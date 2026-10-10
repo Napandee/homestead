@@ -32,7 +32,7 @@ class ThroughTheServer(unittest.TestCase):
 
     def test_the_app_store_without_its_feed_is_a_502(self):
         server, handler = self.handler("GET", "/api/appstore")
-        with mock.patch.object(server, "fetch_appstore", side_effect=OSError("offline")):
+        with mock.patch.object(server.DEPLOY, "fetch_appstore", side_effect=OSError("offline")):
             handler.do_GET()
         code, body = handler._send.call_args.args[:2]
         self.assertEqual(502, code)

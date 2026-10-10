@@ -81,7 +81,7 @@ class RolloutCapacityTests(unittest.TestCase):
             "status": {"phase": "Bound"}}
 
     def reviewed(self):
-        cfg = server.analyze_deploy_intent(copy.deepcopy(self.cfg))
+        cfg = server.DEPLOY.analyze_deploy_intent(copy.deepcopy(self.cfg))
         cfg["capacity_token"] = review.issue(cfg, server.rollout_review_context(self.current))
         cfg["confirm_capacity"] = True
         return cfg

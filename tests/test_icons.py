@@ -62,7 +62,7 @@ class IconCacheTests(unittest.TestCase):
         self.assertEqual("https://example.com/logo.png", annotations["homestead.io/icon-source"])
 
     def test_appstore_template_carries_icon(self):
-        cfg = server.template_to_cfg({
+        cfg = server.DEPLOY.template_to_cfg({
             "name": "Demo App", "repo": "example/demo:latest",
             "icon": "https://example.com/demo.png", "config": [],
         })

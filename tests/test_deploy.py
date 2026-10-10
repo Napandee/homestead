@@ -12,10 +12,10 @@ import server
 
 class AppStoreTemplateTests(unittest.TestCase):
     def test_category_shapes_are_normalized(self):
-        self.assertEqual(["MediaServer", "Tools"], server.category_values("MediaServer Tools"))
-        self.assertEqual(["Network", "Security"], server.category_values(["Network", "Security"]))
-        self.assertEqual(["HomeAutomation"], server.category_values([{"name": "HomeAutomation"}]))
-        self.assertEqual(["Backup/Sync"], server.category_values({"Category": "Backup/Sync"}))
+        self.assertEqual(["MediaServer", "Tools"], server.DEPLOY.category_values("MediaServer Tools"))
+        self.assertEqual(["Network", "Security"], server.DEPLOY.category_values(["Network", "Security"]))
+        self.assertEqual(["HomeAutomation"], server.DEPLOY.category_values([{"name": "HomeAutomation"}]))
+        self.assertEqual(["Backup/Sync"], server.DEPLOY.category_values({"Category": "Backup/Sync"}))
 
     def test_search_prioritizes_name_matches_over_description_matches(self):
         apps = [
@@ -26,7 +26,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "MyFrigateBridge", "desc": "Bridge"},
             {"name": "Amcrest PTZ", "desc": "Controls cameras for Frigate"},
         ]
-        result = server.search_appstore(apps, "frigate")
+        result = server.DEPLOY.search_appstore(apps, "frigate")
         self.assertEqual([
             "Frigate",
             "Frigate Plate Recognizer",
@@ -41,7 +41,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "First", "desc": "Frigate integration"},
             {"name": "Second", "desc": "Frigate helper"},
         ]
-        self.assertEqual(apps, server.search_appstore(apps, "frigate"))
+        self.assertEqual(apps, server.DEPLOY.search_appstore(apps, "frigate"))
 
     def test_catalogue_popular_ranking_uses_feed_performance_and_deduplicates_templates(self):
         apps = [
@@ -49,7 +49,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "Large", "repo": "demo/large:latest", "downloads": 500, "top_performing": 2.1},
             {"name": "Large", "repo": "demo/large:latest", "downloads": 500, "top_performing": 2.1},
         ]
-        ranked = server.rank_appstore(apps, "popular")
+        ranked = server.DEPLOY.rank_appstore(apps, "popular")
         self.assertEqual(["Small", "Large"], [app["name"] for app in ranked])
 
     def test_catalogue_recent_and_trending_use_native_feed_metrics(self):
@@ -62,20 +62,20 @@ class AppStoreTemplateTests(unittest.TestCase):
              "top_performing": 4.0, "top_trending": 4.0, "trending": 4.0, "downloads": 100},
         ]
         self.assertEqual(["Newest", "Middle", "Older fast"],
-                         [app["name"] for app in server.rank_appstore(apps, "recent")])
+                         [app["name"] for app in server.DEPLOY.rank_appstore(apps, "recent")])
         self.assertEqual(["Newest", "Middle", "Older fast"],
-                         [app["name"] for app in server.rank_appstore(apps, "trending")])
-        self.assertEqual("Older fast", server.appstore_spotlight(apps)["name"])
+                         [app["name"] for app in server.DEPLOY.rank_appstore(apps, "trending")])
+        self.assertEqual("Older fast", server.DEPLOY.appstore_spotlight(apps)["name"])
 
     def test_catalogue_metric_coercion_tolerates_missing_and_malformed_values(self):
-        self.assertEqual(0, server.appstore_number(None))
-        self.assertEqual(0, server.appstore_number("not-a-number"))
-        self.assertEqual(12.5, server.appstore_number("12.5"))
+        self.assertEqual(0, server.DEPLOY.appstore_number(None))
+        self.assertEqual(0, server.DEPLOY.appstore_number("not-a-number"))
+        self.assertEqual(12.5, server.DEPLOY.appstore_number("12.5"))
 
     def test_catalogue_markup_is_rendered_as_plain_readable_text(self):
         self.assertEqual(
             "Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc",
-            server.catalog_text(
+            server.DEPLOY.catalog_text(
                 "Container Variable: PLEX_CLAIM_TOKEN&lt;br&gt;<b>Example:</b>&nbsp;claim-abc"),
         )
 
@@ -90,13 +90,13 @@ class AppStoreTemplateTests(unittest.TestCase):
                 "Description": "Container Variable: PLEX_CLAIM_TOKEN<br/>Example: claim-abc",
             }, "value": ""}],
         }
-        meta = server.template_to_cfg(app)["env_meta"][0]
+        meta = server.DEPLOY.template_to_cfg(app)["env_meta"][0]
         self.assertEqual("Claim token · optional", meta["label"])
         self.assertEqual("Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc", meta["description"])
 
     def test_openspeedtest_repository_named_latest_is_not_rewritten(self):
         """`latest` is this publisher's repository name as well as its default tag."""
-        cfg = server.template_to_cfg({
+        cfg = server.DEPLOY.template_to_cfg({
             "name": "SpeedTest-By-OpenSpeedTest",
             "repo": "openspeedtest/latest",
             "config": [],
@@ -124,7 +124,7 @@ class AppStoreTemplateTests(unittest.TestCase):
                  "value": "/dev/bus/usb"},
             ],
         }
-        cfg = server.template_to_cfg(app)
+        cfg = server.DEPLOY.template_to_cfg(app)
         self.assertEqual([{"container": 8080, "host": 18080, "expose": True, "name": "p8080-udp",
                            "protocol": "UDP", "label": "Web", "description": "", "required": True}],
                          cfg["ports"])
@@ -139,7 +139,7 @@ class AppStoreTemplateTests(unittest.TestCase):
     def test_an_apps_paths_share_one_volume_in_folders_of_their_own(self):
         path = lambda target, name="": {"@attributes": {"Name": name or target, "Target": target, "Type": "Path"},
                                        "value": f"/mnt/user/appdata/demo{target}"}
-        cfg = server.template_to_cfg({"name": "Demo", "repo": "demo", "config": [
+        cfg = server.DEPLOY.template_to_cfg({"name": "Demo", "repo": "demo", "config": [
             path("/config"), {"@attributes": {"Target": "/data", "Type": "Path"}, "value": "/mnt/user/demo"},
             path("/app/config"), path("/transcode"),
             {"@attributes": {"Name": "Movies", "Target": "/movies", "Type": "Path"}, "value": "/mnt/user/movies"},
@@ -186,7 +186,7 @@ class AppStoreTemplateTests(unittest.TestCase):
                          pod["containers"][0]["volumeMounts"])
 
     def test_system_localtime_is_imported_as_read_only_host_path(self):
-        cfg = server.template_to_cfg({"name": "Demo", "repo": "demo", "config": [{
+        cfg = server.DEPLOY.template_to_cfg({"name": "Demo", "repo": "demo", "config": [{
             "@attributes": {"Target": "/etc/localtime", "Type": "Path", "Mode": "ro"},
             "value": "/etc/localtime",
         }]})
@@ -195,7 +195,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertTrue(cfg["volumes"][0]["read_only"])
 
     def test_dns_ports_drive_dedicated_vip_and_safe_password(self):
-        cfg = server.template_to_cfg({
+        cfg = server.DEPLOY.template_to_cfg({
             "name": "Any DNS appliance", "repo": "example/dns:latest", "network": "Bridge",
             "config": [
                 {"@attributes": {"Target": "53", "Type": "Port", "Mode": "tcp"}, "value": "53"},
@@ -217,7 +217,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual("192.0.2.243", server.apply_deploy_bindings(cfg)["env"]["ServerIP"])
 
     def test_paths_classify_config_media_cache_and_infer_web_port(self):
-        cfg = server.template_to_cfg({
+        cfg = server.DEPLOY.template_to_cfg({
             "name": "Any media server", "repo": "example/media", "network": "host",
             "webui": "http://[IP]:[PORT:32400]/web",
             "config": [
@@ -239,7 +239,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertFalse(cfg["ports"][0]["expose"])
 
     def test_options_and_dependency_shaped_variables_are_structured(self):
-        options = server.template_to_cfg({
+        options = server.DEPLOY.template_to_cfg({
             "name": "VPN", "repo": "example/vpn", "config": [{
                 "@attributes": {"Target": "VPN_ENABLED", "Type": "Variable"},
                 "value": "false|true",
@@ -248,7 +248,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual("false", options["env"]["VPN_ENABLED"])
         self.assertEqual(["false", "true"], options["env_meta"][0]["options"])
 
-        stateful = server.template_to_cfg({
+        stateful = server.DEPLOY.template_to_cfg({
             "name": "Stateful app", "repo": "example/stateful", "config": [
                 {"@attributes": {"Target": "DB_HOST", "Type": "Variable", "Required": "true"},
                  "value": "database"},
@@ -280,13 +280,13 @@ class AppStoreTemplateTests(unittest.TestCase):
     def test_profiles_do_not_depend_on_app_name_or_image(self):
         common = [{"@attributes": {"Name": "Movies", "Target": "/library", "Type": "Path"},
                    "value": "/mnt/user/media/movies"}]
-        first = server.template_to_cfg({"name": "Alpha", "repo": "vendor/one", "config": common})
-        second = server.template_to_cfg({"name": "Beta", "repo": "another/two", "config": common})
+        first = server.DEPLOY.template_to_cfg({"name": "Alpha", "repo": "vendor/one", "config": common})
+        second = server.DEPLOY.template_to_cfg({"name": "Beta", "repo": "another/two", "config": common})
         self.assertEqual(first["app_profile"], second["app_profile"])
         self.assertEqual("media", first["volumes"][0]["role"])
 
     def test_runtime_socket_is_blocked_for_any_image(self):
-        cfg = server.template_to_cfg({
+        cfg = server.DEPLOY.template_to_cfg({
             "name": "Generic controller", "repo": "example/controller:latest", "config": [{
                 "@attributes": {"Target": "/var/run/docker.sock", "Type": "Path"},
                 "value": "/var/run/docker.sock",
