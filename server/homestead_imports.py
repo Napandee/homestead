@@ -2782,7 +2782,7 @@ def _cleanup_image(request):
 
 
 def _delete_vm_image(request):
-    _cache.pop("vmimages", None)
+    homestead_routes.forget("vmimages")
     b = request.body
     return delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", ""))
 
@@ -2823,12 +2823,12 @@ def _delete_import(request):
         # next, so wait for it to go rather than leaving them
         # Terminating behind the pvc-protection finaliser.
         wait_for_pods_gone(ns, f"app={name}")
-        _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+        homestead_routes.forget("wl", "ov", "network")
     for claim in wanted:
         ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
                         f"persistentvolumeclaims/{claim}")
         removed.append(f"volume {claim}")
-        _cache.pop("vol", None); _cache.pop("stor", None)
+        homestead_routes.forget("vol", "stor")
     # A claim something still mounts only gets a deletion stamp, so
     # say it is releasing rather than reporting it gone.
     releasing = []

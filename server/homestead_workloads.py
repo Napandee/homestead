@@ -44,22 +44,21 @@ NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_work
          "logsearch_read", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
          "is_managed_nfs", "homestead_part", "own_group", "pod_container_rows", "parse_cpu", "parse_mem",
          "age_secs", "display_icon", "_pull_progress", "_service_listeners")
-# And its values: the API server, the cache, where apps go by default, where
+# And its values: the API server, where apps go by default, where
 # logos are kept, and which namespaces are the platform's own.
 API = TOKEN = CTX = None
 DEFAULT_NS = "lab"
 DATA_DIR = "/data"
 SYS_NS = PLATFORM_NS = frozenset()
-_cache = {}
 
 
-def bind(helpers, *, api, token, ssl_context, cache, default_ns, data_dir, system_namespaces, platform_namespaces):
-    global API, TOKEN, CTX, _cache, DEFAULT_NS, DATA_DIR, SYS_NS, PLATFORM_NS
+def bind(helpers, *, api, token, ssl_context, default_ns, data_dir, system_namespaces, platform_namespaces):
+    global API, TOKEN, CTX, DEFAULT_NS, DATA_DIR, SYS_NS, PLATFORM_NS
     missing = set(NEEDS) - set(helpers)
     if missing:
         raise TypeError("homestead_workloads needs " + ", ".join(sorted(missing)))
     globals().update({name: helpers[name] for name in NEEDS})
-    API, TOKEN, CTX, _cache, DEFAULT_NS = api, token, ssl_context, cache, default_ns
+    API, TOKEN, CTX, DEFAULT_NS = api, token, ssl_context, default_ns
     DATA_DIR, SYS_NS, PLATFORM_NS = data_dir, system_namespaces, platform_namespaces
 
 
@@ -154,7 +153,7 @@ def set_failover(request):
     for item in b.get("items") or []:
         guard_managed_smb(item.get("ns"), item.get("name"))
     result = FAILOVER.set_many(b.get("items") or [])
-    _cache.pop("wl", None)
+    ROUTER.forget("wl")
     return result
 
 
@@ -166,7 +165,7 @@ def set_primary_port(request):
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"metadata": {"annotations": {NAMES.key("primary-port"): str(port) if port else None}}},
           ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
+    ROUTER.forget("wl")
     return {"ok": True, "detail": f"{name} opens on port {port} first" if port
             else f"{name} shows its ports in their own order"}
 
@@ -189,7 +188,7 @@ def edit(request):
                 get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
                 nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
         result = RENAME.dispatch(b, context, prepared["deployment"], kget, ksend, OPS, admission)
-        _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+        ROUTER.forget("wl", "ov", "network")
         return result
     moves = RESTRUCTURE.copies(b)
     guard_self(b.get("ns", ""), b.get("name", ""),
@@ -427,7 +426,7 @@ def set_workload_logos(b):
             skipped += skip
         except Exception as e:
             failed.append(f"{name}: {e}")
-    _cache.pop("wl", None)
+    ROUTER.forget("wl")
     detail = ", ".join(part for part in (saved and f"{saved} logo{'s' if saved != 1 else ''} saved",
                                          skipped and f"{skipped} left without one",
                                          done and not saved and not skipped and "logo removed") if part)

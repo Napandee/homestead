@@ -40,20 +40,18 @@ NEEDS = ("kget", "ksend", "cached", "get_app_settings", "guard_managed_smb", "re
          "deploy_capacity_plan", "prepare_deploy_network", "apply_deploy_bindings", "apply_generated_secrets",
          "redact_deployment_preview", "additional_container_configs", "deployment_volumes", "new_claims",
          "ensure_claim", "ensure_profile_compatible", "persist_icon_config", "prepare_lan", "record_lan")
-# And its values: where apps go by default, the cache a deploy clears, and
-# the release the App Store feed is asked for as.
+# And its values: where apps go by default, and the release the App Store feed is asked for as.
 DEFAULT_NS = "lab"
 HOMESTEAD_VERSION = ""
-_cache = {}
 
 
-def bind(helpers, *, default_ns, version, cache):
-    global DEFAULT_NS, HOMESTEAD_VERSION, _cache
+def bind(helpers, *, default_ns, version):
+    global DEFAULT_NS, HOMESTEAD_VERSION
     missing = set(NEEDS) - set(helpers)
     if missing:
         raise TypeError("homestead_deploy needs " + ", ".join(sorted(missing)))
     globals().update({name: helpers[name] for name in NEEDS})
-    DEFAULT_NS, HOMESTEAD_VERSION, _cache = default_ns, version, cache
+    DEFAULT_NS, HOMESTEAD_VERSION = default_ns, version
 
 
 
@@ -918,7 +916,7 @@ def run_deploy(b, *, reviewed_current=None):
         record_lan(ns, target, b["lan"])
     if svc:
         ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
+    ROUTER.forget("wl", "ov", "network")
     container_name = _dns_name(b.get("container_name") or b.get("name"), "container name")
     action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
     op = OPS.start("deployment", action,

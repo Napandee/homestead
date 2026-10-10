@@ -5359,10 +5359,10 @@ def _late(*names):
     return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
 
 
-WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, cache=_cache, default_ns=DEFAULT_NS,
+WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, default_ns=DEFAULT_NS,
                data_dir=DATA_DIR, system_namespaces=SYS_NS, platform_namespaces=PLATFORM_NS)
-DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION, cache=_cache)
-UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS), _cache)
+DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION)
+UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS))
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
                  "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
 # A move reads in the Activity tray like every other long job.

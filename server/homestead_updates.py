@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 import homestead_operations as OPS
 import homestead_rollout_capacity as ROLLOUT
+import homestead_routes as ROUTER
 import homestead_shared as SHARED
 
 
@@ -1253,16 +1254,13 @@ def progress(ns, name, dep=None):
 # the update policy and the capacity review live there still.
 ROUTE_NEEDS = ("guard_managed_smb", "_dns_name", "get_app_settings", "save_app_settings", "set_update_mode",
                "update_policy_status", "enforce_update_policy", "preview_image_update", "reviewed_image_update")
-_cache = {}
 
 
-def bind_routes(helpers, cache):
-    global _cache
+def bind_routes(helpers):
     missing = set(ROUTE_NEEDS) - set(helpers)
     if missing:
         raise TypeError("homestead_updates needs " + ", ".join(sorted(missing)))
     globals().update({name: helpers[name] for name in ROUTE_NEEDS})
-    _cache = cache
 
 
 def _report(request):
@@ -1285,7 +1283,7 @@ def _set_managed(request):
     ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
     guard_managed_smb(ns, name)
     result = set_managed(ns, name, b.get("by"))
-    _cache.pop("wl", None)
+    ROUTER.forget("wl")
     return result
 
 
@@ -1301,7 +1299,7 @@ def _apply(request, action):
         {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
         "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
         {"namespace": b["ns"], "name": b["name"]})
-    _cache.pop("wl", None); _cache.pop("ov", None); refresh_soon(b["ns"], b["name"])
+    ROUTER.forget("wl", "ov"); refresh_soon(b["ns"], b["name"])
     return result
 
 
