@@ -8,6 +8,7 @@ import urllib.error
 from urllib.parse import quote
 
 import homestead_capacity_review as REVIEW
+import homestead_operations as OPS
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 AUTO = "allow-instance-manager-automatic-upgrade"
@@ -384,4 +385,5 @@ def ensure_idle():
 ROUTES = {
     ("GET", "/api/longhorn/v2/upgrade"): ("viewer", lambda request: plan(request.query.get("to", [""])[0])),
     ("POST", "/api/longhorn/v2/upgrade/review"): ("admin", lambda request: settings_review(request.body.get("enabled"), request.body.get("timeout"))[0]),
+    ("POST", "/api/longhorn/v2/upgrade/settings"): ("admin", lambda request: configure(request.body, OPS)),
 }

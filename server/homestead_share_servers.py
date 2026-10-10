@@ -13,20 +13,28 @@ import urllib.error
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_nfs as NFS
+import homestead_operations as OPS
 import homestead_platform as PLATFORM
 import homestead_shares as SHARES
 
 kget = ksend = build_deployment = None
+shared_classes = default_class = storage_options = None
 _cache = {}
 SMB_NAMESPACE = "lab"
 SAMBA_IMAGE = os.environ.get("SAMBA_IMAGE", "dperson/samba:latest")
 SMB_NAME = NAMES.object_name("smb")
 
 
-def bind(_kget, _ksend, _build_deployment, namespace, cache):
+def bind(_kget, _ksend, _build_deployment, namespace, cache,
+         _shared_classes=None, _default_class=None, _storage_options=None):
+    """The last three are server.py's: the classes that can share a volume
+    between nodes, the class new volumes go on, and what a new share can be
+    created on - all read from the classes server.py keeps track of."""
     global kget, ksend, build_deployment, SMB_NAMESPACE, _cache
+    global shared_classes, default_class, storage_options
     kget, ksend, build_deployment = _kget, _ksend, _build_deployment
     SMB_NAMESPACE, _cache = namespace, cache
+    shared_classes, default_class, storage_options = _shared_classes, _default_class, _storage_options
 
 
 def _optional_smb(path):
@@ -484,3 +492,81 @@ def set_nfs_export(name, clients, read_only=True):
             raise
         return {"ok": True, "exports": nfs_state()["exports"],
                 "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
+
+
+# Changing a share restarts the Samba server that serves it, and removing one
+# drops its NFS export first, so the share routes live with the servers.
+def _restart(kind, title, detail, **ref):
+    return OPS.start(kind, title, {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
+                     "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep", **ref}, detail)
+
+
+def create_share(b):
+    access = b.get("access_mode")
+    if access == "ReadWriteMany" and (b.get("storage_class") or default_class()) not in shared_classes():
+        # One SMB server mounts every share: a class that cannot
+        # serve many nodes (k3s's local-path) still serves it.
+        access = "ReadWriteOnce"
+    result = SHARES.create_share(
+        b["name"], b.get("size_gb", 10), b.get("user", "lab"),
+        b.get("password"), b.get("public", False), b.get("read_only", False),
+        b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
+        access, b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
+    deployment = result.pop("deployment", None)
+    if deployment:
+        result["operation"] = _restart("deployment", f"Create share {b['name']}", "Restarting Samba with the new share")
+    return {"ok": True, **result}
+
+
+def save_user(b):
+    result = SHARES.save_user(b.get("user"), b.get("password"), b.get("action", "create"))
+    if result.pop("deployment", None):
+        result["operation"] = _restart("deployment", f"Update SMB user {result['user']}",
+                                       "Restarting Samba with updated credentials")
+    return {"ok": True, **result}
+
+
+def edit_share(b):
+    result = SHARES.edit_share(
+        b["name"], b.get("size_gb"), b.get("user", "lab"),
+        b.get("password"), b.get("public", False), b.get("read_only", False))
+    deployment = result.pop("deployment", None)
+    if deployment:
+        result["operation"] = _restart("deployment", f"Update share {b['name']}", "Restarting Samba with updated access")
+    return {"ok": True, **result}
+
+
+def delete_share(b):
+    share = next((row for row in SHARES.list_shares() if row.get("name") == b["name"]), None)
+    old_export = (share or {}).get("nfs_clients", "")
+    if old_export:
+        set_nfs_export(b["name"], "")
+    try:
+        result = SHARES.delete_share(b["name"])
+    except Exception:
+        if old_export:
+            set_nfs_export(b["name"], old_export, share.get("nfs_read_only", True))
+        raise
+    deployment = result.pop("deployment", None)
+    if deployment:
+        result["operation"] = _restart("share-remove", f"Remove share {b['name']}",
+                                       "Restarting Samba without the removed share",
+                                       uid=deployment.get("metadata", {}).get("uid"), since=time.time(),
+                                       removed_claims=result.get("removed_claims", []))
+    return {"ok": True, **result}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/shares/server"): ("viewer", lambda request: samba_state()),
+    ("GET", "/api/shares/nfs/server"): ("viewer", lambda request: nfs_state()),
+    ("GET", "/api/shares/options"): ("admin", lambda request: storage_options()),
+    ("POST", "/api/shares"): ("admin", lambda request: create_share(request.body)),
+    ("POST", "/api/shares/users"): ("admin", lambda request: save_user(request.body)),
+    ("POST", "/api/shares/edit"): ("admin", lambda request: edit_share(request.body)),
+    ("POST", "/api/shares/delete"): ("admin", lambda request: delete_share(request.body)),
+    ("POST", "/api/shares/nfs"): ("admin", lambda request: set_nfs_export(
+        request.body.get("name", ""), str(request.body.get("clients") or "").strip(),
+        request.body.get("read_only") is not False)),
+    ("POST", "/api/shares/repair"): ("admin", lambda request: repair_samba(str(request.body.get("address") or "").strip())),
+}

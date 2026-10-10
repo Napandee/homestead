@@ -19,15 +19,21 @@ import homestead_shared as SHARED
 import homestead_storage_resize as STORAGE_RESIZE
 
 kget = ksend = storage_classes = _dns_name = node_temps = None
+selectable = shared = facts = None
 _cache = {}
 DATA_DIR = "/data"
 DEFAULT_NS = "lab"
 
 
-def bind(_kget, _ksend, _storage_classes, dns_name, _node_temps, cache, data_dir, default_namespace):
+def bind(_kget, _ksend, _storage_classes, dns_name, _node_temps, cache, data_dir, default_namespace,
+         _selectable=None, _shared=None, _facts=None):
+    """_selectable, _shared and _facts are server.py's class pickers: they put
+    the class new volumes go on first, which server.py keeps."""
     global kget, ksend, storage_classes, _dns_name, node_temps, _cache, DATA_DIR, DEFAULT_NS
+    global selectable, shared, facts
     kget, ksend, storage_classes, _dns_name, node_temps = _kget, _ksend, _storage_classes, dns_name, _node_temps
     _cache, DATA_DIR, DEFAULT_NS = cache, data_dir, default_namespace
+    selectable, shared, facts = _selectable, _shared, _facts
 
 
 def cleanup_restore_classes():
@@ -430,3 +436,33 @@ def repair_volume_class(cfg):
         if key.startswith(("stor", "sc", "vol")):
             _cache.pop(key, None)
     return {"ok": True, "detail": "Resize support repaired. You can now enlarge the volume."}
+
+
+def class_choices(with_facts=False):
+    """The classes a person may pick; with ?facts=1 also the shared ones and
+    what each is, for a picker that explains them."""
+    classes = storage_classes()
+    if with_facts:
+        return {"names": selectable(classes), "shared": shared(classes), "facts": facts(classes)}
+    return selectable(classes)
+
+
+def _cleanup():
+    removed = cleanup_restore_classes()
+    return {"ok": True, "removed": removed,
+            "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
+                      if removed else "nothing to remove: every restore class is still in use"}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/storageclasses"): ("viewer", lambda request: class_choices(
+        (request.query.get("facts") or [""])[0] == "1")),
+    ("GET", "/api/storage/classes"): ("viewer", lambda request: storage_class_inventory()),
+    ("GET", "/api/storage/v2"): ("viewer", lambda request: v2_engine_status()),
+    ("POST", "/api/storage/classes"): ("admin", lambda request: create_storage_class(request.body)),
+    ("POST", "/api/storage/classes/default"): ("admin", lambda request: set_default_storage_class(request.body.get("name"))),
+    ("POST", "/api/storage/classes/delete"): ("admin", lambda request: delete_storage_class(request.body.get("name"))),
+    ("POST", "/api/storage/classes/cleanup"): ("admin", lambda request: _cleanup()),
+    ("POST", "/api/volumes/repair-class"): ("admin", lambda request: repair_volume_class(request.body)),
+}

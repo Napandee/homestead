@@ -2450,7 +2450,7 @@ IMP.bind(kget, ksend, create_pvc, DEPLOY.build_deployment, DEFAULT_NS, _cache, H
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
-LH.bind(kget, ksend, _cache, STORAGE_CLASS)
+LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
@@ -2787,10 +2787,12 @@ VM_REVIEW.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k), DE
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
-STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node_temps(), _cache, DATA_DIR, DEFAULT_NS)
-STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS)
+STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node_temps(), _cache, DATA_DIR, DEFAULT_NS,
+                     selectable_storage_classes, shared_storage_classes, storage_class_facts)
+STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, storage_runtime_check)
 LHCAP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status)
-LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True))
+LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True),
+               settings=get_app_settings, save_settings=save_app_settings)
 import homestead_lhv2_setup as LHV2_SETUP
 LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
 OPS.RESOLVERS["longhorn-v2-prepare"] = LHV2_SETUP.progress
@@ -2866,20 +2868,13 @@ OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
 OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
-                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS)
+                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
+                  lambda: cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 
 def _storage_classes():
     return {c["metadata"]["name"]: c.get("parameters") or {}
             for c in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])}
-
-
-def start_restore_test(ns, name, why="Test now"):
-    """Start one restore test as a job."""
-    return OPS.start(RESTORE_TEST.KIND, f"Restore test of {name}",
-                     {"kind": "Deployment", "name": name, "namespace": ns},
-                     "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
-                     "Finding each volume's newest backup")
 
 
 def restore_tests_tick():
@@ -2889,7 +2884,7 @@ def restore_tests_tick():
                                settings.get("restore_tests", {}).get("enabled", False),
                                update_policy_status(settings)["window_open"], time.time(), _storage_classes())
     if chosen:
-        start_restore_test(chosen["ns"], chosen["name"], "monthly")
+        RESTORE_TEST.start_test(chosen["ns"], chosen["name"], "monthly")
     return chosen
 
 
@@ -2903,27 +2898,6 @@ def _restore_tests_loop():
                 beat("restore-tests", 3600, error, leader_only=True)
                 print(f"restore-tests: {str(error)[:160]}", flush=True)
         time.sleep(3600)
-
-
-def restore_tests_view():
-    """Every app with Longhorn volumes: what a test would restore, and its last result."""
-    out = []
-    running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
-               for o in OPS.list_operations() if o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running")}
-    for w in cached("wl", 5, WORKLOADS.get_workloads):
-        if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
-                or w.get("managed_nfs") or w.get("site"):
-            continue
-        dep = kget(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
-        rows, without = RESTORE_TEST.plan(w["ns"], dep)
-        if not rows and not without:
-            continue
-        out.append({"ns": w["ns"], "name": w["name"], "icon": w.get("icon", ""), "restores": rows, "without": without,
-                    "last": w.get("restore_tested"), "running": f"{w['ns']}/{w['name']}" in running,
-                    "due": RESTORE_TEST.due(w, time.time())})
-    settings = get_app_settings()
-    return {"enabled": settings.get("restore_tests", {}).get("enabled", False), "every_days": RESTORE_TEST.EVERY // 86400,
-            "apps": sorted(out, key=lambda r: (not r["restores"], r["ns"], r["name"]))}
 
 
 def _prune_snapshot(volume, name):
@@ -3816,7 +3790,8 @@ OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("mes
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
-SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache)
+SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,
+                   shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: guard_managed_smb(ns, name), lambda: NODES.node_temps())
 FLOW.bind(lambda path: kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
           parse_cpu, parse_mem, age_secs)
@@ -4837,23 +4812,6 @@ class H(HTTP.LimitedHandler):
                 return self._move(ONBOARD.cleanup_report)
             if p == "/api/cluster/removal":
                 return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
-            if p == "/api/volumes/other":
-                return self._send(200, cached("volother", 10, STORAGE.other_volumes))
-            if p == "/api/volumes":
-                return self._send(200, cached("vol", 8, STORAGE.get_volumes))
-            if p == "/api/volumes/edit-options":
-                return self._send(200, STORAGE.volume_edit_options((q.get("ns") or [DEFAULT_NS])[0],
-                                                          (q.get("name") or [""])[0]))
-            if p == "/api/volumes/delete-plan":
-                plan = VOLUMES.deletion_plan((q.get("ns") or [DEFAULT_NS])[0],
-                    (q.get("name") or [""])[0], (q.get("volume") or [""])[0])
-                return self._send(200, STORAGE_GUARD.review(plan, OPS, kget))
-            if p == "/api/storage":
-                return self._send(200, cached("stor", 10, STORAGE.get_storage))
-            if p == "/api/shares/server":
-                return self._send(200, SHARE_SERVERS.samba_state())
-            if p == "/api/shares/nfs/server":
-                return self._send(200, SHARE_SERVERS.nfs_state())
             if p == "/api/snapshot-files/plan":
                 return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
@@ -4864,48 +4822,12 @@ class H(HTTP.LimitedHandler):
                 if p.endswith("/download"):
                     return self._send_stream(SNAPSHOT_FILES.download(ns, session, path))
                 return self._send(200, SNAPSHOT_FILES.read(ns, session, "list", path))
-            if p == "/api/volumes/ownership":
-                return self._send(200, IMP.ownership_hint(
-                    (q.get("namespace") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
-            if p == "/api/shares/options":
-                return self._send(200, share_storage_options())
-            if p == "/api/vm-disks/import-plan":
-                return self._send(200, IMP.vm_disk_import_plan(
-                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
-            if p == "/api/lh/restore/plan":
-                return self._send(200, LH.restore_plan(
-                    (q.get("backup") or [""])[0],
-                    (q.get("ns") or [DEFAULT_NS])[0],
-                    (q.get("name") or [""])[0]))
-            if p == "/api/storageclasses":
-                classes = storage_classes()
-                if (q.get("facts") or [""])[0] == "1":
-                    return self._send(200, {"names": selectable_storage_classes(classes),
-                                            "shared": shared_storage_classes(classes),
-                                            "facts": storage_class_facts(classes)})
-                return self._send(200, selectable_storage_classes(classes))
-            if p == "/api/storage/classes":
-                return self._send(200, STORAGE_CLASSES.storage_class_inventory())
-            if p == "/api/storage/v2":
-                return self._send(200, STORAGE_CLASSES.v2_engine_status())
-            if p == "/api/pvcs":
-                ns = (q.get("ns") or [DEFAULT_NS])[0]
-                items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
-                return self._send(200, [{"name": i["metadata"]["name"],
-                                         "size": (i.get("status", {}).get("capacity", {}) or {}).get("storage") or
-                                                 i["spec"]["resources"]["requests"]["storage"],
-                                         "status": i.get("status", {}).get("phase", "Unknown"),
-                                         "access_modes": i.get("spec", {}).get("accessModes", []),
-                                         "storage_class": i.get("spec", {}).get("storageClassName", "")}
-                                        for i in items])
             if p == "/api/logos":
                 try:
                     return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-            if p == "/api/restore-tests":
-                return self._send(200, restore_tests_view())
             if p == "/api/logos/missing":
                 try:
                     apps = DEPLOY.fetch_appstore()
@@ -5136,98 +5058,10 @@ class H(HTTP.LimitedHandler):
                         guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
                                          meta.get("name"))
                 return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
-            if p == "/api/restore-tests/settings":
-                enabled = b.get("enabled")
-                if not isinstance(enabled, bool):
-                    raise ValueError("enabled must be true or false")
-                settings = get_app_settings()
-                settings["restore_tests"] = {"enabled": enabled}
-                save_app_settings(settings)
-                return self._send(200, {"ok": True, "enabled": enabled,
-                                        "detail": "Apps with backups are restore-tested monthly" if enabled else "Monthly restore tests are off"})
-            if p == "/api/restore-tests/run":
-                ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-                if any(o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
-                    raise ValueError("a restore test is already running; one runs at a time")
-                return self._send(200, {"ok": True, "operation": start_restore_test(ns, name)})
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
                 return self._send(200, SNAPSHOT_FILES.close(b.get("namespace"), b.get("session")))
-            if p == "/api/volumes/chown":
-                return self._send(200, IMP.chown_claim(
-                    b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))
-            if p == "/api/storage/classes":
-                return self._send(200, STORAGE_CLASSES.create_storage_class(b))
-            if p == "/api/storage/classes/default":
-                return self._send(200, STORAGE_CLASSES.set_default_storage_class(b.get("name")))
-            if p == "/api/storage/classes/delete":
-                return self._send(200, STORAGE_CLASSES.delete_storage_class(b.get("name")))
-            if p == "/api/shares":
-                access = b.get("access_mode")
-                if access == "ReadWriteMany" and (b.get("storage_class") or STORAGE_CLASS) not in shared_storage_classes():
-                    # One SMB server mounts every share: a class that cannot
-                    # serve many nodes (k3s's local-path) still serves it.
-                    access = "ReadWriteOnce"
-                result = SHARES.create_share(
-                    b["name"], b.get("size_gb", 10), b.get("user", "lab"),
-                    b.get("password"), b.get("public", False), b.get("read_only", False),
-                    b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-                    access, b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
-                deployment = result.pop("deployment", None)
-                if deployment:
-                    result["operation"] = OPS.start(
-                        "deployment", f"Create share {b['name']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
-                        "Restarting Samba with the new share")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/users":
-                result = SHARES.save_user(b.get("user"), b.get("password"), b.get("action", "create"))
-                if result.pop("deployment", None):
-                    result["operation"] = OPS.start(
-                        "deployment", f"Update SMB user {result['user']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
-                        "Restarting Samba with updated credentials")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/edit":
-                result = SHARES.edit_share(
-                    b["name"], b.get("size_gb"), b.get("user", "lab"),
-                    b.get("password"), b.get("public", False), b.get("read_only", False))
-                deployment = result.pop("deployment", None)
-                if deployment:
-                    result["operation"] = OPS.start(
-                        "deployment", f"Update share {b['name']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
-                        "Restarting Samba with updated access")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/delete":
-                share = next((row for row in SHARES.list_shares() if row.get("name") == b["name"]), None)
-                old_export = (share or {}).get("nfs_clients", "")
-                if old_export:
-                    SHARE_SERVERS.set_nfs_export(b["name"], "")
-                try:
-                    result = SHARES.delete_share(b["name"])
-                except Exception:
-                    if old_export:
-                        SHARE_SERVERS.set_nfs_export(b["name"], old_export, share.get("nfs_read_only", True))
-                    raise
-                deployment = result.pop("deployment", None)
-                if deployment:
-                    result["operation"] = OPS.start(
-                        "share-remove", f"Remove share {b['name']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep",
-                                    "uid": deployment.get("metadata", {}).get("uid"), "since": time.time(),
-                                    "removed_claims": result.get("removed_claims", [])},
-                        "Restarting Samba without the removed share")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/nfs":
-                return self._send(200, SHARE_SERVERS.set_nfs_export(
-                    b.get("name", ""), str(b.get("clients") or "").strip(),
-                    b.get("read_only") is not False))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
@@ -5237,25 +5071,8 @@ class H(HTTP.LimitedHandler):
                 return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
                                                                 str(b.get("lb_ip") or ""), str(b.get("vip_mode") or ""),
                                                                 int(b.get("port") or 0)))
-            if p == "/api/objectstore/longhorn":
-                return self._send(200, OBJECTS.request_target(replace=bool(b.get("replace", True))))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
-            if p == "/api/longhorn/settings":
-                _cache.pop("lhcap", None)
-                with OPS._lock:
-                    if "v2" in b and not b["v2"] and DISK_V2.tasks():
-                        raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
-                    return self._send(200, LHCAP.save(b))
-            if p == "/api/longhorn/offline-rebuilding":
-                _cache.pop("lhrebuild", None)
-                enabled = b.get("enabled")
-                if not isinstance(enabled, bool):
-                    raise ValueError("enabled must be true or false")
-                settings = get_app_settings()
-                settings["longhorn"] = {"offline_rebuilding": enabled}
-                save_app_settings(settings)
-                return self._send(200, LHREBUILD.save(enabled))
             if p == "/api/longhorn/rebalance":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)
@@ -5280,25 +5097,6 @@ class H(HTTP.LimitedHandler):
                                       {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "add", "excluded": plan["excluded"]},
                                       "Starting with the first copy")
                 return self._send(202, {"operation": operation})
-            if p == "/api/longhorn/rebuild":
-                _cache.pop("lhrebuild", None)
-                _cache.pop("volumes", None)
-                return self._send(200, LHREBUILD.rebuild_now(str(b.get("volume") or "")))
-            if p == "/api/longhorn/v2/upgrade/settings":
-                return self._send(200, LHV2_UPGRADE.configure(b, OPS))
-            if p == "/api/longhorn/v2/enable":
-                result = LHV2_SETUP.enable(b)
-                _cache.pop("lhcap", None)
-                return self._send(200, result)
-            if p == "/api/vm-disks/import":
-                result = IMP.import_vm_disk(b, ops=OPS)
-                return self._send(200, result)
-            if p == "/api/volumes/create":
-                return self._send(200, STORAGE.create_volume(b))
-            if p == "/api/volumes/edit":
-                return self._send(200, STORAGE.edit_volume(b))
-            if p == "/api/volumes/repair-class":
-                return self._send(200, STORAGE_CLASSES.repair_volume_class(b))
             if p == "/api/self/samba":
                 return self._send(200, SHARE_SERVERS.set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/self/nfs":
@@ -5311,59 +5109,6 @@ class H(HTTP.LimitedHandler):
                 if b.get("confirm") != NFS.NAME:
                     raise ValueError(f"type {NFS.NAME} to remove the NFS server")
                 return self._send(200, SHARE_SERVERS.remove_nfs())
-            if p == "/api/shares/repair":
-                return self._send(200, SHARE_SERVERS.repair_samba(str(b.get("address") or "").strip()))
-            if p == "/api/storage/classes/cleanup":
-                removed = STORAGE_CLASSES.cleanup_restore_classes()
-                return self._send(200, {"ok": True, "removed": removed,
-                                        "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
-                                                  if removed else "nothing to remove: every restore class is still in use"})
-            if p == "/api/volumes/reclass/plan":
-                return self._send(200, STORAGE_WORKFLOW.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
-                                                               runtime_check=storage_runtime_check))
-            if p == "/api/volumes/reclass/start":
-                op = STORAGE_WORKFLOW.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
-                                                    runtime_check=storage_runtime_check)
-                _cache.pop("vol", None)
-                return self._send(200, {"ok": True, "operation": op})
-            if p == "/api/volumes/old-copies/remove":
-                _cache.pop("vol", None)
-                return self._send(200, RECLASS.remove_old_copy(b.get("pv", ""), OPS))
-            if p == "/api/volumes/delete":
-                with OPS._lock:
-                    result = VOLUMES.delete(b, validate=lambda plan: STORAGE_GUARD.review(plan, OPS, kget))
-                    result["operation"] = OPS.start(
-                        "volume-delete", f"Delete volume {result['name']}",
-                        {"kind": "PersistentVolumeClaim", "name": result["name"],
-                         "namespace": result["namespace"]},
-                        "/volumes", {"namespace": result["namespace"], "name": result["name"],
-                                      "action": result["action"], "pv": result["pv"],
-                                      "orphan": result.get("orphan", False),
-                                      "volume": result["longhorn_volume"]}, result["message"])
-                return self._send(200, result)
-            if p == "/api/lh/job/run":
-                result = LH.run_job(b.get("name"))
-                result["operation"] = OPS.start(
-                    "protect-run", f"Run {b['name']} now", {"kind": "Job", "name": result["job"],
-                                                            "namespace": result["namespace"]},
-                    "/data-protection", {"namespace": result["namespace"], "name": result["job"]}, "Starting")
-                return self._send(200, result)
-            if p == "/api/lh/snapshot/delete":
-                return self._send(200, {"ok": True, "operation": storage_volume_action(
-                    b.get("volume"), lambda: SNAPSHOT_DELETE.start(b, OPS))})
-            if p == "/api/lh/snapshot/revert":
-                operation = storage_volume_action(b.get("volume"), lambda: REVERT.start(
-                    str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS))
-                return self._send(200, {"ok": True, "operation": operation,
-                                        "detail": "Rolling back: what uses it stops first, then starts again"})
-            if p == "/api/lh/backup":
-                result = LH.create_backup(b["volume"], b.get("name"))
-                if result.get("backup"):
-                    result["operation"] = OPS.start(
-                        "backup", f"Back up {b['volume']}",
-                        {"kind": "Volume", "name": b["volume"], "namespace": "longhorn-system"},
-                        "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
-                return self._send(200, result)
             if p == "/api/lh/restore":
                 with OPS._lock:
                     plan = LH.restore_plan(

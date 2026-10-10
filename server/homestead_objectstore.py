@@ -763,4 +763,5 @@ ROUTES = {
     ("GET", "/api/objectstore/transfers"): ("admin", lambda request: transfers()),
     ("POST", "/api/objectstore/deploy"): ("admin", lambda request: deploy(request.body)),
     ("POST", "/api/objectstore/remove"): ("admin", lambda request: remove(bool(request.body.get("keep_data", True)))),
+    ("POST", "/api/objectstore/longhorn"): ("admin", lambda request: request_target(replace=bool(request.body.get("replace", True)))),
 }

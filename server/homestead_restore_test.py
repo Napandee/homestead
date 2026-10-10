@@ -30,6 +30,8 @@ import json
 import time
 import urllib.error
 
+import homestead_operations as OPS
+
 KIND = "restore-test"
 EVERY = 30 * 86400
 READY_WAIT = 600            # the copy has this long to become ready
@@ -48,12 +50,19 @@ csi_cleanup = lambda: []
 capacity = lambda: {}
 ask = lambda target: {"ok": False}          # homestead_uptime.ask_ports
 self_namespace = "lab"
+workloads = lambda: []                      # server.py's workload list, as cached
+app_settings = lambda: {}                   # server.py's settings, where switching tests on is kept
+save_app_settings = dns_name = None
 
 
-def bind(_kget, _ksend, _names, _backups, _restore, _restore_status, _csi_cleanup, _capacity, _ask, _self_namespace):
+def bind(_kget, _ksend, _names, _backups, _restore, _restore_status, _csi_cleanup, _capacity, _ask, _self_namespace,
+         _workloads=None, _settings=None, _save_settings=None, _dns_name=None):
     global kget, ksend, names, backups, restore, restore_status, csi_cleanup, capacity, ask, self_namespace
+    global workloads, app_settings, save_app_settings, dns_name
     kget, ksend, names, backups, restore, restore_status = _kget, _ksend, _names, _backups, _restore, _restore_status
     csi_cleanup, capacity, ask, self_namespace = _csi_cleanup, _capacity, _ask, _self_namespace
+    if _workloads is not None:
+        workloads, app_settings, save_app_settings, dns_name = _workloads, _settings, _save_settings, _dns_name
 
 
 def _get(path):
@@ -362,3 +371,59 @@ def _finish(item, to, ok, why):
     except Exception:
         pass                    # the job keeps the result even if the app is gone
     return ("succeeded" if ok and not left else "failed"), 100, message
+
+
+def start_test(ns, name, why="Test now"):
+    """Start one restore test as a job."""
+    return OPS.start(KIND, f"Restore test of {name}",
+                     {"kind": "Deployment", "name": name, "namespace": ns},
+                     "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
+                     "Finding each volume's newest backup")
+
+
+def view():
+    """Every app with Longhorn volumes: what a test would restore, and its last result."""
+    out = []
+    running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
+               for o in OPS.list_operations() if o.get("kind") == KIND and o.get("status") in ("queued", "running")}
+    for w in workloads():
+        if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
+                or w.get("managed_nfs") or w.get("site"):
+            continue
+        dep = kget(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
+        rows, without = plan(w["ns"], dep)
+        if not rows and not without:
+            continue
+        out.append({"ns": w["ns"], "name": w["name"], "icon": w.get("icon", ""), "restores": rows, "without": without,
+                    "last": w.get("restore_tested"), "running": f"{w['ns']}/{w['name']}" in running,
+                    "due": due(w, time.time())})
+    settings = app_settings()
+    return {"enabled": settings.get("restore_tests", {}).get("enabled", False), "every_days": EVERY // 86400,
+            "apps": sorted(out, key=lambda r: (not r["restores"], r["ns"], r["name"]))}
+
+
+def switch(enabled):
+    """Monthly tests on or off."""
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be true or false")
+    settings = app_settings()
+    settings["restore_tests"] = {"enabled": enabled}
+    save_app_settings(settings)
+    return {"ok": True, "enabled": enabled,
+            "detail": "Apps with backups are restore-tested monthly" if enabled else "Monthly restore tests are off"}
+
+
+def run_now(b):
+    """Test one app now; one test runs at a time."""
+    ns, name = dns_name(b.get("ns"), "namespace"), dns_name(b.get("name"), "workload name")
+    if any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
+        raise ValueError("a restore test is already running; one runs at a time")
+    return {"ok": True, "operation": start_test(ns, name)}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/restore-tests"): ("viewer", lambda request: view()),
+    ("POST", "/api/restore-tests/settings"): ("admin", lambda request: switch(request.body.get("enabled"))),
+    ("POST", "/api/restore-tests/run"): ("admin", lambda request: run_now(request.body)),
+}

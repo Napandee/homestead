@@ -12,22 +12,25 @@ import urllib.error
 import urllib.parse
 
 import homestead_lhrebuild as LHREBUILD
+import homestead_operations as OPS
 import homestead_rebalance as REBALANCE
 import homestead_routes
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage_resize as STORAGE_RESIZE
+import homestead_storage_workflow as STORAGE_WORKFLOW
 import homestead_volume_usage as VOLUME_USAGE
 
-kget = ksend = storage_classes = create_pvc = age_secs = None
+kget = ksend = storage_classes = create_pvc = age_secs = runtime_check = None
 _cache = {}
 SYS_NS = set()
 DEFAULT_NS = "lab"
 
 
-def bind(_kget, _ksend, _storage_classes, _create_pvc, _age_secs, cache, system_namespaces, default_namespace):
-    global kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS
+def bind(_kget, _ksend, _storage_classes, _create_pvc, _age_secs, cache, system_namespaces, default_namespace,
+         _runtime_check=None):
+    global kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, runtime_check
     kget, ksend, storage_classes, create_pvc, age_secs = _kget, _ksend, _storage_classes, _create_pvc, _age_secs
-    _cache, SYS_NS, DEFAULT_NS = cache, system_namespaces, default_namespace
+    _cache, SYS_NS, DEFAULT_NS, runtime_check = cache, system_namespaces, default_namespace, _runtime_check
 
 
 def _moving_copy(volume, whole=None):
@@ -502,3 +505,45 @@ def edit_volume(cfg):
         if k.startswith(("vol", "stor", "flow")):
             _cache.pop(k, None)
     return {"ok": True, "name": name, "detail": (f"{name}: " + ", ".join(done)) if done else f"{name} is unchanged"}
+
+
+def claims(namespace):
+    """A namespace's claims, for the pickers that choose one."""
+    items = kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims")["items"]
+    return [{"name": i["metadata"]["name"],
+             "size": (i.get("status", {}).get("capacity", {}) or {}).get("storage") or
+                     i["spec"]["resources"]["requests"]["storage"],
+             "status": i.get("status", {}).get("phase", "Unknown"),
+             "access_modes": i.get("spec", {}).get("accessModes", []),
+             "storage_class": i.get("spec", {}).get("storageClassName", "")}
+            for i in items]
+
+
+def _reclass(request, step):
+    """A storage class change, reviewed or started, through the journalled
+    workflow; each step checks every Homestead copy can follow it."""
+    cfg = {**request.body, "namespace": request.body.get("namespace") or DEFAULT_NS}
+    if step == "plan":
+        return STORAGE_WORKFLOW.preview(cfg, request.user, OPS, runtime_check=runtime_check)
+    operation = STORAGE_WORKFLOW.start_reviewed(cfg, request.user, OPS, runtime_check=runtime_check)
+    _cache.pop("vol", None)
+    return {"ok": True, "operation": operation}
+
+
+def _q(request, name, default=""):
+    return (request.query.get(name) or [default])[0]
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.cached("vol", 8, get_volumes)),
+    ("GET", "/api/volumes/other"): ("viewer", lambda request: homestead_routes.cached("volother", 10, other_volumes)),
+    ("GET", "/api/volumes/edit-options"): ("viewer", lambda request: volume_edit_options(
+        _q(request, "ns", DEFAULT_NS), _q(request, "name"))),
+    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.cached("stor", 10, get_storage)),
+    ("GET", "/api/pvcs"): ("viewer", lambda request: claims(_q(request, "ns", DEFAULT_NS))),
+    ("POST", "/api/volumes/create"): ("operator", lambda request: create_volume(request.body)),
+    ("POST", "/api/volumes/edit"): ("operator", lambda request: edit_volume(request.body)),
+    ("POST", "/api/volumes/reclass/plan"): ("operator", lambda request: _reclass(request, "plan")),
+    ("POST", "/api/volumes/reclass/start"): ("admin", lambda request: _reclass(request, "start")),
+}

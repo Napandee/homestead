@@ -25,6 +25,7 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+import homestead_operations as OPS
 import homestead_routes
 
 kget = ksend = None
@@ -32,6 +33,7 @@ LHNS = "longhorn-system"
 API = "/apis/longhorn.io/v1beta2"
 _cache = {}
 STORAGE_CLASS = "longhorn-r2"
+DEFAULT_NS = "lab"           # where a restore goes when none is named
 
 TASKS = {
     "snapshot": "Snapshot — point-in-time, stored on the volume",
@@ -48,10 +50,11 @@ GROUP_LABEL = "recurring-job-group.longhorn.io/"
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
 
 
-def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2"):
-    global kget, ksend, _cache, STORAGE_CLASS
+def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2", default_namespace=None):
+    global kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS
     kget, ksend, _cache = _kget, _ksend, _cache_ref
     STORAGE_CLASS = storage_class
+    DEFAULT_NS = default_namespace or DEFAULT_NS
     CSI_RESTORE.bind(_kget, _ksend)
 
 
@@ -1147,6 +1150,26 @@ def delete_backup(name):
     return {"ok": True, "backup": name}
 
 
+def run_job_now(b):
+    """Run a recurring job once, followed as a job of its own."""
+    result = run_job(b.get("name"))
+    result["operation"] = OPS.start(
+        "protect-run", f"Run {b['name']} now", {"kind": "Job", "name": result["job"],
+                                                "namespace": result["namespace"]},
+        "/data-protection", {"namespace": result["namespace"], "name": result["job"]}, "Starting")
+    return result
+
+
+def backup_now(b):
+    result = create_backup(b["volume"], b.get("name"))
+    if result.get("backup"):
+        result["operation"] = OPS.start(
+            "backup", f"Back up {b['volume']}",
+            {"kind": "Volume", "name": b["volume"], "namespace": "longhorn-system"},
+            "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/lh/job"): ("operator", lambda request: save_job(request.body)),
@@ -1162,4 +1185,9 @@ ROUTES = {
     ("POST", "/api/lh/target"): ("admin", lambda request: set_backup_target(request.body["url"], request.body.get("secret", ""), request.body.get("poll", "5m"), request.body.get("keys"))),
     ("GET", "/api/lh/snapshots"): ("viewer", lambda request: snapshots((request.query.get("volume") or [None])[0])),
     ("GET", "/api/lh/backups"): ("viewer", lambda request: backups((request.query.get("volume") or [None])[0])),
+    ("GET", "/api/lh/restore/plan"): ("viewer", lambda request: restore_plan(
+        (request.query.get("backup") or [""])[0], (request.query.get("ns") or [DEFAULT_NS])[0],
+        (request.query.get("name") or [""])[0])),
+    ("POST", "/api/lh/job/run"): ("operator", lambda request: run_job_now(request.body)),
+    ("POST", "/api/lh/backup"): ("operator", lambda request: backup_now(request.body)),
 }
