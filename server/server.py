@@ -754,6 +754,25 @@ def _forecast_loop():
         time.sleep(3600)
 
 
+def _usage_loop():
+    """Every five minutes on the leader: what each app's containers use, so
+    Edit can suggest what to reserve from a week rather than one moment."""
+    last = 0
+    while True:
+        if LEADER.is_leader() and time.time() - last >= USAGE.STEP:
+            try:
+                metrics = kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])
+                pods = [p for p in kget("/api/v1/pods").get("items", [])
+                        if not NAMES.label_of(p.get("metadata") or {}, "task")]
+                USAGE.record(USAGE.readings(pods, metrics, _flow_owner, SYS_NS))
+                last = time.time()
+                beat("usage", USAGE.STEP, leader_only=True)
+            except Exception as error:
+                beat("usage", USAGE.STEP, error, leader_only=True)
+                print(f"usage: {str(error)[:160]}", flush=True)
+        time.sleep(30)
+
+
 def _changes_loop():
     """Every minute on the leader: what changed in each app since the last look."""
     last = time.time()
@@ -6960,6 +6979,7 @@ import homestead_impact as IMPACT
 import homestead_changes as CHANGES
 import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
+import homestead_usage as USAGE
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -7084,6 +7104,7 @@ SCHEDULES.bind(DATA_DIR)
 OUTAGE.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
+USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
 
 
 def port_contexts(probes):
@@ -8160,7 +8181,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
 def samba_state():
@@ -8857,6 +8878,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
             "memory_limit": limits.get("memory", ""),
+            "usage": USAGE.summary(ns, name, container.get("name", ""), requests, limits),
             "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),
@@ -11814,6 +11836,7 @@ def start_background_tasks():
     threading.Thread(target=_schedules_loop, name="schedules", daemon=True).start()
     threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
     threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
+    threading.Thread(target=_usage_loop, name="usage", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()

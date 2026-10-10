@@ -45,6 +45,15 @@ The form asks, in order:
   set too low can OOM-kill and restart the app. Edit shows each container's
   current values, including sidecars. Compose imports carry `mem_limit` and
   `deploy.resources.limits.memory` into Memory max.
+- **What it uses, and what to reserve.** Homestead records every container's
+  CPU and memory every five minutes and keeps two weeks. Edit shows, beside
+  each reserved field, what the container used 95% of the time over the last
+  seven days and its peak. After a day of readings it offers a reservation:
+  CPU at 1.5 times that usual use (at least 1%), memory at 1.25 times (at
+  least 32 MiB), never above Memory max. **Use suggested** only fills the
+  fields; nothing changes until you save, which restarts the app. The
+  scheduler places apps by what they reserve, not by what they use, so an app
+  that reserves nothing is placed as if it used nothing.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.

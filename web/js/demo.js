@@ -1702,7 +1702,13 @@ ssh_pwauth: true
           : [{ name: "web", container: 8123, protocol: "TCP", host: 8123, expose: true }],
         hardware: index ? [] : (found.hardware || []), volumes: index ? [] : [{ name: "config",
           source: `${found.name}-config`, path: "/config", read_only: false, kind: "existing",
-          value: `${found.name}-config`, managed: false }] }));
+          value: `${found.name}-config`, managed: false }],
+        // A week of recorded use: the app outgrew what it reserves, and its
+        // sidecar has only a few hours so far.
+        usage: index ? { days: 1, samples: 40, window_days: 7, since: "", cpu_p95_m: 3, cpu_max_m: 6, mem_p95_mi: 21, mem_max_mi: 24,
+            why: "A suggestion needs a day of readings; 40 of 288 so far." }
+          : { days: 7, samples: 2016, window_days: 7, since: "", cpu_p95_m: 118, cpu_max_m: 640, mem_p95_mi: 412, mem_max_mi: 598,
+            suggest: { cpu: "180m", memory: "528Mi", capped: [], differs: true } } }));
       return { ns: found.ns, name: found.name, container_name: containers[0].name,
         pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
