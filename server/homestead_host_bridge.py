@@ -28,6 +28,9 @@ Nothing is done to a host whose network Homestead cannot describe.
 import re
 import time
 
+import homestead_operations as OPS
+import homestead_routes as ROUTER
+
 hostrun = kget = ksend = None
 BRIDGE = "br0"
 ROLLBACK_SECONDS = 240
@@ -292,7 +295,18 @@ def status(item, now=None):
     return "succeeded", 100, f"{node} is on {BRIDGE}"
 
 
+def convert(body):
+    """The conversion, confirmed by the host's name, as a job."""
+    node = str(body.get("node") or "")
+    if not node or str(body.get("confirm") or "").strip() != node:
+        raise ValueError(f"type the host's name, {node}, to confirm")
+    op = start(node, OPS)
+    ROUTER.forget("network")
+    return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it in the job tray"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/node/bridge/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
+    ("POST", "/api/node/bridge"): ("admin", lambda request: convert(request.body)),
 }

@@ -102,6 +102,17 @@ class ThroughTheServer(unittest.TestCase):
             del ROUTES._table[("POST", "/api/test/busy")]
         self.assertEqual((409, {"error": "busy", "plan": []}, "application/json"), handler._send.call_args.args)
 
+    def test_a_reply_keeps_its_status(self):
+        # A drain that would strand workloads is refused with what it would strand.
+        server, handler = self.handler("POST", "/api/node/drain", {"node": "node1"})
+        impact = {"stranded": [{"ns": "lab", "name": "web"}]}
+        with mock.patch.object(server.PLACE, "impact", return_value=impact), \
+                mock.patch.object(server.LC, "drain") as drain:
+            handler.do_POST()
+        code, body = handler._send.call_args.args[:2]
+        self.assertEqual((409, impact), (code, body["impact"]))
+        drain.assert_not_called()
+
     def test_a_module_error_is_answered_as_server_py_answers_its_own(self):
         server, handler = self.handler("POST", "/api/firewall/delete", {"name": "gone"})
         with mock.patch.object(server.FIREWALL, "remove", side_effect=ValueError("The policy no longer exists")):

@@ -52,7 +52,7 @@ class HeartbeatTests(unittest.TestCase):
         with mock.patch.object(server, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: True), \
                 mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}), \
-                mock.patch.object(server, "node_temps", lambda: {}), \
+                mock.patch.object(server.NODES, "node_temps", lambda: {}), \
                 mock.patch.object(server, "samba_state", lambda: {"installed": False}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
             health = server.SELF_HEALTH.report()
@@ -62,7 +62,7 @@ class HeartbeatTests(unittest.TestCase):
         with mock.patch.object(server, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: False), \
                 mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {}), \
-                mock.patch.object(server, "node_temps", lambda: {}), \
+                mock.patch.object(server.NODES, "node_temps", lambda: {}), \
                 mock.patch.object(server, "samba_state", lambda: {}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
             standby = {r["name"]: r["state"] for r in server.SELF_HEALTH.report()["loops"]}

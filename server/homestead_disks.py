@@ -20,6 +20,7 @@ import re
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_operations as OPS
 import homestead_routes
 
 kget = ksend = None
@@ -940,8 +941,49 @@ def auto_tag():
     return tagged
 
 
+def _forget_storage(result):
+    # Disks, the storage picture and Longhorn's capacity all change together.
+    for prefix in ("disk", "stor", "lhcap"):
+        homestead_routes.forget_prefix(prefix)
+    return result
+
+
+def _retire(body):
+    op = retire_start(body, OPS)
+    homestead_routes.forget("disks", "lhcap", "nodes", "ov")
+    return {"ok": True, "operation": op}
+
+
+def _longhorn_disk(action, body):
+    """Add a disk to Longhorn, or allow, evict or remove one it has."""
+    result = (add(body) if action == "add"
+              else set_scheduling(body.get("node", ""), body.get("disk", ""), body.get("allow", True)) if action == "scheduling"
+              else evict(body.get("node", ""), body.get("disk", ""), body.get("on", True)) if action == "evict"
+              else remove(body.get("node", ""), body.get("disk", "")))
+    homestead_routes.forget("disks", "lhcap", "nodes", "ov")
+    return result
+
+
+def _renamed(result):
+    homestead_routes.forget("disks")
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/disks/retire"): ("admin", lambda request: _retire(request.body)),
+    ("POST", "/api/disks/os-space/use"): ("admin", lambda request: _forget_storage(use_os_space(request.body))),
+    ("POST", "/api/disks/setup"): ("admin", lambda request: _forget_storage(set_up(request.body))),
+    ("POST", "/api/disks/add"): ("admin", lambda request: _longhorn_disk("add", request.body)),
+    ("POST", "/api/disks/scheduling"): ("admin", lambda request: _longhorn_disk("scheduling", request.body)),
+    ("POST", "/api/disks/evict"): ("admin", lambda request: _longhorn_disk("evict", request.body)),
+    ("POST", "/api/disks/remove"): ("admin", lambda request: _longhorn_disk("remove", request.body)),
+    ("POST", "/api/disks/name"): ("admin", lambda request: _renamed(set_disk_name(
+        request.body.get("node", ""), request.body.get("device", ""), request.body.get("name", "")))),
+    ("POST", "/api/disks/tags"): ("admin", lambda request: _renamed(set_disk_tags(
+        request.body.get("node", ""), request.body.get("disk", ""), request.body.get("tags") or []))),
+    ("POST", "/api/disks/node-tags"): ("admin", lambda request: _renamed(set_node_tags(
+        request.body.get("node", ""), request.body.get("tags") or []))),
     ("POST", "/api/disks/retire/plan"): ("admin", lambda request: retire_plan(request.body.get("node", ""), request.body.get("disk", ""))),
     ("POST", "/api/disks/os-space"): ("admin", lambda request: os_space(str(request.body.get("node") or ""))),
     ("POST", "/api/disks/inspect"): ("admin", lambda request: inspect_disk(str(request.body.get("node") or ""), str(request.body.get("device") or ""))),
