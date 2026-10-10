@@ -21,6 +21,7 @@ import homestead_failover as FAILOVER
 import homestead_memory as MEMORY
 import homestead_maintenance as MAINTENANCE
 import homestead_place as PLACE
+import homestead_priority as PRIORITY
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # Enabled by default, but still admin-only and guarded by impact review,
@@ -543,6 +544,23 @@ def restarts(current, proposed):
     return _pod_template(current) != _pod_template(proposed)
 
 
+def _apply_priority(spec, tier):
+    """The tier chosen in Edit. Normal is no class at all; a class Homestead
+    does not keep is left as it is, since Edit does not offer to change it."""
+    if tier not in PRIORITY.TIERS:
+        raise ValueError("the priority tier must be critical, normal or low")
+    current, _ = PRIORITY.tier_of(spec)
+    if current == "other" or current == tier:
+        return
+    if tier == "normal":
+        spec.pop("priorityClassName", None)
+    else:
+        spec["priorityClassName"] = PRIORITY.TIERS[tier]["name"]
+    # Values copied in from a pod: admission refuses ones not the class's.
+    spec.pop("priority", None)
+    spec.pop("preemptionPolicy", None)
+
+
 def prepare_edit(cfg, current=None):
     """Read-only edit construction; all validation precedes side effects."""
     ns, name = cfg["ns"], cfg["name"]
@@ -555,6 +573,8 @@ def prepare_edit(cfg, current=None):
     if not containers:
         raise ValueError(f"{name} has no editable containers")
 
+    if "priority" in cfg:
+        _apply_priority(spec, cfg["priority"])
     removed = cfg.get("remove_containers") or []
     if not isinstance(removed, list) or any(not isinstance(item, str) for item in removed):
         raise ValueError("removed containers must be a list of names")

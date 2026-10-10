@@ -45,6 +45,13 @@ linked cluster, which applies its own rules to them.
   processes or IPC, and host folders are for admins to give
   (`homestead_host_access.py`). Editing or opening a console in an existing
   privileged workload also requires an admin.
+- **Bulk jobs**: setting reservations or priority tiers for many apps checks
+  each app as the person who started it, as Edit does - an operator cannot
+  reach a management, service-account or host-privileged workload through
+  them.
+- **Scheduling**: Homestead may create PriorityClasses (Kubernetes cannot
+  limit creating them by name) and reads only its own two. A critical app may
+  evict any pod with no tier when room is short; operators can set it.
 - **Files**: the volume browser refuses `..` and quotes every path it passes
   to its helper pod; nothing runs through a shell with request data.
 - **The pod**: runs as a non-root user with a read-only root filesystem, no

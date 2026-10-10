@@ -212,6 +212,16 @@ function failoverSelect(id, current, extra = "") {
 }
 window.FAILOVER_WORDS = FAILOVER_WORDS;
 window.FAILOVER_HELP = FAILOVER_HELP;
+
+/* Which apps fit first when the cluster is short of room. */
+const PRIORITY_HELP = {
+  critical: "Fits first, and whenever it does not fit - after a host fails, or as it restarts, updates or grows - may evict any pod of a lower tier: low apps, and anything with no tier, Homestead included. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
+  normal: "Fits in turn, as every app does by default, and may evict low apps to fit.",
+  low: "Waits for room and never evicts anything; any other app that needs room evicts it first. For batch work and CI runners.",
+};
+window.PRIORITY_HELP = PRIORITY_HELP;
+const prioritySelect = (id, tier, attrs = "") => `<select id="${id}" ${attrs}>${["critical", "normal", "low"].map(t =>
+  `<option value="${t}" ${t === tier ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select>`;
 window.failoverSelect = failoverSelect;
 
 /* Placement, at the three levels there are: the containers in one pod
@@ -248,6 +258,12 @@ function placementSection(p, w, nodes, containers) {
       <div class="place-grid failover"><div class="f">${failoverSelect("e_failover", w.failover || "default",
           `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
         <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
+    <div class="place-level"><div class="place-title">When the cluster is short of room</div>
+      <div class="place-grid failover"><div class="f">${w.priority === "other" || w.priority === "self"
+          ? `<span class="mono">${esc(w.priority_class || "no class")}</span>`
+          : prioritySelect("e_priority", w.priority || "normal", `aria-label="Tier when the cluster is short of room" aria-describedby="e_priority_help" onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}</div>
+        <div class="dim small" id="e_priority_help" aria-live="polite">${esc(w.priority === "self" ? "Set by Homestead's own manifest, which every upgrade applies."
+          : w.priority === "other" ? "A priority class Homestead does not keep; it is left as it is." : PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
     <div class="note" id="e_place_note" hidden></div></section>`;
 }
 /* From a container's menu: the editor, opened at its placement. */
@@ -492,7 +508,8 @@ window.editSave = async (ns, name) => {
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
-    placement: readPlacement(), failover: $("#e_failover")?.value || "", monitoring: monitoringFieldValue("e") };
+    placement: readPlacement(), failover: $("#e_failover")?.value || "", monitoring: monitoringFieldValue("e"),
+    ...($("#e_priority") ? { priority: $("#e_priority").value } : {}) };
   const access = $("#e_net")?.value;
   if (["loadbalancer", "internal", "lan"].includes(access)) {
     body.address = { network_mode: access, vip_mode: $("#e_vip_mode")?.value || "shared", lb_ip: ($("#e_lb_ip")?.value || "").trim() };

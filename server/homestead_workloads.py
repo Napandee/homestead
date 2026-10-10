@@ -29,6 +29,7 @@ import homestead_networking as NETWORK
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
 import homestead_place as PLACE
+import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
 import homestead_rename as RENAME
 import homestead_restore_test as RESTORE_TEST
@@ -181,8 +182,19 @@ def preview_edit(request):
 def edit(request):
     b = request.body
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
+    # Homestead's manifest sets its own priority on every upgrade.
+    if is_self(b.get("ns", ""), b.get("name", "")):
+        b.pop("priority", None)
     prepared, context, plan = edit_capacity_plan(b)
     CAPACITY_REVIEW.enforce(b, plan, context)
+    # The class is made only when an app first moves into its tier:
+    # every save sends the tier, and most keep it. A class someone made with
+    # other values is kept, and the save says so.
+    notes = []
+    if b.get("priority") in ("critical", "low") and context.get("action") != RENAME.KIND and PRIORITY.tier_of(
+            (kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}").get("spec") or {})
+            .get("template", {}).get("spec") or {})[0] != b["priority"]:
+        notes = PRIORITY.ensure((b["priority"],))
     if context.get("action") == RENAME.KIND:
         def admission(dep):
             return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
@@ -199,7 +211,10 @@ def edit(request):
     if moves:
         return COPY_JOB.start(b, context, prepared, moves, kget, OPS,
                               lambda: apply_reviewed_edit(b, prepared, hold=True))
-    return apply_reviewed_edit(b, prepared)
+    result = apply_reviewed_edit(b, prepared)
+    if notes and isinstance(result, dict):
+        result["detail"] = " ".join(filter(None, [str(result.get("detail") or ""), "; ".join(notes) + "."]))
+    return result
 
 
 def move_to_host(request):
@@ -680,7 +695,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
             "memory_limit": limits.get("memory", ""),
-            "usage": USAGE.summary(ns, name, container.get("name", ""), requests, limits),
+            "usage": USAGE.summary(ns, name, container.get("name", ""), requests, limits, tier=PRIORITY.tier_of(pspec)[0]),
             "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),
@@ -727,6 +742,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),
+        # Homestead's own is set by its manifest, which every upgrade applies.
+        "priority": "self" if is_self(ns, name) else PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),

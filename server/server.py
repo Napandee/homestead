@@ -1971,7 +1971,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND)
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -2547,6 +2547,7 @@ import homestead_forecast as FORECAST
 import homestead_usage as USAGE
 import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
+import homestead_priority as PRIORITY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2705,6 +2706,8 @@ RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRA
 RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS, lambda exclude=(): CREBALANCE.plan(exclude),
               CREBALANCE.start, (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"),
               LEADER.is_leader, beat, UPDATES.managed_by)
+PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
+              HOSTACCESS.require_target_as, OPS)
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
