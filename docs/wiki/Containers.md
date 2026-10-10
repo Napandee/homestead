@@ -652,6 +652,35 @@ new reservation, or if it is gone. One that does not come back within ten
 minutes stops the job; the rest are not changed. Follow and stop it in
 **Jobs**.
 
+### Priority tiers
+
+When a host fails and the others cannot hold every app, the scheduler fits
+them by priority. Each app has a tier:
+
+- **Critical** fits first, and may evict any pod of a lower tier to fit - low
+  apps, and anything with no tier, Homestead itself included. For what the
+  house depends on: home automation, passwords, a database, DNS or a tunnel.
+- **Normal** is no tier at all, as every app has by default. (On a cluster
+  with a default PriorityClass of its own, it means that class.)
+- **Low** waits for room and evicts nothing. For batch work and CI runners.
+
+Set one app's tier in Edit → Placement → **When the cluster is short of
+room**, or many at once with **Priority tiers…** in Containers' **⋯** menu,
+where apps that look like home automation, a password manager, a database,
+DNS or a tunnel start at critical - not their exporters or backup helpers -
+and CI runners at low, at most 50 changes a run. Changing a tier restarts the
+app; the bulk job changes one app at a time, as reservations do.
+
+Homestead makes the PriorityClasses `homestead-critical` (1000) and
+`homestead-low` (-1000, never preempts) the first time a tier needs one; it
+makes neither the cluster's default. An app's tier is read from its pod, so
+one set by hand or by Flux shows as it is. Apps Flux or Argo CD apply are
+shown but changed there, not here; a class Homestead does not keep is left
+alone; and Homestead's own tier is set by its manifest. A critical app's
+suggested memory reservation has more headroom - 1.5 times its usual use -
+since a host short of memory evicts the pods most over their reservation
+first, whatever their tier.
+
 ## Reviewed image updates and rollback
 
 Image updates and rollback show the exact immutable target images and a full-pod

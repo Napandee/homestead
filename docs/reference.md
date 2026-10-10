@@ -1040,6 +1040,8 @@ adding what new features need and dropping what nothing uses any more - so an
 upgrade needs no `kubectl`. Rules added to that role by hand do not survive
 this; give anything extra its own role and binding.
 **Settings → Homestead → About this installation → Permissions** says what it last did.
+Until it has, features that need a new permission say so - priority tiers, for
+one, need to create PriorityClasses.
 
 That needs the right to edit its own role, which an older install does not
 have yet. Grant it once, wherever you use `kubectl` (a Rancher

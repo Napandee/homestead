@@ -117,6 +117,15 @@ Service - it answers on the node itself - so remove the Service under
 When a host comes back → In the update window**: it moves containers back onto
 the returned host. Set it to **Suggest** or **No** to stop it.
 
+**A low-tier app stays Pending after a host failed.** Low apps wait for room
+and evict nothing. Give it a higher tier (Edit → Placement → **When the cluster
+is short of room**), or free some room.
+
+**Setting a priority tier says Homestead may not make priority classes yet.**
+Its permissions are from an earlier version. **Settings → Homestead → About
+this installation → Permissions** gives the one `kubectl` command that brings
+them up to date.
+
 **Set reservations from use stopped part way.** One app did not run again
 within ten minutes of its new reservation; the job names it, and the apps after
 it were not changed. Look at that app's events, then review again: apps already

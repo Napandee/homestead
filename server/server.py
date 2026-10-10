@@ -7167,7 +7167,8 @@ CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
 RECOVERY.bind(DATA_DIR)
-PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
+PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
+              lambda obj, namespace, role: guard_as(obj, namespace, role))
 OPS.RESOLVERS[PRIORITY.KIND] = PRIORITY.status
 OPS.CANCELLERS[PRIORITY.KIND] = (PRIORITY.cancel_plan, PRIORITY.cancel_run)
 
@@ -9015,7 +9016,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),
-        "priority": PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
+        # Homestead's own is set by its manifest, which every upgrade applies.
+        "priority": "self" if is_self(ns, name) else PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
@@ -10264,7 +10266,7 @@ class H(HTTP.LimitedHandler):
             if p == "/api/workloads/priority/plan":
                 chosen = q.get("chosen")
                 picks = dict(item.split("=", 1) for item in chosen[0].split(",") if "=" in item) if chosen else None
-                return self._send(200, PRIORITY.plan(picks))
+                return self._send(200, PRIORITY.plan(picks, HOSTACCESS.role()))
             if p == "/api/workloads/requests/plan":
                 chosen = q.get("chosen")
                 return self._send(200, RESERVE.plan([a for a in chosen[0].split(",") if a] if chosen else None, HOSTACCESS.role()))
@@ -11025,10 +11027,17 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context)})
             if p == "/api/edit":
                 guard_managed_smb(b.get("ns", ""), b.get("name", ""))
+                # Homestead's manifest sets its own priority on every upgrade.
+                if is_self(b.get("ns", ""), b.get("name", "")):
+                    b.pop("priority", None)
                 prepared, context, plan = edit_capacity_plan(b)
                 CAPACITY_REVIEW.enforce(b, plan, context)
-                if b.get("priority") in ("critical", "low"):
-                    PRIORITY.ensure()
+                # The class is made only when an app first moves into its tier:
+                # every save sends the tier, and most keep it.
+                if b.get("priority") in ("critical", "low") and context.get("action") != RENAME.KIND and PRIORITY.tier_of(
+                        (kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}").get("spec") or {})
+                        .get("template", {}).get("spec") or {})[0] != b["priority"]:
+                    PRIORITY.ensure((b["priority"],))
                 if context.get("action") == RENAME.KIND:
                     def admission(dep):
                         return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
@@ -11384,12 +11393,12 @@ class H(HTTP.LimitedHandler):
                 if b.get("restart") is not True:
                     return self._send(409, {"error": "A new tier restarts each app; confirm the restarts"})
                 try:
-                    apps = PRIORITY.reviewed(b.get("changes"), b.get("review_token"))
+                    apps = PRIORITY.reviewed(b.get("changes"), b.get("review_token"), HOSTACCESS.role())
                 except ValueError as error:
-                    return self._send(409, {"error": str(error), "plan": PRIORITY.plan()})
+                    return self._send(409, {"error": str(error), "plan": PRIORITY.plan(None, HOSTACCESS.role())})
                 operation = OPS.start(PRIORITY.KIND, f"Set the priority tier of {len(apps)} app{'' if len(apps) == 1 else 's'}",
                                       {"kind": "Deployment", "name": "priority"}, "/containers",
-                                      {"apps": apps, "index": 0, "done": 0, "stage": "apply"},
+                                      {"apps": apps, "index": 0, "done": 0, "stage": "apply", "role": HOSTACCESS.role()},
                                       "Making the priority classes")
                 return self._send(202, {"operation": operation})
             if p == "/api/workloads/requests":

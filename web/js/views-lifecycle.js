@@ -202,7 +202,7 @@ window.FAILOVER_HELP = FAILOVER_HELP;
 
 /* Which apps fit first when the cluster is short of room. */
 const PRIORITY_HELP = {
-  critical: "Fits first after a host fails, and may evict a lower-tier app to fit. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
+  critical: "Fits first after a host fails, and may evict any pod of a lower tier to fit - low apps, and anything with no tier, Homestead included. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
   normal: "Fits in turn, as every app does by default.",
   low: "Waits for room and never evicts anything. For batch work and CI runners.",
 };
@@ -246,10 +246,11 @@ function placementSection(p, w, nodes, containers) {
           `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
         <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
     <div class="place-level"><div class="place-title">When the cluster is short of room</div>
-      <div class="place-grid failover"><div class="f">${w.priority === "other"
-          ? `<span class="mono">${esc(w.priority_class)}</span>`
-          : prioritySelect("e_priority", w.priority || "normal", `onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}</div>
-        <div class="dim small" id="e_priority_help">${esc(w.priority === "other" ? "A priority class Homestead does not keep; it is left as it is." : PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
+      <div class="place-grid failover"><div class="f">${w.priority === "other" || w.priority === "self"
+          ? `<span class="mono">${esc(w.priority_class || "no class")}</span>`
+          : prioritySelect("e_priority", w.priority || "normal", `aria-label="Tier when the cluster is short of room" aria-describedby="e_priority_help" onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}</div>
+        <div class="dim small" id="e_priority_help" aria-live="polite">${esc(w.priority === "self" ? "Set by Homestead's own manifest, which every upgrade applies."
+          : w.priority === "other" ? "A priority class Homestead does not keep; it is left as it is." : PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
     <div class="note" id="e_place_note" hidden></div></section>`;
 }
 /* From a container's menu: the editor, opened at its placement. */

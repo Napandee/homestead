@@ -77,11 +77,49 @@ class PriorityTests(unittest.TestCase):
         priority.ensure()
         priority.ensure()
         made = {body["metadata"]["name"]: body for method, _, body, _ in self.sent if method == "POST"}
-        self.assertEqual(3, len([s for s in self.sent if s[0] == "POST"]))
+        self.assertEqual({"homestead-critical", "homestead-low"}, set(made))
+        self.assertEqual(2, len([s for s in self.sent if s[0] == "POST"]))
         self.assertEqual("Never", made["homestead-low"]["preemptionPolicy"])
-        self.assertEqual(0, made["homestead-normal"]["value"])
         self.assertTrue(made["homestead-critical"]["value"] > 0 > made["homestead-low"]["value"])
         self.assertFalse(any(b["globalDefault"] for b in made.values()))
+
+    def test_only_the_class_a_tier_needs_is_made(self):
+        priority.ensure(("low",))
+        self.assertEqual(["homestead-low"], [b["metadata"]["name"] for m, _, b, _ in self.sent if m == "POST"])
+
+    def test_permissions_from_before_this_version_say_so_plainly(self):
+        denied = urllib.error.HTTPError("x", 403, "forbidden", {}, io.BytesIO())
+        priority.bind(mock.Mock(side_effect=denied), self.ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
+        with self.assertRaisesRegex(PermissionError, "permissions predate this version"):
+            priority.ensure(("critical",))
+
+    def test_a_class_made_meanwhile_by_another_save_is_taken_as_made(self):
+        def ksend(method, path, body=None, ctype=None):
+            raise urllib.error.HTTPError(path, 409, "exists", {}, io.BytesIO())
+        priority.bind(self.kget, ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
+        self.assertEqual([], priority.ensure(("critical",)))
+
+    def test_the_job_fails_plainly_when_it_may_not_make_the_classes(self):
+        plan = priority.plan()
+        apps = priority.reviewed([a for a in plan["apps"] if a["tier"] != a["current"]], plan["review_token"])
+        with mock.patch.object(priority, "ensure", side_effect=PermissionError(priority.NO_PERMISSION)):
+            state, _, message = priority.status({"ref": {"apps": apps, "index": 0, "done": 0, "stage": "apply"}})
+        self.assertEqual("failed", state)
+        self.assertIn("permissions", message)
+
+    def test_an_exporter_or_backup_beside_a_database_is_not_suggested_critical(self):
+        for name in ("postgres-exporter", "mariadb-backup", "adguardhome-sync"):
+            self.assertEqual((None, ""), priority.suggestion(deployment(name, image=f"example/{name}")), name)
+        self.assertEqual("critical", priority.suggestion(deployment("db", image="postgres:16"))[0])
+
+    def test_an_operator_is_not_offered_apps_only_an_admin_may_change(self):
+        def guard(dep, ns, role):
+            if role == "operator" and dep["metadata"]["name"] == "paperless":
+                raise PermissionError("only an admin can operate management, system, service-account or host-privileged workloads")
+        with mock.patch.object(priority, "guard", guard):
+            plan = priority.plan(None, "operator")
+            self.assertNotIn("lab/paperless", {a["id"] for a in plan["apps"]})
+            self.assertIn("only an admin", {s["id"]: s for s in plan["skipped"]}["lab/paperless"]["why"])
 
     def test_a_class_someone_made_with_another_value_is_kept_and_said(self):
         self.classes["homestead-critical"] = {"value": 5}
@@ -126,7 +164,7 @@ class PriorityTests(unittest.TestCase):
         priority.status(item)
         patch = [s for s in self.sent if s[0] == "PATCH"][0]
         self.assertEqual("/apis/apps/v1/namespaces/lab/deployments/vault", patch[1])
-        self.assertEqual({"spec": {"template": {"spec": {"priorityClassName": None}}}}, patch[2])
+        self.assertEqual({"spec": {"template": {"spec": {"priorityClassName": None, "priority": None}}}}, patch[2])
         self.assertEqual("application/strategic-merge-patch+json", patch[3])
         priority.status(item)
         self.assertEqual(("succeeded", 100), priority.status(item)[:2])
@@ -140,6 +178,9 @@ class PriorityTests(unittest.TestCase):
         foreign = {"priorityClassName": "unifi-high"}
         lifecycle._apply_priority(foreign, "low")
         self.assertEqual("unifi-high", foreign["priorityClassName"])
+        copied = {"priority": 0}
+        lifecycle._apply_priority(copied, "low")
+        self.assertEqual({"priorityClassName": "homestead-low"}, copied)
         with self.assertRaisesRegex(ValueError, "critical, normal or low"):
             lifecycle._apply_priority({}, "urgent")
 
@@ -155,15 +196,15 @@ class HeadroomTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             usage.bind(folder, server.parse_cpu, server.parse_mem)
             try:
-                for i in range(usage.MIN_SAMPLES):
+                for i in range(usage.MIN_ROUNDS):
                     usage.record([("lab", "ha", "ha", 100, 400)], now=1_760_000_000 + i * usage.STEP)
-                now = 1_760_000_000 + usage.MIN_SAMPLES * usage.STEP
+                now = 1_760_000_000 + usage.MIN_ROUNDS * usage.STEP
                 normal = int(usage.summary("lab", "ha", "ha", now=now)["suggest"]["memory"][:-2])
                 critical = int(usage.summary("lab", "ha", "ha", now=now, tier="critical")["suggest"]["memory"][:-2])
             finally:
                 usage.bind("/data", server.parse_cpu, server.parse_mem)
         self.assertGreater(critical, normal)
-        self.assertTrue(600 <= critical <= 680, critical)          # 400Mi x 1.5, within a bucket
+        self.assertTrue(592 <= critical <= 640, critical)          # 400Mi x 1.5, within half a bucket
 
 
 if __name__ == "__main__":
