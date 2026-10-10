@@ -39,6 +39,7 @@ STORES = [
     ("Long-term stats", ["history.json", "history-live.json"], "live for an hour, five-minutely for 2 days, hourly for 90 days"),
     ("Change history", ["change-history.json"], "50 changes per app, for 180 days"),
     ("Storage forecast", ["storage-forecast.json"], "a figure a day for 90 days"),
+    ("Hosts coming back", ["recovery.json"], "which hosts returned in the last day, and whether that was dealt with"),
     ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
     ("Alerts", ["alerts.json"], "what is active, and recent alerts"),
     ("Schedules", ["schedules.json"], "the last stop or start of each schedule"),

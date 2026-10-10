@@ -7,7 +7,7 @@ Settings has eight sections: seven that change the cluster for everyone, and
 | Section | What is there |
 |---|---|
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
-| **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
+| **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window; whether containers move back when a host returns |
 | **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
@@ -151,6 +151,25 @@ Deployment.
 
 A notification about a new Homestead release links here: `/settings?tab=about`
 opens this tab, as `?tab=` does for any of them.
+
+## When a host comes back
+
+While a host is down or drained, its containers start on the others, and
+Kubernetes never moves them back. **Updates → When a host comes back** says
+what Homestead does once the host takes work again (Ready, and not cordoned):
+
+- **No** - nothing. **Balance hosts** in Containers moves them when you choose.
+- **Suggest** - an alert under *Hosts joining* says the host is back and how
+  many containers the rebalance would move. Nothing moves until someone
+  reviews it in Balance hosts.
+- **In the update window** - the same alert, then the rebalance runs by itself
+  once, in the next opening of the update window, as the job a person would
+  start. An app whose scheduled job (a nightly backup, say) shares its volume
+  and runs before the window closes is left where it is: the job has to run on
+  the app's host while the volume is attached there.
+
+Only moves worth a restart are made, with the same checks as Balance hosts. A
+host back for a day without anything worth moving is forgotten.
 
 ## Homestead's own health
 

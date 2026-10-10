@@ -108,6 +108,9 @@ DEFAULT_APP_SETTINGS = {
     # Rebuild missing copies of detached volumes. Longhorn's own setting where
     # it has one; this drives Homestead's stand-in where it has not.
     "longhorn": {"offline_rebuilding": True},
+    # What happens when a host comes back: off, suggest (an alert to review
+    # Balance hosts), or window (that rebalance, run in the maintenance window).
+    "placement": {"rebalance": "off"},
     # Monthly restore tests of every app with backups (homestead_restore_test).
     "restore_tests": {"enabled": False},
 }
@@ -495,6 +498,10 @@ def validate_app_settings(value):
     if not isinstance(rebuild, bool):
         raise ValueError("offline rebuilding must be true or false")
     out["longhorn"] = {"offline_rebuilding": rebuild}
+    rebalance = ((value or {}).get("placement") or {}).get("rebalance", out["placement"]["rebalance"])
+    if rebalance not in RECOVERY.MODES:
+        raise ValueError("after a host comes back must be off, suggest or window")
+    out["placement"] = {"rebalance": rebalance}
     tests = ((value or {}).get("restore_tests") or {}).get("enabled", False)
     if not isinstance(tests, bool):
         raise ValueError("restore tests must be on or off")
@@ -517,19 +524,8 @@ def update_policy_status(settings=None, now=None):
     update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
     policy = update.get("policy", "approval_required")
     maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
-    current = time.gmtime(time.time() if now is None else now)
-    hour, minute = (int(part) for part in maintenance["start"].split(":"))
-    start_minute = hour * 60 + minute
-    current_minute = current.tm_hour * 60 + current.tm_min
     duration = int(maintenance["duration_minutes"])
-    # A window may cross midnight. In that case early minutes belong to the
-    # previous configured day, not the current one.
-    today_open = current.tm_wday in maintenance["days"] and (
-        start_minute <= current_minute < min(1440, start_minute + duration))
-    previous_day = (current.tm_wday - 1) % 7
-    carry = max(0, start_minute + duration - 1440)
-    carry_open = previous_day in maintenance["days"] and current_minute < carry
-    window_open = bool(today_open or carry_open)
+    window_open = RECOVERY.window(maintenance, time.time() if now is None else now)[0]
     if policy == "notify_only":
         allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
     elif policy == "maintenance_window" and not window_open:
@@ -771,6 +767,62 @@ def _usage_loop():
                 beat("usage", USAGE.STEP, error, leader_only=True)
                 print(f"usage: {str(error)[:160]}", flush=True)
         time.sleep(30)
+
+
+def start_container_rebalance(plan, why=""):
+    """The container rebalance job for a reviewed plan - or, in the
+    maintenance window after a host came back, one Homestead made itself."""
+    moves = plan["moves"]
+    return OPS.start(CREBALANCE.KIND, f"Rebalance {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
+                     {"kind": "Deployment", "name": "rebalance"}, "/containers",
+                     {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
+                     "Starting with the first container")
+
+
+_recovery_planned = [0.0]
+
+
+def recovery_tick(now=None):
+    """One look: hosts that take work again, and - as settings.placement.
+    rebalance says - whether moving containers back would even things out,
+    and in the maintenance window, doing it. Returns the job started, if any."""
+    now = time.time() if now is None else now
+    settings = cached("settings", 15, get_app_settings)
+    mode = (settings.get("placement") or {}).get("rebalance", "off")
+    returned = RECOVERY.observe(kget("/api/v1/nodes").get("items", []), now)
+    if not returned or mode == "off":
+        return None
+    if any(i.get("kind") == CREBALANCE.KIND and i.get("status") not in OPS.TERMINAL for i in OPS.list_operations()):
+        return None
+    # A plan reads every pod and volume: worked out again every five minutes.
+    if now - _recovery_planned[0] >= 300:
+        _recovery_planned[0] = now
+        RECOVERY.suggest(CREBALANCE.plan()["moves"], now)
+    maintenance = settings["updates"]["maintenance"]
+    key = RECOVERY.window_key(maintenance, now)
+    if mode != "window" or not key or RECOVERY.already_ran(key) or not RECOVERY.observe_returned():
+        return None
+    closes = RECOVERY.window(maintenance, now)[1]
+    keep = RECOVERY.guarded(kget("/apis/batch/v1/cronjobs").get("items", []),
+                            kget("/apis/apps/v1/deployments").get("items", []), now, closes)
+    plan = CREBALANCE.plan(sorted(keep))
+    RECOVERY.ran(key)
+    if plan["moves"]:
+        return start_container_rebalance(plan, f" after {', '.join(sorted(returned))} came back")
+    return None
+
+
+def _recovery_loop():
+    """Every minute on the leader."""
+    while True:
+        if LEADER.is_leader():
+            try:
+                recovery_tick()
+                beat("recovery", 60, leader_only=True)
+            except Exception as error:
+                beat("recovery", 60, error, leader_only=True)
+                print(f"recovery: {str(error)[:160]}", flush=True)
+        time.sleep(60)
 
 
 def _changes_loop():
@@ -6981,6 +7033,7 @@ import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
 import homestead_usage as USAGE
 import homestead_requests as RESERVE
+import homestead_recovery as RECOVERY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -7106,6 +7159,7 @@ OUTAGE.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
+RECOVERY.bind(DATA_DIR)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
 OPS.RESOLVERS[RESERVE.KIND] = RESERVE.status
 OPS.CANCELLERS[RESERVE.KIND] = (RESERVE.cancel_plan, RESERVE.cancel_run)
@@ -7466,6 +7520,9 @@ def _alert_sources():
     take("outage", lambda: OUTAGE.alert_facts())
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
+    take("recovery", lambda: RECOVERY.alert_facts(
+        (cached("settings", 15, get_app_settings).get("placement") or {}).get("rebalance", "off"),
+        cached("settings", 15, get_app_settings)["updates"]["maintenance"]))
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -8185,7 +8242,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "recovery": "Rebalance after a host returns", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
 def samba_state():
@@ -11282,11 +11339,7 @@ class H(HTTP.LimitedHandler):
                         return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
                 if not plan["moves"]:
                     return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
-                operation = OPS.start(CREBALANCE.KIND, f"Rebalance {len(plan['moves'])} container{'' if len(plan['moves']) == 1 else 's'}",
-                                      {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
-                                      "Starting with the first container")
-                return self._send(202, {"operation": operation})
+                return self._send(202, {"operation": start_container_rebalance(plan)})
             if p == "/api/workloads/requests":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == RESERVE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)
@@ -11860,6 +11913,7 @@ def start_background_tasks():
     threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
     threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
     threading.Thread(target=_usage_loop, name="usage", daemon=True).start()
+    threading.Thread(target=_recovery_loop, name="recovery", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
