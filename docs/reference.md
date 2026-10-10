@@ -688,7 +688,7 @@ install the app; if installation still fails, add an Access **Bypass** policy fo
 working, refreshed every 15 seconds while it is open: how quickly the
 Kubernetes API answers, each copy of Homestead and which one leads, every
 background task (live charts, alerts, long-term stats, app usage history,
-hardware detection, cluster moves) with when it last did its work and its last error, the node
+rebalance after a host returns, hardware detection, cluster moves) with when it last did its work and its last error, the node
 probe (nodes running it, reporting, and with drive health), SMB status, the
 permissions check, backup storage and MQTT. SMB can be switched off from Settings → Hardware and storage → Add-ons -
 shares stop being served, and their volumes, settings and passwords are kept -
@@ -1709,6 +1709,11 @@ for the unreachable and not-ready taints, so it shows for containers made
 elsewhere too. A moved container's single-node volume follows it only if
 Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
 pods; the dialog says whether it does and sets it, as does Settings > Hardware and storage.
+
+Kubernetes never moves a container back once its host returns. **Settings >
+Updates > When a host comes back** can raise an alert offering the moves, or
+make them in the update window, leaving apps whose backup job is due where
+they are (see [Settings](wiki/Settings.md#when-a-host-comes-back)).
 
 ## Container groups
 

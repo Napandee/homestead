@@ -30,6 +30,16 @@ class OperationTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_a_start_is_refused_while_a_job_it_waits_for_is_unfinished(self):
+        operations.start("container-rebalance", "Rebalance 2 containers", {"kind": "Deployment", "name": "rebalance"},
+                         "/containers", {"moves": []})
+        with self.assertRaisesRegex(ValueError, "Rebalance 2 containers is running"):
+            operations.start("auto-update", "Update web automatically", {"kind": "Deployment", "name": "web"},
+                             "/containers", {}, unless=("container-rebalance",))
+        self.assertEqual("auto-update", operations.start("auto-update", "Update web automatically",
+                                                         {"kind": "Deployment", "name": "web"}, "/containers", {},
+                                                         unless=("os-rollout",))["kind"])
+
     def test_started_operation_is_persisted_without_private_ref(self):
         item = operations.start(
             "image-pull", "Pull example/image:1", {"kind": "Image", "name": "example/image:1"},

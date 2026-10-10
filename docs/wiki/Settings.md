@@ -7,7 +7,7 @@ Settings has eight sections: seven that change the cluster for everyone, and
 | Section | What is there |
 |---|---|
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
-| **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
+| **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window; whether containers move back when a host returns |
 | **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
@@ -152,6 +152,48 @@ Deployment.
 A notification about a new Homestead release links here: `/settings?tab=about`
 opens this tab, as `?tab=` does for any of them.
 
+## When a host comes back
+
+While a host is down or drained, its containers start on the others, and
+Kubernetes never moves them back. **Updates → When a host comes back** says
+what Homestead does once the host takes work again - Ready, and not cordoned,
+after it has been seen working before (a new host finishing joining is not
+"back"):
+
+- **No** - nothing. **Balance hosts** on Nodes, or **Rebalance containers…** in
+  Containers' menu, moves them when you choose.
+- **Suggest** - an alert under *Hosts joining* (a notification category on by
+  default) says the host is back and how many containers the rebalance would
+  move. Nothing moves until someone reviews it in Balance hosts.
+- **In the update window** - the same alert, then the rebalance runs by itself
+  in each opening of the update window, as the job a person would start,
+  titled *Rebalance N containers after host came back*. It does not start while
+  another job moves or restarts apps or changes hosts - an OS rollout or a
+  host's update, host power or a k3s change, a rebalance, a manual move, an
+  automatic or manual image update, reservations being set, a volume restore
+  or storage-class move, a VM migration, among others - and neither an
+  automatic update nor a scheduled OS rollout starts while it runs. The check
+  and the start are one step, so two that become due the same minute do not
+  both start. The window is used whatever the image update policy, notify
+  only included. The run can go on after the window closes: each move waits up
+  to ten minutes for its container to start. Apps Flux or Argo CD apply are
+  left out of it, since their next sync could move them back; move those by
+  hand, or in Git.
+
+In the window, an app is left where it is when a scheduled job (a CronJob)
+mounts its volume and is running, or runs while the rebalance may still be
+going - before the window closes, or within ten minutes a move for each
+container it would move - or has a schedule Homestead cannot read: the job has
+to run on the app's host while the volume is attached there. A CronJob without
+a time zone of its own runs on its controller's host clock - on k3s often
+local time - so Homestead allows for every clock its last run is consistent
+with, an hour either way in case the clocks have changed since. An app left
+where it is moves at the next opening.
+
+Only moves worth a restart are made, with the same checks as Balance hosts. A
+returned host is remembered until the rebalance finds nothing worth moving,
+and for a week at most; the alert clears then.
+
 ## Homestead's own health
 
 **About** shows whether the parts of Homestead that work in the background are
@@ -162,8 +204,8 @@ working, refreshed every 15 seconds:
 - how fast the Kubernetes API answers;
 - each copy of Homestead, and which one leads;
 - each background task - live charts, alerts, long-term stats, app usage
-  history, hardware detection, moves - with when it last worked and its last
-  error;
+  history, rebalance after a host returns, hardware detection, moves - with
+  when it last worked and its last error;
 - the node probe: how many hosts run it, report, and have drive health;
 - **Samba** - running, and on which address. Switch it off here (shares stop
   being served; volumes, settings and passwords are kept) and on again, which
@@ -174,7 +216,7 @@ working, refreshed every 15 seconds:
 
 **Settings › About › Homestead's data** shows what Homestead keeps on its own
 volume - monitoring and stats history, change history, the storage forecast,
-app usage, jobs, logs, logos and so on - each store's size and how long it keeps things,
+app usage, hosts coming back, jobs, logs, logos and so on - each store's size and how long it keeps things,
 and how full the volume is. Each store trims itself; once a day Homestead also
 trims its logs to a year (and 5,000 entries), removes logos nothing has used for
 30 days, and removes leftovers of interrupted writes. Past 80% full it keeps half

@@ -354,6 +354,10 @@ a time that has an update waiting, and:
 4. succeeds, or - if the rollout stalls or the app stops answering - rolls the
    image back and says so in the job, an alert and a push.
 
+No automatic update starts while a rebalance is moving containers. The same
+window can move containers back after a host returns
+([Settings](Settings#when-a-host-comes-back)).
+
 Only a newer build of the tag the app already follows is taken (a new digest of
 `:latest` or `:1.2`, never 1.2 to 2.0): a new version waits for you. An app that
 is not answering or not fully running beforehand is left alone, as there would

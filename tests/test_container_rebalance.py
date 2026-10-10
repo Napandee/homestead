@@ -4,6 +4,7 @@ import copy
 import sys
 import time
 import unittest
+from unittest import mock
 import urllib.error
 from unittest import mock
 from pathlib import Path
@@ -416,6 +417,18 @@ class RealGuardTests(unittest.TestCase):
         C.status(item)
         self.assertEqual([], self.c.moved)
         self.assertIn(f"lab/frigate: {C.ADMIN_ONLY}", item["ref"]["skipped"])
+
+
+class StartTests(unittest.TestCase):
+    def test_the_job_keeps_who_started_it_and_homesteads_own_run_has_no_role(self):
+        started = []
+        jobs = mock.Mock(start=lambda *a, **k: started.append(a) or {"id": "op"})
+        plan = {"moves": [{"ns": "lab", "name": "web", "id": "lab/web", "from": "k2", "to": "k1"}], "excluded": []}
+        with mock.patch.object(C, "operations", jobs):
+            C.start(plan, role="operator")
+            C.start(plan, " after k2 came back")
+        self.assertEqual(["operator", None], [a[4]["role"] for a in started])
+        self.assertEqual("Rebalance 1 container after k2 came back", started[1][1])
 
 
 if __name__ == "__main__":

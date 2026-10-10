@@ -46,13 +46,15 @@ requirements = satisfies = None # homestead_place: what a workload needs, whethe
 summaries = None                # homestead_place.get_nodes: the host summaries satisfies() reads
 apply = None                    # (ns, name, node) -> moves it, after the manual move's capacity check
 guard = None                    # (deployment, ns, role) -> raises PermissionError if that role may not change it
+operations = None               # homestead_operations: the job is one of its jobs
 is_leader = lambda: True
 
 
-def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None):
-    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard
+def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None,
+         _operations=None):
+    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard, operations
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
-    summaries, guard = _summaries, _guard
+    summaries, guard, operations = _summaries, _guard, _operations
     if _is_leader:
         is_leader = _is_leader
 
@@ -380,6 +382,18 @@ def reviewed(moves, exclude, token, role=None):
 
 
 # --------------------------------------------------------------- the job
+def start(plan, why="", role=None, unless=()):
+    """The job for a reviewed plan - or one Homestead made itself, in the
+    maintenance window after a host came back. role is who started it: each
+    move is checked for them again as it is made; None for Homestead's own.
+    unless: kinds of job that, while one runs, refuse this one (OPS.start)."""
+    moves = plan["moves"]
+    return operations.start(KIND, f"Rebalance {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
+                            {"kind": "Deployment", "name": "rebalance"}, "/containers",
+                            {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"], "role": role},
+                            "Starting with the first container", unless=unless)
+
+
 def _running_on(ns, name):
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     status, spec, meta = dep.get("status") or {}, dep.get("spec") or {}, dep.get("metadata") or {}
@@ -489,14 +503,7 @@ def start_run(request):
             return ROUTER.Reply(409, {"error": "Container load changed since the review; review again", "plan": chosen})
     if not chosen["moves"]:
         return ROUTER.Reply(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": chosen})
-    count = len(chosen["moves"])
-    operation = OPS.start(KIND, f"Rebalance {count} container{'' if count == 1 else 's'}",
-                          {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                          # Who started it: each move is checked for them again as it is made.
-                          {"moves": chosen["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": chosen["excluded"],
-                           "role": role},
-                          "Starting with the first container")
-    return ROUTER.Reply(202, {"operation": operation})
+    return ROUTER.Reply(202, {"operation": start(chosen, role=role)})
 
 
 # Its routes and who may use them (homestead_routes.py).

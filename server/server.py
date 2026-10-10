@@ -399,19 +399,8 @@ def update_policy_status(settings=None, now=None):
     update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
     policy = update.get("policy", "approval_required")
     maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
-    current = time.gmtime(time.time() if now is None else now)
-    hour, minute = (int(part) for part in maintenance["start"].split(":"))
-    start_minute = hour * 60 + minute
-    current_minute = current.tm_hour * 60 + current.tm_min
     duration = int(maintenance["duration_minutes"])
-    # A window may cross midnight. In that case early minutes belong to the
-    # previous configured day, not the current one.
-    today_open = current.tm_wday in maintenance["days"] and (
-        start_minute <= current_minute < min(1440, start_minute + duration))
-    previous_day = (current.tm_wday - 1) % 7
-    carry = max(0, start_minute + duration - 1440)
-    carry_open = previous_day in maintenance["days"] and current_minute < carry
-    window_open = bool(today_open or carry_open)
+    window_open = RECOVERY.window(maintenance, time.time() if now is None else now)[0]
     if policy == "notify_only":
         allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
     elif policy == "maintenance_window" and not window_open:
@@ -2359,7 +2348,7 @@ def rebalance_move(ns, name, node):
 
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
-                PLACE.get_nodes, HOSTACCESS.require_target_as)
+                PLACE.get_nodes, HOSTACCESS.require_target_as, OPS)
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
@@ -2557,6 +2546,7 @@ import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
 import homestead_usage as USAGE
 import homestead_requests as RESERVE
+import homestead_recovery as RECOVERY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2712,6 +2702,9 @@ FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.st
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
+RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS, lambda exclude=(): CREBALANCE.plan(exclude),
+              CREBALANCE.start, (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"),
+              LEADER.is_leader, beat, UPDATES.managed_by)
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
@@ -2814,14 +2807,18 @@ def autoupdate_tick():
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
     chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,
-                             status["window_open"], status["policy"])
+                             status["window_open"], status["policy"], (CREBALANCE.KIND,))
     if not chosen:
         return None
-    OPS.start(AUTOUPDATE.KIND, f"Update {chosen['name']} automatically",
-              {"kind": "Deployment", "name": chosen["name"], "namespace": chosen["ns"]},
-              "/containers?" + urllib.parse.urlencode({"find": chosen["name"]}),
-              {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
-              "Snapshotting its volumes before the update")
+    try:
+        # Refused under the job list's lock if a rebalance started since the look.
+        OPS.start(AUTOUPDATE.KIND, f"Update {chosen['name']} automatically",
+                  {"kind": "Deployment", "name": chosen["name"], "namespace": chosen["ns"]},
+                  "/containers?" + urllib.parse.urlencode({"find": chosen["name"]}),
+                  {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
+                  "Snapshotting its volumes before the update", unless=(CREBALANCE.KIND,))
+    except ValueError:
+        return None
     _cache.pop("wl", None)
     return chosen
 
@@ -2984,6 +2981,7 @@ def _alert_sources():
     take("outage", lambda: OUTAGE.alert_facts())
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
+    take("recovery", RECOVERY.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -5143,6 +5141,7 @@ def start_background_tasks():
     threading.Thread(target=CHANGES.run, name="changes", daemon=True).start()
     threading.Thread(target=FORECAST.run, name="forecast", daemon=True).start()
     threading.Thread(target=USAGE.run, name="usage", daemon=True).start()
+    threading.Thread(target=RECOVERY.run, name="recovery", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
