@@ -97,6 +97,7 @@ MODULES = (
     "homestead_push",
     "homestead_rebalance",
     "homestead_reclass",
+    "homestead_requests",
     "homestead_resources",
     "homestead_restore_test",
     "homestead_revert",

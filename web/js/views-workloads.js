@@ -551,6 +551,7 @@ function renderWorkloads() {
     { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
     { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
+    { label: "Set reservations from use…", icon: "sliders", run: "reservationsReview()", need: "operator", tip: "Reserve CPU and memory for apps from what they used over the last week" },
     { label: "Logos for apps without one", icon: "logo", run: "logoFixup()", need: "operator", tip: "Match apps with no logo to the app store's" },
     { label: "Change history", icon: "clock", run: "wlHistory()", tip: "Every app's changes: who, when and what" },
     { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" },
@@ -1071,6 +1072,91 @@ window.balanceStart = async () => {
     toast((started.length ? `Started ${started.join(" and ")}, but ` : "") + e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Start balancing"; }
     if (e.body?.plan) { balancePlan("containers"); balancePlan("volumes"); }
+  } finally { window.refreshOperations?.(true); }
+};
+
+/* Reservations from a week of use, for many apps at once. The scheduler
+   places apps by what they reserve, so apps reserving nothing are ticked;
+   ones whose reservation only differs from their use are offered unticked,
+   as someone may have set it on purpose. Ticking plans again, so the review
+   token covers exactly what is started. */
+const RESERVE = { chosen: null, plan: null, asked: 0 };
+window.reservationsReview = async () => {
+  RESERVE.chosen = null; RESERVE.plan = null;
+  modal("Set reservations from use", `<div id="resPlan"><div class="empty"><span class="spin2"></span> Reading a week of use…</div></div>
+    ${UI.actions(UI.button("Set reservations", "reservationsStart()", { kind: "pri", id: "reserveGo", attrs: 'data-need="operator" disabled' }), UI.cancel())}`, true);
+  await reservationsPlan();
+};
+async function reservationsPlan() {
+  const pane = $("#resPlan");
+  if (!pane) return;
+  // Each tick plans again; an answer to an earlier tick is dropped.
+  const asked = ++RESERVE.asked;
+  const query = RESERVE.chosen ? `?${new URLSearchParams({ chosen: [...RESERVE.chosen].join(",") })}` : "";
+  let plan;
+  try { plan = await api(`/api/workloads/requests/plan${query}`); }
+  catch (e) { if (asked === RESERVE.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps' use", esc(e.message)); return; }
+  if (asked !== RESERVE.asked || !$("#resPlan")) return;
+  RESERVE.plan = plan;
+  if (!RESERVE.chosen) RESERVE.chosen = new Set(plan.apps.filter(a => a.chosen).map(a => a.id));
+  pane.innerHTML = reservationsHtml(plan);
+  const go = $("#reserveGo");
+  if (go) go.disabled = !RESERVE.chosen.size || RESERVE.chosen.size > plan.max;
+  window.applyRole?.();
+}
+/* A reservation in Edit's words (editCpuWords, editSpan in views-lifecycle.js).
+   What a container reserves now is what it reserves in effect: Kubernetes
+   takes a limit as the request where none is set, and the review says so. */
+const reserveNow = (c, r) => {
+  const value = r === "cpu" ? (c.cpu_now_m ? editCpuWords(c.cpu_now_m) : "none") : (c.memory_now_mi ? reservedMemory(c.memory_now_mi) : "none");
+  return (c.from_limit || []).includes(r) ? `${value} (its limit)` : value;
+};
+function reservationsHtml(plan) {
+  const apps = plan.apps || [], chosen = apps.filter(a => RESERVE.chosen.has(a.id));
+  const over = chosen.length > plan.max;
+  const rows = apps.map((a, i) => [
+    `<label class="rb-app"><input type="checkbox" id="res_${i}" ${RESERVE.chosen.has(a.id) ? "checked" : ""}
+      onchange="reservationsItem(${jsq(a.id)},this.checked)"> <span class="mono">${esc(a.id)}</span></label>${a.missing ? ` ${UI.chip("reserves nothing", "warn")}` : ""}`,
+    a.changes.map(c => `<div>${a.changes.length > 1 ? `<span class="mono">${esc(c.container)}</span> ` : ""}
+      <span>${esc(reserveNow(c, "cpu"))} → <b>${esc(editCpuWords(parseInt(c.cpu, 10)))}</b> CPU · ${esc(reserveNow(c, "memory"))} → <b>${esc(reservedMemory(parseInt(c.memory, 10)))}</b></span>
+      <span class="sub">usually at or under ${esc(editCpuWords(c.cpu_p95_m))} and ${esc(reservedMemory(c.mem_p95_mi))}, peak ${esc(reservedMemory(c.mem_max_mi))} over ${esc(editSpan(c))}${c.lowers ? " · lowers it" : ""}${c.capped.length ? " · held at its limit" : ""}${(c.from_limit || []).some(r => !c.capped.includes(r)) ? " · no longer reserves its whole limit" : ""}</span></div>`).join("")
+      + (a.replicas ? "" : `<div class="sub">Stopped: takes the new reservation when it next starts.</div>`)]);
+  const managed = (plan.skipped || []).filter(s => s.yaml), other = (plan.skipped || []).filter(s => !s.yaml);
+  return [
+    UI.lead(over ? `${chosen.length} apps are ticked; one run changes at most ${plan.max}. Untick some, and set the rest afterwards.`
+      : chosen.length ? `Sets what ${chosen.length} app${chosen.length === 1 ? "" : "s"} reserve${chosen.length === 1 ? "s" : ""} from their use over the last week. Each restarts once, one at a time.`
+      : apps.length ? "Tick the apps to change." : "Every app's reservation already matches its use, or has too few readings yet."),
+    rows.length ? UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Reservation", className: "grow" }], rows)) : "",
+    managed.length ? UI.more(`Applied by Flux or Argo CD · ${managed.length}`, managed.map(s => `<p><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</p>
+      <pre class="mono small">${esc(s.yaml)}</pre>`).join(""), false, "reserve-managed") : "",
+    other.length ? UI.more(`Not changed · ${other.length}`, `<ul class="ui-list">${other.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "reserve-other") : "",
+    UI.more("How the reservations are worked out", `<p>Each container's use is read every five minutes. The reservation is 95% of the week's readings with headroom - CPU 1.5 times, memory 1.25 times - and never above a limit. Apps reserving nothing are ticked; others are offered unticked, since a reservation may have been set on purpose.</p>
+      <p>Apps change one at a time, each waiting for the last to run again. An app with no host that has room for its new reservation, or changed since this review, is skipped. If one does not come back within ten minutes, the job stops and the rest are not changed. Follow and stop it in Jobs.</p>`, false, "reserve-how"),
+    chosen.length && !over ? UI.ack("reserveRestart", chosen.length === 1 ? "Restart it now" : `Restart these ${chosen.length} apps now`) : "",
+  ].join("");
+}
+window.reservationsItem = (id, on) => {
+  on ? RESERVE.chosen.add(id) : RESERVE.chosen.delete(id);
+  const go = $("#reserveGo");
+  if (go) go.disabled = true;
+  reservationsPlan();
+};
+window.reservationsStart = async () => {
+  // What was reviewed: the plan's own ticks, which its token covers.
+  const plan = RESERVE.plan, apps = (plan?.apps || []).filter(a => a.chosen);
+  if (!apps.length) return;
+  if (!$("#reserveRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  const button = $("#reserveGo");
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    await api("/api/workloads/requests", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apps: apps.map(a => ({ id: a.id, changes: a.changes })), review_token: plan.review_token, restart: true }) });
+    closeModal(); toast(`Setting reservations on ${apps.length} app${apps.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+  } catch (e) {
+    toast(e.message, "bad");
+    if (button) { button.disabled = false; button.textContent = "Set reservations"; }
+    // Planned again with the same ticks: what changed is shown, not a reset.
+    reservationsPlan();
   } finally { window.refreshOperations?.(true); }
 };
 

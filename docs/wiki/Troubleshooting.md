@@ -112,6 +112,19 @@ Service's ports on every node, the same ports the app needs there. It needs no
 Service - it answers on the node itself - so remove the Service under
 **Networking**. Moving such an app to k3s leaves the Service behind.
 
+**Set reservations from use stopped part way.** One app did not run again
+within ten minutes of its new reservation; the job names it and what it
+reserved before, and the apps after it were not changed. That app keeps its new
+reservation: look at its events, and if the reservation is why (its new pod
+waits for room, say), set what it had back in **Edit**. Then review again: apps
+already changed are not offered again. A skipped app's reason is in the job
+too - no host it may run on with room, say, or a reservation changed by hand
+since the review.
+
+**Edit shows no suggested reservation.** It needs a day of readings, and
+metrics-server (k3s and RKE2 have it). **Settings → Homestead** shows **App
+usage history** with when it last read use and its last error.
+
 **A container runs but its update check failed.** The registry could not be
 reached or needs credentials; that container shows the error, and the others
 still show their updates.

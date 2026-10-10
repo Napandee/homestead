@@ -1982,7 +1982,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND)
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -2556,6 +2556,7 @@ import homestead_changes as CHANGES
 import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
 import homestead_usage as USAGE
+import homestead_requests as RESERVE
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2709,6 +2710,8 @@ CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k:
              deployments=lambda: [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
 FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
+RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
+             HOSTACCESS.require_target_as, OPS)
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
