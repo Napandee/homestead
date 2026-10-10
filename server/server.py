@@ -769,13 +769,15 @@ def _usage_loop():
         time.sleep(30)
 
 
-def start_container_rebalance(plan, why=""):
+def start_container_rebalance(plan, why="", role=None):
     """The container rebalance job for a reviewed plan - or, in the
-    maintenance window after a host came back, one Homestead made itself."""
+    maintenance window after a host came back, one Homestead made itself.
+    role: who started it, each move is checked for them again as it is made;
+    None for Homestead's own."""
     moves = plan["moves"]
     return OPS.start(CREBALANCE.KIND, f"Rebalance {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
                      {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                     {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
+                     {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"], "role": role},
                      "Starting with the first container")
 
 
@@ -6838,6 +6840,19 @@ HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
 
 
+def guard_as(obj, namespace, role):
+    """Edit's check that a workload is one this role may change, made for a
+    job that runs with no request behind it, as the person who started it."""
+    if role in (None, "admin"):
+        return
+    before = HOSTACCESS.role()
+    HOSTACCESS.set_role(role)
+    try:
+        HOSTACCESS.require_target(obj, namespace)
+    finally:
+        HOSTACCESS.set_role(before)
+
+
 def rebalance_move(ns, name, node):
     """One container of a rebalance: the manual move's capacity check and
     placement - a preference, not a pin - or a reason to leave it."""
@@ -6851,7 +6866,7 @@ def rebalance_move(ns, name, node):
 
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
-                PLACE.get_nodes)
+                PLACE.get_nodes, guard_as)
 POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE, POWER.UNCORDON = power_worker_gone, resume_power_job, restore_held, allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
@@ -7166,20 +7181,6 @@ CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
 RECOVERY.bind(DATA_DIR)
-
-
-def guard_as(obj, namespace, role):
-    """Edit's check that a workload is one this role may change, made for a
-    job that runs with no request behind it, as the person who started it."""
-    if role in (None, "admin"):
-        return
-    before = HOSTACCESS.role()
-    HOSTACCESS.set_role(role)
-    try:
-        HOSTACCESS.require_target(obj, namespace)
-    finally:
-        HOSTACCESS.set_role(before)
-
 
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              guard_as)
@@ -10255,7 +10256,8 @@ class H(HTTP.LimitedHandler):
             if p == "/api/longhorn/offline-rebuilding":
                 return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
             if p == "/api/workloads/rebalance/plan":
-                return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
+                return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a],
+                                                       role=HOSTACCESS.role()))
             if p == "/api/workloads/requests/plan":
                 chosen = q.get("chosen")
                 return self._send(200, RESERVE.plan([a for a in chosen[0].split(",") if a] if chosen else None, HOSTACCESS.role()))
@@ -11350,21 +11352,24 @@ class H(HTTP.LimitedHandler):
                     return self._send(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
                 if b.get("restart") is not True:
                     return self._send(409, {"error": "Moving a container restarts it; confirm the restarts"})
+                role = HOSTACCESS.role()
                 if b.get("moves") is not None:
                     # The moves reviewed, checked against the cluster now -
                     # not a plan made again from load that moves by the second.
                     try:
-                        moves = CREBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
+                        moves = CREBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"), role=role)
+                    except PermissionError as error:
+                        return self._send(403, {"error": str(error)})
                     except ValueError as error:
-                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [])})
+                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [], role=role)})
                     plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
                 else:
-                    plan = CREBALANCE.plan(b.get("exclude") or [])
+                    plan = CREBALANCE.plan(b.get("exclude") or [], role=role)
                     if plan["review_token"] != b.get("review_token"):
                         return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
                 if not plan["moves"]:
                     return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
-                return self._send(202, {"operation": start_container_rebalance(plan)})
+                return self._send(202, {"operation": start_container_rebalance(plan, role=role)})
             if p == "/api/workloads/requests":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == RESERVE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)

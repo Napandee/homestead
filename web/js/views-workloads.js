@@ -1028,7 +1028,7 @@ function balanceReview() {
         ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "nothing worth moving"],
       ["Volume copies", !BALANCE.volumes.on ? "left where they are" : volumes.length
         ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "nothing to move"]]),
-    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host, the rest wait for you. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
+    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host within 10 minutes, the job stops there and the rest are not moved - review again once it runs. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
     containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now") : "",
   ].join("");
   const go = $("#balanceGo");

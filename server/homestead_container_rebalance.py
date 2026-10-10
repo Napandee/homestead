@@ -41,13 +41,14 @@ own = ("", "")                  # Homestead's namespace and Deployment
 requirements = satisfies = None # homestead_place: what a workload needs, whether a host has it
 summaries = None                # homestead_place.get_nodes: the host summaries satisfies() reads
 apply = None                    # (ns, name, node) -> moves it, after the manual move's capacity check
+guard = None                    # (deployment, ns, role) -> raises PermissionError if that role may not change it
 is_leader = lambda: True
 
 
-def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None):
-    global kget, requirements, satisfies, apply, own, is_leader, summaries
+def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None):
+    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
-    summaries = _summaries
+    summaries, guard = _summaries, _guard
     if _is_leader:
         is_leader = _is_leader
 
@@ -110,7 +111,24 @@ def _ready(node):
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in (node.get("status") or {}).get("conditions") or [])
 
 
-def inventory():
+ADMIN_ONLY = "only an admin can move it"
+
+
+def _allowed(dep, ns, role):
+    """Whether role may change dep, as a manual move would ask; no guard or
+    no role (an admin, or Homestead itself) may change anything here."""
+    if guard is None or role is None:
+        return True
+    try:
+        guard(dep, ns, role)
+        return True
+    except PermissionError:
+        return False
+
+
+def inventory(role=None):
+    """Hosts and apps; role, when given, is who the moves are for - an app
+    they may not change is listed with why, as one that cannot move is."""
     nodes = _items("/api/v1/nodes")
     usage = {(m.get("metadata") or {}).get("name"): m.get("usage") or {} for m in _items("/apis/metrics.k8s.io/v1beta1/nodes")}
     hosts = {}
@@ -165,6 +183,8 @@ def inventory():
         modes = {locality.get(v) for v in volumes if v}
         if not why and "strict-local" in modes:
             why = "its volume keeps its only copy on its host (strict-local), so it runs there"
+        if not why and not _allowed(dep, ns, role):
+            why = ADMIN_ONLY
         apps.append({"ns": ns, "name": name, "id": f"{ns}/{name}", "host": where[0], "dep": dep,
                      "cpu": sum(u[0] for u in use), "mem": sum(u[1] for u in use), "why": why,
                      "near": set.intersection(*[copies.get(v, set()) for v in volumes]) if volumes and all(volumes) else None,
@@ -239,8 +259,8 @@ def _score(host, cpu_m, mem_b):
     return max(100 * cpu_m / host["cpu_total"], 100 * mem_b / host["mem_total"])
 
 
-def plan(exclude=()):
-    hosts, apps = inventory()
+def plan(exclude=(), role=None):
+    hosts, apps = inventory(role)
     exclude = set(exclude or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
     score = lambda n: _score(hosts[n], *load[n])
@@ -303,7 +323,7 @@ def review_token(moves, exclude):
                                      sort_keys=True).encode()).hexdigest()[:20]
 
 
-def reviewed(moves, exclude, token):
+def reviewed(moves, exclude, token, role=None):
     """The moves a person reviewed, checked against the cluster now: each
     container still on the host it was to leave, still movable, and its new
     host still able to take it. Load that changed since does not matter -
@@ -315,12 +335,14 @@ def reviewed(moves, exclude, token):
         raise ValueError("Review the containers to move again")
     if review_token(moves, exclude) != token:
         raise ValueError("The moves differ from the review; review again")
-    hosts, apps = inventory()
+    hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
     out = []
     for m in moves:
         app, host = by_id.get(m["id"]), hosts.get(m["to"])
+        if app and app["why"] == ADMIN_ONLY:
+            raise PermissionError(f"{m['id']}: {ADMIN_ONLY}")
         if not app or app["why"] or app["host"] != m["from"] or m["id"] in set(exclude or ()):
             raise ValueError(f"{m['id']} changed since the review; review again")
         if not host or not host["takes"] or not satisfies(summary.get(m["to"], host["node"]), requirements(app["dep"]))[0]:
@@ -367,7 +389,11 @@ def status(item):
             ref.setdefault("skipped", []).append(f"{move['id']}: it moved or changed since the review")
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {move['id']}: it moved or changed since the review"
+        # The job runs with no request behind it: asked again for whoever
+        # started it, since the app may have changed since the review.
         try:
+            if not _allowed(kget(f"/apis/apps/v1/namespaces/{move['ns']}/deployments/{move['name']}"), move["ns"], ref.get("role")):
+                raise ValueError(ADMIN_ONLY)
             apply(move["ns"], move["name"], move["to"])
         except ValueError as error:
             ref.setdefault("skipped", []).append(f"{move['id']}: {str(error)[:160]}")
