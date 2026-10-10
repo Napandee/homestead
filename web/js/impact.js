@@ -46,20 +46,20 @@ window.nodeIfDown = async (node, back = null) => {
 
 /* Whether the hosts left have room for what moves (homestead_capacity):
    each one's memory once it has taken its share, and what would wait. */
-const capacityVerdict = v => ({ fits: ["ok", "fits"], tight: ["warn", "tight"], waits: ["crit", "apps wait"], "no-host": ["crit", "no host left"] })[v] || ["neutral", v];
+const capacityVerdict = v => ({ fits: ["ok", "fits"], tight: ["warn", "tight"], waits: ["crit", "apps wait"], "no-host": ["crit", "no host left"], unknown: ["neutral", "unknown"] })[v] || ["neutral", v];
 function capacityRoomHtml(f) {
   const rows = (f.hosts || []).map(h => {
     const pct = gib => h.mem_alloc_gib ? gib / h.mem_alloc_gib * 100 : 100;
     return [`<span class="mono">${esc(shortHost(h.name))}</span>`,
-    `${UI.meter({ now: pct(h.mem_before_gib ?? h.mem_gib), after: pct(h.mem_gib), warnAt: 90, label: `${h.name} memory` })}
+    `${UI.meter({ now: pct(h.mem_before_gib ?? h.mem_gib), after: pct(h.mem_gib), warnAt: 90, label: `${h.name}: memory reserved after the move` })}
      <span class="sub">${h.mem_before_gib !== undefined && h.mem_before_gib !== h.mem_gib ? `${esc(h.mem_before_gib)} → ` : ""}${esc(h.mem_gib)} of ${esc(h.mem_alloc_gib)} GiB reserved · CPU ${esc(Math.round(h.cpu_alloc_m ? h.cpu_m / h.cpu_alloc_m * 100 : 100))}%</span>`];
   });
   const stuck = [...(f.waits || []), ...(f.evicted || [])];
   return [
     UI.lead(esc(f.sentence)),
     rows.length ? UI.table([{ label: "Host" }, { label: "Reserved after the move", className: "grow" }], rows) : "",
-    stuck.length ? UI.more(`Would wait · ${stuck.length}`, `<div class="impact-list">${stuck.map(p => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(p.id)}</b>
-      <span class="small">${esc(p.why)}</span><span class="dim xs">${esc(p.tier)} tier · reserves ${esc(p.mem_gib)} GiB</span></div><span class="pill slim warn">waits</span></div>`).join("")}</div>`) : "",
+    stuck.length ? UI.more(`${f.evicted?.length ? "Would wait or be evicted" : "Would wait"} · ${stuck.length}`, `<div class="impact-list">${stuck.map(p => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(p.id)}</b>
+      <span class="small">${esc(p.why)}</span><span class="dim xs">${esc(p.tier)} tier · reserves ${esc(p.mem_gib)} GiB</span></div><span class="pill slim warn">${p.on ? "evicted" : "waits"}</span></div>`).join("")}</div>`) : "",
     f.unreserved ? UI.more(`Reserving nothing · ${f.unreserved}`, `<p>${f.unreserved} of the ${f.moving} app${f.moving === 1 ? "" : "s"} that move reserve${f.unreserved === 1 ? "s" : ""} nothing, so ${f.unreserved === 1 ? "it fits" : "they fit"} anywhere on paper and still use memory: the figures are a floor.</p>`) : "",
   ].join("");
 }

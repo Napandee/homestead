@@ -5,8 +5,11 @@ go; it does not say whether the hosts left have the room (#347). This takes
 each host in turn as failed and places its apps on the others the way the
 scheduler would, by what they reserve:
 
-* Apps that would stop anyway (pinned, on host-local storage, hardware only
-  that host has) are left to the impact preview; DaemonSet pods do not move.
+* Apps and VMs that would stop anyway (pinned, on host-local storage,
+  hardware only that host has) or that wait for the host to come back are
+  left to the impact preview; DaemonSet pods do not move. Pods the preview
+  does not list - a StatefulSet, a platform app - move wherever there is room,
+  as the scheduler would move them.
 * The rest are placed in tier order - critical, then normal, then low
   (homestead_priority) - largest first, each on the allowed host with the most
   memory left, as the scheduler's LeastAllocated scoring does.
@@ -18,6 +21,7 @@ Only reservations count. An app that reserves nothing fits anywhere on paper
 and uses memory all the same, so the forecast says how many of those move -
 the figures are a floor, not a promise. It is a preview, not the scheduler:
 it ignores affinity between apps and the order pods actually restart in.
+Pods already Pending, with no host, are counted apart: they wait whatever fails.
 """
 import homestead_pod_resources as RESOURCES
 import homestead_priority as PRIORITY
@@ -34,6 +38,8 @@ def _takes_work(node):
 
 
 def _live(pod):
+    # A terminating pod's room is given back as it goes, and its replacement
+    # is a pod of its own.
     return (pod.get("status") or {}).get("phase") not in ("Succeeded", "Failed") \
         and not (pod.get("metadata") or {}).get("deletionTimestamp")
 
@@ -62,14 +68,17 @@ def forecast(failed, nodes, pods, preview, owner):
         alloc = (node.get("status") or {}).get("allocatable") or {}
         survivors[name] = {"name": name, "cpu_alloc": RESOURCES.quantity(alloc.get("cpu"), "cpu"),
                            "mem_alloc": RESOURCES.quantity(alloc.get("memory")), "cpu": 0, "mem": 0, "low": []}
-    # Where each app may go, from the impact preview; apps that stop stay out.
-    routes = {(r["ns"], r["name"]): r.get("to") or [] for r in preview.get("apps") or []
-              if r.get("kind") == "app" and r.get("outcome") in ("moves", "waits")}
-    moving = []
+    # Where each app and VM may go, from the impact preview. Rows that stop,
+    # or wait for this host to come back, need no room elsewhere.
+    listed = {(r.get("ns"), r.get("name")): r for r in preview.get("apps") or [] if r.get("kind") in ("app", "vm")}
+    moving, pending = [], 0
     for pod in pods:
         if not _live(pod):
             continue
         meta, where = pod.get("metadata") or {}, (pod.get("spec") or {}).get("nodeName")
+        if not where:
+            pending += (pod.get("status") or {}).get("phase") == "Pending"
+            continue
         need = _need(pod)
         if where in survivors:
             host = survivors[where]
@@ -79,10 +88,12 @@ def forecast(failed, nodes, pods, preview, owner):
                 host["cpu"] += need["cpu"]
                 host["mem"] += need["mem"]
         elif where == failed and not _daemon(pod):
-            app = owner(pod)
-            key = (meta.get("namespace"), app)
-            if key in routes:
-                moving.append({"id": f"{key[0]}/{app}", "to": routes[key], **need})
+            app = owner(pod) or meta.get("name")
+            row = listed.get((meta.get("namespace"), app))
+            if row is None:
+                moving.append({"id": f"{meta.get('namespace')}/{app}", "to": list(survivors), **need})
+            elif row.get("outcome") == "moves":
+                moving.append({"id": f"{meta.get('namespace')}/{app}", "to": row.get("to") or [], **need})
     moving.sort(key=lambda p: (ORDER[p["tier"]], -p["mem"], p["id"]))
     before = {h["name"]: h["mem"] + sum(p["mem"] for p in h["low"]) for h in survivors.values()}
 
@@ -123,23 +134,32 @@ def forecast(failed, nodes, pods, preview, owner):
              for h in sorted(survivors.values(), key=lambda h: h["name"])]
     stuck = waits + evicted
     unreserved = sum(1 for p in moving if not p["mem"] and not p["cpu"])
-    verdict = ("no-host" if not survivors else "waits" if stuck
+    verdict = ("no-host" if not survivors and moving else "waits" if stuck
                else "tight" if any(h["full"] >= TIGHT for h in hosts) else "fits")
-    return {"node": failed, "verdict": verdict, "moving": len(moving), "hosts": hosts,
+    return {"node": failed, "verdict": verdict, "moving": len(moving), "hosts": hosts, "pending": pending,
             "waits": [{k: p[k] for k in ("id", "tier", "why")} | {"mem_gib": round(p["mem"] / GIB, 2)} for p in waits],
             "evicted": [{k: p[k] for k in ("id", "tier", "why", "on")} | {"mem_gib": round(p["mem"] / GIB, 2)} for p in evicted],
-            "unreserved": unreserved, "sentence": sentence(failed, verdict, hosts, stuck)}
+            "unreserved": unreserved, "sentence": sentence(failed, verdict, hosts, stuck, len(moving))}
 
 
-def sentence(failed, verdict, hosts, stuck):
+def _gib(value):
+    return f"{value:g}"
+
+
+def sentence(failed, verdict, hosts, stuck, moving=1):
     """The forecast in one line, the fullest host first."""
+    if not moving:
+        return f"If {failed} fails, nothing on it needs room on another host."
     if verdict == "no-host":
-        return f"If {failed} fails, no other host takes work: everything on it waits."
-    worst = max(hosts, key=lambda h: h["full"]) if hosts else None
-    need = (f"{worst['name']} needs {worst['mem_gib']} of {worst['mem_alloc_gib']} GiB"
-            if worst else "nothing needs to move")
+        return f"If {failed} fails, no other host takes work: what runs on it waits."
+    worst = max(hosts, key=lambda h: h["full"])
+    by_cpu = worst["cpu_alloc_m"] and worst["cpu_m"] / worst["cpu_alloc_m"] > (worst["mem_gib"] / worst["mem_alloc_gib"] if worst["mem_alloc_gib"] else 1)
+    need = (f"{worst['name']} would have {round(100 * worst['cpu_m'] / worst['cpu_alloc_m'])}% of its CPU reserved" if by_cpu
+            else f"{worst['name']} would have {_gib(worst['mem_gib'])} of {_gib(worst['mem_alloc_gib'])} GiB of memory reserved")
     if not stuck:
-        return f"If {failed} fails, {need}." + (" Tight, but it fits." if verdict == "tight" else "")
-    low = all(p["tier"] == "low" for p in stuck)
-    return (f"If {failed} fails, {need}; {len(stuck)} {'low-tier ' if low else ''}app{'' if len(stuck) == 1 else 's'} "
-            f"would wait for room.")
+        return f"If {failed} fails, {need}." + (" Tight, but it fits." if verdict == "tight" else " It fits.")
+    tiers = {p["tier"] for p in stuck}
+    tier = f"{tiers.pop()}-tier " if len(tiers) == 1 else ""
+    evicted = any(p.get("on") for p in stuck)
+    return (f"If {failed} fails, {need}; {len(stuck)} {tier}app{'' if len(stuck) == 1 else 's'} "
+            f"would {'wait for room or be evicted' if evicted else 'wait for room'}.")

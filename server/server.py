@@ -972,17 +972,24 @@ def _housekeeping_loop():
         time.sleep(86400)
 
 
-def node_impact(node):
-    """If this host goes down: what stops, moves and is at risk (homestead_impact)."""
-    node = _dns_name(node, "host name")
-    nodes = cached("nodes", 5, get_nodes)
-    if not any(n["name"] == node for n in nodes):
-        raise ValueError(f"there is no host {node}")
+def _impact_sources():
+    """The Deployments and VMs every host's impact preview reads."""
     deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
     try:
         raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
     except Exception:
         raw_vms = []
+    return deployments, raw_vms
+
+
+def node_impact(node, sources=None):
+    """If this host goes down: what stops, moves and is at risk (homestead_impact).
+    sources: _impact_sources(), when several hosts are previewed at once."""
+    node = _dns_name(node, "host name")
+    nodes = cached("nodes", 5, get_nodes)
+    if not any(n["name"] == node for n in nodes):
+        raise ValueError(f"there is no host {node}")
+    deployments, raw_vms = sources or _impact_sources()
     try:
         addresses = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or []
     except Exception:
@@ -1000,13 +1007,20 @@ def capacity_forecast():
     runs, by what apps reserve and their priority tier (homestead_capacity)."""
     nodes = kget("/api/v1/nodes").get("items", [])
     pods = [p for p in kget("/api/v1/pods").get("items", []) if not NAMES.label_of(p.get("metadata") or {}, "task")]
+    sources = _impact_sources()
     out = []
     for node in nodes:
         name = node["metadata"]["name"]
         if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in (node.get("status") or {}).get("conditions") or []):
             continue
-        out.append(CAPACITY.forecast(name, nodes, pods, node_impact(name), _flow_owner))
-    return {"hosts": out, "unreserved": max([h["unreserved"] for h in out] or [0])}
+        try:
+            out.append(CAPACITY.forecast(name, nodes, pods, node_impact(name, sources), _flow_owner))
+        except Exception as e:
+            # One host's preview failing leaves the others' forecast standing.
+            out.append({"node": name, "verdict": "unknown", "moving": 0, "hosts": [], "waits": [], "evicted": [],
+                        "unreserved": 0, "pending": 0, "sentence": f"Could not work out what happens if {name} fails: {str(e)[:120]}"})
+    return {"hosts": out, "unreserved": max([h["unreserved"] for h in out] or [0]),
+            "pending": max([h.get("pending", 0) for h in out] or [0])}
 
 
 def set_vm_monitoring(b):
@@ -10329,7 +10343,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a],
                                                        avoid=standby_hosts()))
             if p == "/api/capacity/forecast":
-                return self._send(200, cached("capacity-forecast", 30, capacity_forecast))
+                return self._send(200, cached("capacity-forecast", 60, capacity_forecast))
             if p == "/api/placement":
                 return self._send(200, placement_summary())
             if p == "/api/workloads/priority/plan":

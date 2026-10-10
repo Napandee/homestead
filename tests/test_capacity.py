@@ -43,7 +43,7 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual((6.0, 4.0), (hosts["b"]["mem_gib"], hosts["c"]["mem_gib"]))
         self.assertEqual((6.0, 0.0), (hosts["b"]["mem_before_gib"], hosts["c"]["mem_before_gib"]))
         self.assertEqual("fits", f["verdict"])
-        self.assertEqual("If a fails, b needs 6.0 of 15.0 GiB.", f["sentence"])
+        self.assertEqual("If a fails, b would have 6 of 15 GiB of memory reserved. It fits.", f["sentence"])
 
     def test_critical_apps_fit_first_and_low_ones_wait_when_the_room_runs_out(self):
         nodes = [node("a"), node("b")]
@@ -91,6 +91,39 @@ class ForecastTests(unittest.TestCase):
         lone = run("a", [node("a"), node("b", cordoned=True)], [pod("x", "a")], preview("x", to=("b",)))
         self.assertEqual("no-host", lone["verdict"])
 
+    def test_a_host_with_nothing_to_move_says_so(self):
+        f = run("a", [node("a"), node("b")], [pod("web", "b")], preview())
+        self.assertEqual((0, "fits"), (f["moving"], f["verdict"]))
+        self.assertEqual("If a fails, nothing on it needs room on another host.", f["sentence"])
+
+    def test_a_cpu_bound_host_is_described_by_its_cpu(self):
+        f = run("a", [node("a"), node("b", cpu="2")], [pod("enc", "a", mem="1Gi", cpu="1900m")], preview("enc", to=("b",)))
+        self.assertEqual("If a fails, b would have 95% of its CPU reserved. Tight, but it fits.", f["sentence"])
+
+    def test_the_sentence_names_the_tier_and_eviction(self):
+        nodes = [node("a"), node("b")]
+        pods = [pod("base", "b", mem="9Gi"), pod("batch", "b", mem="4Gi", tier="low"), pod("ha", "a", mem="5Gi", tier="critical")]
+        f = run("a", nodes, pods, preview("ha", to=("b",)))
+        self.assertIn("1 low-tier app would wait for room or be evicted", f["sentence"])
+
+    def test_vms_move_and_apps_waiting_for_their_host_need_no_room(self):
+        launcher = pod("win", "a", mem="8Gi", kind="VirtualMachineInstance")
+        f = run("a", [node("a"), node("b")], [launcher, pod("nvr", "a", mem="8Gi")],
+                {"apps": [{"kind": "vm", "ns": "lab", "name": "win", "outcome": "moves", "to": ["b"]},
+                          {"kind": "app", "ns": "lab", "name": "nvr", "outcome": "waits", "to": ["b"]}]})
+        self.assertEqual(1, f["moving"])
+        self.assertEqual(8.0, f["hosts"][0]["mem_gib"])
+
+    def test_pods_the_preview_does_not_list_still_take_room(self):
+        db = pod("postgres", "a", mem="6Gi", kind="StatefulSet")
+        f = run("a", [node("a"), node("b")], [db], preview())
+        self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+
+    def test_pending_pods_are_counted_apart(self):
+        waiting = pod("big", None, mem="40Gi", phase="Pending")
+        f = run("a", [node("a"), node("b")], [waiting], preview())
+        self.assertEqual((1, 0), (f["pending"], f["moving"]))
+
 
 class ServerTests(unittest.TestCase):
     def test_each_ready_host_is_forecast_and_helper_pods_are_left_out(self):
@@ -99,10 +132,26 @@ class ServerTests(unittest.TestCase):
         helper["metadata"]["labels"]["homestead.io/task"] = "files"
         pods = {"items": [pod("web", "a"), helper]}
         with mock.patch.object(server, "kget", side_effect=lambda p: nodes if p == "/api/v1/nodes" else pods), \
-                mock.patch.object(server, "node_impact", side_effect=lambda n: preview("web", "files", to=("b",))):
+                mock.patch.object(server, "_impact_sources", return_value=([], [])) as sources, \
+                mock.patch.object(server, "node_impact", side_effect=lambda n, src: preview("web", "files", to=("b",))):
             found = server.capacity_forecast()
         self.assertEqual(["a", "b"], [h["node"] for h in found["hosts"]])
         self.assertEqual(1, found["hosts"][0]["moving"])
+        sources.assert_called_once()
+
+    def test_one_host_failing_to_preview_leaves_the_others(self):
+        nodes = {"items": [node("a"), node("b")]}
+
+        def impact(name, src):
+            if name == "a":
+                raise RuntimeError("boom")
+            return preview()
+        with mock.patch.object(server, "kget", side_effect=lambda p: nodes if p == "/api/v1/nodes" else {"items": []}), \
+                mock.patch.object(server, "_impact_sources", return_value=([], [])), \
+                mock.patch.object(server, "node_impact", side_effect=impact):
+            found = server.capacity_forecast()
+        self.assertEqual(["unknown", "fits"], [h["verdict"] for h in found["hosts"]])
+        self.assertIn("boom", found["hosts"][0]["sentence"])
 
 
 if __name__ == "__main__":

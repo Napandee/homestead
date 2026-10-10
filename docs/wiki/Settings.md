@@ -8,7 +8,7 @@ Settings has ten sections: nine that change the cluster for everyone, and
 |---|---|
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
 | **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
-| **Placement** | How hosts share the work - Kubernetes' default, spread by capacity, or a hot spare - and whether containers move back when a host returns |
+| **Placement** | How hosts share the work - Kubernetes' default, spread by capacity, or a hot spare; whether the other hosts have room if one fails; and whether containers move back when a host returns |
 | **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
@@ -185,20 +185,27 @@ off, visibly, since apps that moved while a host was away only come back that wa
 
 **Placement → If a host fails** takes each host in turn as failed and says
 whether the others have room for what it runs - for example *If node2
-fails, node1 needs 13.7 of 15 GiB; 3 low-tier apps would wait for room.*
-**Details** opens that host's *If it goes down* preview, which shows the same
-forecast under **Room on the other hosts**: each remaining host's memory
-reserved now and after the move.
+fails, node1 would have 13.7 of 15 GiB of memory reserved; 3 low-tier apps
+would wait for room or be evicted.* A host whose CPU runs out first is
+described by its CPU instead. Each host is marked **fits**, **tight** (a host
+left 90% full or more), **apps wait** or **no host left**. **Details** opens
+that host's *If this host goes down* preview, which shows the same forecast
+under **Room on the other hosts**: each remaining host's memory reserved now
+and after the move, and what would wait.
 
-The apps that would move (not those that stop anyway - pinned, on host-local
-storage, or using hardware only that host has) are placed the way the
+The apps and VMs that would move are placed - not those that stop anyway
+(pinned, on host-local storage, or using hardware only that host has), nor
+those set to wait for their host to come back. Pods the preview does not list,
+a StatefulSet's say, move too and take room. They are placed the way the
 scheduler would: critical first, then normal, then low, largest first, each
 on the allowed host with the most room left. Critical and normal apps may
 evict low-tier ones to fit; low apps wait and evict nothing. Only what apps
 *reserve* counts, so an app that reserves nothing fits anywhere on paper:
 the dialog says how many of those move, since the figures are then a floor.
-It is a forecast, not the scheduler - it does not weigh affinity between apps
-or the order pods restart in.
+Apps already Pending, with no host, are counted apart: they wait whichever
+host fails. It is a forecast, not the scheduler - it does not weigh affinity
+between apps or the order pods restart in. The card is worked out when
+Placement is opened, and at most once a minute.
 
 ## When a host comes back
 

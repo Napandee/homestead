@@ -96,6 +96,8 @@ function settingsTab(pick) {
     // Asked for: open it, on a phone as well, where the list comes first.
     STATE.settingsOpen = true;
     UI.selectWorkspace($(".settings-layout"), section, {gridSelector:".settings-grid"});
+    // Shown without a repaint: the forecast is loaded once it can be seen.
+    if (section === "placement" && $("#capacityForecast .spin2")) capacityForecastLoad();
     if (typeof window !== "undefined" && window.scrollPageTop) window.scrollPageTop();
     return section;
   }
@@ -332,7 +334,8 @@ async function viewSettings() {
   homesteadDataPaint();
   mqttPaint();
   lhSettingsPaint();
-  capacityForecastLoad();
+  // Every host's preview at once is not cheap: only when it is to be seen.
+  if (tab === "placement") capacityForecastLoad();
   if (window.storageClassesPaint) storageClassesPaint();
   if (window.addonsPaint) addonsPaint();
   if (window.apiKeysPaint) apiKeysPaint();
@@ -823,11 +826,17 @@ async function capacityForecastLoad() {
   if (!$("#capacityForecast")) return;
   const rows = (all.hosts || []).map(f => {
     const [tone, word] = capacityVerdict(f.verdict);
-    return [`<span class="mono">${esc(f.node)}</span>`, `<span class="pill slim ${tone}">${esc(word)}</span>`,
-      `<span class="small">${esc(f.sentence)}</span>`, UI.button("Details", `nodeIfDown(${jsq(f.node)})`, { kind: "sm" })];
+    return `<tr><td><b class="mono">${esc(f.node)}</b> <span class="pill slim ${tone}">${esc(word)}</span></td>
+      <td class="small">${esc(f.sentence)}</td>
+      <td class="right">${actionBar([{ label: "Details", run: `nodeIfDown(${jsq(f.node)})`, ariaLabel: `What happens if ${f.node} fails` }])}</td></tr>`;
   });
-  host.innerHTML = rows.length ? UI.table([{ label: "Host" }, { label: "" }, { label: "If it fails", className: "grow" }, { label: "" }], rows)
-    + (all.unreserved ? `<p class="ui-help">Apps that reserve nothing fit anywhere on paper: the figures are a floor. <a href="#" onclick="event.preventDefault();reservationsReview()">Set reservations from use</a>.</p>` : "")
+  const notes = [
+    all.unreserved ? `Apps that reserve nothing fit anywhere on paper, so the figures are a floor.${can("operator")
+      ? ` ${UI.button("Set reservations from use…", "reservationsReview()", { kind: "sm" })}` : ""}` : "",
+    all.pending ? `${all.pending} app${all.pending === 1 ? " is" : "s are"} already waiting for room, whichever host fails.` : "",
+  ].filter(Boolean);
+  host.innerHTML = rows.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Host</th><th>If it fails</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`
+    + notes.map(n => `<p class="ui-help">${n}</p>`).join("")
     : '<div class="empty small">No host is ready.</div>';
 }
 
