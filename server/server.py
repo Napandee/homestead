@@ -456,6 +456,7 @@ def save_app_settings(value):
         ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     _cache.pop("settings", None)
     UPDATES.invalidate()
+    PLACEMODE.saved(settings["placement"])
     # A different catalogue source is a different catalogue.
     for key in [k for k in _cache if k.startswith("appstore")]:
         _cache.pop(key, None)
@@ -2348,7 +2349,7 @@ def rebalance_move(ns, name, node):
 
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
-                PLACE.get_nodes, HOSTACCESS.require_target_as, OPS)
+                PLACE.get_nodes, HOSTACCESS.require_target_as, OPS, lambda: PLACEMODE.standby_hosts())
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
@@ -2548,6 +2549,7 @@ import homestead_usage as USAGE
 import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
+import homestead_placement_mode as PLACEMODE
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2703,9 +2705,11 @@ FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.st
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
-RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS, lambda exclude=(): CREBALANCE.plan(exclude),
-              CREBALANCE.start, (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"),
-              LEADER.is_leader, beat, UPDATES.managed_by)
+PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, get_app_settings), SYS_NS)
+RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS,
+              lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
+              (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,
+              UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
               HOSTACCESS.require_target_as, OPS)
 

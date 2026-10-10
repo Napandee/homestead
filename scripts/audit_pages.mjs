@@ -39,6 +39,7 @@ const PAGES = [
   ["vm-import", "vmimport"],
   // The setup guide is a page now (it was the Welcome dialog).
   ["setup", "setup"],
+  ["setup-placement", "setup", "setupOpen('placement')"],
   ["setup-phone", "setup", "setupOpen('phone')"],
   ["setup-appearance", "setup", "setupOpen('appearance')"],
   ["setup-disks", "setup", "setupOpen('disks')"],
@@ -70,7 +71,7 @@ const PAGES = [
   ["node-page", "nodes", "nodeDetail('harvester-node1')"],
   ["node-storage", "nodes", "nodeDetail('harvester-node1');setTimeout(() => nodeSectionGo('storage'), 1200)"],
   ["node-devices", "nodes", "nodeDetail('harvester-node1');setTimeout(() => { nodeSectionGo('hardware'); nodeDevicesLook('harvester-node1'); }, 1200)"],
-  ...["homestead", "updates", "monitoring", "hardware", "fleet", "connections", "access", "troubleshooting", "you"]
+  ...["homestead", "updates", "placement", "monitoring", "hardware", "fleet", "connections", "access", "troubleshooting", "you"]
     .map((tab) => [`settings-${tab}`, "settings", `settingsTab('${tab}')`]),
 ];
 

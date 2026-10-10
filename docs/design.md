@@ -150,8 +150,8 @@ after reloading the page. Returning rechecks the facts.
 
 ### Settings
 
-- **Nine sections, sorted by what you came to change.** Eight concern the
-  cluster for everyone - Homestead, Updates, Monitoring, Hardware and
+- **Ten sections, sorted by what you came to change.** Nine concern the
+  cluster for everyone - Homestead, Updates, Placement, Monitoring, Hardware and
   storage, Linked clusters, Connections, Users and access, Troubleshooting - and **You** is
   yours and this browser's. A column beside them on a desktop; a list to tap
   into on a phone. Each section has an icon from the main menu's sprite

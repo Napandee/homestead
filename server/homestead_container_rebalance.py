@@ -18,6 +18,12 @@ would keep it beside them and the move would never come up - and nothing
 goes to a host it is kept apart from. A host that already holds a copy of its volumes
 is preferred, so its reads stay local.
 
+Standby hosts (avoid) are moved off first and never moved onto: an app on
+one is there because a main host was away, and a main host with room is a
+better place for it. Room is the point: a move off a standby host is made
+only while its new host stays under SPARE_ROOM, so emptying the spare never
+overloads the others - what does not fit stays on it.
+
 The job moves one container at a time with the same capacity check and
 placement as a manual move, waits until it runs on its new host, and stops
 - rather than carrying on - if one does not come up, so a problem is looked
@@ -47,14 +53,16 @@ summaries = None                # homestead_place.get_nodes: the host summaries 
 apply = None                    # (ns, name, node) -> moves it, after the manual move's capacity check
 guard = None                    # (deployment, ns, role) -> raises PermissionError if that role may not change it
 operations = None               # homestead_operations: the job is one of its jobs
+standby = lambda: ()            # homestead_placement_mode.standby_hosts: never moved onto, emptied first
 is_leader = lambda: True
 
 
 def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None,
-         _operations=None):
-    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard, operations
+         _operations=None, _standby=None):
+    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard, operations, standby
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
     summaries, guard, operations = _summaries, _guard, _operations
+    standby = _standby or (lambda: ())
     if _is_leader:
         is_leader = _is_leader
 
@@ -284,11 +292,21 @@ def _over(hosts, load, n):
     return max(100 * load[n][0] / hosts[n]["cpu_total"] - cpu, 100 * load[n][1] / hosts[n]["mem_total"] - mem)
 
 
-def plan(exclude=(), role=None):
+SPARE_ROOM = 90.0  # how full a main host may get from apps moved off a standby host
+
+
+def plan(exclude=(), avoid=(), role=None):
     hosts, apps = inventory(role)
-    exclude = set(exclude or ())
+    exclude, avoid = set(exclude or ()), set(avoid or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
-    spread_before = _spread(hosts, load) if hosts else 0
+    # How even the main hosts are, without the standby ones: an empty spare
+    # would pull the average down and make every move between the others
+    # look worth less than it is.
+    main = {n: h for n, h in hosts.items() if n not in avoid} or hosts
+
+    def main_spread(l):
+        return _spread(main, {n: l[n] for n in main})
+    spread_before = main_spread(load) if hosts else 0
     # satisfies() reads Homestead's own host summary (status, labels,
     # devices), not the Kubernetes Node.
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
@@ -297,7 +315,7 @@ def plan(exclude=(), role=None):
         if app["why"]:
             continue
         reqs = requirements(app["dep"])
-        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"]
+        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"] and n not in avoid
                                and satisfies(summary.get(n, h["node"]), reqs)[0]
                                # Not to a host running something it is kept apart from.
                                and not any(other["host"] == n and _kept_apart(app, other) for other in apps if other is not app)
@@ -305,19 +323,28 @@ def plan(exclude=(), role=None):
     moves, moved = [], set()
     while len(moves) < MAX_MOVES:
         best = None
-        # The busiest host first; when nothing of its can move, the next one.
-        now = _spread(hosts, load)
-        for busiest in sorted(load, key=lambda n: _over(hosts, load, n), reverse=True):
+        # Standby hosts first, then the busiest; when nothing of one can move, the next.
+        now = main_spread(load)
+        for busiest in sorted(load, key=lambda n: (n in avoid, _over(main, {k: load[k] for k in main}, n) if n in main else 0),
+                              reverse=True):
             for app in apps:
                 if app["host"] != busiest or app["why"] or app["id"] in exclude or app["id"] in moved:
                     continue
                 for target in eligible.get(app["id"], ()):
                     after = {**load, busiest: [load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"]],
                              target: [load[target][0] + app["cpu"], load[target][1] + app["mem"]]}
-                    gain = now - _spread(hosts, after)
+                    if busiest in avoid:
+                        # Off a standby host, any move that leaves the new
+                        # one room is worth it; the most room left first.
+                        full = max(100 * after[target][0] / hosts[target]["cpu_total"],
+                                   100 * after[target][1] / hosts[target]["mem_total"])
+                        gain, worth = SPARE_ROOM - full, full <= SPARE_ROOM
+                    else:
+                        gain = now - main_spread(after)
+                        worth = gain >= GAIN
                     near = bool(app["near"] and target in app["near"])
                     key = (gain - (0 if near else 2), near)      # a host with its volumes is worth two points
-                    if gain >= GAIN and (best is None or key > best[0]):
+                    if worth and (best is None or key > best[0]):
                         best = (key, app, target, near)
             if best:
                 break
@@ -340,7 +367,7 @@ def plan(exclude=(), role=None):
                        "mem_before": round(100 * hosts[n]["mem"] / hosts[n]["mem_total"]),
                        "mem_after": round(100 * load[n][1] / hosts[n]["mem_total"])} for n in sorted(hosts)],
             "moves": moves, "apps": sorted(shown), "excluded": sorted(exclude), "quiet": quiet,
-            "spread_before": round(spread_before, 1), "spread_after": round(_spread(hosts, load), 1) if hosts else 0,
+            "spread_before": round(spread_before, 1), "spread_after": round(main_spread(load), 1) if hosts else 0,
             "skipped": [{"id": a["id"], "why": a["why"]} for a in apps if a["why"]],
             "metrics": all(h["metrics"] for h in hosts.values()), "review_token": token}
 
@@ -495,10 +522,10 @@ def start_run(request):
         except PermissionError as error:
             return ROUTER.Reply(403, {"error": str(error)})
         except ValueError as error:
-            return ROUTER.Reply(409, {"error": str(error), "plan": plan(b.get("exclude") or [], role=role)})
+            return ROUTER.Reply(409, {"error": str(error), "plan": plan(b.get("exclude") or [], avoid=standby(), role=role)})
         chosen = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
     else:
-        chosen = plan(b.get("exclude") or [], role=role)
+        chosen = plan(b.get("exclude") or [], avoid=standby(), role=role)
         if chosen["review_token"] != b.get("review_token"):
             return ROUTER.Reply(409, {"error": "Container load changed since the review; review again", "plan": chosen})
     if not chosen["moves"]:
@@ -509,6 +536,6 @@ def start_run(request):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/workloads/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
-                                                                            role=request.role)),
+                                                                            avoid=standby(), role=request.role)),
     ("POST", "/api/workloads/rebalance"): ("operator", start_run),
 }

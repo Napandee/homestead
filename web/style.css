@@ -858,6 +858,7 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .a2job{display:flex;flex-direction:column;gap:2px;padding:5px 9px;font-size:12px}
 .a2jobwhen{font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .a2jobfailed{border-color:color-mix(in srgb,var(--crit) 35%,transparent)}
+.standby-hosts{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
 .usage-suggest{flex-wrap:wrap;gap:8px 12px;margin:2px 0 10px}.usage-suggest .ui-help{flex:1 1 260px;margin:0}
 .a2disconnected{border-color:rgba(255,77,79,.3);background:rgba(255,77,79,.035)}
 .arch-head-actions{flex-wrap:wrap;justify-content:flex-end}
@@ -1683,6 +1684,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-grid[data-tab="homestead"]>section[data-tab="homestead"],
 .settings-grid[data-tab="homestead"]>section[data-tab="about"],
 .settings-grid[data-tab="updates"]>section[data-tab="updates"],
+.settings-grid[data-tab="placement"]>section[data-tab="placement"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="monitoring"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="health"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="mqtt"],

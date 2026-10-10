@@ -50,7 +50,7 @@ readings retain the last warning. Unchanged conditions do not repeat on a timer.
 | Service address | Address has no route | Recurrence after confirmed recovery |
 | Failed job | A background operation fails | Once per operation |
 | Joining host | New Kubernetes registration; subsequently Ready | Once per host identity and stage |
-| Host back | A host takes work again and moving containers back would even the hosts out (Settings → Updates → When a host comes back: Suggest or In the update window) | Clears once nothing is worth moving, or a week after the host came back |
+| Host back | A host takes work again and moving containers back would even the hosts out (Settings → Placement → When a host comes back: Suggest or In the update window) | Clears once nothing is worth moving, or a week after the host came back |
 | Image update | A new eligible image candidate is discovered | Once per candidate identity |
 | Harvester upgrade | New stable release or upgrade start/completion/failure | Once per release or upgrade stage |
 

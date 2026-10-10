@@ -28,6 +28,7 @@ import threading
 import time
 import zoneinfo
 
+import homestead_placement_mode as PLACEMODE
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -239,16 +240,12 @@ def guarded(cronjobs, deployments, start, end):
 
 
 # ------------------------------------------------------------- hosts
-def _takes_work(node):
-    ready = any(c.get("type") == "Ready" and c.get("status") == "True"
-                for c in (node.get("status") or {}).get("conditions") or [])
-    return ready and not (node.get("spec") or {}).get("unschedulable")
-
-
-def observe(nodes, now=None):
+def observe(nodes, now=None, standby=()):
     """Notes each host that takes work again; returns the hosts back within
     RETURN_KEEP. A host seen for the first time has not come back, and nor
-    has one taking work for the first time - a new host finishing joining."""
+    has one taking work for the first time - a new host finishing joining -
+    nor a standby one: nothing is moved onto it, so its return is no reason
+    to move anything."""
     now = int(now or time.time())
     with _lock:
         data = _load()
@@ -258,8 +255,8 @@ def observe(nodes, now=None):
             name = (node.get("metadata") or {}).get("name")
             if not name:
                 continue
-            seen[name] = _takes_work(node)
-            if seen[name] and data["hosts"].get(name) is False and name in worked:
+            seen[name] = PLACEMODE.takes_work(node)
+            if seen[name] and data["hosts"].get(name) is False and name in worked and name not in standby:
                 data["returned"][name] = now
             if not seen[name]:
                 data["returned"].pop(name, None)
@@ -346,8 +343,17 @@ def tick(now=None):
     and in the maintenance window, doing it. Returns the job started, if any."""
     now = time.time() if now is None else now
     current = settings()
-    mode = (current.get("placement") or {}).get("rebalance", "off")
-    returned = observe(read("/api/v1/nodes").get("items", []), now)
+    placement = current.get("placement") or {}
+    mode = placement.get("rebalance", "off")
+    nodes = read("/api/v1/nodes").get("items", [])
+    # The standby taints are kept in step every minute; one that fails waits
+    # for the next, and must not stop hosts coming back from being noticed.
+    try:
+        PLACEMODE.reconcile(nodes, placement)
+    except Exception as error:
+        print(f"placement: {str(error)[:160]}", flush=True)
+    standby = sorted(PLACEMODE.standby_of(placement))
+    returned = observe(nodes, now, standby)
     if not returned or mode == "off":
         return None
     # Not beside other work that moves or restarts apps or hosts: a host
@@ -357,7 +363,7 @@ def tick(now=None):
     # A plan reads every pod and volume: worked out again every five minutes.
     if now - _planned[0] >= 300:
         _planned[0] = now
-        suggest(plan()["moves"], now)
+        suggest(plan(avoid=standby)["moves"], now)
     maintenance = current["updates"]["maintenance"]
     key = window_key(maintenance, now)
     if mode != "window" or not key or already_ran(key) or not observe_returned():
@@ -370,10 +376,10 @@ def tick(now=None):
               for d in deployments if managed_by(d)}
     # A scheduled job is guarded for as long as the run may take - a move can
     # wait MOVE_WAIT for its container - not only until the window closes.
-    first = plan(sorted(gitops))
+    first = plan(sorted(gitops), avoid=standby)
     until = max(closes, now + MOVE_WAIT * len(first["moves"]))
     keep = guarded(read("/apis/batch/v1/cronjobs").get("items", []), deployments, now, until)
-    chosen = plan(sorted(gitops | set(keep)))
+    chosen = plan(sorted(gitops | set(keep)), avoid=standby)
     if not chosen["moves"]:
         ran(key)
         return None

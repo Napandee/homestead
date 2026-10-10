@@ -113,9 +113,14 @@ Service - it answers on the node itself - so remove the Service under
 **Networking**. Moving such an app to k3s leaves the Service behind.
 
 **Apps restarted during the night after a host was down.** That is the job
-*Rebalance N containers after host came back*, from **Settings → Updates →
+*Rebalance N containers after host came back*, from **Settings → Placement →
 When a host comes back → In the update window**: it moves containers back onto
 the returned host. Set it to **Suggest** or **No** to stop it.
+
+**A `homestead.io/standby` taint comes back within a minute of removing it.**
+Homestead keeps standby hosts tainted while **Settings → Placement → How hosts
+share the work** is **Hot spare** with that host ticked. Untick the host there,
+or choose another way to share the work; Homestead then removes the taint itself.
 
 **A low-tier app stays Pending after a host failed.** Low apps wait for room
 and evict nothing. Give it a higher tier (Edit → Placement → **When the cluster

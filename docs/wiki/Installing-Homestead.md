@@ -235,12 +235,16 @@ kubectl delete clusterrolebinding/homestead clusterrole/homestead
 
 The `homestead-data` claim is kept until you delete it from Volumes.
 
-Two cluster-wide things Homestead may have made stay too: the PriorityClasses
-of the priority tiers. Set every critical and low app back to **Normal** first
-(or remove `priorityClassName` from them yourself): pods running now carry on,
-but Kubernetes refuses every new pod that names a class that is gone, so an app
-still naming one cannot restart, update or move to another host. Then:
+Cluster-wide things Homestead may have made stay too: the PriorityClasses of
+the priority tiers, and the hot-spare taint on standby hosts. Set every
+critical and low app back to **Normal** first (or remove `priorityClassName`
+from them yourself): pods running now carry on, but Kubernetes refuses every
+new pod that names a class that is gone, so an app still naming one cannot
+restart, update or move to another host. Then remove both; the second command
+takes the taint off every host that has it, and says `not found` for each one
+that does not, which is expected:
 
 ```bash
 kubectl delete priorityclass homestead-critical homestead-low --ignore-not-found
+kubectl taint nodes --all homestead.io/standby-
 ```

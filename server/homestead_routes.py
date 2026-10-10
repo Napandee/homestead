@@ -90,6 +90,7 @@ MODULES = (
     "homestead_outage",
     "homestead_passthrough",
     "homestead_place",
+    "homestead_placement_mode",
     "homestead_platform",
     "homestead_portal",
     "homestead_power_jobs",

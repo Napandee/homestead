@@ -62,13 +62,14 @@ function thresholdEditor(id, label, unit, help, pair) {
     </div></div>`;
 }
 
-/* Nine sections, each gathering the cards of one topic. A card names its
+/* Ten sections, each gathering the cards of one topic. A card names its
    topic (data-tab); a section shows the cards of every topic it holds, and a
    link or button can still ask for a topic by its own name - settingsTab("fleet"). */
 const SETTINGS_SECTIONS = [
   // [key, label, description, topics, group, icon from index.html's sprite]
   ["homestead", "Homestead", "Version, health, copies, backup", ["homestead", "about"], "Cluster", "home"],
   ["updates", "Updates", "Releases, platform, hosts, containers", ["updates"], "Cluster", "update"],
+  ["placement", "Placement", "How hosts share the work", ["placement"], "Cluster", "node"],
   ["monitoring", "Monitoring", "Thresholds, drives, MQTT", ["monitoring", "health", "mqtt"], "Cluster", "pulse"],
   ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster", "chip"],
   ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster", "link"],
@@ -118,17 +119,21 @@ window.settingsBack = () => {
 };
 
 async function viewSettings() {
-  const [settings, features, overview, users] = await Promise.all([
+  const [settings, features, overview, users, placement] = await Promise.all([
     loadHealthSettings(true), loadHardwareFeatures(),
     api("/api/overview").catch(() => STATE.data.ov || null),
     can("admin") ? api("/api/auth/users").catch(() => []) : Promise.resolve([]),
+    api("/api/placement").catch(() => null),
   ]);
   STATE.data.ov = overview || STATE.data.ov;
+  STATE.data.placement = placement;
   const thresholds = settings.thresholds || HEALTH_DEFAULTS.thresholds;
   const updates = settings.updates || { policy: "approval_required", notify_available: true,
     notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } };
   const maintenance = updates.maintenance || {};
   const rebalanceMode = settings.placement?.rebalance || "off";
+  const placeMode = settings.placement?.mode || "";
+  const standbyHosts = new Set(settings.placement?.standby_nodes || []);
   const smart = settings.smart || { temperature: { warning: 55, critical: 65 },
     reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true };
   const info = settings.info || {};
@@ -204,6 +209,31 @@ async function viewSettings() {
       `, {tab:`updates`, save:`app`})}
 
       ${UI.settingsCard(`
+        ${UI.moduleHeader(`How hosts share the work`, `One choice for the whole cluster, instead of placement set app by app`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        <div class="srows">
+          ${settingRow(`Share the work ${tip("Hot spare taints its hosts homestead.io/standby (PreferNoSchedule): the scheduler avoids them while another host has room, and uses them when none has. No app changes, so it works for apps Flux, Argo CD or Helm apply.")}`,
+            `<div class="dim xs" id="set_place_text">${placeModeText(placeMode, placement)}</div>`,
+            `<select id="set_place_mode" aria-label="Share the work" aria-describedby="set_place_text" ${can("admin") ? "" : "disabled"} onchange="placeModeChanged()">
+              ${placeMode ? "" : '<option value="" selected>Not chosen yet</option>'}
+              ${[["default", "Kubernetes default"], ["spread", "Spread by capacity"], ["standby", "Hot spare"]].map(([v, l]) =>
+                `<option value="${v}" ${placeMode === v ? "selected" : ""}>${l}</option>`).join("")}
+            </select>`)}
+          <div id="set_standby_row" ${placeMode === "standby" ? "" : "hidden"}>
+            ${settingRow(`Standby hosts ${tip("Take apps only when the others cannot. A host is never made standby when no other host takes work.")}`,
+              (placement?.notes || []).map(esc).join("; "),
+              // A standby host no longer in the cluster stays listed, ticked,
+              // so saving another section does not quietly drop it.
+              `<div class="standby-hosts">${[...(placement?.hosts || []),
+                  ...[...standbyHosts].filter(n => !(placement?.hosts || []).some(h => h.name === n)).map(name => ({ name, gone: true }))]
+                .map(h => `<label class="switch"><input type="checkbox" class="set_standby" value="${esc(h.name)}"
+                ${standbyHosts.has(h.name) ? "checked" : ""} ${can("admin") ? "" : "disabled"}> <span class="mono">${esc(h.name)}</span>${h.gone
+                  ? ` <span class="dim xs">${placement ? "not in this cluster" : "hosts could not be read"}</span>` : h.takes_work ? "" : ' <span class="dim xs">not taking work now</span>'}</label>`).join("")
+                || '<span class="dim xs">No hosts reported.</span>'}</div>`)}
+          </div>
+        </div>
+      `, {tab:`placement`, save:`app`})}
+
+      ${UI.settingsCard(`
         ${UI.moduleHeader(`When a host comes back`, `Containers start on the other hosts while one is down or drained, and stay there when it returns`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="srows">
           ${settingRow(`Move containers back ${tip("Uses Balance hosts: only moves that bring the busiest host down enough, each restarting its container once. In the window, an app whose scheduled job (a backup, say) runs before the window closes is left where it is, since the job needs its volume on that host.")}`,
@@ -215,7 +245,7 @@ async function viewSettings() {
               <option value="window" ${rebalanceMode === "window" ? "selected" : ""}>In the update window</option>
             </select>`)}
         </div>
-      `, {tab:`updates`, save:`app`})}
+      `, {tab:`placement`, save:`app`})}
 
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Hardware features`, `Reusable passthrough paths and automatic host detection`, `${can("operator") ? '<button class="btn sm" onclick="hardwareRescan(this)" title="Look for devices plugged in since the last check">Rescan hosts</button>' : ""}
@@ -777,6 +807,38 @@ if (typeof document !== "undefined" && document.addEventListener) {
 }
 const settingsKinds = () => new Set([...(STATE.settingsDirty || [])].map(key => key.split(":")[0]));
 
+/* What each way of sharing the work does, with what it depends on here. */
+function placeModeText(mode, placement) {
+  if (mode === "standby") {
+    // The taint only steers new pods: what runs on a host chosen now stays
+    // until Balance hosts moves it - said, so ticking a host is not taken
+    // for emptying it.
+    const pending = (placement?.hosts || []).filter(h => h.standby && !h.tainted);
+    return `The standby hosts take apps only when the others cannot. Apps already on one stay there until Balance hosts moves them - off standby hosts first, and never onto them.${can("operator")
+      ? ` ${UI.button("Balance hosts…", "balanceHosts()", { kind: "sm" })}` : ""}${pending.length
+      ? ` <span class="badtext">${esc(pending.map(h => h.name).join(", "))} ${pending.length === 1 ? "is" : "are"} not marked standby yet${pending.some(h => h.error) ? `: ${esc(pending.find(h => h.error).error)}` : ""}; Homestead tries again every minute.</span>` : ""}`;
+  }
+  if (mode === "spread") {
+    const n = placement?.unreserved || 0;
+    return `Kubernetes places each app on the host with most room left, by what apps reserve.${n
+      ? ` ${n} app${n === 1 ? " reserves" : "s reserve"} nothing and ${n === 1 ? "is" : "are"} placed as if ${n === 1 ? "it uses" : "they use"} nothing.${can("operator")
+        ? ` ${UI.button("Set reservations from use…", "reservationsReview()", { kind: "sm" })}` : ""}` : " Every app reserves something."}`;
+  }
+  return mode ? "Kubernetes places apps as it does by default; placement is set app by app." : "Not chosen yet: Kubernetes places apps as it does by default.";
+}
+window.placeModeChanged = () => {
+  const mode = $("#set_place_mode").value;
+  $("#set_standby_row").hidden = mode !== "standby";
+  $("#set_place_text").innerHTML = placeModeText(mode, STATE.data.placement);
+  // Spreading or a spare is kept only by moving apps back after a host
+  // returns; offer that, visibly, rather than leaving it off unseen.
+  const back = $("#set_rebalance");
+  if ((mode === "spread" || mode === "standby") && back?.value === "off") {
+    back.value = "suggest";
+    back.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+};
+
 /* What the chosen mode does, in the window's own words. */
 function rebalanceModeText(mode, maintenance) {
   return mode === "suggest" ? "An alert says how many containers would move back; nothing moves until someone reviews it."
@@ -797,7 +859,12 @@ async function settingsAppSave() {
     maintenance: $("#set_update_start") ? { start: $("#set_update_start").value, duration_minutes: +$("#set_update_duration").value,
       days: $$(".set_update_day:checked").map(input => +input.value) } : (current.updates || {}).maintenance };
   if ($("#set_site_name")) body.site_name = $("#set_site_name").value.trim();
-  if ($("#set_rebalance")) body.placement = { ...(current.placement || {}), rebalance: $("#set_rebalance").value };
+  if ($("#set_rebalance")) body.placement = { ...(current.placement || {}), rebalance: $("#set_rebalance").value,
+    ...($("#set_place_mode") ? { mode: $("#set_place_mode").value, standby_nodes: $$(".set_standby:checked").map(input => input.value) } : {}) };
+  if (body.placement?.mode === "standby" && !body.placement.standby_nodes.length) {
+    settingsTab("placement");
+    throw new Error("Tick at least one standby host, or choose another way to share the work");
+  }
   const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || body.thresholds || {}) } };
   STATE.data.appSettings = null;

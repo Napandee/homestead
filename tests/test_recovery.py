@@ -118,6 +118,11 @@ class HostTests(TempData):
             recovery.observe([node("a")], at(0, 1))
         save.assert_not_called()
 
+    def test_a_standby_host_coming_back_is_no_reason_to_move_anything(self):
+        recovery.observe([node("a"), node("spare")], at(0))
+        recovery.observe([node("a"), node("spare", ready=False)], at(1))
+        self.assertEqual({}, recovery.observe([node("a"), node("spare")], at(2), standby=["spare"]))
+
     def test_a_host_seen_for_the_first_time_has_not_come_back(self):
         self.assertEqual({}, recovery.observe([node("a"), node("b")], at(1)))
 
@@ -175,9 +180,11 @@ class TickTests(TempData):
         self.plans, self.running = [], []
         api = {"/apis/batch/v1/cronjobs": {"items": [cronjob("backup-web", "15 2 * * *", "web-data")]},
                "/apis/apps/v1/deployments": {"items": [app("web", "web-data"), app("db", "db-data")]}}
+        self.avoided = []
 
-        def plan(exclude=()):
+        def plan(exclude=(), avoid=()):
             self.plans.append(sorted(exclude))
+            self.avoided.append(sorted(avoid))
             return {"moves": [{"id": "lab/db"}], "excluded": sorted(exclude)}
         self.start = mock.Mock(return_value={"id": "job"})
         jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: self.running)

@@ -176,6 +176,27 @@ class UniFiSetupStateTests(unittest.TestCase):
                 self.assertNotIn("tuple", step["error"])
 
 
+class PlacementSetupStateTests(UniFiSetupStateTests):
+    """How hosts share the work: done once a way is chosen, and shown only
+    with two hosts taking work - read from the cluster, not only the demo."""
+
+    def step(self, found):
+        import homestead_placement_mode as PLACEMODE
+        real = SETUP.homestead_routes.cached
+        with mock.patch.object(PLACEMODE, "current", return_value=found), \
+                mock.patch.object(SETUP.homestead_routes, "cached",
+                                  side_effect=lambda key, ttl, fn: fn() if key == "placement" else real(key, ttl, fn)):
+            return SETUP.state("admin", "admin")["steps"]["placement"]
+
+    def test_the_step_is_done_once_a_way_is_chosen_default_included(self):
+        for chosen, done in (("", False), ("default", True), ("standby", True)):
+            found = self.step({"mode": chosen, "hosts": [], "applies": True})
+            self.assertEqual((done, True), (found["done"], found["applies"]), chosen)
+
+    def test_the_step_does_not_apply_with_one_host_taking_work(self):
+        self.assertFalse(self.step({"mode": "", "hosts": [], "applies": False})["applies"])
+
+
 class NetworkSetupStateTests(unittest.TestCase):
     def setUp(self):
         import server

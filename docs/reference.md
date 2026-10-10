@@ -1713,7 +1713,7 @@ Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
 pods; the dialog says whether it does and sets it, as does Settings > Hardware and storage.
 
 Kubernetes never moves a container back once its host returns. **Settings >
-Updates > When a host comes back** can raise an alert offering the moves, or
+Placement > When a host comes back** can raise an alert offering the moves, or
 make them in the update window, leaving apps whose backup job is due where
 they are (see [Settings](wiki/Settings.md#when-a-host-comes-back)).
 

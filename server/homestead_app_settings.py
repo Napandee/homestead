@@ -7,6 +7,7 @@ import json
 import re
 import urllib.parse
 
+import homestead_placement_mode as PLACEMODE
 import homestead_recovery as RECOVERY
 
 # server.py's reader and writer, bound at start (bind below).
@@ -49,9 +50,11 @@ DEFAULTS = {
     # Rebuild missing copies of detached volumes. Longhorn's own setting where
     # it has one; this drives Homestead's stand-in where it has not.
     "longhorn": {"offline_rebuilding": True},
-    # What happens when a host comes back: off, suggest (an alert to review
+    # How hosts share the work (homestead_placement_mode): "" until chosen,
+    # default, spread, or standby with the hosts kept in reserve - and what
+    # happens when a host comes back: off, suggest (an alert to review
     # Balance hosts), or window (that rebalance, run in the maintenance window).
-    "placement": {"rebalance": "off"},
+    "placement": {"rebalance": "off", "mode": "", "standby_nodes": []},
     # Monthly restore tests of every app with backups (homestead_restore_test).
     "restore_tests": {"enabled": False},
 }
@@ -124,7 +127,7 @@ def validate(value):
     rebalance = ((value or {}).get("placement") or {}).get("rebalance", out["placement"]["rebalance"])
     if rebalance not in RECOVERY.MODES:
         raise ValueError("after a host comes back must be off, suggest or window")
-    out["placement"] = {"rebalance": rebalance}
+    out["placement"] = {"rebalance": rebalance, **PLACEMODE.validate((value or {}).get("placement") or {})}
     tests = ((value or {}).get("restore_tests") or {}).get("enabled", False)
     if not isinstance(tests, bool):
         raise ValueError("restore tests must be on or off")
