@@ -2,6 +2,7 @@ import sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_storage as STORAGE
 
 CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/doublecommander-appdata"
 
@@ -11,6 +12,10 @@ class EnsureClaimTests(unittest.TestCase):
     doublecommander-appdata already exists": the failed one left its volume."""
 
     def setUp(self):
+        # STORAGE reads the cluster through server.py's client in these tests.
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
         self.saved = server.kget, server.ksend, server.storage_classes
         self.claim, self.deployments, self.sent = None, [], []
 

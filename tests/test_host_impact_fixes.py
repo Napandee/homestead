@@ -104,12 +104,12 @@ class DetachedCopiesTests(unittest.TestCase):
                          **({"failedAt": "2026-10-09T01:00:00Z"} if failed else {})}}
 
     def copies(self, replicas):
-        import server
+        import homestead_storage as STORAGE
 
         def kget(path):
             return {"items": replicas if path.endswith("/replicas") else []}
-        with mock.patch.object(server, "kget", side_effect=kget):
-            return server.volume_copies()
+        with mock.patch.object(STORAGE, "kget", side_effect=kget):
+            return STORAGE.volume_copies()
 
     def test_a_detached_volumes_stopped_copies_are_whole(self):
         got = self.copies([self.replica("pg-dumps", "k3s-01", "stopped"), self.replica("pg-dumps", "k3s-02", "stopped")])
