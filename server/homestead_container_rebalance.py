@@ -18,6 +18,10 @@ would keep it beside them and the move would never come up - and nothing
 goes to a host it is kept apart from. A host that already holds a copy of its volumes
 is preferred, so its reads stay local.
 
+Standby hosts (avoid) are moved off first and never moved onto: an app on
+one is there because a main host was away, and any host that can take it is
+a better place for it.
+
 The job moves one container at a time with the same capacity check and
 placement as a manual move, waits until it runs on its new host, and stops
 - rather than carrying on - if one does not come up, so a problem is looked
@@ -239,11 +243,14 @@ def _score(host, cpu_m, mem_b):
     return max(100 * cpu_m / host["cpu_total"], 100 * mem_b / host["mem_total"])
 
 
-def plan(exclude=()):
+STANDBY = 100      # what being a standby host adds to its load, so it is emptied first
+
+
+def plan(exclude=(), avoid=()):
     hosts, apps = inventory()
-    exclude = set(exclude or ())
+    exclude, avoid = set(exclude or ()), set(avoid or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
-    score = lambda n: _score(hosts[n], *load[n])
+    score = lambda n: _score(hosts[n], *load[n]) + (STANDBY if n in avoid else 0)
     # satisfies() reads Homestead's own host summary (status, labels,
     # devices), not the Kubernetes Node.
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
@@ -252,7 +259,7 @@ def plan(exclude=()):
         if app["why"]:
             continue
         reqs = requirements(app["dep"])
-        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"]
+        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"] and n not in avoid
                                and satisfies(summary.get(n, h["node"]), reqs)[0]
                                # Not to a host running something it is kept apart from.
                                and not any(other["host"] == n and _kept_apart(app, other) for other in apps if other is not app)

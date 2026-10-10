@@ -108,9 +108,11 @@ DEFAULT_APP_SETTINGS = {
     # Rebuild missing copies of detached volumes. Longhorn's own setting where
     # it has one; this drives Homestead's stand-in where it has not.
     "longhorn": {"offline_rebuilding": True},
-    # What happens when a host comes back: off, suggest (an alert to review
+    # How hosts share the work (homestead_placement_mode): "" until chosen,
+    # default, spread, or standby with the hosts kept in reserve - and what
+    # happens when a host comes back: off, suggest (an alert to review
     # Balance hosts), or window (that rebalance, run in the maintenance window).
-    "placement": {"rebalance": "off"},
+    "placement": {"rebalance": "off", "mode": "", "standby_nodes": []},
     # Monthly restore tests of every app with backups (homestead_restore_test).
     "restore_tests": {"enabled": False},
 }
@@ -501,7 +503,7 @@ def validate_app_settings(value):
     rebalance = ((value or {}).get("placement") or {}).get("rebalance", out["placement"]["rebalance"])
     if rebalance not in RECOVERY.MODES:
         raise ValueError("after a host comes back must be off, suggest or window")
-    out["placement"] = {"rebalance": rebalance}
+    out["placement"] = {"rebalance": rebalance, **PLACEMODE.validate((value or {}).get("placement") or {})}
     tests = ((value or {}).get("restore_tests") or {}).get("enabled", False)
     if not isinstance(tests, bool):
         raise ValueError("restore tests must be on or off")
@@ -581,6 +583,11 @@ def save_app_settings(value):
         ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     _cache.pop("settings", None)
     UPDATES.invalidate()
+    # Standby hosts take their taint now, not at the next minute's look.
+    try:
+        PLACEMODE.reconcile(kget("/api/v1/nodes").get("items", []), settings["placement"])
+    except Exception as error:
+        print(f"placement: {str(error)[:160]}", flush=True)
     # A different catalogue source is a different catalogue.
     for key in [k for k in _cache if k.startswith("appstore")]:
         _cache.pop(key, None)
@@ -779,6 +786,25 @@ def start_container_rebalance(plan, why=""):
                      "Starting with the first container")
 
 
+def standby_hosts():
+    return sorted(PLACEMODE.standby_of(cached("settings", 15, get_app_settings).get("placement")))
+
+
+def placement_summary():
+    """How hosts share the work, for Settings and the setup guide: each
+    host's part, and how many apps reserve nothing at all - which spreading
+    by capacity depends on."""
+    unreserved = 0
+    for dep in kget("/apis/apps/v1/deployments").get("items", []):
+        if dep["metadata"].get("namespace") in SYS_NS:
+            continue
+        containers = (((dep.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+        if containers and not any(((c.get("resources") or {}).get("requests") or {}) for c in containers):
+            unreserved += 1
+    return PLACEMODE.summary(kget("/api/v1/nodes").get("items", []),
+                             cached("settings", 15, get_app_settings).get("placement"), unreserved)
+
+
 _recovery_planned = [0.0]
 
 
@@ -788,8 +814,12 @@ def recovery_tick(now=None):
     and in the maintenance window, doing it. Returns the job started, if any."""
     now = time.time() if now is None else now
     settings = cached("settings", 15, get_app_settings)
-    mode = (settings.get("placement") or {}).get("rebalance", "off")
-    returned = RECOVERY.observe(kget("/api/v1/nodes").get("items", []), now)
+    placement = settings.get("placement") or {}
+    mode = placement.get("rebalance", "off")
+    nodes = kget("/api/v1/nodes").get("items", [])
+    PLACEMODE.reconcile(nodes, placement)
+    standby = sorted(PLACEMODE.standby_of(placement))
+    returned = RECOVERY.observe(nodes, now)
     if not returned or mode == "off":
         return None
     if any(i.get("kind") == CREBALANCE.KIND and i.get("status") not in OPS.TERMINAL for i in OPS.list_operations()):
@@ -797,7 +827,7 @@ def recovery_tick(now=None):
     # A plan reads every pod and volume: worked out again every five minutes.
     if now - _recovery_planned[0] >= 300:
         _recovery_planned[0] = now
-        RECOVERY.suggest(CREBALANCE.plan()["moves"], now)
+        RECOVERY.suggest(CREBALANCE.plan(avoid=standby)["moves"], now)
     maintenance = settings["updates"]["maintenance"]
     key = RECOVERY.window_key(maintenance, now)
     if mode != "window" or not key or RECOVERY.already_ran(key) or not RECOVERY.observe_returned():
@@ -805,7 +835,7 @@ def recovery_tick(now=None):
     closes = RECOVERY.window(maintenance, now)[1]
     keep = RECOVERY.guarded(kget("/apis/batch/v1/cronjobs").get("items", []),
                             kget("/apis/apps/v1/deployments").get("items", []), now, closes)
-    plan = CREBALANCE.plan(sorted(keep))
+    plan = CREBALANCE.plan(sorted(keep), avoid=standby)
     RECOVERY.ran(key)
     if plan["moves"]:
         return start_container_rebalance(plan, f" after {', '.join(sorted(returned))} came back")
@@ -5234,6 +5264,13 @@ def setup_state(user, role):
                     "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
         step("quorum", quorum)
 
+        def placement():
+            # Offered once there are two hosts to share the work; done once
+            # a way is chosen, Kubernetes' own included.
+            found = placement_summary()
+            return {**found, "done": bool(found["mode"]), "applies": found["applies"]}
+        step("placement", placement)
+
         def clocks():
             known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, get_nodes)}
             told = {k: v for k, v in known.items() if v is not None}
@@ -7035,6 +7072,7 @@ import homestead_usage as USAGE
 import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
+import homestead_placement_mode as PLACEMODE
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -7161,6 +7199,7 @@ CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
 RECOVERY.bind(DATA_DIR)
+PLACEMODE.bind(kget, ksend)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
 OPS.RESOLVERS[PRIORITY.KIND] = PRIORITY.status
 OPS.CANCELLERS[PRIORITY.KIND] = (PRIORITY.cancel_plan, PRIORITY.cancel_run)
@@ -10235,7 +10274,10 @@ class H(HTTP.LimitedHandler):
             if p == "/api/longhorn/offline-rebuilding":
                 return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
             if p == "/api/workloads/rebalance/plan":
-                return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
+                return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a],
+                                                       avoid=standby_hosts()))
+            if p == "/api/placement":
+                return self._send(200, placement_summary())
             if p == "/api/workloads/priority/plan":
                 chosen = q.get("chosen")
                 picks = dict(item.split("=", 1) for item in chosen[0].split(",") if "=" in item) if chosen else None
@@ -11342,10 +11384,10 @@ class H(HTTP.LimitedHandler):
                     try:
                         moves = CREBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
                     except ValueError as error:
-                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [])})
+                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [], avoid=standby_hosts())})
                     plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
                 else:
-                    plan = CREBALANCE.plan(b.get("exclude") or [])
+                    plan = CREBALANCE.plan(b.get("exclude") or [], avoid=standby_hosts())
                     if plan["review_token"] != b.get("review_token"):
                         return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
                 if not plan["moves"]:

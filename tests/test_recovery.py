@@ -142,8 +142,10 @@ class TickTests(TempData):
         self.plans = []
         api = {"/apis/batch/v1/cronjobs": {"items": [cronjob("backup-web", "15 2 * * *", "web-data")]},
                "/apis/apps/v1/deployments": {"items": [app("web", "web-data"), app("db", "db-data")]}}
-        def plan(exclude=()):
+        self.avoided = []
+        def plan(exclude=(), avoid=()):
             self.plans.append(sorted(exclude))
+            self.avoided.append(sorted(avoid))
             return {"moves": [{"id": "lab/db"}], "excluded": sorted(exclude)}
         for patcher in [mock.patch.object(server, "kget", side_effect=lambda p: {"items": self.nodes} if p == "/api/v1/nodes" else api[p]),
                         mock.patch.object(server, "cached", side_effect=lambda key, ttl, fn: self.settings),

@@ -11,7 +11,7 @@
    offers it. The button remains available afterwards, on every cluster. */
 
 const SETUP_CHAPTERS = [
-  ["Cluster health", ["health", "quorum", "clocks"]],
+  ["Cluster health", ["health", "quorum", "placement", "clocks"]],
   ["Access", ["address", "https", "hostname"]],
   ["LAN networking", ["lan"]],
   ["Storage and backups", ["disks", "storage", "smb", "backups", "config", "osupdates"]],
@@ -60,6 +60,7 @@ window.setupDismissVisit = () => { setupVisit(""); $("#setupReturn")?.classList.
 const SETUP_CHECKS = {
   health: "Checks the current node, workload and volume health reports.",
   quorum: "Checks the number of control-plane servers; one server is accepted for a lab.",
+  placement: "Checks that a way of sharing the work is chosen; Kubernetes' default counts. It does not check where apps run now.",
   clocks: "Checks the time-sync reports available from hosts.",
   address: "Checks whether Homestead is using a registered VIP.",
   smb: "Checks that the SMB server is installed and enabled, not that clients can access its shares.",
@@ -126,7 +127,7 @@ function setupStatusLabel(id, status, facts = {}) {
     if (id === "appearance") return "Confirmed by you";
     if (id === "https" && !facts.here) return "Previously checked";
     if (id === "config") return "Export recorded";
-    if (["lan", "smb", "backups", "osupdates", "unifi", "ipam", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
+    if (["placement", "lan", "smb", "backups", "osupdates", "unifi", "ipam", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
     return "Check passed";
   }
   if (status === "skipped") return "Skipped by choice";
@@ -160,6 +161,16 @@ const SETUP_STEPS = {
       ({ name, ready: (s.ready || []).includes(name) || (s.nodes || []).some(n => n.name === name && n.ready) }))) : "",
     actions: () => [{ label: "Add a node", run: "platformJoinGuide()", pri: true }],
     more: "<p>Worker nodes run applications and can hold Longhorn replicas. They do not count towards the control-plane majority.</p>",
+  },
+  placement: {
+    title: "How hosts share the work", lead: s => s.mode === "standby"
+      ? `Hot spare: ${esc((s.hosts || []).filter(h => h.standby).map(h => h.name).join(", ") || "no host")} take${(s.hosts || []).filter(h => h.standby).length === 1 ? "s" : ""} apps only when the others cannot.`
+      : s.mode === "spread" ? `Spread by capacity: each app goes where most room is left, by what apps reserve.${s.unreserved ? ` ${s.unreserved} app${s.unreserved === 1 ? " reserves" : "s reserve"} nothing yet.` : ""}`
+      : s.mode ? "Kubernetes default: apps are placed one by one, as Kubernetes does."
+      : "With more than one host, choose how they share the apps: in proportion to their size, or with a host kept in reserve for when another fails.",
+    body: s => UI.facts((s.hosts || []).map(h => [h.name, h.standby ? "standby" : h.takes_work ? "takes apps" : "not taking work now"])),
+    actions: s => [{ label: s.mode ? "Change in Settings" : "Choose in Settings", run: "settingsTab('placement');go('settings')", pri: !s.mode }],
+    more: "<p><b>Spread by capacity</b> needs apps to reserve CPU and memory: the scheduler places by what they reserve, not what they use. <b>Hot spare</b> marks hosts the scheduler avoids while it has a choice; nothing in any app changes. Either way, apps that moved while a host was away can move back when it returns - Settings, Placement, When a host comes back.</p>",
   },
   clocks: {
     title: "Time synchronisation", lead: s => s.done ? "Available host reports show synchronised clocks." :
