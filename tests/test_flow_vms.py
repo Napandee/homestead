@@ -69,10 +69,10 @@ class FlowVmTests(unittest.TestCase):
         self.by = {w["id"]: w for w in self.flow["workloads"]}
 
     def test_launcher_pods_are_not_containers(self):
-        self.assertEqual({"w:web", "w:vm-ubuntu", "w:vm-router"}, set(self.by))
+        self.assertEqual({"w:lab/web", "w:vm-ubuntu", "w:vm-router"}, set(self.by))
 
     def test_homestead_helper_pods_are_not_workloads(self):
-        self.assertNotIn("w:homestead-files-web-data", self.by)
+        self.assertNotIn("w:lab/homestead-files-web-data", self.by)
 
     def test_a_running_vm_has_its_disk_ports_address_and_use(self):
         ubuntu = self.by["w:vm-ubuntu"]

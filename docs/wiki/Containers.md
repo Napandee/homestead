@@ -683,6 +683,13 @@ the same way: the ports of any Service that selects them
 (such as Harvester's load balancers), their disks and those disks' replicas,
 with their host and address. A stopped VM is shown faded, since its disks are
 still there. Homestead's temporary browser, copy and import pods are hidden.
+Each app is one card named after its Deployment, StatefulSet or DaemonSet,
+and apps of the same name in two namespaces stay apart.
+
+Scheduled jobs, such as a nightly backup per app, are not drawn as apps: a
+pod that has finished is no longer part of what runs. They are listed under
+**Scheduled jobs**, collapsed beneath the containers, each with its last run
+and its next. The count of failed last runs stays on the collapsed heading.
 
 Each address is marked **VIP** or **node** (a node's own address) with the
 node answering for it, and an address no connection reaches is outlined in

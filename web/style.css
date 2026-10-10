@@ -847,6 +847,11 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .a2subhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 2px 2px;
   color:var(--mut);font:650 10px "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase}
 .a2subhead span{font-weight:500;letter-spacing:0;color:var(--dim)}
+.a2jobs>summary{cursor:pointer;list-style:none;justify-content:flex-start;gap:6px}.a2jobs>summary::-webkit-details-marker{display:none}
+.a2jobs>summary::before{content:"▸"}.a2jobs[open]>summary::before{content:"▾"}.a2jobs>summary>span{margin-left:auto}
+.a2job{display:flex;flex-direction:column;gap:2px;padding:5px 9px;font-size:12px}
+.a2jobwhen{font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a2jobfailed{border-color:rgba(255,77,79,.35)}
 .a2disconnected{border-color:rgba(255,77,79,.3);background:rgba(255,77,79,.035)}
 .arch-head-actions{flex-wrap:wrap;justify-content:flex-end}
 .a2item{position:relative;border:1px solid var(--line);border-radius:10px;background:var(--surf2);transition:opacity .2s var(--e),border-color .2s,box-shadow .2s}

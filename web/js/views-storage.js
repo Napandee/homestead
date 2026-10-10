@@ -18,13 +18,15 @@ const ROB = r => r === "healthy" ? "#3ddc91" : r === "degraded" ? "#ffb020" : "#
 const archId = (id, site) => site ? `${id.slice(0,2)}${encodeURIComponent(site.id)}/${id.slice(2)}` : id;
 function architectureData(data) {
   if(!Array.isArray(data.clusters))return data;
-  const graph={workloads:[],volumes:[],nodes:[],vips:[],missing:data.missing || []};
+  const graph={workloads:[],volumes:[],nodes:[],vips:[],jobs:[],missing:data.missing || []};
   for(const cluster of data.clusters){
     const site=cluster.site, key=id=>id?archId(id,site):id;
     graph.workloads.push(...cluster.workloads.map(w=>({...w,site,id:key(w.id),claims:w.claims.map(c=>({...c,vid:key(c.vid)}))})));
     graph.volumes.push(...cluster.volumes.map(v=>({...v,site,id:key(v.id)})));
     graph.nodes.push(...cluster.nodes.map(n=>({...n,site,id:key(n.id),copies:n.copies.map(c=>({...c,vid:key(c.vid)}))})));
     graph.vips.push(...cluster.vips.map(v=>({...v,site,id:key(v.id)})));
+    // A member on an older version sends no scheduled jobs.
+    graph.jobs.push(...(cluster.jobs||[]).map(j=>({...j,site,id:key(j.id)})));
   }
   return graph;
 }
@@ -59,6 +61,7 @@ async function viewFlow() {
           <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
   const renderGraph = f => {
+    const jobs=f.jobs||[];
     const containers=f.workloads.filter(w=>w.kind!=="vm"),vms=f.workloads.filter(w=>w.kind==="vm");
     const connectedVolumes=f.volumes.filter(v=>mountedVolumes.has(v.id)),disconnectedVolumes=f.volumes.filter(v=>!mountedVolumes.has(v.id));
     return `<div class="arch2wrap"><svg class="archsvg" aria-hidden="true"></svg><div class="arch2">
@@ -80,6 +83,7 @@ async function viewFlow() {
           ${containers.map(workloadCard).join("") || '<div class="dim xs">No containers</div>'}</div>
         ${vms.length ? `<div class="a2group a2vmgroup"><div class="a2subhead">Virtual machines <span>${vms.length}</span></div>
           ${vms.map(workloadCard).join("")}</div>` : ""}
+        ${jobs.length ? scheduledJobs(jobs) : ""}
       </section>
 
       <section class="a2col"><h4>Volumes <span class="dim">${f.volumes.length}</span></h4>
@@ -99,7 +103,7 @@ async function viewFlow() {
       </section>
     </div></div>`;
   };
-  const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
+  const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips","jobs"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
   paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container or VM is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
@@ -115,6 +119,28 @@ async function viewFlow() {
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);
   else drawArch();
   archWatch();
+}
+
+/* Scheduled jobs, collapsed under the apps: a nightly backup runs for a minute
+   and is not part of how anything is reached, but a failed run must not look
+   like a good one - so the count of failures stays on the closed summary. */
+function scheduledJobs(jobs) {
+  const failed = jobs.filter(j => j.last_failed).length;
+  // Kubernetes reads a schedule without a time zone on the cluster's clock,
+  // which is the UTC that CRON assumes; with one of its own, no next run is
+  // worked out rather than a wrong one.
+  const utc = j => !j.time_zone || ["UTC", "Etc/UTC"].includes(j.time_zone);
+  const last = j => j.running ? '<span class="pill slim med">running</span>'
+    : !j.last_run ? '<span class="dim">not run yet</span>'
+    : j.last_failed ? `<span class="pill slim crit">failed</span> ${esc(fmtAgo(Math.max(1, (Date.now() - Date.parse(j.last_run)) / 1000)))}`
+    : `ran ${esc(fmtAgo(Math.max(1, (Date.now() - Date.parse(j.last_run)) / 1000)))}`;
+  const row = j => `<div class="a2item a2job ${j.last_failed ? "a2jobfailed" : ""}"${clusterAttr(j)}
+      title="${esc(`${j.ns}/${j.name} · ${CRON.describe(j.schedule)}${utc(j) ? "" : ` (${j.time_zone})`}${j.claims.length ? ` · uses ${j.claims.join(", ")}` : ""}`)}">
+      <span class="a2name">${esc(j.name)}</span>
+      <span class="a2jobwhen">${last(j)}<span class="dim"> · ${j.suspended ? "paused" : utc(j) ? `next ${nextRun(j.schedule)}` : esc(j.schedule)}</span></span></div>`;
+  return `<details class="a2group a2jobs"${STATE.archJobs ? " open" : ""} ontoggle="STATE.archJobs=this.open">
+    <summary class="a2subhead">Scheduled jobs <span>${failed ? `<b class="badtext">${failed} failed</b> · ` : ""}${jobs.length}</span></summary>
+    ${jobs.map(row).join("")}</details>`;
 }
 
 /* What an address is, where it lives, and why it is not reachable if not. */

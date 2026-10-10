@@ -21,6 +21,7 @@ const only = process.argv[2] || "";
 const PAGES = [
   ["dashboard", "dash"],
   ["architecture", "flow"],
+  ["architecture-jobs", "flow", "document.querySelector('.a2jobs > summary').click()"],
   ["nodes", "nodes"],
   ["nodes-cards", "nodes", "setViewLayout('nodes','viewNodes','cards')"],
   ["portal", "portal"],
