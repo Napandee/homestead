@@ -105,7 +105,8 @@ RKE2 run, and the pages that need one offer the same install.
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings, and 90 days of history with node availability, recorded with no browser open |
 | **MQTT** | Cluster and node stats to an MQTT broker with Home Assistant discovery |
-| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
+| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, a card or row layout, reservations suggested from a week of use and set for many apps at once, and priority tiers |
+| **Placement** | One choice for the whole cluster - Kubernetes' default, spread by capacity, or hot-spare standby hosts kept by a soft taint - containers moved back when a host returns (suggested, or in the update window), and a forecast of whether the other hosts have room if each one fails |
 | **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through the Helm controller k3s and RKE2 ship |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester, or on k3s and RKE2 with KubeVirt installed from Settings - power actions, live migration between hosts, a console (the VM's screen or its serial port), and a k3s cluster made of VMs, with KubeVirt inside if asked |
@@ -1732,6 +1733,12 @@ within each group. A group is the `homestead.io/group` annotation on each
 Deployment, so it needs no list of its own and exists while something is in it.
 
 ## Placement rules
+
+Placement for the whole cluster - Kubernetes' default, spread by capacity, or
+hot-spare standby hosts - is one choice in **Settings → Placement**, beside
+moving containers back when a host returns and a forecast of the room left if
+each host fails ([Settings](wiki/Settings.md#how-hosts-share-the-work)). What
+follows is placement app by app.
 
 Start and deployment reviews show **Launch host** above the capacity estimates.
 Required hosts are pins; preferred hosts allow failover. With automatic placement,
