@@ -637,8 +637,9 @@ now. Untick any move you do not want, then start it.
 Only what the scheduler could already place elsewhere moves: a Deployment with
 one copy, not pinned to its host, not on host-local storage, and only to hosts
 its hardware and placement rules allow. An app reading its volumes locally
-moves only to a host that holds a copy of them. The review lists what was left
-out and why. The job moves one container at a time, waits until it runs on its
+moves only to a host that holds a copy of them. An operator's review leaves out
+apps only an admin may change, as Move does, and the job checks again before
+each move. The review lists what was left out and why. The job moves one container at a time, waits until it runs on its
 new host, and stops if one does not come up; cancelling stops after the
 current one.
 
