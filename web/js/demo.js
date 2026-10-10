@@ -2478,13 +2478,13 @@ ssh_pwauth: true
       // A nightly backup per app, as a cluster with ReadWriteOnce volumes has:
       // one failed last night, so the collapsed lane still says so.
       jobs: [{ id: "j:lab/backup-frigate", name: "backup-frigate", ns: "lab", schedule: "15 2 * * *", time_zone: "", suspended: false,
-          last_run: new Date(Date.now() - 9 * 3600e3).toISOString(), last_success: "", running: 0, last_failed: true, claims: ["frigate-config"] },
+          last_run: new Date(Date.now() - 9 * 3600e3).toISOString(), last_success: "", running: 0, last_failed: true, claims: [{ pvc: "frigate-config", vid: "v:frigate" }] },
         { id: "j:lab/backup-home-assistant", name: "backup-home-assistant", ns: "lab", schedule: "0 2 * * *", time_zone: "", suspended: false,
           last_run: new Date(Date.now() - 9.2 * 3600e3).toISOString(), last_success: new Date(Date.now() - 9.2 * 3600e3 + 40e3).toISOString(),
-          running: 0, last_failed: false, claims: ["home-assistant"] },
+          running: 0, last_failed: false, claims: [{ pvc: "home-assistant", vid: "v:home" }] },
         { id: "j:lab/backup-paperless", name: "backup-paperless", ns: "lab", schedule: "30 2 * * *", time_zone: "", suspended: false,
           last_run: new Date(Date.now() - 8.7 * 3600e3).toISOString(), last_success: new Date(Date.now() - 8.7 * 3600e3 + 52e3).toISOString(),
-          running: 0, last_failed: false, claims: ["paperless-data"] }],
+          running: 0, last_failed: false, claims: [{ pvc: "paperless-data", vid: "v:paperless" }] }],
       vips: [{ id: "i:192.0.2.214", ip: "192.0.2.214", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "frigate", port: 5000 }] },
         { id: "i:192.0.2.215", ip: "192.0.2.215", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "home-assistant", port: 8123 }] },
         { id: "i:192.0.2.216", ip: "192.0.2.216", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "paperless", port: 8000 }] },
