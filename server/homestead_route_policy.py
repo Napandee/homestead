@@ -94,6 +94,7 @@ POLICY = {
     ('GET', '/api/workloads/requests/plan'): 'viewer',
     ('GET', '/api/workloads/priority/plan'): 'viewer',
     ('GET', '/api/placement'): 'viewer',
+    ('GET', '/api/capacity/forecast'): 'viewer',
     ('GET', '/api/move/clusters'): 'viewer',
     ('GET', '/api/move/definition'): 'admin',
     ('GET', '/api/move/hello'): 'viewer',

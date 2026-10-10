@@ -228,6 +228,11 @@ async function viewSettings() {
       `, {tab:`placement`, save:`app`})}
 
       ${UI.settingsCard(`
+        ${UI.moduleHeader(`If a host fails`, `Whether the other hosts have room for what it runs, by what apps reserve and their priority tier`, ``)}
+        <div id="capacityForecast"><div class="empty small"><span class="spin2"></span> Working it out for each host…</div></div>
+      `, {tab:`placement`})}
+
+      ${UI.settingsCard(`
         ${UI.moduleHeader(`When a host comes back`, `Containers start on the other hosts while one is down or drained, and stay there when it returns`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="srows">
           ${settingRow(`Move containers back ${tip("Uses Balance hosts: only moves that bring the busiest host down enough, each restarting its container once. In the window, an app whose scheduled job (a backup, say) runs before the window closes is left where it is, since the job needs its volume on that host.")}`,
@@ -321,6 +326,7 @@ async function viewSettings() {
   homesteadDataPaint();
   mqttPaint();
   lhSettingsPaint();
+  capacityForecastLoad();
   if (window.storageClassesPaint) storageClassesPaint();
   if (window.addonsPaint) addonsPaint();
   if (window.apiKeysPaint) apiKeysPaint();
@@ -800,6 +806,24 @@ if (typeof document !== "undefined" && document.addEventListener) {
   window.addEventListener?.("beforeunload", event => { if (STATE.settingsDirty?.size) { event.preventDefault(); event.returnValue = ""; } });
 }
 const settingsKinds = () => new Set([...(STATE.settingsDirty || [])].map(key => key.split(":")[0]));
+
+/* Each host as if it failed: a line per host, the details in its preview. */
+async function capacityForecastLoad() {
+  const host = $("#capacityForecast");
+  if (!host) return;
+  let all;
+  try { all = await api("/api/capacity/forecast"); }
+  catch (e) { host.innerHTML = UI.callout("warn", "Could not work it out", esc(e.message)); return; }
+  if (!$("#capacityForecast")) return;
+  const rows = (all.hosts || []).map(f => {
+    const [tone, word] = capacityVerdict(f.verdict);
+    return [`<span class="mono">${esc(f.node)}</span>`, `<span class="pill slim ${tone}">${esc(word)}</span>`,
+      `<span class="small">${esc(f.sentence)}</span>`, UI.button("Details", `nodeIfDown(${jsq(f.node)})`, { kind: "sm" })];
+  });
+  host.innerHTML = rows.length ? UI.table([{ label: "Host" }, { label: "" }, { label: "If it fails", className: "grow" }, { label: "" }], rows)
+    + (all.unreserved ? `<p class="ui-help">Apps that reserve nothing fit anywhere on paper: the figures are a floor. <a href="#" onclick="event.preventDefault();reservationsReview()">Set reservations from use</a>.</p>` : "")
+    : '<div class="empty small">No host is ready.</div>';
+}
 
 /* What each way of sharing the work does, with what it depends on here. */
 function placeModeText(mode, placement) {

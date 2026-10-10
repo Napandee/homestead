@@ -38,9 +38,42 @@ window.nodeIfDown = async (node, back = null) => {
         <span class="small">Carries on with ${v.left} of ${v.wanted} cop${v.wanted === 1 ? "y" : "ies"} until Longhorn rebuilds one.</span></div><span class="pill slim warn">fewer copies</span></div>`).join(""))}
     ${section("Addresses", p.addresses, p.addresses.map(a => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(a.ip)}</b>
         <span class="small">Moves to another host within seconds${a.services?.length ? `; used by ${esc(a.services.slice(0, 3).join(", "))}` : ""}.</span></div><span class="pill slim info">moves</span></div>`).join(""))}
+    <div id="ifDownRoom"></div>
     ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
     ${UI.actions(ifDownClose())}</div>`;
+  ifDownRoom(node);
 };
+
+/* Whether the hosts left have room for what moves (homestead_capacity):
+   each one's memory once it has taken its share, and what would wait. */
+const capacityVerdict = v => ({ fits: ["ok", "fits"], tight: ["warn", "tight"], waits: ["crit", "apps wait"], "no-host": ["crit", "no host left"] })[v] || ["neutral", v];
+function capacityRoomHtml(f) {
+  const rows = (f.hosts || []).map(h => {
+    const pct = gib => h.mem_alloc_gib ? gib / h.mem_alloc_gib * 100 : 100;
+    return [`<span class="mono">${esc(shortHost(h.name))}</span>`,
+    `${UI.meter({ now: pct(h.mem_before_gib ?? h.mem_gib), after: pct(h.mem_gib), warnAt: 90, label: `${h.name} memory` })}
+     <span class="sub">${h.mem_before_gib !== undefined && h.mem_before_gib !== h.mem_gib ? `${esc(h.mem_before_gib)} → ` : ""}${esc(h.mem_gib)} of ${esc(h.mem_alloc_gib)} GiB reserved · CPU ${esc(Math.round(h.cpu_alloc_m ? h.cpu_m / h.cpu_alloc_m * 100 : 100))}%</span>`];
+  });
+  const stuck = [...(f.waits || []), ...(f.evicted || [])];
+  return [
+    UI.lead(esc(f.sentence)),
+    rows.length ? UI.table([{ label: "Host" }, { label: "Reserved after the move", className: "grow" }], rows) : "",
+    stuck.length ? UI.more(`Would wait · ${stuck.length}`, `<div class="impact-list">${stuck.map(p => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(p.id)}</b>
+      <span class="small">${esc(p.why)}</span><span class="dim xs">${esc(p.tier)} tier · reserves ${esc(p.mem_gib)} GiB</span></div><span class="pill slim warn">waits</span></div>`).join("")}</div>`) : "",
+    f.unreserved ? UI.more(`Reserving nothing · ${f.unreserved}`, `<p>${f.unreserved} of the ${f.moving} app${f.moving === 1 ? "" : "s"} that move reserve${f.unreserved === 1 ? "s" : ""} nothing, so ${f.unreserved === 1 ? "it fits" : "they fit"} anywhere on paper and still use memory: the figures are a floor.</p>`) : "",
+  ].join("");
+}
+async function ifDownRoom(node) {
+  const host = $("#ifDownRoom");
+  if (!host) return;
+  try {
+    const all = await api("/api/capacity/forecast");
+    const f = (all.hosts || []).find(h => h.node === node);
+    if (f && $("#ifDownRoom")) $("#ifDownRoom").innerHTML = UI.section(`Room on the other hosts · ${capacityVerdict(f.verdict)[1]}`, capacityRoomHtml(f));
+  } catch (e) { /* the rest of the preview stands without it */ }
+}
+window.capacityRoomHtml = capacityRoomHtml;
+window.capacityVerdict = capacityVerdict;
 
 const ifDownClose = () => window.__ifDownBack ? UI.button("Back", "ifDownBack()") : UI.cancel("Close");
 window.ifDownBack = () => { const back = window.__ifDownBack; window.__ifDownBack = null; back ? back() : closeModal(); };

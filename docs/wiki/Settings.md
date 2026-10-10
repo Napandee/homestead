@@ -179,6 +179,25 @@ Longhorn's, Homestead's probe - from rolling out on that host. Choosing either
 of the last two turns on **Suggest** under *When a host comes back* if it was
 off, visibly, since apps that moved while a host was away only come back that way.
 
+## If a host fails
+
+**Placement → If a host fails** takes each host in turn as failed and says
+whether the others have room for what it runs - for example *If node2
+fails, node1 needs 13.7 of 15 GiB; 3 low-tier apps would wait for room.*
+**Details** opens that host's *If it goes down* preview, which shows the same
+forecast under **Room on the other hosts**: each remaining host's memory
+reserved now and after the move.
+
+The apps that would move (not those that stop anyway - pinned, on host-local
+storage, or using hardware only that host has) are placed the way the
+scheduler would: critical first, then normal, then low, largest first, each
+on the allowed host with the most room left. Critical and normal apps may
+evict low-tier ones to fit; low apps wait and evict nothing. Only what apps
+*reserve* counts, so an app that reserves nothing fits anywhere on paper:
+the dialog says how many of those move, since the figures are then a floor.
+It is a forecast, not the scheduler - it does not weigh affinity between apps
+or the order pods restart in.
+
 ## When a host comes back
 
 While a host is down or drained, its containers start on the others, and

@@ -983,6 +983,20 @@ def node_impact(node):
                           cached("vol", 8, get_volumes), addresses, nodes, placement)
 
 
+def capacity_forecast():
+    """If each host failed in turn: whether the others have room for what it
+    runs, by what apps reserve and their priority tier (homestead_capacity)."""
+    nodes = kget("/api/v1/nodes").get("items", [])
+    pods = [p for p in kget("/api/v1/pods").get("items", []) if not NAMES.label_of(p.get("metadata") or {}, "task")]
+    out = []
+    for node in nodes:
+        name = node["metadata"]["name"]
+        if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in (node.get("status") or {}).get("conditions") or []):
+            continue
+        out.append(CAPACITY.forecast(name, nodes, pods, node_impact(name), _flow_owner))
+    return {"hosts": out, "unreserved": max([h["unreserved"] for h in out] or [0])}
+
+
 def set_vm_monitoring(b):
     """How a VM is monitored: automatic, a port, a web page on a port, or off.
     An annotation on the VM, so it does not restart."""
@@ -7073,6 +7087,7 @@ import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
 import homestead_placement_mode as PLACEMODE
+import homestead_capacity as CAPACITY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -10276,6 +10291,8 @@ class H(HTTP.LimitedHandler):
             if p == "/api/workloads/rebalance/plan":
                 return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a],
                                                        avoid=standby_hosts()))
+            if p == "/api/capacity/forecast":
+                return self._send(200, cached("capacity-forecast", 30, capacity_forecast))
             if p == "/api/placement":
                 return self._send(200, placement_summary())
             if p == "/api/workloads/priority/plan":
