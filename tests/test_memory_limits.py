@@ -33,7 +33,7 @@ class MemoryLimitTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "at least"):
                 server.build_deployment({**cfg, "memory_limit": "64Mi"})
         with mock.patch.object(server.LC, "seed_configs", return_value=[]):
-            reopened = server.workload_edit_payload("lab", "app", deployment, hardware_definitions=[], services=[])
+            reopened = server.WORKLOADS.workload_edit_payload("lab", "app", deployment, hardware_definitions=[], services=[])
         self.assertEqual("512Mi", reopened["containers"][0]["memory_limit"])
 
     def test_sidecar_limit_is_per_container(self):

@@ -105,7 +105,7 @@ class SaveLogoTests(unittest.TestCase):
         return self.sent[i][0][2]["metadata"]["annotations"]
 
     def test_a_logo_is_cached_and_only_the_deployments_annotations_change(self):
-        result = self.server.set_workload_logos({"items": [{"ns": "lab", "name": "sonarr", "icon": "https://example.com/s.png"}]})
+        result = self.server.WORKLOADS.set_workload_logos({"items": [{"ns": "lab", "name": "sonarr", "icon": "https://example.com/s.png"}]})
         (method, path, body), kwargs = self.sent[0]
         self.assertEqual(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/sonarr"), (method, path))
         self.assertEqual(["metadata"], list(body), "the pod template is untouched, so nothing restarts")
@@ -115,7 +115,7 @@ class SaveLogoTests(unittest.TestCase):
         self.assertEqual("1 logo saved", result["detail"])
 
     def test_blank_removes_and_skip_marks(self):
-        self.server.set_workload_logos({"items": [{"ns": "lab", "name": "a", "icon": ""}, {"ns": "lab", "name": "b", "skip": True}]})
+        self.server.WORKLOADS.set_workload_logos({"items": [{"ns": "lab", "name": "a", "icon": ""}, {"ns": "lab", "name": "b", "skip": True}]})
         self.assertIsNone(self.annotations(0)["homestead.io/icon"])
         self.assertEqual({"homestead.io/logo-skipped": "true"}, self.annotations(1))
 
@@ -124,12 +124,12 @@ class SaveLogoTests(unittest.TestCase):
                       [{"ns": "lab", "name": "a", "icon": "javascript:alert(1)"}],
                       [{"ns": "lab", "name": "a", "icon": "file:///etc/passwd"}]):
             with self.subTest(items=items), self.assertRaises(ValueError):
-                self.server.set_workload_logos({"items": items})
+                self.server.WORKLOADS.set_workload_logos({"items": items})
         self.assertEqual([], self.sent)
 
     def test_one_failed_fetch_does_not_stop_the_rest(self):
         with self.mock.patch.object(self.server.ICONS, "persist", side_effect=[ValueError("not an image"), "/api/icons/b.png"]):
-            result = self.server.set_workload_logos({"items": [{"ns": "lab", "name": "a", "icon": "https://example.com/a"},
+            result = self.server.WORKLOADS.set_workload_logos({"items": [{"ns": "lab", "name": "a", "icon": "https://example.com/a"},
                                                                {"ns": "lab", "name": "b", "icon": "https://example.com/b"}]})
         self.assertFalse(result["ok"])
         self.assertEqual(1, result["done"])

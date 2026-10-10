@@ -610,7 +610,7 @@ def _uptime_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                UPTIME.observe(cached("wl", 5, get_workloads), vms=cached("vms", 5, VMS.list_vms))
+                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=cached("vms", 5, VMS.list_vms))
                 try:
                     outage_tick()
                 except Exception as error:
@@ -778,7 +778,7 @@ def node_impact(node):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
+    return IMPACT.preview(node, cached("wl", 5, WORKLOADS.get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
                           cached("vol", 8, get_volumes), addresses, nodes, placement)
 
 
@@ -876,7 +876,7 @@ def test_outage_webhook(b):
 
 def outage_tick():
     """After a monitoring round, on the leader: any outage action that is due."""
-    found = OUTAGE.items(cached("wl", 5, get_workloads), cached("vms", 5, VMS.list_vms))
+    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
     if not found:
         return []
     operations = OPS.list_operations()
@@ -894,7 +894,7 @@ def outage_tick():
 
 
 def scheduled_items():
-    return SCHEDULES.items(cached("wl", 5, get_workloads), cached("vms", 5, VMS.list_vms))
+    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
 
 
 def schedule_act(item, action):
@@ -960,7 +960,7 @@ def set_uptime_setting(b):
     ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
     port = b.get("port") if b.get("mode") != "off" else None
     if port not in (None, ""):
-        w = next((w for w in cached("wl", 5, get_workloads) if w["ns"] == ns and w["name"] == name), None)
+        w = next((w for w in cached("wl", 5, WORKLOADS.get_workloads) if w["ns"] == ns and w["name"] == name), None)
         published = {int(p["port"]) for p in (w or {}).get("ports") or [] if p.get("port")}
         if w is not None and str(port).isdigit() and int(port) not in published:
             raise ValueError(f"{name} does not publish port {port}; choose one of "
@@ -1786,185 +1786,6 @@ def own_group(ns, name):
     return OWN_GROUP if (ns, name) in own or ns in PLATFORM_NS else ""
 
 
-def get_workloads():
-    deps = kget("/apis/apps/v1/deployments").get("items", [])
-    pods = kget("/api/v1/pods").get("items", [])
-    try:
-        pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m
-              for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])}
-    except Exception:
-        pm = {}
-    try:
-        svcs = kget("/api/v1/services").get("items", [])
-    except Exception:
-        svcs = []
-
-    out = []
-    for d in deps:
-        ns, name = d["metadata"]["namespace"], d["metadata"]["name"]
-        if ns in SYS_NS and ns not in PLATFORM_NS:
-            continue
-        sel = d["spec"].get("selector", {}).get("matchLabels", {})
-        mine = [p for p in pods if p["metadata"]["namespace"] == ns and
-                all(p["metadata"].get("labels", {}).get(k) == v for k, v in sel.items())]
-        cpu = mem = 0.0
-        for p in mine:
-            m = pm.get((ns, p["metadata"]["name"]))
-            if m:
-                for c in m.get("containers", []):
-                    cpu += parse_cpu(c.get("usage", {}).get("cpu"))
-                    mem += parse_mem(c.get("usage", {}).get("memory"))
-        ports = []
-        for s in svcs:
-            if s["metadata"]["namespace"] != ns: continue
-            ssel = s["spec"].get("selector") or {}
-            if ssel and all(sel.get(k) == v for k, v in ssel.items()):
-                ip = ""
-                ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", [])
-                if ing: ip = ing[0].get("ip", "")
-                for pt in s["spec"].get("ports", []):
-                    ports.append({"port": pt.get("port"), "ip": ip, "name": pt.get("name", ""),
-                                  "protocol": str(pt.get("protocol") or "TCP").upper()})
-        starts = [p["status"].get("startTime") for p in mine if p["status"].get("startTime")]
-        uptime = max([age_secs(x) for x in starts], default=0) if starts else 0
-        st = d.get("status", {})
-        pspec = d["spec"]["template"]["spec"]
-        annotations = d["metadata"].get("annotations", {}) or {}
-        # On its own LAN address it answers on its container ports there,
-        # with no Service in between.
-        lan_ip = (LAN.read(d) or {}).get("address", "")
-        if lan_ip and not ports:
-            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", ""), "lan": True,
-                      "protocol": str(cp.get("protocol") or "TCP").upper()}
-                     for c in pspec.get("containers", []) or [] for cp in c.get("ports", []) or []
-                     if cp.get("containerPort")]
-        # The port chosen as the app's own - its web UI, usually - comes
-        # first, so the card's first link is the one people want.
-        try:
-            primary = int(NAMES.read(annotations, "primary-port") or 0)
-        except ValueError:
-            primary = 0
-        if primary:
-            ports.sort(key=lambda row: row.get("port") != primary)
-            for row in ports:
-                row["primary"] = row.get("port") == primary
-        hardware = HW.workload_features(pspec, annotations)
-        pod_rows = []
-        transition_ages = []
-        fatal_waits = []
-        fatal_reasons = {"ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff",
-                         "CreateContainerConfigError", "CreateContainerError"}
-        for p in mine:
-            conditions = {c.get("type"): c for c in p.get("status", {}).get("conditions", []) or []}
-            ready = conditions.get("Ready", {}).get("status") == "True"
-            waits = []
-            for cs in p.get("status", {}).get("containerStatuses", []) or []:
-                waiting = (cs.get("state", {}).get("waiting") or {})
-                if waiting:
-                    reason = waiting.get("reason", "Waiting")
-                    waits.append({"container": cs.get("name", ""), "reason": reason,
-                                  "message": (UPDATES.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
-                    if reason in fatal_reasons:
-                        why = UPDATES.explain_pull(waiting.get("message"))
-                        fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
-            if not ready:
-                transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
-            # Pending and unscheduled says nothing; the scheduler said why.
-            unplaced = ""
-            placed = conditions.get("PodScheduled") or {}
-            if placed.get("status") == "False" and not p["metadata"].get("deletionTimestamp"):
-                own = []
-                if pspec.get("hostNetwork") and NETWORK.servicelb_present():
-                    wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
-                              for cp in c.get("ports", []) or []}
-                    own = sorted({row["port"] for row in ports if row.get("port") in wanted})
-                unplaced = UPDATES.explain_unplaced(placed.get("message", ""), own)
-                if age_secs(p["metadata"].get("creationTimestamp")) > 60:
-                    fatal_waits.append(f"{p['metadata']['name']} cannot be placed: {unplaced}")
-            containers = pod_container_rows(p)
-            # A pod still fetching its image says how far it has got: events
-            # say Pulling, containerd says how many bytes.
-            pull = {}
-            if not ready and not p["metadata"].get("deletionTimestamp") and any(
-                    w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits):
-                try:
-                    pull = UPDATES.pull_state(ns, p["metadata"]["name"]) or {}
-                    if pull.get("state") == "pulling":
-                        pull.update(_pull_progress(p["spec"].get("nodeName", ""), pull.get("image", "")))
-                    else:
-                        pull = {}
-                except Exception:
-                    pull = {}
-            pod_rows.append({"name": p["metadata"]["name"], "hostname": p["spec"].get("hostname", ""),
-                             "ip": (p.get("status") or {}).get("podIP", ""),
-                             "phase": p["status"].get("phase"),
-                             "node": p["spec"].get("nodeName", ""), "ready": ready,
-                             # Told to stop, and not stopped yet.
-                             "terminating": bool(p["metadata"].get("deletionTimestamp")),
-                             "unplaced": unplaced,
-                             "pull": pull,
-                             "waiting": waits,
-                             "uptime": age_secs(p["status"].get("startTime")),
-                             "containers": containers,
-                             "container_count": len([c for c in containers if c["kind"] == "app"]),
-                             "restarts": sum(c.get("restartCount", 0) for c in
-                                             p["status"].get("containerStatuses", []) or [])})
-        progress_errors = [c.get("message") or c.get("reason") or "rollout failed"
-                           for c in st.get("conditions", []) or []
-                           if c.get("type") == "Progressing" and c.get("status") == "False"]
-        template_annotations = d["spec"].get("template", {}).get("metadata", {}).get("annotations", {}) or {}
-        rollout_at = (NAMES.read(template_annotations, "update-rollout-at") or
-                      NAMES.read(template_annotations, "restartedAt"))
-        if rollout_at:
-            transition_ages.append(age_secs(rollout_at))
-        if not transition_ages:
-            transition_ages.append(age_secs(d["metadata"].get("creationTimestamp")))
-        out.append({
-            "ns": ns, "name": name, "kind": "Deployment", "uptime": uptime,
-            "ready": st.get("readyReplicas", 0) or 0,
-            "desired": d["spec"].get("replicas", 0) or 0,
-            "available": st.get("availableReplicas", 0) or 0,
-            "updated": st.get("updatedReplicas", 0) or 0,
-            "unavailable": st.get("unavailableReplicas", 0) or 0,
-            "generation": d["metadata"].get("generation", 0) or 0,
-            "observed_generation": st.get("observedGeneration", 0) or 0,
-            "transition_age": min(transition_ages),
-            "problems": fatal_waits + progress_errors,
-            "images": [c["image"] for c in pspec.get("containers", [])],
-            # Its volumes, by claim, so the row can lead to them.
-            "claims": sorted({(v.get("persistentVolumeClaim") or {}).get("claimName") for v in pspec.get("volumes") or []
-                              if (v.get("persistentVolumeClaim") or {}).get("claimName")}),
-            "nodes": sorted({p["spec"].get("nodeName", "") for p in mine if p["spec"].get("nodeName")}),
-            "pods": pod_rows,
-            "pod_count": len(pod_rows),
-            "container_count": sum(p["container_count"] for p in pod_rows),
-            "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
-            "ports": ports,
-            "gpu": "igpu" in hardware,
-            "hardware": hardware,
-            "icon": display_icon(annotations),
-            # A logo whose cached copy is being fetched again still counts as one.
-            "has_logo": bool(NAMES.read(annotations, "icon")),
-            "logo_skipped": NAMES.read(annotations, "logo-skipped") == "true",
-            # The Helm release it belongs to, whose chart may name a logo.
-            "helm_release": annotations.get("meta.helm.sh/release-name", ""),
-            "answer_check": NAMES.read(annotations, "uptime"),
-            "schedule": SCHEDULES.read(annotations, NAMES),
-            "outage_actions": OUTAGE.read(annotations, NAMES),
-            "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
-            "restore_tested": RESTORE_TEST.last_result(annotations),
-            "group": NAMES.read(annotations, "group") or own_group(ns, name),
-            "self": is_self(ns, name),
-            "managed_smb": is_managed_smb(ns, name),
-            "managed_nfs": is_managed_nfs(ns, name),
-            "platform": "Homestead" if homestead_part(ns, name) else PLATFORM_NS.get(ns, ""),
-            "homestead": homestead_part(ns, name),
-            "failover": FAILOVER.mode_of(pspec),
-            "lan": (LAN.read(d) or {}).get("address", ""),
-        })
-    return sorted(out, key=lambda x: (x["ns"], x["name"]))
-
-
 def workload_group(value):
     """A group's name as stored: its own words, trimmed, one line."""
     group = " ".join(str(value or "").split())
@@ -1994,49 +1815,6 @@ def set_workload_groups(b):
     count = len(items)
     return {"ok": True, "group": group,
             "detail": f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")}
-
-
-def set_workload_logos(b):
-    """Gives workloads a logo, or takes it away with a blank one.
-
-    Only the Deployment's own annotations change, never its pod template, so
-    nothing restarts. Each logo is fetched and kept like one typed in Edit."""
-    items = b.get("items") or []
-    if not items:
-        raise ValueError("choose at least one workload")
-    if len(items) > 200:
-        raise ValueError("at most 200 workloads at a time")
-    plans = []
-    for item in items:
-        ns, name = _dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name")
-        guard_managed_smb(ns, name)
-        source = str(item.get("icon") or "").strip()
-        if source and not source.startswith(("https://", "http://")):
-            raise ValueError("a logo is a public http:// or https:// image URL")
-        plans.append((ns, name, source, item.get("skip") is True))
-    done, saved, skipped, failed = 0, 0, 0, []
-    for ns, name, source, skip in plans:
-        try:
-            if skip:      # no logo, on purpose: it is not counted as missing again
-                patch = {"metadata": {"annotations": {NAMES.key("logo-skipped"): "true"}}}
-            else:
-                cached_ref = ICONS.persist(source, DATA_DIR) if source else ""
-                patch = {"metadata": {"annotations": {NAMES.key("icon"): cached_ref or None,
-                                                      NAMES.key("icon-source"): source or None,
-                                                      NAMES.key("logo-skipped"): None}}}
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", patch,
-                  ctype="application/merge-patch+json")
-            done += 1
-            saved += bool(source and not skip)
-            skipped += skip
-        except Exception as e:
-            failed.append(f"{name}: {e}")
-    _cache.pop("wl", None)
-    detail = ", ".join(part for part in (saved and f"{saved} logo{'s' if saved != 1 else ''} saved",
-                                         skipped and f"{skipped} left without one",
-                                         done and not saved and not skipped and "logo removed") if part)
-    return {"ok": not failed, "done": done, "failed": failed,
-            "detail": detail + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")}
 
 
 def set_vm_logos(b):
@@ -2111,7 +1889,7 @@ def logo_choices(ns, name, term, kind="workload"):
     """The picker's tiles for one workload: its chart's logo and its image's
     match, then a search. A VM has no image, so it is the search alone."""
     workload = None if kind == "vm" else next(
-        (w for w in cached("wl", 5, get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
+        (w for w in cached("wl", 5, WORKLOADS.get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
     images = (workload or {}).get("images") or []
     chart = helm_chart_logos().get((ns, (workload or {}).get("helm_release"))) if workload else None
     return {"tiles": LOGOS.suggest(fetch_appstore(), images, term if term is not None else name, search_appstore,
@@ -2209,7 +1987,7 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
 
 def get_overview():
     nodes = get_nodes()
-    wl = get_workloads()
+    wl = WORKLOADS.get_workloads()
     vols = get_volumes()
     pods = kget("/api/v1/pods").get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
@@ -3295,82 +3073,6 @@ def reviewed_image_update(body, action):
     return UPDATES.commit_prepared(prepared)
 
 
-def move_capacity_plan(body):
-    """Review the exact host-placement edit without stopping or writing anything."""
-    ns, name = _dns_name(body.get("ns"), "namespace"), _dns_name(body.get("name"), "workload name")
-    guard_managed_smb(ns, name)
-    if body.get("auto"):
-        raise ValueError("select an explicit suggested host and review it before moving")
-    node = body.get("node") or None
-    if node and (not isinstance(node, str) or len(node) > 253 or
-                 not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in node.split("."))):
-        raise ValueError("host must be a valid Kubernetes node name")
-    if not isinstance(body.get("pin", False), bool):
-        raise ValueError("pin must be true or false")
-    cache = {}
-    def read(path):
-        if path not in cache:
-            cache[path] = kget(path)
-        return copy.deepcopy(cache[path])
-    current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    context = {"action": "host-move", **rollout_review_context(current)}
-    if current["spec"].get("paused"):
-        raise ValueError("paused workloads cannot be moved; resume and review placement again")
-    if current["spec"]["template"]["spec"].get("nodeName"):
-        raise ValueError("this pod template uses a direct nodeName binding; remove it before using reviewed host placement")
-    # A move stops the old pods. Never interpret incomplete ownership as free
-    # capacity, nor invite consent to stopping a workload on that assumption.
-    pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
-    _, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
-    if not known:
-        raise ValueError("pod ownership is unavailable; no move can be reviewed until inventory is complete")
-    nodes = copy.deepcopy(PLACE.get_nodes())
-    if node and not any(n["name"] == node for n in nodes):
-        raise ValueError("selected host no longer exists; review placement again")
-    proposed = copy.deepcopy(current)
-    mode = PLACE.apply_node_placement(proposed, node, body.get("pin", False))
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    def planner(*args, **kwargs):
-        return PLACE.manifest_plan(*args, **kwargs, read=read)
-    def review(dep):
-        return ROLLOUT_CAPACITY.plan(current, dep, ns, read, lambda: nodes, planner, threshold)
-    capacity = review(proposed)
-    # Check the chosen destination even for a soft preference, where Kubernetes
-    # might otherwise hide its shortage by finding room on the current host.
-    target = None
-    if node:
-        pinned = copy.deepcopy(proposed)
-        pinned["spec"]["template"]["spec"].setdefault("nodeSelector", {})["kubernetes.io/hostname"] = node
-        target = review(pinned)
-        capacity["blocked"] = capacity["blocked"] or target["blocked"]
-    capacity["move"] = {"node": node, "mode": mode, "target": target}
-    capacity["warnings"].append("A preferred host is not guaranteed; Kubernetes may choose another eligible host, including the current host. Hard pinning prevents failover.")
-    spec = proposed["spec"]["template"]["spec"]
-    if any("hostPath" in v for v in spec.get("volumes", [])):
-        capacity["warnings"].append("Host paths are not copied: files and devices may differ on the destination. Verify required host-local data before moving.")
-    if any("emptyDir" in v for v in spec.get("volumes", [])):
-        capacity["warnings"].append("Pod-local emptyDir data is lost when old pods are replaced.")
-    capacity["requires_confirmation"] = True
-    return proposed, capacity, context
-
-
-def preview_host_move(body):
-    _, capacity, context = move_capacity_plan(body)
-    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
-
-
-def reviewed_host_move(body):
-    proposed, capacity, context = move_capacity_plan(body)
-    CAPACITY_REVIEW.enforce(body, capacity, context)
-    meta = proposed["metadata"]
-    # Preserve resourceVersion: a concurrent controller edit must conflict,
-    # never be silently overwritten by a second, unreviewed fetch-and-move.
-    ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
-    PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
-    return {"ok": True, "moved": meta["name"], "to": capacity["move"]["node"] or "any node",
-            "mode": capacity["move"]["mode"]}
-
-
 def capacity_manifest(config, existing=None):
     """Construct a read-only manifest and planned claims without provisioning."""
     cfg = analyze_deploy_intent(copy.deepcopy(config))
@@ -3419,82 +3121,6 @@ def hardware_device_paths():
         return {f.get("host_path") for f in HW.features() if f.get("host_path")}
     except Exception:
         return set()
-
-
-def edit_capacity_plan(config):
-    """Build the exact edit before seed/PVC/icon or workload writes."""
-    ns, name = LC.dns_label(config["ns"], "namespace"), LC.dns_label(config["name"], "workload name")
-    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    HOSTACCESS.require_target(current, ns)
-    if config.get("workload_name") and config["workload_name"] != name:
-        new_name = LC.dns_label(config["workload_name"], "new workload name")
-        if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
-            raise ValueError("Use exact lowercase Kubernetes names for the rename")
-        guard_self(ns, name, renaming=True)
-        proposed, context = RENAME.prepare(config, current, LC._renamed_deployment, kget)
-        post_stop = copy.deepcopy(proposed)
-        post_stop["spec"]["strategy"] = {"type": "Recreate"}  # rename orchestration, not a saved strategy change
-        plan = ROLLOUT_CAPACITY.plan(current, post_stop, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-                                     get_app_settings()["thresholds"]["memory"]["critical"])
-        plan["requires_confirmation"] = True
-        plan["rename"] = {"from": name, "to": new_name}
-        plan["warnings"].append("Rename stops the old pods before starting the new workload. Volumes and service addresses are kept. Failed or uncertain steps retain resources for inspection, not automatic rollback.")
-        return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
-    if config.get("remove_containers") and is_self(ns, name):
-        raise ValueError("Homestead cannot remove its own containers from this page")
-    prepared = LC.prepare_edit(config, current=current)
-    context = {"action": "edit", **rollout_review_context(current),
-               "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
-    proposed = copy.deepcopy(prepared["deployment"])
-    HOSTACCESS.require_edit(current, proposed, hardware_device_paths())
-    if proposed["spec"].get("paused") and proposed["spec"].get("replicas", 1) > current["spec"].get("replicas", 1):
-        raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
-    if prepared["name"] != name:
-        count = proposed["spec"].get("replicas", 1)
-        proposed = LC._renamed_deployment(proposed, ns, prepared["name"])
-        proposed["spec"].update(replicas=count, strategy={"type": "Recreate"})
-    moves = RESTRUCTURE.copies(config)
-    if moves:
-        if prepared["name"] != name:
-            raise ValueError("rename the workload and move its data in separate saves")
-        if "lan" in config and (LAN.clean(config["lan"]) if config.get("lan") else None) != (LAN.read(current) or None):
-            raise ValueError("Change the LAN address and move storage in separate saves")
-        proposed["spec"]["strategy"] = {"type": "Recreate"}
-        COPY_JOB.guards(current, kget)
-        COPY_JOB.validate_sources(config, current)
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    plan = ROLLOUT_CAPACITY.plan(current, proposed, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-                                 threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
-    if moves:
-        helper = COPY_JOB.helper_manifest(ns, name, moves)
-        helper_plan = ROLLOUT_CAPACITY.plan(current, helper, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-            threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
-        plan["copy_helper"] = helper_plan
-        plan["blocked"] = plan["blocked"] or helper_plan["blocked"]
-        plan["requires_confirmation"] = True
-        plan["warnings"] += ["Copy helper: " + warning for warning in helper_plan["warnings"]]
-        plan["warnings"].append("Storage copy stops all containers. Placement is checked again before copying and restarting. Failed or uncertain steps keep the data and require inspection; no automatic rollback or deletion.")
-        plan["warnings"].append("Destination files may be merged or overwritten. This is not a backup or filesystem free-space/consistency guarantee; avoid external writers during the copy.")
-    if moves or prepared["name"] != name or proposed["spec"].get("replicas", 1):
-        import_blocker = PLACE.IMPORT_GUARD.pending(current, ns, kget)
-        if import_blocker:
-            plan["blocked"] = True
-            plan["warnings"].append(import_blocker)
-    additions = [row.get("name") for row in config.get("containers") or [] if row.get("new") is True]
-    removals = config.get("remove_containers") or []
-    if additions or removals:
-        exposed = [port for container in config.get("containers") or []
-                   for port in container.get("ports") or [] if port.get("expose")]
-        if exposed and config.get("manage_ports"):
-            NETWORK._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
-                                      "target_port": port.get("container"), "protocol": port.get("protocol") or "TCP"}
-                                     for port in exposed]})
-        plan["container_changes"] = {"added": additions, "removed": removals}
-        plan["requires_confirmation"] = True
-        plan["warnings"].append("Changing the containers rolls every pod in this workload. Removed containers stop; persistent volumes and their data are retained.")
-    if config.get("lan"):
-        plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
-    return prepared, context, plan
 
 
 def apply_reviewed_edit(b, prepared, hold=False):
@@ -6453,7 +6079,7 @@ def rebalance_move(ns, name, node):
     """One container of a rebalance: the manual move's capacity check and
     placement - a preference, not a pin - or a reason to leave it."""
     body = {"ns": ns, "name": name, "node": node, "pin": False}
-    proposed, capacity, _ = move_capacity_plan(body)
+    proposed, capacity, _ = WORKLOADS.move_capacity_plan(body)
     if capacity.get("blocked"):
         raise ValueError("; ".join(capacity.get("blockers") or []) or f"{node} cannot take it now")
     meta = proposed["metadata"]
@@ -6562,7 +6188,7 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
-PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
+PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, WORKLOADS.get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = COPY_JOB.legacy_status
 OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, kget, ksend, OPS, copy_admission)
@@ -6687,7 +6313,8 @@ def _late(*names):
     return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
 
 
-WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, cache=_cache, default_ns=DEFAULT_NS)
+WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, cache=_cache, default_ns=DEFAULT_NS,
+               data_dir=DATA_DIR, system_namespaces=SYS_NS, platform_namespaces=PLATFORM_NS)
 DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, ca_feed=CA_FEED)
 UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS), _cache)
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
@@ -6924,7 +6551,7 @@ def start_restore_test(ns, name, why="Test now"):
 def restore_tests_tick():
     """On the leader, hourly: test the app longest untested, when switched on."""
     settings = get_app_settings()
-    chosen = RESTORE_TEST.pick(cached("wl", 5, get_workloads), OPS.list_operations(),
+    chosen = RESTORE_TEST.pick(cached("wl", 5, WORKLOADS.get_workloads), OPS.list_operations(),
                                settings.get("restore_tests", {}).get("enabled", False),
                                update_policy_status(settings)["window_open"], time.time(), _storage_classes())
     if chosen:
@@ -6949,7 +6576,7 @@ def restore_tests_view():
     out = []
     running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
                for o in OPS.list_operations() if o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running")}
-    for w in cached("wl", 5, get_workloads):
+    for w in cached("wl", 5, WORKLOADS.get_workloads):
         if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
                 or w.get("managed_nfs") or w.get("site"):
             continue
@@ -6984,7 +6611,7 @@ def autoupdate_tick():
     operations = OPS.list_operations()
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
-    chosen = AUTOUPDATE.pick(cached("wl", 5, get_workloads), report, UPTIME.report(), operations,
+    chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,
                              status["window_open"], status["policy"])
     if not chosen:
         return None
@@ -8183,10 +7810,10 @@ import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
 # Looked up when asked, so a test that patches one is the one the guide reads.
-SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: get_nodes(), workloads=lambda: get_workloads(),
+SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
            samba=lambda: samba_state())
-API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
+API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, WORKLOADS.get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
@@ -8327,154 +7954,6 @@ def _service_listeners(deployment, services):
                 continue
     return listeners
 
-
-def workload_edit_payload(ns, name, deployment, hardware_definitions=None, services=None):
-    """Return pod-level settings plus an editable record for every app container."""
-    pspec = deployment["spec"]["template"]["spec"]
-    if services is None:
-        try:
-            services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
-        except Exception:
-            services = []
-    listeners = _service_listeners(deployment, services)
-    annotations = deployment["metadata"].get("annotations", {}) or {}
-    definitions = hardware_definitions if hardware_definitions is not None else HW.features()
-    # Variables kept in the workload's own Secret are edited like any other.
-    kept, own_secret = ENVSEC.values(ns, deployment, kget), ENVSEC.own(deployment)
-    volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
-
-    def source_label(volume):
-        if volume.get("persistentVolumeClaim"):
-            return volume["persistentVolumeClaim"].get("claimName", "")
-        for field, label in (("configMap", "ConfigMap"), ("secret", "Secret")):
-            if volume.get(field):
-                return f"{label} {volume[field].get('name', '')}".strip()
-        if volume.get("hostPath"):
-            return volume["hostPath"].get("path", "host path")
-        if "emptyDir" in volume:
-            return "temporary storage"
-        return "Kubernetes volume"
-
-    def storage_kind(volume):
-        """Map a pod volume onto the storage picker's vocabulary.
-
-        Only claims, host paths and emptyDir are editable as storage. ConfigMap
-        and Secret volumes are Kubernetes wiring that the editor shows but does
-        not offer to repoint.
-        """
-        if volume.get("persistentVolumeClaim"):
-            return "existing", volume["persistentVolumeClaim"].get("claimName", "")
-        if volume.get("hostPath"):
-            return "host", volume["hostPath"].get("path", "")
-        if "emptyDir" in volume:
-            empty = volume.get("emptyDir") or {}
-            if str(empty.get("medium", "")).lower() == "memory":
-                return "memory", str(empty.get("sizeLimit", "") or "")
-            return "ephemeral", ""
-        for field in ("configMap", "secret"):
-            if volume.get(field):
-                return field, volume[field].get("name", volume[field].get("secretName", ""))
-        return "other", ""
-
-    def env_reference(item):
-        ref = item.get("valueFrom", {}) or {}
-        for field, label in (("secretKeyRef", "Secret"), ("configMapKeyRef", "ConfigMap")):
-            if ref.get(field):
-                value = ref[field]
-                return f"{label} {value.get('name', '')} · {value.get('key', '')}".strip(" ·")
-        if ref.get("fieldRef"):
-            return f"Pod field · {ref['fieldRef'].get('fieldPath', '')}".strip(" ·")
-        if ref.get("resourceFieldRef"):
-            return f"Resource field · {ref['resourceFieldRef'].get('resource', '')}".strip(" ·")
-        return "Managed Kubernetes reference"
-
-    containers = []
-    for container in pspec.get("containers", []) or []:
-        mounts, hardware = [], []
-        for mount in container.get("volumeMounts", []) or []:
-            volume = volumes.get(mount.get("name"), {})
-            kind, value = storage_kind(volume)
-            host_path = (volume.get("hostPath") or {}).get("path", "").rstrip("/")
-            mount_path = str(mount.get("mountPath") or "").rstrip("/")
-            device = False
-            for feature in definitions:
-                expected_host = feature["host_path"].rstrip("/")
-                if (host_path == expected_host or host_path.startswith(expected_host + "/")) and mount_path == feature["container_path"].rstrip("/"):
-                    device = True
-                    if feature["id"] not in hardware:
-                        hardware.append(feature["id"])
-            mounts.append({"name": mount.get("name", ""), "path": mount.get("mountPath", ""),
-                           "source": source_label(volume), "read_only": bool(mount.get("readOnly", False)),
-                           "sub_path": mount.get("subPath", ""),
-                           "kind": kind, "value": value,
-                           "managed": device or kind in ("configMap", "secret", "other")})
-        own_values = kept.get(container.get("name"), {})
-        literals = {item["name"]: item.get("value", "") if "valueFrom" not in item else own_values[item["name"]]
-                    for item in container.get("env", []) or []
-                    if item.get("name") and ("valueFrom" not in item or item["name"] in own_values)}
-        refs = [{"name": item["name"], "source": env_reference(item)}
-                for item in container.get("env", []) or []
-                if item.get("name") and item.get("valueFrom") and item["name"] not in own_values]
-        requests = (container.get("resources", {}) or {}).get("requests", {}) or {}
-        limits = (container.get("resources", {}) or {}).get("limits", {}) or {}
-        containers.append({
-            "original_name": container.get("name", ""), "name": container.get("name", ""),
-            "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
-            "memory_limit": limits.get("memory", ""),
-            "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
-            "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
-                       "protocol": port.get("protocol", "TCP"),
-                       "host": listeners.get((str(port.get("protocol") or "TCP").upper(),
-                                              port.get("containerPort")), port.get("containerPort")),
-                       "expose": (str(port.get("protocol") or "TCP").upper(),
-                                  port.get("containerPort")) in listeners}
-                      for port in container.get("ports", []) or []],
-            "hardware": hardware,
-            "volumes": [m for m in mounts if m["name"] != PRIV.TUN_VOLUME],
-            "privileges": PRIV.read(container, pspec),
-        })
-    detected = HW.workload_features(pspec, annotations, definitions)
-    assigned = {feature for container in containers for feature in container["hardware"]}
-    if containers:
-        containers[0]["hardware"].extend(feature for feature in detected if feature not in assigned)
-    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "memory_limit": "", "env": {}, "ports": [], "volumes": []}
-    reusable = []
-    device_paths = {feature["host_path"].rstrip("/") for feature in definitions}
-    for volume in pspec.get("volumes", []) or []:
-        kind, value = storage_kind(volume)
-        if kind not in ("existing", "host", "ephemeral", "memory"):
-            continue
-        if kind == "host" and any(value.rstrip("/") == device or value.rstrip("/").startswith(device + "/")
-                                  for device in device_paths):
-            continue
-        reusable.append({"name": volume.get("name", ""),
-                         "kind": {"existing": "pvc", "ephemeral": "emptyDir"}.get(kind, kind),
-                         "source": value})
-    replicas = deployment["spec"].get("replicas", 1) or 0
-    try:
-        parked = int(annotations.get(LC.AUTOSTART_REPLICAS, "") or 0)
-    except ValueError:
-        parked = 0
-    return {
-        "ns": ns, "name": name, "pod_hostname": pspec.get("hostname", ""),
-        "replicas": replicas, "autostart": replicas > 0,
-        "start_replicas": replicas or parked or 1, "containers": containers,
-        "pod_volumes": reusable,
-        "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
-        # How it is monitored, so Edit shows it rather than Automatic - and
-        # saving an edit keeps it.
-        "answer_check": NAMES.read(annotations, "uptime"),
-        "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
-        "placement": AFFINITY.public(deployment),
-        "failover": FAILOVER.mode_of(pspec),
-        "lan": LAN.read(deployment),
-        "network_mode": "host" if pspec.get("hostNetwork") else "",
-        "has_service": bool(listeners),
-        "seed_configs": LC.seed_configs(ns, deployment),
-        "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
-        "memory_limit": first["memory_limit"],
-        "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,
-    }
 
 # Browser routes serve the same authenticated application shell. Keep this an
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
@@ -8681,7 +8160,7 @@ def persist_icon_config(cfg):
 # ---------------------------------------------------------------- linked clusters
 # The resources the combined view gathers, and how this cluster answers locally.
 FLEET_LISTS = {
-    "workloads": lambda: cached("wl", 5, get_workloads),
+    "workloads": lambda: cached("wl", 5, WORKLOADS.get_workloads),
     "vms": lambda: cached("vms", 5, VMS.list_vms),
     "nodes": lambda: cached("nodes", 5, get_nodes),
     "volumes": lambda: cached("vol", 8, get_volumes),
@@ -9487,7 +8966,7 @@ class H(HTTP.LimitedHandler):
                     apps = fetch_appstore()
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, get_workloads), apps, helm_chart_logos())})
+                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, WORKLOADS.get_workloads), apps, helm_chart_logos())})
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})

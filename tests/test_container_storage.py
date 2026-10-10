@@ -189,7 +189,7 @@ class AutostartTests(WorkloadEditFixture, unittest.TestCase):
         self.assertEqual(0, saved["spec"]["replicas"])
         self.assertEqual("3", saved["metadata"]["annotations"][lifecycle.AUTOSTART_REPLICAS])
 
-        payload = server.workload_edit_payload("lab", "frigate", saved, FEATURES)
+        payload = server.WORKLOADS.workload_edit_payload("lab", "frigate", saved, FEATURES)
         self.assertFalse(payload["autostart"])
         self.assertEqual(3, payload["start_replicas"])
 
@@ -200,7 +200,7 @@ class AutostartTests(WorkloadEditFixture, unittest.TestCase):
         saved = self.sent[-1][2]
         self.assertEqual(1, saved["spec"]["replicas"])
         self.assertNotIn(lifecycle.AUTOSTART_REPLICAS, saved["metadata"]["annotations"])
-        self.assertTrue(server.workload_edit_payload("lab", "frigate", saved, FEATURES)["autostart"])
+        self.assertTrue(server.WORKLOADS.workload_edit_payload("lab", "frigate", saved, FEATURES)["autostart"])
 
     def test_a_replica_edit_without_autostart_keeps_working(self):
         lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 2})
@@ -212,12 +212,12 @@ class EditPayloadStorageTests(unittest.TestCase):
     def test_the_editor_reads_each_mount_folder(self):
         deployment = copy.deepcopy(DEPLOYMENT)
         deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["subPath"] = "config"
-        payload = server.workload_edit_payload("lab", "frigate", deployment, FEATURES)
+        payload = server.WORKLOADS.workload_edit_payload("lab", "frigate", deployment, FEATURES)
         mounts = {mount["path"]: mount for mount in payload["containers"][0]["volumes"]}
         self.assertEqual("config", mounts["/config"]["sub_path"])
 
     def test_payload_separates_editable_storage_from_kubernetes_wiring(self):
-        payload = server.workload_edit_payload("lab", "frigate", copy.deepcopy(DEPLOYMENT), FEATURES)
+        payload = server.WORKLOADS.workload_edit_payload("lab", "frigate", copy.deepcopy(DEPLOYMENT), FEATURES)
 
         mounts = {mount["path"]: mount for mount in payload["containers"][0]["volumes"]}
         self.assertEqual(("existing", "frigate-config", False),
@@ -228,7 +228,7 @@ class EditPayloadStorageTests(unittest.TestCase):
         self.assertTrue(mounts["/dev/dri"]["managed"])
 
     def test_payload_lists_pod_volumes_without_devices_or_wiring(self):
-        payload = server.workload_edit_payload("lab", "frigate", copy.deepcopy(DEPLOYMENT), FEATURES)
+        payload = server.WORKLOADS.workload_edit_payload("lab", "frigate", copy.deepcopy(DEPLOYMENT), FEATURES)
 
         self.assertEqual([{"name": "config", "kind": "pvc", "source": "frigate-config"}],
                          payload["pod_volumes"])
@@ -275,7 +275,7 @@ class MemoryScratchTests(WorkloadEditFixture, unittest.TestCase):
         self.deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"].append(
             {"name": "cache", "mountPath": "/tmp/cache"})
 
-        payload = server.workload_edit_payload("lab", "frigate", self.deployment, FEATURES, services=[])
+        payload = server.WORKLOADS.workload_edit_payload("lab", "frigate", self.deployment, FEATURES, services=[])
 
         mount = next(m for m in payload["containers"][0]["volumes"] if m["path"] == "/tmp/cache")
         self.assertEqual(("memory", "512Mi", False), (mount["kind"], mount["value"], mount["managed"]))

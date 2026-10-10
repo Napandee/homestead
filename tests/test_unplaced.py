@@ -54,7 +54,7 @@ class PlexOnK3sTests(unittest.TestCase):
                  "/api/v1/services": {"items": [svc]}}
         with mock.patch.object(server, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})), \
                 mock.patch.object(server.NETWORK, "servicelb_present", return_value=True):
-            plex = server.get_workloads()[0]
+            plex = server.WORKLOADS.get_workloads()[0]
         self.assertIn("ServiceLB, publishing this app's own Service", plex["pods"][0]["unplaced"])
         self.assertTrue(any("cannot be placed" in p for p in plex["problems"]))
 
