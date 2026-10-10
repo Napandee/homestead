@@ -180,8 +180,9 @@ working, refreshed every 15 seconds:
 
 - how fast the Kubernetes API answers;
 - each copy of Homestead, and which one leads;
-- each background task - live charts, alerts, long-term stats, hardware
-  detection, moves - with when it last worked and its last error;
+- each background task - live charts, alerts, long-term stats, app usage
+  history, hardware detection, moves - with when it last worked and its last
+  error;
 - the node probe: how many hosts run it, report, and have drive health;
 - **Samba** - running, and on which address. Switch it off here (shares stop
   being served; volumes, settings and passwords are kept) and on again, which
@@ -192,7 +193,7 @@ working, refreshed every 15 seconds:
 
 **Settings › About › Homestead's data** shows what Homestead keeps on its own
 volume - monitoring and stats history, change history, the storage forecast,
-jobs, logs, logos and so on - each store's size and how long it keeps things,
+app usage, jobs, logs, logos and so on - each store's size and how long it keeps things,
 and how full the volume is. Each store trims itself; once a day Homestead also
 trims its logs to a year (and 5,000 entries), removes logos nothing has used for
 30 days, and removes leftovers of interrupted writes. Past 80% full it keeps half

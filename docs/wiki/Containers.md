@@ -46,25 +46,19 @@ The form asks, in order:
   current values, including sidecars. Compose imports carry `mem_limit` and
   `deploy.resources.limits.memory` into Memory max.
 - **What it uses, and what to reserve.** Homestead records every container's
-  CPU and memory every five minutes and keeps two weeks. Edit shows, beside
-  each reserved field, what the container used 95% of the time over the last
-  seven days and its peak. After a day of readings it offers a reservation:
-  CPU at 1.5 times that usual use (at least 1%), memory at 1.25 times (at
-  least 32 MiB), never above Memory max. **Use suggested** only fills the
+  CPU and memory every five minutes, from metrics-server (k3s and RKE2 have
+  it), and keeps two weeks. Edit shows, beside each reserved field, what the
+  container was usually at or under - 95% of readings over the last seven
+  days, to within about 5% - and its peak. After a day of readings it offers
+  a reservation: CPU at 1.5 times that usual use (at least 10m, a hundredth of
+  a core), memory at 1.25 times (at least 32 MiB), rounded up to 0.5% of a
+  core and 16 MiB, and never above a CPU limit or Memory max. A reservation
+  already within 10% of that is left alone, and a suggestion below what the
+  container reserves now says it lowers it. **Use suggested** only fills the
   fields; nothing changes until you save, which restarts the app. The
-  scheduler places apps by what they reserve, not by what they use, so an app
-  that reserves nothing is placed as if it used nothing.
-- **Set reservations from use…** (Containers' menu) offers the same
-  suggestion for every app at once. Apps reserving nothing are ticked; apps
-  whose reservation only differs from their use are listed unticked, since it
-  may have been set on purpose. Apps that Flux or Argo CD apply are not
-  changed, because their next sync would undo it; each shows the
-  `resources` YAML to commit instead. Homestead's own reservations come from
-  its manifest and are left alone. Starting it runs a job that changes one
-  app at a time, all of its containers in one restart, and waits for it to run
-  again before the next. An app whose reservation was changed by hand since
-  the review is skipped, and one that does not come back within ten minutes
-  stops the job.
+  scheduler places apps by what they reserve, not by what they use: an app
+  that reserves nothing, and has no limit Kubernetes would take instead, is
+  placed as if it used nothing.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.
@@ -628,6 +622,32 @@ same input plus `capacity_token` and `confirm_capacity: true` to `/api/move`.
 Unreviewed calls are refused. Legacy `auto` calls must select and review an
 explicit suggested destination; it cannot change silently at execution time.
 
+### Reservations from use, for many apps
+
+**Set reservations from use…** in Containers' **⋯** menu offers the
+reservation Edit would suggest for every app at once. Apps reserving nothing
+are ticked - at most 50, the most one run changes; apps whose reservation only
+differs from their use are listed unticked, since it may have been set on
+purpose. Ticking or unticking works the plan out again.
+
+These are left out, with the reason:
+
+- apps Flux or Argo CD apply, since their next sync would undo the change -
+  each shows a patch to commit instead, a Deployment with only the
+  containers' `resources` set;
+- Homestead itself, whose reservations come from its manifest;
+- apps with less than a day of readings;
+- for an operator, apps only an admin may change - management, system,
+  service-account or host-privileged ones, as in Edit.
+
+Starting it runs a job, **Set reservations on N apps**, that changes one app
+at a time - all its containers in one restart - and waits for it to run again
+before the next. An app is skipped, with the reason in the job, if its
+reservation was changed by hand since the review, if no host has room for its
+new reservation, or if it is gone. One that does not come back within ten
+minutes stops the job; the rest are not changed. Follow and stop it in
+**Jobs**.
+
 ## Reviewed image updates and rollback
 
 Image updates and rollback show the exact immutable target images and a full-pod
@@ -703,13 +723,18 @@ the same way: the ports of any Service that selects them
 (such as Harvester's load balancers), their disks and those disks' replicas,
 with their host and address. A stopped VM is shown faded, since its disks are
 still there. Homestead's temporary browser, copy and import pods are hidden.
-Each app is one card named after its Deployment, StatefulSet or DaemonSet,
-and apps of the same name in two namespaces stay apart.
+Each app is one card named after its Deployment, StatefulSet or DaemonSet
+(a pod nothing owns is named after itself), apps of the same name in two
+namespaces stay apart, and a port is drawn to the app whose pods its Service
+selects - not to every app sharing an `app` label.
 
-Scheduled jobs, such as a nightly backup per app, are not drawn as apps: a
-pod that has finished is no longer part of what runs. They are listed under
-**Scheduled jobs**, collapsed beneath the containers, each with its last run
-and its next. The count of failed last runs stays on the collapsed heading.
+Pods a Job starts are not drawn as apps. Scheduled jobs (CronJobs outside the
+system namespaces), such as a nightly backup per app, are listed under
+**Scheduled jobs**, collapsed beneath the containers: each with its last run,
+its next, and the volumes it uses. The count of failed last runs stays on the
+collapsed heading. A schedule with a time zone of its own, or written in a
+form such as `@daily` or `SUN`, is shown as written. One-off Jobs are not
+shown.
 
 Each address is marked **VIP** or **node** (a node's own address) with the
 node answering for it, and an address no connection reaches is outlined in
@@ -717,7 +742,7 @@ red with the reason (see [Address map](Networking#address-map)).
 Each node lists its own address and the VIPs it answers for; hovering a node
 highlights its addresses, and hovering an address highlights its node.
 
-A volume no container or VM definition references is **disconnected**. Those
+A volume no container, VM or scheduled job references is **disconnected**. Those
 retained and old volumes are hidden by default; **Show disconnected** reveals a
 red group beneath the live volumes without letting it obscure the active paths.
 

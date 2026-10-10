@@ -110,7 +110,7 @@ RKE2 run, and the pages that need one offer the same install.
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester, or on k3s and RKE2 with KubeVirt installed from Settings - power actions, live migration between hosts, a console (the VM's screen or its serial port), and a k3s cluster made of VMs, with KubeVirt inside if asked |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
-| **Architecture** | VIP → workload → Longhorn volume → replica dependency view, with containers and VMs separated, Homestead helper pods hidden, and unreferenced volumes behind a disconnected-data switch |
+| **Architecture** | VIP → workload → Longhorn volume → replica dependency view, one card per controller, with containers and VMs separated, scheduled jobs in a collapsed lane that counts failed last runs, Homestead helper pods hidden, and unreferenced volumes behind a disconnected-data switch |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
 | **Cluster** | k3s, RKE2 or Harvester version, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding a host (k3s and RKE2 join commands, or a guide to Harvester's installer), and removing hosts - including ones that are dead for good |
 | **Linked clusters** | Link several Homesteads and manage them all from any one - only one need be reachable - with a switch in the top bar, an All clusters view of containers, VMs, nodes and volumes together, consoles and every action relayed, and roles kept across clusters; requests between clusters are signed with a shared key and no password is stored (docs/multi-cluster.md) |
@@ -622,6 +622,11 @@ It answers "was it busy last week?" and "has a node been dropping out?";
 Harvester's own monitoring (Prometheus and Grafana) is there for anything
 deeper.
 
+Each container's CPU and memory is read from metrics-server every five
+minutes as well, by the leading replica, and kept as a small histogram a day
+for fourteen days in `usage.json`; Edit suggests reservations from the last
+seven (see [Containers](wiki/Containers.md)).
+
 ## MQTT and Home Assistant
 
 **Settings → Monitoring** publishes cluster and node stats to an MQTT broker, with
@@ -682,8 +687,8 @@ install the app; if installation still fails, add an Access **Bypass** policy fo
 **Settings → Homestead** shows whether the parts that work in the background are
 working, refreshed every 15 seconds while it is open: how quickly the
 Kubernetes API answers, each copy of Homestead and which one leads, every
-background task (live charts, alerts, long-term stats, hardware detection,
-cluster moves) with when it last did its work and its last error, the node
+background task (live charts, alerts, long-term stats, app usage history,
+hardware detection, cluster moves) with when it last did its work and its last error, the node
 probe (nodes running it, reporting, and with drive health), SMB status, the
 permissions check, backup storage and MQTT. SMB can be switched off from Settings → Hardware and storage → Add-ons -
 shares stop being served, and their volumes, settings and passwords are kept -

@@ -848,10 +848,10 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
   color:var(--mut);font:650 10px "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase}
 .a2subhead span{font-weight:500;letter-spacing:0;color:var(--dim)}
 .a2jobs>summary{cursor:pointer;list-style:none;justify-content:flex-start;gap:6px}.a2jobs>summary::-webkit-details-marker{display:none}
-.a2jobs>summary::before{content:"▸"}.a2jobs[open]>summary::before{content:"▾"}.a2jobs>summary>span{margin-left:auto}
+.a2jobs>summary::before{content:"▸"/""}.a2jobs[open]>summary::before{content:"▾"/""}.a2jobs>summary>span{margin-left:auto}
 .a2job{display:flex;flex-direction:column;gap:2px;padding:5px 9px;font-size:12px}
 .a2jobwhen{font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.a2jobfailed{border-color:rgba(255,77,79,.35)}
+.a2jobfailed{border-color:color-mix(in srgb,var(--crit) 35%,transparent)}
 .usage-suggest{flex-wrap:wrap;gap:8px 12px;margin:2px 0 10px}.usage-suggest .ui-help{flex:1 1 260px;margin:0}
 .a2disconnected{border-color:rgba(255,77,79,.3);background:rgba(255,77,79,.035)}
 .arch-head-actions{flex-wrap:wrap;justify-content:flex-end}

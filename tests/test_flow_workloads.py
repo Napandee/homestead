@@ -46,12 +46,22 @@ API = {
         pod("backup-web-29330520-abcde", labels={"app": "backup"}, owner=("Job", "backup-web-29330520"),
             phase="Succeeded", node="node2", claims=["web-data"]),
         pod("backup-db-29330520-fghij", owner=("Job", "backup-db-29330520"), phase="Failed"),
-        # A pod nothing owns is still shown, by its app label.
+        # A pod nothing owns is still shown, by its app label or its own name.
         pod("debug", labels={"app": "toolbox"}),
+        pod("nginx-test-pod"),
+        # Two controllers share an app label; the Service selects only one.
+        pod("paperless-web-1a2b3-x", labels={"app": "paperless", "component": "web", "pod-template-hash": "1a2b3"},
+            owner=("ReplicaSet", "paperless-web-1a2b3")),
+        pod("paperless-worker-4c5d6-y", labels={"app": "paperless", "component": "worker", "pod-template-hash": "4c5d6"},
+            owner=("ReplicaSet", "paperless-worker-4c5d6")),
     ]},
     "/api/v1/services": {"items": [service("web", "lab", "web", 80, "192.0.2.10"),
-                                   service("web", "staging", "web", 8080, "192.0.2.11")]},
-    "/apis/longhorn.io/v1beta2/volumes": {"items": []},
+                                   service("web", "staging", "web", 8080, "192.0.2.11"),
+                                   {**service("paperless", "lab", "paperless", 8000, "192.0.2.12"),
+                                    "spec": {"selector": {"app": "paperless", "component": "web"}, "ports": [{"port": 8000}]}}]},
+    "/apis/longhorn.io/v1beta2/volumes": {"items": [
+        {"metadata": {"name": "pvc-web"}, "spec": {"numberOfReplicas": 2, "size": str(2**30)},
+         "status": {"kubernetesStatus": {"pvcName": "web-data"}, "robustness": "healthy"}}]},
     "/apis/longhorn.io/v1beta2/replicas": {"items": []},
     "/apis/kubevirt.io/v1/virtualmachineinstances": {"items": []},
     "/apis/kubevirt.io/v1/virtualmachines": {"items": []},
@@ -81,7 +91,8 @@ class FlowWorkloadTests(unittest.TestCase):
         self.assertFalse([w for w in self.by if "backup" in w])
 
     def test_each_controller_is_one_card_named_after_it(self):
-        self.assertEqual({"w:lab/web", "w:lab/shared-postgres", "w:staging/web", "w:lab/toolbox"}, set(self.by))
+        self.assertEqual({"w:lab/web", "w:lab/shared-postgres", "w:staging/web", "w:lab/toolbox", "w:lab/nginx-test-pod",
+                          "w:lab/paperless-web", "w:lab/paperless-worker"}, set(self.by))
         self.assertEqual("shared-postgres", self.by["w:lab/shared-postgres"]["name"])
 
     def test_a_card_shows_the_node_its_app_runs_on_during_a_rollout(self):
@@ -95,8 +106,16 @@ class FlowWorkloadTests(unittest.TestCase):
         self.assertTrue(self.jobs["j:lab/backup-db"]["last_failed"])
         self.assertFalse(self.jobs["j:lab/backup-web"]["last_failed"])
 
-    def test_a_job_lists_the_volumes_it_uses(self):
-        self.assertEqual(["web-data"], self.jobs["j:lab/backup-web"]["claims"])
+    def test_a_job_lists_the_volumes_it_uses_by_their_graph_ids(self):
+        self.assertEqual([{"pvc": "web-data", "vid": "v:pvc-web"}], self.jobs["j:lab/backup-web"]["claims"])
+
+    def test_only_the_controller_a_service_selects_gets_its_port(self):
+        self.assertEqual([8000], [p["port"] for p in self.by["w:lab/paperless-web"]["ports"]])
+        self.assertEqual([], self.by["w:lab/paperless-worker"]["ports"])
+
+    def test_a_static_pod_is_named_after_itself_not_its_node(self):
+        mirror = pod("kube-vip-node1", owner=("Node", "node1"))
+        self.assertEqual("kube-vip-node1", server._flow_owner(mirror))
 
     def test_a_paused_job_keeps_its_own_time_zone(self):
         paused = self.jobs["j:lab/backup-paused"]
