@@ -240,7 +240,7 @@ class RolloutCapacityTests(unittest.TestCase):
     def test_stale_resource_version_requires_new_review_before_mutations(self):
         cfg = self.reviewed()
         self.current["metadata"]["resourceVersion"] = "11"
-        with mock.patch.object(server, "run_deploy") as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
                 server.reviewed_deploy(cfg)
         deploy.assert_not_called()
@@ -248,20 +248,20 @@ class RolloutCapacityTests(unittest.TestCase):
     def test_replaced_deployment_with_same_name_invalidates_review(self):
         cfg = self.reviewed()
         self.current["metadata"]["uid"] = "replacement"
-        with mock.patch.object(server, "run_deploy") as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
                 server.reviewed_deploy(cfg)
         deploy.assert_not_called()
 
     def test_ack_cannot_override_rolling_deadlock(self):
         self.rolling()
-        with mock.patch.object(server, "run_deploy") as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
                 server.reviewed_deploy(self.reviewed())
         deploy.assert_not_called()
 
     def test_success_passes_exact_fresh_controller_to_mutation(self):
-        with mock.patch.object(server, "run_deploy", return_value={"ok": True}) as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
             self.assertTrue(server.reviewed_deploy(self.reviewed())["ok"])
         self.assertEqual(self.current, deploy.call_args.kwargs["reviewed_current"])
 
@@ -278,7 +278,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.assertEqual(200, code)
         self.assertEqual("Recreate", body["capacity"]["rollout"]["strategy"])
         cfg = {**self.cfg, "confirm_capacity": True, "capacity_token": body["capacity_token"]}
-        with mock.patch.object(server, "run_deploy", return_value={"ok": True}) as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
             self.assertTrue(server.reviewed_deploy(cfg)["ok"])
         deploy.assert_called_once()
 
@@ -291,7 +291,7 @@ class RolloutCapacityTests(unittest.TestCase):
         with mock.patch.object(server, "persist_icon_config"), mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server, "ksend") as send, mock.patch.object(server.OPS, "start", return_value={}), \
                 mock.patch.object(server, "kget", side_effect=AssertionError("unreviewed second read")):
-            server.run_deploy(copy.deepcopy(self.cfg), reviewed_current=copy.deepcopy(self.current))
+            server.DEPLOY.run_deploy(copy.deepcopy(self.cfg), reviewed_current=copy.deepcopy(self.current))
         deployment_put = next(call for call in send.call_args_list if call.args[0] == "PUT")
         self.assertEqual("10", deployment_put.args[2]["metadata"]["resourceVersion"])
         self.assertEqual(2, len(deployment_put.args[2]["spec"]["template"]["spec"]["containers"]))

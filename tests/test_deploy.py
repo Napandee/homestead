@@ -103,7 +103,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         })
         self.assertEqual("openspeedtest/latest", cfg["image"])
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.build_deployment(cfg)
+            deployment, _ = server.DEPLOY.build_deployment(cfg)
         self.assertEqual(
             "openspeedtest/latest:latest",
             deployment["spec"]["template"]["spec"]["containers"][0]["image"],
@@ -176,7 +176,7 @@ class AppStoreTemplateTests(unittest.TestCase):
                            "storage_class": "longhorn-r3", "access_mode": "ReadWriteMany"}],
                          server.new_claims(volumes))
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.build_deployment({"name": "demo", "image": "demo:1",
+            deployment, _ = server.DEPLOY.build_deployment({"name": "demo", "image": "demo:1",
                                                     "namespace": "lab", "volumes": volumes})
         pod = deployment["spec"]["template"]["spec"]
         self.assertEqual([{"name": "vol0", "persistentVolumeClaim": {"claimName": "demo-appdata"}}],
@@ -324,7 +324,7 @@ class SidecarDeploymentTests(unittest.TestCase):
             "volumes": [{"path": "/data", "source": "shared", "type": "pod", "read_only": True}],
             "env": {"MODE": "sidecar"}, "hardware": [],
         }
-        updated, service = server.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, service = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         self.assertEqual("7", updated["metadata"]["resourceVersion"])
         helper = updated["spec"]["template"]["spec"]["containers"][1]
         self.assertEqual("helper", helper["name"])
@@ -335,7 +335,7 @@ class SidecarDeploymentTests(unittest.TestCase):
     def test_sidecar_uses_explicit_container_name(self):
         cfg = {"name": "legacy", "container_name": "metrics-helper", "image": "example/helper",
                "target_workload": "media", "ports": [], "volumes": [], "hardware": []}
-        updated, _ = server.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         self.assertEqual("metrics-helper", updated["spec"]["template"]["spec"]["containers"][1]["name"])
 
     def test_sidecar_new_claim_gets_a_collision_safe_pod_volume(self):
@@ -344,7 +344,7 @@ class SidecarDeploymentTests(unittest.TestCase):
             "volumes": [{"path": "/cache", "source": "helper-cache", "type": "pvc"}],
             "ports": [], "hardware": [],
         }
-        updated, _ = server.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         volumes = updated["spec"]["template"]["spec"]["volumes"]
         self.assertEqual("helper-cache", volumes[-1]["persistentVolumeClaim"]["claimName"])
         self.assertEqual(volumes[-1]["name"], updated["spec"]["template"]["spec"]["containers"][1]["volumeMounts"][0]["name"])
@@ -355,23 +355,23 @@ class SidecarDeploymentTests(unittest.TestCase):
             "volumes": [{"path": "/cache", "source": "", "type": "emptyDir"}],
             "ports": [], "hardware": [],
         }
-        updated, _ = server.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         volume = updated["spec"]["template"]["spec"]["volumes"][-1]
         self.assertEqual({}, volume["emptyDir"])
         self.assertEqual(volume["name"], updated["spec"]["template"]["spec"]["containers"][1]["volumeMounts"][0]["name"])
 
     def test_duplicate_container_and_missing_pod_volume_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "already exists"):
-            server.build_sidecar_deployment({"name": "main", "image": "x", "target_workload": "media"},
+            server.DEPLOY.build_sidecar_deployment({"name": "main", "image": "x", "target_workload": "media"},
                                                copy.deepcopy(self.current))
         with self.assertRaisesRegex(ValueError, "does not exist"):
-            server.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
+            server.DEPLOY.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
                                                "volumes": [{"path": "/x", "source": "missing", "type": "pod"}]},
                                                copy.deepcopy(self.current))
 
     def test_host_network_cannot_be_forced_on_shared_pod(self):
         with self.assertRaisesRegex(ValueError, "host networking"):
-            server.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
+            server.DEPLOY.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
                                                "network_mode": "host"}, copy.deepcopy(self.current))
 
 
@@ -407,7 +407,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
                "image": "example/frigate", "namespace": "lab", "ports": [{"container": 5000,
                "host": 5000, "protocol": "TCP", "expose": True}], "volumes": [], "hardware": []}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, service = server.build_deployment(cfg)
+            deployment, service = server.DEPLOY.build_deployment(cfg)
         self.assertEqual("camera-stack", deployment["metadata"]["name"])
         self.assertEqual("frigate", deployment["spec"]["template"]["spec"]["containers"][0]["name"])
         self.assertEqual("camera-stack", service["metadata"]["name"])
@@ -419,7 +419,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
                "hardware": [], "command": ["/bin/sh", "-c"], "args": ["run"], "working_dir": "/app",
                "run_as_user": 1000, "run_as_group": 1000, "cap_add": ["NET_ADMIN"]}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.build_deployment(cfg)
+            deployment, _ = server.DEPLOY.build_deployment(cfg)
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual((["/bin/sh", "-c"], ["run"], "/app"),
                          (container["command"], container["args"], container["workingDir"]))
@@ -429,7 +429,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
     def test_a_plain_workload_gets_no_empty_security_context(self):
         cfg = {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [], "hardware": []}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.build_deployment(cfg)
+            deployment, _ = server.DEPLOY.build_deployment(cfg)
         self.assertNotIn("securityContext", deployment["spec"]["template"]["spec"]["containers"][0])
 
     def test_a_command_must_be_words(self):
@@ -437,7 +437,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
                "hardware": [], "command": "rm -rf /"}
         with mock.patch.object(server.HW, "features", return_value=[]):
             with self.assertRaisesRegex(ValueError, "list of words"):
-                server.build_deployment(cfg)
+                server.DEPLOY.build_deployment(cfg)
 
 
 class HomesteadManifestTests(unittest.TestCase):

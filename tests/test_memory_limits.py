@@ -24,14 +24,14 @@ class MemoryLimitTests(unittest.TestCase):
     def test_new_deployment_has_optional_memory_limit(self):
         cfg = {"name": "app", "image": "nginx:alpine", "memory": "128Mi", "memory_limit": "512Mi"}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.build_deployment(cfg)
-            unbounded, _ = server.build_deployment({**cfg, "memory_limit": ""})
+            deployment, _ = server.DEPLOY.build_deployment(cfg)
+            unbounded, _ = server.DEPLOY.build_deployment({**cfg, "memory_limit": ""})
         self.assertEqual("512Mi", deployment["spec"]["template"]["spec"]["containers"][0]
                          ["resources"]["limits"]["memory"])
         self.assertNotIn("limits", unbounded["spec"]["template"]["spec"]["containers"][0]["resources"])
         with mock.patch.object(server.HW, "features", return_value=[]):
             with self.assertRaisesRegex(ValueError, "at least"):
-                server.build_deployment({**cfg, "memory_limit": "64Mi"})
+                server.DEPLOY.build_deployment({**cfg, "memory_limit": "64Mi"})
         with mock.patch.object(server.LC, "seed_configs", return_value=[]):
             reopened = server.WORKLOADS.workload_edit_payload("lab", "app", deployment, hardware_definitions=[], services=[])
         self.assertEqual("512Mi", reopened["containers"][0]["memory_limit"])
@@ -43,7 +43,7 @@ class MemoryLimitTests(unittest.TestCase):
         cfg = {"name": "helper", "container_name": "helper", "target_workload": "app",
                "image": "busybox", "memory": "64Mi", "memory_limit": "128Mi"}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            updated, _ = server.build_sidecar_deployment(cfg, current)
+            updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, current)
         containers = updated["spec"]["template"]["spec"]["containers"]
         self.assertNotIn("limits", containers[0]["resources"])
         self.assertEqual("128Mi", containers[1]["resources"]["limits"]["memory"])

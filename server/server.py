@@ -2423,144 +2423,6 @@ def new_claims(volumes):
     return list(claims.values())
 
 
-def _build_single_deployment(cfg):
-    name = _dns_name(cfg.get("workload_name") or cfg.get("name"), "workload name")
-    container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
-    ns = cfg.get("namespace", DEFAULT_NS)
-    env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
-    mounts, volumes, named, owned = [], [], {}, []
-    for i, v in enumerate(cfg.get("volumes") or []):
-        if v.get("type") == "pod":
-            raise ValueError("existing pod volumes can only be used when joining an existing workload")
-        # Several folders of one claim share a single volume entry and differ
-        # only by subPath, which is how an import lands one volume per app.
-        key = (v.get("type") or "pvc", v.get("source") or "")
-        reusable = key[0] in ("pvc", "host") and key[1]
-        vn = named.get(key) if reusable else None
-        if not vn:
-            vn = f"vol{len(volumes)}"
-            if reusable:
-                named[key] = vn
-            if v.get("type") == "host":
-                volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
-            elif v.get("type") == "emptyDir":
-                # A RAM-backed scratch volume is what a tmpfs mount becomes:
-                # same speed, same volatility, and bounded so it cannot eat the
-                # node's memory.
-                empty = {}
-                if str(v.get("medium", "")).lower() == "memory":
-                    empty["medium"] = "Memory"
-                if v.get("size_limit"):
-                    empty["sizeLimit"] = str(v["size_limit"])
-                volumes.append({"name": vn, "emptyDir": empty})
-            else:
-                volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
-        mount = {"name": vn, "mountPath": v["path"]}
-        owner = (cfg.get("volume_owners") or {}).get(v.get("path"))
-        if owner and v.get("type") == "pvc" and v.get("create"):
-            owned.append((vn, str(v.get("sub_path") or ""), *owner))
-        if v.get("sub_path"):
-            mount["subPath"] = str(v["sub_path"]).strip("/")
-        if v.get("read_only"):
-            mount["readOnly"] = True
-        mounts.append(mount)
-    ports = [{"containerPort": int(p["container"]),
-              "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
-              "protocol": str(p.get("protocol", "TCP")).upper()}
-             for p in cfg.get("ports") or []]
-    c = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
-    # Arguments to the image's own entrypoint - cloudflared's "tunnel run",
-    # say. A list of plain strings, passed as they are; never a shell.
-    args = cfg.get("args") or []
-    if not isinstance(args, list) or len(args) > 32 or any(not isinstance(a, str) or len(a) > 512 or "\x00" in a for a in args):
-        raise ValueError("arguments are a list of up to 32 short strings")
-    if args: c["args"] = list(args)
-    if env: c["env"] = env
-    if ports: c["ports"] = ports
-    if mounts: c["volumeMounts"] = mounts
-    res = {}
-    if cfg.get("cpu"): res.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    memory_request = str(cfg.get("memory") or "").strip()
-    memory_limit = str(cfg.get("memory_limit") or "").strip()
-    MEMORY.validate(memory_request, memory_limit, container_name)
-    if memory_request: res.setdefault("requests", {})["memory"] = memory_request
-    if memory_limit: res.setdefault("limits", {})["memory"] = memory_limit
-    if res: c["resources"] = res
-    if cfg.get("privileged"): c["securityContext"] = {"privileged": True}
-    apply_container_settings(c, cfg)
-
-    podspec = {"containers": [c], "automountServiceAccountToken": False}
-    if volumes: podspec["volumes"] = volumes
-    if owned:
-        # A new volume is root's; the image may run as a user of its own.
-        podspec["initContainers"] = [VOLOWNER.init_container(owned)]
-    hardware = set(cfg.get("hardware") or [])
-    if cfg.get("gpu"):
-        hardware.add("igpu")
-    devices = {f["id"]: HW.mount_spec(f) for f in HW.features()}
-    unknown = hardware - set(devices)
-    if unknown:
-        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
-    for hw in hardware:
-        if hw not in devices:
-            continue
-        dev = devices[hw]
-        podspec.setdefault("nodeSelector", {})[dev["label"]] = "true"
-        podspec["containers"][0].setdefault("securityContext", {})["privileged"] = True
-        podspec["containers"][0].setdefault("volumeMounts", []).append(
-            {"name": dev["name"], "mountPath": dev["container_path"]})
-        podspec.setdefault("volumes", []).append(
-            {"name": dev["name"], "hostPath": {"path": dev["host_path"], "type": dev["path_type"]}})
-    if any(key in cfg for key in ("privileged", "cap_add", "tun")):
-        PRIV.apply(podspec["containers"][0], podspec, cfg, hardware=bool(hardware))
-    if cfg.get("fs_group") is not None:
-        # The kubelet gives the volume to this group and makes it group
-        # writable, which is what lets a container that is not root write to
-        # appdata it did not create.
-        podspec.setdefault("securityContext", {})["fsGroup"] = int(cfg["fs_group"])
-    if cfg.get("network_mode") == "host":
-        podspec["hostNetwork"] = True
-        podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
-    if cfg.get("node"):
-        podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
-    FAILOVER.apply(podspec, cfg.get("failover") or "move")
-    lan_address = cfg.get("lan") if cfg.get("network_mode") == "lan" else None
-    # How it is monitored, if not automatically: an annotation, read by homestead_uptime.
-    monitoring = UPTIME.check_setting((cfg.get("monitoring") or {}).get("mode") or "auto",
-                                      (cfg.get("monitoring") or {}).get("path"))
-    dep = {
-        "apiVersion": "apps/v1", "kind": "Deployment",
-        "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
-                     "annotations": ({**({NAMES.key("icon"): cfg.get("icon", "")} if cfg.get("icon") else {}),
-                                      **({NAMES.key("icon-source"): cfg.get("icon_source", cfg.get("icon", ""))} if cfg.get("icon") else {}),
-                                      **({NAMES.key("hardware"): ",".join(sorted(hardware))} if hardware else {}),
-                                      **({NAMES.key("uptime"): monitoring} if monitoring else {})})},
-        "spec": {"replicas": int(cfg.get("replicas", 1)), "strategy": {"type": "Recreate"},
-                 "selector": {"matchLabels": {"app": name}},
-                 "template": {"metadata": {"labels": {"app": name, "lab-workload": "true"}}, "spec": podspec}},
-    }
-    svc = None
-    exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
-    if exposed and cfg.get("network_mode") not in ("host", "lan"):
-        mode = cfg.get("vip_mode", "shared")
-        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or NETWORK.shared_vip()) if mode == "shared" else "")
-        svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
-        svc = {
-            "apiVersion": "v1", "kind": "Service",
-            "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
-                         "annotations": PLATFORM.vip_annotations(vip) if svc_type == "LoadBalancer" else {}},
-            "spec": {"type": svc_type, "selector": {"app": name},
-                     **(PLATFORM.vip_spec(vip) if svc_type == "LoadBalancer" else {}),
-                      "ports": [{"name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
-                                 "port": int(p.get("host") or p["container"]),
-                                 "targetPort": int(p["container"]),
-                                 "protocol": str(p.get("protocol", "TCP")).upper()} for p in exposed]},
-        }
-    if lan_address:
-        LAN.apply_to_template(dep, ns, name, lan_address)
-    return dep, svc
-
-
 
 def additional_container_configs(cfg):
     """Explicit extra definitions in a new pod; the original deploy stays compatible."""
@@ -2603,37 +2465,6 @@ def prepare_deploy_network(cfg):
     combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
     planned = NETWORK.prepare_deploy(combined)
     return dict(planned, ports=cfg.get("ports") or [])
-
-
-def build_deployment(cfg):
-    extras = additional_container_configs(cfg)
-    if not extras:
-        return _build_single_deployment(cfg)
-    HOSTACCESS.require_cfg([cfg, *extras])
-    dep, _ = _build_single_deployment(cfg)
-    changes = [dict(item, new=True, name=item["container_name"], privileges={
-        key: item[key] for key in ("privileged", "cap_add", "tun") if key in item}) for item in extras]
-    prepared = LC.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
-                                "containers": changes}, current=dep)
-    dep = prepared["deployment"]
-    pspec = dep["spec"]["template"]["spec"]
-    used_names = {container["name"] for group in ("containers", "initContainers") for container in pspec.get(group) or []}
-    for item, container in zip(extras, pspec["containers"][1:]):
-        mounts = {mount["mountPath"]: mount for mount in container.get("volumeMounts") or []}
-        owners = [(mounts[path]["name"], mounts[path].get("subPath", ""), *owner)
-                  for path, owner in (item.get("volume_owners") or {}).items() if path in mounts]
-        if owners:
-            helper = VOLOWNER.init_container(owners)
-            helper["name"] = LC._unique_volume_name("hs-owner-" + container["name"], used_names)
-            pspec.setdefault("initContainers", []).append(helper)
-    all_ports = [port for item in [cfg, *extras] for port in item.get("ports") or []]
-    service_ports = [dict(port, name=port.get("name") or f"p{port.get('host') or port['container']}-{str(port.get('protocol') or 'TCP').lower()}") for port in all_ports]
-    _, service = _build_single_deployment(dict(cfg, ports=service_ports))
-    if service:
-        names = [port["name"] for port in service["spec"]["ports"]]
-        if len(names) != len(set(names)):
-            raise ValueError("exposed port names must be unique across all containers")
-    return dep, service
 
 
 def edit_lan(ns, name, wanted):
@@ -2682,34 +2513,6 @@ def record_lan(ns, name, lan):
                           "owner": "homestead", "note": f"container {ns}/{name}, on {lan['network']}"})
     except Exception:
         pass
-
-
-def apply_container_settings(container, cfg):
-    """Command, working directory, user and capabilities, when a config has them.
-
-    Compose's entrypoint and command are Kubernetes' command and args: one
-    replaces the image's ENTRYPOINT, the other its CMD.
-    """
-    for key, field in (("command", "command"), ("args", "args")):
-        value = cfg.get(key)
-        if value:
-            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-                raise ValueError(f"{key} must be a list of words")
-            container[field] = list(value)
-    if cfg.get("working_dir"):
-        container["workingDir"] = str(cfg["working_dir"])
-    security = container.setdefault("securityContext", {})
-    for key, field in (("run_as_user", "runAsUser"), ("run_as_group", "runAsGroup")):
-        if cfg.get(key) is not None and cfg.get(key) != "":
-            security[field] = int(cfg[key])
-    if cfg.get("cap_add"):
-        caps = [str(x).upper() for x in cfg["cap_add"]]
-        if not all(re.fullmatch(r"[A-Z_]{2,40}", cap) for cap in caps):
-            raise ValueError("capabilities are names like NET_ADMIN")
-        security.setdefault("capabilities", {})["add"] = caps
-    if not security:
-        container.pop("securityContext", None)
-    return container
 
 
 def _dns_name(value, label="name"):
@@ -2849,7 +2652,7 @@ def _migrate_samba_locked(legacy):
                "namespace": SMB_NAMESPACE, "ports": [{"container": 445, "name": "smb", "expose": True}],
                "vip_mode": "automatic"}
         cfg = NETWORK.prepare_deploy(cfg)
-        _, new_service = build_deployment(cfg)
+        _, new_service = DEPLOY.build_deployment(cfg)
     made_dep = removed_service = made_service = stopped_old = False
     try:
         ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", new_dep)
@@ -2919,7 +2722,7 @@ def install_samba(address=""):
            "args": ["-g", "server min protocol = SMB2"],
            "env": {**SHARES.filesystem_identity(), "PERMISSIONS": ""}}
     cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = build_deployment(cfg)
+    dep, svc = DEPLOY.build_deployment(cfg)
     created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
     if svc:
         try:
@@ -3083,9 +2886,9 @@ def capacity_manifest(config, existing=None):
         target = _dns_name(cfg.get("target_workload"), "existing workload")
         if existing is None:
             existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, _ = build_sidecar_deployment(cfg, existing)
+        dep, _ = DEPLOY.build_sidecar_deployment(cfg, existing)
     elif cfg.get("target_mode", "new") == "new":
-        dep, _ = build_deployment(cfg)
+        dep, _ = DEPLOY.build_deployment(cfg)
     else:
         raise ValueError("deployment target must be new or existing")
     claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
@@ -3184,63 +2987,7 @@ def reviewed_deploy(b):
     # version. The final PUT keeps this resourceVersion for optimistic locking.
     plan = deploy_capacity_plan(b, existing=current)
     CAPACITY_REVIEW.enforce(b, plan, context)
-    return run_deploy(b, reviewed_current=current) if current is not None else run_deploy(b)
-
-
-def run_deploy(b, *, reviewed_current=None):
-    """Create (or join) a workload. HTTP Deploy uses reviewed_deploy first."""
-    b = DEPLOY.analyze_deploy_intent(b)
-    ns = b.get("namespace") or DEFAULT_NS
-    target = b.get("target_workload") if b.get("target_mode") == "existing" else b.get("workload_name") or b.get("name")
-    guard_managed_smb(ns, target)
-    b = ensure_profile_compatible(b)
-    persist_icon_config(b)
-    b = prepare_deploy_network(b)
-    b = apply_deploy_bindings(b)
-    b = apply_generated_secrets(b)
-    b = prepare_lan(b)
-    ns = b.get("namespace") or DEFAULT_NS
-    target_mode = b.get("target_mode", "new")
-    if target_mode == "new":
-        b = VOLOWNER.prepare(b)
-        b["additional_containers"] = [VOLOWNER.prepare(item) for item in additional_container_configs(b)]
-    if target_mode == "existing":
-        target = _dns_name(b.get("target_workload"), "existing workload")
-        current = copy.deepcopy(reviewed_current) if reviewed_current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, svc = build_sidecar_deployment(b, current)
-    elif target_mode == "new":
-        dep, svc = build_deployment(b)
-        target = dep["metadata"]["name"]
-    else:
-        raise ValueError("deployment target must be new or existing")
-    reused = []
-    for claim in new_claims(deployment_volumes(b)):
-        if ensure_claim(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"]):
-            reused.append(claim["name"])
-    b["_reused_claims"] = reused
-    if b.get("network_mode") == "lan" and target_mode == "new":
-        LAN.ensure_nad(ns, target, b["lan"])
-    masked = {item.get("key") for item in b.get("env_meta") or [] if item.get("masked")}
-    ENVSEC.externalize(ns, dep, kget, ksend, masked)
-    if target_mode == "existing":
-        ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
-    else:
-        ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
-    if b.get("network_mode") == "lan" and target_mode == "new":
-        record_lan(ns, target, b["lan"])
-    if svc:
-        ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-    container_name = _dns_name(b.get("container_name") or b.get("name"), "container name")
-    action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
-    op = OPS.start("deployment", action,
-                   {"kind": "Deployment", "name": target, "namespace": ns},
-                   "/containers", {"namespace": ns, "name": target,
-                                   # What cancelling it undoes: a new one is removed,
-                                   # an existing one goes back to its last version.
-                                   "undo": "rollout" if target_mode == "existing" else "delete"})
-    return {"ok": True, "name": target, "container": container_name, "operation": op,
-            "reused_volumes": b.get("_reused_claims") or []}
+    return DEPLOY.run_deploy(b, reviewed_current=current) if current is not None else DEPLOY.run_deploy(b)
 
 
 def compose_report(b):
@@ -3293,59 +3040,10 @@ def compose_preparation(b):
     return configs, entries, claims
 
 
-def compose_capacity(entries, claims, created=None):
-    """Fresh joint review, including created controllers whose pods lag behind."""
-    created = created or {}
-    ns = entries[0]["deployment"]["metadata"]["namespace"]
-    cache = {}
-    def read(path):
-        if path not in cache:
-            try:
-                cache[path] = kget(path)
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise
-                cache[path] = error
-        value = cache[path]
-        if isinstance(value, Exception):
-            raise value
-        return copy.deepcopy(value)
-    pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
-    planned = copy.deepcopy(entries)
-    starting_headroom = {}
-    for entry in planned:
-        previous = created.get(entry["name"])
-        if previous is None:
-            continue
-        current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{entry['name']}")
-        if current.get("metadata", {}).get("uid") != previous.get("metadata", {}).get("uid") or current.get("spec") != previous.get("spec"):
-            raise ValueError(entry["name"] + " changed during batch creation; review the remaining services again")
-        owned, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
-        if not known:
-            raise ValueError(entry["name"] + " pod ownership is unavailable; remaining services were not created")
-        scheduled = [p for p in owned if p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")]
-        for pod in scheduled:
-            spec = pod["spec"]
-            host = spec["nodeName"]
-            starting_headroom[host] = starting_headroom.get(host, 0) + max(0,
-                PLACE._pod_memory(spec)[0] - PLACE._pod_request(spec, "memory")) / 1024**3
-        # Keep all scheduled/terminating consumers reserved. Replace only this
-        # controller's unassigned pods with synthetic placements of its deficit.
-        pending_ids = {id(p) for p in owned if not p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")}
-        pods = [p for p in pods if id(p) not in pending_ids]
-        entry["deployment"] = current
-        entry["replicas"] = max(0, int(current["spec"].get("replicas", 1)) - len(scheduled))
-    nodes = copy.deepcopy(PLACE.get_nodes())
-    for node in nodes:
-        node["batch_starting_headroom_gb"] = starting_headroom.get(node["name"], 0)
-    return BATCH_CAPACITY.plan(planned, ns, pods, nodes, claims,
-                               get_app_settings()["thresholds"]["memory"]["critical"], read=read)
-
-
 def compose_preview(b):
     configs, entries, claims = compose_preparation(b)
     HOSTACCESS.require_cfg(configs)
-    return {"capacity": compose_capacity(entries, claims),
+    return {"capacity": DEPLOY.compose_capacity(entries, claims),
             "capacity_token": CAPACITY_REVIEW.issue(b, {"action": "compose", "configs": configs})}
 
 
@@ -3353,7 +3051,7 @@ def compose_apply(b):
     """Guard the entire batch before any writes, then recheck its remainder."""
     configs, entries, claims = compose_preparation(b)
     HOSTACCESS.require_cfg(configs)
-    plan = compose_capacity(entries, claims)
+    plan = DEPLOY.compose_capacity(entries, claims)
     if plan["status"] == "unknown":
         raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
     CAPACITY_REVIEW.enforce(b, plan, {"action": "compose", "configs": configs})
@@ -3362,11 +3060,11 @@ def compose_apply(b):
         name = entry["name"]
         try:
             if created:
-                fresh = compose_capacity(entries, claims, controllers)
+                fresh = DEPLOY.compose_capacity(entries, claims, controllers)
                 if fresh["blocked"]:
                     return {"ok": False, "created": created, "failed": name,
                             "error": "Remaining batch no longer fits the checked capacity; review again", "capacity": fresh}
-            result = run_deploy(copy.deepcopy(cfg))
+            result = DEPLOY.run_deploy(copy.deepcopy(cfg))
             created.append(result["name"])
             # Never assume the Deployment has pods just because POST returned.
             ns = cfg["namespace"]
@@ -3431,137 +3129,6 @@ def share_storage_options():
             "storage_classes": selectable_storage_classes(classes),
             "shared_storage_classes": shared_storage_classes(classes),
             "storage_class_facts": storage_class_facts(classes)}
-
-
-def _unique_volume_name(base, used):
-    base = re.sub(r"[^a-z0-9-]", "-", base.lower()).strip("-")[:55] or "volume"
-    candidate, suffix = base, 2
-    while candidate in used:
-        tail = f"-{suffix}"
-        candidate = base[:63 - len(tail)].rstrip("-") + tail
-        suffix += 1
-    used.add(candidate)
-    return candidate
-
-
-def build_sidecar_deployment(cfg, current):
-    HOSTACCESS.require_target(current, cfg.get("namespace") or DEFAULT_NS)
-    """Add one container to an existing Deployment pod template.
-
-    Kubernetes cannot modify a running Pod. Updating the controller template causes a
-    reviewed rollout, so all containers in the workload restart together.
-    """
-    container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
-    target = _dns_name(cfg.get("target_workload"), "existing workload")
-    if current.get("metadata", {}).get("name") != target:
-        raise ValueError("existing workload does not match the selected Deployment")
-    if cfg.get("network_mode") == "host":
-        raise ValueError("host networking cannot be enabled while joining an existing workload")
-
-    updated = json.loads(json.dumps(current))
-    pspec = updated.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
-    containers = pspec.setdefault("containers", [])
-    if any(c.get("name") == container_name for c in containers):
-        raise ValueError(f"container {container_name} already exists in {target}")
-
-    env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
-    ports = [{"containerPort": int(p["container"]),
-              "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
-              "protocol": str(p.get("protocol", "TCP")).upper()}
-             for p in cfg.get("ports") or [] if p.get("container")]
-    container = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
-    if env:
-        container["env"] = env
-    if ports:
-        container["ports"] = ports
-    resources = {}
-    if cfg.get("cpu"):
-        resources.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    memory_request = str(cfg.get("memory") or "").strip()
-    memory_limit = str(cfg.get("memory_limit") or "").strip()
-    MEMORY.validate(memory_request, memory_limit, container_name)
-    if memory_request:
-        resources.setdefault("requests", {})["memory"] = memory_request
-    if memory_limit:
-        resources.setdefault("limits", {})["memory"] = memory_limit
-    if resources:
-        container["resources"] = resources
-    if cfg.get("privileged"):
-        container["securityContext"] = {"privileged": True}
-
-    pod_volumes = pspec.setdefault("volumes", [])
-    existing_by_name = {v.get("name"): v for v in pod_volumes}
-    used = set(existing_by_name)
-    mounts = []
-    for index, item in enumerate(cfg.get("volumes") or []):
-        mount_path = (item.get("path") or "").strip()
-        if not mount_path:
-            continue
-        if item.get("type") == "pod":
-            volume_name = item.get("source", "")
-            if volume_name not in existing_by_name:
-                raise ValueError(f"pod volume {volume_name or '(blank)'} does not exist in {target}")
-        else:
-            source = (item.get("source") or "").strip()
-            if not source and item.get("type") != "emptyDir":
-                raise ValueError(f"storage source is required for {mount_path}")
-            volume_name = ""
-            if item.get("type") not in ("host", "emptyDir"):
-                volume_name = next((v.get("name") for v in pod_volumes
-                                    if v.get("persistentVolumeClaim", {}).get("claimName") == source), "")
-            if not volume_name:
-                volume_name = _unique_volume_name(f"hs-{container_name}-{index + 1}", used)
-                if item.get("type") == "host":
-                    pod_volumes.append({"name": volume_name, "hostPath": {"path": source}})
-                elif item.get("type") == "emptyDir":
-                    pod_volumes.append({"name": volume_name, "emptyDir": {}})
-                else:
-                    pod_volumes.append({"name": volume_name,
-                                        "persistentVolumeClaim": {"claimName": source}})
-        mount = {"name": volume_name, "mountPath": mount_path}
-        if item.get("sub_path") and item.get("type") != "emptyDir":
-            mount["subPath"] = str(item["sub_path"]).strip("/")
-        if item.get("read_only"):
-            mount["readOnly"] = True
-        mounts.append(mount)
-
-    hardware = set(cfg.get("hardware") or [])
-    if cfg.get("gpu"):
-        hardware.add("igpu")
-    devices = {feature["id"]: HW.mount_spec(feature) for feature in HW.features()}
-    unknown = hardware - set(devices)
-    if unknown:
-        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
-    for feature_id in hardware:
-        device = devices[feature_id]
-        pspec.setdefault("nodeSelector", {})[device["label"]] = "true"
-        container.setdefault("securityContext", {})["privileged"] = True
-        volume_name = next((v.get("name") for v in pod_volumes
-                            if v.get("hostPath", {}).get("path") == device["host_path"]), "")
-        if not volume_name:
-            volume_name = _unique_volume_name(device["name"], used)
-            pod_volumes.append({"name": volume_name, "hostPath": {
-                "path": device["host_path"], "type": device["path_type"]}})
-        mounts.append({"name": volume_name, "mountPath": device["container_path"]})
-    if mounts:
-        container["volumeMounts"] = mounts
-    containers.append(container)
-
-    selector = current.get("spec", {}).get("selector", {}).get("matchLabels", {})
-    service_cfg = dict(cfg)
-    service_cfg["name"] = container_name
-    # Only the Service portion is needed here. Pod storage and hardware have
-    # already been merged above and pod-volume references are join-only.
-    service_cfg["volumes"] = []
-    service_cfg["hardware"] = []
-    service_cfg["gpu"] = False
-    _, service = build_deployment(service_cfg)
-    if service:
-        service["spec"]["selector"] = selector
-    annotation_name = ("sidecar-" + container_name)[:63].rstrip("-")
-    updated.setdefault("metadata", {}).setdefault("annotations", {})[
-        NAMES.key(annotation_name)] = cfg.get("image", "")
-    return updated, service
 
 
 # Harvester keeps these for VM images and VM state; they are not general
@@ -5543,7 +5110,7 @@ def _resolve_storage_class():
 
 STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
-IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
+IMP.bind(kget, ksend, create_pvc, DEPLOY.build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
@@ -5794,7 +5361,7 @@ def _late(*names):
 
 WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, cache=_cache, default_ns=DEFAULT_NS,
                data_dir=DATA_DIR, system_namespaces=SYS_NS, platform_namespaces=PLATFORM_NS)
-DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION)
+DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION, cache=_cache)
 UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS), _cache)
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
                  "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
@@ -7144,7 +6711,7 @@ def _nfs_deployment(rows, address=""):
            "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
            "vip_mode": "manual" if address else "automatic", "lb_ip": address, "exclusive_vip": True}
     cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = build_deployment(cfg)
+    dep, svc = DEPLOY.build_deployment(cfg)
     dep = NFS.configure(dep, selected)
     if svc:
         # NFS's CIDR rules must see the real client address, not a node SNAT.

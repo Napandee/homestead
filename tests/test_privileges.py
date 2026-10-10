@@ -56,7 +56,7 @@ class DeployTests(unittest.TestCase):
         with mock.patch.object(server.HW, "features", lambda: []):
             cfg = server.DEPLOY.template_to_cfg(app)
             self.assertEqual((True, ["NET_ADMIN"], False), (cfg["tun"], cfg["cap_add"], cfg["privileged"]))
-            dep, _ = server.build_deployment(dict(cfg, name="vpn", namespace="lab", ports=[], volumes=[]))
+            dep, _ = server.DEPLOY.build_deployment(dict(cfg, name="vpn", namespace="lab", ports=[], volumes=[]))
         container = dep["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual(["NET_ADMIN"], container["securityContext"]["capabilities"]["add"])
         self.assertIn({"name": PRIV.TUN_VOLUME, "mountPath": "/dev/net/tun"}, container["volumeMounts"])

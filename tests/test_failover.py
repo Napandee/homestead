@@ -97,7 +97,7 @@ class DeployTests(unittest.TestCase):
         import server
         with mock.patch.object(server.HW, "features", lambda: []):
             cfg = dict(name="coral-app", namespace="lab", image="busybox", ports=[], volumes=[], **extra)
-            dep, _ = server.build_deployment(cfg)
+            dep, _ = server.DEPLOY.build_deployment(cfg)
         return dep["spec"]["template"]["spec"]
 
     def test_a_new_container_moves_unless_told_otherwise(self):
