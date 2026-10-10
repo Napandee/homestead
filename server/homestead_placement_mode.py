@@ -21,10 +21,15 @@ DaemonSets - Longhorn's, Homestead's probe - from their pods on that host
 the next time they roll out. A host is never made standby when that would
 leave no other host taking work.
 
-Homestead keeps the taints matching the setting: it adds its own where the
-setting says, and removes its own - never anyone else's - where it does not.
+Homestead keeps the taints matching the setting: it adds the taint where the
+setting says, and removes any taint with its key, homestead.io/standby, where
+it does not - never a taint with another key. Each change names the node's
+resourceVersion, so a taint something else added since Homestead read the
+node is not overwritten: Kubernetes refuses the change, and the next minute's
+look tries again.
 """
 import re
+import urllib.error
 
 MODES = ("", "default", "spread", "standby")
 TAINT = {"key": "homestead.io/standby", "value": "true", "effect": "PreferNoSchedule"}
@@ -96,10 +101,15 @@ def reconcile(nodes, placement):
             continue
         kept = [t for t in taints if not _ours(t)]
         new = kept + [dict(TAINT)] if name in want else kept
-        # A merge patch replaces the list; it is the node's own list with only
-        # Homestead's taint added or taken out.
-        ksend("PATCH", f"/api/v1/nodes/{name}", {"spec": {"taints": new or None}},
-              ctype="application/merge-patch+json")
+        # A merge patch replaces the list: the node's own list with only
+        # Homestead's taint added or taken out, refused if the node changed.
+        try:
+            ksend("PATCH", f"/api/v1/nodes/{name}",
+                  {"metadata": {"resourceVersion": meta.get("resourceVersion")}, "spec": {"taints": new or None}},
+                  ctype="application/merge-patch+json")
+        except (urllib.error.HTTPError, ValueError) as error:
+            notes.append(f"{name} was not changed this time: {str(error)[:120]}")
+            continue
         changed.append(f"{name} {'is now standby' if name in want else 'takes apps again'}")
     return changed, notes
 

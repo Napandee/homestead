@@ -94,22 +94,25 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
    the 95th percentile, since a reservation is about the usual day, and the
    peak, since a nightly burst is what the usual day hides. */
 const editCpuWords = m => m >= 1000 ? `${+(m / 1000).toFixed(2)} cores` : `${+(m / 10).toFixed(1)}%`;
+const editDays = n => `${n} day${n === 1 ? "" : "s"}`;
 function editUsageWords(usage, kind) {
   if (!usage?.samples || usage.cpu_p95_m === undefined) return "";
   const [usual, peak] = kind === "cpu" ? [editCpuWords(usage.cpu_p95_m), editCpuWords(usage.cpu_max_m)]
-    : [workloadMemory(usage.mem_p95_mi), workloadMemory(usage.mem_max_mi)];
-  const span = usage.days > 1 ? `${usage.days} days` : "today";
-  return `<span data-tip="95% of readings over ${esc(span)} were at or under ${esc(usual)}">uses up to ${esc(usual)} · peak ${esc(peak)} (${esc(span)})</span>`;
+    : [reservedMemory(usage.mem_p95_mi), reservedMemory(usage.mem_max_mi)];
+  return `<span data-tip="95% of readings over ${esc(editDays(usage.days))} were at or under ${esc(usual)}">usually at or under ${esc(usual)} · peak ${esc(peak)} over ${esc(editDays(usage.days))}</span>`;
 }
 /* A reservation worked out from that use, offered rather than applied: it
    fills the fields, and nothing changes until the edit is saved. */
 function editUsageSuggestion(usage, index) {
   const s = usage?.suggest;
   if (!s) return usage?.why && usage.samples ? `<div class="ui-help usage-suggest">${esc(usage.why)}</div>` : "";
-  if (!s.differs) return `<div class="ui-help usage-suggest">The reservation matches its use over ${esc(usage.days)} days.</div>`;
-  const capped = s.capped?.length ? ` Kept at its ${s.capped.map(k => k === "cpu" ? "CPU" : "memory").join(" and ")} maximum, which its use reaches.` : "";
-  return `<div class="usage-suggest between"><span class="ui-help">From ${esc(usage.days)} day${usage.days === 1 ? "" : "s"} of use, reserve
-      <b>${esc(editCpuWords(parseInt(s.cpu, 10)))}</b> CPU and <b>${esc(workloadMemory(parseInt(s.memory, 10)))}</b>.${esc(capped)}
+  if (!s.differs) return `<div class="ui-help usage-suggest">The reservation matches its use over ${esc(editDays(usage.days))}.</div>`;
+  // Kubernetes refuses a reservation above a limit: the suggestion stops at it.
+  const capped = (s.capped || []).map(k => k === "cpu" ? " Held at its CPU limit, which is set outside Homestead."
+    : " Held at Memory max: its use and headroom would pass it.").join("");
+  return `<div class="usage-suggest between"><span class="ui-help">From ${esc(editDays(usage.days))} of use, ${s.lowers ? "lower the reservation to" : "reserve"}
+      <b>${esc(editCpuWords(parseInt(s.cpu, 10)))}</b> CPU and <b>${esc(reservedMemory(parseInt(s.memory, 10)))}</b>${s.cpu_now_m || s.memory_now_mi
+        ? ` (now ${esc(s.cpu_now_m ? editCpuWords(s.cpu_now_m) : "none")} and ${esc(s.memory_now_mi ? reservedMemory(s.memory_now_mi) : "none")})` : ""}.${esc(capped)}
       Saving restarts the app.</span>
     <button class="btn sm" type="button" onclick="editUseSuggested(${index},${jsq(s.cpu)},${jsq(s.memory)})">Use suggested</button></div>`;
 }
@@ -199,7 +202,7 @@ window.FAILOVER_HELP = FAILOVER_HELP;
 
 /* Which apps fit first when the cluster is short of room. */
 const PRIORITY_HELP = {
-  critical: "Fits first after a host fails, and may evict a lower-tier app to fit. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
+  critical: "Fits first after a host fails, and may evict any pod of a lower tier to fit - low apps, and anything with no tier, Homestead included. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
   normal: "Fits in turn, as every app does by default.",
   low: "Waits for room and never evicts anything. For batch work and CI runners.",
 };
@@ -243,10 +246,11 @@ function placementSection(p, w, nodes, containers) {
           `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
         <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
     <div class="place-level"><div class="place-title">When the cluster is short of room</div>
-      <div class="place-grid failover"><div class="f">${w.priority === "other"
-          ? `<span class="mono">${esc(w.priority_class)}</span>`
-          : prioritySelect("e_priority", w.priority || "normal", `onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}</div>
-        <div class="dim small" id="e_priority_help">${esc(w.priority === "other" ? "A priority class Homestead does not keep; it is left as it is." : PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
+      <div class="place-grid failover"><div class="f">${w.priority === "other" || w.priority === "self"
+          ? `<span class="mono">${esc(w.priority_class || "no class")}</span>`
+          : prioritySelect("e_priority", w.priority || "normal", `aria-label="Tier when the cluster is short of room" aria-describedby="e_priority_help" onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}</div>
+        <div class="dim small" id="e_priority_help" aria-live="polite">${esc(w.priority === "self" ? "Set by Homestead's own manifest, which every upgrade applies."
+          : w.priority === "other" ? "A priority class Homestead does not keep; it is left as it is." : PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
     <div class="note" id="e_place_note" hidden></div></section>`;
 }
 /* From a container's menu: the editor, opened at its placement. */

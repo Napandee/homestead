@@ -42,20 +42,43 @@ class UsageTests(unittest.TestCase):
             usage.record([("lab", "web", container, cpu_m * (8 if spike else 1), mem_mi * (2 if spike else 1))],
                          now=NOW - days * DAY + i * usage.STEP)
 
-    def test_a_reading_is_kept_to_within_a_tenth(self):
+    def test_a_reading_is_kept_to_within_a_twentieth_either_way(self):
         for value in (1, 7.5, 100, 412, 4096):
-            top = usage._top(usage._bucket(value))
-            self.assertTrue(value <= top < value * usage.RATIO + 1e-9, (value, top))
+            mid = usage._mid(usage._bucket(value))
+            self.assertTrue(value / 1.05 - 1e-9 <= mid <= value * 1.05 + 1e-9, (value, mid))
 
-    def test_nothing_is_suggested_before_a_day_of_readings(self):
+    def test_steady_use_reads_as_itself_and_never_above_its_peak(self):
+        self.week()
+        found = usage.summary("lab", "web", "web", now=NOW)
+        self.assertLessEqual(found["cpu_p95_m"], found["cpu_max_m"])
+        self.assertTrue(95 <= found["cpu_p95_m"] <= 100, found["cpu_p95_m"])
+
+    def test_a_suggestion_waits_for_a_day_of_readings(self):
         self.week(days=1, spikes=0)
-        partial = usage.summary("lab", "web", "web", now=NOW - 1)
-        self.assertIn("suggest", partial)
+        self.assertIn("suggest", usage.summary("lab", "web", "web", now=NOW - 1))
         usage.bind(str(self.folder / "fresh"), server.parse_cpu, server.parse_mem)
         usage.record([("lab", "web", "web", 100, 400)], now=NOW)
         early = usage.summary("lab", "web", "web", now=NOW)
         self.assertNotIn("suggest", early)
-        self.assertIn("1 of 288", early["why"])
+        self.assertIn("0 hours so far", early["why"])
+
+    def test_three_copies_still_need_a_whole_day(self):
+        for i in range(100):
+            usage.record([("lab", "web", "web", 100, 400)] * 3, now=NOW - 100 * usage.STEP + i * usage.STEP)
+        found = usage.summary("lab", "web", "web", now=NOW)
+        self.assertEqual((300, 100), (found["samples"], found["rounds"]))
+        self.assertNotIn("suggest", found)
+
+    def test_a_limit_without_a_request_counts_as_the_reservation(self):
+        self.week()
+        found = usage.summary("lab", "web", "web", {}, {"cpu": "2", "memory": "2Gi"}, now=NOW)["suggest"]
+        self.assertEqual((2000, 2048, True), (found["cpu_now_m"], found["memory_now_mi"], found["lowers"]))
+
+    def test_a_reservation_close_to_the_suggestion_is_left_alone(self):
+        self.week()
+        first = usage.summary("lab", "web", "web", now=NOW)["suggest"]
+        near = {"cpu": f"{int(int(first['cpu'][:-1]) * 1.05)}m", "memory": f"{int(int(first['memory'][:-2]) * 0.95)}Mi"}
+        self.assertFalse(usage.summary("lab", "web", "web", near, now=NOW)["suggest"]["differs"])
 
     def test_a_container_never_seen_says_so(self):
         self.assertEqual(0, usage.summary("lab", "web", "web", now=NOW)["samples"])
@@ -65,8 +88,8 @@ class UsageTests(unittest.TestCase):
         self.week()
         found = usage.summary("lab", "web", "web", {"cpu": "50m", "memory": "128Mi"}, now=NOW)
         cpu, mem = int(found["suggest"]["cpu"][:-1]), int(found["suggest"]["memory"][:-2])
-        self.assertTrue(150 <= cpu <= 170, cpu)        # 100m x 1.5, within a bucket
-        self.assertTrue(500 <= mem <= 560, mem)        # 400Mi x 1.25, within a bucket
+        self.assertTrue(145 <= cpu <= 160, cpu)        # 100m x 1.5, within half a bucket
+        self.assertTrue(480 <= mem <= 528, mem)        # 400Mi x 1.25, within half a bucket
         self.assertEqual(0, cpu % usage.CPU_STEP_M)
         self.assertEqual(0, mem % usage.MEM_STEP_MI)
         self.assertTrue(found["suggest"]["differs"])

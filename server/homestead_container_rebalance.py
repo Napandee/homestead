@@ -19,8 +19,10 @@ goes to a host it is kept apart from. A host that already holds a copy of its vo
 is preferred, so its reads stay local.
 
 Standby hosts (avoid) are moved off first and never moved onto: an app on
-one is there because a main host was away, and any host that can take it is
-a better place for it.
+one is there because a main host was away, and a main host with room is a
+better place for it. Room is the point: a move off a standby host is made
+only while its new host stays under SPARE_ROOM, so emptying the spare never
+overloads the others - what does not fit stays on it.
 
 The job moves one container at a time with the same capacity check and
 placement as a manual move, waits until it runs on its new host, and stops
@@ -243,14 +245,14 @@ def _score(host, cpu_m, mem_b):
     return max(100 * cpu_m / host["cpu_total"], 100 * mem_b / host["mem_total"])
 
 
-STANDBY = 100      # what being a standby host adds to its load, so it is emptied first
+SPARE_ROOM = 90.0  # how full a main host may get from apps moved off a standby host
 
 
 def plan(exclude=(), avoid=()):
     hosts, apps = inventory()
     exclude, avoid = set(exclude or ()), set(avoid or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
-    score = lambda n: _score(hosts[n], *load[n]) + (STANDBY if n in avoid else 0)
+    score = lambda n: _score(hosts[n], *load[n])
     # satisfies() reads Homestead's own host summary (status, labels,
     # devices), not the Kubernetes Node.
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
@@ -267,8 +269,8 @@ def plan(exclude=(), avoid=()):
     moves, moved = [], set()
     while len(moves) < MAX_MOVES:
         best = None
-        # The busiest host first; when nothing of its can move, the next one.
-        for busiest in sorted(load, key=score, reverse=True):
+        # Standby hosts first, then the busiest; when nothing of one can move, the next.
+        for busiest in sorted(load, key=lambda n: (n in avoid, score(n)), reverse=True):
             for app in apps:
                 if app["host"] != busiest or app["why"] or app["id"] in exclude or app["id"] in moved:
                     continue
@@ -276,10 +278,13 @@ def plan(exclude=(), avoid=()):
                     after_from = _score(hosts[busiest], load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"])
                     after_to = _score(hosts[target], load[target][0] + app["cpu"], load[target][1] + app["mem"])
                     peak = max(after_from, after_to)
-                    gain = score(busiest) - peak
+                    # Off a standby host, any move that leaves room on the new
+                    # one is worth it; elsewhere, one that evens hosts out.
+                    gain = (SPARE_ROOM - after_to) if busiest in avoid else score(busiest) - peak
+                    worth = after_to <= SPARE_ROOM if busiest in avoid else gain >= GAIN
                     near = bool(app["near"] and target in app["near"])
                     key = (gain - (0 if near else 2), near)      # a host with its volumes is worth two points
-                    if gain >= GAIN and (best is None or key > best[0]):
+                    if worth and (best is None or key > best[0]):
                         best = (key, app, target, near)
             if best:
                 break

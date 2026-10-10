@@ -33,8 +33,9 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumes]
     verbs: [get, list, watch, patch]
-  # cordon / uncordon needs patch on the node object; removing a dead host
-  # deletes it, after a quorum and data-loss preflight refuses a live one
+  # cordon / uncordon needs patch on the node object, as does the hot-spare
+  # taint homestead.io/standby (homestead_placement_mode.py); removing a dead
+  # host deletes it, after a quorum and data-loss preflight refuses a live one
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch, patch, update, delete]
@@ -68,15 +69,15 @@ rules:
   - apiGroups: ["apps"]
     resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Priority tiers (homestead_priority.py): Homestead makes its three classes
-  # when a tier is first set, and reads them back. Creating cannot be limited
+  # Priority tiers (homestead_priority.py): Homestead makes its two classes
+  # when a tier is first used, and reads them back. Creating cannot be limited
   # by name; reading can, and nothing is updated or deleted.
   - apiGroups: ["scheduling.k8s.io"]
     resources: [priorityclasses]
     verbs: [create]
   - apiGroups: ["scheduling.k8s.io"]
     resources: [priorityclasses]
-    resourceNames: [homestead-critical, homestead-normal, homestead-low]
+    resourceNames: [homestead-critical, homestead-low]
     verbs: [get]
   # Read autoscaler ownership before allowing a workload rename.
   - apiGroups: ["autoscaling"]
