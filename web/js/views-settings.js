@@ -213,15 +213,21 @@ async function viewSettings() {
         <div class="srows">
           ${settingRow(`Share the work ${tip("Hot spare taints its hosts homestead.io/standby (PreferNoSchedule): the scheduler avoids them while another host has room, and uses them when none has. No app changes, so it works for apps Flux, Argo CD or Helm apply.")}`,
             `<div class="dim xs" id="set_place_text">${placeModeText(placeMode, placement)}</div>`,
-            `<select id="set_place_mode" ${can("admin") ? "" : "disabled"} onchange="placeModeChanged()">
+            `<select id="set_place_mode" aria-label="Share the work" aria-describedby="set_place_text" ${can("admin") ? "" : "disabled"} onchange="placeModeChanged()">
+              ${placeMode ? "" : '<option value="" selected>Not chosen yet</option>'}
               ${[["default", "Kubernetes default"], ["spread", "Spread by capacity"], ["standby", "Hot spare"]].map(([v, l]) =>
-                `<option value="${v}" ${(placeMode || "default") === v ? "selected" : ""}>${l}</option>`).join("")}
+                `<option value="${v}" ${placeMode === v ? "selected" : ""}>${l}</option>`).join("")}
             </select>`)}
           <div id="set_standby_row" ${placeMode === "standby" ? "" : "hidden"}>
             ${settingRow(`Standby hosts ${tip("Take apps only when the others cannot. A host is never made standby when no other host takes work.")}`,
               (placement?.notes || []).map(esc).join("; "),
-              `<div class="standby-hosts">${(placement?.hosts || []).map(h => `<label class="switch"><input type="checkbox" class="set_standby" value="${esc(h.name)}"
-                ${standbyHosts.has(h.name) ? "checked" : ""} ${can("admin") ? "" : "disabled"}> <span class="mono">${esc(h.name)}</span>${h.takes_work ? "" : ' <span class="dim xs">not taking work now</span>'}</label>`).join("")
+              // A standby host no longer in the cluster stays listed, ticked,
+              // so saving another section does not quietly drop it.
+              `<div class="standby-hosts">${[...(placement?.hosts || []),
+                  ...[...standbyHosts].filter(n => !(placement?.hosts || []).some(h => h.name === n)).map(name => ({ name, gone: true }))]
+                .map(h => `<label class="switch"><input type="checkbox" class="set_standby" value="${esc(h.name)}"
+                ${standbyHosts.has(h.name) ? "checked" : ""} ${can("admin") ? "" : "disabled"}> <span class="mono">${esc(h.name)}</span>${h.gone
+                  ? ' <span class="dim xs">not in this cluster</span>' : h.takes_work ? "" : ' <span class="dim xs">not taking work now</span>'}</label>`).join("")
                 || '<span class="dim xs">No hosts reported.</span>'}</div>`)}
           </div>
         </div>
@@ -803,11 +809,12 @@ const settingsKinds = () => new Set([...(STATE.settingsDirty || [])].map(key => 
 
 /* What each way of sharing the work does, with what it depends on here. */
 function placeModeText(mode, placement) {
-  if (mode === "standby") return "The standby hosts take apps only when the others cannot. When a host comes back, the rebalance moves apps off them first.";
+  if (mode === "standby") return "The standby hosts take apps only when the others cannot. Balance hosts moves apps off them first, and never onto them.";
   if (mode === "spread") {
     const n = placement?.unreserved || 0;
     return `Kubernetes places each app on the host with most room left, by what apps reserve.${n
-      ? ` ${n} app${n === 1 ? " reserves" : "s reserve"} nothing and ${n === 1 ? "is" : "are"} placed as if ${n === 1 ? "it uses" : "they use"} nothing: <a href="#" onclick="event.preventDefault();reservationsReview()">set reservations from use</a>.` : " Every app reserves something."}`;
+      ? ` ${n} app${n === 1 ? " reserves" : "s reserve"} nothing and ${n === 1 ? "is" : "are"} placed as if ${n === 1 ? "it uses" : "they use"} nothing.${can("operator")
+        ? ` ${UI.button("Set reservations from use…", "reservationsReview()", { kind: "sm" })}` : ""}` : " Every app reserves something."}`;
   }
   return mode ? "Kubernetes places apps as it does by default; placement is set app by app." : "Not chosen yet: Kubernetes places apps as it does by default.";
 }
@@ -818,7 +825,7 @@ window.placeModeChanged = () => {
   // Spreading or a spare is kept only by moving apps back after a host
   // returns; offer that, visibly, rather than leaving it off unseen.
   const back = $("#set_rebalance");
-  if (mode !== "default" && back?.value === "off") {
+  if ((mode === "spread" || mode === "standby") && back?.value === "off") {
     back.value = "suggest";
     back.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -846,6 +853,10 @@ async function settingsAppSave() {
   if ($("#set_site_name")) body.site_name = $("#set_site_name").value.trim();
   if ($("#set_rebalance")) body.placement = { ...(current.placement || {}), rebalance: $("#set_rebalance").value,
     ...($("#set_place_mode") ? { mode: $("#set_place_mode").value, standby_nodes: $$(".set_standby:checked").map(input => input.value) } : {}) };
+  if (body.placement?.mode === "standby" && !body.placement.standby_nodes.length) {
+    settingsTab("placement");
+    throw new Error("Tick at least one standby host, or choose another way to share the work");
+  }
   const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || body.thresholds || {}) } };
   STATE.data.appSettings = null;

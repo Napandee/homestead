@@ -2,6 +2,7 @@
 in step with it, and the rebalance emptying standby hosts first."""
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -14,7 +15,7 @@ from test_container_rebalance import Cluster, bind
 
 
 def node(name, ready=True, taints=None):
-    return {"metadata": {"name": name}, "spec": {"taints": taints or []},
+    return {"metadata": {"name": name, "resourceVersion": "7"}, "spec": {"taints": taints or []},
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
@@ -51,6 +52,19 @@ class TaintTests(unittest.TestCase):
         self.assertEqual(("PATCH", "/api/v1/nodes/pi", "application/merge-patch+json"), (method, path, ctype))
         self.assertEqual([THEIRS, OURS], body["spec"]["taints"])
         self.assertEqual("PreferNoSchedule", OURS["effect"])
+        # Refused if the node's taints changed since they were read.
+        self.assertEqual({"resourceVersion": "7"}, body["metadata"])
+
+    def test_a_refused_change_is_a_note_and_the_other_hosts_still_change(self):
+        def send(method, path, body, ctype):
+            if path.endswith("/pi"):
+                raise urllib.error.HTTPError(path, 409, "Conflict", {}, None)
+            self.sent.append(path)
+        mode.bind(None, send)
+        changed, notes = mode.reconcile([node("a"), node("pi"), node("nas")],
+                                        {"mode": "standby", "standby_nodes": ["pi", "nas"]})
+        self.assertEqual(["nas is now standby"], changed)
+        self.assertIn("pi was not changed this time", notes[-1])
 
     def test_leaving_standby_mode_removes_only_homesteads_taint(self):
         changed, _ = mode.reconcile([node("pi", taints=[THEIRS, OURS]), node("bare", taints=[OURS])], {"mode": "spread"})
@@ -96,6 +110,17 @@ class StandbyRebalanceTests(unittest.TestCase):
         moved = C.plan(avoid=["k1"])["moves"]
         self.assertTrue(moved)
         self.assertEqual({"k1"}, {m["from"] for m in moved})
+
+    def test_nothing_moves_off_a_standby_host_onto_one_that_would_be_too_full(self):
+        c = Cluster()
+        # The spare k3 runs the apps; k1 and k2 are past SPARE_ROOM already.
+        for p in c.pods:
+            p["spec"]["nodeName"] = "k3"
+        usage = {"k1": "15Gi", "k2": "15Gi", "k3": "11Gi"}
+        for row in c.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"]:
+            row["usage"]["memory"] = usage[row["metadata"]["name"]]
+        bind(c)
+        self.assertEqual([], C.plan(avoid=["k3"])["moves"])
 
 
 class TickTests(unittest.TestCase):

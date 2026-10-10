@@ -1,6 +1,6 @@
 # Settings
 
-Settings has eight sections: seven that change the cluster for everyone, and
+Settings has ten sections: nine that change the cluster for everyone, and
 **You**, which is yours and this browser's. The desktop top bar's gear opens
 **You**; on a phone, open Settings from **More** or your account icon.
 
@@ -14,6 +14,7 @@ Settings has eight sections: seven that change the cluster for everyone, and
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
 | **Connections** | UniFi Network, the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
+| **Troubleshooting** | bug reports and logs |
 | **You** | appearance, notifications on this device, refresh rate, your password and signing out |
 
 A section saves once: change what you like and a bar at its foot offers
@@ -169,10 +170,11 @@ offered in the setup guide once there are two hosts:
   cannot. Homestead gives each the taint `homestead.io/standby=true:PreferNoSchedule`:
   the scheduler avoids it while another host has room and uses it when none
   has. No app changes, so it works for apps Flux, Argo CD or Helm apply.
-  Homestead keeps the taints in step with the setting every minute, adding and
-  removing only its own, and never makes standby the last host taking work.
-  When a host comes back, Balance hosts moves apps off the standby hosts first,
-  and never onto them.
+  Homestead keeps the taints in step with the setting every minute: it adds
+  its own and removes any taint with the key `homestead.io/standby`, leaves
+  every other taint alone, and never makes standby the last host taking work.
+  Balance hosts always moves apps off standby hosts first - as far as the
+  other hosts stay under 90% full - and never onto them.
 
 The taint is soft on purpose: a hard `NoSchedule` would also keep DaemonSets -
 Longhorn's, Homestead's probe - from rolling out on that host. Choosing either

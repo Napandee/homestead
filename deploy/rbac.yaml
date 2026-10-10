@@ -33,8 +33,9 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumes]
     verbs: [get, list, watch, patch]
-  # cordon / uncordon needs patch on the node object; removing a dead host
-  # deletes it, after a quorum and data-loss preflight refuses a live one
+  # cordon / uncordon needs patch on the node object, as does the hot-spare
+  # taint homestead.io/standby (homestead_placement_mode.py); removing a dead
+  # host deletes it, after a quorum and data-loss preflight refuses a live one
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch, patch, update, delete]

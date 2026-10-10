@@ -235,9 +235,11 @@ kubectl delete clusterrolebinding/homestead clusterrole/homestead
 
 The `homestead-data` claim is kept until you delete it from Volumes.
 
-Two cluster-wide things Homestead may have made stay too. Apps using them keep
-running without them:
+Cluster-wide things Homestead may have made stay too: the two priority tiers
+and the hot-spare taint on standby hosts. Apps keep running without them; the
+second command removes the taint from every host that has it:
 
 ```bash
 kubectl delete priorityclass homestead-critical homestead-low --ignore-not-found
+kubectl taint nodes --all homestead.io/standby-
 ```

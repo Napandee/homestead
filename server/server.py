@@ -582,6 +582,7 @@ def save_app_settings(value):
             raise
         ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     _cache.pop("settings", None)
+    _cache.pop("placement", None)
     UPDATES.invalidate()
     # Standby hosts take their taint now, not at the next minute's look.
     try:
@@ -791,6 +792,10 @@ def standby_hosts():
 
 
 def placement_summary():
+    return cached("placement", 15, _placement_summary)
+
+
+def _placement_summary():
     """How hosts share the work, for Settings and the setup guide: each
     host's part, and how many apps reserve nothing at all - which spreading
     by capacity depends on."""
@@ -817,7 +822,12 @@ def recovery_tick(now=None):
     placement = settings.get("placement") or {}
     mode = placement.get("rebalance", "off")
     nodes = kget("/api/v1/nodes").get("items", [])
-    PLACEMODE.reconcile(nodes, placement)
+    # The taints are kept in step every minute; one that fails waits for
+    # the next, and must not stop hosts coming back from being noticed.
+    try:
+        PLACEMODE.reconcile(nodes, placement)
+    except Exception as error:
+        print(f"placement: {str(error)[:160]}", flush=True)
     standby = sorted(PLACEMODE.standby_of(placement))
     returned = RECOVERY.observe(nodes, now)
     if not returned or mode == "off":
