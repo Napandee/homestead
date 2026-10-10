@@ -59,14 +59,26 @@ class WindowTests(unittest.TestCase):
 
 class CronTests(unittest.TestCase):
     def test_a_nightly_job_fires_inside_the_window_and_not_outside(self):
-        self.assertTrue(recovery.fires_between("15 2 * * *", at(2), at(4)))
-        self.assertFalse(recovery.fires_between("15 5 * * *", at(2), at(4)))
-        self.assertTrue(recovery.fires_between("@daily", at(23) - 86400, at(1)))
+        self.assertTrue(recovery.fires_between("15 2 * * *", at(2), at(4), "UTC"))
+        self.assertFalse(recovery.fires_between("15 5 * * *", at(2), at(4), "UTC"))
+        self.assertTrue(recovery.fires_between("@daily", at(23) - 86400, at(1), "UTC"))
 
-    def test_days_of_the_week_and_steps(self):
-        self.assertFalse(recovery.fires_between("30 2 * * 1", at(2), at(4)))      # Mondays; this is a Wednesday
-        self.assertTrue(recovery.fires_between("30 2 * * 3", at(2), at(4)))
-        self.assertTrue(recovery.fires_between("*/20 * * * *", at(2, 1), at(2, 21)))
+    def test_days_of_the_week_by_number_or_name_and_steps(self):
+        self.assertFalse(recovery.fires_between("30 2 * * 1", at(2), at(4), "UTC"))      # Mondays; this is a Wednesday
+        self.assertTrue(recovery.fires_between("30 2 * * 3", at(2), at(4), "UTC"))
+        self.assertTrue(recovery.fires_between("30 2 * * WED", at(2), at(4), "UTC"))
+        self.assertFalse(recovery.fires_between("30 2 * OCT mon", at(2), at(4), "UTC"))
+        self.assertTrue(recovery.fires_between("*/20 * * * *", at(2, 1), at(2, 21), "UTC"))
+
+    def test_a_job_without_a_time_zone_is_read_on_the_clock_its_last_run_shows(self):
+        # 04:30 on a host in Berlin (CEST) is 02:30 UTC - inside the window.
+        self.assertTrue(recovery.fires_between("30 4 * * *", at(2), at(4), last="2026-10-06T02:30:00Z"))
+        # The same job on a host on UTC last ran at 04:30 UTC - after it.
+        self.assertFalse(recovery.fires_between("30 4 * * *", at(2), at(4), last="2026-10-06T04:30:00Z"))
+        # Never run yet: any offset may be the controller's, so it may run.
+        self.assertTrue(recovery.fires_between("30 4 * * *", at(2), at(4)))
+        # A last run the schedule cannot have made: the clock is unknown.
+        self.assertIsNone(recovery.fires_between("30 4 * * *", at(2), at(4), last="2026-10-06T04:31:00Z"))
 
     def test_a_job_in_its_own_time_zone(self):
         # 03:15 in London is 02:15 UTC in October (BST).
@@ -97,10 +109,16 @@ class HostTests(TempData):
         self.assertEqual({}, recovery.observe([node("a"), node("b")], at(1)))
 
     def test_a_host_ready_again_or_uncordoned_has_come_back(self):
+        recovery.observe([node("a"), node("b"), node("c")], at(0))
         recovery.observe([node("a"), node("b", ready=False), node("c", cordoned=True)], at(1))
         self.assertEqual({"b", "c"}, set(recovery.observe([node("a"), node("b"), node("c")], at(1, 5))))
 
-    def test_a_host_down_again_or_a_day_later_is_forgotten(self):
+    def test_a_new_host_finishing_joining_has_not_come_back(self):
+        recovery.observe([node("a"), node("new", ready=False)], at(1))
+        self.assertEqual({}, recovery.observe([node("a"), node("new")], at(1, 5)))
+
+    def test_a_host_down_again_or_a_week_later_is_forgotten(self):
+        recovery.observe([node("b")], at(0))
         recovery.observe([node("b", ready=False)], at(1))
         recovery.observe([node("b")], at(1, 5))
         self.assertEqual({}, recovery.observe([node("b", ready=False)], at(1, 10)))
@@ -110,6 +128,7 @@ class HostTests(TempData):
 
 class AlertTests(TempData):
     def back(self, moves):
+        recovery.observe([node("b")], at(0))
         recovery.observe([node("b", ready=False)], at(1))
         recovery.observe([node("b")], at(1, 5))
         recovery.suggest([{}] * moves, at(1, 5))
@@ -121,9 +140,10 @@ class AlertTests(TempData):
         self.assertIn("b is back: 3 containers", fact["title"])
         self.assertIn("Nothing moves until you review it", fact["body"])
 
-    def test_in_window_mode_it_says_when_they_move(self):
+    def test_in_window_mode_it_says_when_they_move_or_that_they_will_not(self):
         self.back(1)
-        self.assertIn("next maintenance window (02:00 UTC)", recovery.alert_facts("window", WINDOW)[0]["body"])
+        self.assertIn("next update window (02:00 UTC)", recovery.alert_facts("window", WINDOW)[0]["body"])
+        self.assertIn("no days set", recovery.alert_facts("window", {**WINDOW, "days": []})[0]["body"])
 
     def test_nothing_to_move_forgets_the_host_and_off_says_nothing(self):
         self.back(2)
@@ -137,7 +157,7 @@ class TickTests(TempData):
     """One pass of the leader's loop, against a fake cluster."""
     def setUp(self):
         super().setUp()
-        self.nodes = [node("a"), node("b", ready=False)]
+        self.nodes = [node("a"), node("b")]
         self.settings = {"placement": {"rebalance": "window"}, "updates": {"maintenance": WINDOW}}
         self.plans = []
         api = {"/apis/batch/v1/cronjobs": {"items": [cronjob("backup-web", "15 2 * * *", "web-data")]},
@@ -154,30 +174,53 @@ class TickTests(TempData):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_in_the_window_it_rebalances_once_leaving_apps_whose_backup_is_due(self):
+    def away_and_back(self):
+        server.recovery_tick(at(0))
+        self.nodes = [node("a"), node("b", ready=False)]
         server.recovery_tick(at(1))
         self.nodes = [node("a"), node("b")]
+
+    def test_in_the_window_it_rebalances_once_leaving_apps_whose_backup_is_due(self):
+        self.away_and_back()
         self.assertIsNone(server.recovery_tick(at(1, 30)))            # back, but outside the window
         self.assertEqual({"id": "job"}, server.recovery_tick(at(2, 5)))
         self.assertEqual(["lab/web"], self.plans[-1])
         server.start_container_rebalance.assert_called_once()
         self.assertIn("after b came back", server.start_container_rebalance.call_args[0][1])
         self.assertIsNone(server.recovery_tick(at(2, 30)))            # once per opening
+        # Remembered, so what the backup held back moves at the next opening.
+        self.assertEqual({"b"}, set(recovery.observe_returned()))
+        self.assertEqual({"id": "job"}, server.recovery_tick(at(2, 5) + 86400))
+
+    def test_a_failed_start_is_tried_again_in_the_same_window(self):
+        self.away_and_back()
+        with mock.patch.object(server, "start_container_rebalance", side_effect=RuntimeError("API down")):
+            with self.assertRaises(RuntimeError):
+                server.recovery_tick(at(2, 5))
+        self.assertEqual({"id": "job"}, server.recovery_tick(at(2, 6)))
 
     def test_suggest_mode_never_moves_anything_itself(self):
         self.settings["placement"]["rebalance"] = "suggest"
-        server.recovery_tick(at(1))
-        self.nodes = [node("a"), node("b")]
+        self.away_and_back()
         server.recovery_tick(at(2, 5))
         server.start_container_rebalance.assert_not_called()
         self.assertTrue(recovery.alert_facts("suggest"))
 
-    def test_a_rebalance_already_running_is_left_to_finish(self):
-        server.recovery_tick(at(1))
-        self.nodes = [node("a"), node("b")]
-        with mock.patch.object(server.OPS, "list_operations", return_value=[{"kind": server.CREBALANCE.KIND, "status": "running"}]):
-            self.assertIsNone(server.recovery_tick(at(2, 5)))
+    def test_other_work_moving_apps_or_hosts_is_left_to_finish(self):
+        self.away_and_back()
+        for kind in (server.CREBALANCE.KIND, "os-rollout", server.AUTOUPDATE.KIND, server.RESERVE.KIND):
+            with mock.patch.object(server.OPS, "list_operations", return_value=[{"kind": kind, "status": "running"}]):
+                self.assertIsNone(server.recovery_tick(at(2, 5)), kind)
         server.start_container_rebalance.assert_not_called()
+
+    def test_no_automatic_update_starts_while_a_rebalance_runs(self):
+        running = [{"kind": server.CREBALANCE.KIND, "status": "running"}]
+        with mock.patch.object(server.OPS, "list_operations", return_value=running), \
+                mock.patch.object(server, "update_policy_status", return_value={"window_open": True, "policy": "maintenance_window"}), \
+                mock.patch.object(server.AUTOUPDATE, "tidy"), \
+                mock.patch.object(server.AUTOUPDATE, "pick") as pick:
+            self.assertIsNone(server.autoupdate_tick())
+        pick.assert_not_called()
 
 
 class SettingsTests(unittest.TestCase):

@@ -112,6 +112,11 @@ Service's ports on every node, the same ports the app needs there. It needs no
 Service - it answers on the node itself - so remove the Service under
 **Networking**. Moving such an app to k3s leaves the Service behind.
 
+**Apps restarted during the night after a host was down.** That is the job
+*Rebalance N containers after host came back*, from **Settings → Updates →
+When a host comes back → In the update window**: it moves containers back onto
+the returned host. Set it to **Suggest** or **No** to stop it.
+
 **Set reservations from use stopped part way.** One app did not run again
 within ten minutes of its new reservation; the job names it, and the apps after
 it were not changed. Look at that app's events, then review again: apps already

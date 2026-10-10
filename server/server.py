@@ -792,7 +792,10 @@ def recovery_tick(now=None):
     returned = RECOVERY.observe(kget("/api/v1/nodes").get("items", []), now)
     if not returned or mode == "off":
         return None
-    if any(i.get("kind") == CREBALANCE.KIND and i.get("status") not in OPS.TERMINAL for i in OPS.list_operations()):
+    # Not beside other work that moves or restarts apps or hosts: a host
+    # uncordoned mid OS rollout is "back", and the next one is about to drain.
+    waits_for = (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster")
+    if any(i.get("kind") in waits_for and i.get("status") not in OPS.TERMINAL for i in OPS.list_operations()):
         return None
     # A plan reads every pod and volume: worked out again every five minutes.
     if now - _recovery_planned[0] >= 300:
@@ -806,10 +809,9 @@ def recovery_tick(now=None):
     keep = RECOVERY.guarded(kget("/apis/batch/v1/cronjobs").get("items", []),
                             kget("/apis/apps/v1/deployments").get("items", []), now, closes)
     plan = CREBALANCE.plan(sorted(keep))
+    started = start_container_rebalance(plan, f" after {', '.join(sorted(returned))} came back") if plan["moves"] else None
     RECOVERY.ran(key)
-    if plan["moves"]:
-        return start_container_rebalance(plan, f" after {', '.join(sorted(returned))} came back")
-    return None
+    return started
 
 
 def _recovery_loop():
@@ -7369,6 +7371,9 @@ def autoupdate_tick():
     operations = OPS.list_operations()
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
+    # An app is not updated while a rebalance may be moving it.
+    if any(i.get("kind") == CREBALANCE.KIND and i.get("status") not in OPS.TERMINAL for i in operations):
+        return None
     chosen = AUTOUPDATE.pick(cached("wl", 5, get_workloads), report, UPTIME.report(), operations,
                              status["window_open"], status["policy"])
     if not chosen:
