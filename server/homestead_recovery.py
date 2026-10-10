@@ -9,14 +9,16 @@ cordoned - and then, as settings.placement.rebalance says:
 * off: nothing.
 * suggest: an alert says the host is back and how many containers the
   container rebalance would move; nothing moves until someone reviews it.
-* window: the same alert, and in the next maintenance window the rebalance
-  runs by itself, as the job a person would start, leaving out any app whose
-  backup job is due before the window closes - a backup has to run on the
-  app's host while its volume is attached there, and a move under it would
-  fail it or the move.
+* window: the same alert, and in each opening of the maintenance window the
+  rebalance runs by itself, as the job a person would start, leaving out any
+  app whose backup job is due before the window closes - a backup has to run
+  on the app's host while its volume is attached there, and a move under it
+  would fail it or the move.
 
-A returned host is remembered for RETURN_KEEP seconds; once the rebalance
-finds nothing worth moving, or has run, it is forgotten.
+A returned host is remembered until the rebalance finds nothing worth moving,
+or for RETURN_KEEP at most - long enough for a weekly window. A host is "back"
+only once it has been seen taking work before: one joining for the first time
+is new, not back.
 """
 import calendar
 import datetime
@@ -31,7 +33,7 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 FILE = "recovery.json"
 MODES = ("off", "suggest", "window")
-RETURN_KEEP = 24 * 3600
+RETURN_KEEP = 7 * 86400
 _lock = threading.Lock()
 
 
@@ -49,11 +51,12 @@ def _load():
         with open(_path(), encoding="utf-8") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
-            return {"hosts": data.get("hosts") or {}, "returned": data.get("returned") or {},
-                    "suggestion": data.get("suggestion") or {}, "ran": data.get("ran") or ""}
+            return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
+                    "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
+                    "ran": data.get("ran") or ""}
     except (OSError, ValueError):
         pass
-    return {"hosts": {}, "returned": {}, "suggestion": {}, "ran": ""}
+    return {"hosts": {}, "worked": [], "returned": {}, "suggestion": {}, "ran": ""}
 
 
 def _save(data):
@@ -89,8 +92,15 @@ MACROS = {"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 *
           "@daily": "0 0 * * *", "@midnight": "0 0 * * *", "@hourly": "0 * * * *"}
 
 
-def _field(text, lo, hi):
+# Names Kubernetes' cron accepts for months and days of the week.
+MONTHS = {m: i + 1 for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())}
+DAYS = {d: i for i, d in enumerate("sun mon tue wed thu fri sat".split())}
+
+
+def _field(text, lo, hi, names=None):
     out = set()
+    for name, number in (names or {}).items():
+        text = text.lower().replace(name, str(number))
     for part in text.split(","):
         rng, _, step = part.partition("/")
         step = int(step) if step else 1
@@ -107,42 +117,58 @@ def _field(text, lo, hi):
     return out
 
 
-def fires_between(schedule, start, end, tz=""):
+def fires_between(schedule, start, end, tz="", last=""):
     """Whether a CronJob's schedule fires in [start, end). None when the
     schedule or its time zone cannot be read - the caller treats that as
-    'it may', since a backup missed is worse than a move put off."""
+    'it may', since a backup missed is worse than a move put off.
+
+    Without a time zone of its own, Kubernetes reads a schedule on the clock
+    of the host its controller runs on - on k3s, often local time, not UTC.
+    That offset is not known, so every offset the job's last run (last) is
+    consistent with counts; with no last run, every offset does."""
     text = MACROS.get(str(schedule).strip(), str(schedule).strip())
     parts = text.split()
     if len(parts) != 5:
         return None
     try:
         minute, hour, dom, month = (_field(parts[0], 0, 59), _field(parts[1], 0, 23),
-                                    _field(parts[2], 1, 31), _field(parts[3], 1, 12))
-        dow = {d % 7 for d in _field(parts[4], 0, 7)}
+                                    _field(parts[2], 1, 31), _field(parts[3], 1, 12, MONTHS))
+        dow = {d % 7 for d in _field(parts[4], 0, 7, DAYS)}
     except ValueError:
         return None
-    zone = None
-    if tz and tz not in ("UTC", "Etc/UTC"):
-        try:
-            zone = zoneinfo.ZoneInfo(tz)
-        except Exception:
-            return None
     any_dom, any_dow = parts[2] in ("*", "?"), parts[4] in ("*", "?")
-    t = int(start) - int(start) % 60
-    while t < end:
-        if zone is not None:
-            local = datetime.datetime.fromtimestamp(t, zone)
-            fields = (local.minute, local.hour, local.day, local.month, (local.weekday() + 1) % 7)
-        else:
-            g = time.gmtime(t)
-            fields = (g.tm_min, g.tm_hour, g.tm_mday, g.tm_mon, (g.tm_wday + 1) % 7)
-        m, h, d, mo, wd = fields
+
+    def matches(m, h, d, mo, wd):
         # Cron's rule: with both day fields restricted, either one will do.
         day = (wd in dow) if any_dom else (d in dom) if any_dow else (d in dom or wd in dow)
-        if m in minute and h in hour and mo in month and day:
-            return True
-        t += 60
-    return False
+        return m in minute and h in hour and mo in month and day
+
+    def on_clock(t, offset):
+        g = time.gmtime(t + offset)
+        return g.tm_min, g.tm_hour, g.tm_mday, g.tm_mon, (g.tm_wday + 1) % 7
+
+    first = int(start) - int(start) % 60
+    if tz:
+        if tz in ("UTC", "Etc/UTC"):
+            local = lambda t: on_clock(t, 0)
+        else:
+            try:
+                zone = zoneinfo.ZoneInfo(tz)
+            except Exception:
+                return None
+            local = lambda t: (lambda x: (x.minute, x.hour, x.day, x.month, (x.weekday() + 1) % 7))(
+                datetime.datetime.fromtimestamp(t, zone))
+        return any(matches(*local(t)) for t in range(first, int(end), 60))
+    offsets = range(-12 * 3600, 14 * 3600 + 1, 900)
+    try:
+        ran = calendar.timegm(time.strptime(str(last), "%Y-%m-%dT%H:%M:%SZ")) if last else None
+    except ValueError:
+        ran = None
+    if ran is not None:
+        offsets = [o for o in offsets if matches(*on_clock(ran, o))]
+        if not offsets:
+            return None
+    return any(matches(*on_clock(t, o)) for t in range(first, int(end), 60) for o in offsets)
 
 
 def guarded(cronjobs, deployments, start, end):
@@ -167,10 +193,14 @@ def guarded(cronjobs, deployments, start, end):
             apps |= claims.get((meta.get("namespace"), claim), set())
         if not apps:
             continue
-        due = bool(status.get("active")) or fires_between(spec.get("schedule", ""), start, end, spec.get("timeZone") or "")
+        due = True if status.get("active") else fires_between(spec.get("schedule", ""), start, end, spec.get("timeZone") or "",
+                                                               status.get("lastScheduleTime") or "")
         if due is not False:
+            why = (f"its scheduled job {meta.get('name')} is running" if status.get("active")
+                   else f"its scheduled job {meta.get('name')} runs before the window closes" if due
+                   else f"its scheduled job {meta.get('name')} has a schedule Homestead cannot read, so it may run then")
             for app in apps:
-                out.setdefault(app, f"its scheduled job {meta.get('name')} runs before the window closes")
+                out.setdefault(app, why)
     return out
 
 
@@ -183,21 +213,24 @@ def _takes_work(node):
 
 def observe(nodes, now=None):
     """Notes each host that takes work again; returns the hosts back within
-    RETURN_KEEP. A host seen for the first time has not come back."""
+    RETURN_KEEP. A host seen for the first time has not come back, and nor
+    has one taking work for the first time - a new host finishing joining."""
     now = int(now or time.time())
     with _lock:
         data = _load()
-        seen = {}
+        seen, worked = {}, set(data["worked"])
         for node in nodes:
             name = (node.get("metadata") or {}).get("name")
             if not name:
                 continue
             seen[name] = _takes_work(node)
-            if seen[name] and data["hosts"].get(name) is False:
+            if seen[name] and data["hosts"].get(name) is False and name in worked:
                 data["returned"][name] = now
             if not seen[name]:
                 data["returned"].pop(name, None)
-        data["hosts"] = seen
+            if seen[name]:
+                worked.add(name)
+        data["hosts"], data["worked"] = seen, sorted(worked & set(seen))
         data["returned"] = {n: t for n, t in data["returned"].items() if now - t < RETURN_KEEP and n in seen}
         if not data["returned"]:
             data["suggestion"] = {}
@@ -227,10 +260,12 @@ def observe_returned():
 
 
 def ran(key):
-    """The window's rebalance started: the hosts back are dealt with."""
+    """This opening of the window has had its rebalance. The hosts back stay
+    remembered: apps a backup kept where they were are moved at the next
+    opening, and the next plan that finds nothing to move forgets them."""
     with _lock:
         data = _load()
-        data.update(returned={}, suggestion={}, ran=key)
+        data["ran"] = key
         _save(data)
 
 
@@ -249,10 +284,15 @@ def alert_facts(mode, maintenance=None):
         return []
     hosts, moves = found["hosts"], found["moves"]
     who = " and ".join(hosts) if len(hosts) < 3 else f"{len(hosts)} hosts"
-    then = (f"They move in the next maintenance window ({maintenance['start']} UTC) unless you start it sooner."
-            if mode == "window" and maintenance else "Nothing moves until you review it.")
+    if mode != "window" or not maintenance:
+        then = "Nothing moves until you review it."
+    elif not maintenance.get("days"):
+        then = "The update window has no days set, so nothing moves by itself; review it."
+    else:
+        then = (f"They move in the next update window ({maintenance['start']} UTC) unless you start it sooner - "
+                "apart from any whose scheduled job runs then.")
     return [{"key": "recovery:rebalance", "category": "joins", "severity": "info",
              "title": f"{who} {'is' if len(hosts) == 1 else 'are'} back: {moves} container{'' if moves == 1 else 's'} could move to even out the hosts",
              "body": f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away. "
                      f"Balance hosts shows the moves; each restarts its container once. {then}",
-             "resolved": "The hosts are even again", "href": "/containers", "signals": {"moves": moves}}]
+             "resolved": "No containers need to move back now", "href": "/containers", "signals": {"moves": moves}}]

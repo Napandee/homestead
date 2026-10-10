@@ -3,19 +3,22 @@
 When a host fails, its apps start on the others; if those cannot hold them
 all, the scheduler fits them in its own order, and the home automation can
 wait behind a media scanner (#347). Kubernetes orders pods by their
-PriorityClass, so Homestead keeps three of its own:
+PriorityClass, so Homestead keeps two of its own and calls having none a tier:
 
-* critical - fits first, and may evict lower pods to fit (home automation,
-  the password manager, a database, the tunnel);
-* normal - every app without a class, as now: the class's value is 0, the
-  same as having none, so "no class" and "normal" mean one thing;
-* low - waits, and never evicts anything (preemptionPolicy Never): batch
-  work and CI runners.
+* critical (homestead-critical) - fits first, and may evict any pod of lower
+  priority to fit: low apps, and every pod with no class - other apps, and
+  infrastructure such as Homestead itself. For what the house depends on.
+* normal - no class at all, as every app has now. On a cluster with a
+  globalDefault class of its own, "no class" means that one.
+* low (homestead-low) - waits, and never evicts anything (preemptionPolicy
+  Never): batch work and CI runners.
 
-None is the cluster's globalDefault, which would apply to every new pod -
-system pods included. An app's tier is read from its pod spec, so a class
-set by hand or by Flux is shown as it is; a class Homestead does not keep is
-shown by name and left alone.
+Homestead makes neither the cluster's globalDefault, which would apply to
+every new pod - system pods included - and makes each only when it is first
+used. An app's tier is read from its pod spec, so a class set by hand or by
+Flux is shown as it is; a class Homestead does not keep is shown by name and
+left alone. homestead-normal, which earlier versions made, still reads as
+normal.
 
 Changing a tier changes the pod template, so the app restarts once. Like the
 reservations (homestead_requests), the tiers are reviewed as a list and
@@ -35,12 +38,11 @@ SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
 TIERS = {
     "critical": {"name": "homestead-critical", "value": 1000, "preemptionPolicy": "PreemptLowerPriority",
                  "description": "Homestead: fits first, and may evict lower-priority pods to fit."},
-    "normal": {"name": "homestead-normal", "value": 0, "preemptionPolicy": "PreemptLowerPriority",
-               "description": "Homestead: the same as no class at all."},
+    "normal": {"name": None},
     "low": {"name": "homestead-low", "value": -1000, "preemptionPolicy": "Never",
             "description": "Homestead: waits for room, and never evicts anything."},
 }
-BY_CLASS = {spec["name"]: tier for tier, spec in TIERS.items()}
+BY_CLASS = {"homestead-critical": "critical", "homestead-normal": "normal", "homestead-low": "low"}
 # What an app is, from its name or image, when it is likely critical or low.
 # A suggestion only: it is ticked in the review, never applied unseen.
 HINTS = [
@@ -48,6 +50,8 @@ HINTS = [
                             r"postgres|mariadb|mysql|cloudflared|tailscale|wireguard|pi-?hole|adguard")),
     ("low", re.compile(r"actions-runner|gitlab-runner|renovate|\brunner\b")),
 ]
+# A helper beside one of those - its exporter, backup or sync - is not it.
+HELPER = re.compile(r"(exporter|backup|sync|metrics|dashboard|\bui|admin)\b")
 WHY = {"critical": "looks like home automation, a password manager, a database, DNS or a tunnel",
        "low": "looks like batch or CI work"}
 
@@ -56,13 +60,16 @@ managed_by = lambda dep: {}
 own = ("", "")
 system_ns = frozenset()
 is_leader = lambda: True
+guard = lambda dep, ns, role: None   # as in homestead_requests: may this role change it
 
 
-def bind(_kget, _ksend, _managed_by, _own, _system_ns, _is_leader=None):
-    global kget, ksend, managed_by, own, system_ns, is_leader
+def bind(_kget, _ksend, _managed_by, _own, _system_ns, _is_leader=None, _guard=None):
+    global kget, ksend, managed_by, own, system_ns, is_leader, guard
     kget, ksend, managed_by, own, system_ns = _kget, _ksend, _managed_by, tuple(_own), frozenset(_system_ns)
     if _is_leader:
         is_leader = _is_leader
+    if _guard:
+        guard = _guard
 
 
 def tier_of(pod_spec):
@@ -79,29 +86,49 @@ def suggestion(dep):
     meta = dep.get("metadata") or {}
     images = " ".join(c.get("image", "") for c in (((dep.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or [])
     text = f"{meta.get('name', '')} {images}".lower()
+    if HELPER.search(meta.get("name", "").lower()):
+        return None, ""
     for tier, pattern in HINTS:
         if pattern.search(text):
             return tier, WHY[tier]
     return None, ""
 
 
-def ensure():
-    """The three classes, made where missing. One that exists with another
-    value is kept as it is - someone made it - and said so."""
+NO_PERMISSION = ("Homestead may not make priority classes yet: its permissions predate this version. "
+                 "Settings → Homestead → About this installation → Permissions says how to bring them up to date.")
+
+
+def ensure(tiers=("critical", "low")):
+    """The classes these tiers use, made where missing. One that exists with
+    another value or policy is kept as it is - someone made it - and said so."""
     notes = []
-    for tier, spec in TIERS.items():
+    for tier in tiers:
+        spec = TIERS[tier]
+        if not spec["name"]:
+            continue
         try:
             found = kget(f"/apis/scheduling.k8s.io/v1/priorityclasses/{spec['name']}")
-            if found.get("value") != spec["value"]:
-                notes.append(f"{spec['name']} exists with value {found.get('value')}; it is kept")
+            if (found.get("value"), found.get("preemptionPolicy", "PreemptLowerPriority")) != (spec["value"], spec["preemptionPolicy"]):
+                notes.append(f"{spec['name']} exists with value {found.get('value')} and "
+                             f"{found.get('preemptionPolicy', 'PreemptLowerPriority')}; it is kept")
+            continue
         except urllib.error.HTTPError as error:
+            if error.code == 403:
+                raise PermissionError(NO_PERMISSION)
             if error.code != 404:
                 raise
+        try:
             ksend("POST", "/apis/scheduling.k8s.io/v1/priorityclasses", {
                 "apiVersion": "scheduling.k8s.io/v1", "kind": "PriorityClass",
                 "metadata": {"name": spec["name"], "labels": {"app.kubernetes.io/managed-by": "homestead"}},
                 "value": spec["value"], "preemptionPolicy": spec["preemptionPolicy"],
                 "globalDefault": False, "description": spec["description"]})
+        except urllib.error.HTTPError as error:
+            if error.code == 403:
+                raise PermissionError(NO_PERMISSION)
+            # Made meanwhile by an edit or another job: there now, as wanted.
+            if error.code != 409:
+                raise
     return notes
 
 
@@ -116,10 +143,11 @@ def _pod_spec(dep):
     return ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
 
 
-def plan(chosen=None):
+def plan(chosen=None, role=None):
     """Every app with its tier now, the tier suggested, and the tier it is
     set to in the review: by default the suggestion for an app still at
-    normal, else what it has. chosen maps an app id to a tier."""
+    normal, else what it has. chosen maps an app id to a tier. role: who
+    asks; apps they may not change are left out, saying why."""
     apps, skipped = [], []
     for dep in _deployments():
         meta = dep.get("metadata") or {}
@@ -132,12 +160,18 @@ def plan(chosen=None):
         if current == "other":
             skipped.append({"id": app_id, "why": f"it uses the class {cls}, which Homestead does not keep; it is left alone"})
             continue
+        try:
+            guard(dep, ns, role)
+        except PermissionError as error:
+            skipped.append({"id": app_id, "why": str(error)})
+            continue
         owner = managed_by(dep)
         row = {"id": app_id, "ns": ns, "name": name, "current": current, "suggested": suggested or "", "why": why,
                "managed": owner.get("by", "")}
         if owner:
             where = f" ({owner['source']})" if owner.get("source") else ""
-            row["note"] = f"{owner['by']} applies it{where}; set priorityClassName there"
+            row["note"] = (f"{owner['by']} applies it{where}; set priorityClassName there" if owner.get("detected")
+                           else f"marked as updated by {owner['by']}; set priorityClassName there")
         default = suggested if suggested and current == "normal" and not owner else current
         row["tier"] = (chosen or {}).get(app_id, default) if not owner else current
         if row["tier"] not in TIERS:
@@ -145,6 +179,11 @@ def plan(chosen=None):
         apps.append(row)
     apps.sort(key=lambda a: ({"critical": 0, "normal": 1, "low": 2}[a["tier"]], a["id"]))
     changes = [a for a in apps if a["tier"] != a["current"]]
+    # The suggestions never start more than one run may change.
+    if chosen is None and len(changes) > MAX_APPS:
+        for app in changes[MAX_APPS:]:
+            app["tier"] = app["current"]
+        changes = changes[:MAX_APPS]
     return {"apps": apps, "skipped": sorted(skipped, key=lambda s: s["id"]), "max": MAX_APPS,
             "changes": len(changes), "review_token": review_token(changes)}
 
@@ -154,7 +193,7 @@ def review_token(changes):
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()[:20]
 
 
-def reviewed(changes, token):
+def reviewed(changes, token, role=None):
     """The tier changes a person reviewed, each app checked as it is now."""
     if not isinstance(changes, list) or not changes:
         raise ValueError("Change at least one app's tier")
@@ -168,12 +207,16 @@ def reviewed(changes, token):
     out = []
     for c in changes:
         ns, name = c["id"].split("/", 1)
-        check(ns, name, c["current"])
+        check(ns, name, c["current"], role)
         out.append({"id": c["id"], "ns": ns, "name": name, "current": c["current"], "tier": c["tier"]})
     return out
 
 
-def check(ns, name, current):
+def check(ns, name, current, role=None, tier=None):
+    """One app as it is now: still one Homestead - and the person who asked -
+    may change, and still in the tier it was reviewed in. Returns "applied"
+    when it already has the new tier: a change whose answer was lost is waited
+    for, not counted as skipped."""
     app_id = f"{ns}/{name}"
     try:
         dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
@@ -183,15 +226,22 @@ def check(ns, name, current):
         raise
     if (ns, name) == own or ns in system_ns or ns.startswith(SYSTEM) or managed_by(dep):
         raise ValueError(f"{app_id} is not one Homestead changes")
-    if tier_of(_pod_spec(dep))[0] != current:
+    guard(dep, ns, role)
+    now = tier_of(_pod_spec(dep))[0]
+    if tier and now == tier:
+        return "applied"
+    if now != current:
         raise ValueError(f"{app_id}'s tier changed since the review")
+    return "ready"
 
 
 def patch(app):
-    """Normal is no class at all: the class is removed rather than set."""
+    """Normal is no class at all: the class is removed rather than set. A
+    number written into the template (priority, copied from a pod) goes too:
+    admission refuses a pod whose number is not its class's."""
     cls = None if app["tier"] == "normal" else TIERS[app["tier"]]["name"]
     ksend("PATCH", f"/apis/apps/v1/namespaces/{app['ns']}/deployments/{app['name']}",
-          {"spec": {"template": {"spec": {"priorityClassName": cls}}}},
+          {"spec": {"template": {"spec": {"priorityClassName": cls, "priority": None}}}},
           ctype="application/strategic-merge-patch+json")
 
 
@@ -210,7 +260,10 @@ def status(item):
     if not ref.get("classes"):
         if not is_leader():
             return "running", 0, item.get("message") or "Making the priority classes"
-        ref["notes"] = ensure()
+        try:
+            ref["notes"] = ensure(sorted({a["tier"] for a in apps}))
+        except PermissionError as error:
+            return "failed", 0, str(error)
         ref["classes"] = True
         return "running", 0, "Priority classes ready" + (f"; {'; '.join(ref['notes'])}" if ref["notes"] else "")
     if i >= len(apps):
@@ -224,12 +277,12 @@ def status(item):
     stage, now = ref.get("stage", "apply"), time.time()
     if stage == "apply":
         try:
-            check(app["ns"], app["name"], app["current"])
-            patch(app)
-        except (ValueError, urllib.error.HTTPError) as error:
-            if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 409, 422):
+            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"]) == "ready":
+                patch(app)
+        except (ValueError, PermissionError, urllib.error.HTTPError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 404, 409, 422):
                 raise
-            why = str(error) if isinstance(error, ValueError) else f"Kubernetes refused it ({error.code})"
+            why = f"Kubernetes refused it ({error.code})" if isinstance(error, urllib.error.HTTPError) else str(error)
             ref.setdefault("skipped", []).append(f"{app['id']}: {why[:160]}")
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {app['id']}: {why[:160]}"

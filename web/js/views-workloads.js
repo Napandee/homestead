@@ -1079,7 +1079,7 @@ window.balanceStart = async () => {
    ones whose reservation only differs from their use are offered unticked,
    as someone may have set it on purpose. Ticking plans again, so the review
    token covers exactly what is started. */
-const RESERVE = { chosen: null, plan: null };
+const RESERVE = { chosen: null, plan: null, asked: 0 };
 window.reservationsReview = async () => {
   RESERVE.chosen = null; RESERVE.plan = null;
   modal("Set reservations from use", `<div id="resPlan"><div class="empty"><span class="spin2"></span> Reading a week of use…</div></div>
@@ -1089,36 +1089,43 @@ window.reservationsReview = async () => {
 async function reservationsPlan() {
   const pane = $("#resPlan");
   if (!pane) return;
+  // Each tick plans again; an answer to an earlier tick is dropped.
+  const asked = ++RESERVE.asked;
   const query = RESERVE.chosen ? `?${new URLSearchParams({ chosen: [...RESERVE.chosen].join(",") })}` : "";
-  try { RESERVE.plan = await api(`/api/workloads/requests/plan${query}`); }
-  catch (e) { pane.innerHTML = UI.callout("bad", "Could not read the apps' use", esc(e.message)); return; }
-  if (!RESERVE.chosen) RESERVE.chosen = new Set(RESERVE.plan.apps.filter(a => a.chosen).map(a => a.id));
-  pane.innerHTML = reservationsHtml(RESERVE.plan);
+  let plan;
+  try { plan = await api(`/api/workloads/requests/plan${query}`); }
+  catch (e) { if (asked === RESERVE.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps' use", esc(e.message)); return; }
+  if (asked !== RESERVE.asked || !$("#resPlan")) return;
+  RESERVE.plan = plan;
+  if (!RESERVE.chosen) RESERVE.chosen = new Set(plan.apps.filter(a => a.chosen).map(a => a.id));
+  pane.innerHTML = reservationsHtml(plan);
   const go = $("#reserveGo");
-  if (go) go.disabled = !RESERVE.chosen.size;
+  if (go) go.disabled = !RESERVE.chosen.size || RESERVE.chosen.size > plan.max;
   window.applyRole?.();
 }
 const reserveCpu = text => { const m = parseInt(text, 10); return !text ? "none" : /m$/.test(text) ? (m >= 1000 ? `${+(m / 1000).toFixed(2)} cores` : `${+(m / 10).toFixed(1)}%`) : `${text} cores`; };
-const reserveMem = text => !text ? "none" : /Mi$/.test(text) ? workloadMemory(parseInt(text, 10)) : text;
+const reserveMem = text => !text ? "none" : /Mi$/.test(text) ? reservedMemory(parseInt(text, 10)) : text;
 function reservationsHtml(plan) {
   const apps = plan.apps || [], chosen = apps.filter(a => RESERVE.chosen.has(a.id));
+  const over = chosen.length > plan.max;
   const rows = apps.map((a, i) => [
     `<label class="rb-app"><input type="checkbox" id="res_${i}" ${RESERVE.chosen.has(a.id) ? "checked" : ""}
       onchange="reservationsItem(${jsq(a.id)},this.checked)"> <span class="mono">${esc(a.id)}</span></label>${a.missing ? ` ${UI.chip("reserves nothing", "warn")}` : ""}`,
     a.changes.map(c => `<div>${a.changes.length > 1 ? `<span class="mono">${esc(c.container)}</span> ` : ""}
       <span>${esc(reserveCpu(c.cpu_now))} → <b>${esc(reserveCpu(c.cpu))}</b> CPU · ${esc(reserveMem(c.memory_now))} → <b>${esc(reserveMem(c.memory))}</b></span>
-      <span class="sub">uses up to ${esc(reserveCpu(`${c.cpu_p95_m}m`))} and ${esc(workloadMemory(c.mem_p95_mi))}, peak ${esc(workloadMemory(c.mem_max_mi))} · ${esc(c.days)} day${c.days === 1 ? "" : "s"}${c.capped.length ? " · kept at its maximum" : ""}</span></div>`).join("")]);
+      <span class="sub">usually at or under ${esc(reserveCpu(`${c.cpu_p95_m}m`))} and ${esc(reservedMemory(c.mem_p95_mi))}, peak ${esc(reservedMemory(c.mem_max_mi))} over ${esc(c.days)} day${c.days === 1 ? "" : "s"}${c.lowers ? " · lowers it" : ""}${c.capped.length ? " · held at its limit" : ""}</span></div>`).join("")]);
   const managed = (plan.skipped || []).filter(s => s.yaml), other = (plan.skipped || []).filter(s => !s.yaml);
   return [
-    UI.lead(chosen.length ? `Sets what ${chosen.length} app${chosen.length === 1 ? "" : "s"} reserve${chosen.length === 1 ? "s" : ""} from their use over the last week. Each restarts once, one at a time.`
+    UI.lead(over ? `${chosen.length} apps are ticked; one run changes at most ${plan.max}. Untick some, and set the rest afterwards.`
+      : chosen.length ? `Sets what ${chosen.length} app${chosen.length === 1 ? "" : "s"} reserve${chosen.length === 1 ? "s" : ""} from their use over the last week. Each restarts once, one at a time.`
       : apps.length ? "Tick the apps to change." : "Every app's reservation already matches its use, or has too few readings yet."),
-    rows.length ? UI.section(`Apps · ${rows.length}`, '<p class="ui-help">Reserving 95% of the week\'s use with headroom: CPU 1.5 times, memory 1.25 times. Apps reserving nothing are ticked.</p>'
-      + UI.table([{ label: "App" }, { label: "Reservation", className: "grow" }], rows)) : "",
+    rows.length ? UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Reservation", className: "grow" }], rows)) : "",
     managed.length ? UI.more(`Applied by Flux or Argo CD · ${managed.length}`, managed.map(s => `<p><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</p>
-      <pre class="mono small">${esc(s.yaml)}</pre>`).join("")) : "",
-    other.length ? UI.more(`Not changed · ${other.length}`, `<ul class="ui-list">${other.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`) : "",
-    chosen.length ? '<p class="ui-help">Apps change one at a time, each waiting for the last to run again; if one does not come back within ten minutes, the rest wait for you. Follow and stop it in Jobs.</p>' : "",
-    chosen.length ? UI.ack("reserveRestart", chosen.length === 1 ? "Restart it now" : `Restart these ${chosen.length} apps now`) : "",
+      <pre class="mono small">${esc(s.yaml)}</pre>`).join(""), false, "reserve-managed") : "",
+    other.length ? UI.more(`Not changed · ${other.length}`, `<ul class="ui-list">${other.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "reserve-other") : "",
+    UI.more("How the reservations are worked out", `<p>Each container's use is read every five minutes. The reservation is 95% of the week's readings with headroom - CPU 1.5 times, memory 1.25 times - and never above a limit. Apps reserving nothing are ticked; others are offered unticked, since a reservation may have been set on purpose.</p>
+      <p>Apps change one at a time, each waiting for the last to run again. An app with no host that has room for its new reservation, or changed since this review, is skipped. If one does not come back within ten minutes, the job stops and the rest are not changed. Follow and stop it in Jobs.</p>`, false, "reserve-how"),
+    chosen.length && !over ? UI.ack("reserveRestart", chosen.length === 1 ? "Restart it now" : `Restart these ${chosen.length} apps now`) : "",
   ].join("");
 }
 window.reservationsItem = (id, on) => {
@@ -1128,7 +1135,8 @@ window.reservationsItem = (id, on) => {
   reservationsPlan();
 };
 window.reservationsStart = async () => {
-  const plan = RESERVE.plan, apps = (plan?.apps || []).filter(a => RESERVE.chosen.has(a.id));
+  // What was reviewed: the plan's own ticks, which its token covers.
+  const plan = RESERVE.plan, apps = (plan?.apps || []).filter(a => a.chosen);
   if (!apps.length) return;
   if (!$("#reserveRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
   const button = $("#reserveGo");
@@ -1140,14 +1148,15 @@ window.reservationsStart = async () => {
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set reservations"; }
-    if (e.body?.plan) { RESERVE.chosen = null; reservationsPlan(); }
+    // Planned again with the same ticks: what changed is shown, not a reset.
+    if (e.body?.plan) reservationsPlan();
   } finally { window.refreshOperations?.(true); }
 };
 
 /* Priority tiers for many apps at once. Apps whose name or image suggests a
    tier start set to it; the rest keep what they have. Changing a row plans
    again, so the review token covers exactly what is started. */
-const PRIORITY = { picks: {}, plan: null };
+const PRIORITY = { picks: {}, plan: null, asked: 0 };
 window.priorityReview = async () => {
   PRIORITY.picks = {}; PRIORITY.plan = null;
   modal("Priority tiers", `<div id="prioPlan"><div class="empty"><span class="spin2"></span> Reading the apps…</div></div>
@@ -1157,28 +1166,34 @@ window.priorityReview = async () => {
 async function priorityPlan() {
   const pane = $("#prioPlan");
   if (!pane) return;
+  // Each change plans again; an answer to an earlier one is dropped.
+  const asked = ++PRIORITY.asked;
   const picks = Object.entries(PRIORITY.picks).map(([id, tier]) => `${id}=${tier}`).join(",");
-  try { PRIORITY.plan = await api(`/api/workloads/priority/plan${picks ? `?${new URLSearchParams({ chosen: picks })}` : ""}`); }
-  catch (e) { pane.innerHTML = UI.callout("bad", "Could not read the apps", esc(e.message)); return; }
-  pane.innerHTML = priorityHtml(PRIORITY.plan);
+  let plan;
+  try { plan = await api(`/api/workloads/priority/plan${picks ? `?${new URLSearchParams({ chosen: picks })}` : ""}`); }
+  catch (e) { if (asked === PRIORITY.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps", esc(e.message)); return; }
+  if (asked !== PRIORITY.asked || !$("#prioPlan")) return;
+  PRIORITY.plan = plan;
+  pane.innerHTML = priorityHtml(plan);
   const go = $("#prioGo");
-  if (go) go.disabled = !PRIORITY.plan.changes;
+  if (go) go.disabled = !plan.changes || plan.changes > plan.max;
   window.applyRole?.();
 }
 function priorityHtml(plan) {
-  const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current);
+  const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current), over = changes.length > plan.max;
   const rows = apps.map((a, i) => [
     `<span class="mono">${esc(a.id)}</span>${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
     `${prioritySelect(`prio_${i}`, a.tier, `${a.managed ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
       <span class="sub">${esc(a.note || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
   return [
-    UI.lead(changes.length ? `Changes the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}. Each restarts once, one at a time.`
+    UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
+      : changes.length ? `Changes the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}. Each restarts once, one at a time.`
       : "Every app keeps its tier. Choose a tier to change one."),
-    '<p class="ui-help">When a host fails and the others cannot hold every app, critical apps fit first and may evict a low one; low apps wait and evict nothing. Normal is every app without a tier, as now.</p>',
     UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
-    (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`) : "",
-    changes.length ? '<p class="ui-help">Homestead makes its three priority classes first, if missing. Apps then change one at a time, each waiting for the last to run again; if one does not come back within ten minutes, the rest wait for you.</p>' : "",
-    changes.length ? UI.ack("prioRestart", changes.length === 1 ? "Restart it now" : `Restart these ${changes.length} apps now`) : "",
+    (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
+    UI.more("What the tiers do", `<p>When a host fails and the others cannot hold every app, critical apps fit first and may evict any pod of a lower tier - low apps, and anything with no tier, Homestead included. Low apps wait and evict nothing. Normal is no tier at all, as every app has now.</p>
+      <p>Homestead makes the classes a tier needs first, if missing. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
+    changes.length && !over ? UI.ack("prioRestart", changes.length === 1 ? "Restart it now" : `Restart these ${changes.length} apps now`) : "",
   ].join("");
 }
 window.priorityItem = (id, tier) => {
@@ -1200,7 +1215,8 @@ window.priorityStart = async () => {
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set tiers"; }
-    if (e.body?.plan) { PRIORITY.picks = {}; priorityPlan(); }
+    // Planned again with the same choices: what changed is shown, not a reset.
+    if (e.body?.plan) priorityPlan();
   } finally { window.refreshOperations?.(true); }
 };
 

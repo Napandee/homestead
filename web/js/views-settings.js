@@ -202,7 +202,7 @@ async function viewSettings() {
           ${settingRow("Tell me about new images", "", `<label class="toggle"><input id="set_notify_available" type="checkbox" ${updates.notify_available !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
           ${settingRow("Tell me when a registry check fails", "", `<label class="toggle"><input id="set_notify_failures" type="checkbox" ${updates.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
           ${settingRow("Update window", esc(updateWindowText(maintenance)) + (updates.policy === "maintenance_window" ? ""
-            : `<div class="dim xs">${updates.policy === "notify_only" ? "Not used while the policy is notify only: nothing is installed, not even by apps set to update themselves."
+            : `<div class="dim xs">${updates.policy === "notify_only" ? "No image is installed while the policy is notify only, not even by apps set to update themselves. Moving containers back after a host returns still uses this window, if set to."
               : "Rollouts you approve start straight away under this policy; only apps set to update themselves wait for this window."}</div>`),
             can("admin") ? '<button class="btn sm" onclick="updateWindowEdit()">Change</button>' : "")}
         </div>
@@ -231,8 +231,8 @@ async function viewSettings() {
         ${UI.moduleHeader(`When a host comes back`, `Containers start on the other hosts while one is down or drained, and stay there when it returns`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="srows">
           ${settingRow(`Move containers back ${tip("Uses Balance hosts: only moves that bring the busiest host down enough, each restarting its container once. In the window, an app whose scheduled job (a backup, say) runs before the window closes is left where it is, since the job needs its volume on that host.")}`,
-            `<div class="dim xs" id="set_rebalance_text">${rebalanceModeText(rebalanceMode, maintenance)}</div>`,
-            `<select id="set_rebalance" ${can("admin") ? "" : "disabled"}
+            `<div class="dim xs" id="set_rebalance_text" aria-live="polite">${rebalanceModeText(rebalanceMode, maintenance)}</div>`,
+            `<select id="set_rebalance" aria-label="Move containers back" aria-describedby="set_rebalance_text" ${can("admin") ? "" : "disabled"}
               onchange="$('#set_rebalance_text').innerHTML=rebalanceModeText(this.value,(STATE.data.appSettings?.updates||{}).maintenance||{})">
               <option value="off" ${rebalanceMode === "off" ? "selected" : ""}>No - leave them where they are</option>
               <option value="suggest" ${rebalanceMode === "suggest" ? "selected" : ""}>Suggest - an alert to review the moves</option>
@@ -827,8 +827,8 @@ window.placeModeChanged = () => {
 /* What the chosen mode does, in the window's own words. */
 function rebalanceModeText(mode, maintenance) {
   return mode === "suggest" ? "An alert says how many containers would move back; nothing moves until someone reviews it."
-    : mode === "window" ? `The same alert, then the moves run by themselves in the update window (${esc(updateWindowText(maintenance))}).`
-    : "Nothing moves back on its own. Balance hosts, in Containers, moves them when you choose.";
+    : mode === "window" ? `The same alert, then the moves run by themselves in the update window (${esc(updateWindowText(maintenance))}), apart from apps whose scheduled job runs then.`
+    : "Nothing moves back on its own. Balance hosts on Nodes, or Rebalance containers in Containers' menu, moves them when you choose.";
 }
 
 async function settingsAppSave() {

@@ -556,6 +556,8 @@ def _apply_priority(spec, tier):
         spec.pop("priorityClassName", None)
     else:
         spec["priorityClassName"] = PRIORITY.TIERS[tier]["name"]
+    # A number copied in from a pod: admission refuses one not the class's.
+    spec.pop("priority", None)
 
 
 def prepare_edit(cfg, current=None):

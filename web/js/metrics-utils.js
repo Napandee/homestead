@@ -10,6 +10,13 @@
     return `${percent >= 100 ? Math.round(percent) : Number(percent.toFixed(1))}%`;
   }
 
+  /* A reservation in the units its fields use - MiB and GiB, as Kubernetes
+     writes them - where workloadMemory is for live use, in MB. */
+  function reservedMemory(mib) {
+    const value = Number(mib);
+    if (!Number.isFinite(value) || value <= 0) return "0 MiB";
+    return value < 1024 ? `${Math.round(value)} MiB` : `${+(value / 1024).toFixed(value < 10240 ? 1 : 0)} GiB`;
+  }
   function workloadMemory(mb) {
     const value = Number(mb);
     if (!Number.isFinite(value) || value <= 0) return "0 MB";
@@ -87,6 +94,7 @@
   }
 
   global.workloadCpuPercent = workloadCpuPercent;
+  global.reservedMemory = reservedMemory;
   global.sizeParts = sizeParts;
   global.sizeText = sizeText;
   global.sizePair = sizePair;

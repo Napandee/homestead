@@ -112,6 +112,30 @@ Service's ports on every node, the same ports the app needs there. It needs no
 Service - it answers on the node itself - so remove the Service under
 **Networking**. Moving such an app to k3s leaves the Service behind.
 
+**Apps restarted during the night after a host was down.** That is the job
+*Rebalance N containers after host came back*, from **Settings → Updates →
+When a host comes back → In the update window**: it moves containers back onto
+the returned host. Set it to **Suggest** or **No** to stop it.
+
+**A low-tier app stays Pending after a host failed.** Low apps wait for room
+and evict nothing. Give it a higher tier (Edit → Placement → **When the cluster
+is short of room**), or free some room.
+
+**Setting a priority tier says Homestead may not make priority classes yet.**
+Its permissions are from an earlier version. **Settings → Homestead → About
+this installation → Permissions** gives the one `kubectl` command that brings
+them up to date.
+
+**Set reservations from use stopped part way.** One app did not run again
+within ten minutes of its new reservation; the job names it, and the apps after
+it were not changed. Look at that app's events, then review again: apps already
+changed are not offered again. A skipped app's reason is in the job too - no
+host with room, say, or a reservation changed by hand since the review.
+
+**Edit shows no suggested reservation.** It needs a day of readings, and
+metrics-server (k3s and RKE2 have it). **Settings → Homestead** shows **App
+usage history** with when it last read use and its last error.
+
 **A container runs but its update check failed.** The registry could not be
 reached or needs credentials; that container shows the error, and the others
 still show their updates.
