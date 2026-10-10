@@ -37,6 +37,7 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_routes as ROUTER
 import homestead_schedules as SCHEDULES
 import homestead_updates as UPDATES
+import homestead_usage as USAGE
 
 # server.py's helpers this module calls, bound by name at start.
 NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload", "set_workload_groups",
@@ -679,6 +680,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
             "memory_limit": limits.get("memory", ""),
+            "usage": USAGE.summary(ns, name, container.get("name", ""), requests, limits),
             "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),

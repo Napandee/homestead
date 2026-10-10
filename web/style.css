@@ -858,6 +858,7 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .a2job{display:flex;flex-direction:column;gap:2px;padding:5px 9px;font-size:12px}
 .a2jobwhen{font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .a2jobfailed{border-color:color-mix(in srgb,var(--crit) 35%,transparent)}
+.usage-suggest{flex-wrap:wrap;gap:8px 12px;margin:2px 0 10px}.usage-suggest .ui-help{flex:1 1 260px;margin:0}
 .a2disconnected{border-color:rgba(255,77,79,.3);background:rgba(255,77,79,.035)}
 .arch-head-actions{flex-wrap:wrap;justify-content:flex-end}
 .a2item{position:relative;border:1px solid var(--line);border-radius:10px;background:var(--surf2);transition:opacity .2s var(--e),border-color .2s,box-shadow .2s}

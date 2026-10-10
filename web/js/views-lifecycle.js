@@ -55,10 +55,12 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       </div>`,
     hardware: () => `
       <div class="f2">
-        <div class="f"><label>CPU reserved ${tip('The share of a CPU core the scheduler keeps for this container: 100% is one core. It is not a limit; the container can use more when the host has it spare.')}</label>${UI.quantity("cpu", `e_cpu_${index}`, container.cpu || "", { placeholder: "5", label: "CPU reserved" })}</div>
+        <div class="f"><label>CPU reserved ${tip('The share of a CPU core the scheduler keeps for this container: 100% is one core. It is not a limit; the container can use more when the host has it spare.')}</label>${UI.quantity("cpu", `e_cpu_${index}`, container.cpu || "", { placeholder: "5", label: "CPU reserved",
+          usage: editUsageWords(container.usage, "cpu") })}</div>
         <div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", `e_mem_${index}`, container.memory || "", { placeholder: "128", label: "Memory reserved",
-          usage: container.usage_mb ? `the app uses about ${esc(workloadMemory(container.usage_mb))} now` : "" })}</div>
+          usage: editUsageWords(container.usage, "memory") || (container.usage_mb ? `the app uses about ${esc(workloadMemory(container.usage_mb))} now` : "") })}</div>
       </div>
+      ${editUsageSuggestion(container.usage, index)}
       <div class="f"><label>Memory max (optional) ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", `e_mem_limit_${index}`, container.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: `e_mem_${index}` })}</div>
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
@@ -86,6 +88,56 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
     <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="row"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
       ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
+};
+
+/* What a container has used over the last week, beside the field it informs:
+   the 95th percentile, since a reservation is about the usual day, and the
+   peak, since a nightly burst is what the usual day hides. */
+const editCpuWords = m => m >= 1000 ? `${+(m / 1000).toFixed(2)} cores` : `${+(m / 10).toFixed(1)}%`;
+/* How long the use was watched, from its five-minute rounds: three hours
+   that cross midnight are three hours, not two days. */
+const editSpan = usage => {
+  const hours = usage?.hours ?? (usage?.days || 0) * 24;
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+};
+function editUsageWords(usage, kind) {
+  if (!usage?.samples || usage.cpu_p95_m === undefined) return "";
+  const [usual, peak] = kind === "cpu" ? [editCpuWords(usage.cpu_p95_m), editCpuWords(usage.cpu_max_m)]
+    : [reservedMemory(usage.mem_p95_mi), reservedMemory(usage.mem_max_mi)];
+  return `<span data-tip="95% of readings over ${esc(editSpan(usage))} were at or under ${esc(usual)}">usually at or under ${esc(usual)} · peak ${esc(peak)} over ${esc(editSpan(usage))}</span>`;
+}
+/* Each resource on its own, since one can go up while the other comes down. */
+function editSuggestionChange(name, change, to, now) {
+  if (change === "keep") return `${name} stays at <b>${esc(now)}</b>`;
+  return `${change === "lower" ? "lower" : "raise"} ${name} to <b>${esc(to)}</b>${now ? ` (now ${esc(now)})` : " (none reserved now)"}`;
+}
+/* A reservation worked out from that use, offered rather than applied: it
+   fills the fields, and nothing changes until the edit is saved. */
+function editUsageSuggestion(usage, index) {
+  const s = usage?.suggest;
+  if (!s) return usage?.why && usage.samples ? `<div class="ui-help usage-suggest">${esc(usage.why)}</div>` : "";
+  if (!s.differs) return `<div class="ui-help usage-suggest">The reservation matches its use over ${esc(editSpan(usage))}.</div>`;
+  // Kubernetes refuses a reservation above a limit: the suggestion stops at it.
+  const capped = (s.capped || []).map(k => k === "cpu" ? " Held at its CPU limit, which is set outside Homestead."
+    : " Held at Memory max: its use and headroom would pass it.").join("");
+  const cpu = editSuggestionChange("CPU", s.cpu_change, editCpuWords(parseInt(s.cpu, 10)), s.cpu_now_m ? editCpuWords(s.cpu_now_m) : "");
+  const memory = editSuggestionChange("memory", s.memory_change, reservedMemory(parseInt(s.memory, 10)),
+    s.memory_now_mi ? reservedMemory(s.memory_now_mi) : "");
+  return `<div class="usage-suggest between"><span class="ui-help">From ${esc(editSpan(usage))} of use: ${cpu}, ${memory}.${esc(capped)}
+      Saving restarts the app.</span>
+    <button class="btn sm" type="button" onclick="editUseSuggested(${index},${jsq(s.cpu)},${jsq(s.memory)})">Use suggested</button></div>`;
+}
+window.editUseSuggested = (index, cpu, memory) => {
+  [[`e_cpu_${index}`, cpu], [`e_mem_${index}`, memory]].forEach(([id, value]) => {
+    const box = document.querySelector(`.qty[data-target="${CSS.escape(id)}"]`);
+    const input = box?.querySelector(".qty-text");
+    if (!input) return;
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("focusout", { bubbles: true }));
+  });
 };
 
 /* ---------------- placement rules ----------------

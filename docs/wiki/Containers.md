@@ -45,6 +45,21 @@ The form asks, in order:
   set too low can OOM-kill and restart the app. Edit shows each container's
   current values, including sidecars. Compose imports carry `mem_limit` and
   `deploy.resources.limits.memory` into Memory max.
+- **What it uses, and what to reserve.** Homestead records each app
+  container's CPU and memory every five minutes, from metrics-server (k3s and
+  RKE2 have it; without it, Settings -> Homestead says so), and keeps two
+  weeks. Edit shows, beside each reserved field, what the
+  container was usually at or under - 95% of readings over the last seven
+  days, to within about 5% - and its peak. After a day of readings it offers
+  a reservation: CPU at 1.5 times that usual use (at least 10m, a hundredth of
+  a core), memory at 1.25 times (at least 32 MiB), rounded up to 0.5% of a
+  core and 16 MiB, and never above a CPU limit or Memory max. A reservation
+  already within 10% of that is left alone; otherwise the suggestion says, for
+  CPU and memory apart, whether it raises or lowers each and from what. **Use suggested** only fills the
+  fields; nothing changes until you save, which restarts the app. The
+  scheduler places apps by what they reserve, not by what they use: an app
+  that reserves nothing, and has no limit Kubernetes would take instead, is
+  placed as if it used nothing.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.

@@ -622,6 +622,11 @@ It answers "was it busy last week?" and "has a node been dropping out?";
 Harvester's own monitoring (Prometheus and Grafana) is there for anything
 deeper.
 
+Each container's CPU and memory is read from metrics-server every five
+minutes as well, by the leading replica, and kept as a small histogram a day
+for fourteen days in `usage.json`; Edit suggests reservations from the last
+seven (see [Containers](wiki/Containers.md)).
+
 ## MQTT and Home Assistant
 
 **Settings → Monitoring** publishes cluster and node stats to an MQTT broker, with
@@ -682,8 +687,8 @@ install the app; if installation still fails, add an Access **Bypass** policy fo
 **Settings → Homestead** shows whether the parts that work in the background are
 working, refreshed every 15 seconds while it is open: how quickly the
 Kubernetes API answers, each copy of Homestead and which one leads, every
-background task (live charts, alerts, long-term stats, hardware detection,
-cluster moves) with when it last did its work and its last error, the node
+background task (live charts, alerts, long-term stats, app usage history,
+hardware detection, cluster moves) with when it last did its work and its last error, the node
 probe (nodes running it, reporting, and with drive health), SMB status, the
 permissions check, backup storage and MQTT. SMB can be switched off from Settings → Hardware and storage → Add-ons -
 shares stop being served, and their volumes, settings and passwords are kept -

@@ -30,7 +30,7 @@ def bind(_kget, _ksend, _data_volume, _heartbeats, _node_temps, _samba_state, na
 MAX_REPLICAS = 3
 # What each background task is called in Settings.
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
 def report():

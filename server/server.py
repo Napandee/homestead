@@ -2555,6 +2555,7 @@ import homestead_outage as OUTAGE
 import homestead_changes as CHANGES
 import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
+import homestead_usage as USAGE
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2707,6 +2708,7 @@ OUTAGE.bind(DATA_DIR, kget=lambda path: kget(path), ksend=lambda *a, **k: ksend(
 CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
              deployments=lambda: [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
 FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
+USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
@@ -5137,6 +5139,7 @@ def start_background_tasks():
     threading.Thread(target=_schedules_loop, name="schedules", daemon=True).start()
     threading.Thread(target=CHANGES.run, name="changes", daemon=True).start()
     threading.Thread(target=FORECAST.run, name="forecast", daemon=True).start()
+    threading.Thread(target=USAGE.run, name="usage", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
