@@ -56,13 +56,19 @@ class RequestsTests(unittest.TestCase):
             "kube-system/coredns": deployment("coredns", ns="kube-system"),
         }
         SUGGEST[("lab", "settled", "app")] = ("20m", "64Mi")
-        self.sent = []
+        self.sent, self.node_memory = [], "16Gi"
         reserve.bind(self.kget, lambda *a, **k: self.sent.append((a, k)), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
 
     def kget(self, path):
         if path == "/apis/apps/v1/deployments":
             return {"items": [copy.deepcopy(d) for d in self.deps.values()]}
+        if path == "/api/v1/nodes":
+            return {"items": [{"metadata": {"name": "n1"}, "spec": {},
+                               "status": {"allocatable": {"cpu": "4", "memory": self.node_memory},
+                                          "conditions": [{"type": "Ready", "status": "True"}]}}]}
+        if path == "/api/v1/pods":
+            return {"items": []}
         ns, name = path.split("/namespaces/")[1].split("/deployments/")
         if f"{ns}/{name}" not in self.deps:
             raise urllib.error.HTTPError(path, 404, "not found", {}, io.BytesIO())
@@ -77,11 +83,38 @@ class RequestsTests(unittest.TestCase):
     def test_an_app_whose_reservation_matches_its_use_is_not_offered(self):
         self.assertNotIn("lab/settled", {a["id"] for a in reserve.plan()["apps"]})
 
-    def test_a_flux_app_gets_the_yaml_to_commit_instead(self):
+    def test_a_flux_app_gets_a_patch_to_commit_instead(self):
         skipped = {s["id"]: s for s in reserve.plan()["skipped"]}
         self.assertIn("Flux applies it", skipped["media/jellyfin"]["why"])
-        self.assertIn("cpu: 240m", skipped["media/jellyfin"]["yaml"])
-        self.assertIn("memory: 1104Mi", skipped["media/jellyfin"]["yaml"])
+        patch = skipped["media/jellyfin"]["yaml"]
+        self.assertTrue(patch.startswith("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: jellyfin\n  namespace: media"))
+        self.assertIn("      - name: app\n        resources:\n          requests:\n            cpu: 240m\n            memory: 1104Mi", patch)
+
+    def test_an_app_an_admin_marked_as_updated_elsewhere_is_not_said_to_sync(self):
+        with mock.patch.object(reserve, "managed_by", lambda dep: {"by": "Renovate", "source": "", "detected": False}
+                               if dep["metadata"]["name"] == "paperless" else {}):
+            why = {s["id"]: s for s in reserve.plan()["skipped"]}["lab/paperless"]["why"]
+        self.assertNotIn("sync", why)
+        self.assertIn("Renovate", why)
+
+    def test_an_operator_is_not_offered_apps_only_an_admin_may_change(self):
+        def guard(dep, ns, role):
+            if role == "operator" and dep["metadata"]["name"] == "web":
+                raise PermissionError("only an admin can operate management, system, service-account or host-privileged workloads")
+        with mock.patch.object(reserve, "guard", guard):
+            plan = reserve.plan(None, "operator")
+            self.assertNotIn("lab/web", {a["id"] for a in plan["apps"]})
+            self.assertIn("only an admin", {s["id"]: s for s in plan["skipped"]}["lab/web"]["why"])
+            self.assertIn("lab/web", {a["id"] for a in reserve.plan(None, "admin")["apps"]})
+            item = self.job(["lab/web"])
+            item["ref"]["role"] = "operator"
+            self.assertIn("Skipped lab/web: only an admin", reserve.status(item)[2])
+        self.assertEqual([], self.sent)
+
+    def test_the_default_never_ticks_more_than_one_run_may_change(self):
+        with mock.patch.object(reserve, "MAX_APPS", 1):
+            plan = reserve.plan()
+        self.assertEqual(1, sum(a["chosen"] for a in plan["apps"]))
 
     def test_homestead_itself_and_system_namespaces_are_not_changed(self):
         plan = reserve.plan()
@@ -137,6 +170,29 @@ class RequestsTests(unittest.TestCase):
         state, progress, message = reserve.status(item)
         self.assertEqual(("succeeded", 100), (state, progress))
         self.assertIn("2 apps", message)
+
+    def test_a_change_already_made_is_waited_for_not_skipped(self):
+        item = self.job(["lab/paperless"])
+        self.deps["lab/paperless"]["spec"]["template"]["spec"]["containers"][0]["resources"] = {
+            "requests": {"cpu": "60m", "memory": "480Mi"}}
+        state, _, message = reserve.status(item)
+        self.assertEqual(("running", "rolling"), (state, item["ref"]["stage"]))
+        self.assertEqual([], self.sent)
+        self.assertNotIn("skipped", item["ref"])
+
+    def test_an_app_no_host_has_room_for_is_skipped(self):
+        item = self.job(["lab/paperless"])
+        self.node_memory = "256Mi"
+        message = reserve.status(item)[2]
+        self.assertIn("no host has room for its new reservation (480 MiB", message)
+        self.assertEqual([], self.sent)
+
+    def test_an_app_deleted_mid_job_is_skipped_and_the_rest_go_on(self):
+        item = self.job(["lab/paperless", "lab/web"])
+        gone = urllib.error.HTTPError("x", 404, "not found", {}, io.BytesIO())
+        reserve.bind(self.kget, mock.Mock(side_effect=[gone, None]), usage, managed,
+                     ("homestead", "homestead"), {"kube-system"}, lambda: True)
+        self.assertIn("Skipped lab/paperless", reserve.status(item)[2])
 
     def test_a_refused_change_skips_that_app_and_the_rest_go_on(self):
         item = self.job(["lab/paperless", "lab/web"])

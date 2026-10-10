@@ -156,20 +156,34 @@ opens this tab, as `?tab=` does for any of them.
 
 While a host is down or drained, its containers start on the others, and
 Kubernetes never moves them back. **Updates → When a host comes back** says
-what Homestead does once the host takes work again (Ready, and not cordoned):
+what Homestead does once the host takes work again - Ready, and not cordoned,
+after it has been seen working before (a new host finishing joining is not
+"back"):
 
-- **No** - nothing. **Balance hosts** in Containers moves them when you choose.
-- **Suggest** - an alert under *Hosts joining* says the host is back and how
-  many containers the rebalance would move. Nothing moves until someone
-  reviews it in Balance hosts.
+- **No** - nothing. **Balance hosts** on Nodes, or **Rebalance containers…** in
+  Containers' menu, moves them when you choose.
+- **Suggest** - an alert under *Hosts joining* (a notification category on by
+  default) says the host is back and how many containers the rebalance would
+  move. Nothing moves until someone reviews it in Balance hosts.
 - **In the update window** - the same alert, then the rebalance runs by itself
-  once, in the next opening of the update window, as the job a person would
-  start. An app whose scheduled job (a nightly backup, say) shares its volume
-  and runs before the window closes is left where it is: the job has to run on
-  the app's host while the volume is attached there.
+  in each opening of the update window, as the job a person would start,
+  titled *Rebalance N containers after host came back*. It does not start while
+  another job is moving apps or hosts - an OS rollout, a rebalance, an
+  automatic update or reservations being set - and no automatic update starts
+  while it runs. The window is used whatever the image update policy, notify
+  only included.
+
+In the window, an app is left where it is when a scheduled job (a CronJob)
+mounts its volume and is running, or runs before the window closes, or has a
+schedule Homestead cannot read: the job has to run on the app's host while the
+volume is attached there. A CronJob without a time zone of its own runs on its
+controller's host clock - on k3s often local time - so Homestead allows for
+every clock its last run is consistent with. An app left where it is moves at
+the next opening.
 
 Only moves worth a restart are made, with the same checks as Balance hosts. A
-host back for a day without anything worth moving is forgotten.
+returned host is remembered until the rebalance finds nothing worth moving,
+and for a week at most; the alert clears then.
 
 ## Homestead's own health
 
@@ -180,8 +194,9 @@ working, refreshed every 15 seconds:
 
 - how fast the Kubernetes API answers;
 - each copy of Homestead, and which one leads;
-- each background task - live charts, alerts, long-term stats, hardware
-  detection, moves - with when it last worked and its last error;
+- each background task - live charts, alerts, long-term stats, app usage
+  history, rebalance after a host returns, hardware detection, moves - with
+  when it last worked and its last error;
 - the node probe: how many hosts run it, report, and have drive health;
 - **Samba** - running, and on which address. Switch it off here (shares stop
   being served; volumes, settings and passwords are kept) and on again, which
@@ -192,7 +207,7 @@ working, refreshed every 15 seconds:
 
 **Settings › About › Homestead's data** shows what Homestead keeps on its own
 volume - monitoring and stats history, change history, the storage forecast,
-jobs, logs, logos and so on - each store's size and how long it keeps things,
+app usage, hosts coming back, jobs, logs, logos and so on - each store's size and how long it keeps things,
 and how full the volume is. Each store trims itself; once a day Homestead also
 trims its logs to a year (and 5,000 entries), removes logos nothing has used for
 30 days, and removes leftovers of interrupted writes. Past 80% full it keeps half

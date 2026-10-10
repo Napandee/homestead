@@ -792,7 +792,10 @@ def recovery_tick(now=None):
     returned = RECOVERY.observe(kget("/api/v1/nodes").get("items", []), now)
     if not returned or mode == "off":
         return None
-    if any(i.get("kind") == CREBALANCE.KIND and i.get("status") not in OPS.TERMINAL for i in OPS.list_operations()):
+    # Not beside other work that moves or restarts apps or hosts: a host
+    # uncordoned mid OS rollout is "back", and the next one is about to drain.
+    waits_for = (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster")
+    if any(i.get("kind") in waits_for and i.get("status") not in OPS.TERMINAL for i in OPS.list_operations()):
         return None
     # A plan reads every pod and volume: worked out again every five minutes.
     if now - _recovery_planned[0] >= 300:
@@ -806,10 +809,9 @@ def recovery_tick(now=None):
     keep = RECOVERY.guarded(kget("/apis/batch/v1/cronjobs").get("items", []),
                             kget("/apis/apps/v1/deployments").get("items", []), now, closes)
     plan = CREBALANCE.plan(sorted(keep))
+    started = start_container_rebalance(plan, f" after {', '.join(sorted(returned))} came back") if plan["moves"] else None
     RECOVERY.ran(key)
-    if plan["moves"]:
-        return start_container_rebalance(plan, f" after {', '.join(sorted(returned))} came back")
-    return None
+    return started
 
 
 def _recovery_loop():
@@ -2439,9 +2441,10 @@ def _flow_owner(pod):
 
     A Deployment's pods belong to a ReplicaSet named after it plus the pod
     template's hash, so the Deployment is found without reading ReplicaSets.
-    Only a pod nothing owns falls back to its app label or its name: guessing
-    from the name alone made shared-postgres-0 into "shared" and gave every
-    CronJob a card of its own."""
+    Only a pod no controller owns - a bare pod, or a static one its node
+    mirrors - falls back to its app label or its own name: guessing from the
+    name made shared-postgres-0 into "shared" and gave every CronJob a card
+    of its own."""
     meta = pod.get("metadata") or {}
     labels = meta.get("labels") or {}
     owner = next((o for o in meta.get("ownerReferences") or [] if o.get("controller")),
@@ -2453,18 +2456,17 @@ def _flow_owner(pod):
         if kind == "ReplicaSet":
             suffix = "-" + (labels.get("pod-template-hash") or "")
             return name[:-len(suffix)] if suffix != "-" and name.endswith(suffix) else name
-        if name:
+        if name and kind != "Node":
             return name
-    return labels.get("app") or meta.get("name", "").rsplit("-", 2)[0]
+    return labels.get("app") or meta.get("name", "")
 
 
-def _flow_jobs():
+def _flow_jobs(vol_by_pvc=None):
     """Scheduled jobs outside the system namespaces, for their own lane on the
-    architecture page: each runs for a minute a night, so as cards among the
-    apps they crowded them out and a failed run looked like a healthy one.
-
-    A run that started after the last success and is no longer active failed,
-    as for Longhorn's recurring jobs."""
+    architecture page: a run is brief, so as cards among the apps they crowded
+    them out and a failed run looked like a healthy one. Each keeps the
+    volumes it mounts, so a volume only a backup job uses is not taken for
+    one nothing uses."""
     try:
         crons = kget("/apis/batch/v1/cronjobs").get("items", [])
     except Exception:
@@ -2474,17 +2476,14 @@ def _flow_jobs():
         meta, spec, status = cron.get("metadata") or {}, cron.get("spec") or {}, cron.get("status") or {}
         if meta.get("namespace") in SYS_NS or NAMES.label_of(meta, "task"):
             continue
-        last, ok = status.get("lastScheduleTime", "") or "", status.get("lastSuccessfulTime", "") or ""
-        active = len(status.get("active") or [])
         pod_spec = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+        claims = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
+                         for v in pod_spec.get("volumes") or []} - {None, ""})
         out.append({
             "id": f"j:{meta['namespace']}/{meta['name']}", "name": meta["name"], "ns": meta["namespace"],
             "schedule": spec.get("schedule", ""), "time_zone": spec.get("timeZone") or "",
-            "suspended": bool(spec.get("suspend")),
-            "last_run": last, "last_success": ok, "running": active,
-            "last_failed": bool(last and not active and (not ok or ok < last)),
-            "claims": sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
-                              for v in pod_spec.get("volumes") or []} - {None, ""}),
+            "suspended": bool(spec.get("suspend")), **LH.cron_run_state(status),
+            "claims": [{"pvc": c, "vid": ((vol_by_pvc or {}).get(c) or {}).get("id", "")} for c in claims],
         })
     return sorted(out, key=lambda j: (j["ns"], j["name"]))
 
@@ -2576,18 +2575,25 @@ def get_flow2():
         ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
         return wanted.get((s["metadata"]["namespace"], s["metadata"]["name"])) or (ing[0].get("ip") if ing else None)
 
-    ports_by_app, vips = {}, {}
+    app_services, vips = [], {}
     for s in svcs:
         app = (s["spec"].get("selector") or {}).get("app")
         if not app:
             continue
         vip = address_of(s)
+        app_services.append((s, [{"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip}
+                                 for prt in s["spec"].get("ports", []) or []]))
         for prt in s["spec"].get("ports", []) or []:
-            rec = {"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip}
-            # A Service selects pods in its own namespace only.
-            ports_by_app.setdefault((s["metadata"]["namespace"], app), []).append(rec)
             if vip:
                 vips.setdefault(vip, []).append({"port": prt.get("port"), "app": app})
+
+    def app_ports(ns, labels):
+        """An app's ports: each Service in its namespace whose whole selector
+        its pods match. Two controllers can share an app label - a web part
+        and a worker - and only the one the Service selects is reached."""
+        return [rec for s, recs in app_services if s["metadata"]["namespace"] == ns
+                and all(labels.get(k) == v for k, v in (s["spec"].get("selector") or {}).items())
+                for rec in recs]
 
     def vm_ports(ns, name, labels):
         """A VM's ports: those of each Service in its namespace that selects
@@ -2657,7 +2663,7 @@ def get_flow2():
             "hardware": HW.workload_features(p["spec"], dep_meta.get((ns, name), {})),
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
-            "claims": claims, "ports": ports_by_app.get((ns, labels.get("app") or name), []),
+            "claims": claims, "ports": app_ports(ns, labels),
         })
     # --- virtual machines, running or not: a stopped VM's disks are still here
     vmi_by = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in vmis}
@@ -2708,7 +2714,7 @@ def get_flow2():
                   for k in names],
         "volumes": sorted(vols, key=lambda x: x["name"]),
         "workloads": sorted(wls, key=lambda x: x["name"]),
-        "jobs": _flow_jobs(),
+        "jobs": _flow_jobs(vol_by_pvc),
         "vips": [{"id": "i:" + ip, "ip": ip, "ports": sorted(p, key=lambda x: x["port"]),
                   "kind": (place.get(ip) or {}).get("kind", "vip"), "node": (place.get(ip) or {}).get("node", ""),
                   "state": (place.get(ip) or {}).get("state", "ok"), "reason": (place.get(ip) or {}).get("reason", "")}
@@ -7164,7 +7170,23 @@ RECOVERY.bind(DATA_DIR)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
 OPS.RESOLVERS[PRIORITY.KIND] = PRIORITY.status
 OPS.CANCELLERS[PRIORITY.KIND] = (PRIORITY.cancel_plan, PRIORITY.cancel_run)
-RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
+
+
+def guard_as(obj, namespace, role):
+    """Edit's check that a workload is one this role may change, made for a
+    job that runs with no request behind it, as the person who started it."""
+    if role in (None, "admin"):
+        return
+    before = HOSTACCESS.role()
+    HOSTACCESS.set_role(role)
+    try:
+        HOSTACCESS.require_target(obj, namespace)
+    finally:
+        HOSTACCESS.set_role(before)
+
+
+RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
+             guard_as)
 OPS.RESOLVERS[RESERVE.KIND] = RESERVE.status
 OPS.CANCELLERS[RESERVE.KIND] = (RESERVE.cancel_plan, RESERVE.cancel_run)
 
@@ -7353,6 +7375,9 @@ def autoupdate_tick():
     operations = OPS.list_operations()
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
+    # An app is not updated while a rebalance may be moving it.
+    if any(i.get("kind") == CREBALANCE.KIND and i.get("status") not in OPS.TERMINAL for i in operations):
+        return None
     chosen = AUTOUPDATE.pick(cached("wl", 5, get_workloads), report, UPTIME.report(), operations,
                              status["window_open"], status["policy"])
     if not chosen:
@@ -10242,7 +10267,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, PRIORITY.plan(picks))
             if p == "/api/workloads/requests/plan":
                 chosen = q.get("chosen")
-                return self._send(200, RESERVE.plan([a for a in chosen[0].split(",") if a] if chosen else None))
+                return self._send(200, RESERVE.plan([a for a in chosen[0].split(",") if a] if chosen else None, HOSTACCESS.role()))
             if p == "/api/longhorn/rebalance/plan":
                 return self._send(200, REBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/pvcs":
@@ -11375,12 +11400,12 @@ class H(HTTP.LimitedHandler):
                 if b.get("restart") is not True:
                     return self._send(409, {"error": "A new reservation restarts each app; confirm the restarts"})
                 try:
-                    apps = RESERVE.reviewed(b.get("apps"), b.get("review_token"))
+                    apps = RESERVE.reviewed(b.get("apps"), b.get("review_token"), HOSTACCESS.role())
                 except ValueError as error:
-                    return self._send(409, {"error": str(error), "plan": RESERVE.plan()})
+                    return self._send(409, {"error": str(error), "plan": RESERVE.plan(None, HOSTACCESS.role())})
                 operation = OPS.start(RESERVE.KIND, f"Set reservations on {len(apps)} app{'' if len(apps) == 1 else 's'}",
                                       {"kind": "Deployment", "name": "reservations"}, "/containers",
-                                      {"apps": apps, "index": 0, "done": 0, "stage": "apply"},
+                                      {"apps": apps, "index": 0, "done": 0, "stage": "apply", "role": HOSTACCESS.role()},
                                       "Starting with the first app")
                 return self._send(202, {"operation": operation})
             if p == "/api/longhorn/rebalance":

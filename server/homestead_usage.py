@@ -14,7 +14,13 @@ daily ones. The day's largest reading is kept exactly. Days older than
 KEEP_DAYS are forgotten, and so is a container no longer seen for that long.
 
 A reading is per pod: a request is per pod too, so an app with three copies
-gives three readings each time, and none of them is added up.
+gives three readings each time, and none of them is added up. What makes "a
+day of readings" is the number of rounds a container was seen in, not the
+readings, or three copies would count a day in eight hours.
+
+The file is rewritten whole each round - a few hundred kilobytes at most,
+since a day is a few dozen numbers per container - and read once per change,
+not once per container asked about.
 
 Nothing here changes an app. The suggestion is shown in Edit, beside the
 fields it would fill, and saved only if the person saves it.
@@ -22,7 +28,6 @@ fields it would fill, and saved only if the person saves it.
 import json
 import math
 import os
-import threading
 import time
 
 import homestead_shared as SHARED
@@ -34,7 +39,7 @@ FILE = "usage.json"
 STEP = 300
 KEEP_DAYS = 14
 WINDOW_DAYS = 7
-MIN_SAMPLES = 288          # a day of readings before anything is suggested
+MIN_ROUNDS = 288           # a day of rounds before anything is suggested
 RATIO = 1.1
 PERCENTILE = 0.95
 # Headroom over the 95th percentile, and the least worth reserving, as the
@@ -45,7 +50,12 @@ MEM_FACTOR, MEM_FLOOR_MI, MEM_STEP_MI = 1.25, 32, 16
 # A critical app gets more: kubelet, short of memory, evicts the pods most
 # over their reservation first - before it looks at priority at all.
 MEM_FACTOR_CRITICAL = 1.5
-_lock = threading.Lock()
+# A reservation within this share of the suggestion already matches it: the
+# suggestion moves a little every day, and a restart for 5% is not worth it.
+CLOSE = 0.10
+# Exclusive across replicas: during a leader handoff two may record a round.
+_lock = SHARED.SharedLock("usage")
+_cache = {"stamp": None, "data": None}
 
 
 def bind(data_dir, cpu_cores, mem_bytes):
@@ -76,8 +86,10 @@ def _bucket(value):
     return -1 if value < 1 else int(math.floor(math.log(value) / math.log(RATIO)))
 
 
-def _top(bucket):
-    return 1.0 if bucket < 0 else RATIO ** (bucket + 1)
+def _mid(bucket):
+    """A bucket's middle, on the same scale as its edges: a reading in it is
+    within 5% either way, where its top would overstate every one by up to 10%."""
+    return 0.5 if bucket < 0 else RATIO ** (bucket + 0.5)
 
 
 def key(ns, workload, container):
@@ -91,10 +103,15 @@ def record(readings, now=None):
     with _lock:
         data = _load()
         series = data["series"]
+        counted = set()
         for ns, workload, container, cpu_m, mem_mi in readings:
-            entry = series.setdefault(key(ns, workload, container), {"days": {}})
-            day = entry["days"].setdefault(today, {"n": 0, "cpu": {}, "mem": {}, "cpu_max": 0, "mem_max": 0})
+            name = key(ns, workload, container)
+            entry = series.setdefault(name, {"days": {}})
+            day = entry["days"].setdefault(today, {"n": 0, "rounds": 0, "cpu": {}, "mem": {}, "cpu_max": 0, "mem_max": 0})
             day["n"] += 1
+            if name not in counted:
+                counted.add(name)
+                day["rounds"] = day.get("rounds", 0) + 1
             for field, value in (("cpu", cpu_m), ("mem", mem_mi)):
                 bucket = str(_bucket(value))
                 day[field][bucket] = day[field].get(bucket, 0) + 1
@@ -119,8 +136,8 @@ def _percentile(histograms, share):
     for bucket in sorted(counts):
         seen += counts[bucket]
         if seen >= share * total:
-            return _top(bucket)
-    return _top(max(counts))
+            return _mid(bucket)
+    return _mid(max(counts))
 
 
 def _round_up(value, step):
@@ -135,25 +152,42 @@ def _mebibytes(text):
     return _mem(text) / 2 ** 20 if str(text or "").strip() else None
 
 
+def _snapshot():
+    """The file as last written, read again only when it changed."""
+    try:
+        stamp = (_path(), os.stat(_path()).st_mtime_ns)
+    except OSError:
+        return {"series": {}}
+    if _cache["stamp"] != stamp:
+        with _lock:
+            _cache.update(stamp=stamp, data=_load())
+    return _cache["data"]
+
+
 def summary(ns, workload, container, requests=None, limits=None, now=None, tier=""):
     """What a container has used over the last WINDOW_DAYS, and what to
     reserve for it - or why there is no suggestion yet."""
     now = int(now or time.time())
     first = _day(now - (WINDOW_DAYS - 1) * 86400)
-    with _lock:
-        entry = _load()["series"].get(key(ns, workload, container)) or {}
+    entry = _snapshot()["series"].get(key(ns, workload, container)) or {}
     days = {d: v for d, v in (entry.get("days") or {}).items() if d >= first}
     samples = sum(v.get("n", 0) for v in days.values())
-    out = {"days": len(days), "samples": samples, "window_days": WINDOW_DAYS, "since": min(days) if days else ""}
+    # Files from before rounds were counted have readings only.
+    rounds = sum(v.get("rounds", v.get("n", 0)) for v in days.values())
+    out = {"days": len(days), "samples": samples, "rounds": rounds, "window_days": WINDOW_DAYS,
+           "since": min(days) if days else ""}
     if not samples:
         out["why"] = "No readings yet: Homestead records use every five minutes."
         return out
-    cpu = _percentile([v.get("cpu") or {} for v in days.values()], PERCENTILE)
-    mem = _percentile([v.get("mem") or {} for v in days.values()], PERCENTILE)
-    out.update({"cpu_p95_m": round(cpu), "cpu_max_m": round(max(v.get("cpu_max", 0) for v in days.values())),
-                "mem_p95_mi": round(mem), "mem_max_mi": round(max(v.get("mem_max", 0) for v in days.values()))})
-    if samples < MIN_SAMPLES:
-        out["why"] = f"A suggestion needs a day of readings; {samples} of {MIN_SAMPLES} so far."
+    peak_cpu = max(v.get("cpu_max", 0) for v in days.values())
+    peak_mem = max(v.get("mem_max", 0) for v in days.values())
+    # A bucket's middle can sit above the largest reading in it.
+    cpu = min(_percentile([v.get("cpu") or {} for v in days.values()], PERCENTILE), peak_cpu)
+    mem = min(_percentile([v.get("mem") or {} for v in days.values()], PERCENTILE), peak_mem)
+    out.update({"cpu_p95_m": round(cpu), "cpu_max_m": round(peak_cpu), "mem_p95_mi": round(mem), "mem_max_mi": round(peak_mem)})
+    if rounds < MIN_ROUNDS:
+        hours = rounds * STEP // 3600
+        out["why"] = f"A suggestion needs a day of readings; {hours} hour{'' if hours == 1 else 's'} so far."
         return out
     cpu_m = max(CPU_FLOOR_M, _round_up(cpu * CPU_FACTOR, CPU_STEP_M))
     mem_mi = max(MEM_FLOOR_MI, _round_up(mem * (MEM_FACTOR_CRITICAL if tier == "critical" else MEM_FACTOR), MEM_STEP_MI))
@@ -167,9 +201,19 @@ def summary(ns, workload, container, requests=None, limits=None, now=None, tier=
     if mem_limit and mem_mi > mem_limit:
         mem_mi = int(mem_limit)
         capped.append("memory")
-    current_cpu, current_mem = _millicores((requests or {}).get("cpu")), _mebibytes((requests or {}).get("memory"))
+    # Kubernetes takes a limit as the request where none is set, so such a
+    # container reserves its limit - it does not reserve nothing.
+    current_cpu = _millicores((requests or {}).get("cpu") or (limits or {}).get("cpu"))
+    current_mem = _mebibytes((requests or {}).get("memory") or (limits or {}).get("memory"))
+
+    def close(now_, then):
+        return bool(now_) and abs(now_ - then) <= CLOSE * then
+
     out["suggest"] = {"cpu": f"{cpu_m}m", "memory": f"{mem_mi}Mi", "capped": capped,
-                      "differs": current_cpu != cpu_m or current_mem != mem_mi}
+                      "cpu_now_m": round(current_cpu) if current_cpu else 0,
+                      "memory_now_mi": round(current_mem) if current_mem else 0,
+                      "lowers": bool((current_cpu and cpu_m < current_cpu) or (current_mem and mem_mi < current_mem)),
+                      "differs": not (close(current_cpu, cpu_m) and close(current_mem, mem_mi))}
     return out
 
 
