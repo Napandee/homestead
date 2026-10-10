@@ -1991,7 +1991,7 @@ ssh_pwauth: true
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
     "/api/workloads/requests/plan": url => {
       const change = (container, cpu_now, memory_now, cpu, memory, p95c, p95m, maxm) => ({ container, cpu_now, memory_now, cpu, memory,
-        capped: [], missing: !cpu_now && !memory_now, cpu_p95_m: p95c, mem_p95_mi: p95m, mem_max_mi: maxm, days: 7 });
+        capped: [], missing: !cpu_now && !memory_now, lowers: false, cpu_p95_m: p95c, mem_p95_mi: p95m, mem_max_mi: maxm, days: 7 });
       const apps = [
         { id: "lab/paperless", ns: "lab", name: "paperless", replicas: 1, missing: true, changes: [change("paperless", "", "", "65m", "480Mi", 42, 380, 512)] },
         { id: "lab/home-assistant", ns: "lab", name: "home-assistant", replicas: 1, missing: true,
@@ -2000,7 +2000,7 @@ ssh_pwauth: true
       const asked = url.searchParams.get("chosen"), chosen = asked === null ? apps.filter(a => a.missing).map(a => a.id) : asked.split(",").filter(Boolean);
       return { apps: apps.map(a => ({ ...a, chosen: chosen.includes(a.id) })), max: 50, review_token: "demo-requests-" + chosen.join("."),
         skipped: [{ id: "media/jellyfin", why: "Flux applies it (Kustomization flux-system/apps) and would undo the change at its next sync; commit this instead",
-            yaml: "- name: jellyfin\n  resources:\n    requests:\n      cpu: 240m\n      memory: 1104Mi" },
+            yaml: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: jellyfin\n  namespace: media\nspec:\n  template:\n    spec:\n      containers:\n      - name: jellyfin\n        resources:\n          requests:\n            cpu: 240m\n            memory: 1104Mi" },
           { id: "lab/unifi", why: "A suggestion needs a day of readings; 96 of 288 so far." }] };
     },
     "/api/workloads/requests": { operation: { id: "demo-requests", kind: "set-requests", title: "Set reservations on 2 apps", status: "running", progress: 0, message: "Starting with the first app", cancellable: true } },

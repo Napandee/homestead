@@ -622,6 +622,32 @@ same input plus `capacity_token` and `confirm_capacity: true` to `/api/move`.
 Unreviewed calls are refused. Legacy `auto` calls must select and review an
 explicit suggested destination; it cannot change silently at execution time.
 
+### Reservations from use, for many apps
+
+**Set reservations from use…** in Containers' **⋯** menu offers the
+reservation Edit would suggest for every app at once. Apps reserving nothing
+are ticked - at most 50, the most one run changes; apps whose reservation only
+differs from their use are listed unticked, since it may have been set on
+purpose. Ticking or unticking works the plan out again.
+
+These are left out, with the reason:
+
+- apps Flux or Argo CD apply, since their next sync would undo the change -
+  each shows a patch to commit instead, a Deployment with only the
+  containers' `resources` set;
+- Homestead itself, whose reservations come from its manifest;
+- apps with less than a day of readings;
+- for an operator, apps only an admin may change - management, system,
+  service-account or host-privileged ones, as in Edit.
+
+Starting it runs a job, **Set reservations on N apps**, that changes one app
+at a time - all its containers in one restart - and waits for it to run again
+before the next. An app is skipped, with the reason in the job, if its
+reservation was changed by hand since the review, if no host has room for its
+new reservation, or if it is gone. One that does not come back within ten
+minutes stops the job; the rest are not changed. Follow and stop it in
+**Jobs**.
+
 ## Reviewed image updates and rollback
 
 Image updates and rollback show the exact immutable target images and a full-pod
