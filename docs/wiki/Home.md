@@ -52,7 +52,7 @@ probe - and your first sign-in.
 ## Using Homestead
 
 - [Dashboard and nodes](Dashboard-and-nodes) - health, every disk, hardware, drive health
-- [Containers](Containers) - deploy, edit, groups, updates, privileges, placement
+- [Containers](Containers) - deploy, edit, groups, updates, privileges, placement, reservations and priority tiers
 - [App Store](App-Store) - Unraid's Community Applications, deployed properly
 - [Importing](Importing) - containers and VMs from an Unraid server, a Docker Compose file, or a VM disk image
 - [Storage](Storage) - volumes, Longhorn allocation, adding disks, changing a storage class
@@ -67,7 +67,7 @@ probe - and your first sign-in.
 - [Moving between clusters](Moving-between-clusters) - bring workloads from one cluster to another
 - [Helm and Resources](Helm-and-resources) - charts, and every Kubernetes object
 - [API](API) - scoped, expiring API keys for Home Assistant, scripts and AI agents
-- [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health
+- [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health, and how hosts share the work
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 
 The [reference](https://github.com/homestead-lab/homestead/blob/main/docs/reference.md) covers every feature in depth; this wiki is the guided

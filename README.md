@@ -153,7 +153,9 @@ volumes, ports, hardware and updates handled for you.
 placement; update checks with a monitored rollout and one-click rollback, or
 automatic updates in your maintenance window - snapshotted first, rolled back if
 the app stops answering. Logos from the app store, change history with undo,
-log search across every app, and start and stop schedules.
+log search across every app, and start and stop schedules. Reservations
+suggested from a week of real use, set for many apps at once, and priority
+tiers that say which apps keep running when the cluster is short of room.
 Homestead updates itself from its own button on the top bar.
 
 **Monitoring** - every app and VM asked every minute whether it answers, with
@@ -186,7 +188,9 @@ on a versioned, self-describing API ([OpenAPI](docs/api/openapi.json),
 <td width="50%" valign="top">
 
 **Nodes and hardware** - node health, SMART drive health, disks, iGPU, Coral
-and USB passthrough, and a terminal on every node.
+and USB passthrough, and a terminal on every node. One placement choice for
+the whole cluster - spread by capacity or a hot spare - and containers moved
+back when a host returns.
 
 **Cluster** - control-plane and etcd health, adding and removing hosts, and
 platform versions: k3s or RKE2, Longhorn, KubeVirt, CDI, kube-vip and Multus
@@ -194,7 +198,8 @@ upgraded a step at a time, Harvester upgrades followed.
 
 **Dashboard and alerts** - 90 days of history, push notifications, and MQTT
 with Home Assistant discovery; a forecast of when storage fills, and what
-would stop or move if a host went down.
+would stop or move if a host went down, and whether the other hosts have room
+for it.
 
 **Network shares and Portal** - Samba shares from any volume, and a tile for
 every web interface on your network.

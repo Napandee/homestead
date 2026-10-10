@@ -627,6 +627,28 @@ same input plus `capacity_token` and `confirm_capacity: true` to `/api/move`.
 Unreviewed calls are refused. Legacy `auto` calls must select and review an
 explicit suggested destination; it cannot change silently at execution time.
 
+### Balance hosts
+
+**Balance hosts** on Nodes, or **Rebalance containers…** in Containers' menu,
+evens out a cluster where one host ended up running most of the busy apps -
+after a reboot, say. It proposes the fewest moves (ten at most) that bring the
+busiest host down, each one worth its restart, by what the hosts and apps use
+now. Untick any move you do not want, then start it.
+
+Only what the scheduler could already place elsewhere moves: a Deployment with
+one copy, not pinned to its host, not on host-local storage, and only to hosts
+its hardware and placement rules allow. An app reading its volumes locally
+moves only to a host that holds a copy of them. An operator's review leaves out
+apps only an admin may change, as Move does, and the job checks again before
+each move. The review lists what was left out and why. The job moves one
+container at a time, waits until it runs on its new host, and stops if one
+does not come up within ten minutes; cancelling stops after the current one.
+
+With a hot spare ([Settings](Settings#how-hosts-share-the-work)), apps on
+standby hosts are moved off first - as far as the other hosts stay under 90%
+full - and nothing is moved onto them. **Settings → Placement → When a host
+comes back** can suggest or schedule this when a host returns.
+
 ### Reservations from use, for many apps
 
 **Set reservations from use…** in Containers' **⋯** menu offers the

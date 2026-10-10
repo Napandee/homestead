@@ -23,6 +23,7 @@
 - [Moving between clusters](Moving-between-clusters)
 - [Helm and Resources](Helm-and-resources)
 - [Settings](Settings)
+- [How hosts share the work](Settings#how-hosts-share-the-work)
 - [API](API)
 
 **Help**
