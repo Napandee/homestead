@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "server" / "probe"))
 import homestead_disks as DISKS
 import server
+import homestead_storage_classes as STORAGE_CLASSES
 
 NODES = {
     "node1": {"metadata": {"name": "node1"}, "spec": {"tags": ["rack-a"], "disks": {
@@ -90,6 +91,10 @@ class TagTests(unittest.TestCase):
 
 class StorageClassTagTests(unittest.TestCase):
     def setUp(self):
+        # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
         self.sent = []
         Cluster()
 
@@ -104,18 +109,18 @@ class StorageClassTagTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def test_a_class_asks_for_its_tags(self):
-        result = server.create_storage_class({"name": "longhorn-ssd", "replicas": 2, "disk_tags": ["ssd"],
+        result = STORAGE_CLASSES.create_storage_class({"name": "longhorn-ssd", "replicas": 2, "disk_tags": ["ssd"],
                                               "node_tags": "rack-a"})
         params = self.sent[-1]["parameters"]
         self.assertEqual(("ssd", "rack-a"), (params["diskSelector"], params["nodeSelector"]))
         self.assertIn("only node1", result["message"])
 
     def test_a_class_no_disk_fits_says_so(self):
-        result = server.create_storage_class({"name": "longhorn-nvme", "disk_tags": ["nvme"]})
+        result = STORAGE_CLASSES.create_storage_class({"name": "longhorn-nvme", "disk_tags": ["nvme"]})
         self.assertIn("will not schedule", result["message"])
 
     def test_a_class_without_tags_has_no_selectors(self):
-        result = server.create_storage_class({"name": "longhorn-any"})
+        result = STORAGE_CLASSES.create_storage_class({"name": "longhorn-any"})
         self.assertNotIn("diskSelector", self.sent[-1]["parameters"])
         self.assertNotIn("schedule", result["message"])
 

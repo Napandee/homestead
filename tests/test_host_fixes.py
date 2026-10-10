@@ -13,6 +13,7 @@ import homestead_specs as SPECS
 import homestead_shares as shares
 import homestead_manifests as MANIFESTS
 import server
+import homestead_storage_classes as STORAGE_CLASSES
 import test_shares
 
 
@@ -99,22 +100,22 @@ class StorageClassTests(unittest.TestCase):
     def test_the_default_chosen_here_is_kept_when_k3s_marks_local_path_again(self):
         demoted = []
         with tempfile.TemporaryDirectory() as data, \
-                mock.patch.object(server, "DATA_DIR", data), \
-                mock.patch.object(server, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN)]), \
-                mock.patch.object(server, "ksend", lambda method, path, body=None, **k: demoted.append(path)):
+                mock.patch.object(STORAGE_CLASSES, "DATA_DIR", data), \
+                mock.patch.object(STORAGE_CLASSES, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN)]), \
+                mock.patch.object(STORAGE_CLASSES, "ksend", lambda method, path, body=None, **k: demoted.append(path)):
             Path(data, "default-class.json").write_text(json.dumps({"name": "longhorn"}))
-            self.assertEqual(("longhorn", ["local-path"]), server.reconcile_default_class())
+            self.assertEqual(("longhorn", ["local-path"]), STORAGE_CLASSES.reconcile_default_class())
         self.assertEqual(["/apis/storage.k8s.io/v1/storageclasses/local-path"], demoted)
 
     def test_with_nothing_chosen_longhorn_wins_over_local_path(self):
-        with tempfile.TemporaryDirectory() as data, mock.patch.object(server, "DATA_DIR", data), \
-                mock.patch.object(server, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN)]), \
-                mock.patch.object(server, "ksend", lambda *a, **k: None):
-            self.assertEqual(("longhorn", ["local-path"]), server.reconcile_default_class())
+        with tempfile.TemporaryDirectory() as data, mock.patch.object(STORAGE_CLASSES, "DATA_DIR", data), \
+                mock.patch.object(STORAGE_CLASSES, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN)]), \
+                mock.patch.object(STORAGE_CLASSES, "ksend", lambda *a, **k: None):
+            self.assertEqual(("longhorn", ["local-path"]), STORAGE_CLASSES.reconcile_default_class())
 
     def test_one_default_is_left_alone(self):
-        with mock.patch.object(server, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN, default=False)]):
-            self.assertIsNone(server.reconcile_default_class())
+        with mock.patch.object(STORAGE_CLASSES, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN, default=False)]):
+            self.assertIsNone(STORAGE_CLASSES.reconcile_default_class())
 
 
 class ShutdownTests(unittest.TestCase):

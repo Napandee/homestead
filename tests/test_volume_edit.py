@@ -3,6 +3,7 @@ import copy
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_storage_classes as STORAGE_CLASSES
 
 PVC = "/api/v1/namespaces/lab/persistentvolumeclaims/example-data"
 LH_VOLUME = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-123"
@@ -14,6 +15,10 @@ class VolumeEditTests(unittest.TestCase):
     a Longhorn path without its namespace, after the size had changed."""
 
     def setUp(self):
+        # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
         self.saved = server.kget, server.ksend
         self.sent = []
         self.replicas = 1
@@ -139,7 +144,7 @@ class VolumeEditTests(unittest.TestCase):
         cfg = self.prepare_restore_repair()
         self.assertTrue(server.volume_edit_options("lab", "example-data")["repair_class"])
         self.assertEqual([], self.sent)
-        server.repair_volume_class(cfg)
+        STORAGE_CLASSES.repair_volume_class(cfg)
         self.assertEqual(1, len(self.sent))
         method, path, body = self.sent[0]
         self.assertEqual(("POST", "/apis/storage.k8s.io/v1/storageclasses"), (method, path))
@@ -154,20 +159,20 @@ class VolumeEditTests(unittest.TestCase):
         # resize. The maintenance pass now puts the class back by itself.
         self.prepare_restore_repair()
         self.objects["/apis/storage.k8s.io/v1/storageclasses"] = {"items": [{"metadata": {"name": "longhorn"}}]}
-        self.assertEqual([self.class_name], server.repair_restore_classes())
+        self.assertEqual([self.class_name], STORAGE_CLASSES.repair_restore_classes())
         self.assertEqual([("POST", "/apis/storage.k8s.io/v1/storageclasses")], [s[:2] for s in self.sent])
         self.assertTrue(self.sent[0][2]["allowVolumeExpansion"])
         # With the class present nothing more is sent.
         self.objects["/apis/storage.k8s.io/v1/storageclasses"]["items"].append({"metadata": {"name": self.class_name}})
         self.sent.clear()
-        self.assertEqual([], server.repair_restore_classes())
+        self.assertEqual([], STORAGE_CLASSES.repair_restore_classes())
         self.assertEqual([], self.sent)
 
     def test_a_claim_that_cannot_be_matched_is_left_alone(self):
         self.prepare_restore_repair()
         self.pv["spec"]["csi"]["volumeAttributes"].pop("fromBackup")
         self.objects["/apis/storage.k8s.io/v1/storageclasses"] = {"items": []}
-        self.assertEqual([], server.repair_restore_classes())
+        self.assertEqual([], STORAGE_CLASSES.repair_restore_classes())
         self.assertEqual([], self.sent)
 
     def test_restored_longhorn_claims_are_not_other_volumes(self):
@@ -179,7 +184,7 @@ class VolumeEditTests(unittest.TestCase):
                  "status": {"phase": "Bound"}}
         self.objects["/api/v1/persistentvolumeclaims"] = {"items": [self.pvc, local]}
         saved = server.storage_classes
-        server.storage_classes = lambda: [{"name": "longhorn", "provisioner": server.LONGHORN_PROVISIONER}]
+        server.storage_classes = lambda: [{"name": "longhorn", "provisioner": STORAGE_CLASSES.LONGHORN_PROVISIONER}]
         try:
             names = [row["name"] for row in server.other_volumes()]
         finally:
@@ -200,7 +205,7 @@ class VolumeEditTests(unittest.TestCase):
                 if case == "missing_backup": self.pv["spec"]["csi"]["volumeAttributes"].pop("fromBackup")
                 if case == "incomplete_inventory": self.objects["/api/v1/persistentvolumeclaims"]["metadata"] = {"continue": "next"}
                 if case == "no_review": cfg["confirm"] = ""
-                with self.assertRaises(ValueError): server.repair_volume_class(cfg)
+                with self.assertRaises(ValueError): STORAGE_CLASSES.repair_volume_class(cfg)
                 self.assertEqual([], self.sent)
                 self.pvc["status"]["phase"] = "Bound"
 
@@ -208,7 +213,7 @@ class VolumeEditTests(unittest.TestCase):
         cfg = self.prepare_restore_repair()
         self.objects["/apis/storage.k8s.io/v1/storageclasses/" + self.class_name] = {"allowVolumeExpansion": False}
         with self.assertRaisesRegex(ValueError, "already exists"):
-            server.repair_volume_class(cfg)
+            STORAGE_CLASSES.repair_volume_class(cfg)
         self.objects.pop("/apis/storage.k8s.io/v1/storageclasses/" + self.class_name)
         other_claim, other_pv = copy.deepcopy(self.pvc), copy.deepcopy(self.pv)
         other_claim["metadata"].update(name="example-other", uid="other-uid")
@@ -218,7 +223,7 @@ class VolumeEditTests(unittest.TestCase):
         self.objects["/api/v1/persistentvolumeclaims"]["items"].append(other_claim)
         self.objects["/api/v1/persistentvolumes/pvc-other"] = other_pv
         with self.assertRaisesRegex(ValueError, "different storage settings"):
-            server.repair_volume_class(cfg)
+            STORAGE_CLASSES.repair_volume_class(cfg)
         self.assertEqual([], self.sent)
 
 
