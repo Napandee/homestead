@@ -61,5 +61,22 @@ class RecurringJobRunTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
 
+class CronRunStateTests(unittest.TestCase):
+    """A CronJob's last run, as Data protection and Architecture show it."""
+
+    def test_a_run_after_the_last_success_that_is_no_longer_active_failed(self):
+        state = LH.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z", "lastSuccessfulTime": "2026-09-22T03:01:00Z"})
+        self.assertEqual((True, 0), (state["last_failed"], state["running"]))
+
+    def test_a_run_still_going_has_not_failed(self):
+        state = LH.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z", "active": [{"name": "job-1"}]})
+        self.assertEqual((False, 1), (state["last_failed"], state["running"]))
+
+    def test_a_run_that_succeeded_and_one_that_never_ran_have_not_failed(self):
+        self.assertFalse(LH.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z",
+                                            "lastSuccessfulTime": "2026-09-23T03:02:00Z"})["last_failed"])
+        self.assertEqual({"last_run": "", "last_success": "", "running": 0, "last_failed": False}, LH.cron_run_state(None))
+
+
 if __name__ == "__main__":
     unittest.main()

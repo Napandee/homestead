@@ -683,6 +683,21 @@ the same way: the ports of any Service that selects them
 (such as Harvester's load balancers), their disks and those disks' replicas,
 with their host and address. A stopped VM is shown faded, since its disks are
 still there. Homestead's temporary browser, copy and import pods are hidden.
+Each app is one card named after its Deployment, StatefulSet or DaemonSet
+(a pod nothing owns is named after itself), apps of the same name in two
+namespaces stay apart, and a port is drawn to the app whose pods its Service
+selects - not to every app sharing an `app` label.
+
+Pods a Job starts are not drawn as apps. Scheduled jobs (CronJobs outside the
+system namespaces), such as a nightly backup per app, are listed under
+**Scheduled jobs**, collapsed beneath the containers: each with its last run,
+when it runs, and the volumes it uses. The count of failed last runs stays on
+the collapsed heading. A schedule set to UTC shows its next run. One with no
+time zone runs on the clock of the cluster's controller - on k3s often the
+host's local time - so it is put in words "on the cluster's clock", with no
+next run the page could get wrong. One with another time zone, or written in a
+form such as `@daily` or `SUN`, is shown as written. One-off Jobs are not
+shown.
 
 Each address is marked **VIP** or **node** (a node's own address) with the
 node answering for it, and an address no connection reaches is outlined in
@@ -690,7 +705,7 @@ red with the reason (see [Address map](Networking#address-map)).
 Each node lists its own address and the VIPs it answers for; hovering a node
 highlights its addresses, and hovering an address highlights its node.
 
-A volume no container or VM definition references is **disconnected**. Those
+A volume no container, VM or scheduled job references is **disconnected**. Those
 retained and old volumes are hidden by default; **Show disconnected** reveals a
 red group beneath the live volumes without letting it obscure the active paths.
 

@@ -102,16 +102,18 @@ def _cron_runs():
         crons = kget(f"/apis/batch/v1/namespaces/{LHNS}/cronjobs").get("items", [])
     except Exception:
         return {}
-    runs = {}
-    for cron in crons:
-        status = cron.get("status", {}) or {}
-        last, ok = status.get("lastScheduleTime", "") or "", status.get("lastSuccessfulTime", "") or ""
-        active = len(status.get("active") or [])
-        runs[cron["metadata"]["name"]] = {
-            "last_run": last, "last_success": ok, "running": active,
-            "last_failed": bool(last and not active and (not ok or ok < last)),
-        }
-    return runs
+    return {cron["metadata"]["name"]: cron_run_state(cron.get("status")) for cron in crons}
+
+
+def cron_run_state(status):
+    """A CronJob's last run from its status: when, whether it is running, and
+    whether it failed - a run that started after the last success and is no
+    longer active did."""
+    status = status or {}
+    last, ok = status.get("lastScheduleTime", "") or "", status.get("lastSuccessfulTime", "") or ""
+    active = len(status.get("active") or [])
+    return {"last_run": last, "last_success": ok, "running": active,
+            "last_failed": bool(last and not active and (not ok or ok < last))}
 
 
 def run_job(name):

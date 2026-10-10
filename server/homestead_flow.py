@@ -2,6 +2,7 @@
 which workloads and VMs use those volumes, and the ports and VIPs that reach
 them - read from the cluster as it is now."""
 import homestead_hardware as HW
+import homestead_longhorn as LH
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_routes
@@ -23,6 +24,59 @@ def bind(_kget, sys_ns, _display_icon, _moving_copy, _parse_cpu, _parse_mem, _ag
     kget, SYS_NS = _kget, sys_ns
     display_icon, moving_copy = _display_icon, _moving_copy
     parse_cpu, parse_mem, age_secs = _parse_cpu, _parse_mem, _age_secs
+
+
+def _flow_owner(pod):
+    """The name of what a pod runs for, or None for a pod a Job made.
+
+    A Deployment's pods belong to a ReplicaSet named after it plus the pod
+    template's hash, so the Deployment is found without reading ReplicaSets.
+    Only a pod no controller owns - a bare pod, or a static one its node
+    mirrors - falls back to its app label or its own name: guessing from the
+    name made shared-postgres-0 into "shared" and gave every CronJob a card
+    of its own."""
+    meta = pod.get("metadata") or {}
+    labels = meta.get("labels") or {}
+    owner = next((o for o in meta.get("ownerReferences") or [] if o.get("controller")),
+                 None) or next(iter(meta.get("ownerReferences") or []), None)
+    if owner:
+        kind, name = owner.get("kind"), owner.get("name") or ""
+        if kind == "Job":
+            return None
+        if kind == "ReplicaSet":
+            # Argo Rollouts names its ReplicaSets the same way, with its own label.
+            suffix = "-" + (labels.get("pod-template-hash") or labels.get("rollouts-pod-template-hash") or "")
+            return name[:-len(suffix)] if suffix != "-" and name.endswith(suffix) else name
+        if name and kind != "Node":
+            return name
+    return labels.get("app") or meta.get("name", "")
+
+
+def _flow_jobs(vol_by_pvc=None):
+    """Scheduled jobs outside the system namespaces, for their own lane on the
+    architecture page: a run is brief, so as cards among the apps they crowded
+    them out and a failed run looked like a healthy one. Each keeps the
+    volumes it mounts, so a volume only a backup job uses is not taken for
+    one nothing uses."""
+    try:
+        crons = kget("/apis/batch/v1/cronjobs").get("items", [])
+    except Exception:
+        return []
+    out = []
+    for cron in crons:
+        meta, spec, status = cron.get("metadata") or {}, cron.get("spec") or {}, cron.get("status") or {}
+        if meta.get("namespace") in SYS_NS or NAMES.label_of(meta, "task"):
+            continue
+        pod_spec = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+        claims = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
+                         for v in pod_spec.get("volumes") or []} - {None, ""})
+        out.append({
+            "id": f"j:{meta['namespace']}/{meta['name']}", "name": meta["name"], "ns": meta["namespace"],
+            "schedule": spec.get("schedule", ""), "time_zone": spec.get("timeZone") or "",
+            "suspended": bool(spec.get("suspend")), **LH.cron_run_state(status),
+            "claims": [{"pvc": c, "vid": ((vol_by_pvc or {}).get(c) or {}).get("id", "")} for c in claims],
+        })
+    return sorted(out, key=lambda j: (j["ns"], j["name"]))
 
 
 def get_flow2():
@@ -112,17 +166,25 @@ def get_flow2():
         ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
         return wanted.get((s["metadata"]["namespace"], s["metadata"]["name"])) or (ing[0].get("ip") if ing else None)
 
-    ports_by_app, vips = {}, {}
+    app_services, vips = [], {}
     for s in svcs:
         app = (s["spec"].get("selector") or {}).get("app")
         if not app:
             continue
         vip = address_of(s)
+        app_services.append((s, [{"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip}
+                                 for prt in s["spec"].get("ports", []) or []]))
         for prt in s["spec"].get("ports", []) or []:
-            rec = {"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip}
-            ports_by_app.setdefault(app, []).append(rec)
             if vip:
                 vips.setdefault(vip, []).append({"port": prt.get("port"), "app": app})
+
+    def app_ports(ns, labels):
+        """An app's ports: each Service in its namespace whose whole selector
+        its pods match. Two controllers can share an app label - a web part
+        and a worker - and only the one the Service selects is reached."""
+        return [rec for s, recs in app_services if s["metadata"]["namespace"] == ns
+                and all(labels.get(k) == v for k, v in (s["spec"].get("selector") or {}).items())
+                for rec in recs]
 
     def vm_ports(ns, name, labels):
         """A VM's ports: those of each Service in its namespace that selects
@@ -151,9 +213,12 @@ def get_flow2():
     except Exception:
         pmet = {}
 
-    # --- workloads
+    # --- workloads: one card per controller, from the pods running for it.
+    # A pod that has finished - a CronJob's last run, a completed Job - is no
+    # longer part of what the cluster runs; scheduled jobs are listed apart.
+    # Running pods come first so a card shows where its app runs now.
     seen, wls, launchers = set(), [], {}
-    for p in pods:
+    for p in sorted(pods, key=lambda p: p["status"].get("phase") != "Running"):
         labels = p["metadata"].get("labels", {}) or {}
         # A VM runs in a virt-launcher pod; it is shown as the VM, below, not
         # as a container - and every VM's launcher is not one app.
@@ -162,29 +227,34 @@ def get_flow2():
                 launchers[(p["metadata"]["namespace"], labels.get("vm.kubevirt.io/name")
                            or labels.get("kubevirt.io/domain", ""))] = p
             continue
-        app = labels.get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
-        if app in seen:
+        if p["status"].get("phase") in ("Succeeded", "Failed"):
             continue
-        seen.add(app)
+        name = _flow_owner(p)
+        if not name:
+            continue
+        ns = p["metadata"]["namespace"]
+        if (ns, name) in seen:
+            continue
+        seen.add((ns, name))
         claims = []
         for vol in p["spec"].get("volumes", []) or []:
             cn = (vol.get("persistentVolumeClaim") or {}).get("claimName")
             if cn:
                 claims.append({"pvc": cn, "vid": vol_by_pvc[cn]["id"] if cn in vol_by_pvc else ""})
-        cu, mu = pmet.get((p["metadata"]["namespace"], p["metadata"]["name"]), (0, 0))
+        cu, mu = pmet.get((ns, p["metadata"]["name"]), (0, 0))
         wls.append({
-            "id": "w:" + app, "name": app, "kind": "container",
+            "id": f"w:{ns}/{name}", "name": name, "kind": "container",
             "node": p["spec"].get("nodeName", ""),
             "phase": p["status"].get("phase", ""),
             "uptime": age_secs(p["status"].get("startTime")),
             "cpu": round(cu, 3), "mem_mb": round(mu / 1048576, 1),
-            "ns": p["metadata"]["namespace"],
+            "ns": ns,
             "image": (p["spec"].get("containers") or [{}])[0].get("image", ""),
-            "icon": display_icon(dep_meta.get((p["metadata"]["namespace"], app), {})),
-            "hardware": HW.workload_features(p["spec"], dep_meta.get((p["metadata"]["namespace"], app), {})),
+            "icon": display_icon(dep_meta.get((ns, name), {})),
+            "hardware": HW.workload_features(p["spec"], dep_meta.get((ns, name), {})),
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
-            "claims": claims, "ports": ports_by_app.get(app, []),
+            "claims": claims, "ports": app_ports(ns, labels),
         })
     # --- virtual machines, running or not: a stopped VM's disks are still here
     vmi_by = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in vmis}
@@ -235,6 +305,7 @@ def get_flow2():
                   for k in names],
         "volumes": sorted(vols, key=lambda x: x["name"]),
         "workloads": sorted(wls, key=lambda x: x["name"]),
+        "jobs": _flow_jobs(vol_by_pvc),
         "vips": [{"id": "i:" + ip, "ip": ip, "ports": sorted(p, key=lambda x: x["port"]),
                   "kind": (place.get(ip) or {}).get("kind", "vip"), "node": (place.get(ip) or {}).get("node", ""),
                   "state": (place.get(ip) or {}).get("state", "ok"), "reason": (place.get(ip) or {}).get("reason", "")}
