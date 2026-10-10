@@ -97,8 +97,10 @@ command already started inside the guest or container has terminated.
 
 Operators cannot exec or replace code in management/system workloads, helper
 pods, nondefault service accounts or workloads with host privileges. Checks apply
-to the original identity and the proposed manifest, including sidecars. New
-ordinary deployments do not mount service-account tokens. Custom installations
+to the original identity and the proposed manifest, including sidecars. A
+background job an operator starts - rebalancing containers - is checked for that
+operator when it is reviewed and again before each change it makes, since the
+job itself runs with no request behind it. New ordinary deployments do not mount service-account tokens. Custom installations
 must also avoid granting powerful Kubernetes rights to the default service account.
 API control keys are limited to the same ordinary workload targets; their scopes
 never select the internal authorization bypass.

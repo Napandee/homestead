@@ -264,6 +264,74 @@ class JobTests(unittest.TestCase):
         self.assertEqual([], self.c.moved)
 
 
+class RoleTests(unittest.TestCase):
+    """An operator may not move an app only an admin may change; the job,
+    which runs with no request behind it, asks again for whoever started it."""
+
+    def setUp(self):
+        self.c = Cluster()
+        self.asked = []
+
+        def guard(dep, ns, role):
+            self.asked.append((dep["metadata"]["name"], role))
+            if role == "operator" and dep["metadata"]["name"] == "frigate":
+                raise PermissionError("only an admin can operate management workloads")
+        C.bind(self.c.get, lambda dep: {}, lambda n, r: (True, []), self.c.apply, ("lab", "homestead"), lambda: True,
+               None, guard)
+        self.item = {"id": "job", "ref": {"moves": [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"}],
+                                          "index": 0, "moved": 0, "stage": "move"}}
+
+    def tearDown(self):
+        bind(Cluster())
+
+    def test_an_operators_plan_leaves_out_what_only_an_admin_may_change(self):
+        found = C.plan(role="operator")
+        self.assertNotIn("lab/frigate", [m["id"] for m in found["moves"]])
+        self.assertIn({"id": "lab/frigate", "why": C.ADMIN_ONLY}, found["skipped"])
+        self.assertIn("lab/frigate", [m["id"] for m in C.plan(role="admin")["moves"]])
+
+    def test_an_admin_or_homestead_itself_is_not_asked(self):
+        C.plan()
+        self.assertEqual([], [a for a in self.asked if a[1] is None])
+
+    def test_a_move_an_operator_was_never_offered_is_refused(self):
+        moves = [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"}]
+        with self.assertRaisesRegex(PermissionError, "only an admin"):
+            C.reviewed(moves, [], C.review_token(moves, []), role="operator")
+        self.assertEqual("lab/frigate", C.reviewed(moves, [], C.review_token(moves, []), role="admin")[0]["id"])
+
+    def test_the_job_asks_again_for_whoever_started_it(self):
+        self.item["ref"]["role"] = "operator"
+        C.status(self.item)
+        self.assertEqual([], self.c.moved)
+        self.assertIn(f"lab/frigate: {C.ADMIN_ONLY}", self.item["ref"]["skipped"])
+
+    def test_a_job_with_no_role_moves_as_before(self):
+        C.status(self.item)
+        self.assertEqual([("frigate", "k1")], self.c.moved)
+
+
+class GuardAsTests(unittest.TestCase):
+    def test_guard_as_refuses_an_operator_a_workload_with_its_own_service_account(self):
+        import server
+        dep = deployment("backup")
+        dep["spec"]["template"]["spec"]["serviceAccountName"] = "backup-sa"
+        with self.assertRaises(PermissionError):
+            server.guard_as(dep, "lab", "operator")
+        server.guard_as(dep, "lab", "admin")
+        server.guard_as(deployment("plain"), "lab", "operator")
+        self.assertIsNone(server.HOSTACCESS.role())
+
+    def test_the_job_keeps_who_started_it_and_homesteads_own_run_has_no_role(self):
+        import server
+        from unittest import mock
+        plan = {"moves": [{"ns": "lab", "name": "web", "id": "lab/web", "from": "k2", "to": "k1"}], "excluded": []}
+        with mock.patch.object(server.OPS, "start", return_value={}) as start:
+            server.start_container_rebalance(plan, role="operator")
+            server.start_container_rebalance(plan, " after k2 came back")
+        self.assertEqual(["operator", None], [c.args[4]["role"] for c in start.call_args_list])
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -122,6 +122,23 @@ class StandbyRebalanceTests(unittest.TestCase):
         bind(c)
         self.assertEqual([], C.plan(avoid=["k3"])["moves"])
 
+    def test_an_operators_plan_leaves_admin_only_apps_on_a_standby_host(self):
+        c = Cluster()
+        for p in c.pods:
+            p["spec"]["nodeName"] = "k1"
+
+        def guard(dep, ns, role):
+            if role == "operator" and dep["metadata"]["name"] == "frigate":
+                raise PermissionError("admin only")
+        C.bind(c.get, lambda dep: {}, lambda n, r: (True, []), c.apply, ("lab", "homestead"), lambda: True, None, guard)
+        try:
+            found = C.plan(avoid=["k1"], role="operator")
+        finally:
+            bind(Cluster())
+        self.assertTrue(found["moves"])
+        self.assertNotIn("lab/frigate", [m["id"] for m in found["moves"]])
+        self.assertIn({"id": "lab/frigate", "why": C.ADMIN_ONLY}, found["skipped"])
+
 
 class TickTests(unittest.TestCase):
     def test_each_look_keeps_the_taints_in_step_and_plans_around_standby(self):
