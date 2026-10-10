@@ -92,6 +92,16 @@ class ThroughTheServer(unittest.TestCase):
             handler.do_GET()
         self.assertEqual((200, {"policies": []}), handler._send.call_args.args)
 
+    def test_a_reply_keeps_its_own_status(self):
+        server, handler = self.handler("POST", "/api/test/busy")
+        ROUTES._table[("POST", "/api/test/busy")] = ROUTES.Route(
+            "POST", "/api/test/busy", "admin", lambda request: ROUTES.Reply(409, {"error": "busy", "plan": []}), "test")
+        try:
+            handler.do_POST()
+        finally:
+            del ROUTES._table[("POST", "/api/test/busy")]
+        self.assertEqual((409, {"error": "busy", "plan": []}, "application/json"), handler._send.call_args.args)
+
     def test_a_module_error_is_answered_as_server_py_answers_its_own(self):
         server, handler = self.handler("POST", "/api/firewall/delete", {"name": "gone"})
         with mock.patch.object(server.FIREWALL, "remove", side_effect=ValueError("The policy no longer exists")):

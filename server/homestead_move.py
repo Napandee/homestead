@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+import homestead_routes as ROUTER
 from homestead_pod_resources import storage_gib
 
 kget = ksend = None
@@ -747,8 +748,40 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
                       + "; its first start can take a minute while the image downloads"}
 
 
+def answer(call):
+    """A move step's answer, with a refusal as a 409 rather than a 500.
+
+    The Homestead on the other end waits out a 5xx and stops on a 4xx, so
+    "no, it is still running" has to arrive as the second kind.
+    """
+    try:
+        return call()
+    except (ValueError, PermissionError) as error:
+        return ROUTER.Reply(409, {"error": str(error)})
+    except Unreachable as error:
+        return ROUTER.Reply(502, {"error": str(error)})
+
+
+def _transfers(request):
+    b = request.body
+    return answer(lambda: transfers(b.get("name"), b.get("allow"), b.get("size_gb") or 100,
+                                    b.get("lb_ip") or "", b.get("vip_mode") or "", int(b.get("port") or 0)))
+
+
+def _setup_storage(request):
+    b = request.body
+    return answer(lambda: setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or "",
+                                        b.get("vip_mode") or "", int(b.get("port") or 0)))
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/move/clusters/check"): ("admin", lambda request: answer(lambda: check_cluster(request.body.get("name")))),
+    ("POST", "/api/move/clusters/readiness"): ("admin", lambda request: answer(lambda: readiness(request.body.get("name")))),
+    ("POST", "/api/move/clusters/storage"): ("admin", _setup_storage),
+    ("POST", "/api/move/clusters/transfers"): ("admin", _transfers),
+    ("POST", "/api/move/clusters/target"): ("admin", lambda request: answer(lambda: remote(
+        request.body.get("name"), "/api/objectstore/longhorn", {"replace": True}))),
     ("GET", "/api/fleet/legacy"): ("viewer", lambda request: legacy_clusters()),
     ("GET", "/api/move/inventory"): ("viewer", lambda request: inventory()),
     ("GET", "/api/move/clusters"): ("viewer", lambda request: list_clusters()),

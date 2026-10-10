@@ -1716,13 +1716,6 @@ def self_stop_warning():
             "on the cluster. Restart it instead if it needs a fresh start.")
 
 
-class WorkloadRefused(Exception):
-    """A start the capacity check will not allow as asked: 409, with its plan."""
-    def __init__(self, message, plan):
-        super().__init__(message)
-        self.plan = plan
-
-
 def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     """A Deployment to n replicas, after the checks the app makes: never the
     SMB server's, never Homestead's own unless confirmed, and a start only
@@ -1736,9 +1729,9 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     if n > 0:
         plan = workload_start_plan(ns, name, n)
         if plan["blocked"]:
-            raise WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
+            raise WORKLOADS.WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
         if plan["requires_confirmation"] and not confirm_capacity:
-            raise WorkloadRefused("review node memory before starting", plan)
+            raise WORKLOADS.WorkloadRefused("review node memory before starting", plan)
     if n:
         clear_unstarted_pods(ns, name, stopping=False)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
@@ -5205,7 +5198,7 @@ def api_scale(ns, name, n):
     """Start or stop a container for /api/v1, under the app's own checks."""
     try:
         result = scale_workload(ns, name, n, confirm_capacity=True, confirm_self=False)
-    except WorkloadRefused as refused:
+    except WORKLOADS.WorkloadRefused as refused:
         raise API_V1.ApiError(409, str(refused), blockers=list((refused.plan or {}).get("blockers") or [])) from None
     return {"warnings": list((result.get("plan") or {}).get("warnings") or []), "job": None}
 
@@ -6359,6 +6352,8 @@ import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
+import homestead_deploy as DEPLOY
+import homestead_workloads as WORKLOADS
 import homestead_onboard as ONBOARD
 import homestead_cfaccess as CFACCESS
 import homestead_push as PUSH
@@ -6682,7 +6677,21 @@ OPS.RESOLVERS["reclass"] = storage_move_progress
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
-MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
+MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: guard_managed_smb(ns, name))
+
+
+def _late(*names):
+    """server.py's helpers by name, each looked up when called, so a module's
+    routes reach the same function server.py's own code does - and a test
+    that replaces one here replaces it there."""
+    return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
+
+
+WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, cache=_cache, default_ns=DEFAULT_NS)
+DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, ca_feed=CA_FEED)
+UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS), _cache)
+IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
+                 "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
 # A move reads in the Activity tray like every other long job.
 OPS.RESOLVERS["move"] = MOVE_ENGINE.op_state
 ONBOARD.bind(kget, ksend, DEFAULT_NS, OPS)
@@ -9028,6 +9037,8 @@ class H(HTTP.LimitedHandler):
         if isinstance(answer, MODULE_ROUTES.Raw):
             self._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
             self._send(200, answer.body, answer.ctype)
+        elif isinstance(answer, MODULE_ROUTES.Reply):
+            self._send(answer.code, answer.body, answer.ctype)
         else:
             self._send(200, answer)
         return True
@@ -9302,8 +9313,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, report["hosts"].get(node) or {"node": node, "available": False, "ports": [],
                                       "conditions": [], "reason": "No node probe answers on this host."})
                 return self._send(200, report)
-            if p == "/api/workloads":
-                return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal/status":
                 return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/self/data/prepare":
@@ -9335,32 +9344,13 @@ class H(HTTP.LimitedHandler):
             if p == "/api/cluster/upgrades":
                 current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
                 return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
-            # What this cluster offers another one. Read-only, and the half
-            # of a move the far cluster calls.
+            # What this cluster offers another one. Read-only.
             if p == "/api/onboard/guide":
                 return self._move(ONBOARD.guide)
             if p == "/api/cluster/cleanup":
                 return self._move(ONBOARD.cleanup_report)
             if p == "/api/cluster/removal":
                 return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
-            # Which release this is, asked by another Homestead before a move.
-            if p == "/api/move/definition":
-                return self._move(lambda: MOVE_SOURCE.in_namespace(
-                    (q.get("namespace") or [""])[0], MOVE_SOURCE.definition,
-                    (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
-            if p == "/api/move/source-status":
-                return self._move(lambda: MOVE_SOURCE.in_namespace(
-                    (q.get("namespace") or [""])[0], MOVE_SOURCE.status,
-                    (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
-            if p == "/api/move/target":
-                return self._move(MOVE_SOURCE.target)
-            if p == "/api/image-updates":
-                force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
-                # Settings › Homestead checks Homestead's own parts, not every app.
-                only = (q.get("only") or [""])[0] == "homestead"
-                report = json.loads(json.dumps(UPDATES.homestead_report() if force and only else UPDATES.report(force)))
-                report["policy"] = update_policy_status()
-                return self._send(200, report)
             if p == "/api/volumes/other":
                 return self._send(200, cached("volother", 10, other_volumes))
             if p == "/api/volumes":
@@ -9443,10 +9433,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cluster_shutdown(review=True).review())
             if p == "/api/cluster/shutdown":
                 return self._send(200, {"state": cluster_shutdown().public_state()})
-            if p == "/api/workloads/start-plan":
-                return self._send(200, workload_start_plan(
-                    (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
-                    int((q.get("replicas") or [1])[0])))
             if p == "/api/vm/create-options":
                 return self._send(200, vm_create_options())
             if p == "/api/vm-disks/import-plan":
@@ -9457,10 +9443,6 @@ class H(HTTP.LimitedHandler):
                     (q.get("backup") or [""])[0],
                     (q.get("ns") or [DEFAULT_NS])[0],
                     (q.get("name") or [""])[0]))
-            if p == "/api/workload":
-                ns, nm = q["ns"][0], q["name"][0]
-                d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
-                return self._send(200, workload_edit_payload(ns, nm, d))
             if p == "/api/storageclasses":
                 classes = storage_classes()
                 if (q.get("facts") or [""])[0] == "1":
@@ -9482,9 +9464,6 @@ class H(HTTP.LimitedHandler):
                                          "access_modes": i.get("spec", {}).get("accessModes", []),
                                          "storage_class": i.get("spec", {}).get("storageClassName", "")}
                                         for i in items])
-            if p == "/api/deploy/options":
-                ns = (q.get("ns") or [DEFAULT_NS])[0]
-                return self._send(200, deploy_options(ns))
             if p == "/api/logos":
                 try:
                     return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
@@ -9509,80 +9488,6 @@ class H(HTTP.LimitedHandler):
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
                 return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, get_workloads), apps, helm_chart_logos())})
-            if p == "/api/appstore":
-                term = (q.get("q") or [""])[0].lower().strip()
-                cat = (q.get("cat") or [""])[0].lower().strip()
-                sort_mode = (q.get("sort") or ["home"])[0].lower().strip()
-                if sort_mode not in {"home", "spotlight", "popular", "trending", "recent"}:
-                    sort_mode = "home"
-                try:
-                    apps = fetch_appstore()
-                except Exception as e:
-                    return self._send(502, {"error": f"app feed unavailable: {e}"})
-                source = {"url": catalog_source(), "default": catalog_source() == CA_FEED}
-                if sort_mode == "home" and not term and not cat:
-                    # The catalogue's front page, as Community Applications lays it out.
-                    return self._send(200, {"sort": "home", "total": len(apps), "source": source, "sections": {
-                        mode: [appstore_summary(a) for a in rank_appstore(apps, mode)[:count]]
-                        for mode, count in (("spotlight", 4), ("recent", 8), ("trending", 8), ("popular", 8))}})
-                if sort_mode == "home":
-                    sort_mode = "popular"
-                if term:
-                    apps = search_appstore(apps, term)
-                else:
-                    apps = rank_appstore(apps, sort_mode)
-                if cat:
-                    apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
-                spotlight = None if term else appstore_spotlight(apps)
-                limit = 60 if term else 30
-                return self._send(200, {"total": len(apps), "apps": [appstore_summary(a) for a in apps[:limit]],
-                                        "sort": "search" if term else sort_mode, "source": source,
-                                        "spotlight": appstore_summary(spotlight) if spotlight else None})
-            if p == "/api/appstore/app":
-                key = (q.get("key") or [""])[0]
-                try:
-                    app = next((a for a in fetch_appstore() if appstore_key(a) == key), None)
-                except Exception as e:
-                    return self._send(502, {"error": f"app feed unavailable: {e}"})
-                if not app:
-                    return self._send(404, {"error": "that app is no longer in the catalogue"})
-                return self._send(200, {k: v for k, v in app.items() if k != "config"})
-            if p == "/api/logs/search":
-                apps = [a for a in (q.get("apps") or [""])[0].split(",") if a]
-                return self._send(200, LOGSEARCH.search(
-                    cached("wl", 5, get_workloads), (q.get("q") or [""])[0], logsearch_read,
-                    window=(q.get("window") or ["1h"])[0], apps=apps,
-                    regex=(q.get("regex") or [""])[0] == "1", case=(q.get("case") or [""])[0] == "1"))
-            if p == "/api/logs":
-                ns = q["ns"][0]
-                pod = (q.get("pod") or [""])[0]
-                job = (q.get("job") or [""])[0]
-                if job and not pod:
-                    matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
-                    pod = matches[0]["metadata"]["name"] if matches else ""
-                if not pod:
-                    return self._send(404, {"error": "Logs are not available yet because no pod exists."})
-                tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
-                container = (q.get("container") or [""])[0]
-                if not container:
-                    # A pod with more than one container has to be told which;
-                    # asking without a name is a 400 from Kubernetes.
-                    try:
-                        spec = kget(f"/api/v1/namespaces/{ns}/pods/{pod}").get("spec", {}) or {}
-                        names = [c.get("name") for c in spec.get("containers", []) or []]
-                        container = names[0] if names else ""
-                    except Exception:
-                        container = ""
-                query = f"tailLines={tail}&timestamps=true" + (
-                    f"&container={urllib.parse.quote(container)}" if container else "")
-                req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                             headers={"Authorization": f"Bearer {TOKEN}"})
-                try:
-                    with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-                        return self._send(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
-                except urllib.error.HTTPError as error:
-                    return self._send(409 if error.code in (400, 404) else error.code,
-                                      {"error": logs_refusal(error, pod, container)})
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
@@ -9743,14 +9648,6 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout-everywhere", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/deploy":
-                return self._send(200, reviewed_deploy(b))
-            if p == "/api/compose/parse":
-                return self._send(200, compose_report(b))
-            if p == "/api/compose/preview":
-                return self._send(200, compose_preview(b))
-            if p == "/api/compose/apply":
-                return self._send(200, compose_apply(b))
             if p == "/api/self/data/abandon":
                 try:
                     return self._send(200, abandon_self_data_preparation(b))
@@ -9857,10 +9754,6 @@ class H(HTTP.LimitedHandler):
                         guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
                                          meta.get("name"))
                 return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
-            if p == "/api/workloads/group":
-                return self._send(200, set_workload_groups(b))
-            if p == "/api/workloads/logo":
-                return self._send(200, set_workload_logos(b))
             if p == "/api/vms/logo":
                 return self._send(200, set_vm_logos(b))
             if p == "/api/uptime/setting":
@@ -9869,8 +9762,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_vm_monitoring(b))
             if p == "/api/power-schedules/set":
                 return self._send(200, set_schedule(b))
-            if p == "/api/image-updates/mode":
-                return self._send(200, set_update_mode(b))
             if p == "/api/restore-tests/settings":
                 enabled = b.get("enabled")
                 if not isinstance(enabled, bool):
@@ -9885,49 +9776,6 @@ class H(HTTP.LimitedHandler):
                 if any(o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
                     raise ValueError("a restore test is already running; one runs at a time")
                 return self._send(200, {"ok": True, "operation": start_restore_test(ns, name)})
-            if p == "/api/scale":
-                try:
-                    scale_workload(b["ns"], b["name"], int(b["replicas"]),
-                                   confirm_capacity=b.get("confirm_capacity") is True,
-                                   confirm_self=b.get("confirm_self") is True)
-                except WorkloadRefused as refused:
-                    return self._send(409, {"error": str(refused), "plan": refused.plan})
-                return self._send(200, {"ok": True})
-            if p == "/api/restart":
-                return self._send(200, restart_workload(b["ns"], b["name"]))
-            if p == "/api/image-updates/channel":
-                settings = get_app_settings()
-                settings["updates"]["channel"] = b.get("channel")
-                return self._send(200, save_app_settings(settings))
-            if p == "/api/image-updates/preview":
-                return self._send(200, preview_image_update(b))
-            if p == "/api/image-updates/managed":
-                ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-                guard_managed_smb(ns, name)
-                result = UPDATES.set_managed(ns, name, b.get("by"))
-                _cache.pop("wl", None)
-                return self._send(200, result)
-            if p == "/api/image-updates/apply":
-                guard_managed_smb(b.get("ns"), b.get("name"))
-                enforce_update_policy(b)
-                result = reviewed_image_update(b, "update")
-                result["operation"] = OPS.start(
-                    "image-update", f"Update {b['name']}",
-                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
-                    {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
-                return self._send(200, result)
-            if p == "/api/image-updates/rollback":
-                guard_managed_smb(b.get("ns"), b.get("name"))
-                result = reviewed_image_update(b, "rollback")
-                result["operation"] = OPS.start(
-                    "image-rollback", f"Roll back {b['name']}",
-                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
-                    {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
-                return self._send(200, result)
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
@@ -9935,65 +9783,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/volumes/chown":
                 return self._send(200, IMP.chown_claim(
                     b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))
-            if p == "/api/imports/delete":
-                plan = IMP.import_cleanup_plan(b.get("name"), b.get("namespace"))
-                if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
-                    raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
-                made = {row["name"] for row in plan["volumes"] if row["created"]}
-                # The request names claims; asking for all of them is the old
-                # boolean, which an import with one volume still sends.
-                wanted = [str(claim) for claim in (b.get("remove_volumes") or [])]
-                if b.get("remove_volume") and not wanted:
-                    wanted = [row["name"] for row in plan["volumes"] if row["created"]]
-                borrowed = [claim for claim in wanted if claim not in made]
-                if borrowed:
-                    raise ValueError(f"this import copied into {', '.join(sorted(borrowed))} "
-                                     "without creating it, so it will not delete it")
-                if b.get("remove_workload") and plan["workload"]:
-                    guard_managed_smb(plan["namespace"], plan["workload"])
-                result = IMP.delete_import(b.get("name"), b.get("namespace"))
-                if result.get("journalled"):
-                    return self._send(200, {**result, "removed": [], "releasing": []})
-                removed = []
-                if b.get("remove_workload") and plan["workload"]:
-                    ns, name = plan["namespace"], plan["workload"]
-                    services = set(NETWORK.workload_service_names(ns, name)) | {name}
-                    ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-                    for service in sorted(services):
-                        try:
-                            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
-                        except urllib.error.HTTPError:
-                            pass
-                    removed.append(f"workload {name}")
-                    # Its pod holds the same claims the caller may be deleting
-                    # next, so wait for it to go rather than leaving them
-                    # Terminating behind the pvc-protection finaliser.
-                    IMP.wait_for_pods_gone(ns, f"app={name}")
-                    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                for claim in wanted:
-                    ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
-                                    f"persistentvolumeclaims/{claim}")
-                    removed.append(f"volume {claim}")
-                    _cache.pop("vol", None); _cache.pop("stor", None)
-                # A claim something still mounts only gets a deletion stamp, so
-                # say it is releasing rather than reporting it gone.
-                releasing = []
-                for claim in wanted:
-                    try:
-                        live = kget(f"/api/v1/namespaces/{plan['namespace']}/"
-                                    f"persistentvolumeclaims/{claim}")
-                    except Exception:
-                        continue
-                    if (live.get("metadata", {}) or {}).get("deletionTimestamp"):
-                        releasing.append(claim)
-                result["releasing"] = releasing
-                if removed:
-                    result["message"] = result["message"] + " with " + " and ".join(removed)
-                if result.get("releasing"):
-                    result["message"] += (" — " + ", ".join(result["releasing"])
-                                          + " will finish deleting once released")
-                result["removed"] = removed
-                return self._send(200, result)
             if p == "/api/network/service/delete":
                 guard_managed_smb(b.get("namespace"), b.get("name"))
                 result = NETWORK.delete_service(b.get("namespace"), b.get("name"), b.get("force"))
@@ -10070,113 +9859,19 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_nfs_export(
                     b.get("name", ""), str(b.get("clients") or "").strip(),
                     b.get("read_only") is not False))
-            if p == "/api/appstore/install":
-                cfg = template_to_cfg(b["app"])
-                cfg.update(b.get("overrides") or {})
-                # Older API clients must use the same review as the current UI.
-                # The token is issued by /api/preview for the resolved template
-                # plus overrides, not for the catalogue identifier alone.
-                cfg.update(capacity_token=b.get("capacity_token"), confirm_capacity=b.get("confirm_capacity") is True)
-                result = reviewed_deploy(cfg)
-                reused = result.get("reused_volumes") or []
-                if reused:
-                    result["detail"] = f"kept the existing {', '.join(reused)} - its data carries on"
-                return self._send(200, result)
-            if p == "/api/edit/preview":
-                guard_managed_smb(b.get("ns", ""), b.get("name", ""))
-                _, context, plan = edit_capacity_plan(b)
-                return self._send(200, {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context)})
-            if p == "/api/edit":
-                guard_managed_smb(b.get("ns", ""), b.get("name", ""))
-                prepared, context, plan = edit_capacity_plan(b)
-                CAPACITY_REVIEW.enforce(b, plan, context)
-                if context.get("action") == RENAME.KIND:
-                    def admission(dep):
-                        return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
-                            get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
-                            nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
-                    result = RENAME.dispatch(b, context, prepared["deployment"], kget, ksend, OPS, admission)
-                    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                    return self._send(200, result)
-                moves = RESTRUCTURE.copies(b)
-                guard_self(b.get("ns", ""), b.get("name", ""),
-                           stopping=("autostart" in b and not b["autostart"]) or
-                                    ("replicas" in b and int(b.get("replicas") or 0) == 0),
-                           confirmed=b.get("confirm_self") is True, moving=bool(moves))
-                if moves:
-                    result = COPY_JOB.start(b, context, prepared, moves, kget, OPS,
-                                            lambda: apply_reviewed_edit(b, prepared, hold=True))
-                else:
-                    result = apply_reviewed_edit(b, prepared)
-                return self._send(200, result)
-            if p == "/api/move/preview":
-                return self._send(200, preview_host_move(b))
-            if p == "/api/move":
-                result = reviewed_host_move(b)
-                result["operation"] = OPS.start(
-                    "deployment", f"Move {b['name']}",
-                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers", {"namespace": b["ns"], "name": b["name"], "undo": "rollout"})
-                return self._send(200, result)
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
-            if p == "/api/move/clusters/check":
-                return self._move(lambda: MOVE.check_cluster(b.get("name")))
-            if p == "/api/move/clusters/readiness":
-                return self._move(lambda: MOVE.readiness(b.get("name")))
-            if p == "/api/move/clusters/storage":
-                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or "",
-                                                             b.get("vip_mode") or "", int(b.get("port") or 0)))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
             if p == "/api/cluster/cleanup/run":
                 return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
-            if p == "/api/move/source":
-                action, kind, name = b.get("action"), b.get("kind"), b.get("name")
-                identity = {"transfer_id": str(b.get("transfer_id") or ""),
-                            "expected_uid": str(b.get("expected_uid") or "")}
-                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name, **identity,
-                                                                 expected_version=str(b.get("expected_version") or "")),
-                           "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
-                                                                 b.get("claims") if isinstance(b.get("claims"), list) else None,
-                                                                 **identity, cleanup_id=str(b.get("cleanup_id") or "")),
-                           "cleanup": lambda: MOVE_SOURCE.cleanup(identity["transfer_id"], identity["expected_uid"]),
-                           "release": lambda: MOVE_SOURCE.release(kind, name, **identity),
-                           "remove": lambda: MOVE_SOURCE.remove(
-                               kind, name, bool(b.get("volumes")),
-                               b.get("claims") if isinstance(b.get("claims"), list) else None)}
-                if action not in actions:
-                    return self._send(400, {"error": "unknown move action"})
-                return self._move(lambda: MOVE_SOURCE.in_namespace(b.get("namespace"), actions[action]))
-            if p in ("/api/move/plan", "/api/move/start"):
-                if p.endswith("/start") and (b.get("kind") or "container") == "container":
-                    guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
-                call = MOVE_ENGINE.plan if p.endswith("plan") else MOVE_ENGINE.start
-                return self._move(lambda: call(
-                    b.get("cluster"), b.get("kind") or "container", b.get("name"),
-                    b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
-                    b.get("address") or "", b.get("storage_class") or "",
-                    b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
-                    b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices")))
-            if p == "/api/move/moves/retry":
-                return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
-            if p == "/api/move/moves/abandon":
-                return self._move(lambda: MOVE_ENGINE.abandon(b.get("id")))
-            if p == "/api/move/moves/finish":
-                return self._move(lambda: MOVE_ENGINE.finish(b.get("id"), bool(b.get("volumes"))))
             if p == "/api/objectstore/transfers":
                 return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
                                                                 str(b.get("lb_ip") or ""), str(b.get("vip_mode") or ""),
                                                                 int(b.get("port") or 0)))
-            if p == "/api/move/clusters/transfers":
-                return self._move(lambda: MOVE.transfers(b.get("name"), b.get("allow"), b.get("size_gb") or 100,
-                                                         b.get("lb_ip") or "", b.get("vip_mode") or "",
-                                                         int(b.get("port") or 0)))
             if p == "/api/objectstore/longhorn":
                 return self._send(200, OBJECTS.request_target(replace=bool(b.get("replace", True))))
-            if p == "/api/move/clusters/target":
-                return self._move(lambda: MOVE.remote(b.get("name"), "/api/objectstore/longhorn", {"replace": True}))
             if p == "/api/node/probe/install":
                 return self._send(200, PROBE.install(HOMESTEAD_VERSION))
             if p == "/api/node/probe/allocation":
@@ -10365,32 +10060,6 @@ class H(HTTP.LimitedHandler):
                 settings["longhorn"] = {"offline_rebuilding": enabled}
                 save_app_settings(settings)
                 return self._send(200, LHREBUILD.save(enabled))
-            if p == "/api/workloads/rebalance":
-                running = next((i for i in OPS.list_operations() if i.get("kind") == CREBALANCE.KIND
-                                and i.get("status") not in OPS.TERMINAL), None)
-                if running:
-                    return self._send(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
-                if b.get("restart") is not True:
-                    return self._send(409, {"error": "Moving a container restarts it; confirm the restarts"})
-                if b.get("moves") is not None:
-                    # The moves reviewed, checked against the cluster now -
-                    # not a plan made again from load that moves by the second.
-                    try:
-                        moves = CREBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
-                    except ValueError as error:
-                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [])})
-                    plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
-                else:
-                    plan = CREBALANCE.plan(b.get("exclude") or [])
-                    if plan["review_token"] != b.get("review_token"):
-                        return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
-                if not plan["moves"]:
-                    return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
-                operation = OPS.start(CREBALANCE.KIND, f"Rebalance {len(plan['moves'])} container{'' if len(plan['moves']) == 1 else 's'}",
-                                      {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
-                                      "Starting with the first container")
-                return self._send(202, {"operation": operation})
             if p == "/api/longhorn/rebalance":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)
@@ -10450,25 +10119,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, VMSTORE.refresh(force=True))
             if p == "/api/vm-disks/import":
                 result = IMP.import_vm_disk(b, ops=OPS)
-                return self._send(200, result)
-            if p == "/api/images/prepull":
-                result = IMP.prepull(b["image"], b.get("nodes"))
-                result["operation"] = OPS.start(
-                    "image-pull", f"Pull {b['image']}",
-                    {"kind": "Image", "name": b["image"], "namespace": DEFAULT_NS},
-                    "/image-cache", {"namespace": DEFAULT_NS, "name": result["daemonset"]})
-                return self._send(200, result)
-            if p == "/api/images/vm/delete":
-                _cache.pop("vmimages", None)
-                return self._send(200, IMP.delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", "")))
-            if p == "/api/images/forget-rollback":
-                return self._send(200, IMP.forget_rollback(b.get("namespace") or DEFAULT_NS, b.get("name", "")))
-            if p == "/api/images/cleanup":
-                result = IMP.cleanup_image(b.get("digest"), b.get("nodes"))
-                result["operation"] = OPS.start(
-                    "image-cleanup", f"Clean cached image {result['digest'][:19]}…",
-                    {"kind": "Image", "name": result["image"], "namespace": DEFAULT_NS},
-                    "/image-cache", {"namespace": DEFAULT_NS, "pods": result["pods"]})
                 return self._send(200, result)
             if p == "/api/volumes/create":
                 return self._send(200, create_volume(b))
@@ -10531,22 +10181,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True, "removed": removed,
                                         "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
                                                   if removed else "nothing to remove: every restore class is still in use"})
-            if p == "/api/workloads/failover":
-                for item in b.get("items") or []:
-                    guard_managed_smb(item.get("ns"), item.get("name"))
-                result = FAILOVER.set_many(b.get("items") or [])
-                _cache.pop("wl", None)
-                return self._send(200, result)
-            if p == "/api/workload/primary-port":
-                ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
-                guard_managed_smb(ns, name)
-                port = int(b.get("port") or 0)
-                ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-                      {"metadata": {"annotations": {NAMES.key("primary-port"): str(port) if port else None}}},
-                      ctype="application/merge-patch+json")
-                _cache.pop("wl", None)
-                return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
-                                        else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
                 return self._send(200, STORAGE_WORKFLOW.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
                                                                runtime_check=storage_runtime_check))
@@ -10612,11 +10246,6 @@ class H(HTTP.LimitedHandler):
                          "backup": result["backup"], "restore_config": b,
                          "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
-            if p == "/api/import/preview":
-                return self._send(200, preview_import(b))
-            if p == "/api/import":
-                result = reviewed_import(b)
-                return self._send(200, result)
             if p == "/api/operations/cancel":
                 # The route lets any operator in; what the job's own cancel
                 # does - delete VMs, stop a volume move - may need more.
@@ -10638,36 +10267,6 @@ class H(HTTP.LimitedHandler):
                     "/networking", {"namespace": result["namespace"], "name": result["name"]},
                     "Waiting for the Service address and endpoints")
                 return self._send(200, result)
-            if p == "/api/preview":
-                b = analyze_deploy_intent(b)
-                current = None
-                context = None
-                if b.get("target_mode") == "existing":
-                    ns = _dns_name(b.get("namespace") or DEFAULT_NS, "namespace")
-                    target = _dns_name(b.get("target_workload"), "existing workload")
-                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-                    context = rollout_review_context(current)
-                capacity = deploy_capacity_plan(b, existing=current)
-                capacity_token = CAPACITY_REVIEW.issue(b, context)
-                b = prepare_deploy_network(b)
-                b = apply_deploy_bindings(b)
-                b = apply_generated_secrets(b)
-                if b.get("target_mode") == "existing":
-                    ns = b.get("namespace") or DEFAULT_NS
-                    target = _dns_name(b.get("target_workload"), "existing workload")
-                    dep, svc = build_sidecar_deployment(b, current)
-                    return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
-                                            "capacity": capacity, "capacity_token": capacity_token,
-                                            "app_profile": b.get("app_profile"),
-                                            "impact": {"mode": "existing", "workload": target,
-                                                       "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
-                                                       "message": "Saving updates the Deployment template and restarts every container in its pods."}})
-                dep, svc = build_deployment(b)
-                return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
-                                        "capacity": capacity, "capacity_token": capacity_token,
-                                        "app_profile": b.get("app_profile"),
-                                        "impact": {"mode": "new", "workload": dep["metadata"]["name"],
-                                                   "message": "Creates a new independently managed Deployment."}})
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
@@ -10724,22 +10323,6 @@ def _reconcile_permissions():
             print(f"moved {adopted['changed']} objects' keys to {NAMES.DOMAIN}", flush=True)
     except Exception as error:
         print(f"old keys: not moved ({str(error)[:120]})", flush=True)
-
-
-def logs_refusal(error, pod, container):
-    """What Kubernetes' refusal to give logs means, in words rather than its JSON."""
-    try:
-        message = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
-    except Exception:
-        message = ""
-    who = f"{container} in {pod}" if container else pod
-    if "waiting to start" in message or "ContainerCreating" in message or "PodInitializing" in message:
-        return f"{who} has not started yet, so there are no logs. It shows here once it is running."
-    if "not found" in message and "pods" in message:
-        return f"{pod} no longer exists; the workload has probably replaced it. Reopen the logs."
-    if "terminated" in message:
-        return f"{who} has stopped and Kubernetes kept no logs from it."
-    return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
 
 
 def _upgrade_node_probe():
