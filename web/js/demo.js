@@ -1705,10 +1705,10 @@ ssh_pwauth: true
           value: `${found.name}-config`, managed: false }],
         // A week of recorded use: the app outgrew what it reserves, and its
         // sidecar has only a few hours so far.
-        usage: index ? { days: 1, samples: 40, window_days: 7, since: "", cpu_p95_m: 3, cpu_max_m: 6, mem_p95_mi: 21, mem_max_mi: 24,
-            why: "A suggestion needs a day of readings; 40 of 288 so far." }
-          : { days: 7, samples: 2016, window_days: 7, since: "", cpu_p95_m: 118, cpu_max_m: 640, mem_p95_mi: 412, mem_max_mi: 598,
-            suggest: { cpu: "180m", memory: "528Mi", capped: [], differs: true } } }));
+        usage: index ? { days: 1, samples: 40, rounds: 40, window_days: 7, since: "", cpu_p95_m: 3, cpu_max_m: 6, mem_p95_mi: 21, mem_max_mi: 24,
+            why: "A suggestion needs a day of readings; 3 hours so far." }
+          : { days: 7, samples: 2016, rounds: 2016, window_days: 7, since: "", cpu_p95_m: 118, cpu_max_m: 640, mem_p95_mi: 412, mem_max_mi: 598,
+            suggest: { cpu: "180m", memory: "528Mi", capped: [], cpu_now_m: 50, memory_now_mi: 128, lowers: false, differs: true } } }));
       return { ns: found.ns, name: found.name, container_name: containers[0].name,
         pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
@@ -2493,13 +2493,13 @@ ssh_pwauth: true
       // A nightly backup per app, as a cluster with ReadWriteOnce volumes has:
       // one failed last night, so the collapsed lane still says so.
       jobs: [{ id: "j:lab/backup-frigate", name: "backup-frigate", ns: "lab", schedule: "15 2 * * *", time_zone: "", suspended: false,
-          last_run: new Date(Date.now() - 9 * 3600e3).toISOString(), last_success: "", running: 0, last_failed: true, claims: ["frigate-config"] },
+          last_run: new Date(Date.now() - 9 * 3600e3).toISOString(), last_success: "", running: 0, last_failed: true, claims: [{ pvc: "frigate-config", vid: "v:frigate" }] },
         { id: "j:lab/backup-home-assistant", name: "backup-home-assistant", ns: "lab", schedule: "0 2 * * *", time_zone: "", suspended: false,
           last_run: new Date(Date.now() - 9.2 * 3600e3).toISOString(), last_success: new Date(Date.now() - 9.2 * 3600e3 + 40e3).toISOString(),
-          running: 0, last_failed: false, claims: ["home-assistant"] },
+          running: 0, last_failed: false, claims: [{ pvc: "home-assistant", vid: "v:home" }] },
         { id: "j:lab/backup-paperless", name: "backup-paperless", ns: "lab", schedule: "30 2 * * *", time_zone: "", suspended: false,
           last_run: new Date(Date.now() - 8.7 * 3600e3).toISOString(), last_success: new Date(Date.now() - 8.7 * 3600e3 + 52e3).toISOString(),
-          running: 0, last_failed: false, claims: ["paperless-data"] }],
+          running: 0, last_failed: false, claims: [{ pvc: "paperless-data", vid: "v:paperless" }] }],
       vips: [{ id: "i:192.0.2.214", ip: "192.0.2.214", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "frigate", port: 5000 }] },
         { id: "i:192.0.2.215", ip: "192.0.2.215", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "home-assistant", port: 8123 }] },
         { id: "i:192.0.2.216", ip: "192.0.2.216", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "paperless", port: 8000 }] },

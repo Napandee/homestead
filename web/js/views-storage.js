@@ -26,7 +26,7 @@ function architectureData(data) {
     graph.nodes.push(...cluster.nodes.map(n=>({...n,site,id:key(n.id),copies:n.copies.map(c=>({...c,vid:key(c.vid)}))})));
     graph.vips.push(...cluster.vips.map(v=>({...v,site,id:key(v.id)})));
     // A member on an older version sends no scheduled jobs.
-    graph.jobs.push(...(cluster.jobs||[]).map(j=>({...j,site,id:key(j.id)})));
+    graph.jobs.push(...(cluster.jobs||[]).map(j=>({...j,site,id:key(j.id),claims:(j.claims||[]).map(c=>({...c,vid:key(c.vid)}))})));
   }
   return graph;
 }
@@ -43,7 +43,9 @@ async function viewFlow() {
   f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
   STATE.data.alinks = links;
   const used = new Set(links.flat());
-  const mountedVolumes = new Set(links.filter(([, , type]) => type === "mount").map(([, id]) => id));
+  // A volume only a scheduled job mounts - a backup target - is in use too.
+  const mountedVolumes = new Set([...links.filter(([, , type]) => type === "mount").map(([, id]) => id),
+    ...(f.jobs || []).flatMap(j => (j.claims || []).map(c => c.vid)).filter(Boolean)]);
   const host = w => (w.node || "").replace(/^harvester-/, "");
   const kind = w => w.kind === "vm" ? (w.running ? `VM · ${host(w) || w.state || "starting"}` : `VM · ${(w.state || "stopped").toLowerCase()}`) : host(w);
   const disconnectedVolumes = f.volumes.filter(v => !mountedVolumes.has(v.id));
@@ -126,18 +128,18 @@ async function viewFlow() {
    like a good one - so the count of failures stays on the closed summary. */
 function scheduledJobs(jobs) {
   const failed = jobs.filter(j => j.last_failed).length;
-  // Kubernetes reads a schedule without a time zone on the cluster's clock,
-  // which is the UTC that CRON assumes; with one of its own, no next run is
-  // worked out rather than a wrong one.
-  const utc = j => !j.time_zone || ["UTC", "Etc/UTC"].includes(j.time_zone);
-  const last = j => j.running ? '<span class="pill slim med">running</span>'
-    : !j.last_run ? '<span class="dim">not run yet</span>'
-    : j.last_failed ? `<span class="pill slim crit">failed</span> ${esc(fmtAgo(Math.max(1, (Date.now() - Date.parse(j.last_run)) / 1000)))}`
-    : `ran ${esc(fmtAgo(Math.max(1, (Date.now() - Date.parse(j.last_run)) / 1000)))}`;
-  const row = j => `<div class="a2item a2job ${j.last_failed ? "a2jobfailed" : ""}"${clusterAttr(j)}
-      title="${esc(`${j.ns}/${j.name} · ${CRON.describe(j.schedule)}${utc(j) ? "" : ` (${j.time_zone})`}${j.claims.length ? ` · uses ${j.claims.join(", ")}` : ""}`)}">
+  // Homestead assumes a schedule without a time zone is on UTC, as CRON
+  // does; one with a zone of its own, or written in a way CRON cannot read
+  // (@daily, SUN), is shown as written rather than with a wrong next run.
+  const plain = j => (!j.time_zone || ["UTC", "Etc/UTC"].includes(j.time_zone)) && CRON.parse(j.schedule);
+  const when = j => plain(j) ? CRON.describe(j.schedule) : `${j.schedule}${j.time_zone ? ` (${j.time_zone})` : ""}`;
+  const uses = j => (j.claims || []).map(c => c.pvc).join(", ");
+  const row = j => `<div class="a2item a2job ${j.last_failed ? "a2jobfailed" : ""}"${clusterAttr(j)} tabindex="0"
+      data-tip="${esc(`${j.ns}/${j.name} · ${when(j)}${uses(j) ? ` · uses ${uses(j)}` : ""}`)}">
       <span class="a2name">${esc(j.name)}</span>
-      <span class="a2jobwhen">${last(j)}<span class="dim"> · ${j.suspended ? "paused" : utc(j) ? `next ${nextRun(j.schedule)}` : esc(j.schedule)}</span></span></div>`;
+      <span class="a2jobwhen">${lastRunText(j, `the log of its last run, in ${j.ns}`)}<span class="dim"> · ${j.suspended ? "paused"
+        : plain(j) ? `next ${nextRun(j.schedule)}` : esc(when(j))}</span></span>
+      ${uses(j) ? `<span class="a2jobwhen dim">uses ${esc(uses(j))}</span>` : ""}</div>`;
   return `<details class="a2group a2jobs"${STATE.archJobs ? " open" : ""} ontoggle="STATE.archJobs=this.open">
     <summary class="a2subhead">Scheduled jobs <span>${failed ? `<b class="badtext">${failed} failed</b> · ` : ""}${jobs.length}</span></summary>
     ${jobs.map(row).join("")}</details>`;
