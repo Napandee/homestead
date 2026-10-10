@@ -2550,6 +2550,7 @@ import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
 import homestead_placement_mode as PLACEMODE
+import homestead_capacity as CAPACITY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2706,6 +2707,7 @@ USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_o
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
 PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, get_app_settings), SYS_NS)
+CAPACITY.bind(kget, NODES.node_impact, NODES._impact_sources, FLOW._flow_owner, lambda pod: NAMES.label_of(pod["metadata"], "task"))
 RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS,
               lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
               (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,

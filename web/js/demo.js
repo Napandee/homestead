@@ -2016,6 +2016,23 @@ ssh_pwauth: true
         skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" }] };
     },
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
+    // Each host as if it failed; harvester-node2 is the issue's own example.
+    "/api/capacity/forecast": { unreserved: 4, pending: 0, hosts: [
+      { node: "harvester-node1", verdict: "fits", moving: 5, unreserved: 1, waits: [], evicted: [],
+        sentence: "If harvester-node1 fails, harvester-node3 would have 9.2 of 15 GiB of memory reserved. It fits.",
+        hosts: [{ name: "harvester-node2", mem_gib: 8.1, mem_before_gib: 6.4, mem_alloc_gib: 15, cpu_m: 2100, cpu_alloc_m: 8000, full: 0.54, received: true },
+          { name: "harvester-node3", mem_gib: 9.2, mem_before_gib: 5.9, mem_alloc_gib: 15, cpu_m: 2600, cpu_alloc_m: 8000, full: 0.613, received: true }] },
+      { node: "harvester-node2", verdict: "waits", moving: 9, unreserved: 2,
+        sentence: "If harvester-node2 fails, harvester-node1 would have 13.7 of 15 GiB of memory reserved; 3 low-tier apps would wait for room or be evicted.",
+        waits: [{ id: "ci/actions-runner", tier: "low", why: "low tier: it waits for room and evicts nothing", mem_gib: 2 },
+          { id: "media/tdarr", tier: "low", why: "low tier: it waits for room and evicts nothing", mem_gib: 1.5 }],
+        evicted: [{ id: "lab/paperless-consumer", tier: "low", why: "evicted from harvester-node1 to make room for lab/home-assistant", on: "harvester-node1", mem_gib: 0.75 }],
+        hosts: [{ name: "harvester-node1", mem_gib: 13.7, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 5200, cpu_alloc_m: 8000, full: 0.913, received: true },
+          { name: "harvester-node3", mem_gib: 12.9, mem_before_gib: 8.8, mem_alloc_gib: 15, cpu_m: 4100, cpu_alloc_m: 8000, full: 0.86, received: true }] },
+      { node: "harvester-node3", verdict: "tight", moving: 4, unreserved: 1, waits: [], evicted: [],
+        sentence: "If harvester-node3 fails, harvester-node1 would have 13.6 of 15 GiB of memory reserved. Tight, but it fits.",
+        hosts: [{ name: "harvester-node1", mem_gib: 13.6, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 4300, cpu_alloc_m: 8000, full: 0.907, received: true },
+          { name: "harvester-node2", mem_gib: 11.2, mem_before_gib: 8.1, mem_alloc_gib: 15, cpu_m: 3800, cpu_alloc_m: 8000, full: 0.747, received: true }] }] },
     "/api/placement": { mode: "standby", unreserved: 4, notes: [], applies: true, hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: true, tainted: true, takes_work: true }] },
     "/api/workloads/priority/plan": url => {
       const picks = Object.fromEntries((url.searchParams.get("chosen") || "").split(",").filter(x => x.includes("=")).map(x => x.split("=")));

@@ -43,6 +43,7 @@ MODULES = (
     "homestead_app_settings",
     "homestead_auth",
     "homestead_baseline",
+    "homestead_capacity",
     "homestead_changes",
     "homestead_cluster",
     "homestead_cluster_shutdown",

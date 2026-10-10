@@ -134,7 +134,11 @@ happens, what an outage of that host would do: which apps and VMs move and to
 which hosts, which wait for it (their failover setting), which stop until it is
 back (nowhere else can run them - the hardware they use, their placement, or
 volumes with no copy elsewhere), which Longhorn volumes would be unavailable or
-run with fewer copies, and which addresses move. Each line says why. It is a
+run with fewer copies, and which addresses move. Each line says why. **Room on
+the other hosts** then says whether the hosts left have the memory and CPU for
+what moves, by what apps reserve and their [priority tier](Containers#priority-tiers),
+and which apps would wait; **Settings → Placement → If a host fails** has the
+same for every host at once ([Settings](Settings#if-a-host-fails)). It is a
 forecast from what Homestead knows now, not a promise: Kubernetes decides at the
 time, with what is free then.
 
