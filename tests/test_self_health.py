@@ -7,16 +7,17 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_share_servers as SERVERS
 
 
 class SambaSwitchTests(unittest.TestCase):
     def test_off_stops_serving_and_keeps_everything(self):
         sent = []
         dep = {"metadata": {"name": server.SMB_NAME}, "spec": {"replicas": 1, "template": {"spec": {"containers": [{"image": "dperson/samba"}]}}}, "status": {"readyReplicas": 1}}
-        with mock.patch.object(server, "kget", lambda path, **k: dep if path.endswith(f"/deployments/{server.SMB_NAME}") else {}), \
-                mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)), \
+        with mock.patch.object(SERVERS, "kget", lambda path, **k: dep if path.endswith(f"/deployments/{server.SMB_NAME}") else {}), \
+                mock.patch.object(SERVERS, "ksend", lambda *a, **k: sent.append(a)), \
                 mock.patch.object(server.SHARES, "list_shares", lambda: [1, 2]):
-            result = server.set_samba(False)
+            result = SERVERS.set_samba(False)
         self.assertEqual(("PATCH", f"/apis/apps/v1/namespaces/{server.SMB_NAMESPACE}/deployments/{server.SMB_NAME}",
                           {"spec": {"replicas": 0}}), sent[0])
         self.assertIn("kept", result["detail"])
@@ -25,12 +26,12 @@ class SambaSwitchTests(unittest.TestCase):
         def missing(path, **k):
             raise urllib.error.HTTPError(path, 404, "missing", None, None)
         applied = []
-        with mock.patch.object(server, "kget", missing), \
-                mock.patch.object(server, "install_samba", lambda address="": {"metadata": {"name": server.SMB_NAME}}), \
+        with mock.patch.object(SERVERS, "kget", missing), \
+                mock.patch.object(SERVERS, "install_samba", lambda address="": {"metadata": {"name": server.SMB_NAME}}), \
                 mock.patch.object(server.SHARES, "list_shares", lambda: []), \
                 mock.patch.object(server.SHARES, "_state", lambda: ([{"name": "media"}], {"media": {}}, None, None, None)), \
                 mock.patch.object(server.SHARES, "apply_samba", lambda rows, creds, dep=None: applied.append(rows)):
-            result = server.set_samba(True)
+            result = SERVERS.set_samba(True)
         self.assertEqual([[{"name": "media"}]], applied)
         self.assertIn("1 share", result["detail"])
 
@@ -53,7 +54,7 @@ class HeartbeatTests(unittest.TestCase):
                 mock.patch.object(server.LEADER, "is_leader", lambda: True), \
                 mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}), \
                 mock.patch.object(server.NODES, "node_temps", lambda: {}), \
-                mock.patch.object(server, "samba_state", lambda: {"installed": False}), \
+                mock.patch.object(SERVERS, "samba_state", lambda: {"installed": False}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
             health = server.SELF_HEALTH.report()
         states = {row["name"]: row["state"] for row in health["loops"]}
@@ -63,7 +64,7 @@ class HeartbeatTests(unittest.TestCase):
                 mock.patch.object(server.LEADER, "is_leader", lambda: False), \
                 mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {}), \
                 mock.patch.object(server.NODES, "node_temps", lambda: {}), \
-                mock.patch.object(server, "samba_state", lambda: {}), \
+                mock.patch.object(SERVERS, "samba_state", lambda: {}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
             standby = {r["name"]: r["state"] for r in server.SELF_HEALTH.report()["loops"]}
         self.assertEqual("standby", standby["alerts"], "the leader's work is not this copy's to do")

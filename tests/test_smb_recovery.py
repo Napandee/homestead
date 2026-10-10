@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_smb_recovery as recovery
 import homestead_shares as shares
 import server
+import homestead_share_servers as SERVERS
 
 
 class RecoveryTests(unittest.TestCase):
@@ -194,11 +195,11 @@ class RecoveryTests(unittest.TestCase):
     def test_status_reports_partial_not_drift_and_keeps_read_path_non_mutating(self):
         recovery.write(self.dep, {"suspended": {"single": "node offline"}})
         self.dep = shares.configured_deployment(self.dep, self.rows, {})
-        self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = server.SAMBA_IMAGE
-        with mock.patch.object(server, "_optional_smb", side_effect=lambda path: self.dep if "/deployments/" in path else {}), \
+        self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = SERVERS.SAMBA_IMAGE
+        with mock.patch.object(SERVERS, "_optional_smb", side_effect=lambda path: self.dep if "/deployments/" in path else {}), \
                 mock.patch.object(shares, "_state", return_value=(self.rows, {}, {}, {}, self.dep)), \
-                mock.patch.object(server, "ksend") as send:
-            result = server.samba_state()
+                mock.patch.object(SERVERS, "ksend") as send:
+            result = SERVERS.samba_state()
         self.assertTrue(result["in_sync"])
         self.assertTrue(result["partial"])
         self.assertEqual(["replicated"], result["served_shares"])

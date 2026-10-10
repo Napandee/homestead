@@ -1795,163 +1795,8 @@ def _pvc_rows(namespace):
     return sorted(rows, key=lambda row: row["name"])
 
 
-SAMBA_IMAGE = os.environ.get("SAMBA_IMAGE", "dperson/samba:latest")
-SMB_NAME = NAMES.object_name("smb")
-
-
-def _optional_smb(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
-def _smb_path(kind, name):
-    return f"/api{'/v1' if kind == 'services' else 's/apps/v1'}/namespaces/{SMB_NAMESPACE}/{kind}/{name}"
-
-
-def _smb_new_object(old, name):
-    """Prepare a copied Kubernetes object for POST under its new name."""
-    previous_address = next((item.get("ip", "") for item in
-                             ((old.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "")
-    body = copy.deepcopy(old)
-    body.pop("status", None)
-    meta = body.setdefault("metadata", {})
-    for field in ("resourceVersion", "uid", "generation", "creationTimestamp", "managedFields",
-                  "selfLink", "deletionTimestamp", "deletionGracePeriodSeconds", "ownerReferences"):
-        meta.pop(field, None)
-    meta["name"] = name
-    meta.setdefault("labels", {})["app"] = name
-    meta["labels"][NAMES.key("managed")] = "true"
-    if body.get("kind") == "Service":
-        body["spec"]["selector"] = {"app": name}
-        annotations = meta.setdefault("annotations", {})
-        if (previous_address and body["spec"].get("type") == "LoadBalancer"
-                and not any(key in annotations for key in
-                            ("kube-vip.io/loadbalancerIPs", "metallb.universe.tf/loadBalancerIPs"))
-                and not body["spec"].get("loadBalancerIP")):
-            annotations.update(PLATFORM.vip_annotations(previous_address))
-        for field in ("clusterIP", "clusterIPs", "ipFamilies", "healthCheckNodePort"):
-            body["spec"].pop(field, None)
-        for port in body["spec"].get("ports", []) or []:
-            port.pop("nodePort", None)
-    else:
-        body["spec"]["selector"] = {"matchLabels": {"app": name}}
-        body["spec"]["template"].setdefault("metadata", {}).setdefault("labels", {})["app"] = name
-        body["spec"]["template"]["spec"]["containers"][0]["name"] = name
-    return body
-
-
-def _migrate_samba(legacy):
-    with SHARES.LOCK:
-        return _migrate_samba_locked(legacy)
-
-
-def _migrate_samba_locked(legacy):
-    """Recreate the legacy workload under Homestead's name and preserve its VIP.
-
-    The replacement starts at zero replicas so RWO claims are never mounted by
-    both pods. If cutover fails, the old Deployment and Service are restored.
-    """
-    old_dep_path = _smb_path("deployments", "samba")
-    new_dep_path = _smb_path("deployments", SMB_NAME)
-    old_svc_path = _smb_path("services", "samba")
-    new_svc_path = _smb_path("services", SMB_NAME)
-    old_service = _optional_smb(old_svc_path)
-    rows, credentials, *_ = SHARES._state()
-    new_dep = _smb_new_object(legacy, SMB_NAME)
-    replicas = int((legacy.get("spec") or {}).get("replicas", 1) or 0)
-    new_dep["spec"]["replicas"] = 0
-    new_dep = SHARES.configured_deployment(new_dep, rows, credentials)
-    if old_service:
-        new_service = _smb_new_object(old_service, SMB_NAME)
-    else:
-        cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE,
-               "namespace": SMB_NAMESPACE, "ports": [{"container": 445, "name": "smb", "expose": True}],
-               "vip_mode": "automatic"}
-        cfg = NETWORK.prepare_deploy(cfg)
-        _, new_service = DEPLOY.build_deployment(cfg)
-    made_dep = removed_service = made_service = stopped_old = False
-    try:
-        ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", new_dep)
-        made_dep = True
-        if old_service:
-            ksend("DELETE", old_svc_path)
-            removed_service = True
-        ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", new_service)
-        made_service = True
-        if replicas:
-            ksend("PATCH", old_dep_path, {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-            stopped_old = True
-            ksend("PATCH", new_dep_path, {"spec": {"replicas": replicas}},
-                  ctype="application/merge-patch+json")
-            deadline = time.time() + SHARES.ROLLOUT_TIMEOUT
-            while time.time() < deadline:
-                live = _optional_smb(new_dep_path) or {}
-                status = live.get("status") or {}
-                if (int(status.get("readyReplicas", 0) or 0) >= replicas and
-                        int(status.get("updatedReplicas", 0) or 0) >= replicas and
-                        int(status.get("observedGeneration", 0) or 0) >=
-                        int((live.get("metadata") or {}).get("generation", 0) or 0)):
-                    break
-                time.sleep(1.5)
-            else:
-                raise ValueError("homestead-smb did not become ready; the former Samba workload was restored")
-        ksend("DELETE", old_dep_path)
-    except Exception as error:
-        recovery = []
-        for action in (
-            lambda: ksend("PATCH", new_dep_path, {"spec": {"replicas": 0}},
-                          ctype="application/merge-patch+json") if made_dep else None,
-            lambda: ksend("DELETE", new_svc_path) if made_service else None,
-            lambda: ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services",
-                          _smb_new_object(old_service, "samba")) if removed_service else None,
-            lambda: ksend("PATCH", old_dep_path, {"spec": {"replicas": replicas}},
-                          ctype="application/merge-patch+json") if stopped_old else None,
-            lambda: ksend("DELETE", new_dep_path) if made_dep else None,
-        ):
-            try:
-                action()
-            except Exception as failure:
-                recovery.append(str(failure)[:120])
-        if recovery:
-            raise RuntimeError(f"SMB migration failed: {error}; recovery needs attention: "
-                               + "; ".join(recovery)) from error
-        raise
-    _cache.pop("wl", None); _cache.pop("network", None)
-    return kget(new_dep_path)
-
-
-def install_samba(address=""):
-    """The Samba server shares are served from, made when the first share is:
-    SMB on port 445 at an address of its own - the one chosen, or the next
-    free one. Shares are its arguments, which Homestead writes, so it starts
-    with none."""
-    existing = _optional_smb(_smb_path("deployments", SMB_NAME))
-    if existing:
-        return existing
-    legacy = _optional_smb(_smb_path("deployments", "samba"))
-    if legacy:
-        return _migrate_samba(legacy)
-    cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
-           "ports": [{"container": 445, "name": "smb", "protocol": "TCP", "expose": True}],
-           "vip_mode": "manual" if address else "automatic", "lb_ip": address,
-           "args": ["-g", "server min protocol = SMB2"],
-           "env": {**SHARES.filesystem_identity(), "PERMISSIONS": ""}}
-    cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = DEPLOY.build_deployment(cfg)
-    created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
-    if svc:
-        try:
-            ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-        except Exception:
-            ksend("DELETE", _smb_path("deployments", SMB_NAME))
-            raise
-    _cache.pop("wl", None); _cache.pop("network", None)
-    return created
+import homestead_share_servers as SHARE_SERVERS
+SMB_NAME = SHARE_SERVERS.SMB_NAME
 
 
 def rollout_review_context(current):
@@ -4828,312 +4673,10 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-def samba_state():
-    """The Samba server shares are served from: whether it runs, and where."""
-    dep = _optional_smb(_smb_path("deployments", SMB_NAME)) or _optional_smb(
-        _smb_path("deployments", "samba"))
-    try:
-        rows, credentials, *_ = SHARES._state()
-        configured = {row["name"] for row in rows}
-        config_error = ""
-    except Exception as error:
-        configured = set()
-        credentials = {}
-        rows = []
-        config_error = str(error)[:160]
-    if not dep:
-        return {"installed": False, "enabled": False, "shares": len(configured), "image": SAMBA_IMAGE,
-                "name": SMB_NAME, "served_shares": [], "in_sync": not configured and not config_error,
-                **({"error": config_error} if config_error else {})}
-    name = dep["metadata"]["name"]
-    status = dep.get("status") or {}
-    address = ""
-    try:
-        svc = _optional_smb(_smb_path("services", SMB_NAME)) or _optional_smb(
-            _smb_path("services", "samba")) or {}
-        address = next((i.get("ip", "") for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "") \
-            or ((svc.get("metadata") or {}).get("annotations") or {}).get("kube-vip.io/loadbalancerIPs", "") \
-            or ((svc.get("metadata") or {}).get("annotations") or {}).get("metallb.universe.tf/loadBalancerIPs", "") \
-            or ((svc.get("spec") or {}).get("loadBalancerIP") or "")
-    except Exception:
-        pass
-    containers = ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
-    container = containers[0]
-    paths = {mount.get("mountPath") for mount in container.get("volumeMounts", []) or []}
-    args = container.get("args") or []
-    served = {arg.split(";", 1)[0] for index, flag in enumerate(args[:-1]) if flag == "-s"
-              for arg in [args[index + 1]] if ";" in arg and arg.split(";", 2)[1] in paths}
-    try:
-        recovery = SHARES.RECOVERY.read(dep)
-        offline = SHARES.RECOVERY.offline_shares(dep, rows)
-    except Exception as error:
-        recovery, offline = {}, []
-        config_error = str(error)[:160]
-    expected_names = configured - {item["name"] for item in offline}
-    in_sync = served == expected_names and not config_error and name == SMB_NAME
-    if in_sync:
-        try:
-            expected = SHARES.configured_deployment(dep, rows, credentials)
-            expected_spec = expected["spec"]["template"]["spec"]
-            live_spec = dep["spec"]["template"]["spec"]
-            expected_container = expected_spec["containers"][0]
-            in_sync = (all(SHARES.SPECS.same(container.get(field), expected_container.get(field))
-                           for field in ("args", "env", "volumeMounts"))
-                       and live_spec.get("volumes", []) == expected_spec.get("volumes", [])
-                       and SHARES.SPECS.same(live_spec.get("initContainers", []), expected_spec.get("initContainers", []))
-                       and container.get("image") == SAMBA_IMAGE)
-        except Exception as error:
-            config_error = str(error)[:160]
-            in_sync = False
-    desired = int((dep.get("spec") or {}).get("replicas", 1) or 0)
-    return {"installed": True, "enabled": desired > 0, "desired": desired, "name": name,
-            "ready": int(status.get("readyReplicas", 0) or 0), "address": address,
-            "shares": len(configured), "served_shares": sorted(served), "in_sync": in_sync,
-            "offline_shares": offline, "partial": bool(offline),
-            "recovery_pending": recovery.get("pending", {}), "recovery_warning": recovery.get("warning", ""),
-            "recovery_failures": recovery.get("restore_failures", {}),
-            "image": container.get("image", ""), **({"error": config_error} if config_error else {})}
-
-
-def set_samba(enabled, address=""):
-    """Samba on or off. Off stops serving; every share, its volume and its
-    password are kept for when it is switched back on. On installs it first
-    if the cluster has none, with the shares already defined."""
-    state = samba_state()
-    name = state["name"]
-    if not enabled:
-        if state["installed"]:
-            ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-        _cache.pop("wl", None)
-        return {"ok": True, "detail": "Samba is stopping; the shares, their volumes and passwords are kept"}
-    if not state["installed"]:
-        install_samba(address)
-        rows, credentials, *_ = SHARES._state()
-        if rows:
-            SHARES.apply_samba(rows, credentials)
-        _cache.pop("wl", None)
-        return {"ok": True, "detail": "Samba is being installed" + (f" with {len(rows)} share{'s' if len(rows) != 1 else ''}" if rows else "")}
-    if name == "samba":
-        install_samba()
-        name = SMB_NAME
-    ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 1}},
-          ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
-    return {"ok": True, "detail": "Samba is starting"}
-
-
-def remove_samba():
-    """Uninstall only the SMB workload and address; never touch share data."""
-    with SHARES.LOCK:
-        removed = []
-        for name in (SMB_NAME, "samba"):
-            for kind in ("deployments", "services"):
-                path = _smb_path(kind, name)
-                if _optional_smb(path) is not None:
-                    ksend("DELETE", path)
-                    removed.append(f"{kind}/{name}")
-        _cache.pop("wl", None)
-        _cache.pop("network", None)
-    return {"ok": True, "removed": removed,
-            "detail": "SMB server removed. Share definitions, passwords, PVCs and their data were kept."}
-
-
-def repair_samba(address=""):
-    """Apply the saved inventory now, with the same rollout guard as edits."""
-    with SHARES.LOCK:
-        install_samba(address)
-        result = SHARES.reconcile_samba(SAMBA_IMAGE, retry_recovery=True)
-    _cache.pop("wl", None)
-    return {"ok": True, "detail": "SMB mappings checked; recovered storage must pass the stability check before shares return" if result["state"] == "current"
-            else "SMB is being repaired from the saved shares", "server": samba_state()}
-
-
-def nfs_state():
-    """The opt-in NFSv4 gateway is independent of the SMB server and PVCs."""
-    dep = _optional_smb(_smb_path("deployments", NFS.NAME))
-    svc = _optional_smb(_smb_path("services", NFS.NAME))
-    rows, *_ = SHARES._state()
-    names = [row["name"] for row in rows if row.get("nfs_clients")]
-    desired = int(((dep or {}).get("spec") or {}).get("replicas", 0) or 0)
-    ingress = ((((svc or {}).get("status") or {}).get("loadBalancer") or {}).get("ingress") or [])
-    address = next((item.get("ip", "") for item in ingress if item.get("ip")), "")
-    annotations = (((svc or {}).get("metadata") or {}).get("annotations") or {})
-    address = address or annotations.get("kube-vip.io/loadbalancerIPs", "") or annotations.get(
-        "metallb.universe.tf/loadBalancerIPs", "")
-    return {"installed": bool(dep), "enabled": bool(dep) and desired > 0,
-            "name": NFS.NAME, "image": NFS.IMAGE, "exports": names, "address": address,
-            "ready": int(((dep or {}).get("status") or {}).get("readyReplicas", 0) or 0),
-            "desired": desired, "recovery": nfs_recovery(rows, dep)}
-
-
-def nfs_recovery(rows, deployment=None):
-    errors, volumes = [], []
-    def read(path, default, label):
-        try:
-            return kget(path)
-        except Exception:
-            errors.append(f"{label} could not be checked.")
-            return default
-    nodes = read("/api/v1/nodes", {}, "Node availability").get("items", [])
-    lh = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
-    replicas = read(f"{lh}/replicas", {}, "Storage replicas").get("items")
-    policy = read(f"{lh}/settings/node-down-pod-deletion-policy", {}, "Longhorn node recovery").get("value")
-    for pvc in sorted({row["pvc"] for row in rows if row.get("nfs_clients") and row.get("pvc")}):
-        claim = read(f"/api/v1/namespaces/{SMB_NAMESPACE}/persistentvolumeclaims/{pvc}", {}, pvc)
-        name = (claim.get("spec") or {}).get("volumeName")
-        volume = read(f"{lh}/volumes/{name}", None, f"{pvc} replication") if name else None
-        volumes.append({"pvc": pvc, "volume": volume})
-    try:
-        platform = PLATFORM.detect()
-    except Exception:
-        platform = {}
-        errors.append("Load balancer availability could not be checked.")
-    podspec = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
-    return NFS.recovery_report(nodes, volumes, replicas, platform, policy, errors, podspec)
-
-
-def _nfs_inventory(current=None):
-    rows, _, config, _, _ = SHARES._state()
-    identified = NFS.export_ids(rows, current)
-    if identified != rows:
-        SHARES._save_config(identified, config)
-    return identified
-
-
-def _nfs_exports(rows):
-    return NFS.exports(rows, SHARES._pvc)
-
-
-def _nfs_deployment(rows, address=""):
-    selected = _nfs_exports(rows)
-    if not selected:
-        raise ValueError("choose at least one NFS export in Network Shares first")
-    if PLATFORM.detect().get("load_balancer") == "servicelb":
-        raise ValueError("NFS needs a dedicated VIP that preserves client IPs; install kube-vip under Cluster Add-ons first")
-    cfg = {"name": NFS.NAME, "container_name": NFS.NAME, "namespace": SMB_NAMESPACE,
-           "image": NFS.IMAGE, "cpu": "50m", "memory": "128Mi",
-           "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
-           "vip_mode": "manual" if address else "automatic", "lb_ip": address, "exclusive_vip": True}
-    cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = DEPLOY.build_deployment(cfg)
-    dep = NFS.configure(dep, selected)
-    if svc:
-        # NFS's CIDR rules must see the real client address, not a node SNAT.
-        svc["spec"]["externalTrafficPolicy"] = "Local"
-        svc["metadata"].setdefault("annotations", {})[NAMES.key("exclusive-vip")] = "true"
-    return dep, svc
-
-
-@SHARES.serialized
-def reconcile_nfs(rows=None):
-    """Keep a running NFS gateway's exports aligned with the saved inventory."""
-    dep_path = _smb_path("deployments", NFS.NAME)
-    current = _optional_smb(dep_path)
-    if not current:
-        return {"state": "absent"}
-    if rows is None:
-        rows = _nfs_inventory(current)
-    selected = _nfs_exports(rows)
-    if not selected:
-        if int((current.get("spec") or {}).get("replicas", 0) or 0):
-            ksend("PATCH", dep_path, {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-        return {"state": "off", "exports": 0}
-    wanted = NFS.configure(current, selected)
-    if NFS.same_pod_config(current, wanted):
-        return {"state": "current", "exports": len(selected)}
-    ksend("PUT", dep_path, wanted)
-    _cache.pop("wl", None)
-    return {"state": "updated", "exports": len(selected)}
-
-
-def set_nfs(enabled, address=""):
-    with SHARES.LOCK:
-        path = _smb_path("deployments", NFS.NAME)
-        current = _optional_smb(path)
-        if not enabled:
-            if current:
-                ksend("PATCH", path, {"spec": {"replicas": 0}},
-                      ctype="application/merge-patch+json")
-            _cache.pop("wl", None)
-            return {"ok": True, "detail": "NFS stopped; exports, shares and every PVC were kept"}
-        rows = _nfs_inventory(current)
-        _nfs_exports(rows)
-        if not any(row.get("nfs_clients") for row in rows):
-            raise ValueError("choose at least one NFS export in Network Shares first")
-        if not current:
-            dep, svc = _nfs_deployment(rows, address)
-            ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
-            try:
-                ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-            except Exception:
-                ksend("DELETE", path)
-                raise
-        else:
-            reconcile_nfs(rows)
-            if _optional_smb(_smb_path("services", NFS.NAME)) is None:
-                _, svc = _nfs_deployment(rows, address)
-                ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-            ksend("PATCH", path, {"spec": {"replicas": 1}},
-                  ctype="application/merge-patch+json")
-        _cache.pop("wl", None)
-        return {"ok": True, "detail": "NFS is starting; exports use NFSv4/TCP on port 2049"}
-
-
-def remove_nfs():
-    """Remove only the NFS address and daemon, never a claim or share record."""
-    with SHARES.LOCK:
-        current = _optional_smb(_smb_path("deployments", NFS.NAME))
-        if current:
-            _nfs_inventory(current)
-        removed = []
-        for kind in ("deployments", "services"):
-            path = _smb_path(kind, NFS.NAME)
-            if _optional_smb(path) is not None:
-                ksend("DELETE", path)
-                removed.append(f"{kind}/{NFS.NAME}")
-        _cache.pop("wl", None)
-        _cache.pop("network", None)
-    return {"ok": True, "removed": removed,
-            "detail": "NFS server removed. Export settings, SMB shares, PVCs and data were kept."}
-
-
-def set_nfs_export(name, clients, read_only=True):
-    """Save one explicit export; an empty client network removes that export."""
-    with SHARES.LOCK:
-        rows, _, config_obj, _, _ = SHARES._state()
-        rows = NFS.export_ids(rows, _optional_smb(_smb_path("deployments", NFS.NAME)))
-        row = next((item for item in rows if item.get("name") == name), None)
-        if row is None:
-            raise ValueError("share not found")
-        previous = copy.deepcopy(rows)
-        if clients:
-            row["nfs_clients"] = NFS.client_network(clients)
-            row["nfs_read_only"] = bool(read_only)
-        else:
-            row.pop("nfs_clients", None)
-            row.pop("nfs_read_only", None)
-        _nfs_exports(rows)
-        config_path = f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps/{SHARES.CONFIGMAP()}"
-        written = SHARES._save_config(rows, config_obj)
-        try:
-            reconcile_nfs(rows)
-        except Exception:
-            SHARES._restore_object(config_path, config_obj, written)
-            try:
-                reconcile_nfs(previous)
-            except Exception:
-                pass
-            raise
-        return {"ok": True, "exports": nfs_state()["exports"],
-                "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
-
-
 # Looked up when asked, so a test that patches one is the one used.
 SELF_HEALTH.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k),
                  lambda dep=None: homestead_data_volume(dep), _heartbeats,
-                 lambda: NODES.node_temps(), lambda: samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
+                 lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
                                          "Join plans were replaced by the install guide")
@@ -5141,7 +4684,8 @@ OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
 OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
-SHARES.install = install_samba
+SHARES.install = SHARE_SERVERS.install_samba
+SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: guard_managed_smb(ns, name), lambda: NODES.node_temps())
 FLOW.bind(lambda path: kget(path), SYS_NS, lambda annotations: display_icon(annotations), _moving_copy,
           parse_cpu, parse_mem, age_secs)
@@ -5165,7 +4709,7 @@ API_KEYS.bind(DATA_DIR)
 # Looked up when asked, so a test that patches one is the one the guide reads.
 SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
-           samba=lambda: samba_state())
+           samba=lambda: SHARE_SERVERS.samba_state())
 API_V1.bind(nodes=lambda: cached("nodes", 5, NODES.get_nodes), workloads=lambda: cached("wl", 5, WORKLOADS.get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
@@ -6176,9 +5720,9 @@ class H(HTTP.LimitedHandler):
             if p == "/api/storage":
                 return self._send(200, cached("stor", 10, get_storage))
             if p == "/api/shares/server":
-                return self._send(200, samba_state())
+                return self._send(200, SHARE_SERVERS.samba_state())
             if p == "/api/shares/nfs/server":
-                return self._send(200, nfs_state())
+                return self._send(200, SHARE_SERVERS.nfs_state())
             if p == "/api/snapshot-files/plan":
                 return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
@@ -6532,12 +6076,12 @@ class H(HTTP.LimitedHandler):
                 share = next((row for row in SHARES.list_shares() if row.get("name") == b["name"]), None)
                 old_export = (share or {}).get("nfs_clients", "")
                 if old_export:
-                    set_nfs_export(b["name"], "")
+                    SHARE_SERVERS.set_nfs_export(b["name"], "")
                 try:
                     result = SHARES.delete_share(b["name"])
                 except Exception:
                     if old_export:
-                        set_nfs_export(b["name"], old_export, share.get("nfs_read_only", True))
+                        SHARE_SERVERS.set_nfs_export(b["name"], old_export, share.get("nfs_read_only", True))
                     raise
                 deployment = result.pop("deployment", None)
                 if deployment:
@@ -6550,7 +6094,7 @@ class H(HTTP.LimitedHandler):
                         "Restarting Samba without the removed share")
                 return self._send(200, {"ok": True, **result})
             if p == "/api/shares/nfs":
-                return self._send(200, set_nfs_export(
+                return self._send(200, SHARE_SERVERS.set_nfs_export(
                     b.get("name", ""), str(b.get("clients") or "").strip(),
                     b.get("read_only") is not False))
             if p == "/api/cluster/remove-node":
@@ -6625,19 +6169,19 @@ class H(HTTP.LimitedHandler):
             if p == "/api/volumes/repair-class":
                 return self._send(200, repair_volume_class(b))
             if p == "/api/self/samba":
-                return self._send(200, set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+                return self._send(200, SHARE_SERVERS.set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/self/nfs":
-                return self._send(200, set_nfs(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+                return self._send(200, SHARE_SERVERS.set_nfs(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/addons/smb/remove":
                 if b.get("confirm") != SMB_NAME:
                     raise ValueError(f"type {SMB_NAME} to remove the SMB server")
-                return self._send(200, remove_samba())
+                return self._send(200, SHARE_SERVERS.remove_samba())
             if p == "/api/addons/nfs/remove":
                 if b.get("confirm") != NFS.NAME:
                     raise ValueError(f"type {NFS.NAME} to remove the NFS server")
-                return self._send(200, remove_nfs())
+                return self._send(200, SHARE_SERVERS.remove_nfs())
             if p == "/api/shares/repair":
-                return self._send(200, repair_samba(str(b.get("address") or "").strip()))
+                return self._send(200, SHARE_SERVERS.repair_samba(str(b.get("address") or "").strip()))
             if p == "/api/storage/classes/cleanup":
                 removed = cleanup_restore_classes()
                 return self._send(200, {"ok": True, "removed": removed,
@@ -6812,10 +6356,10 @@ def _samba_loop():
         if LEADER.is_leader():
             try:
                 with self_data_activity():
-                    state = samba_state()
+                    state = SHARE_SERVERS.samba_state()
                     if state.get("name") == "samba" and state.get("installed"):
-                        install_samba()
-                    result = SHARES.reconcile_samba(SAMBA_IMAGE)
+                        SHARE_SERVERS.install_samba()
+                    result = SHARES.reconcile_samba(SHARE_SERVERS.SAMBA_IMAGE)
                 beat("samba", 60, leader_only=True)
                 if result.get("state") == "repaired":
                     print("network shares: restored SMB settings from the share inventory", flush=True)
@@ -6824,7 +6368,7 @@ def _samba_loop():
                 print(f"network shares: {str(error)[:180]}", flush=True)
             try:
                 with self_data_activity():
-                    nfs_result = reconcile_nfs()
+                    nfs_result = SHARE_SERVERS.reconcile_nfs()
                 if nfs_result.get("state") == "updated":
                     print("network shares: restored NFS exports from the share inventory", flush=True)
             except Exception as error:

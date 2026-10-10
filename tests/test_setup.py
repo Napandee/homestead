@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_setup as SETUP
+import homestead_share_servers as SERVERS
 
 
 class SetupTests(unittest.TestCase):
@@ -121,7 +122,7 @@ class UniFiSetupStateTests(unittest.TestCase):
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
                         (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (server, "vm_network_details", []),
-                        (server, "samba_state", {}), (server.LH, "backup_target", {}),
+                        (SERVERS, "samba_state", {}), (server.LH, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IMP, "list_sources", []), (server.API_KEYS, "list_keys", []),
                         (server.FLEET, "summary", {}), (server.HOST_CONSOLE, "inventory", {}),
@@ -197,7 +198,7 @@ class NetworkSetupStateTests(unittest.TestCase):
         self.networks, self.samba = [], {"installed": False, "enabled": False}
         patch = mock.patch.object(server, "kget", side_effect=lambda _: {"items": self.networks})
         self.read = patch.start(); self.addCleanup(patch.stop)
-        patch = mock.patch.object(server, "samba_state", side_effect=lambda: self.samba)
+        patch = mock.patch.object(SERVERS, "samba_state", side_effect=lambda: self.samba)
         self.smb_read = patch.start(); self.addCleanup(patch.stop)
         patch = mock.patch.object(server, "ksend")
         self.write = patch.start(); self.addCleanup(patch.stop)
