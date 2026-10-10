@@ -54,6 +54,17 @@ The form asks, in order:
   fields; nothing changes until you save, which restarts the app. The
   scheduler places apps by what they reserve, not by what they use, so an app
   that reserves nothing is placed as if it used nothing.
+- **Set reservations from use…** (Containers' menu) offers the same
+  suggestion for every app at once. Apps reserving nothing are ticked; apps
+  whose reservation only differs from their use are listed unticked, since it
+  may have been set on purpose. Apps that Flux or Argo CD apply are not
+  changed, because their next sync would undo it; each shows the
+  `resources` YAML to commit instead. Homestead's own reservations come from
+  its manifest and are left alone. Starting it runs a job that changes one
+  app at a time, all of its containers in one restart, and waits for it to run
+  again before the next. An app whose reservation was changed by hand since
+  the review is skipped, and one that does not come back within ten minutes
+  stops the job.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.

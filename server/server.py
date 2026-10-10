@@ -4991,7 +4991,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND)
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -6980,6 +6980,7 @@ import homestead_changes as CHANGES
 import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
 import homestead_usage as USAGE
+import homestead_requests as RESERVE
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -7105,6 +7106,9 @@ OUTAGE.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
+RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
+OPS.RESOLVERS[RESERVE.KIND] = RESERVE.status
+OPS.CANCELLERS[RESERVE.KIND] = (RESERVE.cancel_plan, RESERVE.cancel_run)
 
 
 def port_contexts(probes):
@@ -10170,6 +10174,9 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
             if p == "/api/workloads/rebalance/plan":
                 return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
+            if p == "/api/workloads/requests/plan":
+                chosen = q.get("chosen")
+                return self._send(200, RESERVE.plan([a for a in chosen[0].split(",") if a] if chosen else None))
             if p == "/api/longhorn/rebalance/plan":
                 return self._send(200, REBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/pvcs":
@@ -11279,6 +11286,22 @@ class H(HTTP.LimitedHandler):
                                       {"kind": "Deployment", "name": "rebalance"}, "/containers",
                                       {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
                                       "Starting with the first container")
+                return self._send(202, {"operation": operation})
+            if p == "/api/workloads/requests":
+                running = next((i for i in OPS.list_operations() if i.get("kind") == RESERVE.KIND
+                                and i.get("status") not in OPS.TERMINAL), None)
+                if running:
+                    return self._send(409, {"error": "Reservations are already being set; follow it in Jobs", "operation": running})
+                if b.get("restart") is not True:
+                    return self._send(409, {"error": "A new reservation restarts each app; confirm the restarts"})
+                try:
+                    apps = RESERVE.reviewed(b.get("apps"), b.get("review_token"))
+                except ValueError as error:
+                    return self._send(409, {"error": str(error), "plan": RESERVE.plan()})
+                operation = OPS.start(RESERVE.KIND, f"Set reservations on {len(apps)} app{'' if len(apps) == 1 else 's'}",
+                                      {"kind": "Deployment", "name": "reservations"}, "/containers",
+                                      {"apps": apps, "index": 0, "done": 0, "stage": "apply"},
+                                      "Starting with the first app")
                 return self._send(202, {"operation": operation})
             if p == "/api/longhorn/rebalance":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND

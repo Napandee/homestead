@@ -1989,6 +1989,21 @@ ssh_pwauth: true
         skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" }] };
     },
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
+    "/api/workloads/requests/plan": url => {
+      const change = (container, cpu_now, memory_now, cpu, memory, p95c, p95m, maxm) => ({ container, cpu_now, memory_now, cpu, memory,
+        capped: [], missing: !cpu_now && !memory_now, cpu_p95_m: p95c, mem_p95_mi: p95m, mem_max_mi: maxm, days: 7 });
+      const apps = [
+        { id: "lab/paperless", ns: "lab", name: "paperless", replicas: 1, missing: true, changes: [change("paperless", "", "", "65m", "480Mi", 42, 380, 512)] },
+        { id: "lab/home-assistant", ns: "lab", name: "home-assistant", replicas: 1, missing: true,
+          changes: [change("home-assistant", "", "", "120m", "848Mi", 78, 676, 790), change("mqtt-sidecar", "", "", "10m", "32Mi", 3, 21, 24)] },
+        { id: "lab/frigate", ns: "lab", name: "frigate", replicas: 1, missing: false, changes: [change("frigate", "50m", "128Mi", "180m", "528Mi", 118, 412, 598)] }];
+      const asked = url.searchParams.get("chosen"), chosen = asked === null ? apps.filter(a => a.missing).map(a => a.id) : asked.split(",").filter(Boolean);
+      return { apps: apps.map(a => ({ ...a, chosen: chosen.includes(a.id) })), max: 50, review_token: "demo-requests-" + chosen.join("."),
+        skipped: [{ id: "media/jellyfin", why: "Flux applies it (Kustomization flux-system/apps) and would undo the change at its next sync; commit this instead",
+            yaml: "- name: jellyfin\n  resources:\n    requests:\n      cpu: 240m\n      memory: 1104Mi" },
+          { id: "lab/unifi", why: "A suggestion needs a day of readings; 96 of 288 so far." }] };
+    },
+    "/api/workloads/requests": { operation: { id: "demo-requests", kind: "set-requests", title: "Set reservations on 2 apps", status: "running", progress: 0, message: "Starting with the first app", cancellable: true } },
     "/api/longhorn/rebalance/plan": url => {
       const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
       const all = [{ volume: "pvc-demo-frigate", claim: "lab/frigate-recordings", app: "lab/frigate", from: "harvester-node2", to: "harvester-node1", size_gb: 120, attached: true },
