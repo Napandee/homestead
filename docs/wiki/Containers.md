@@ -65,6 +65,21 @@ The form asks, in order:
   again before the next. An app whose reservation was changed by hand since
   the review is skipped, and one that does not come back within ten minutes
   stops the job.
+- **Priority tiers.** When a host fails and the others cannot hold every
+  app, **critical** apps fit first and may evict a lower-tier one; **low**
+  apps wait and never evict anything; **normal** is every app without a
+  tier, as before. Set one app's tier in Edit → Placement, or many at once
+  with **Priority tiers…** in Containers' menu, where apps that look like home
+  automation, a password manager, a database, DNS or a tunnel start at
+  critical and CI runners at low. Homestead makes its three PriorityClasses
+  (`homestead-critical`, `homestead-normal`, `homestead-low`) the first time
+  a tier is set; none is the cluster default. An app's tier is read from its
+  pod, so one set by Flux shows as it is; Flux- and Argo-applied apps are
+  changed there, not here, and a class Homestead does not keep is left
+  alone. Changing a tier restarts the app. A critical app's suggested memory
+  reservation has more headroom (1.5 times its usual use), since a host
+  short of memory evicts the apps most over their reservation first,
+  whatever their tier.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.

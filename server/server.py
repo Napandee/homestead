@@ -5043,7 +5043,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND)
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -7034,6 +7034,7 @@ import homestead_forecast as FORECAST
 import homestead_usage as USAGE
 import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
+import homestead_priority as PRIORITY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -7160,6 +7161,9 @@ CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem)
 RECOVERY.bind(DATA_DIR)
+PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
+OPS.RESOLVERS[PRIORITY.KIND] = PRIORITY.status
+OPS.CANCELLERS[PRIORITY.KIND] = (PRIORITY.cancel_plan, PRIORITY.cancel_run)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader())
 OPS.RESOLVERS[RESERVE.KIND] = RESERVE.status
 OPS.CANCELLERS[RESERVE.KIND] = (RESERVE.cancel_plan, RESERVE.cancel_run)
@@ -8939,7 +8943,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
             "memory_limit": limits.get("memory", ""),
-            "usage": USAGE.summary(ns, name, container.get("name", ""), requests, limits),
+            "usage": USAGE.summary(ns, name, container.get("name", ""), requests, limits, tier=PRIORITY.tier_of(pspec)[0]),
             "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),
@@ -8986,6 +8990,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),
+        "priority": PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
@@ -10231,6 +10236,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
             if p == "/api/workloads/rebalance/plan":
                 return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
+            if p == "/api/workloads/priority/plan":
+                chosen = q.get("chosen")
+                picks = dict(item.split("=", 1) for item in chosen[0].split(",") if "=" in item) if chosen else None
+                return self._send(200, PRIORITY.plan(picks))
             if p == "/api/workloads/requests/plan":
                 chosen = q.get("chosen")
                 return self._send(200, RESERVE.plan([a for a in chosen[0].split(",") if a] if chosen else None))
@@ -10993,6 +11002,8 @@ class H(HTTP.LimitedHandler):
                 guard_managed_smb(b.get("ns", ""), b.get("name", ""))
                 prepared, context, plan = edit_capacity_plan(b)
                 CAPACITY_REVIEW.enforce(b, plan, context)
+                if b.get("priority") in ("critical", "low"):
+                    PRIORITY.ensure()
                 if context.get("action") == RENAME.KIND:
                     def admission(dep):
                         return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
@@ -11340,6 +11351,22 @@ class H(HTTP.LimitedHandler):
                 if not plan["moves"]:
                     return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
                 return self._send(202, {"operation": start_container_rebalance(plan)})
+            if p == "/api/workloads/priority":
+                running = next((i for i in OPS.list_operations() if i.get("kind") == PRIORITY.KIND
+                                and i.get("status") not in OPS.TERMINAL), None)
+                if running:
+                    return self._send(409, {"error": "Tiers are already being set; follow it in Jobs", "operation": running})
+                if b.get("restart") is not True:
+                    return self._send(409, {"error": "A new tier restarts each app; confirm the restarts"})
+                try:
+                    apps = PRIORITY.reviewed(b.get("changes"), b.get("review_token"))
+                except ValueError as error:
+                    return self._send(409, {"error": str(error), "plan": PRIORITY.plan()})
+                operation = OPS.start(PRIORITY.KIND, f"Set the priority tier of {len(apps)} app{'' if len(apps) == 1 else 's'}",
+                                      {"kind": "Deployment", "name": "priority"}, "/containers",
+                                      {"apps": apps, "index": 0, "done": 0, "stage": "apply"},
+                                      "Making the priority classes")
+                return self._send(202, {"operation": operation})
             if p == "/api/workloads/requests":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == RESERVE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)

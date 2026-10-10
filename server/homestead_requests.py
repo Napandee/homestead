@@ -24,6 +24,8 @@ import json
 import time
 import urllib.error
 
+import homestead_priority as PRIORITY
+
 KIND = "set-requests"
 MAX_APPS = 50
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
@@ -72,9 +74,11 @@ def _changes(dep):
     meta = dep.get("metadata") or {}
     ns, name = meta.get("namespace", ""), meta.get("name", "")
     out, waiting = [], []
-    for container in (((dep.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []:
+    pod_spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    tier = PRIORITY.tier_of(pod_spec)[0]
+    for container in pod_spec.get("containers") or []:
         requests, limits = _resources(container)
-        found = usage(ns, name, container.get("name", ""), requests, limits)
+        found = usage(ns, name, container.get("name", ""), requests, limits, tier=tier)
         suggest = found.get("suggest")
         if not suggest:
             waiting.append(found.get("why") or "no readings yet")

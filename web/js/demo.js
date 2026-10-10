@@ -1713,6 +1713,7 @@ ssh_pwauth: true
         pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
+        priority: found.name === "home-assistant" ? "critical" : "normal", priority_class: found.name === "home-assistant" ? "homestead-critical" : "",
         seed_configs: [], volumes: containers[0].volumes, containers };
     },
     "/api/portal": (url, init) => {
@@ -1989,6 +1990,25 @@ ssh_pwauth: true
         skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" }] };
     },
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
+    "/api/workloads/priority/plan": url => {
+      const picks = Object.fromEntries((url.searchParams.get("chosen") || "").split(",").filter(x => x.includes("=")).map(x => x.split("=")));
+      const rows = [
+        { id: "lab/home-assistant", current: "normal", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
+        { id: "lab/vaultwarden", current: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
+        { id: "lab/frigate", current: "normal", suggested: "", why: "" },
+        { id: "lab/paperless", current: "normal", suggested: "", why: "" },
+        { id: "ci/actions-runner", current: "normal", suggested: "low", why: "looks like batch or CI work" },
+        { id: "media/jellyfin", current: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" }];
+      const apps = rows.map(r => {
+        const [ns, name] = r.id.split("/");
+        const fallback = r.suggested && r.current === "normal" && !r.managed ? r.suggested : r.current;
+        return { ns, name, managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
+      }).sort((a, b) => ["critical", "normal", "low"].indexOf(a.tier) - ["critical", "normal", "low"].indexOf(b.tier) || a.id.localeCompare(b.id));
+      const changes = apps.filter(a => a.tier !== a.current);
+      return { apps, changes: changes.length, max: 50, review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."),
+        skipped: [{ id: "lab/unifi", why: "it uses the class unifi-high, which Homestead does not keep; it is left alone" }] };
+    },
+    "/api/workloads/priority": { operation: { id: "demo-priority", kind: "set-priority", title: "Set the priority tier of 2 apps", status: "running", progress: 0, message: "Making the priority classes", cancellable: true } },
     "/api/workloads/requests/plan": url => {
       const change = (container, cpu_now, memory_now, cpu, memory, p95c, p95m, maxm) => ({ container, cpu_now, memory_now, cpu, memory,
         capped: [], missing: !cpu_now && !memory_now, cpu_p95_m: p95c, mem_p95_mi: p95m, mem_max_mi: maxm, days: 7 });

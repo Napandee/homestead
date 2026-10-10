@@ -27,7 +27,7 @@ SUGGEST = {("lab", "paperless", "app"): ("60m", "480Mi"), ("lab", "frigate", "ap
            ("lab", "unifi", "app"): None}
 
 
-def usage(ns, name, container, requests=None, limits=None):
+def usage(ns, name, container, requests=None, limits=None, tier=""):
     found = SUGGEST.get((ns, name, container))
     if not found:
         return {"samples": 96, "why": "A suggestion needs a day of readings; 96 of 288 so far."}

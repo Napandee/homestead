@@ -552,6 +552,7 @@ function renderWorkloads() {
     { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
     { label: "Set reservations from use…", icon: "sliders", run: "reservationsReview()", need: "operator", tip: "Reserve CPU and memory for apps from what they used over the last week" },
+    { label: "Priority tiers…", icon: "list", run: "priorityReview()", need: "operator", tip: "Which apps fit first when a host fails and the others are short of room" },
     { label: "Logos for apps without one", icon: "logo", run: "logoFixup()", need: "operator", tip: "Match apps with no logo to the app store's" },
     { label: "Change history", icon: "clock", run: "wlHistory()", tip: "Every app's changes: who, when and what" },
     { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" },
@@ -1140,6 +1141,66 @@ window.reservationsStart = async () => {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set reservations"; }
     if (e.body?.plan) { RESERVE.chosen = null; reservationsPlan(); }
+  } finally { window.refreshOperations?.(true); }
+};
+
+/* Priority tiers for many apps at once. Apps whose name or image suggests a
+   tier start set to it; the rest keep what they have. Changing a row plans
+   again, so the review token covers exactly what is started. */
+const PRIORITY = { picks: {}, plan: null };
+window.priorityReview = async () => {
+  PRIORITY.picks = {}; PRIORITY.plan = null;
+  modal("Priority tiers", `<div id="prioPlan"><div class="empty"><span class="spin2"></span> Reading the apps…</div></div>
+    ${UI.actions(UI.button("Set tiers", "priorityStart()", { kind: "pri", id: "prioGo", attrs: 'data-need="operator" disabled' }), UI.cancel())}`, true);
+  await priorityPlan();
+};
+async function priorityPlan() {
+  const pane = $("#prioPlan");
+  if (!pane) return;
+  const picks = Object.entries(PRIORITY.picks).map(([id, tier]) => `${id}=${tier}`).join(",");
+  try { PRIORITY.plan = await api(`/api/workloads/priority/plan${picks ? `?${new URLSearchParams({ chosen: picks })}` : ""}`); }
+  catch (e) { pane.innerHTML = UI.callout("bad", "Could not read the apps", esc(e.message)); return; }
+  pane.innerHTML = priorityHtml(PRIORITY.plan);
+  const go = $("#prioGo");
+  if (go) go.disabled = !PRIORITY.plan.changes;
+  window.applyRole?.();
+}
+function priorityHtml(plan) {
+  const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current);
+  const rows = apps.map((a, i) => [
+    `<span class="mono">${esc(a.id)}</span>${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
+    `${prioritySelect(`prio_${i}`, a.tier, `${a.managed ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
+      <span class="sub">${esc(a.note || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
+  return [
+    UI.lead(changes.length ? `Changes the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}. Each restarts once, one at a time.`
+      : "Every app keeps its tier. Choose a tier to change one."),
+    '<p class="ui-help">When a host fails and the others cannot hold every app, critical apps fit first and may evict a low one; low apps wait and evict nothing. Normal is every app without a tier, as now.</p>',
+    UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
+    (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`) : "",
+    changes.length ? '<p class="ui-help">Homestead makes its three priority classes first, if missing. Apps then change one at a time, each waiting for the last to run again; if one does not come back within ten minutes, the rest wait for you.</p>' : "",
+    changes.length ? UI.ack("prioRestart", changes.length === 1 ? "Restart it now" : `Restart these ${changes.length} apps now`) : "",
+  ].join("");
+}
+window.priorityItem = (id, tier) => {
+  PRIORITY.picks[id] = tier;
+  const go = $("#prioGo");
+  if (go) go.disabled = true;
+  priorityPlan();
+};
+window.priorityStart = async () => {
+  const plan = PRIORITY.plan, changes = (plan?.apps || []).filter(a => a.tier !== a.current);
+  if (!changes.length) return;
+  if (!$("#prioRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  const button = $("#prioGo");
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    await api("/api/workloads/priority", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier })), review_token: plan.review_token, restart: true }) });
+    closeModal(); toast(`Setting the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+  } catch (e) {
+    toast(e.message, "bad");
+    if (button) { button.disabled = false; button.textContent = "Set tiers"; }
+    if (e.body?.plan) { PRIORITY.picks = {}; priorityPlan(); }
   } finally { window.refreshOperations?.(true); }
 };
 

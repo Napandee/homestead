@@ -42,6 +42,9 @@ PERCENTILE = 0.95
 # headroom; memory over the reservation is what kubelet evicts first.
 CPU_FACTOR, CPU_FLOOR_M, CPU_STEP_M = 1.5, 10, 5
 MEM_FACTOR, MEM_FLOOR_MI, MEM_STEP_MI = 1.25, 32, 16
+# A critical app gets more: kubelet, short of memory, evicts the pods most
+# over their reservation first - before it looks at priority at all.
+MEM_FACTOR_CRITICAL = 1.5
 _lock = threading.Lock()
 
 
@@ -132,7 +135,7 @@ def _mebibytes(text):
     return _mem(text) / 2 ** 20 if str(text or "").strip() else None
 
 
-def summary(ns, workload, container, requests=None, limits=None, now=None):
+def summary(ns, workload, container, requests=None, limits=None, now=None, tier=""):
     """What a container has used over the last WINDOW_DAYS, and what to
     reserve for it - or why there is no suggestion yet."""
     now = int(now or time.time())
@@ -153,7 +156,7 @@ def summary(ns, workload, container, requests=None, limits=None, now=None):
         out["why"] = f"A suggestion needs a day of readings; {samples} of {MIN_SAMPLES} so far."
         return out
     cpu_m = max(CPU_FLOOR_M, _round_up(cpu * CPU_FACTOR, CPU_STEP_M))
-    mem_mi = max(MEM_FLOOR_MI, _round_up(mem * MEM_FACTOR, MEM_STEP_MI))
+    mem_mi = max(MEM_FLOOR_MI, _round_up(mem * (MEM_FACTOR_CRITICAL if tier == "critical" else MEM_FACTOR), MEM_STEP_MI))
     # Kubernetes refuses a request above the limit, so a suggestion never
     # passes one; it says so, since the limit itself may be what is wrong.
     capped = []
