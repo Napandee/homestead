@@ -550,7 +550,7 @@ def _apply_priority(spec, tier):
     if tier not in PRIORITY.TIERS:
         raise ValueError("the priority tier must be critical, normal or low")
     current, _ = PRIORITY.tier_of(spec)
-    if current == "other" or current == tier:
+    if current not in PRIORITY.TIERS or current == tier:
         return
     if tier == "normal":
         spec.pop("priorityClassName", None)

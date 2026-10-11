@@ -86,10 +86,11 @@ class PriorityTests(unittest.TestCase):
         if method == "POST":
             self.classes[body["metadata"]["name"]] = body
 
-    def test_no_class_is_normal_and_a_foreign_class_is_other(self):
+    def test_no_class_is_normal_and_a_class_not_on_the_cluster_is_missing(self):
+        # #429: a class is placed by its value; one the cluster does not list is missing, not "other".
         self.assertEqual(("normal", ""), priority.tier_of({}))
         self.assertEqual(("critical", "homestead-critical"), priority.tier_of({"priorityClassName": "homestead-critical"}))
-        self.assertEqual(("other", "unifi-high"), priority.tier_of({"priorityClassName": "unifi-high"}))
+        self.assertEqual(("missing", "unifi-high"), priority.tier_of({"priorityClassName": "unifi-high"}))
 
     def test_the_classes_are_made_once_with_low_never_evicting_and_none_the_default(self):
         priority.ensure()
@@ -334,3 +335,109 @@ class HeadroomTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+P = priority
+
+
+def pc(name, value, default=False, never=False):
+    c = {"metadata": {"name": name}, "value": value}
+    if default:
+        c["globalDefault"] = True
+    if never:
+        c["preemptionPolicy"] = "Never"
+    return c
+
+
+X = [pc("x-critical", 100000), pc("x-normal", 10000, default=True), pc("x-low", 1000, never=True)]
+
+
+class LadderTests(unittest.TestCase):
+    def test_no_classes_means_default_zero_and_homestead_classes_to_make(self):
+        lad = P.ladder([])
+        self.assertEqual({"name": None, "value": 0}, lad["default"])
+        self.assertEqual({"name": "homestead-critical", "value": 1000, "create": True}, lad["critical"])
+        self.assertEqual({"name": "homestead-low", "value": -1000, "create": True}, lad["low"])
+
+    def test_a_clusters_own_classes_are_used(self):
+        lad = P.ladder(X)
+        self.assertEqual("x-normal", lad["normal"])
+        self.assertEqual({"name": "x-critical", "value": 100000, "create": False}, lad["critical"])
+        self.assertEqual({"name": "x-low", "value": 1000, "create": False}, lad["low"])
+
+    def test_a_stale_homestead_critical_gets_a_new_name_above_the_default(self):
+        lad = P.ladder([pc("x-normal", 10000, default=True), pc("homestead-critical", 1000)])
+        self.assertEqual({"name": "homestead-critical-11000", "value": 11000, "create": True}, lad["critical"])
+        self.assertEqual("homestead-critical", lad["low"]["name"], "the stale one is below the default: low by number")
+
+    def test_critical_must_preempt_and_ties_prefer_homestead_then_name(self):
+        lad = P.ladder([pc("b-high", 5000), pc("homestead-critical-5000", 5000), pc("a-wait", 9000, never=True)])
+        self.assertEqual("homestead-critical-5000", lad["critical"]["name"])
+
+    def test_low_prefers_never(self):
+        lad = P.ladder([pc("x-normal", 10000, default=True), pc("x-batch", 9000), pc("x-low", 1000, never=True)])
+        self.assertEqual("x-low", lad["low"]["name"])
+
+    def test_a_default_at_the_cap_leaves_no_room_for_critical(self):
+        lad = P.ladder([pc("top", 1_000_000_000, default=True)])
+        self.assertIsNone(lad["critical"])
+        self.assertTrue(any("above" in w for w in lad["warnings"]))
+
+    def test_two_defaults_take_the_lowest_as_admission_does(self):
+        lad = P.ladder([pc("a", 50, default=True), pc("b", 20, default=True)])
+        self.assertEqual({"name": "b", "value": 20}, lad["default"])
+
+    def test_system_classes_are_never_critical(self):
+        lad = P.ladder([pc("system-cluster-critical", 2_000_000_000)])
+        self.assertTrue(lad["critical"]["create"])
+
+    def test_a_homestead_class_as_the_default_is_normal(self):
+        lad = P.ladder([pc("homestead-critical", 1000, default=True)])
+        self.assertEqual("homestead-critical", lad["normal"])
+        self.assertEqual({"name": "homestead-critical-2000", "value": 2000, "create": True}, lad["critical"])
+
+    def test_an_unreadable_class_list_behaves_as_today(self):
+        def broken(path):
+            raise urllib.error.HTTPError(path, 403, "no", {}, None)
+        P.kget = broken
+        P._LADDER.update(at=0, value=None)
+        lad = P.ladder()
+        self.assertEqual(0, lad["default"]["value"])
+        self.assertEqual("homestead-critical", lad["critical"]["name"])
+        self.assertIsNone(P._LADDER["value"], "a failed read is not kept")
+
+
+class TierOfTests(unittest.TestCase):
+    def setUp(self):
+        self.lad = P.ladder(X)
+
+    def test_templates_by_class_value(self):
+        self.assertEqual(("critical", "x-critical"), P.tier_of({"priorityClassName": "x-critical"}, self.lad))
+        self.assertEqual(("normal", "x-normal"), P.tier_of({"priorityClassName": "x-normal"}, self.lad))
+        self.assertEqual(("low", "x-low"), P.tier_of({"priorityClassName": "x-low"}, self.lad))
+        self.assertEqual(("normal", ""), P.tier_of({}, self.lad))
+
+    def test_homestead_critical_at_1000_is_low_on_this_cluster(self):
+        lad = P.ladder(X + [pc("homestead-critical", 1000)])
+        self.assertEqual("low", P.tier_of({"priorityClassName": "homestead-critical"}, lad)[0])
+
+    def test_pods_by_their_number(self):
+        self.assertEqual("critical", P.tier_of({"priority": 100000, "priorityClassName": "x-critical"}, self.lad)[0])
+
+    def test_old_pods_rank_by_their_own_number(self):
+        self.assertEqual("low", P.tier_of({"priority": 0}, self.lad)[0])
+
+    def test_system_and_missing(self):
+        lad = P.ladder(X + [pc("system-node-critical", 2_000_001_000)])
+        self.assertEqual("system", P.tier_of({"priorityClassName": "system-node-critical"}, lad)[0])
+        self.assertEqual(("missing", "gone"), P.tier_of({"priorityClassName": "gone"}, lad))
+
+    def test_with_no_classes_today_s_names_read_as_today(self):
+        lad = P._fallback()
+        self.assertEqual("critical", P.tier_of({"priorityClassName": "homestead-critical"}, lad)[0])
+        self.assertEqual("low", P.tier_of({"priorityClassName": "homestead-low"}, lad)[0])
+        self.assertEqual("normal", P.tier_of({"priorityClassName": "homestead-normal"}, lad)[0])
+
+    def test_priority_of_gives_number_and_preemption(self):
+        self.assertEqual((1000, False), P.priority_of({"priorityClassName": "x-low"}, self.lad))
+        self.assertEqual((10000, True), P.priority_of({}, self.lad))
