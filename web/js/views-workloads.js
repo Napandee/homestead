@@ -528,6 +528,117 @@ function platformShown() {
   return STATE.showPlatform;
 }
 
+/* Move several (#366): tick containers - across filters, which keep what
+   is ticked - choose a host, and review them together: each one's host,
+   why one can't go, and the hosts' room with all of them counted. One job
+   moves them, one at a time, and stops at the first that does not go. */
+const MV = { picked: new Set(), q: "", to: "", over: {}, plan: null, seq: 0 };
+window.MV = MV;
+const mvRows = () => (STATE.data.wl || []).filter(w => !w.site && !w.platform && !w.managed_smb && !w.managed_nfs);
+const mvShown = () => mvRows().filter(w => !MV.q || `${w.ns}/${w.name}`.toLowerCase().includes(MV.q.toLowerCase()));
+const mvHosts = () => ((STATE.data.nodes || []).filter(n => n.schedulable !== false)).map(n => n.name);
+
+window.moveSeveral = async (ids = null, to = "", avoid = "") => {
+  // The hosts come with the Nodes page; opened from elsewhere, read them here.
+  if (!(STATE.data.nodes || []).length) {
+    try { STATE.data.nodes = await api("/api/nodes"); } catch (e) { return toast(`Could not read the hosts: ${e.message}`, "bad"); }
+  }
+  Object.assign(MV, { picked: new Set(ids || []), q: "", to: to || mvHosts().find(h => h !== avoid) || "", over: {}, plan: null });
+  if (ids) return mvReview();
+  modal("Move several", `<div class="ui-stack">
+    ${UI.lead("Tick the containers to move, then review them together. What you tick stays ticked when you change the filter.")}
+    <div class="wg-tools"><input id="mv_q" type="search" placeholder="Filter by name or namespace" aria-label="Filter containers" oninput="mvFilter()"></div>
+    <div class="wg-selbar"><b id="mv_count" aria-live="polite"></b>${UI.button("Tick all shown", "mvTickShown(true)")}${UI.button("Clear", "mvClear()")}</div>
+    <div class="wg-list" id="mv_list"></div>
+    ${UI.actions(UI.cancel() + UI.button("Review…", "mvReview()", { kind: "pri", id: "mvNext" }))}</div>`);
+  mvRender();
+};
+window.mvFilter = () => { MV.q = ($("#mv_q") || {}).value || ""; mvRender(); };
+window.mvTick = (id, on) => { on ? MV.picked.add(id) : MV.picked.delete(id); mvRender(); };
+window.mvTickShown = on => { mvShown().forEach(w => on ? MV.picked.add(`${w.ns}/${w.name}`) : MV.picked.delete(`${w.ns}/${w.name}`)); mvRender(); };
+window.mvTickHost = host => { mvShown().filter(w => (w.nodes || []).includes(host)).forEach(w => MV.picked.add(`${w.ns}/${w.name}`)); mvRender(); };
+window.mvClear = () => { MV.picked.clear(); mvRender(); };
+function mvRender() {
+  const list = $("#mv_list"), count = $("#mv_count");
+  if (count) count.innerHTML = MV.picked.size ? `${MV.picked.size} ticked` : "None ticked";
+  if (!list) return;
+  const shown = mvShown(), hosts = [...new Set(shown.map(w => (w.nodes || [])[0] || "unscheduled"))].sort();
+  list.innerHTML = shown.length ? hosts.map(h => `<div class="wg-group"><div class="between"><b class="mono">${esc(h)}</b>
+      ${h === "unscheduled" ? "" : UI.button("Tick these", `mvTickHost(${jsq(h)})`, { kind: "sm" })}</div>
+      ${shown.filter(w => ((w.nodes || [])[0] || "unscheduled") === h).map(w => { const id = `${w.ns}/${w.name}`;
+        return `<label class="wg-item"><input type="checkbox" value="${esc(id)}" ${MV.picked.has(id) ? "checked" : ""}
+          onchange="mvTick(${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`; }).join("")}</div>`).join("")
+    : '<div class="ui-empty">No container matches.</div>';
+}
+
+window.mvReview = () => {
+  if (!MV.picked.size) return toast("Tick at least one container", "warn");
+  modal("Move several", `<div id="mvBody"><div class="empty"><span class="spin2"></span> Checking the hosts…</div></div>`);
+  return mvPlan();
+};
+window.mvTo = to => { MV.to = to; MV.over = {}; return mvPlan(); };
+window.mvOverride = (id, to) => { MV.over[id] = to; return mvPlan(); };
+window.mvUntick = id => { MV.picked.delete(id); return mvPlan(); };
+const mvPicks = () => [...MV.picked].map(id => ({ id, to: MV.over[id] || MV.to }));
+
+window.mvPlan = async () => {
+  const seq = ++MV.seq;
+  let plan;
+  try { plan = await api("/api/workloads/rebalance/review", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ picks: mvPicks() }) }); }
+  catch (e) { if (seq === MV.seq) $("#mbody").innerHTML = UI.callout("bad", "Could not check the hosts", esc(e.message)); return; }
+  if (seq !== MV.seq) return;              // a newer review was asked for meanwhile
+  MV.plan = plan;
+  const moves = plan.moves || [], stays = (plan.rows || []).filter(r => r.why);
+  const hostSelect = (value, change, label) => `<select aria-label="${esc(label)}" onchange="${change}">${mvHosts().map(h =>
+    `<option value="${esc(h)}"${h === value ? " selected" : ""}>${esc(h)}</option>`).join("")}</select>`;
+  const rows = (plan.rows || []).map(r => [
+    `<label class="rb-app"><input type="checkbox" value="${esc(r.id)}" ${r.why ? "disabled" : "checked"}
+      onchange="mvUntick(${jsq(r.id)})"> <span class="mono">${esc(r.id)}</span></label>`,
+    r.why ? `<span class="ui-help">${esc(r.why)}</span>`
+      : `<span class="mono">${esc(r.from)} → ${esc(r.to)}</span> <span class="sub">${r.reserves ? `${esc(r.cpu_m)}m CPU · ${esc(r.mem_mb)} MiB reserved` : "reserves nothing"}</span>`,
+    hostSelect(MV.over[r.id] || MV.to, `mvOverride(${jsq(r.id)},this.value)`, `Host for ${r.id}`)]);
+  const notice = !moves.length ? UI.callout("bad", "Can't move", "Choose another host for them, or untick them.")
+    : stays.length || (plan.hosts || []).some(h => h.over) ? UI.callout("warn", "Check first",
+      `${stays.length ? `${stays.length} stay where they are. ` : ""}Each one moved restarts on its new host.`) : "";
+  $("#mbody").innerHTML = [
+    UI.lead(!moves.length ? "None of these can move to the hosts chosen; each one says why."
+      : `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} to ${esc([...new Set(moves.map(m => m.to))].join(", "))}; each restarts there, one at a time.`),
+    `<div class="f"><label>Move to</label>${hostSelect(MV.to, "mvTo(this.value)", "Move to")}</div>`,
+    notice,
+    UI.section(`Containers · ${rows.length}`, UI.table([{ label: "Container" }, { label: "Move", className: "grow" }, { label: "Host" }], rows)),
+    (plan.hosts || []).length ? UI.section("Hosts", mvHostTable(plan)) : "",
+    moves.length ? UI.ack("mvAck", `Restart these ${moves.length} container${moves.length === 1 ? "" : "s"}`) : "",
+    UI.actions(UI.cancel() + UI.button(`Move ${moves.length}`, "mvGo()", { kind: "pri", disabled: !moves.length, attrs: 'data-need="operator"' })),
+  ].join("");
+  window.applyRole?.();
+};
+
+/* What the destinations have reserved - the scheduler places by requests -
+   with every container sent there counted. Not what they use: a container
+   that reserves nothing adds nothing here, so the table says so. */
+function mvHostTable(plan) {
+  const meter = (before, after, total, label) => total ? UI.meter({ now: before / total * 100, after: after / total * 100, warnAt: 90, label }) : "";
+  return UI.table([{ label: "Host" }, { label: "Reserved CPU", className: "grow" }, { label: "Reserved memory", className: "grow" }], (plan.hosts || []).map(h => {
+    const nothing = (plan.rows || []).some(r => r.to === h.name && !r.why && !r.reserves);
+    return [`<span class="mono">${esc(h.name)}</span>${h.over ? ` ${UI.chip("over", "bad")}` : ""}`,
+      `${meter(h.cpu_before_m, h.cpu_after_m, h.cpu_total_m, `${h.name} CPU`)}<span class="sub">${esc(h.cpu_after_m)}m of ${esc(h.cpu_total_m)}m CPU</span>`,
+      `${meter(h.used_gb, h.projected_gb, h.capacity_gb, `${h.name} memory`)}<span class="sub">${esc(h.projected_gb)} of ${esc(h.capacity_gb)} GiB${
+        nothing ? " · some here reserve nothing, so they may use more" : ""}</span>`];
+  }));
+}
+
+window.mvGo = async () => {
+  const plan = MV.plan;
+  if (!plan || !(plan.moves || []).length) return;
+  if (!$("#mvAck")?.checked) return toast("Confirm the restarts first", "warn");
+  try {
+    await api("/api/workloads/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ picks: plan.moves.map(m => ({ id: m.id, to: m.to })), review_token: plan.review_token, restart: true }) });
+    toast(`Moving ${plan.moves.length}; follow it in Jobs`, "ok"); closeModal(); refresh(true);
+  } catch (e) { toast(e.message, "bad"); return mvPlan(); }
+};
+
 function renderWorkloads() {
   const q = STATE.q.toLowerCase();
   // Every linked cluster at once: each cluster is a group, with its chip.
@@ -551,6 +662,7 @@ function renderWorkloads() {
     { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
     { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
+    { label: "Move several…", icon: "move", run: "moveSeveral()", need: "operator", tip: "Tick containers and move them to a host you choose, reviewed together" },
     { label: "Set reservations from use…", icon: "sliders", run: "reservationsReview()", need: "operator", tip: "Reserve CPU and memory for apps from what they used over the last week" },
     { label: "Priority tiers…", icon: "list", run: "priorityReview()", need: "operator", tip: "Which apps fit first when a host fails and the others are short of room" },
     { label: "Logos for apps without one", icon: "logo", run: "logoFixup()", need: "operator", tip: "Match apps with no logo to the app store's" },

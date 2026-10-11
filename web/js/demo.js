@@ -2004,6 +2004,15 @@ ssh_pwauth: true
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/workloads/rebalance/review": (url, init) => {
+      const picks = JSON.parse(init?.body || "{}").picks || [];
+      const rows = picks.map((p, i) => ({ id: p.id, from: "harvester-node1", to: p.to, cpu_m: 250, mem_mb: 512, reserves: true,
+        why: p.to === "harvester-node1" ? "it already runs on harvester-node1" : i >= 10 ? "at most 10 at a time" : "" }));
+      const moves = rows.filter(r => !r.why).map(r => ({ id: r.id, from: r.from, to: r.to }));
+      return { rows, moves, blocked: !moves.length, review_token: moves.length ? "demo-moves" : "",
+        hosts: [...new Set(moves.map(m => m.to))].map(name => ({ name, eligible: true, metrics_available: true, used_gb: 9, capacity_gb: 32,
+          projected_gb: 9 + moves.filter(m => m.to === name).length * 0.5, projected_percent: 30, over: false })) };
+    },
     "/api/workloads/rebalance/plan": url => {
       const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
       const all = [{ ns: "lab", name: "frigate", id: "lab/frigate", from: "harvester-node2", to: "harvester-node1", cpu_m: 1400, mem_gb: 1.8, near: true },
