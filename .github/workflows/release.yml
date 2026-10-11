@@ -187,8 +187,12 @@ jobs:
         shell: bash
         run: |
           sudo apt-get install -y -qq tmux whiptail >/dev/null
-          bash scripts/capture_tui.sh
+          # The screens that were captured are drawn even when one was missed,
+          # which still fails this step so the miss is seen.
+          missed=0
+          bash scripts/capture_tui.sh || missed=1
           node scripts/render_tui.mjs
+          exit "$missed"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: homestead-screenshots
@@ -219,7 +223,11 @@ jobs:
               gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --latest --title "Homestead $GITHUB_REF_NAME"
             fi
           fi
-          gh release upload "$GITHUB_REF_NAME" release-assets/*.png release-assets/*.jpg release-assets/*.tgz --clobber
+          # Whatever pictures there are: a kind with none (the installer's,
+          # when its screens were not captured) leaves the rest to go up.
+          shopt -s nullglob
+          assets=(release-assets/*.png release-assets/*.jpg release-assets/*.tgz)
+          if [ "${#assets[@]}" -gt 0 ]; then gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber; fi
       - name: Keep the releases page short
         # The newest 5 releases, the newest of the 3 newest feature lines and of
         # the 2 newest majors. Only release pages go: their tags stay, and so do

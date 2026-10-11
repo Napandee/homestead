@@ -56,7 +56,7 @@
 set -u
 
 RAW="https://raw.githubusercontent.com/homestead-lab/homestead"
-REF="${HOMESTEAD_REF:-v2.8.322}"
+REF="${HOMESTEAD_REF:-v2.8.323-dev.1}"
 DRY=0
 DIST=k3s
 ROLE=""
@@ -433,15 +433,20 @@ channels() { # k3s|rke2 -> "channel version" lines, releases only
   # Asked a few times first: its outages are brief, and the fallback below
   # can name a different "stable" than a host joining later would get.
   for try in 1 2 3 4; do
-    found=$(fetch "https://update.$1.io/v1-release/channels" | tr -d '\n' \
+    body=$(curl -sfL --connect-timeout 5 --max-time 15 "https://update.$1.io/v1-release/channels" 2>/dev/null); code=$?
+    found=$(printf '%s' "$body" | tr -d '\n' \
       | grep -o '"name":"[^"]*","latest":"[^"]*"' \
       | sed 's/"name":"\([^"]*\)","latest":"\([^"]*\)"/\1 \2/' \
       | grep -v '^testing ' | grep -Ev ' v[0-9.]+-')
     if [ -n "$found" ]; then printf '%s\n' "$found"; return; fi
+    # Not reached at all - since October 2026 it takes no connections - so
+    # GitHub at once, rather than a minute and a half waiting on it.
+    case "$code" in 6|7|28) break ;; esac
     [ "$try" = 4 ] || sleep 10
   done
-  # The update server is down (update.rke2.io has answered 404): the project's
-  # own releases stand in - the newest as stable, and the newest of each minor.
+  # The update server is down (update.rke2.io has answered 404, then taken no
+  # connections): the project's own releases stand in - the newest as stable,
+  # and the newest of each minor.
   repo=k3s-io/k3s; [ "$1" = rke2 ] && repo=rancher/rke2
   fetch "https://api.github.com/repos/$repo/releases?per_page=60" | grep -o '"tag_name": *"[^"]*"' \
     | sed 's/.*"\([^"]*\)"$/\1/' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+\+(k3s|rke2r)[0-9]+$' \
