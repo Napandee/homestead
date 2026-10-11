@@ -11,9 +11,21 @@ systemd unit on the host that uninstalls the agent and installs a server
 - it has to be detached, since the uninstall stops Homestead's own helper
 pod there. The job's resolver follows the unit's status file, then waits
 for the same Node to come back as a Ready etcd member."""
+import hashlib
 import json
+import os
 import re
 import shlex
+import urllib.error
+
+import homestead_capacity as CAPACITY
+import homestead_lifecycle as LIFECYCLE
+import homestead_maintenance as MAINTENANCE
+import homestead_operations as OPS
+import homestead_platform as PLATFORM
+import homestead_roles as ROLES
+import homestead_self as SELF
+import homestead_hostrun as HOSTRUN
 
 KIND = "host-promote"
 UNIT = "homestead-promote"
@@ -135,3 +147,163 @@ def launch_script(op_id, length, body):
         "echo STARTED",
         "",
     ])
+
+
+LONGHORN = "/apis/longhorn.io/v1beta2"
+# Jobs that restart or change a host: none may run while a host is reinstalled.
+HOST_JOBS = ("node-power", "host-os", "os-rollout", "cluster-shutdown", "platform-upgrade")
+SERVER_ROLES = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master", "node-role.kubernetes.io/etcd")
+# One host command for the checks only the host can answer.
+CHECK = (f"[ -s {NODE_PASSWORD} ] && echo PASSWORD; "
+         "[ -x /usr/local/bin/k3s-agent-uninstall.sh ] && echo UNINSTALL; true")
+
+
+def _own_node():
+    """The node this Homestead pod runs on, as server.own_node says."""
+    try:
+        return kget(f"/api/v1/namespaces/{SELF.NS}/pods/{os.environ.get('HOSTNAME', '')}")["spec"]["nodeName"]
+    except Exception:
+        return ""
+
+
+# server.py sits at its line cap, so this module wires itself: Kubernetes
+# through the client hostrun is bound with, looked up at each call. bind()
+# is for tests.
+kget = lambda path, *a, **k: HOSTRUN.kget(path, *a, **k)  # noqa: E731
+ksend = lambda *a, **k: HOSTRUN.ksend(*a, **k)  # noqa: E731
+hostrun = HOSTRUN
+own_node = _own_node
+
+
+def bind(_kget, _ksend, _hostrun, _own_node):
+    global kget, ksend, hostrun, own_node
+    kget, ksend, hostrun, own_node = _kget, _ksend, _hostrun, _own_node
+
+
+def _name(n):
+    return (n.get("metadata") or {}).get("name", "")
+
+
+def _server(n):
+    labels = (n.get("metadata") or {}).get("labels") or {}
+    return any(k in labels for k in SERVER_ROLES)
+
+
+def _ready(n):
+    return any(c.get("type") == "Ready" and c.get("status") == "True"
+               for c in (n.get("status") or {}).get("conditions") or [])
+
+
+def _version(n):
+    return ((n.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "")
+
+
+def _exists(path):
+    try:
+        kget(path)
+        return True
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+
+
+def _replicas_on(node):
+    try:
+        rows = kget(f"{LONGHORN}/replicas").get("items", [])
+    except Exception:
+        return None
+    return sum(1 for r in rows if (r.get("spec") or {}).get("nodeID") == node)
+
+
+def _review(node, facts, blockers):
+    """The plan as a person approved it: what start() must find again."""
+    canon = json.dumps({"node": node, **{k: facts[k] for k in ("uid", "version", "server", "settings", "host_settings", "members")},
+                        "blockers": blockers}, sort_keys=True)
+    return hashlib.sha256(canon.encode()).hexdigest()
+
+
+def plan(node):
+    """What making node a server would do, and what stops it."""
+    nodes = kget("/api/v1/nodes").get("items", [])
+    host = next((n for n in nodes if _name(n) == node), None)
+    if host is None:
+        raise ValueError(f"{node} is not a host in this cluster")
+    p = PLATFORM.detect(True) or {}
+    q = LIFECYCLE.quorum_report()
+    members = list(q.get("members") or [])
+    blockers, warnings = [], []
+    if p.get("harvester") or p.get("distribution") != "k3s":
+        blockers.append("Only a k3s app host can be made a server here")
+    elif not members:
+        blockers.append("This cluster keeps its state outside etcd: a server would add no vote")
+    if _server(host):
+        blockers.append(f"{node} is a server already")
+    elif ROLES.is_tiebreaker(host):
+        blockers.append(f"{node} is marked as a tiebreaker; app hosts only")
+    if not _ready(host):
+        blockers.append(f"{node} is not Ready")
+    if own_node() == node:
+        blockers.append(f"Homestead runs on {node}: move it to another host first (Host actions › Move all off), then review again")
+    shared, known = PLATFORM.shared_server_args(nodes)
+    if not known:
+        blockers.append("The servers' shared settings could not be read from k3s.io/node-args")
+    version = _version(host)
+    versions = sorted({_version(n) for n in nodes if _server(n)})
+    if versions != [version]:
+        blockers.append(f"{node} runs k3s {version or 'unknown'}, the servers {', '.join(versions) or 'unknown'}: "
+                        "upgrade so the versions match first")
+    down = [m for m in members if m not in (q.get("ready") or [])]
+    if down:
+        blockers.append(f"etcd member{'s' if len(down) != 1 else ''} {', '.join(down)} not Ready: "
+                        "the cluster takes no new member while short of a vote")
+    jobs = [o for o in OPS.list_operations() if o.get("status") not in OPS.TERMINAL]
+    if any(o.get("kind") == KIND for o in jobs):
+        blockers.append("A host is being made a server already")
+    for kind in sorted({o.get("kind") for o in jobs if o.get("kind") in HOST_JOBS}):
+        blockers.append(f"A {kind} job is running: a restart or update during the reinstall could cost a vote. "
+                        "Wait for it to finish")
+    forecast = next((h for h in CAPACITY.every_host().get("hosts", []) if h.get("node") == node), None)
+    if forecast is None or forecast.get("verdict") in ("waits", "no-host", "unknown"):
+        blockers.append((forecast or {}).get("sentence") or f"Could not work out where {node}'s apps would go")
+    elif forecast.get("verdict") == "tight":
+        warnings.append(forecast.get("sentence", ""))
+    if not _exists(f"/api/v1/namespaces/kube-system/secrets/{node}.node-password.k3s"):
+        blockers.append(f"kube-system/{node}.node-password.k3s is missing: the host would not register as the same Node")
+    if _ready(host):
+        out, _ = hostrun.run(node, CHECK, timeout=45, wait=30)
+        if "PASSWORD" not in out:
+            blockers.append(f"{node} has no node password at {NODE_PASSWORD}: it would register as a new Node")
+        if "UNINSTALL" not in out:
+            blockers.append(f"{node} has no /usr/local/bin/k3s-agent-uninstall.sh: was k3s installed another way?")
+    host_settings, dropped = node_flags(host)
+    for flag in (f for f in dropped if f in RENAMING_FLAGS):
+        blockers.append(f"{node} was started with {flag}: as a server it would register under another name")
+    if dropped:
+        warnings.append(f"{node} was started with {', '.join(dropped)}, which a server here would not keep")
+    after = len(members) + 1
+    warnings.append(f"{len(members)} → {after} members: " +
+                    ("two members need both: add a third soon" if after == 2 else
+                     "losing any one keeps the cluster up" if after % 2 else "an even count adds no failure margin"))
+    pods = [x for x in kget("/api/v1/pods").get("items", []) if (x.get("spec") or {}).get("nodeName") == node]
+    local = MAINTENANCE.inventory(kget, pods).get("local_storage") or []
+    if local:
+        warnings.append("Kept on this host, waiting for it: " + ", ".join(str(r.get("pod") or r) for r in local[:6]))
+    warnings.append(f"{node} is out of service for several minutes while k3s reinstalls")
+    facts = {"uid": (host.get("metadata") or {}).get("uid", ""), "version": version,
+             "server": (p.get("control_plane") or [""])[0], "settings": shared, "host_settings": host_settings,
+             "members": members, "replicas": _replicas_on(node)}
+    return {"node": node, "blockers": blockers, "warnings": warnings, "facts": facts,
+            "review_token": _review(node, facts, blockers)}
+
+
+def _node_param(request):
+    node = (request.query.get("node") or [""])[0]
+    if not node:
+        raise ValueError("which host?")
+    return node
+
+
+ROUTES = {
+    ("GET", "/api/node/promote/plan"): ("admin", lambda request: plan(_node_param(request))),
+}

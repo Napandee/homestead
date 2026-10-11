@@ -98,6 +98,7 @@ MODULES = (
     "homestead_portal",
     "homestead_power_jobs",
     "homestead_priority",
+    "homestead_promote",
     "homestead_probe",
     "homestead_push",
     "homestead_rebalance",
