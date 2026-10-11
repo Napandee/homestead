@@ -687,5 +687,74 @@ esac''')
         self.assertIn("rollout restart deployment/rke2-coredns-rke2-coredns", out)
 
 
+
+FIO_OUT = """  fsync/fdatasync/sync_file_range:
+    sync (usec): min=530, max=21000, avg=1300.12, stdev=800.1
+    sync percentiles (usec):
+     |  1.00th=[  578],  5.00th=[  603], 10.00th=[  619], 20.00th=[  652],
+     | 99.00th=[ 14222], 99.50th=[16712], 99.90th=[20055], 99.95th=[21000],
+"""
+
+
+@unittest.skipUnless(SH and os.name == "posix", "needs a POSIX system")
+class SmallServerCheckTests(unittest.TestCase):
+    def checks(self, overrides):
+        code, out = functions(overrides + '\nsmall_server_checks\nprintf "%s\\n" "$REPORT"; echo "FAILED=$FAILED"')
+        self.assertEqual(0, code, out)
+        return out
+
+    HEALTHY = ('etcd_sync_ms() { echo 2; }\ncgroup_memory() { true; }\nvxlan_available() { true; }\n'
+               'swap_on() { false; }\npi_throttled() { echo ""; }\nis_pi() { false; }\n')
+
+    def test_a_healthy_small_server_passes_every_check(self):
+        out = self.checks(self.HEALTHY)
+        self.assertIn("PASS  Disk syncs in 2 ms", out)
+        self.assertIn("FAILED=0", out)
+
+    def test_a_slow_disk_warns_with_what_etcd_needs(self):
+        out = self.checks(self.HEALTHY + 'etcd_sync_ms() { echo 38; }\n')
+        self.assertIn("WARN  Disk syncs in 38 ms", out)
+        self.assertIn("under 10 ms", out)
+
+    def test_no_memory_cgroup_fails_and_names_the_pi_fix(self):
+        out = self.checks(self.HEALTHY + 'cgroup_memory() { false; }\nis_pi() { true; }\n')
+        self.assertIn("FAIL  The memory cgroup controller is off", out)
+        self.assertIn("cgroup_enable=memory cgroup_memory=1", out)
+        self.assertIn("FAILED=1", out)
+
+    def test_no_vxlan_fails(self):
+        self.assertIn("FAIL  The vxlan kernel module", self.checks(self.HEALTHY + 'vxlan_available() { false; }\n'))
+
+    def test_swap_warns(self):
+        self.assertIn("WARN  Swap is on", self.checks(self.HEALTHY + 'swap_on() { true; }\n'))
+
+    def test_a_throttled_pi_warns_with_what_the_bits_mean(self):
+        out = self.checks(self.HEALTHY + 'is_pi() { true; }\npi_throttled() { echo 0x50005; }\n')
+        self.assertIn("WARN  This Raspberry Pi reports 0x50005", out)
+        self.assertIn("under-voltage now", out)
+
+    def test_fio_output_reads_as_its_99th_percentile(self):
+        code, out = functions(f"printf '%s' '{FIO_OUT}' | fio_p99_ms")
+        self.assertEqual("14", out.strip())
+
+    def test_dd_output_reads_as_its_average_write(self):
+        code, out = functions("echo '819200 bytes (819 kB, 800 KiB) copied, 1.2 s, 683 kB/s' | dd_avg_ms 200")
+        self.assertEqual("6", out.strip())
+
+    def test_a_temperature_cap_is_named_and_not_blamed_on_power(self):
+        out = self.checks(self.HEALTHY + 'is_pi() { true; }\npi_throttled() { echo 0x80008; }\n')
+        self.assertIn("soft temperature limit now", out)
+        self.assertIn("soft temperature limit since boot", out)
+        self.assertNotIn("power supply", out)
+
+    def test_the_disk_test_reads_dd_and_fio_in_the_c_locale(self):
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("LC_ALL=C dd if=/dev/zero", text)
+        self.assertIn("LC_ALL=C fio --name=homestead-etcd-check", text)
+
+    def test_an_unmeasured_disk_warns_rather_than_passing(self):
+        self.assertIn("WARN  Disk sync time could not be measured", self.checks(self.HEALTHY + 'etcd_sync_ms() { echo ""; }\n'))
+
+
 if __name__ == "__main__":
     unittest.main()
