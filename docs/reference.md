@@ -663,6 +663,7 @@ a plain-HTTP LAN address; Settings says so there instead.
 | Failed jobs | anything in the activity tray that ends in failure |
 | Hosts joining | a new host registering with the cluster, and becoming Ready |
 | Image updates | a newer image for a workload (off by default; checked twice a day) |
+| AI agents | an AI agent is waiting for someone to approve a request |
 
 A problem is announced once it has lasted a minute, so restarts and rollouts do
 not buzz a phone, and announced again when it is over; the second notification
@@ -682,6 +683,27 @@ Homestead needs to reach the push services on the internet (for example
 the manifest and icons are served without Access's signature so the browser can
 install the app; if installation still fails, add an Access **Bypass** policy for
 `/manifest.webmanifest` and `/icons/*`.
+
+## AI agents (MCP)
+
+Homestead has an MCP server at `POST /mcp` (Streamable HTTP, stateless JSON-RPC)
+so agents such as Claude Code can manage the cluster. It is off by default: an
+administrator turns on **AI agents (MCP)** in Settings → Access, and `/mcp`
+answers `404` while it is off.
+
+It is reached only with an [API key](wiki/API.md) made with **Allow AI agents
+(MCP)** ticked, in the `Authorization: Bearer` header. Besides `read`,
+`containers:control` and `vms:control`, MCP keys can hold `logs:read`,
+`containers:manage`, `vms:manage` and `storage:manage`; the tools a key sees
+follow its scopes, and it acts as an operator at most. Changes are previewed
+before they are applied. Deletes, snapshot reverts, restores, backup deletes,
+storage class changes and changes that need an administrator become requests,
+shown in the bell, pushed to devices (the "AI agents" notification kind) and
+approved on the `/agents` page; they expire after 30 minutes. Every key call is
+audited for 30 days.
+
+The [AI agents](wiki/AI-agents.md) page has the tool list, how to connect a
+client, and troubleshooting.
 
 ## Homestead's own health
 

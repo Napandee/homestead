@@ -25,6 +25,10 @@ an agent's tool list.
   | `read` | Read status: the cluster, nodes, containers, VMs, alerts and jobs |
   | `containers:control` | Start, stop and restart containers |
   | `vms:control` | Start, stop and restart virtual machines |
+  | `logs:read` | Read containers' logs (AI agents, over MCP) |
+  | `containers:manage` | Deploy, edit, scale and move containers (AI agents, over MCP) |
+  | `vms:manage` | Create, edit and migrate virtual machines (AI agents, over MCP) |
+  | `storage:manage` | Create and resize volumes, snapshot and back them up (AI agents, over MCP) |
 
 - **Expires after** - a day to a year. There are no keys that never expire.
 - **Only from** (optional) - addresses or networks it may be used from, such as
@@ -149,6 +153,12 @@ Give the key `read` and `containers:control`, and limit it to Home Assistant's
 address.
 
 ## AI agents
+
+If the agent speaks the Model Context Protocol (Claude Code, Claude Desktop and
+others), use [AI agents](AI-agents): MCP is the easier way, and adds previews,
+approvals for anything destructive, and an audit. A key for it is made with
+**Allow AI agents (MCP)** ticked. For other agent frameworks the OpenAPI
+description remains.
 
 Hand the agent a key and the description:
 
