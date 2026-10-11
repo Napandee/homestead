@@ -2,8 +2,10 @@
 
 The kubelet says only "Pulling" and later "Pulled"; containerd knows more.
 While it fetches an image it lists each layer in progress with the bytes it
-has so far (ctr content active), and a layer it has finished it simply holds
-(ctr content info). The registry says what the layers are and how big. So
+has so far (ctr content active: the layer, its bytes, how long it has been
+going), and a layer it has finished it simply holds (ctr content ls). The
+registry says what the layers are and how big. ctr content info, which this
+asked first, is gone from containerd 2, as k3s now ships it. So
 for a pull under way Homestead starts a small pod on that node that prints,
 every two seconds, the layers containerd has and those it is still fetching;
 their sizes against the registry's make the percentage.
@@ -28,7 +30,9 @@ _LAYERS = {}
 
 UNITS = {"b": 1, "kb": 1000, "kib": 1024, "mb": 1000 ** 2, "mib": 1024 ** 2,
          "gb": 1000 ** 3, "gib": 1024 ** 3, "tb": 1000 ** 4, "tib": 1024 ** 4}
-ACTIVE = re.compile(r"^\S*?sha256:([0-9a-f]{64})\s+([\d.]+)\s*([kKmMgGtT]?i?B)\s+([\d.]+)\s*([kKmMgGtT]?i?B)")
+# "layer-sha256:<digest>  74.45MB  34 seconds": the bytes so far, then
+# how long - one size, not two.
+ACTIVE = re.compile(r"^\S*?sha256:([0-9a-f]{64})\s+([\d.]+)\s*([kKmMgGtT]?i?B)\b")
 
 
 def bind(_kget, _ksend, _raw_get, _layers_of, namespace="lab"):
@@ -59,8 +63,9 @@ def script(digests):
         f"end=$(( $(date +%s) + {LIMIT} ))",
         "while [ $(date +%s) -lt $end ]; do",
         "  echo \"== $(date +%s)\"; missing=0",
+        f"  have=$({RUNTIME.CTR} content ls -q 2>/dev/null)",
         f"  for d in {wanted}; do",
-        f"    if {RUNTIME.CTR} content info $d >/dev/null 2>&1; then echo \"HAVE $d\"; else missing=1; fi",
+        "    case \"$have\" in *\"$d\"*) echo \"HAVE $d\" ;; *) missing=1 ;; esac",
         "  done",
         f"  {RUNTIME.CTR} content active 2>/dev/null | tail -n +2",
         "  [ $missing = 0 ] && { echo '== done'; exit 0; }",
@@ -131,7 +136,7 @@ def progress(node, image):
         pod = None
     if not pod:
         body = RUNTIME.pod(name, NS, node, script([layer["digest"] for layer in layers]), TASK,
-                           {NAMES.key("image"): image[:250]}, memory="48Mi", deadline=LIMIT + 60)
+                           {NAMES.key("image"): image[:250]}, memory="64Mi", deadline=LIMIT + 60)
         body["spec"]["automountServiceAccountToken"] = False
         try:
             ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
