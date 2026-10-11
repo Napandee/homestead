@@ -2733,7 +2733,7 @@ ssh_pwauth: true
       "containers:manage": "Deploy, change and delete containers (deleting waits for a person to approve)",
       "vms:manage": "Create, change and delete virtual machines (deleting waits for a person to approve)",
       "storage:manage": "Snapshot, back up, restore and move volumes (data-losing steps wait for a person to approve)" },
-    min_ttl: 3600, max_ttl: 366 * 86400,
+    min_ttl: 3600, max_ttl: 366 * 86400, you: { address: "192.0.2.31", node_address: false, note: "" },
     keys: [{ id: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", scopes: ["read", "containers:control"], networks: ["192.0.2.20"],
              created: ago(60 * 24 * 12), expires: ago(-60 * 24 * 78), expired: false, last_used: ago(2), last_ip: "192.0.2.20" },
            { id: "8c41e07a9b55", name: "Ops agent", owner: "demo", scopes: ["read"], networks: [],

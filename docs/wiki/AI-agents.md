@@ -40,8 +40,9 @@ Choose scopes for what the agent should do:
 | `storage:manage` | Create and grow volumes, snapshot and back up; ask to delete, revert or restore |
 
 Give the agent `read` alone first and see what it makes of your cluster. Add
-scopes when you want it to act. Set **Only from** to the client's address, and
-use HTTPS: the key travels in a header.
+scopes when you want it to act. Use HTTPS: the key travels in a header. Set
+**Only from** to the client's address only where Homestead can see it (see
+[API](API) - on many clusters it sees a node's address instead).
 
 ## Connecting a client
 
@@ -226,8 +227,8 @@ agent follows it with `get_agent_request`.
 - **Audited.** Every call is recorded (below).
 
 Use HTTPS, or limit the key to the client's address: a key sent over plain HTTP
-can be read by anyone on the path. Behind a load balancer, check "used … from" on
-the key's card before setting **Only from**, as for any key.
+can be read by anyone on the path. Limiting by address works only where
+Homestead sees clients' own addresses; the API keys card says when it does not.
 
 ## The audit
 
@@ -247,3 +248,4 @@ Settings.
 | A tool is missing | The key's scopes do not include it; make a key with the scope |
 | A request ended as failed | The cluster changed between the ask and the approval, so the plan no longer matched. Ask again |
 | A request expired | Nobody answered within 30 minutes |
+| `401 … cannot be used from 10.42.0.0` | Homestead sees a node's address, not the client's, so **Only from** cannot match. Make a key without it (see [API](API)) |

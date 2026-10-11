@@ -149,7 +149,9 @@ window.mcpCardPaint = async () => {
   card.innerHTML = `${UI.moduleHeader("AI agents (MCP)", "Let an AI assistant such as Claude manage this cluster with an API key, through the Model Context Protocol")}
     <div class="srows">${settingRow("Allow AI agents to connect", "Off, every request to the endpoint is refused. Each agent still needs an API key marked for AI agents.",
       `<label class="toggle"><input type="checkbox" id="mcp_on" ${on ? "checked" : ""} onchange="mcpSwitch(this)"><span></span></label>`)}</div>
-    ${location.protocol === "http:" ? UI.callout("warn", "This page is not served over HTTPS", "An agent's key would travel unencrypted on the network. Set up HTTPS first, and limit each key to the address of the client that uses it.") : ""}
+    ${location.protocol === "http:" ? UI.callout("warn", "This page is not served over HTTPS", STATE.data.apiKeys?.you?.node_address
+      ? "An agent's key would travel unencrypted on the network. Set up HTTPS first. Limiting keys to a client's address does not work on this cluster: Homestead sees a node's address for every request (see API keys)."
+      : "An agent's key would travel unencrypted on the network. Set up HTTPS first, and limit each key to the address of the client that uses it.") : ""}
     ${UI.field("Endpoint", `<div class="row" style="gap:8px;flex-wrap:nowrap"><input class="mono" readonly value="${esc(url)}" onclick="this.select()">${copy("url")}</div>`,
       { help: "Make a key under API keys with Allow AI agents (MCP) ticked, then give it to the client." })}
     ${UI.more("Connect Claude Code", `<pre class="mono small agent-raw">${esc(window.__mcpText.code)}</pre><div class="row">${copy("code")}</div>`, false, "mcp-claude-code")}

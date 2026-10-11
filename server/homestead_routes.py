@@ -130,7 +130,8 @@ MODULES = (
 )
 ROLES = ("viewer", "operator", "admin")
 
-Request = collections.namedtuple("Request", "method path query body user role")
+# addr: the address the request came from, as server.py sees it.
+Request = collections.namedtuple("Request", "method path query body user role addr", defaults=("",))
 Route = collections.namedtuple("Route", "method path role handler module")
 Raw = collections.namedtuple("Raw", "body ctype")
 # A download sent as it is read: chunks (an iterator of bytes), its type, the
