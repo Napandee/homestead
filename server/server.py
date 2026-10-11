@@ -4785,19 +4785,13 @@ class H(HTTP.LimitedHandler):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p == "/api/auth/keys":
-                # Made in this Homestead's own app, by someone signed in to it:
-                # never relayed from a linked cluster.
+            if p in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit"):
+                # Made, changed and revoked in this Homestead's own app, by
+                # someone signed in to it: never relayed from a linked cluster.
                 if self._fleet_from:
-                    return self._send(403, {"error": "make API keys in this Homestead's own app"})
-                made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user, b.get("mcp", False))
-                self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
-                return self._send(200, {"ok": True, **made})
-            if p == "/api/auth/keys/revoke":
-                if self._fleet_from:
-                    return self._send(403, {"error": "revoke API keys in this Homestead's own app"})
-                done = API_KEYS.revoke(b.get("id"))
-                self._signin("key-revoked", self.user, detail=done["name"])
+                    return self._send(403, {"error": "manage API keys in this Homestead's own app"})
+                done, event, detail = API_KEYS.manage(p.rsplit("/", 1)[-1], b, self.user)
+                self._signin(event, self.user, detail=detail)
                 return self._send(200, done)
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)

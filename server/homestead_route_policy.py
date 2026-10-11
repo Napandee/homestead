@@ -37,6 +37,7 @@ POLICY = {
     ('POST', '/api/alerts/delivered'): 'viewer',
     ('POST', '/api/auth/keys'): 'admin',
     ('POST', '/api/auth/keys/revoke'): 'admin',
+    ('POST', '/api/auth/keys/edit'): 'admin',
     ('POST', '/api/auth/login'): 'operator',
     ('POST', '/api/auth/logout'): 'viewer',
     ('POST', '/api/auth/password'): 'viewer',

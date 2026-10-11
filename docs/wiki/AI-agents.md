@@ -27,7 +27,10 @@ ticked. A key without that tick does not work on `/mcp`, and a browser session
 never does.
 
 A key acts as an **operator at most**, even when an administrator made it.
-Choose scopes for what the agent should do:
+Choose scopes for what the agent should do - every scope includes `read`, and
+managing an area includes controlling it - or start from the dialog's
+**Read only**, **Operate** or **Manage everything**. **Edit** on a key changes
+its scopes later without a new token:
 
 | Scope | Lets the agent |
 |---|---|

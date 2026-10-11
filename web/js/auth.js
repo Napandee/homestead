@@ -500,7 +500,8 @@ window.apiKeysPaint = async () => {
       <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ' <span class="tag" title="A node\'s address inside the cluster, not the client\'s">node</span>' : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
-      <td>${actionBar([{ label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 1 })}</td></tr>`).join("");
+      <td>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
+        { label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 2 })}</td></tr>`).join("");
   card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
         <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}
     ${found.you?.node_address ? UI.callout("warn", "Homestead cannot see where requests come from", esc(found.you.note)) : ""}
@@ -510,19 +511,62 @@ window.apiKeysPaint = async () => {
       Its full description is at <span class="mono">/api/v1/openapi.json</span> on this Homestead.</div>`;
 };
 
+/* The key dialog, for a new key or to change one (key given): the same
+   fields, with presets above the scopes and what each scope brings with it. */
+function apiKeyForm(key) {
+  const data = STATE.data.apiKeys || {}, scopes = data.scopes || {}, implies = data.implies || {};
+  const chosen = new Set(key ? key.scopes : ["read"]);
+  const presets = Object.entries(data.presets || {}).map(([label, list]) =>
+    `<button type="button" class="btn sm" onclick="apiKeyPreset(${jsq(JSON.stringify(list))})">${esc(label)}</button>`).join(" ");
+  return (presets ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">${presets}</div>` : "")
+    + Object.entries(scopes).map(([scope, text]) => settingRow(`<span class="mono">${esc(scope)}</span>`,
+      esc(text) + ((implies[scope] || []).length ? `<div class="dim xs">Includes ${esc(implies[scope].join(", "))}</div>` : ""),
+      `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${chosen.has(scope) ? "checked" : ""}><span></span></label>`)).join("")
+    + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. Off, it works only on the API.",
+      `<label class="toggle"><input type="checkbox" id="ak_mcp" ${key?.mcp ? "checked" : ""}><span></span></label>`);
+}
+window.apiKeyPreset = list => {
+  const want = new Set(JSON.parse(list));
+  for (const box of $$(".ak-scope")) box.checked = want.has(box.value);
+};
+function apiKeyNetworksHelp() {
+  const you = STATE.data.apiKeys?.you;
+  return you?.node_address
+    ? `Leave this empty here: Homestead sees your request as coming from ${esc(you.address)}, a node's address inside the cluster, so it cannot tell clients apart and a limit would refuse them all.`
+    : "Addresses or networks it may be used from; anywhere if empty.";
+}
+
+window.apiKeyEdit = id => {
+  const key = (STATE.data.apiKeys?.keys || []).find(k => k.id === id);
+  if (!key) return;
+  modal(`Change ${esc(key.name)}`, UI.lead("Changes take effect within seconds. The key itself stays the same, so whatever uses it carries on.")
+    + UI.field("Name", `<input id="ak_name" maxlength="60" value="${esc(key.name)}">`)
+    + `<div class="sec">What it may do</div>` + apiKeyForm(key)
+    + UI.fields(UI.field("Expires", `<select id="ak_ttl"><option value="">Keep: ${esc(keyUntil(key.expires))}</option>${API_TTLS.map(([label, s]) => `<option value="${s}">${esc(label)} from now</option>`).join("")}</select>`),
+      UI.field("Only from (optional)", `<input id="ak_nets" value="${esc((key.networks || []).join(", "))}" placeholder="192.0.2.20, 198.51.100.0/24">`, { help: apiKeyNetworksHelp() }))
+    + UI.actions(UI.cancel() + UI.button("Save changes", `apiKeySave(this,${jsq(id)})`, { kind: "pri" })));
+};
+window.apiKeySave = async (button, id) => {
+  const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
+    mcp: $("#ak_mcp").checked, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
+  if ($("#ak_ttl").value) body.ttl_seconds = +$("#ak_ttl").value;
+  if (!body.name) return toast("give the key a name", "bad");
+  if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
+  button.disabled = true;
+  try {
+    const done = await api("/api/auth/keys/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    closeModal();
+    toast(done.changed?.length ? `${done.key.name}: ${done.changed.join(", ")} changed` : "Nothing changed", "ok");
+    apiKeysPaint();
+  } catch (e) { button.disabled = false; toast(e.message, "bad"); }
+};
+
 window.apiKeyNew = () => {
-  const scopes = STATE.data.apiKeys?.scopes || {};
   modal("New API key", UI.lead("A key can do only what its scopes allow, and stops working when it expires or is revoked. You see it once.")
     + UI.field("Name", '<input id="ak_name" placeholder="Home Assistant" maxlength="60">', { help: "What uses it, so you know which to revoke." })
-    + `<div class="sec">What it may do</div>`
-    + Object.entries(scopes).map(([scope, text]) => settingRow(`<span class="mono">${esc(scope)}</span>`, esc(text),
-      `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${scope === "read" ? "checked" : ""}><span></span></label>`)).join("")
-    + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. Off, it works only on the API.",
-      '<label class="toggle"><input type="checkbox" id="ak_mcp"><span></span></label>')
+    + `<div class="sec">What it may do</div>` + apiKeyForm()
     + UI.fields(UI.field("Expires after", `<select id="ak_ttl">${API_TTLS.map(([label, s]) => `<option value="${s}" ${s === 90 * 86400 ? "selected" : ""}>${label}</option>`).join("")}</select>`),
-      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: STATE.data.apiKeys?.you?.node_address
-        ? `Leave this empty here: Homestead sees your request as coming from ${esc(STATE.data.apiKeys.you.address)}, a node's address inside the cluster, so it cannot tell clients apart and a limit would refuse them all.`
-        : "Addresses or networks it may be used from; anywhere if empty." }))
+      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: apiKeyNetworksHelp() }))
     + UI.actions(UI.cancel() + UI.button("Make key", "apiKeyMake(this)", { kind: "pri" })));
 };
 

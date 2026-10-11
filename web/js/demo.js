@@ -2736,6 +2736,10 @@ ssh_pwauth: true
       "network:manage": "Expose apps and keep the IP address plan (MCP)",
       "cluster:manage": "Namespaces and raw Kubernetes objects (MCP); every change waits for an admin to approve it" },
     min_ttl: 3600, max_ttl: 366 * 86400, you: { address: "192.0.2.31", node_address: false, note: "" },
+    implies: { "logs:read": ["read"], "containers:control": ["read"], "containers:manage": ["containers:control", "read"],
+      "vms:control": ["read"], "vms:manage": ["vms:control", "read"], "storage:manage": ["read"], "network:manage": ["read"], "cluster:manage": ["read"] },
+    presets: { "Read only": ["read"], "Operate": ["read", "containers:control", "vms:control"],
+      "Manage everything": ["read", "logs:read", "containers:manage", "vms:manage", "storage:manage", "network:manage"] },
     keys: [{ id: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", scopes: ["read", "containers:control"], networks: ["192.0.2.20"],
              created: ago(60 * 24 * 12), expires: ago(-60 * 24 * 78), expired: false, last_used: ago(2), last_ip: "192.0.2.20" },
            { id: "8c41e07a9b55", name: "Ops agent", owner: "demo", scopes: ["read"], networks: [],
@@ -2795,6 +2799,10 @@ ssh_pwauth: true
              created: ago(0), expires: ago(-(body.ttl_seconds || 86400) / 60), expired: false, last_used: null, last_ip: "" } };
   };
   responses["/api/auth/keys/revoke"] = { ok: true, name: "Home Assistant" };
+  responses["/api/auth/keys/edit"] = (url, init) => {
+    const body = JSON.parse(init?.body || "{}"), key = responses["/api/auth/keys"]().keys.find(k => k.id === body.id) || {};
+    return { ok: true, key: { ...key, ...body }, changed: ["scopes"] };
+  };
   // The setup guide, part way through, as a cluster a few weeks in would be.
   const demoSetup = { skips: [], hidden: false, opened: true, admin: true, personal: ["appearance", "phone", "notifications"], steps: {
     health: { done: false, applies: true, summary: "One workload is not ready",
