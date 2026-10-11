@@ -16,12 +16,25 @@ def node(name, ready=True):
     return {"metadata": {"name": name}, "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
+LH_NODES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes"
+
+
+def lh_node(name, schedulable=True, disks=({"allowScheduling": True},), ready=True, evicting=False):
+    return {"metadata": {"name": name},
+            "spec": {"allowScheduling": schedulable, "evictionRequested": evicting,
+                     "disks": {f"disk-{i}": dict(d) for i, d in enumerate(disks)}},
+            "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+
+
 class Cluster:
     def __init__(self, nodes, objects=None, probes=None, host_out="MULTIPATH set\nISCSI kept\nEND\n"):
         self.objects = {"/api/v1/nodes": {"items": nodes}, **(objects or {})}
         self.probes, self.host_out, self.sent, self.ran = probes or {}, host_out, [], []
 
     def kget(self, path):
+        # Longhorn stores on every node unless a test says otherwise.
+        if path == LH_NODES and path not in self.objects:
+            return {"items": [lh_node(n["metadata"]["name"]) for n in self.objects["/api/v1/nodes"]["items"]]}
         if path not in self.objects:
             raise KeyError(path)
         return self.objects[path]
@@ -285,6 +298,14 @@ class NodeParityTests(unittest.TestCase):
         cluster.objects["/api/v1/nodes"]["items"].pop()
         self.assertEqual([], PARITY.own_copies(PARITY._ready_nodes()), "never lowered")
 
+    def test_a_tiebreaker_longhorn_does_not_store_on_leaves_homesteads_data_at_two_copies(self):
+        # #364: a Pi kept for etcd votes is Ready, tainted, and runs no Longhorn.
+        cluster, volume = self.own_cluster(["a", "b", "pi"], 1)
+        cluster.objects[LH_NODES] = {"items": [lh_node("a"), lh_node("b")]}
+        PARITY._seen_ready = None
+        PARITY.copies_tick()
+        self.assertEqual(2, volume["spec"]["numberOfReplicas"])
+
     def test_homesteads_data_volume_set_by_someone_else_is_kept(self):
         cluster, volume = self.own_cluster(["a", "b", "c"], 2)
         self.assertEqual([], PARITY.own_copies(PARITY._ready_nodes()))
@@ -299,6 +320,60 @@ class NodeParityTests(unittest.TestCase):
                 self.bind(cluster)
                 PARITY.tick()
                 self.assertEqual([], cluster.sent)
+
+    def test_new_volumes_keep_as_many_copies_as_hosts_longhorn_stores_on(self):
+        setting = {"value": "1"}
+        cluster = Cluster([node("a"), node("b"), node("pi")],
+                          {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}}, PARITY.LONGHORN_SETTING: setting,
+                           LH_NODES: {"items": [lh_node("a"), lh_node("b")]}})
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIn("keep 2 copies", PARITY.copies_tick())
+        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": "2"}), cluster.sent)
+
+    def test_a_host_longhorn_may_not_schedule_on_does_not_count(self):
+        for unschedulable in (lh_node("c", schedulable=False), lh_node("c", disks=({"allowScheduling": False},)), lh_node("c", disks=()),
+                              lh_node("c", evicting=True), lh_node("c", disks=({"allowScheduling": True, "evictionRequested": True},))):
+            with self.subTest(node=unschedulable):
+                cluster = Cluster([node("a"), node("b"), node("c")],
+                                  {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                                   LH_NODES: {"items": [lh_node("a"), lh_node("b"), unschedulable]}})
+                self.bind(cluster)
+                PARITY._seen_ready = None
+                self.assertIn("keep 2 copies", PARITY.copies_tick())
+
+    def test_a_longhorn_record_left_behind_on_a_host_it_no_longer_runs_on_does_not_count(self):
+        # Longhorn ran on the Pi once, then was moved off it: its node record
+        # stays, still allowing scheduling, but is no longer Ready.
+        cluster = Cluster([node("a"), node("b"), node("pi")],
+                          {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                           LH_NODES: {"items": [lh_node("a"), lh_node("b"), lh_node("pi", ready=False)]}})
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIn("keep 2 copies", PARITY.copies_tick())
+
+    def test_the_platform_look_counts_the_same_hosts(self):
+        cluster = Cluster([node("a"), node("b"), node("pi")],
+                          {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                           LH_NODES: {"items": [lh_node("a"), lh_node("b")]}}, host_out="MULTIPATH none\nISCSI kept\nEND\n")
+        self.bind(cluster)
+        PARITY.tick()
+        chart = next(body for _, path, body in cluster.sent if path == f"{HELM}/longhorn")
+        self.assertIn("defaultReplicaCount: 2", chart["spec"]["valuesContent"])
+
+    def test_nothing_is_raised_while_longhorn_cannot_say_where_it_stores(self):
+        cluster = Cluster([node("a"), node("b"), node("c")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}}})
+        get = cluster.kget
+
+        def kget(path):
+            if path == LH_NODES:
+                raise RuntimeError("Longhorn is starting")
+            return get(path)
+        cluster.kget = kget
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIsNone(PARITY.copies_tick())
+        self.assertEqual([], cluster.sent)
 
     def test_one_node_keeps_one_copy(self):
         cluster = Cluster([node("a")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}}},
