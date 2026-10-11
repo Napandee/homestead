@@ -51,9 +51,16 @@ The address is `/mcp` on your Homestead, and the key goes in the
 **Claude Code:**
 
 ```bash
-claude mcp add --transport http homestead http://homestead.example.com/mcp \
+claude mcp add --transport http --scope user homestead http://homestead.example.com/mcp \
   --header "Authorization: Bearer hsk_..."
 ```
+
+`--scope user` makes Homestead available in every project. Without it, Claude
+Code adds it only to the folder the command ran in. The desktop app's Code tab
+reads the same configuration, but does not put the `claude` command on the
+path: install it with `npm install -g @anthropic-ai/claude-code` to run the
+line above. A session loads its servers when it starts, so start a new one and
+run `/mcp` to see Homestead connected.
 
 **Claude Desktop** reaches it through `mcp-remote`. Add this to its
 configuration:
