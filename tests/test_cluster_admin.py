@@ -43,6 +43,17 @@ class ClusterAdministrationTests(unittest.TestCase):
         self.assertEqual("Control plane + etcd", report["onboarding"]["recommended_role"])
         self.assertEqual("1.6.0", report["versions"]["harvester"])
 
+    def test_etcd_members_are_listed_with_a_tiebreaker_told_apart(self):
+        pi = node("pi", ["control-plane", "etcd"])
+        pi["metadata"]["labels"]["node-role/tiebreaker"] = "true"
+        report = self.report([node("one", ["control-plane", "etcd"]), node("two", ["control-plane", "etcd"]), pi])
+        self.assertEqual([{"name": "one", "ready": True, "role": "server"}, {"name": "pi", "ready": True, "role": "tiebreaker"},
+                          {"name": "two", "ready": True, "role": "server"}], report["control_plane"]["members"])
+
+    def test_two_members_are_told_a_small_machine_can_be_the_third_vote(self):
+        report = self.report([node("one", ["control-plane", "etcd"]), node("two", ["control-plane", "etcd"])])
+        self.assertIn("tiebreaker", report["onboarding"]["reason"])
+
     def test_three_member_cluster_has_one_member_failure_margin(self):
         nodes = [node(str(i), ["control-plane", "etcd"]) for i in range(3)]
         report = self.report(nodes)
