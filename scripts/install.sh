@@ -26,7 +26,7 @@
 # failure, or with --text, plain prompts are used instead.
 #
 # Unattended installation: set the answers in the environment.
-#   HS_ROLE=new|server|agent|addons|harvester   installation mode
+#   HS_ROLE=new|server|agent|tiebreaker|addons|harvester   installation mode
 #   HS_DIST=k3s|rke2                            distribution for a new cluster
 #   HS_NODE_IP=192.0.2.50                     this node's IP address
 #   HS_SERVER=192.0.2.50  HS_TOKEN=...        the cluster to join
@@ -738,17 +738,18 @@ flow_new() {
   ROLE=$(choose HS_ROLE "Installation Mode" "Select how to install this machine:" \
     new "Create a new cluster" \
     server "Join an existing cluster as a server node" \
+    tiebreaker "Join an existing cluster as a tiebreaker (an etcd vote only)" \
     agent "Join an existing cluster as a worker node") || exit
   [ "$ROLE" = harvester ] && fail "This machine is not a Harvester node."
   case "$ROLE" in
     new) pick_dist ;;
-    server|agent) find_cluster ;;
+    server|agent|tiebreaker) find_cluster ;;
   esac
   pick_ip
   prechecks "$ROLE"
   case "$ROLE" in
     new) new_cluster ;;
-    server|agent) join_cluster "$ROLE" ;;
+    server|agent|tiebreaker) join_cluster "$ROLE" ;;
     addons) add_to_cluster ;;
     *) fail "Unknown installation mode: $ROLE" ;;
   esac
@@ -890,18 +891,19 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   finish_new
 }
 
-join_cluster() { # server|agent
+join_cluster() { # server|agent|tiebreaker
   token=$(ask HS_TOKEN "Cluster Token" "Enter the cluster token. To display it, run this command on an existing server node:
 
   sudo cat $(token_file)" "" secret) || exit
   [ -n "$token" ] || fail "No cluster token was entered."
   SECRET="$token"
-  mode=agent; [ "$1" = server ] && mode=join
-  pick_longhorn_volume
+  case "$1" in server|tiebreaker) mode=join ;; *) mode=agent ;; esac
+  # A tiebreaker holds an etcd vote and no Longhorn data (#364).
+  if [ "$1" = tiebreaker ]; then LH_VOLUME=""; LH_LINE=""; else pick_longhorn_volume; fi
   pick_console
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
-  Installation mode    Join an existing cluster as a $([ "$1" = server ] && echo "server node" || echo "worker node")
+  Installation mode    Join an existing cluster as a $(case "$1" in server) echo "server node" ;; tiebreaker) echo "tiebreaker (an etcd vote only)" ;; *) echo "worker node" ;; esac)
   Distribution         $(dist_name)
   Cluster              $url
   Host console         $(console_line)
@@ -911,7 +913,7 @@ join_cluster() { # server|agent
 
 Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
   # shellcheck disable=SC2046
-  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag) $(version_args k8s)$(volume_args)
+  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $([ "$1" = tiebreaker ] && echo --tiebreaker) $(dist_flag) $(version_args k8s)$(volume_args)
   install_console
   msg "Installation Complete" "$(hostname) has joined the cluster. It appears on the Homestead Nodes page within a few minutes."
 }

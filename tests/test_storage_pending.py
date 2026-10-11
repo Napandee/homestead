@@ -74,6 +74,13 @@ class StoragePendingTests(unittest.TestCase):
         self.assertIn('install_k3s server --server "$URL" --node-taint "$JOIN_TAINT"', script)
         self.assertIn('JOIN_TAINT=""', script, "set -u: the first server has none")
 
+    def test_a_tiebreaker_joins_with_its_own_taint_and_label_and_no_storage_wait(self):
+        script = (Path(__file__).resolve().parents[1] / "scripts" / "bootstrap-k3s.sh").read_text()
+        self.assertIn('--tiebreaker) TIEBREAKER=1; shift; continue ;;', script)
+        self.assertIn('JOIN_TAINT="node-role/tiebreaker=true:NoSchedule"; JOIN_LABEL="node-role/tiebreaker=true"', script)
+        self.assertIn('install_k3s server --server "$URL" --node-taint "$JOIN_TAINT" ${JOIN_LABEL:+--node-label "$JOIN_LABEL"}', script)
+        self.assertIn('[ "$TIEBREAKER" = 1 ] && [ "$MODE" = agent ] && fail', script)
+
 
 class WaitingPodTests(unittest.TestCase):
     def test_longhorn_missing_on_a_node_is_said_plainly_and_is_not_a_failure_yet(self):

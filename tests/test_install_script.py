@@ -73,6 +73,13 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6", out)
         self.assertNotIn("K10example", out, "the cluster token is never shown or logged")
 
+    def test_joining_as_a_tiebreaker(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "tiebreaker", "HS_NODE_IP": "192.0.2.6",
+                                                          "HS_SERVER": "192.0.2.5", "HS_TOKEN": "K10example::server:secret", "HS_YES": "1"})
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://192.0.2.5:6443 [token hidden] --node-ip 192.0.2.6", out)
+        self.assertIn("--node-ip 192.0.2.6 --tiebreaker", out)
+        self.assertNotIn("--longhorn-volume", out, "a tiebreaker holds no Longhorn data")
+
     def test_ref_needs_a_release(self):
         code, out = run(["--dry-run", "--ref"])
         self.assertEqual(2, code, out)

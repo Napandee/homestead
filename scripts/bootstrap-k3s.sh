@@ -99,6 +99,8 @@ VIP=""
 LONGHORN_VOLUME=auto
 NODE_IP=""
 JOIN_TAINT=""
+JOIN_LABEL=""
+TIEBREAKER=0
 RAW=https://raw.githubusercontent.com/homestead-lab/homestead
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -368,6 +370,7 @@ install_rke2() { # server|agent [url token]
     [ -n "$JOIN_TAINT" ] && printf 'node-taint:
   - "%s"
 ' "$JOIN_TAINT"
+    [ -n "$JOIN_LABEL" ] && printf 'node-label:\n  - "%s"\n' "$JOIN_LABEL"
     # A server publishes LoadBalancer Services on the nodes' own addresses,
     # as k3s does - Homestead's own address among them.
     [ "$type" = server ] && echo "enable-servicelb: true"
@@ -402,6 +405,7 @@ case "$MODE" in
     [ $# -ge 2 ] || fail "Usage: $MODE https://<server>:6443 <token> (RKE2: https://<server>:9345 <token> --rke2)"
     URL="$1"; TOKEN="$2"; shift 2
     while [ $# -gt 0 ]; do
+      case "$1" in --tiebreaker) TIEBREAKER=1; shift; continue ;; esac
       set +e; parse_common "$@"; used=$?; set -e
       [ "$used" = 0 ] && fail "Unknown option: $1"
       shift "$used"
@@ -413,12 +417,16 @@ case "$MODE" in
     # with a volume does not land here and wait. Only a preference - Longhorn
     # itself still starts here.
     JOIN_TAINT="homestead.io/storage-pending=longhorn:PreferNoSchedule"
+    # A tiebreaker holds an etcd vote and nothing else (#364): it never gets
+    # Longhorn, so it does not wait for it, and it takes no apps.
+    [ "$TIEBREAKER" = 1 ] && [ "$MODE" = agent ] && fail "A tiebreaker joins as a server: use join, not agent"
+    if [ "$TIEBREAKER" = 1 ]; then JOIN_TAINT="node-role/tiebreaker=true:NoSchedule"; JOIN_LABEL="node-role/tiebreaker=true"; fi
     if [ "$DIST" = rke2 ]; then
       if [ "$MODE" = agent ]; then install_rke2 agent "$URL" "$TOKEN"; else install_rke2 server "$URL" "$TOKEN"; fi
     else
       export K3S_URL="$URL" K3S_TOKEN="$TOKEN"
       if [ "$MODE" = agent ]; then install_k3s agent --node-taint "$JOIN_TAINT"
-      else unset K3S_URL; install_k3s server --server "$URL" --node-taint "$JOIN_TAINT"; fi
+      else unset K3S_URL; install_k3s server --server "$URL" --node-taint "$JOIN_TAINT" ${JOIN_LABEL:+--node-label "$JOIN_LABEL"}; fi
     fi
     say "Node joined the cluster. It appears on the Homestead Nodes page within a few minutes."
     exit 0 ;;
