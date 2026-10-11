@@ -2749,6 +2749,107 @@ def create_vm(cfg, platform=None, default_class=""):
     return commit_vm(prepare_vm(cfg, platform, default_class))
 
 
+# server.py's helpers the routes below call, bound by name (bind_routes):
+# an import's capacity review lives there still.
+ROUTE_NEEDS = ("guard_managed_smb", "preview_import", "reviewed_import", "workload_service_names")
+
+
+def bind_routes(helpers):
+    missing = set(ROUTE_NEEDS) - set(helpers)
+    if missing:
+        raise TypeError("homestead_imports needs " + ", ".join(sorted(missing)))
+    globals().update({name: helpers[name] for name in ROUTE_NEEDS})
+
+
+def _prepull(request):
+    b = request.body
+    result = prepull(b["image"], b.get("nodes"))
+    result["operation"] = OPS.start(
+        "image-pull", f"Pull {b['image']}",
+        {"kind": "Image", "name": b["image"], "namespace": NS},
+        "/image-cache", {"namespace": NS, "name": result["daemonset"]})
+    return result
+
+
+def _cleanup_image(request):
+    b = request.body
+    result = cleanup_image(b.get("digest"), b.get("nodes"))
+    result["operation"] = OPS.start(
+        "image-cleanup", f"Clean cached image {result['digest'][:19]}…",
+        {"kind": "Image", "name": result["image"], "namespace": NS},
+        "/image-cache", {"namespace": NS, "pods": result["pods"]})
+    return result
+
+
+def _delete_vm_image(request):
+    homestead_routes.forget("vmimages")
+    b = request.body
+    return delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", ""))
+
+
+def _delete_import(request):
+    """An import's record, and what it made that the request also names."""
+    b = request.body
+    plan = import_cleanup_plan(b.get("name"), b.get("namespace"))
+    if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
+        raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
+    made = {row["name"] for row in plan["volumes"] if row["created"]}
+    # The request names claims; asking for all of them is the old
+    # boolean, which an import with one volume still sends.
+    wanted = [str(claim) for claim in (b.get("remove_volumes") or [])]
+    if b.get("remove_volume") and not wanted:
+        wanted = [row["name"] for row in plan["volumes"] if row["created"]]
+    borrowed = [claim for claim in wanted if claim not in made]
+    if borrowed:
+        raise ValueError(f"this import copied into {', '.join(sorted(borrowed))} "
+                         "without creating it, so it will not delete it")
+    if b.get("remove_workload") and plan["workload"]:
+        guard_managed_smb(plan["namespace"], plan["workload"])
+    result = delete_import(b.get("name"), b.get("namespace"))
+    if result.get("journalled"):
+        return {**result, "removed": [], "releasing": []}
+    removed = []
+    if b.get("remove_workload") and plan["workload"]:
+        ns, name = plan["namespace"], plan["workload"]
+        services = set(workload_service_names(ns, name)) | {name}
+        ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        for service in sorted(services):
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
+            except urllib.error.HTTPError:
+                pass
+        removed.append(f"workload {name}")
+        # Its pod holds the same claims the caller may be deleting
+        # next, so wait for it to go rather than leaving them
+        # Terminating behind the pvc-protection finaliser.
+        wait_for_pods_gone(ns, f"app={name}")
+        homestead_routes.forget("wl", "ov", "network")
+    for claim in wanted:
+        ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
+                        f"persistentvolumeclaims/{claim}")
+        removed.append(f"volume {claim}")
+        homestead_routes.forget("vol", "stor")
+    # A claim something still mounts only gets a deletion stamp, so
+    # say it is releasing rather than reporting it gone.
+    releasing = []
+    for claim in wanted:
+        try:
+            live = kget(f"/api/v1/namespaces/{plan['namespace']}/"
+                        f"persistentvolumeclaims/{claim}")
+        except Exception:
+            continue
+        if (live.get("metadata", {}) or {}).get("deletionTimestamp"):
+            releasing.append(claim)
+    result["releasing"] = releasing
+    if removed:
+        result["message"] = result["message"] + " with " + " and ".join(removed)
+    if result.get("releasing"):
+        result["message"] += (" — " + ", ".join(result["releasing"])
+                              + " will finish deleting once released")
+    result["removed"] = removed
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 def _schedule_saved(request):
     save_job(request.body)
@@ -2763,6 +2864,14 @@ def _schedule_run(request):
 ROUTES = {
     ("POST", "/api/schedules"): ("operator", _schedule_saved),
     ("POST", "/api/schedules/run"): ("operator", _schedule_run),
+    ("POST", "/api/images/prepull"): ("operator", _prepull),
+    ("POST", "/api/images/cleanup"): ("admin", _cleanup_image),
+    ("POST", "/api/images/vm/delete"): ("admin", _delete_vm_image),
+    ("POST", "/api/images/forget-rollback"): ("admin", lambda request: forget_rollback(
+        request.body.get("namespace") or NS, request.body.get("name", ""))),
+    ("POST", "/api/imports/delete"): ("admin", _delete_import),
+    ("POST", "/api/import/preview"): ("admin", lambda request: preview_import(request.body)),
+    ("POST", "/api/import"): ("admin", lambda request: reviewed_import(request.body)),
     ("GET", "/api/vm-disks"): ("viewer", lambda request: list_vm_disks()),
     ("GET", "/api/sources"): ("admin", lambda request: list_sources()),
     ("GET", "/api/imports"): ("viewer", lambda request: import_status()),

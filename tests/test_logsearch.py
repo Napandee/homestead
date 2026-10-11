@@ -119,7 +119,7 @@ class OneAtATimeTests(unittest.TestCase):
 class RouteTests(unittest.TestCase):
     def test_route_is_open_to_viewers(self):
         import homestead_route_policy as POLICY
-        self.assertEqual("viewer", POLICY.POLICY[("GET", "/api/logs/search")])
+        self.assertEqual("viewer", POLICY.role("/api/logs/search", "GET"))
 
 
 if __name__ == "__main__":

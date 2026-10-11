@@ -191,7 +191,7 @@ class TargetAuthorizationTests(unittest.TestCase):
     def test_operator_sidecar_cannot_keep_a_powerful_service_account(self):
         self.obj["spec"]["template"]["spec"]["serviceAccountName"] = "homestead"
         with self.assertRaises(PermissionError):
-            server.build_sidecar_deployment({"namespace": "lab", "name": "sidecar", "image": "fixture/app"}, self.obj)
+            server.DEPLOY.build_sidecar_deployment({"namespace": "lab", "name": "sidecar", "image": "fixture/app"}, self.obj)
 
     def test_operator_console_cannot_exec_an_alias_of_management(self):
         pod = {"metadata": {"name": "innocent-name"}, "spec": {"serviceAccountName": "homestead", "containers": [{"name": "main"}]}, "status": {"phase": "Running"}}
@@ -199,7 +199,7 @@ class TargetAuthorizationTests(unittest.TestCase):
             server.CONSOLE_PROXY.validate_pod("lab", "innocent-name", "main")
 
     def test_new_workloads_do_not_mount_service_account_tokens(self):
-        obj, _ = server.build_deployment({"name": "ordinary", "image": "fixture/app"})
+        obj, _ = server.DEPLOY.build_deployment({"name": "ordinary", "image": "fixture/app"})
         self.assertFalse(obj["spec"]["template"]["spec"]["automountServiceAccountToken"])
 
 

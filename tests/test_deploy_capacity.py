@@ -133,9 +133,9 @@ class DeployCapacityTests(unittest.TestCase):
     def test_rejected_guard_never_reaches_side_effects_even_with_ack(self):
         self.cfg["memory"] = "10Gi"
         self.cfg["memory_limit"] = "12Gi"
-        cfg = server.analyze_deploy_intent(self.cfg)
+        cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
         cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
-        with mock.patch.object(server, "run_deploy") as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
                 server.reviewed_deploy(cfg)
         deploy.assert_not_called()
@@ -143,21 +143,21 @@ class DeployCapacityTests(unittest.TestCase):
 
     def test_unknown_requires_valid_review_token_and_ack(self):
         self.nodes[0]["mem_metrics_available"] = False
-        with mock.patch.object(server, "run_deploy", return_value={"ok": True}) as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
             for cfg in (self.cfg, {**self.cfg, "confirm_capacity": True}):
                 with self.assertRaises(review.Rejected):
                     server.reviewed_deploy(cfg)
             deploy.assert_not_called()
-            cfg = server.analyze_deploy_intent(self.cfg)
+            cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
             cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
             self.assertTrue(server.reviewed_deploy(cfg)["ok"])
 
     def test_fresh_recheck_blocks_previously_reviewed_capacity(self):
-        cfg = server.analyze_deploy_intent(self.cfg)
+        cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
         cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
         self.objects["/api/v1/pods"]["items"] = [{"metadata": {"namespace": "other"},
             "spec": {"nodeName": "a", "containers": [{"resources": {"requests": {"memory": "8Gi"}}}]}}]
-        with mock.patch.object(server, "run_deploy") as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
                 server.reviewed_deploy(cfg)
         deploy.assert_not_called()
@@ -165,7 +165,7 @@ class DeployCapacityTests(unittest.TestCase):
     def test_invalid_count_rejected_before_any_writes(self):
         for count in (-1, 101):
             self.cfg["replicas"] = count
-            with mock.patch.object(server, "run_deploy") as deploy:
+            with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
                 with self.assertRaises(ValueError):
                     server.reviewed_deploy(self.cfg)
             deploy.assert_not_called()
@@ -183,7 +183,7 @@ class DeployCapacityTests(unittest.TestCase):
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
         self.cfg.update(memory="10Gi", memory_limit="12Gi")
-        with mock.patch.object(server, "run_deploy") as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             handler.do_POST()
         self.assertEqual(409, handler._send.call_args.args[0])
         self.assertTrue(handler._send.call_args.args[1]["review_required"])
@@ -203,7 +203,7 @@ class DeployCapacityTests(unittest.TestCase):
         self.assertEqual(200, code)
         self.assertTrue(body["capacity"]["requires_confirmation"])
         cfg = {**self.cfg, "capacity_token": body["capacity_token"], "confirm_capacity": True}
-        with mock.patch.object(server, "run_deploy", return_value={"ok": True}) as deploy:
+        with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
             self.assertTrue(server.reviewed_deploy(cfg)["ok"])
         deploy.assert_called_once()
 
@@ -214,8 +214,8 @@ class DeployCapacityTests(unittest.TestCase):
         handler._body = lambda: {"app": "example-template", **body}
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server, "template_to_cfg", return_value=copy.deepcopy(self.cfg)), \
-                mock.patch.object(server, "run_deploy", return_value={"ok": True, "name": "demo", "reused_volumes": ["data"]}) as deploy:
+        with mock.patch.object(server.DEPLOY, "template_to_cfg", return_value=copy.deepcopy(self.cfg)), \
+                mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True, "name": "demo", "reused_volumes": ["data"]}) as deploy:
             handler.do_POST()
         self.send.assert_not_called()
         return handler._send.call_args.args, deploy
@@ -233,7 +233,7 @@ class DeployCapacityTests(unittest.TestCase):
 
     def test_legacy_appstore_accepts_reviewed_resolved_template(self):
         self.nodes[0]["mem_metrics_available"] = False
-        token = review.issue(server.analyze_deploy_intent(self.cfg))
+        token = review.issue(server.DEPLOY.analyze_deploy_intent(self.cfg))
         result, deploy = self.legacy_install({"confirm_capacity": True, "capacity_token": token})
         self.assertEqual(200, result[0])
         self.assertEqual(["data"], result[1]["reused_volumes"])
@@ -241,7 +241,7 @@ class DeployCapacityTests(unittest.TestCase):
 
     def test_legacy_appstore_changed_override_invalidates_review(self):
         self.nodes[0]["mem_metrics_available"] = False
-        token = review.issue(server.analyze_deploy_intent(self.cfg))
+        token = review.issue(server.DEPLOY.analyze_deploy_intent(self.cfg))
         result, deploy = self.legacy_install({"confirm_capacity": True, "capacity_token": token,
                                                "overrides": {"image": "different:2"}})
         self.assertEqual(409, result[0])

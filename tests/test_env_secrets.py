@@ -113,7 +113,7 @@ class EditRoundTripTests(unittest.TestCase):
         original = server.kget
         server.kget = self.store.read
         try:
-            return server.workload_edit_payload("lab", "tunnel", dep, [], services=[])["containers"][0]
+            return server.WORKLOADS.workload_edit_payload("lab", "tunnel", dep, [], services=[])["containers"][0]
         finally:
             server.kget = original
 

@@ -54,9 +54,9 @@ class DeployTests(unittest.TestCase):
         app = {"name": "transmission-openvpn", "repo": "haugene/transmission-openvpn", "network": "bridge",
                "config": [], "extra_params": "--cap-add=NET_ADMIN --device=/dev/net/tun", "privileged": False}
         with mock.patch.object(server.HW, "features", lambda: []):
-            cfg = server.template_to_cfg(app)
+            cfg = server.DEPLOY.template_to_cfg(app)
             self.assertEqual((True, ["NET_ADMIN"], False), (cfg["tun"], cfg["cap_add"], cfg["privileged"]))
-            dep, _ = server.build_deployment(dict(cfg, name="vpn", namespace="lab", ports=[], volumes=[]))
+            dep, _ = server.DEPLOY.build_deployment(dict(cfg, name="vpn", namespace="lab", ports=[], volumes=[]))
         container = dep["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual(["NET_ADMIN"], container["securityContext"]["capabilities"]["add"])
         self.assertIn({"name": PRIV.TUN_VOLUME, "mountPath": "/dev/net/tun"}, container["volumeMounts"])

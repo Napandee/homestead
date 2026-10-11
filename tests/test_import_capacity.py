@@ -29,7 +29,7 @@ class ImportCapacityTests(unittest.TestCase):
         self.objects["/apis/storage.k8s.io/v1/storageclasses/storage"] = {
             "metadata": {"name": "storage", "uid": "sc"}, "provisioner": "driver.longhorn.io"}
         for patch in (mock.patch.object(imports, "kget", side_effect=self.get),
-                      mock.patch.object(imports, "build_deployment", side_effect=server.build_deployment),
+                      mock.patch.object(imports, "build_deployment", side_effect=server.DEPLOY.build_deployment),
                       mock.patch.object(imports, "_source", return_value=source(user="test")),
                       mock.patch.object(imports, "source_secret", return_value="source-credentials"),
                       mock.patch.object(imports, "NS", "lab"),

@@ -29,6 +29,9 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_operations as OPS
+import homestead_routes as ROUTER
+
 KIND = "container-rebalance"
 MAX_MOVES = 10
 GAIN = 3.0          # a move must even the hosts out by this many points (spread, below)
@@ -423,7 +426,40 @@ def cancel_run(work, chosen):
     return f"Stopped after moving {moved} container{'' if moved == 1 else 's'}"
 
 
+def start_run(request):
+    """The reviewed moves, started as a job: 202 while it runs, 409 when the
+    review no longer holds."""
+    b = request.body
+    running = next((i for i in OPS.list_operations() if i.get("kind") == KIND
+                    and i.get("status") not in OPS.TERMINAL), None)
+    if running:
+        return ROUTER.Reply(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
+    if b.get("restart") is not True:
+        return ROUTER.Reply(409, {"error": "Moving a container restarts it; confirm the restarts"})
+    if b.get("moves") is not None:
+        # The moves reviewed, checked against the cluster now -
+        # not a plan made again from load that moves by the second.
+        try:
+            moves = reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
+        except ValueError as error:
+            return ROUTER.Reply(409, {"error": str(error), "plan": plan(b.get("exclude") or [])})
+        chosen = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
+    else:
+        chosen = plan(b.get("exclude") or [])
+        if chosen["review_token"] != b.get("review_token"):
+            return ROUTER.Reply(409, {"error": "Container load changed since the review; review again", "plan": chosen})
+    if not chosen["moves"]:
+        return ROUTER.Reply(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": chosen})
+    count = len(chosen["moves"])
+    operation = OPS.start(KIND, f"Rebalance {count} container{'' if count == 1 else 's'}",
+                          {"kind": "Deployment", "name": "rebalance"}, "/containers",
+                          {"moves": chosen["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": chosen["excluded"]},
+                          "Starting with the first container")
+    return ROUTER.Reply(202, {"operation": operation})
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/workloads/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
+    ("POST", "/api/workloads/rebalance"): ("operator", start_run),
 }

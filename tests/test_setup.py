@@ -259,12 +259,12 @@ class DeployArgsTests(unittest.TestCase):
 
     def test_args_reach_the_container_and_bad_ones_are_refused(self):
         import server
-        dep, _ = server.build_deployment({"name": "cloudflared", "image": "cloudflare/cloudflared:latest",
+        dep, _ = server.DEPLOY.build_deployment({"name": "cloudflared", "image": "cloudflare/cloudflared:latest",
                                           "args": ["tunnel", "--no-autoupdate", "run"], "network_mode": "internal"})
         self.assertEqual(["tunnel", "--no-autoupdate", "run"], dep["spec"]["template"]["spec"]["containers"][0]["args"])
         for bad in ("tunnel run", [1], ["x"] * 33, ["a" * 600]):
             with self.subTest(bad=str(bad)[:20]), self.assertRaises(ValueError):
-                server.build_deployment({"name": "c", "image": "busybox", "args": bad})
+                server.DEPLOY.build_deployment({"name": "c", "image": "busybox", "args": bad})
 
 
 if __name__ == "__main__":

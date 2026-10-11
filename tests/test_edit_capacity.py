@@ -74,7 +74,7 @@ class EditCapacityTests(unittest.TestCase):
         self.current["spec"]["template"]["spec"]["containers"].append({"name": "sidecar", "resources": {
             "requests": {"memory": "1Gi"}, "limits": {"memory": "1Gi"}}})
         before = copy.deepcopy(self.current)
-        _, _, plan = server.edit_capacity_plan(self.config)
+        _, _, plan = server.WORKLOADS.edit_capacity_plan(self.config)
         self.assertEqual(7, plan["pod_request_gb"])
         self.assertEqual(before, self.current)
 
@@ -109,7 +109,7 @@ class EditCapacityTests(unittest.TestCase):
 
     def test_selected_host_is_part_of_same_edit_and_plan(self):
         self.config["node"] = "missing"
-        prepared, _, plan = server.edit_capacity_plan(self.config)
+        prepared, _, plan = server.WORKLOADS.edit_capacity_plan(self.config)
         self.assertFalse(plan["blocked"])
         spec = prepared["deployment"]["spec"]["template"]["spec"]
         self.assertNotIn("kubernetes.io/hostname", spec.get("nodeSelector", {}))
@@ -177,7 +177,7 @@ class EditCapacityTests(unittest.TestCase):
         self.current["spec"]["paused"] = True
         self.config["replicas"] = 20
         with self.assertRaisesRegex(ValueError, "paused"):
-            server.edit_capacity_plan(self.config)
+            server.WORKLOADS.edit_capacity_plan(self.config)
 
     def test_rename_preview_is_name_only_and_requires_confirmation(self):
         self.objects["/apis/autoscaling/v2/namespaces/lab/horizontalpodautoscalers"] = {"items": []}

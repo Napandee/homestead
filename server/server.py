@@ -610,7 +610,7 @@ def _uptime_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                UPTIME.observe(cached("wl", 5, get_workloads), vms=cached("vms", 5, VMS.list_vms))
+                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=cached("vms", 5, VMS.list_vms))
                 try:
                     outage_tick()
                 except Exception as error:
@@ -778,7 +778,7 @@ def node_impact(node):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
+    return IMPACT.preview(node, cached("wl", 5, WORKLOADS.get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
                           cached("vol", 8, get_volumes), addresses, nodes, placement)
 
 
@@ -876,7 +876,7 @@ def test_outage_webhook(b):
 
 def outage_tick():
     """After a monitoring round, on the leader: any outage action that is due."""
-    found = OUTAGE.items(cached("wl", 5, get_workloads), cached("vms", 5, VMS.list_vms))
+    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
     if not found:
         return []
     operations = OPS.list_operations()
@@ -894,7 +894,7 @@ def outage_tick():
 
 
 def scheduled_items():
-    return SCHEDULES.items(cached("wl", 5, get_workloads), cached("vms", 5, VMS.list_vms))
+    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
 
 
 def schedule_act(item, action):
@@ -960,7 +960,7 @@ def set_uptime_setting(b):
     ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
     port = b.get("port") if b.get("mode") != "off" else None
     if port not in (None, ""):
-        w = next((w for w in cached("wl", 5, get_workloads) if w["ns"] == ns and w["name"] == name), None)
+        w = next((w for w in cached("wl", 5, WORKLOADS.get_workloads) if w["ns"] == ns and w["name"] == name), None)
         published = {int(p["port"]) for p in (w or {}).get("ports") or [] if p.get("port")}
         if w is not None and str(port).isdigit() and int(port) not in published:
             raise ValueError(f"{name} does not publish port {port}; choose one of "
@@ -1716,13 +1716,6 @@ def self_stop_warning():
             "on the cluster. Restart it instead if it needs a fresh start.")
 
 
-class WorkloadRefused(Exception):
-    """A start the capacity check will not allow as asked: 409, with its plan."""
-    def __init__(self, message, plan):
-        super().__init__(message)
-        self.plan = plan
-
-
 def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     """A Deployment to n replicas, after the checks the app makes: never the
     SMB server's, never Homestead's own unless confirmed, and a start only
@@ -1736,9 +1729,9 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     if n > 0:
         plan = workload_start_plan(ns, name, n)
         if plan["blocked"]:
-            raise WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
+            raise WORKLOADS.WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
         if plan["requires_confirmation"] and not confirm_capacity:
-            raise WorkloadRefused("review node memory before starting", plan)
+            raise WORKLOADS.WorkloadRefused("review node memory before starting", plan)
     if n:
         clear_unstarted_pods(ns, name, stopping=False)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
@@ -1793,185 +1786,6 @@ def own_group(ns, name):
     return OWN_GROUP if (ns, name) in own or ns in PLATFORM_NS else ""
 
 
-def get_workloads():
-    deps = kget("/apis/apps/v1/deployments").get("items", [])
-    pods = kget("/api/v1/pods").get("items", [])
-    try:
-        pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m
-              for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])}
-    except Exception:
-        pm = {}
-    try:
-        svcs = kget("/api/v1/services").get("items", [])
-    except Exception:
-        svcs = []
-
-    out = []
-    for d in deps:
-        ns, name = d["metadata"]["namespace"], d["metadata"]["name"]
-        if ns in SYS_NS and ns not in PLATFORM_NS:
-            continue
-        sel = d["spec"].get("selector", {}).get("matchLabels", {})
-        mine = [p for p in pods if p["metadata"]["namespace"] == ns and
-                all(p["metadata"].get("labels", {}).get(k) == v for k, v in sel.items())]
-        cpu = mem = 0.0
-        for p in mine:
-            m = pm.get((ns, p["metadata"]["name"]))
-            if m:
-                for c in m.get("containers", []):
-                    cpu += parse_cpu(c.get("usage", {}).get("cpu"))
-                    mem += parse_mem(c.get("usage", {}).get("memory"))
-        ports = []
-        for s in svcs:
-            if s["metadata"]["namespace"] != ns: continue
-            ssel = s["spec"].get("selector") or {}
-            if ssel and all(sel.get(k) == v for k, v in ssel.items()):
-                ip = ""
-                ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", [])
-                if ing: ip = ing[0].get("ip", "")
-                for pt in s["spec"].get("ports", []):
-                    ports.append({"port": pt.get("port"), "ip": ip, "name": pt.get("name", ""),
-                                  "protocol": str(pt.get("protocol") or "TCP").upper()})
-        starts = [p["status"].get("startTime") for p in mine if p["status"].get("startTime")]
-        uptime = max([age_secs(x) for x in starts], default=0) if starts else 0
-        st = d.get("status", {})
-        pspec = d["spec"]["template"]["spec"]
-        annotations = d["metadata"].get("annotations", {}) or {}
-        # On its own LAN address it answers on its container ports there,
-        # with no Service in between.
-        lan_ip = (LAN.read(d) or {}).get("address", "")
-        if lan_ip and not ports:
-            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", ""), "lan": True,
-                      "protocol": str(cp.get("protocol") or "TCP").upper()}
-                     for c in pspec.get("containers", []) or [] for cp in c.get("ports", []) or []
-                     if cp.get("containerPort")]
-        # The port chosen as the app's own - its web UI, usually - comes
-        # first, so the card's first link is the one people want.
-        try:
-            primary = int(NAMES.read(annotations, "primary-port") or 0)
-        except ValueError:
-            primary = 0
-        if primary:
-            ports.sort(key=lambda row: row.get("port") != primary)
-            for row in ports:
-                row["primary"] = row.get("port") == primary
-        hardware = HW.workload_features(pspec, annotations)
-        pod_rows = []
-        transition_ages = []
-        fatal_waits = []
-        fatal_reasons = {"ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff",
-                         "CreateContainerConfigError", "CreateContainerError"}
-        for p in mine:
-            conditions = {c.get("type"): c for c in p.get("status", {}).get("conditions", []) or []}
-            ready = conditions.get("Ready", {}).get("status") == "True"
-            waits = []
-            for cs in p.get("status", {}).get("containerStatuses", []) or []:
-                waiting = (cs.get("state", {}).get("waiting") or {})
-                if waiting:
-                    reason = waiting.get("reason", "Waiting")
-                    waits.append({"container": cs.get("name", ""), "reason": reason,
-                                  "message": (UPDATES.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
-                    if reason in fatal_reasons:
-                        why = UPDATES.explain_pull(waiting.get("message"))
-                        fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
-            if not ready:
-                transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
-            # Pending and unscheduled says nothing; the scheduler said why.
-            unplaced = ""
-            placed = conditions.get("PodScheduled") or {}
-            if placed.get("status") == "False" and not p["metadata"].get("deletionTimestamp"):
-                own = []
-                if pspec.get("hostNetwork") and NETWORK.servicelb_present():
-                    wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
-                              for cp in c.get("ports", []) or []}
-                    own = sorted({row["port"] for row in ports if row.get("port") in wanted})
-                unplaced = UPDATES.explain_unplaced(placed.get("message", ""), own)
-                if age_secs(p["metadata"].get("creationTimestamp")) > 60:
-                    fatal_waits.append(f"{p['metadata']['name']} cannot be placed: {unplaced}")
-            containers = pod_container_rows(p)
-            # A pod still fetching its image says how far it has got: events
-            # say Pulling, containerd says how many bytes.
-            pull = {}
-            if not ready and not p["metadata"].get("deletionTimestamp") and any(
-                    w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits):
-                try:
-                    pull = UPDATES.pull_state(ns, p["metadata"]["name"]) or {}
-                    if pull.get("state") == "pulling":
-                        pull.update(_pull_progress(p["spec"].get("nodeName", ""), pull.get("image", "")))
-                    else:
-                        pull = {}
-                except Exception:
-                    pull = {}
-            pod_rows.append({"name": p["metadata"]["name"], "hostname": p["spec"].get("hostname", ""),
-                             "ip": (p.get("status") or {}).get("podIP", ""),
-                             "phase": p["status"].get("phase"),
-                             "node": p["spec"].get("nodeName", ""), "ready": ready,
-                             # Told to stop, and not stopped yet.
-                             "terminating": bool(p["metadata"].get("deletionTimestamp")),
-                             "unplaced": unplaced,
-                             "pull": pull,
-                             "waiting": waits,
-                             "uptime": age_secs(p["status"].get("startTime")),
-                             "containers": containers,
-                             "container_count": len([c for c in containers if c["kind"] == "app"]),
-                             "restarts": sum(c.get("restartCount", 0) for c in
-                                             p["status"].get("containerStatuses", []) or [])})
-        progress_errors = [c.get("message") or c.get("reason") or "rollout failed"
-                           for c in st.get("conditions", []) or []
-                           if c.get("type") == "Progressing" and c.get("status") == "False"]
-        template_annotations = d["spec"].get("template", {}).get("metadata", {}).get("annotations", {}) or {}
-        rollout_at = (NAMES.read(template_annotations, "update-rollout-at") or
-                      NAMES.read(template_annotations, "restartedAt"))
-        if rollout_at:
-            transition_ages.append(age_secs(rollout_at))
-        if not transition_ages:
-            transition_ages.append(age_secs(d["metadata"].get("creationTimestamp")))
-        out.append({
-            "ns": ns, "name": name, "kind": "Deployment", "uptime": uptime,
-            "ready": st.get("readyReplicas", 0) or 0,
-            "desired": d["spec"].get("replicas", 0) or 0,
-            "available": st.get("availableReplicas", 0) or 0,
-            "updated": st.get("updatedReplicas", 0) or 0,
-            "unavailable": st.get("unavailableReplicas", 0) or 0,
-            "generation": d["metadata"].get("generation", 0) or 0,
-            "observed_generation": st.get("observedGeneration", 0) or 0,
-            "transition_age": min(transition_ages),
-            "problems": fatal_waits + progress_errors,
-            "images": [c["image"] for c in pspec.get("containers", [])],
-            # Its volumes, by claim, so the row can lead to them.
-            "claims": sorted({(v.get("persistentVolumeClaim") or {}).get("claimName") for v in pspec.get("volumes") or []
-                              if (v.get("persistentVolumeClaim") or {}).get("claimName")}),
-            "nodes": sorted({p["spec"].get("nodeName", "") for p in mine if p["spec"].get("nodeName")}),
-            "pods": pod_rows,
-            "pod_count": len(pod_rows),
-            "container_count": sum(p["container_count"] for p in pod_rows),
-            "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
-            "ports": ports,
-            "gpu": "igpu" in hardware,
-            "hardware": hardware,
-            "icon": display_icon(annotations),
-            # A logo whose cached copy is being fetched again still counts as one.
-            "has_logo": bool(NAMES.read(annotations, "icon")),
-            "logo_skipped": NAMES.read(annotations, "logo-skipped") == "true",
-            # The Helm release it belongs to, whose chart may name a logo.
-            "helm_release": annotations.get("meta.helm.sh/release-name", ""),
-            "answer_check": NAMES.read(annotations, "uptime"),
-            "schedule": SCHEDULES.read(annotations, NAMES),
-            "outage_actions": OUTAGE.read(annotations, NAMES),
-            "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
-            "restore_tested": RESTORE_TEST.last_result(annotations),
-            "group": NAMES.read(annotations, "group") or own_group(ns, name),
-            "self": is_self(ns, name),
-            "managed_smb": is_managed_smb(ns, name),
-            "managed_nfs": is_managed_nfs(ns, name),
-            "platform": "Homestead" if homestead_part(ns, name) else PLATFORM_NS.get(ns, ""),
-            "homestead": homestead_part(ns, name),
-            "failover": FAILOVER.mode_of(pspec),
-            "lan": (LAN.read(d) or {}).get("address", ""),
-        })
-    return sorted(out, key=lambda x: (x["ns"], x["name"]))
-
-
 def workload_group(value):
     """A group's name as stored: its own words, trimmed, one line."""
     group = " ".join(str(value or "").split())
@@ -2001,49 +1815,6 @@ def set_workload_groups(b):
     count = len(items)
     return {"ok": True, "group": group,
             "detail": f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")}
-
-
-def set_workload_logos(b):
-    """Gives workloads a logo, or takes it away with a blank one.
-
-    Only the Deployment's own annotations change, never its pod template, so
-    nothing restarts. Each logo is fetched and kept like one typed in Edit."""
-    items = b.get("items") or []
-    if not items:
-        raise ValueError("choose at least one workload")
-    if len(items) > 200:
-        raise ValueError("at most 200 workloads at a time")
-    plans = []
-    for item in items:
-        ns, name = _dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name")
-        guard_managed_smb(ns, name)
-        source = str(item.get("icon") or "").strip()
-        if source and not source.startswith(("https://", "http://")):
-            raise ValueError("a logo is a public http:// or https:// image URL")
-        plans.append((ns, name, source, item.get("skip") is True))
-    done, saved, skipped, failed = 0, 0, 0, []
-    for ns, name, source, skip in plans:
-        try:
-            if skip:      # no logo, on purpose: it is not counted as missing again
-                patch = {"metadata": {"annotations": {NAMES.key("logo-skipped"): "true"}}}
-            else:
-                cached_ref = ICONS.persist(source, DATA_DIR) if source else ""
-                patch = {"metadata": {"annotations": {NAMES.key("icon"): cached_ref or None,
-                                                      NAMES.key("icon-source"): source or None,
-                                                      NAMES.key("logo-skipped"): None}}}
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", patch,
-                  ctype="application/merge-patch+json")
-            done += 1
-            saved += bool(source and not skip)
-            skipped += skip
-        except Exception as e:
-            failed.append(f"{name}: {e}")
-    _cache.pop("wl", None)
-    detail = ", ".join(part for part in (saved and f"{saved} logo{'s' if saved != 1 else ''} saved",
-                                         skipped and f"{skipped} left without one",
-                                         done and not saved and not skipped and "logo removed") if part)
-    return {"ok": not failed, "done": done, "failed": failed,
-            "detail": detail + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")}
 
 
 def set_vm_logos(b):
@@ -2118,10 +1889,10 @@ def logo_choices(ns, name, term, kind="workload"):
     """The picker's tiles for one workload: its chart's logo and its image's
     match, then a search. A VM has no image, so it is the search alone."""
     workload = None if kind == "vm" else next(
-        (w for w in cached("wl", 5, get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
+        (w for w in cached("wl", 5, WORKLOADS.get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
     images = (workload or {}).get("images") or []
     chart = helm_chart_logos().get((ns, (workload or {}).get("helm_release"))) if workload else None
-    return {"tiles": LOGOS.suggest(fetch_appstore(), images, term if term is not None else name, search_appstore,
+    return {"tiles": LOGOS.suggest(DEPLOY.fetch_appstore(), images, term if term is not None else name, DEPLOY.search_appstore,
                                    chart=chart), "images": images}
 
 
@@ -2150,7 +1921,7 @@ def protection_issues(jobs, target):
 
 def get_overview():
     nodes = get_nodes()
-    wl = get_workloads()
+    wl = WORKLOADS.get_workloads()
     vols = get_volumes()
     pods = kget("/api/v1/pods").get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
@@ -2252,144 +2023,6 @@ def new_claims(volumes):
     return list(claims.values())
 
 
-def _build_single_deployment(cfg):
-    name = _dns_name(cfg.get("workload_name") or cfg.get("name"), "workload name")
-    container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
-    ns = cfg.get("namespace", DEFAULT_NS)
-    env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
-    mounts, volumes, named, owned = [], [], {}, []
-    for i, v in enumerate(cfg.get("volumes") or []):
-        if v.get("type") == "pod":
-            raise ValueError("existing pod volumes can only be used when joining an existing workload")
-        # Several folders of one claim share a single volume entry and differ
-        # only by subPath, which is how an import lands one volume per app.
-        key = (v.get("type") or "pvc", v.get("source") or "")
-        reusable = key[0] in ("pvc", "host") and key[1]
-        vn = named.get(key) if reusable else None
-        if not vn:
-            vn = f"vol{len(volumes)}"
-            if reusable:
-                named[key] = vn
-            if v.get("type") == "host":
-                volumes.append({"name": vn, "hostPath": {"path": v["source"]}})
-            elif v.get("type") == "emptyDir":
-                # A RAM-backed scratch volume is what a tmpfs mount becomes:
-                # same speed, same volatility, and bounded so it cannot eat the
-                # node's memory.
-                empty = {}
-                if str(v.get("medium", "")).lower() == "memory":
-                    empty["medium"] = "Memory"
-                if v.get("size_limit"):
-                    empty["sizeLimit"] = str(v["size_limit"])
-                volumes.append({"name": vn, "emptyDir": empty})
-            else:
-                volumes.append({"name": vn, "persistentVolumeClaim": {"claimName": v["source"]}})
-        mount = {"name": vn, "mountPath": v["path"]}
-        owner = (cfg.get("volume_owners") or {}).get(v.get("path"))
-        if owner and v.get("type") == "pvc" and v.get("create"):
-            owned.append((vn, str(v.get("sub_path") or ""), *owner))
-        if v.get("sub_path"):
-            mount["subPath"] = str(v["sub_path"]).strip("/")
-        if v.get("read_only"):
-            mount["readOnly"] = True
-        mounts.append(mount)
-    ports = [{"containerPort": int(p["container"]),
-              "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
-              "protocol": str(p.get("protocol", "TCP")).upper()}
-             for p in cfg.get("ports") or []]
-    c = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
-    # Arguments to the image's own entrypoint - cloudflared's "tunnel run",
-    # say. A list of plain strings, passed as they are; never a shell.
-    args = cfg.get("args") or []
-    if not isinstance(args, list) or len(args) > 32 or any(not isinstance(a, str) or len(a) > 512 or "\x00" in a for a in args):
-        raise ValueError("arguments are a list of up to 32 short strings")
-    if args: c["args"] = list(args)
-    if env: c["env"] = env
-    if ports: c["ports"] = ports
-    if mounts: c["volumeMounts"] = mounts
-    res = {}
-    if cfg.get("cpu"): res.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    memory_request = str(cfg.get("memory") or "").strip()
-    memory_limit = str(cfg.get("memory_limit") or "").strip()
-    MEMORY.validate(memory_request, memory_limit, container_name)
-    if memory_request: res.setdefault("requests", {})["memory"] = memory_request
-    if memory_limit: res.setdefault("limits", {})["memory"] = memory_limit
-    if res: c["resources"] = res
-    if cfg.get("privileged"): c["securityContext"] = {"privileged": True}
-    apply_container_settings(c, cfg)
-
-    podspec = {"containers": [c], "automountServiceAccountToken": False}
-    if volumes: podspec["volumes"] = volumes
-    if owned:
-        # A new volume is root's; the image may run as a user of its own.
-        podspec["initContainers"] = [VOLOWNER.init_container(owned)]
-    hardware = set(cfg.get("hardware") or [])
-    if cfg.get("gpu"):
-        hardware.add("igpu")
-    devices = {f["id"]: HW.mount_spec(f) for f in HW.features()}
-    unknown = hardware - set(devices)
-    if unknown:
-        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
-    for hw in hardware:
-        if hw not in devices:
-            continue
-        dev = devices[hw]
-        podspec.setdefault("nodeSelector", {})[dev["label"]] = "true"
-        podspec["containers"][0].setdefault("securityContext", {})["privileged"] = True
-        podspec["containers"][0].setdefault("volumeMounts", []).append(
-            {"name": dev["name"], "mountPath": dev["container_path"]})
-        podspec.setdefault("volumes", []).append(
-            {"name": dev["name"], "hostPath": {"path": dev["host_path"], "type": dev["path_type"]}})
-    if any(key in cfg for key in ("privileged", "cap_add", "tun")):
-        PRIV.apply(podspec["containers"][0], podspec, cfg, hardware=bool(hardware))
-    if cfg.get("fs_group") is not None:
-        # The kubelet gives the volume to this group and makes it group
-        # writable, which is what lets a container that is not root write to
-        # appdata it did not create.
-        podspec.setdefault("securityContext", {})["fsGroup"] = int(cfg["fs_group"])
-    if cfg.get("network_mode") == "host":
-        podspec["hostNetwork"] = True
-        podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
-    if cfg.get("node"):
-        podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
-    FAILOVER.apply(podspec, cfg.get("failover") or "move")
-    lan_address = cfg.get("lan") if cfg.get("network_mode") == "lan" else None
-    # How it is monitored, if not automatically: an annotation, read by homestead_uptime.
-    monitoring = UPTIME.check_setting((cfg.get("monitoring") or {}).get("mode") or "auto",
-                                      (cfg.get("monitoring") or {}).get("path"))
-    dep = {
-        "apiVersion": "apps/v1", "kind": "Deployment",
-        "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
-                     "annotations": ({**({NAMES.key("icon"): cfg.get("icon", "")} if cfg.get("icon") else {}),
-                                      **({NAMES.key("icon-source"): cfg.get("icon_source", cfg.get("icon", ""))} if cfg.get("icon") else {}),
-                                      **({NAMES.key("hardware"): ",".join(sorted(hardware))} if hardware else {}),
-                                      **({NAMES.key("uptime"): monitoring} if monitoring else {})})},
-        "spec": {"replicas": int(cfg.get("replicas", 1)), "strategy": {"type": "Recreate"},
-                 "selector": {"matchLabels": {"app": name}},
-                 "template": {"metadata": {"labels": {"app": name, "lab-workload": "true"}}, "spec": podspec}},
-    }
-    svc = None
-    exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
-    if exposed and cfg.get("network_mode") not in ("host", "lan"):
-        mode = cfg.get("vip_mode", "shared")
-        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or NETWORK.shared_vip()) if mode == "shared" else "")
-        svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
-        svc = {
-            "apiVersion": "v1", "kind": "Service",
-            "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
-                         "annotations": PLATFORM.vip_annotations(vip) if svc_type == "LoadBalancer" else {}},
-            "spec": {"type": svc_type, "selector": {"app": name},
-                     **(PLATFORM.vip_spec(vip) if svc_type == "LoadBalancer" else {}),
-                      "ports": [{"name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
-                                 "port": int(p.get("host") or p["container"]),
-                                 "targetPort": int(p["container"]),
-                                 "protocol": str(p.get("protocol", "TCP")).upper()} for p in exposed]},
-        }
-    if lan_address:
-        LAN.apply_to_template(dep, ns, name, lan_address)
-    return dep, svc
-
-
 
 def additional_container_configs(cfg):
     """Explicit extra definitions in a new pod; the original deploy stays compatible."""
@@ -2415,7 +2048,7 @@ def additional_container_configs(cfg):
         if not isinstance(privileges, dict) or set(privileges) - {"privileged", "cap_add", "tun"}:
             raise ValueError("invalid additional container privileges")
         item.update(privileges)
-        item = ensure_profile_compatible(analyze_deploy_intent(item))
+        item = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(item))
         result.append(item)
     return result
 
@@ -2432,37 +2065,6 @@ def prepare_deploy_network(cfg):
     combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
     planned = NETWORK.prepare_deploy(combined)
     return dict(planned, ports=cfg.get("ports") or [])
-
-
-def build_deployment(cfg):
-    extras = additional_container_configs(cfg)
-    if not extras:
-        return _build_single_deployment(cfg)
-    HOSTACCESS.require_cfg([cfg, *extras])
-    dep, _ = _build_single_deployment(cfg)
-    changes = [dict(item, new=True, name=item["container_name"], privileges={
-        key: item[key] for key in ("privileged", "cap_add", "tun") if key in item}) for item in extras]
-    prepared = LC.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
-                                "containers": changes}, current=dep)
-    dep = prepared["deployment"]
-    pspec = dep["spec"]["template"]["spec"]
-    used_names = {container["name"] for group in ("containers", "initContainers") for container in pspec.get(group) or []}
-    for item, container in zip(extras, pspec["containers"][1:]):
-        mounts = {mount["mountPath"]: mount for mount in container.get("volumeMounts") or []}
-        owners = [(mounts[path]["name"], mounts[path].get("subPath", ""), *owner)
-                  for path, owner in (item.get("volume_owners") or {}).items() if path in mounts]
-        if owners:
-            helper = VOLOWNER.init_container(owners)
-            helper["name"] = LC._unique_volume_name("hs-owner-" + container["name"], used_names)
-            pspec.setdefault("initContainers", []).append(helper)
-    all_ports = [port for item in [cfg, *extras] for port in item.get("ports") or []]
-    service_ports = [dict(port, name=port.get("name") or f"p{port.get('host') or port['container']}-{str(port.get('protocol') or 'TCP').lower()}") for port in all_ports]
-    _, service = _build_single_deployment(dict(cfg, ports=service_ports))
-    if service:
-        names = [port["name"] for port in service["spec"]["ports"]]
-        if len(names) != len(set(names)):
-            raise ValueError("exposed port names must be unique across all containers")
-    return dep, service
 
 
 def edit_lan(ns, name, wanted):
@@ -2511,34 +2113,6 @@ def record_lan(ns, name, lan):
                           "owner": "homestead", "note": f"container {ns}/{name}, on {lan['network']}"})
     except Exception:
         pass
-
-
-def apply_container_settings(container, cfg):
-    """Command, working directory, user and capabilities, when a config has them.
-
-    Compose's entrypoint and command are Kubernetes' command and args: one
-    replaces the image's ENTRYPOINT, the other its CMD.
-    """
-    for key, field in (("command", "command"), ("args", "args")):
-        value = cfg.get(key)
-        if value:
-            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-                raise ValueError(f"{key} must be a list of words")
-            container[field] = list(value)
-    if cfg.get("working_dir"):
-        container["workingDir"] = str(cfg["working_dir"])
-    security = container.setdefault("securityContext", {})
-    for key, field in (("run_as_user", "runAsUser"), ("run_as_group", "runAsGroup")):
-        if cfg.get(key) is not None and cfg.get(key) != "":
-            security[field] = int(cfg[key])
-    if cfg.get("cap_add"):
-        caps = [str(x).upper() for x in cfg["cap_add"]]
-        if not all(re.fullmatch(r"[A-Z_]{2,40}", cap) for cap in caps):
-            raise ValueError("capabilities are names like NET_ADMIN")
-        security.setdefault("capabilities", {})["add"] = caps
-    if not security:
-        container.pop("securityContext", None)
-    return container
 
 
 def _dns_name(value, label="name"):
@@ -2678,7 +2252,7 @@ def _migrate_samba_locked(legacy):
                "namespace": SMB_NAMESPACE, "ports": [{"container": 445, "name": "smb", "expose": True}],
                "vip_mode": "automatic"}
         cfg = NETWORK.prepare_deploy(cfg)
-        _, new_service = build_deployment(cfg)
+        _, new_service = DEPLOY.build_deployment(cfg)
     made_dep = removed_service = made_service = stopped_old = False
     try:
         ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", new_dep)
@@ -2748,7 +2322,7 @@ def install_samba(address=""):
            "args": ["-g", "server min protocol = SMB2"],
            "env": {**SHARES.filesystem_identity(), "PERMISSIONS": ""}}
     cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = build_deployment(cfg)
+    dep, svc = DEPLOY.build_deployment(cfg)
     created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
     if svc:
         try:
@@ -2902,85 +2476,9 @@ def reviewed_image_update(body, action):
     return UPDATES.commit_prepared(prepared)
 
 
-def move_capacity_plan(body):
-    """Review the exact host-placement edit without stopping or writing anything."""
-    ns, name = _dns_name(body.get("ns"), "namespace"), _dns_name(body.get("name"), "workload name")
-    guard_managed_smb(ns, name)
-    if body.get("auto"):
-        raise ValueError("select an explicit suggested host and review it before moving")
-    node = body.get("node") or None
-    if node and (not isinstance(node, str) or len(node) > 253 or
-                 not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in node.split("."))):
-        raise ValueError("host must be a valid Kubernetes node name")
-    if not isinstance(body.get("pin", False), bool):
-        raise ValueError("pin must be true or false")
-    cache = {}
-    def read(path):
-        if path not in cache:
-            cache[path] = kget(path)
-        return copy.deepcopy(cache[path])
-    current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    context = {"action": "host-move", **rollout_review_context(current)}
-    if current["spec"].get("paused"):
-        raise ValueError("paused workloads cannot be moved; resume and review placement again")
-    if current["spec"]["template"]["spec"].get("nodeName"):
-        raise ValueError("this pod template uses a direct nodeName binding; remove it before using reviewed host placement")
-    # A move stops the old pods. Never interpret incomplete ownership as free
-    # capacity, nor invite consent to stopping a workload on that assumption.
-    pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
-    _, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
-    if not known:
-        raise ValueError("pod ownership is unavailable; no move can be reviewed until inventory is complete")
-    nodes = copy.deepcopy(PLACE.get_nodes())
-    if node and not any(n["name"] == node for n in nodes):
-        raise ValueError("selected host no longer exists; review placement again")
-    proposed = copy.deepcopy(current)
-    mode = PLACE.apply_node_placement(proposed, node, body.get("pin", False))
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    def planner(*args, **kwargs):
-        return PLACE.manifest_plan(*args, **kwargs, read=read)
-    def review(dep):
-        return ROLLOUT_CAPACITY.plan(current, dep, ns, read, lambda: nodes, planner, threshold)
-    capacity = review(proposed)
-    # Check the chosen destination even for a soft preference, where Kubernetes
-    # might otherwise hide its shortage by finding room on the current host.
-    target = None
-    if node:
-        pinned = copy.deepcopy(proposed)
-        pinned["spec"]["template"]["spec"].setdefault("nodeSelector", {})["kubernetes.io/hostname"] = node
-        target = review(pinned)
-        capacity["blocked"] = capacity["blocked"] or target["blocked"]
-    capacity["move"] = {"node": node, "mode": mode, "target": target}
-    capacity["warnings"].append("A preferred host is not guaranteed; Kubernetes may choose another eligible host, including the current host. Hard pinning prevents failover.")
-    spec = proposed["spec"]["template"]["spec"]
-    if any("hostPath" in v for v in spec.get("volumes", [])):
-        capacity["warnings"].append("Host paths are not copied: files and devices may differ on the destination. Verify required host-local data before moving.")
-    if any("emptyDir" in v for v in spec.get("volumes", [])):
-        capacity["warnings"].append("Pod-local emptyDir data is lost when old pods are replaced.")
-    capacity["requires_confirmation"] = True
-    return proposed, capacity, context
-
-
-def preview_host_move(body):
-    _, capacity, context = move_capacity_plan(body)
-    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
-
-
-def reviewed_host_move(body):
-    proposed, capacity, context = move_capacity_plan(body)
-    CAPACITY_REVIEW.enforce(body, capacity, context)
-    meta = proposed["metadata"]
-    # Preserve resourceVersion: a concurrent controller edit must conflict,
-    # never be silently overwritten by a second, unreviewed fetch-and-move.
-    ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
-    PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
-    return {"ok": True, "moved": meta["name"], "to": capacity["move"]["node"] or "any node",
-            "mode": capacity["move"]["mode"]}
-
-
 def capacity_manifest(config, existing=None):
     """Construct a read-only manifest and planned claims without provisioning."""
-    cfg = analyze_deploy_intent(copy.deepcopy(config))
+    cfg = DEPLOY.analyze_deploy_intent(copy.deepcopy(config))
     ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
     cfg["namespace"] = ns
     joining = cfg.get("target_mode") == "existing"
@@ -2988,9 +2486,9 @@ def capacity_manifest(config, existing=None):
         target = _dns_name(cfg.get("target_workload"), "existing workload")
         if existing is None:
             existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, _ = build_sidecar_deployment(cfg, existing)
+        dep, _ = DEPLOY.build_sidecar_deployment(cfg, existing)
     elif cfg.get("target_mode", "new") == "new":
-        dep, _ = build_deployment(cfg)
+        dep, _ = DEPLOY.build_deployment(cfg)
     else:
         raise ValueError("deployment target must be new or existing")
     claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
@@ -3026,82 +2524,6 @@ def hardware_device_paths():
         return {f.get("host_path") for f in HW.features() if f.get("host_path")}
     except Exception:
         return set()
-
-
-def edit_capacity_plan(config):
-    """Build the exact edit before seed/PVC/icon or workload writes."""
-    ns, name = LC.dns_label(config["ns"], "namespace"), LC.dns_label(config["name"], "workload name")
-    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    HOSTACCESS.require_target(current, ns)
-    if config.get("workload_name") and config["workload_name"] != name:
-        new_name = LC.dns_label(config["workload_name"], "new workload name")
-        if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
-            raise ValueError("Use exact lowercase Kubernetes names for the rename")
-        guard_self(ns, name, renaming=True)
-        proposed, context = RENAME.prepare(config, current, LC._renamed_deployment, kget)
-        post_stop = copy.deepcopy(proposed)
-        post_stop["spec"]["strategy"] = {"type": "Recreate"}  # rename orchestration, not a saved strategy change
-        plan = ROLLOUT_CAPACITY.plan(current, post_stop, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-                                     get_app_settings()["thresholds"]["memory"]["critical"])
-        plan["requires_confirmation"] = True
-        plan["rename"] = {"from": name, "to": new_name}
-        plan["warnings"].append("Rename stops the old pods before starting the new workload. Volumes and service addresses are kept. Failed or uncertain steps retain resources for inspection, not automatic rollback.")
-        return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
-    if config.get("remove_containers") and is_self(ns, name):
-        raise ValueError("Homestead cannot remove its own containers from this page")
-    prepared = LC.prepare_edit(config, current=current)
-    context = {"action": "edit", **rollout_review_context(current),
-               "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
-    proposed = copy.deepcopy(prepared["deployment"])
-    HOSTACCESS.require_edit(current, proposed, hardware_device_paths())
-    if proposed["spec"].get("paused") and proposed["spec"].get("replicas", 1) > current["spec"].get("replicas", 1):
-        raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
-    if prepared["name"] != name:
-        count = proposed["spec"].get("replicas", 1)
-        proposed = LC._renamed_deployment(proposed, ns, prepared["name"])
-        proposed["spec"].update(replicas=count, strategy={"type": "Recreate"})
-    moves = RESTRUCTURE.copies(config)
-    if moves:
-        if prepared["name"] != name:
-            raise ValueError("rename the workload and move its data in separate saves")
-        if "lan" in config and (LAN.clean(config["lan"]) if config.get("lan") else None) != (LAN.read(current) or None):
-            raise ValueError("Change the LAN address and move storage in separate saves")
-        proposed["spec"]["strategy"] = {"type": "Recreate"}
-        COPY_JOB.guards(current, kget)
-        COPY_JOB.validate_sources(config, current)
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    plan = ROLLOUT_CAPACITY.plan(current, proposed, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-                                 threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
-    if moves:
-        helper = COPY_JOB.helper_manifest(ns, name, moves)
-        helper_plan = ROLLOUT_CAPACITY.plan(current, helper, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-            threshold, planned_claims={row["name"]: row for row in prepared["claims"]})
-        plan["copy_helper"] = helper_plan
-        plan["blocked"] = plan["blocked"] or helper_plan["blocked"]
-        plan["requires_confirmation"] = True
-        plan["warnings"] += ["Copy helper: " + warning for warning in helper_plan["warnings"]]
-        plan["warnings"].append("Storage copy stops all containers. Placement is checked again before copying and restarting. Failed or uncertain steps keep the data and require inspection; no automatic rollback or deletion.")
-        plan["warnings"].append("Destination files may be merged or overwritten. This is not a backup or filesystem free-space/consistency guarantee; avoid external writers during the copy.")
-    if moves or prepared["name"] != name or proposed["spec"].get("replicas", 1):
-        import_blocker = PLACE.IMPORT_GUARD.pending(current, ns, kget)
-        if import_blocker:
-            plan["blocked"] = True
-            plan["warnings"].append(import_blocker)
-    additions = [row.get("name") for row in config.get("containers") or [] if row.get("new") is True]
-    removals = config.get("remove_containers") or []
-    if additions or removals:
-        exposed = [port for container in config.get("containers") or []
-                   for port in container.get("ports") or [] if port.get("expose")]
-        if exposed and config.get("manage_ports"):
-            NETWORK._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
-                                      "target_port": port.get("container"), "protocol": port.get("protocol") or "TCP"}
-                                     for port in exposed]})
-        plan["container_changes"] = {"added": additions, "removed": removals}
-        plan["requires_confirmation"] = True
-        plan["warnings"].append("Changing the containers rolls every pod in this workload. Removed containers stop; persistent volumes and their data are retained.")
-    if config.get("lan"):
-        plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
-    return prepared, context, plan
 
 
 def apply_reviewed_edit(b, prepared, hold=False):
@@ -3150,7 +2572,7 @@ def copy_admission(dep):
 
 def reviewed_deploy(b):
     """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
-    b = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(b)))
+    b = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(b)))
     HOSTACCESS.require_cfg([b, *additional_container_configs(b)])
     if b.get("target_mode", "new") not in ("new", "existing"):
         raise ValueError("deployment target must be new or existing")
@@ -3165,63 +2587,7 @@ def reviewed_deploy(b):
     # version. The final PUT keeps this resourceVersion for optimistic locking.
     plan = deploy_capacity_plan(b, existing=current)
     CAPACITY_REVIEW.enforce(b, plan, context)
-    return run_deploy(b, reviewed_current=current) if current is not None else run_deploy(b)
-
-
-def run_deploy(b, *, reviewed_current=None):
-    """Create (or join) a workload. HTTP Deploy uses reviewed_deploy first."""
-    b = analyze_deploy_intent(b)
-    ns = b.get("namespace") or DEFAULT_NS
-    target = b.get("target_workload") if b.get("target_mode") == "existing" else b.get("workload_name") or b.get("name")
-    guard_managed_smb(ns, target)
-    b = ensure_profile_compatible(b)
-    persist_icon_config(b)
-    b = prepare_deploy_network(b)
-    b = apply_deploy_bindings(b)
-    b = apply_generated_secrets(b)
-    b = prepare_lan(b)
-    ns = b.get("namespace") or DEFAULT_NS
-    target_mode = b.get("target_mode", "new")
-    if target_mode == "new":
-        b = VOLOWNER.prepare(b)
-        b["additional_containers"] = [VOLOWNER.prepare(item) for item in additional_container_configs(b)]
-    if target_mode == "existing":
-        target = _dns_name(b.get("target_workload"), "existing workload")
-        current = copy.deepcopy(reviewed_current) if reviewed_current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, svc = build_sidecar_deployment(b, current)
-    elif target_mode == "new":
-        dep, svc = build_deployment(b)
-        target = dep["metadata"]["name"]
-    else:
-        raise ValueError("deployment target must be new or existing")
-    reused = []
-    for claim in new_claims(deployment_volumes(b)):
-        if ensure_claim(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"]):
-            reused.append(claim["name"])
-    b["_reused_claims"] = reused
-    if b.get("network_mode") == "lan" and target_mode == "new":
-        LAN.ensure_nad(ns, target, b["lan"])
-    masked = {item.get("key") for item in b.get("env_meta") or [] if item.get("masked")}
-    ENVSEC.externalize(ns, dep, kget, ksend, masked)
-    if target_mode == "existing":
-        ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
-    else:
-        ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", dep)
-    if b.get("network_mode") == "lan" and target_mode == "new":
-        record_lan(ns, target, b["lan"])
-    if svc:
-        ksend("POST", f"/api/v1/namespaces/{ns}/services", svc)
-    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-    container_name = _dns_name(b.get("container_name") or b.get("name"), "container name")
-    action = f"Add {container_name} to {target}" if target_mode == "existing" else f"Deploy {target}"
-    op = OPS.start("deployment", action,
-                   {"kind": "Deployment", "name": target, "namespace": ns},
-                   "/containers", {"namespace": ns, "name": target,
-                                   # What cancelling it undoes: a new one is removed,
-                                   # an existing one goes back to its last version.
-                                   "undo": "rollout" if target_mode == "existing" else "delete"})
-    return {"ok": True, "name": target, "container": container_name, "operation": op,
-            "reused_volumes": b.get("_reused_claims") or []}
+    return DEPLOY.run_deploy(b, reviewed_current=current) if current is not None else DEPLOY.run_deploy(b)
 
 
 def compose_report(b):
@@ -3262,7 +2628,7 @@ def compose_preparation(b):
     for name in report["order"]:
         if name not in rows:
             continue
-        cfg = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
+        cfg = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
         guard_managed_smb(cfg.get("namespace") or DEFAULT_NS, cfg.get("workload_name") or cfg.get("name"))
         cfg, dep, pending, _ = capacity_manifest(cfg)
         for claim, descriptor in pending.items():
@@ -3274,59 +2640,10 @@ def compose_preparation(b):
     return configs, entries, claims
 
 
-def compose_capacity(entries, claims, created=None):
-    """Fresh joint review, including created controllers whose pods lag behind."""
-    created = created or {}
-    ns = entries[0]["deployment"]["metadata"]["namespace"]
-    cache = {}
-    def read(path):
-        if path not in cache:
-            try:
-                cache[path] = kget(path)
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise
-                cache[path] = error
-        value = cache[path]
-        if isinstance(value, Exception):
-            raise value
-        return copy.deepcopy(value)
-    pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
-    planned = copy.deepcopy(entries)
-    starting_headroom = {}
-    for entry in planned:
-        previous = created.get(entry["name"])
-        if previous is None:
-            continue
-        current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{entry['name']}")
-        if current.get("metadata", {}).get("uid") != previous.get("metadata", {}).get("uid") or current.get("spec") != previous.get("spec"):
-            raise ValueError(entry["name"] + " changed during batch creation; review the remaining services again")
-        owned, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
-        if not known:
-            raise ValueError(entry["name"] + " pod ownership is unavailable; remaining services were not created")
-        scheduled = [p for p in owned if p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")]
-        for pod in scheduled:
-            spec = pod["spec"]
-            host = spec["nodeName"]
-            starting_headroom[host] = starting_headroom.get(host, 0) + max(0,
-                PLACE._pod_memory(spec)[0] - PLACE._pod_request(spec, "memory")) / 1024**3
-        # Keep all scheduled/terminating consumers reserved. Replace only this
-        # controller's unassigned pods with synthetic placements of its deficit.
-        pending_ids = {id(p) for p in owned if not p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")}
-        pods = [p for p in pods if id(p) not in pending_ids]
-        entry["deployment"] = current
-        entry["replicas"] = max(0, int(current["spec"].get("replicas", 1)) - len(scheduled))
-    nodes = copy.deepcopy(PLACE.get_nodes())
-    for node in nodes:
-        node["batch_starting_headroom_gb"] = starting_headroom.get(node["name"], 0)
-    return BATCH_CAPACITY.plan(planned, ns, pods, nodes, claims,
-                               get_app_settings()["thresholds"]["memory"]["critical"], read=read)
-
-
 def compose_preview(b):
     configs, entries, claims = compose_preparation(b)
     HOSTACCESS.require_cfg(configs)
-    return {"capacity": compose_capacity(entries, claims),
+    return {"capacity": DEPLOY.compose_capacity(entries, claims),
             "capacity_token": CAPACITY_REVIEW.issue(b, {"action": "compose", "configs": configs})}
 
 
@@ -3334,7 +2651,7 @@ def compose_apply(b):
     """Guard the entire batch before any writes, then recheck its remainder."""
     configs, entries, claims = compose_preparation(b)
     HOSTACCESS.require_cfg(configs)
-    plan = compose_capacity(entries, claims)
+    plan = DEPLOY.compose_capacity(entries, claims)
     if plan["status"] == "unknown":
         raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
     CAPACITY_REVIEW.enforce(b, plan, {"action": "compose", "configs": configs})
@@ -3343,11 +2660,11 @@ def compose_apply(b):
         name = entry["name"]
         try:
             if created:
-                fresh = compose_capacity(entries, claims, controllers)
+                fresh = DEPLOY.compose_capacity(entries, claims, controllers)
                 if fresh["blocked"]:
                     return {"ok": False, "created": created, "failed": name,
                             "error": "Remaining batch no longer fits the checked capacity; review again", "capacity": fresh}
-            result = run_deploy(copy.deepcopy(cfg))
+            result = DEPLOY.run_deploy(copy.deepcopy(cfg))
             created.append(result["name"])
             # Never assume the Deployment has pods just because POST returned.
             ns = cfg["namespace"]
@@ -3412,137 +2729,6 @@ def share_storage_options():
             "storage_classes": selectable_storage_classes(classes),
             "shared_storage_classes": shared_storage_classes(classes),
             "storage_class_facts": storage_class_facts(classes)}
-
-
-def _unique_volume_name(base, used):
-    base = re.sub(r"[^a-z0-9-]", "-", base.lower()).strip("-")[:55] or "volume"
-    candidate, suffix = base, 2
-    while candidate in used:
-        tail = f"-{suffix}"
-        candidate = base[:63 - len(tail)].rstrip("-") + tail
-        suffix += 1
-    used.add(candidate)
-    return candidate
-
-
-def build_sidecar_deployment(cfg, current):
-    HOSTACCESS.require_target(current, cfg.get("namespace") or DEFAULT_NS)
-    """Add one container to an existing Deployment pod template.
-
-    Kubernetes cannot modify a running Pod. Updating the controller template causes a
-    reviewed rollout, so all containers in the workload restart together.
-    """
-    container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
-    target = _dns_name(cfg.get("target_workload"), "existing workload")
-    if current.get("metadata", {}).get("name") != target:
-        raise ValueError("existing workload does not match the selected Deployment")
-    if cfg.get("network_mode") == "host":
-        raise ValueError("host networking cannot be enabled while joining an existing workload")
-
-    updated = json.loads(json.dumps(current))
-    pspec = updated.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
-    containers = pspec.setdefault("containers", [])
-    if any(c.get("name") == container_name for c in containers):
-        raise ValueError(f"container {container_name} already exists in {target}")
-
-    env = [{"name": k, "value": str(v)} for k, v in (cfg.get("env") or {}).items()]
-    ports = [{"containerPort": int(p["container"]),
-              "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
-              "protocol": str(p.get("protocol", "TCP")).upper()}
-             for p in cfg.get("ports") or [] if p.get("container")]
-    container = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
-    if env:
-        container["env"] = env
-    if ports:
-        container["ports"] = ports
-    resources = {}
-    if cfg.get("cpu"):
-        resources.setdefault("requests", {})["cpu"] = cfg["cpu"]
-    memory_request = str(cfg.get("memory") or "").strip()
-    memory_limit = str(cfg.get("memory_limit") or "").strip()
-    MEMORY.validate(memory_request, memory_limit, container_name)
-    if memory_request:
-        resources.setdefault("requests", {})["memory"] = memory_request
-    if memory_limit:
-        resources.setdefault("limits", {})["memory"] = memory_limit
-    if resources:
-        container["resources"] = resources
-    if cfg.get("privileged"):
-        container["securityContext"] = {"privileged": True}
-
-    pod_volumes = pspec.setdefault("volumes", [])
-    existing_by_name = {v.get("name"): v for v in pod_volumes}
-    used = set(existing_by_name)
-    mounts = []
-    for index, item in enumerate(cfg.get("volumes") or []):
-        mount_path = (item.get("path") or "").strip()
-        if not mount_path:
-            continue
-        if item.get("type") == "pod":
-            volume_name = item.get("source", "")
-            if volume_name not in existing_by_name:
-                raise ValueError(f"pod volume {volume_name or '(blank)'} does not exist in {target}")
-        else:
-            source = (item.get("source") or "").strip()
-            if not source and item.get("type") != "emptyDir":
-                raise ValueError(f"storage source is required for {mount_path}")
-            volume_name = ""
-            if item.get("type") not in ("host", "emptyDir"):
-                volume_name = next((v.get("name") for v in pod_volumes
-                                    if v.get("persistentVolumeClaim", {}).get("claimName") == source), "")
-            if not volume_name:
-                volume_name = _unique_volume_name(f"hs-{container_name}-{index + 1}", used)
-                if item.get("type") == "host":
-                    pod_volumes.append({"name": volume_name, "hostPath": {"path": source}})
-                elif item.get("type") == "emptyDir":
-                    pod_volumes.append({"name": volume_name, "emptyDir": {}})
-                else:
-                    pod_volumes.append({"name": volume_name,
-                                        "persistentVolumeClaim": {"claimName": source}})
-        mount = {"name": volume_name, "mountPath": mount_path}
-        if item.get("sub_path") and item.get("type") != "emptyDir":
-            mount["subPath"] = str(item["sub_path"]).strip("/")
-        if item.get("read_only"):
-            mount["readOnly"] = True
-        mounts.append(mount)
-
-    hardware = set(cfg.get("hardware") or [])
-    if cfg.get("gpu"):
-        hardware.add("igpu")
-    devices = {feature["id"]: HW.mount_spec(feature) for feature in HW.features()}
-    unknown = hardware - set(devices)
-    if unknown:
-        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(unknown)))
-    for feature_id in hardware:
-        device = devices[feature_id]
-        pspec.setdefault("nodeSelector", {})[device["label"]] = "true"
-        container.setdefault("securityContext", {})["privileged"] = True
-        volume_name = next((v.get("name") for v in pod_volumes
-                            if v.get("hostPath", {}).get("path") == device["host_path"]), "")
-        if not volume_name:
-            volume_name = _unique_volume_name(device["name"], used)
-            pod_volumes.append({"name": volume_name, "hostPath": {
-                "path": device["host_path"], "type": device["path_type"]}})
-        mounts.append({"name": volume_name, "mountPath": device["container_path"]})
-    if mounts:
-        container["volumeMounts"] = mounts
-    containers.append(container)
-
-    selector = current.get("spec", {}).get("selector", {}).get("matchLabels", {})
-    service_cfg = dict(cfg)
-    service_cfg["name"] = container_name
-    # Only the Service portion is needed here. Pod storage and hardware have
-    # already been merged above and pod-volume references are join-only.
-    service_cfg["volumes"] = []
-    service_cfg["hardware"] = []
-    service_cfg["gpu"] = False
-    _, service = build_deployment(service_cfg)
-    if service:
-        service["spec"]["selector"] = selector
-    annotation_name = ("sidecar-" + container_name)[:63].rstrip("-")
-    updated.setdefault("metadata", {}).setdefault("annotations", {})[
-        NAMES.key(annotation_name)] = cfg.get("image", "")
-    return updated, service
 
 
 # Harvester keeps these for VM images and VM state; they are not general
@@ -4584,7 +3770,7 @@ def api_scale(ns, name, n):
     """Start or stop a container for /api/v1, under the app's own checks."""
     try:
         result = scale_workload(ns, name, n, confirm_capacity=True, confirm_self=False)
-    except WorkloadRefused as refused:
+    except WORKLOADS.WorkloadRefused as refused:
         raise API_V1.ApiError(409, str(refused), blockers=list((refused.plan or {}).get("blockers") or [])) from None
     return {"warnings": list((result.get("plan") or {}).get("warnings") or []), "job": None}
 
@@ -4883,527 +4069,6 @@ def set_node_hardware(cfg):
     return {"ok": True, "node": name}
 
 
-# ---------------------------------------------------------------- app store
-CA_FEED = os.environ.get(
-    "COMMUNITY_CATALOG_URL",
-    "https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicationFeed.json",
-)
-
-
-def category_values(value):
-    """Flatten inconsistent feed category shapes into stable display strings."""
-    found = []
-
-    def visit(item):
-        if isinstance(item, (list, tuple)):
-            for child in item:
-                visit(child)
-        elif isinstance(item, dict):
-            preferred = [item.get(key) for key in ("name", "label", "category", "Category")]
-            usable = [child for child in preferred if child not in (None, "")]
-            for child in usable or item.values():
-                visit(child)
-        elif item is not None:
-            for part in re.split(r"[\s,|]+", str(item).strip()):
-                if part and part not in found:
-                    found.append(part)
-
-    visit(value)
-    return found
-
-
-# Markup in catalogue text: HTML tags, and forum codes such as [b], [/span] and
-# [span style='color: red'] - a known tag name, so "[1]" or "[x86]" survive.
-CATALOG_MARKUP = re.compile(
-    r"<[^>]*>|\[/?(?:b|i|u|s|br|p|hr|img|url|span|color|size|font|center|left|right|quote|code|list|li|\*|h[1-6])"
-    r"(?:[= ][^\]]*)?\]", re.I)
-
-
-def catalog_text(value, limit=None):
-    """Turn catalogue HTML fragments and entities into compact readable text."""
-    text = str(value or "")
-    # Some catalogue fields contain encoded markup (and occasionally encode it
-    # twice), so decode before removing tags.
-    for _ in range(2):
-        decoded = html.unescape(text)
-        if decoded == text:
-            break
-        text = decoded
-    text = re.sub(r"(?i)<\s*br\s*/?\s*>|\[\s*br\s*/?\s*\]", "\n", text)
-    text = re.sub(r"(?i)</\s*(?:p|div|li|tr|h[1-6])\s*>", "\n", text)
-    # HTML, and the forum's [b]/[span style=...] codes that templates use too.
-    text = re.sub(CATALOG_MARKUP, "", text)
-    text = html.unescape(text).replace("\xa0", " ")
-    text = re.sub(r"[ \t\r\f\v]+", " ", text)
-    text = re.sub(r"\s*\n+\s*", " · ", text)
-    text = re.sub(r"(?:\s*·\s*)+", " · ", text).strip(" ·")
-    return text[:limit] if limit is not None else text
-
-
-def catalog_paragraphs(value, limit=8000):
-    """Catalogue text with its paragraphs kept, for reading in full.
-
-    Overviews mix HTML, entities and the forum's [b]/[br] codes; each becomes
-    plain text with line breaks where the author put them."""
-    text = str(value or "")
-    for _ in range(2):
-        decoded = html.unescape(text)
-        if decoded == text:
-            break
-        text = decoded
-    text = re.sub(r"(?i)\[\s*br\s*/?\s*\]|<\s*br\s*/?\s*>", "\n", text)
-    text = re.sub(r"(?i)</\s*(?:p|div|li|tr|h[1-6])\s*>", "\n", text)
-    text = re.sub(CATALOG_MARKUP, "", text)
-    text = html.unescape(text).replace("\xa0", " ").replace("\r\n", "\n").replace("\r", "\n")
-    text = "\n".join(line.strip() for line in text.split("\n"))
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text[:limit]
-
-
-def catalog_reason(value):
-    """A spotlight's reason, which the feed gives as a dict - sometimes as its text."""
-    if isinstance(value, str) and value.strip().startswith("{"):
-        try:
-            import ast
-            value = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            pass
-    if isinstance(value, dict):
-        value = value.get("en_US") or next(iter(value.values()), "")
-    return catalog_text(value)
-
-
-def catalog_links(value):
-    if isinstance(value, str):
-        value = [value]
-    return [str(x) for x in (value or []) if isinstance(x, str) and x.startswith(("http://", "https://"))][:6]
-
-
-def appstore_key(app):
-    return f"{app.get('name')}|{app.get('repo')}"
-
-
-# What a list of apps needs; the full record comes one app at a time.
-APPSTORE_HEAVY = ("overview", "config", "screenshots", "readme", "comment", "requires")
-
-
-def appstore_summary(app):
-    return {k: v for k, v in app.items() if k not in APPSTORE_HEAVY}
-
-
-def search_appstore(apps, term):
-    """Return catalogue matches with name relevance ahead of description hits."""
-    needle = str(term or "").strip().lower()
-    if not needle:
-        return list(apps)
-
-    def relevance(app):
-        name = str(app.get("name") or "").lower()
-        description = str(app.get("desc") or "").lower()
-        if name == needle:
-            return 0
-        if name.startswith(needle):
-            return 1
-        if re.search(rf"(?:^|[^a-z0-9]){re.escape(needle)}", name):
-            return 2
-        if needle in name:
-            return 3
-        if needle in description:
-            return 4
-        return None
-
-    ranked = []
-    for position, app in enumerate(apps):
-        score = relevance(app)
-        if score is not None:
-            ranked.append((score, position, app))
-    return [app for _, _, app in sorted(ranked, key=lambda row: (row[0], row[1]))]
-
-
-def appstore_number(value):
-    """Coerce optional feed statistics without letting malformed rows break browsing."""
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def unique_appstore_apps(apps):
-    """Hide duplicate templates that point at the same named container image."""
-    seen, out = set(), []
-    for app in apps:
-        key = (str(app.get("name") or "").strip().lower(),
-               str(app.get("repo") or "").strip().lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(app)
-    return out
-
-
-def rank_appstore(apps, mode="popular"):
-    """Rank cached catalogue rows using only statistics supplied by the feed."""
-    rows = unique_appstore_apps(apps)
-    if mode == "spotlight":
-        return sorted((app for app in rows if app.get("spotlight")),
-                      key=lambda app: -app["spotlight"]["date"])
-    if mode == "recent":
-        # Templates added in one feed update share a timestamp; the feed's own
-        # order among them is the one Community Applications shows.
-        key = lambda app: -appstore_number(app.get("first_seen"))
-    elif mode == "trending":
-        key = lambda app: (-appstore_number(app.get("top_trending")),
-                           -appstore_number(app.get("trending")),
-                           -appstore_number(app.get("top_performing")),
-                           -appstore_number(app.get("downloads")),
-                           str(app.get("name") or "").lower())
-    else:
-        key = lambda app: (-appstore_number(app.get("top_performing")),
-                           -appstore_number(app.get("trending")),
-                           -appstore_number(app.get("top_trending")),
-                           -appstore_number(app.get("downloads")),
-                           str(app.get("name") or "").lower())
-    return sorted(rows, key=key)
-
-
-def appstore_spotlight(apps):
-    """Choose the strongest feed-ranked app for the catalogue spotlight."""
-    ranked = rank_appstore(apps, "popular")
-    return next((app for app in ranked if appstore_number(app.get("top_performing")) > 0),
-                next((app for app in ranked if appstore_number(app.get("trending")) > 0),
-                     ranked[0] if ranked else None))
-
-
-def catalog_source():
-    """The catalogue feed in use: the one set in Settings, else the default."""
-    try:
-        custom = cached("settings", 15, get_app_settings).get("catalog_url") or ""
-    except Exception:
-        custom = ""
-    return custom or CA_FEED
-
-
-def fetch_appstore():
-    source = catalog_source()
-
-    def go():
-        req = urllib.request.Request(source, headers={
-            "User-Agent": f"Homestead/{HOMESTEAD_VERSION} (+https://github.com/homestead-lab/homestead)",
-            "Accept": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
-        apps = data.get("applist", data if isinstance(data, list) else [])
-        out = []
-        for a in apps:
-            repo = a.get("Repository") or ""
-            if not repo or not a.get("Name"):
-                continue
-            # Containers only, as Community Applications shows them: a plugin
-            # or language pack is Unraid's own software, and blacklisted,
-            # deprecated or hidden templates are not offered there either.
-            if (a.get("Plugin") or a.get("PluginURL") or a.get("Language") or a.get("LanguagePack")
-                    or a.get("Blacklist") or a.get("Deprecated") or a.get("hideFromCA")
-                    or str(repo).lower().endswith(".plg")):
-                continue
-            spotlight = None
-            if appstore_number(a.get("RecommendedDate")):
-                stamp = int(appstore_number(a.get("RecommendedDate")))
-                spotlight = {"date": stamp, "month": time.strftime("%b %Y", time.gmtime(stamp)),
-                             "reason": catalog_reason(a.get("RecommendedReason")),
-                             "who": catalog_text(a.get("RecommendedWho") or "")}
-            maintainer = a.get("Maintainer") or a.get("Author") or ""
-            if isinstance(maintainer, dict):
-                maintainer = maintainer.get("Name") or next((v for v in maintainer.values() if isinstance(v, str)), "")
-            maintainer = str(maintainer or re.sub(r"'s Repository$", "", str(a.get("Repo") or ""))).strip()
-            categories = category_values(a.get("CategoryList") or a.get("Category") or "")
-            item = {
-                "name": a.get("Name"),
-                "repo": repo,
-                "icon": a.get("Icon") or "",
-                "desc": catalog_text(a.get("Overview") or a.get("Description") or "", 300),
-                "cat": categories[0] if categories else "",
-                "categories": categories,
-                "web": a.get("Project") or a.get("Support") or "",
-                "network": a.get("Network") or "bridge",
-                "webui": a.get("WebUI") or "",
-                "config": a.get("Config") or [],
-                "downloads": int(appstore_number(a.get("downloads"))),
-                "stars": int(appstore_number(a.get("stars"))),
-                "trending": appstore_number(a.get("trending")),
-                "top_trending": appstore_number(a.get("topTrending")),
-                "top_performing": appstore_number(a.get("topPerforming")),
-                "first_seen": int(appstore_number(a.get("FirstSeen"))),
-                "last_update": int(appstore_number(a.get("LastUpdate"))),
-                "spotlight": spotlight,
-                "maintainer": catalog_text(maintainer, 80),
-                "official": bool(a.get("Official") or a.get("LTOfficial")),
-                "beta": str(a.get("Beta") or "").lower() in ("true", "1", "yes"),
-                "privileged": str(a.get("Privileged") or "").lower() == "true",
-                "extra_params": catalog_text(a.get("ExtraParams") or "", 600),
-                "links": {k: v for k, v in {
-                    "project": a.get("Project"), "support": a.get("Support"), "registry": a.get("Registry"),
-                    "readme": a.get("ReadMe") or a.get("Readme"), "video": a.get("Video"),
-                    "discord": a.get("Discord"), "github": a.get("GitHub"), "web": a.get("WebPage"),
-                }.items() if isinstance(v, str) and v.startswith(("http://", "https://"))},
-                "overview": catalog_paragraphs(a.get("Overview") or a.get("Description") or ""),
-                "screenshots": catalog_links(a.get("Screenshot")),
-                "requires": catalog_text(a.get("Requires") or "", 600),
-                "comment": catalog_text(a.get("CAComment") or a.get("ModeratorComment") or "", 600),
-                "license": catalog_text(a.get("License") or a.get("Licence") or "", 80),
-            }
-            item["deploy"] = template_to_cfg(item)
-            out.append(item)
-        return out
-    return cached(f"appstore:{source}", 21600, go)
-
-
-def appdata_folders(vols):
-    """Gives each path an app keeps in its appdata volume a folder of its own.
-
-    An Unraid template maps each path to its own host folder; here they share
-    one volume, as an import lays them out, each mounted from its own folder
-    with subPath. A single path takes the whole volume. The volume is sized
-    for everything in it."""
-    shared = [v for v in vols if v.get("type") == "pvc" and v.get("create")]
-    if len(shared) < 2:
-        return vols
-    taken, total = set(), 0
-    access = "ReadWriteMany" if any(v.get("access_mode") == "ReadWriteMany" for v in shared) else "ReadWriteOnce"
-    for v in shared:
-        base = re.sub(r"[^a-z0-9._-]+", "-", str(v["path"]).rstrip("/").rsplit("/", 1)[-1].lower()).strip("-.") or "data"
-        folder, n = base, 2
-        while folder in taken:
-            folder, n = f"{base}-{n}", n + 1
-        taken.add(folder)
-        v["sub_path"] = folder
-        total += int(v.get("size_gb") or 5)
-        v["access_mode"] = access
-    for v in shared:
-        v["size_gb"] = total
-    return vols
-
-
-def template_to_cfg(app):
-    """Turn an Unraid CA template entry into our deploy config."""
-    ports, envs, env_meta, vols, devices = [], {}, [], [], []
-    cfgs = app.get("config") or []
-    if isinstance(cfgs, dict):
-        cfgs = [cfgs]
-    if not isinstance(cfgs, list):
-        cfgs = []
-    name = re.sub(r"[^a-z0-9-]", "-", app["name"].lower()).strip("-")[:40]
-    for c in cfgs:
-        if not isinstance(c, dict):
-            continue
-        attrs = c.get("@attributes", {}) or {}
-        typ = str(attrs.get("Type") or c.get("Type") or "").strip().lower()
-        tgt = str(attrs.get("Target") or c.get("Target") or "").strip()
-        val = c.get("value")
-        if val is None or val == "":
-            val = attrs.get("Default") or c.get("Default") or ""
-        val = str(val)
-        label = catalog_text(attrs.get("Name") or c.get("Name") or tgt)
-        description = catalog_text(attrs.get("Description") or c.get("Description") or "")
-        required = str(attrs.get("Required") or c.get("Required") or "false").lower() == "true"
-        mode = str(attrs.get("Mode") or c.get("Mode") or "")
-        read_only = mode.lower() == "ro"
-        if typ == "port" and tgt:
-            try:
-                protocol = mode.upper() if mode.lower() in ("tcp", "udp") else "TCP"
-                ports.append({"container": int(tgt), "host": int(val or tgt), "expose": True,
-                              "name": f"p{tgt}-{protocol.lower()}", "protocol": protocol,
-                              "label": label, "description": description, "required": required})
-            except (TypeError, ValueError):
-                pass
-        elif typ == "variable" and tgt:
-            options = [option.strip() for option in val.split("|") if option.strip()] if "|" in val else []
-            if options:
-                val = options[0]
-            masked = str(attrs.get("Mask", "false")).lower() == "true"
-            secret_value = masked or bool(re.search(r"(?:PASSWORD|PASS|TOKEN|SECRET|API_KEY|APIKEY)$", tgt, re.I))
-            generate = secret_value and (bool(val) or required or (masked and "password" in tgt.lower()))
-            if generate:
-                # Public catalogue defaults must never become deployed credentials.
-                val = ""
-            envs[tgt] = val
-            env_meta.append({"key": tgt, "label": label, "description": description,
-                             "required": required, "masked": secret_value,
-                             "generate": generate, "options": options})
-        elif typ == "path" and tgt:
-            system_bind = tgt in ("/etc/localtime", "/var/run/docker.sock") and val == tgt
-            clean_path = tgt.rstrip("/").lower() or "/"
-            context = " ".join((clean_path, label, description, val)).lower()
-            tokens = set(re.split(r"[^a-z0-9]+", context))
-            cache_tokens = {"cache", "caches", "transcode", "transcoding", "temp", "temporary", "tmp"}
-            media_tokens = {"media", "movie", "movies", "tv", "music", "photo", "photos",
-                            "video", "videos", "recording", "recordings", "download", "downloads"}
-            config_path = (clean_path == "/config" or clean_path.endswith("/config") or
-                           "appdata" in str(val).lower())
-            role = ("system" if system_bind else "cache" if tokens & cache_tokens else
-                    "config" if config_path else "media" if tokens & media_tokens else
-                    "data" if clean_path == "/data" or clean_path.endswith("/data") else "config")
-            volume_type = "host" if system_bind else "emptyDir" if role == "cache" else "pvc"
-            create = not system_bind and role not in ("cache", "media")
-            size = 50 if role == "data" else 5
-            access_mode = ("ReadWriteMany" if {"rwx", "shared", "multinode", "multi-node"} & tokens
-                           else "ReadWriteOnce")
-            source = (val if system_bind else "" if role in ("cache", "media") else f"{name}-appdata")
-            vols.append({"path": tgt, "source": source,
-                         "type": volume_type, "create": create, "role": role,
-                         "access_mode": access_mode, "size_gb": size,
-                         "read_only": read_only, "label": label, "description": description,
-                         "required": required, "template_source": val})
-        elif typ == "device":
-            devices.append({"host_path": val or tgt, "container_path": tgt or val,
-                            "label": label, "description": description, "required": required})
-    appdata_folders(vols)
-    network = str(app.get("network") or "bridge").strip().lower()
-    network_mode = "host" if network == "host" else "loadbalancer"
-    vip_mode = "auto" if network not in ("bridge", "host", "default", "") else "shared"
-
-    # Host-mode templates frequently omit port rows. Preserve the useful WebUI
-    # listener so users can switch to a Service without re-reading the template.
-    if not ports:
-        match = re.search(r"\[PORT:(\d+)\]", str(app.get("webui") or ""), re.I)
-        if match:
-            port = int(match.group(1))
-            ports.append({"container": port, "host": port, "expose": network != "host",
-                          "name": f"p{port}-tcp", "protocol": "TCP",
-                          "label": "Web interface", "description": "Inferred from the template WebUI URL",
-                          "required": True})
-    # What Unraid lets it do to its host: Privileged, and the capabilities and
-    # tunnel device its extra parameters ask for (VPN containers need them).
-    privileges = PRIV.from_docker(app.get("extra_params", ""), app.get("privileged"),
-                                  devices=[d["host_path"] for d in devices])
-    devices = [d for d in devices if PRIV.TUN not in (d["host_path"] + d["container_path"])]
-    cfg = {"name": name,
-            "image": app["repo"], "icon": app.get("icon") or "",
-            "ports": ports, "env": envs, "env_meta": env_meta, "volumes": vols,
-            **privileges,
-            "template_devices": devices, "template_network": network,
-            "network_mode": network_mode, "vip_mode": vip_mode,
-            "env_bindings": {}}
-    return analyze_deploy_intent(cfg)
-
-
-def analyze_deploy_intent(cfg):
-    """Derive portable Kubernetes guidance from template semantics, never app names."""
-    updated = dict(cfg)
-    updated["ports"] = [dict(item) for item in (cfg.get("ports") or [])]
-    updated["env_bindings"] = dict(cfg.get("env_bindings") or {})
-    notes, dependencies, intents = [], [], []
-    exposed = [item for item in updated["ports"] if item.get("expose", True)]
-    dns = any(int(item.get("container") or 0) == 53 for item in exposed)
-    if dns and updated.get("network_mode") != "host":
-        updated["network_mode"], updated["vip_mode"] = "loadbalancer", "auto"
-        intents.append("network")
-        notes.append("A dedicated automatic VIP is selected because this template exposes DNS port 53.")
-        bind_names = {"SERVERIP", "SERVER_IP", "LOCAL_IPV4", "FTLCONF_LOCAL_IPV4"}
-        for key in (updated.get("env") or {}):
-            if re.sub(r"[^A-Z0-9_]", "", key.upper()) in bind_names:
-                updated["env_bindings"][key] = "vip"
-        if updated["env_bindings"]:
-            notes.append("Address variables are filled from the allocated VIP at deploy time.")
-    for port in updated["ports"]:
-        if int(port.get("container") or 0) == 67 and str(port.get("protocol") or "TCP").upper() == "UDP":
-            port["expose"], port["required"] = False, False
-            port["description"] = "Optional: expose only when this workload provides DHCP"
-            if "network" not in intents:
-                intents.append("network")
-            notes.append("DHCP port 67 stays disabled unless you explicitly expose it.")
-
-    volumes = updated.get("volumes") or []
-
-    def inferred_role(item):
-        if item.get("role"):
-            return item["role"]
-        path = str(item.get("path") or "").rstrip("/").lower() or "/"
-        context = " ".join(str(item.get(key) or "") for key in
-                           ("path", "source", "template_source", "label", "description")).lower()
-        tokens = set(re.split(r"[^a-z0-9]+", context))
-        if path in ("/etc/localtime", "/var/run/docker.sock", "/run/containerd/containerd.sock"):
-            return "system"
-        if tokens & {"cache", "caches", "transcode", "transcoding", "temp", "temporary", "tmp"}:
-            return "cache"
-        if path == "/config" or path.endswith("/config") or "appdata" in context:
-            return "config"
-        if tokens & {"media", "movie", "movies", "tv", "music", "photo", "photos", "video",
-                     "videos", "recording", "recordings", "download", "downloads"}:
-            return "media"
-        if path == "/data" or path.endswith("/data"):
-            return "data"
-        return "config"
-
-    media = [item.get("path") for item in volumes if inferred_role(item) == "media"]
-    cache = [item.get("path") for item in volumes if inferred_role(item) == "cache"]
-    data_paths = [item.get("path") for item in volumes if inferred_role(item) == "data"]
-    if media:
-        intents.append("storage")
-        notes.append("Choose existing/shared media storage for: " + ", ".join(filter(None, media)) + ".")
-    if cache:
-        if "storage" not in intents:
-            intents.append("storage")
-        notes.append("Temporary pod storage is selected for cache/transcode paths: " + ", ".join(filter(None, cache)) + ".")
-    if data_paths:
-        if "storage" not in intents:
-            intents.append("storage")
-        notes.append("Persistent data paths start as editable Longhorn claims; choose RWX when multiple replicas or workloads must attach: " + ", ".join(filter(None, data_paths)) + ".")
-    if any(item.get("access_mode") == "ReadWriteMany" for item in volumes):
-        if "storage" not in intents:
-            intents.append("storage")
-        notes.append("Template wording indicates shared storage; review the proposed RWX claim and size.")
-
-    generated = [item.get("key") for item in (updated.get("env_meta") or []) if item.get("generate")]
-    if generated:
-        intents.append("security")
-        notes.append("Public defaults for secret fields are discarded and generated locally.")
-    option_fields = [item.get("key") for item in (updated.get("env_meta") or []) if item.get("options")]
-    if option_fields:
-        notes.append("Enumerated template values are presented as selectors instead of literal option strings.")
-
-    env_keys = {re.sub(r"[^A-Z0-9_]", "", key.upper()) for key in (updated.get("env") or {})}
-    if any(key.endswith(("DB_HOST", "DATABASE_HOST", "MYSQL_HOST", "POSTGRES_HOST")) for key in env_keys):
-        dependencies.append({"kind": "database", "name": "External database endpoint",
-                             "required": True, "managed": False})
-    if any(key.endswith(("REDIS_HOST", "CACHE_HOST")) for key in env_keys):
-        dependencies.append({"kind": "cache", "name": "External cache endpoint",
-                             "required": True, "managed": False})
-
-    runtime_socket = next((item for item in volumes
-                           if item.get("path") in ("/var/run/docker.sock", "/run/containerd/containerd.sock")), None)
-    blocked = bool(runtime_socket)
-    if blocked:
-        intents.append("safety")
-        dependencies.append({"kind": "runtime", "name": "Host container-runtime control",
-                             "required": True, "managed": False})
-        notes.append("This template requests a host container-runtime socket and can create or control other containers; it needs a Kubernetes-specific deployment design.")
-    if dependencies:
-        intents.append("dependency")
-        notes.append("Review the external services listed below before deployment.")
-    if updated.get("template_devices"):
-        intents.append("hardware")
-        notes.append("Imported device paths are matched to reusable hardware features; verify eligible hosts before deploying.")
-    network = str(updated.get("template_network") or "bridge").lower()
-    if network == "host":
-        intents.append("network")
-        notes.append("The source requests host networking; review node port collisions and failover, or switch to a Service VIP.")
-    elif network not in ("bridge", "default", "") and not dns:
-        intents.append("network")
-        notes.append("The source custom network is represented by a dedicated Kubernetes VIP.")
-    if not notes:
-        notes.append("Review the imported ports, variables, and storage choices before deploying.")
-
-    intents = list(dict.fromkeys(intents)) or ["template"]
-    level = "dependency" if blocked or dependencies else "guided" if dns else "review"
-    label = ("Needs Kubernetes design" if blocked else "Dependency review" if dependencies else
-             "Dedicated VIP" if dns else "Storage review" if "storage" in intents else "Template review")
-    updated["app_profile"] = {"intent": intents[0], "intents": intents, "level": level,
-                              "label": label, "notes": notes, "dependencies": dependencies,
-                              "blocked": blocked}
-    return updated
-
-
 def apply_deploy_bindings(cfg):
     """Resolve values that depend on the reviewed cluster-side network plan."""
     bindings = cfg.get("env_bindings") or {}
@@ -5510,6 +4175,8 @@ import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
 import homestead_compose as COMPOSE
+import homestead_deploy as DEPLOY
+import homestead_workloads as WORKLOADS
 import homestead_onboard as ONBOARD
 import homestead_cfaccess as CFACCESS
 import homestead_push as PUSH
@@ -5595,7 +4262,7 @@ def _resolve_storage_class():
 
 STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
-IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
+IMP.bind(kget, ksend, create_pvc, DEPLOY.build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
@@ -5610,7 +4277,7 @@ def rebalance_move(ns, name, node):
     """One container of a rebalance: the manual move's capacity check and
     placement - a preference, not a pin - or a reason to leave it."""
     body = {"ns": ns, "name": name, "node": node, "pin": False}
-    proposed, capacity, _ = move_capacity_plan(body)
+    proposed, capacity, _ = WORKLOADS.move_capacity_plan(body)
     if capacity.get("blocked"):
         raise ValueError("; ".join(capacity.get("blockers") or []) or f"{node} cannot take it now")
     meta = proposed["metadata"]
@@ -5719,7 +4386,7 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
-PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
+PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, WORKLOADS.get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = COPY_JOB.legacy_status
 OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, kget, ksend, OPS, copy_admission)
@@ -5834,7 +4501,22 @@ OPS.RESOLVERS["reclass"] = storage_move_progress
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
-MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS)
+MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: guard_managed_smb(ns, name))
+
+
+def _late(*names):
+    """server.py's helpers by name, each looked up when called, so a module's
+    routes reach the same function server.py's own code does - and a test
+    that replaces one here replaces it there."""
+    return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
+
+
+WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, default_ns=DEFAULT_NS,
+               data_dir=DATA_DIR, system_namespaces=SYS_NS, platform_namespaces=PLATFORM_NS)
+DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION)
+UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS))
+IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
+                 "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
 # A move reads in the Activity tray like every other long job.
 OPS.RESOLVERS["move"] = MOVE_ENGINE.op_state
 ONBOARD.bind(kget, ksend, DEFAULT_NS, OPS)
@@ -6073,7 +4755,7 @@ def start_restore_test(ns, name, why="Test now"):
 def restore_tests_tick():
     """On the leader, hourly: test the app longest untested, when switched on."""
     settings = get_app_settings()
-    chosen = RESTORE_TEST.pick(cached("wl", 5, get_workloads), OPS.list_operations(),
+    chosen = RESTORE_TEST.pick(cached("wl", 5, WORKLOADS.get_workloads), OPS.list_operations(),
                                settings.get("restore_tests", {}).get("enabled", False),
                                update_policy_status(settings)["window_open"], time.time(), _storage_classes())
     if chosen:
@@ -6098,7 +4780,7 @@ def restore_tests_view():
     out = []
     running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
                for o in OPS.list_operations() if o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running")}
-    for w in cached("wl", 5, get_workloads):
+    for w in cached("wl", 5, WORKLOADS.get_workloads):
         if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
                 or w.get("managed_nfs") or w.get("site"):
             continue
@@ -6133,7 +4815,7 @@ def autoupdate_tick():
     operations = OPS.list_operations()
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
-    chosen = AUTOUPDATE.pick(cached("wl", 5, get_workloads), report, UPTIME.report(), operations,
+    chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,
                              status["window_open"], status["policy"])
     if not chosen:
         return None
@@ -7180,7 +5862,7 @@ def _nfs_deployment(rows, address=""):
            "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
            "vip_mode": "manual" if address else "automatic", "lb_ip": address, "exclusive_vip": True}
     cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = build_deployment(cfg)
+    dep, svc = DEPLOY.build_deployment(cfg)
     dep = NFS.configure(dep, selected)
     if svc:
         # NFS's CIDR rules must see the real client address, not a node SNAT.
@@ -7327,10 +6009,10 @@ import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
 # Looked up when asked, so a test that patches one is the one the guide reads.
-SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: get_nodes(), workloads=lambda: get_workloads(),
+SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
            samba=lambda: samba_state())
-API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
+API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, WORKLOADS.get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
@@ -7471,154 +6153,6 @@ def _service_listeners(deployment, services):
                 continue
     return listeners
 
-
-def workload_edit_payload(ns, name, deployment, hardware_definitions=None, services=None):
-    """Return pod-level settings plus an editable record for every app container."""
-    pspec = deployment["spec"]["template"]["spec"]
-    if services is None:
-        try:
-            services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
-        except Exception:
-            services = []
-    listeners = _service_listeners(deployment, services)
-    annotations = deployment["metadata"].get("annotations", {}) or {}
-    definitions = hardware_definitions if hardware_definitions is not None else HW.features()
-    # Variables kept in the workload's own Secret are edited like any other.
-    kept, own_secret = ENVSEC.values(ns, deployment, kget), ENVSEC.own(deployment)
-    volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
-
-    def source_label(volume):
-        if volume.get("persistentVolumeClaim"):
-            return volume["persistentVolumeClaim"].get("claimName", "")
-        for field, label in (("configMap", "ConfigMap"), ("secret", "Secret")):
-            if volume.get(field):
-                return f"{label} {volume[field].get('name', '')}".strip()
-        if volume.get("hostPath"):
-            return volume["hostPath"].get("path", "host path")
-        if "emptyDir" in volume:
-            return "temporary storage"
-        return "Kubernetes volume"
-
-    def storage_kind(volume):
-        """Map a pod volume onto the storage picker's vocabulary.
-
-        Only claims, host paths and emptyDir are editable as storage. ConfigMap
-        and Secret volumes are Kubernetes wiring that the editor shows but does
-        not offer to repoint.
-        """
-        if volume.get("persistentVolumeClaim"):
-            return "existing", volume["persistentVolumeClaim"].get("claimName", "")
-        if volume.get("hostPath"):
-            return "host", volume["hostPath"].get("path", "")
-        if "emptyDir" in volume:
-            empty = volume.get("emptyDir") or {}
-            if str(empty.get("medium", "")).lower() == "memory":
-                return "memory", str(empty.get("sizeLimit", "") or "")
-            return "ephemeral", ""
-        for field in ("configMap", "secret"):
-            if volume.get(field):
-                return field, volume[field].get("name", volume[field].get("secretName", ""))
-        return "other", ""
-
-    def env_reference(item):
-        ref = item.get("valueFrom", {}) or {}
-        for field, label in (("secretKeyRef", "Secret"), ("configMapKeyRef", "ConfigMap")):
-            if ref.get(field):
-                value = ref[field]
-                return f"{label} {value.get('name', '')} · {value.get('key', '')}".strip(" ·")
-        if ref.get("fieldRef"):
-            return f"Pod field · {ref['fieldRef'].get('fieldPath', '')}".strip(" ·")
-        if ref.get("resourceFieldRef"):
-            return f"Resource field · {ref['resourceFieldRef'].get('resource', '')}".strip(" ·")
-        return "Managed Kubernetes reference"
-
-    containers = []
-    for container in pspec.get("containers", []) or []:
-        mounts, hardware = [], []
-        for mount in container.get("volumeMounts", []) or []:
-            volume = volumes.get(mount.get("name"), {})
-            kind, value = storage_kind(volume)
-            host_path = (volume.get("hostPath") or {}).get("path", "").rstrip("/")
-            mount_path = str(mount.get("mountPath") or "").rstrip("/")
-            device = False
-            for feature in definitions:
-                expected_host = feature["host_path"].rstrip("/")
-                if (host_path == expected_host or host_path.startswith(expected_host + "/")) and mount_path == feature["container_path"].rstrip("/"):
-                    device = True
-                    if feature["id"] not in hardware:
-                        hardware.append(feature["id"])
-            mounts.append({"name": mount.get("name", ""), "path": mount.get("mountPath", ""),
-                           "source": source_label(volume), "read_only": bool(mount.get("readOnly", False)),
-                           "sub_path": mount.get("subPath", ""),
-                           "kind": kind, "value": value,
-                           "managed": device or kind in ("configMap", "secret", "other")})
-        own_values = kept.get(container.get("name"), {})
-        literals = {item["name"]: item.get("value", "") if "valueFrom" not in item else own_values[item["name"]]
-                    for item in container.get("env", []) or []
-                    if item.get("name") and ("valueFrom" not in item or item["name"] in own_values)}
-        refs = [{"name": item["name"], "source": env_reference(item)}
-                for item in container.get("env", []) or []
-                if item.get("name") and item.get("valueFrom") and item["name"] not in own_values]
-        requests = (container.get("resources", {}) or {}).get("requests", {}) or {}
-        limits = (container.get("resources", {}) or {}).get("limits", {}) or {}
-        containers.append({
-            "original_name": container.get("name", ""), "name": container.get("name", ""),
-            "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
-            "memory_limit": limits.get("memory", ""),
-            "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
-            "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
-                       "protocol": port.get("protocol", "TCP"),
-                       "host": listeners.get((str(port.get("protocol") or "TCP").upper(),
-                                              port.get("containerPort")), port.get("containerPort")),
-                       "expose": (str(port.get("protocol") or "TCP").upper(),
-                                  port.get("containerPort")) in listeners}
-                      for port in container.get("ports", []) or []],
-            "hardware": hardware,
-            "volumes": [m for m in mounts if m["name"] != PRIV.TUN_VOLUME],
-            "privileges": PRIV.read(container, pspec),
-        })
-    detected = HW.workload_features(pspec, annotations, definitions)
-    assigned = {feature for container in containers for feature in container["hardware"]}
-    if containers:
-        containers[0]["hardware"].extend(feature for feature in detected if feature not in assigned)
-    first = containers[0] if containers else {"name": "", "image": "", "cpu": "", "memory": "", "memory_limit": "", "env": {}, "ports": [], "volumes": []}
-    reusable = []
-    device_paths = {feature["host_path"].rstrip("/") for feature in definitions}
-    for volume in pspec.get("volumes", []) or []:
-        kind, value = storage_kind(volume)
-        if kind not in ("existing", "host", "ephemeral", "memory"):
-            continue
-        if kind == "host" and any(value.rstrip("/") == device or value.rstrip("/").startswith(device + "/")
-                                  for device in device_paths):
-            continue
-        reusable.append({"name": volume.get("name", ""),
-                         "kind": {"existing": "pvc", "ephemeral": "emptyDir"}.get(kind, kind),
-                         "source": value})
-    replicas = deployment["spec"].get("replicas", 1) or 0
-    try:
-        parked = int(annotations.get(LC.AUTOSTART_REPLICAS, "") or 0)
-    except ValueError:
-        parked = 0
-    return {
-        "ns": ns, "name": name, "pod_hostname": pspec.get("hostname", ""),
-        "replicas": replicas, "autostart": replicas > 0,
-        "start_replicas": replicas or parked or 1, "containers": containers,
-        "pod_volumes": reusable,
-        "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
-        # How it is monitored, so Edit shows it rather than Automatic - and
-        # saving an edit keeps it.
-        "answer_check": NAMES.read(annotations, "uptime"),
-        "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
-        "placement": AFFINITY.public(deployment),
-        "failover": FAILOVER.mode_of(pspec),
-        "lan": LAN.read(deployment),
-        "network_mode": "host" if pspec.get("hostNetwork") else "",
-        "has_service": bool(listeners),
-        "seed_configs": LC.seed_configs(ns, deployment),
-        "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
-        "memory_limit": first["memory_limit"],
-        "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,
-    }
 
 # Browser routes serve the same authenticated application shell. Keep this an
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
@@ -7825,7 +6359,7 @@ def persist_icon_config(cfg):
 # ---------------------------------------------------------------- linked clusters
 # The resources the combined view gathers, and how this cluster answers locally.
 FLEET_LISTS = {
-    "workloads": lambda: cached("wl", 5, get_workloads),
+    "workloads": lambda: cached("wl", 5, WORKLOADS.get_workloads),
     "vms": lambda: cached("vms", 5, VMS.list_vms),
     "nodes": lambda: cached("nodes", 5, get_nodes),
     "volumes": lambda: cached("vol", 8, get_volumes),
@@ -8181,6 +6715,8 @@ class H(HTTP.LimitedHandler):
         if isinstance(answer, MODULE_ROUTES.Raw):
             self._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
             self._send(200, answer.body, answer.ctype)
+        elif isinstance(answer, MODULE_ROUTES.Reply):
+            self._send(answer.code, answer.body, answer.ctype)
         else:
             self._send(200, answer)
         return True
@@ -8451,8 +6987,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, report["hosts"].get(node) or {"node": node, "available": False, "ports": [],
                                       "conditions": [], "reason": "No node probe answers on this host."})
                 return self._send(200, report)
-            if p == "/api/workloads":
-                return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal/status":
                 return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/self/data/prepare":
@@ -8476,32 +7010,13 @@ class H(HTTP.LimitedHandler):
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()
                 return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
-            # What this cluster offers another one. Read-only, and the half
-            # of a move the far cluster calls.
+            # What this cluster offers another one. Read-only.
             if p == "/api/onboard/guide":
                 return self._move(ONBOARD.guide)
             if p == "/api/cluster/cleanup":
                 return self._move(ONBOARD.cleanup_report)
             if p == "/api/cluster/removal":
                 return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
-            # Which release this is, asked by another Homestead before a move.
-            if p == "/api/move/definition":
-                return self._move(lambda: MOVE_SOURCE.in_namespace(
-                    (q.get("namespace") or [""])[0], MOVE_SOURCE.definition,
-                    (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
-            if p == "/api/move/source-status":
-                return self._move(lambda: MOVE_SOURCE.in_namespace(
-                    (q.get("namespace") or [""])[0], MOVE_SOURCE.status,
-                    (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
-            if p == "/api/move/target":
-                return self._move(MOVE_SOURCE.target)
-            if p == "/api/image-updates":
-                force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
-                # Settings › Homestead checks Homestead's own parts, not every app.
-                only = (q.get("only") or [""])[0] == "homestead"
-                report = json.loads(json.dumps(UPDATES.homestead_report() if force and only else UPDATES.report(force)))
-                report["policy"] = update_policy_status()
-                return self._send(200, report)
             if p == "/api/volumes/other":
                 return self._send(200, cached("volother", 10, other_volumes))
             if p == "/api/volumes":
@@ -8576,10 +7091,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, power_plan_with_job(POWER.plan((q.get("node") or [""])[0],
                                                                       (q.get("action") or [""])[0],
                                                                       force=(q.get("force") or [""])[0] == "1")))
-            if p == "/api/workloads/start-plan":
-                return self._send(200, workload_start_plan(
-                    (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
-                    int((q.get("replicas") or [1])[0])))
             if p == "/api/vm-disks/import-plan":
                 return self._send(200, IMP.vm_disk_import_plan(
                     (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
@@ -8588,10 +7099,6 @@ class H(HTTP.LimitedHandler):
                     (q.get("backup") or [""])[0],
                     (q.get("ns") or [DEFAULT_NS])[0],
                     (q.get("name") or [""])[0]))
-            if p == "/api/workload":
-                ns, nm = q["ns"][0], q["name"][0]
-                d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
-                return self._send(200, workload_edit_payload(ns, nm, d))
             if p == "/api/storageclasses":
                 classes = storage_classes()
                 if (q.get("facts") or [""])[0] == "1":
@@ -8613,9 +7120,6 @@ class H(HTTP.LimitedHandler):
                                          "access_modes": i.get("spec", {}).get("accessModes", []),
                                          "storage_class": i.get("spec", {}).get("storageClassName", "")}
                                         for i in items])
-            if p == "/api/deploy/options":
-                ns = (q.get("ns") or [DEFAULT_NS])[0]
-                return self._send(200, deploy_options(ns))
             if p == "/api/logos":
                 try:
                     return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
@@ -8636,84 +7140,10 @@ class H(HTTP.LimitedHandler):
                                         "actions": OUTAGE.report()})
             if p == "/api/logos/missing":
                 try:
-                    apps = fetch_appstore()
+                    apps = DEPLOY.fetch_appstore()
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, get_workloads), apps, helm_chart_logos())})
-            if p == "/api/appstore":
-                term = (q.get("q") or [""])[0].lower().strip()
-                cat = (q.get("cat") or [""])[0].lower().strip()
-                sort_mode = (q.get("sort") or ["home"])[0].lower().strip()
-                if sort_mode not in {"home", "spotlight", "popular", "trending", "recent"}:
-                    sort_mode = "home"
-                try:
-                    apps = fetch_appstore()
-                except Exception as e:
-                    return self._send(502, {"error": f"app feed unavailable: {e}"})
-                source = {"url": catalog_source(), "default": catalog_source() == CA_FEED}
-                if sort_mode == "home" and not term and not cat:
-                    # The catalogue's front page, as Community Applications lays it out.
-                    return self._send(200, {"sort": "home", "total": len(apps), "source": source, "sections": {
-                        mode: [appstore_summary(a) for a in rank_appstore(apps, mode)[:count]]
-                        for mode, count in (("spotlight", 4), ("recent", 8), ("trending", 8), ("popular", 8))}})
-                if sort_mode == "home":
-                    sort_mode = "popular"
-                if term:
-                    apps = search_appstore(apps, term)
-                else:
-                    apps = rank_appstore(apps, sort_mode)
-                if cat:
-                    apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
-                spotlight = None if term else appstore_spotlight(apps)
-                limit = 60 if term else 30
-                return self._send(200, {"total": len(apps), "apps": [appstore_summary(a) for a in apps[:limit]],
-                                        "sort": "search" if term else sort_mode, "source": source,
-                                        "spotlight": appstore_summary(spotlight) if spotlight else None})
-            if p == "/api/appstore/app":
-                key = (q.get("key") or [""])[0]
-                try:
-                    app = next((a for a in fetch_appstore() if appstore_key(a) == key), None)
-                except Exception as e:
-                    return self._send(502, {"error": f"app feed unavailable: {e}"})
-                if not app:
-                    return self._send(404, {"error": "that app is no longer in the catalogue"})
-                return self._send(200, {k: v for k, v in app.items() if k != "config"})
-            if p == "/api/logs/search":
-                apps = [a for a in (q.get("apps") or [""])[0].split(",") if a]
-                return self._send(200, LOGSEARCH.search(
-                    cached("wl", 5, get_workloads), (q.get("q") or [""])[0], logsearch_read,
-                    window=(q.get("window") or ["1h"])[0], apps=apps,
-                    regex=(q.get("regex") or [""])[0] == "1", case=(q.get("case") or [""])[0] == "1"))
-            if p == "/api/logs":
-                ns = q["ns"][0]
-                pod = (q.get("pod") or [""])[0]
-                job = (q.get("job") or [""])[0]
-                if job and not pod:
-                    matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
-                    pod = matches[0]["metadata"]["name"] if matches else ""
-                if not pod:
-                    return self._send(404, {"error": "Logs are not available yet because no pod exists."})
-                tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
-                container = (q.get("container") or [""])[0]
-                if not container:
-                    # A pod with more than one container has to be told which;
-                    # asking without a name is a 400 from Kubernetes.
-                    try:
-                        spec = kget(f"/api/v1/namespaces/{ns}/pods/{pod}").get("spec", {}) or {}
-                        names = [c.get("name") for c in spec.get("containers", []) or []]
-                        container = names[0] if names else ""
-                    except Exception:
-                        container = ""
-                query = f"tailLines={tail}&timestamps=true" + (
-                    f"&container={urllib.parse.quote(container)}" if container else "")
-                req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                             headers={"Authorization": f"Bearer {TOKEN}"})
-                try:
-                    with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-                        return self._send(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
-                except urllib.error.HTTPError as error:
-                    return self._send(409 if error.code in (400, 404) else error.code,
-                                      {"error": logs_refusal(error, pod, container)})
+                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, WORKLOADS.get_workloads), apps, helm_chart_logos())})
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
@@ -8874,14 +7304,6 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout-everywhere", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/deploy":
-                return self._send(200, reviewed_deploy(b))
-            if p == "/api/compose/parse":
-                return self._send(200, compose_report(b))
-            if p == "/api/compose/preview":
-                return self._send(200, compose_preview(b))
-            if p == "/api/compose/apply":
-                return self._send(200, compose_apply(b))
             if p == "/api/self/data/abandon":
                 try:
                     return self._send(200, abandon_self_data_preparation(b))
@@ -8946,16 +7368,10 @@ class H(HTTP.LimitedHandler):
                         guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
                                          meta.get("name"))
                 return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
-            if p == "/api/workloads/group":
-                return self._send(200, set_workload_groups(b))
-            if p == "/api/workloads/logo":
-                return self._send(200, set_workload_logos(b))
             if p == "/api/uptime/setting":
                 return self._send(200, set_uptime_setting(b))
             if p == "/api/power-schedules/set":
                 return self._send(200, set_schedule(b))
-            if p == "/api/image-updates/mode":
-                return self._send(200, set_update_mode(b))
             if p == "/api/restore-tests/settings":
                 enabled = b.get("enabled")
                 if not isinstance(enabled, bool):
@@ -8970,49 +7386,6 @@ class H(HTTP.LimitedHandler):
                 if any(o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
                     raise ValueError("a restore test is already running; one runs at a time")
                 return self._send(200, {"ok": True, "operation": start_restore_test(ns, name)})
-            if p == "/api/scale":
-                try:
-                    scale_workload(b["ns"], b["name"], int(b["replicas"]),
-                                   confirm_capacity=b.get("confirm_capacity") is True,
-                                   confirm_self=b.get("confirm_self") is True)
-                except WorkloadRefused as refused:
-                    return self._send(409, {"error": str(refused), "plan": refused.plan})
-                return self._send(200, {"ok": True})
-            if p == "/api/restart":
-                return self._send(200, restart_workload(b["ns"], b["name"]))
-            if p == "/api/image-updates/channel":
-                settings = get_app_settings()
-                settings["updates"]["channel"] = b.get("channel")
-                return self._send(200, save_app_settings(settings))
-            if p == "/api/image-updates/preview":
-                return self._send(200, preview_image_update(b))
-            if p == "/api/image-updates/managed":
-                ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-                guard_managed_smb(ns, name)
-                result = UPDATES.set_managed(ns, name, b.get("by"))
-                _cache.pop("wl", None)
-                return self._send(200, result)
-            if p == "/api/image-updates/apply":
-                guard_managed_smb(b.get("ns"), b.get("name"))
-                enforce_update_policy(b)
-                result = reviewed_image_update(b, "update")
-                result["operation"] = OPS.start(
-                    "image-update", f"Update {b['name']}",
-                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
-                    {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
-                return self._send(200, result)
-            if p == "/api/image-updates/rollback":
-                guard_managed_smb(b.get("ns"), b.get("name"))
-                result = reviewed_image_update(b, "rollback")
-                result["operation"] = OPS.start(
-                    "image-rollback", f"Roll back {b['name']}",
-                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
-                    {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
-                return self._send(200, result)
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
@@ -9020,65 +7393,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/volumes/chown":
                 return self._send(200, IMP.chown_claim(
                     b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))
-            if p == "/api/imports/delete":
-                plan = IMP.import_cleanup_plan(b.get("name"), b.get("namespace"))
-                if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
-                    raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
-                made = {row["name"] for row in plan["volumes"] if row["created"]}
-                # The request names claims; asking for all of them is the old
-                # boolean, which an import with one volume still sends.
-                wanted = [str(claim) for claim in (b.get("remove_volumes") or [])]
-                if b.get("remove_volume") and not wanted:
-                    wanted = [row["name"] for row in plan["volumes"] if row["created"]]
-                borrowed = [claim for claim in wanted if claim not in made]
-                if borrowed:
-                    raise ValueError(f"this import copied into {', '.join(sorted(borrowed))} "
-                                     "without creating it, so it will not delete it")
-                if b.get("remove_workload") and plan["workload"]:
-                    guard_managed_smb(plan["namespace"], plan["workload"])
-                result = IMP.delete_import(b.get("name"), b.get("namespace"))
-                if result.get("journalled"):
-                    return self._send(200, {**result, "removed": [], "releasing": []})
-                removed = []
-                if b.get("remove_workload") and plan["workload"]:
-                    ns, name = plan["namespace"], plan["workload"]
-                    services = set(NETWORK.workload_service_names(ns, name)) | {name}
-                    ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-                    for service in sorted(services):
-                        try:
-                            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
-                        except urllib.error.HTTPError:
-                            pass
-                    removed.append(f"workload {name}")
-                    # Its pod holds the same claims the caller may be deleting
-                    # next, so wait for it to go rather than leaving them
-                    # Terminating behind the pvc-protection finaliser.
-                    IMP.wait_for_pods_gone(ns, f"app={name}")
-                    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                for claim in wanted:
-                    ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
-                                    f"persistentvolumeclaims/{claim}")
-                    removed.append(f"volume {claim}")
-                    _cache.pop("vol", None); _cache.pop("stor", None)
-                # A claim something still mounts only gets a deletion stamp, so
-                # say it is releasing rather than reporting it gone.
-                releasing = []
-                for claim in wanted:
-                    try:
-                        live = kget(f"/api/v1/namespaces/{plan['namespace']}/"
-                                    f"persistentvolumeclaims/{claim}")
-                    except Exception:
-                        continue
-                    if (live.get("metadata", {}) or {}).get("deletionTimestamp"):
-                        releasing.append(claim)
-                result["releasing"] = releasing
-                if removed:
-                    result["message"] = result["message"] + " with " + " and ".join(removed)
-                if result.get("releasing"):
-                    result["message"] += (" — " + ", ".join(result["releasing"])
-                                          + " will finish deleting once released")
-                result["removed"] = removed
-                return self._send(200, result)
             if p == "/api/storage/classes":
                 return self._send(200, create_storage_class(b))
             if p == "/api/storage/classes/default":
@@ -9150,113 +7464,19 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_nfs_export(
                     b.get("name", ""), str(b.get("clients") or "").strip(),
                     b.get("read_only") is not False))
-            if p == "/api/appstore/install":
-                cfg = template_to_cfg(b["app"])
-                cfg.update(b.get("overrides") or {})
-                # Older API clients must use the same review as the current UI.
-                # The token is issued by /api/preview for the resolved template
-                # plus overrides, not for the catalogue identifier alone.
-                cfg.update(capacity_token=b.get("capacity_token"), confirm_capacity=b.get("confirm_capacity") is True)
-                result = reviewed_deploy(cfg)
-                reused = result.get("reused_volumes") or []
-                if reused:
-                    result["detail"] = f"kept the existing {', '.join(reused)} - its data carries on"
-                return self._send(200, result)
-            if p == "/api/edit/preview":
-                guard_managed_smb(b.get("ns", ""), b.get("name", ""))
-                _, context, plan = edit_capacity_plan(b)
-                return self._send(200, {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context)})
-            if p == "/api/edit":
-                guard_managed_smb(b.get("ns", ""), b.get("name", ""))
-                prepared, context, plan = edit_capacity_plan(b)
-                CAPACITY_REVIEW.enforce(b, plan, context)
-                if context.get("action") == RENAME.KIND:
-                    def admission(dep):
-                        return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
-                            get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
-                            nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
-                    result = RENAME.dispatch(b, context, prepared["deployment"], kget, ksend, OPS, admission)
-                    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-                    return self._send(200, result)
-                moves = RESTRUCTURE.copies(b)
-                guard_self(b.get("ns", ""), b.get("name", ""),
-                           stopping=("autostart" in b and not b["autostart"]) or
-                                    ("replicas" in b and int(b.get("replicas") or 0) == 0),
-                           confirmed=b.get("confirm_self") is True, moving=bool(moves))
-                if moves:
-                    result = COPY_JOB.start(b, context, prepared, moves, kget, OPS,
-                                            lambda: apply_reviewed_edit(b, prepared, hold=True))
-                else:
-                    result = apply_reviewed_edit(b, prepared)
-                return self._send(200, result)
-            if p == "/api/move/preview":
-                return self._send(200, preview_host_move(b))
-            if p == "/api/move":
-                result = reviewed_host_move(b)
-                result["operation"] = OPS.start(
-                    "deployment", f"Move {b['name']}",
-                    {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
-                    "/containers", {"namespace": b["ns"], "name": b["name"], "undo": "rollout"})
-                return self._send(200, result)
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
-            if p == "/api/move/clusters/check":
-                return self._move(lambda: MOVE.check_cluster(b.get("name")))
-            if p == "/api/move/clusters/readiness":
-                return self._move(lambda: MOVE.readiness(b.get("name")))
-            if p == "/api/move/clusters/storage":
-                return self._move(lambda: MOVE.setup_storage(b.get("name"), b.get("size_gb") or 100, b.get("lb_ip") or "",
-                                                             b.get("vip_mode") or "", int(b.get("port") or 0)))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
             if p == "/api/cluster/cleanup/run":
                 return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
-            if p == "/api/move/source":
-                action, kind, name = b.get("action"), b.get("kind"), b.get("name")
-                identity = {"transfer_id": str(b.get("transfer_id") or ""),
-                            "expected_uid": str(b.get("expected_uid") or "")}
-                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name, **identity,
-                                                                 expected_version=str(b.get("expected_version") or "")),
-                           "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
-                                                                 b.get("claims") if isinstance(b.get("claims"), list) else None,
-                                                                 **identity, cleanup_id=str(b.get("cleanup_id") or "")),
-                           "cleanup": lambda: MOVE_SOURCE.cleanup(identity["transfer_id"], identity["expected_uid"]),
-                           "release": lambda: MOVE_SOURCE.release(kind, name, **identity),
-                           "remove": lambda: MOVE_SOURCE.remove(
-                               kind, name, bool(b.get("volumes")),
-                               b.get("claims") if isinstance(b.get("claims"), list) else None)}
-                if action not in actions:
-                    return self._send(400, {"error": "unknown move action"})
-                return self._move(lambda: MOVE_SOURCE.in_namespace(b.get("namespace"), actions[action]))
-            if p in ("/api/move/plan", "/api/move/start"):
-                if p.endswith("/start") and (b.get("kind") or "container") == "container":
-                    guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
-                call = MOVE_ENGINE.plan if p.endswith("plan") else MOVE_ENGINE.start
-                return self._move(lambda: call(
-                    b.get("cluster"), b.get("kind") or "container", b.get("name"),
-                    b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
-                    b.get("address") or "", b.get("storage_class") or "",
-                    b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
-                    b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices")))
-            if p == "/api/move/moves/retry":
-                return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
-            if p == "/api/move/moves/abandon":
-                return self._move(lambda: MOVE_ENGINE.abandon(b.get("id")))
-            if p == "/api/move/moves/finish":
-                return self._move(lambda: MOVE_ENGINE.finish(b.get("id"), bool(b.get("volumes"))))
             if p == "/api/objectstore/transfers":
                 return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
                                                                 str(b.get("lb_ip") or ""), str(b.get("vip_mode") or ""),
                                                                 int(b.get("port") or 0)))
-            if p == "/api/move/clusters/transfers":
-                return self._move(lambda: MOVE.transfers(b.get("name"), b.get("allow"), b.get("size_gb") or 100,
-                                                         b.get("lb_ip") or "", b.get("vip_mode") or "",
-                                                         int(b.get("port") or 0)))
             if p == "/api/objectstore/longhorn":
                 return self._send(200, OBJECTS.request_target(replace=bool(b.get("replace", True))))
-            if p == "/api/move/clusters/target":
-                return self._move(lambda: MOVE.remote(b.get("name"), "/api/objectstore/longhorn", {"replace": True}))
             if p == "/api/node/probe/install":
                 return self._send(200, PROBE.install(HOMESTEAD_VERSION))
             if p == "/api/node/probe/allocation":
@@ -9410,32 +7630,6 @@ class H(HTTP.LimitedHandler):
                 settings["longhorn"] = {"offline_rebuilding": enabled}
                 save_app_settings(settings)
                 return self._send(200, LHREBUILD.save(enabled))
-            if p == "/api/workloads/rebalance":
-                running = next((i for i in OPS.list_operations() if i.get("kind") == CREBALANCE.KIND
-                                and i.get("status") not in OPS.TERMINAL), None)
-                if running:
-                    return self._send(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
-                if b.get("restart") is not True:
-                    return self._send(409, {"error": "Moving a container restarts it; confirm the restarts"})
-                if b.get("moves") is not None:
-                    # The moves reviewed, checked against the cluster now -
-                    # not a plan made again from load that moves by the second.
-                    try:
-                        moves = CREBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
-                    except ValueError as error:
-                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [])})
-                    plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
-                else:
-                    plan = CREBALANCE.plan(b.get("exclude") or [])
-                    if plan["review_token"] != b.get("review_token"):
-                        return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
-                if not plan["moves"]:
-                    return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
-                operation = OPS.start(CREBALANCE.KIND, f"Rebalance {len(plan['moves'])} container{'' if len(plan['moves']) == 1 else 's'}",
-                                      {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
-                                      "Starting with the first container")
-                return self._send(202, {"operation": operation})
             if p == "/api/longhorn/rebalance":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)
@@ -9478,25 +7672,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/vm-disks/import":
                 result = IMP.import_vm_disk(b, ops=OPS)
                 return self._send(200, result)
-            if p == "/api/images/prepull":
-                result = IMP.prepull(b["image"], b.get("nodes"))
-                result["operation"] = OPS.start(
-                    "image-pull", f"Pull {b['image']}",
-                    {"kind": "Image", "name": b["image"], "namespace": DEFAULT_NS},
-                    "/image-cache", {"namespace": DEFAULT_NS, "name": result["daemonset"]})
-                return self._send(200, result)
-            if p == "/api/images/vm/delete":
-                _cache.pop("vmimages", None)
-                return self._send(200, IMP.delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", "")))
-            if p == "/api/images/forget-rollback":
-                return self._send(200, IMP.forget_rollback(b.get("namespace") or DEFAULT_NS, b.get("name", "")))
-            if p == "/api/images/cleanup":
-                result = IMP.cleanup_image(b.get("digest"), b.get("nodes"))
-                result["operation"] = OPS.start(
-                    "image-cleanup", f"Clean cached image {result['digest'][:19]}…",
-                    {"kind": "Image", "name": result["image"], "namespace": DEFAULT_NS},
-                    "/image-cache", {"namespace": DEFAULT_NS, "pods": result["pods"]})
-                return self._send(200, result)
             if p == "/api/volumes/create":
                 return self._send(200, create_volume(b))
             if p == "/api/volumes/edit":
@@ -9522,22 +7697,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True, "removed": removed,
                                         "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
                                                   if removed else "nothing to remove: every restore class is still in use"})
-            if p == "/api/workloads/failover":
-                for item in b.get("items") or []:
-                    guard_managed_smb(item.get("ns"), item.get("name"))
-                result = FAILOVER.set_many(b.get("items") or [])
-                _cache.pop("wl", None)
-                return self._send(200, result)
-            if p == "/api/workload/primary-port":
-                ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
-                guard_managed_smb(ns, name)
-                port = int(b.get("port") or 0)
-                ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-                      {"metadata": {"annotations": {NAMES.key("primary-port"): str(port) if port else None}}},
-                      ctype="application/merge-patch+json")
-                _cache.pop("wl", None)
-                return self._send(200, {"ok": True, "detail": f"{name} opens on port {port} first" if port
-                                        else f"{name} shows its ports in their own order"})
             if p == "/api/volumes/reclass/plan":
                 return self._send(200, STORAGE_WORKFLOW.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
                                                                runtime_check=storage_runtime_check))
@@ -9603,11 +7762,6 @@ class H(HTTP.LimitedHandler):
                          "backup": result["backup"], "restore_config": b,
                          "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
-            if p == "/api/import/preview":
-                return self._send(200, preview_import(b))
-            if p == "/api/import":
-                result = reviewed_import(b)
-                return self._send(200, result)
             if p == "/api/operations/cancel":
                 # The route lets any operator in; what the job's own cancel
                 # does - delete VMs, stop a volume move - may need more.
@@ -9619,36 +7773,6 @@ class H(HTTP.LimitedHandler):
                 for key in ("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2"):
                     _cache.pop(key, None)
                 return self._send(200, result)
-            if p == "/api/preview":
-                b = analyze_deploy_intent(b)
-                current = None
-                context = None
-                if b.get("target_mode") == "existing":
-                    ns = _dns_name(b.get("namespace") or DEFAULT_NS, "namespace")
-                    target = _dns_name(b.get("target_workload"), "existing workload")
-                    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-                    context = rollout_review_context(current)
-                capacity = deploy_capacity_plan(b, existing=current)
-                capacity_token = CAPACITY_REVIEW.issue(b, context)
-                b = prepare_deploy_network(b)
-                b = apply_deploy_bindings(b)
-                b = apply_generated_secrets(b)
-                if b.get("target_mode") == "existing":
-                    ns = b.get("namespace") or DEFAULT_NS
-                    target = _dns_name(b.get("target_workload"), "existing workload")
-                    dep, svc = build_sidecar_deployment(b, current)
-                    return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
-                                            "capacity": capacity, "capacity_token": capacity_token,
-                                            "app_profile": b.get("app_profile"),
-                                            "impact": {"mode": "existing", "workload": target,
-                                                       "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
-                                                       "message": "Saving updates the Deployment template and restarts every container in its pods."}})
-                dep, svc = build_deployment(b)
-                return self._send(200, {"deployment": redact_deployment_preview(dep, b), "service": svc,
-                                        "capacity": capacity, "capacity_token": capacity_token,
-                                        "app_profile": b.get("app_profile"),
-                                        "impact": {"mode": "new", "workload": dep["metadata"]["name"],
-                                                   "message": "Creates a new independently managed Deployment."}})
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
@@ -9705,22 +7829,6 @@ def _reconcile_permissions():
             print(f"moved {adopted['changed']} objects' keys to {NAMES.DOMAIN}", flush=True)
     except Exception as error:
         print(f"old keys: not moved ({str(error)[:120]})", flush=True)
-
-
-def logs_refusal(error, pod, container):
-    """What Kubernetes' refusal to give logs means, in words rather than its JSON."""
-    try:
-        message = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
-    except Exception:
-        message = ""
-    who = f"{container} in {pod}" if container else pod
-    if "waiting to start" in message or "ContainerCreating" in message or "PodInitializing" in message:
-        return f"{who} has not started yet, so there are no logs. It shows here once it is running."
-    if "not found" in message and "pods" in message:
-        return f"{pod} no longer exists; the workload has probably replaced it. Reopen the logs."
-    if "terminated" in message:
-        return f"{who} has stopped and Kubernetes kept no logs from it."
-    return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
 
 
 def _upgrade_node_probe():

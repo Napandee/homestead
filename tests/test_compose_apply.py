@@ -30,7 +30,7 @@ class ComposeApplyTests(unittest.TestCase):
         self.sets = []
         get = mock.patch.object(server, "kget", side_effect=self.get)
         features = mock.patch.object(server.HW, "features", return_value=[])
-        deploy = mock.patch.object(server, "run_deploy", side_effect=self._deploy)
+        deploy = mock.patch.object(server.DEPLOY, "run_deploy", side_effect=self._deploy)
         nodes = [{"name": "host", "status": "Ready", "schedulable": True, "hardware": {},
                   "labels": {"kubernetes.io/hostname": "host"}, "allocatable": {"cpu": "8", "memory": "16Gi", "pods": "100"},
                   "mem_cap_gb": 16, "mem_used_gb": 1, "mem_metrics_available": True}]
@@ -63,7 +63,7 @@ class ComposeApplyTests(unittest.TestCase):
         if cfg["workload_name"] == self.fail_on:
             raise ValueError("the cluster said no")
         self.created.append(cfg["workload_name"])
-        dep, _ = server.build_deployment(cfg)
+        dep, _ = server.DEPLOY.build_deployment(cfg)
         dep["metadata"]["uid"] = cfg["workload_name"] + "-uid"
         self.controllers[cfg["workload_name"]] = dep
         return {"ok": True, "name": cfg["workload_name"]}
@@ -139,7 +139,7 @@ class ComposeApplyTests(unittest.TestCase):
             self.pods.append({"metadata": {"namespace": "other", "name": "competitor"},
                               "spec": {"nodeName": "host", "containers": [{"name": "other", "resources": {"requests": {"memory": "5Gi"}}}]}})
             return result
-        with mock.patch.object(server, "run_deploy", side_effect=deploy):
+        with mock.patch.object(server.DEPLOY, "run_deploy", side_effect=deploy):
             result = self.apply({"text": text, "namespace": "lab"})
         self.assertFalse(result["ok"])
         self.assertEqual(["one"], result["created"])
@@ -157,7 +157,7 @@ class ComposeApplyTests(unittest.TestCase):
                 {"kind": "ReplicaSet", "controller": True, "uid": name + "-rs"}]},
                 "spec": {**copy.deepcopy(self.controllers[name]["spec"]["template"]["spec"]), "nodeName": "host"}})
             return result
-        with mock.patch.object(server, "run_deploy", side_effect=deploy):
+        with mock.patch.object(server.DEPLOY, "run_deploy", side_effect=deploy):
             result = self.apply({"text": text, "namespace": "lab"})
         self.assertTrue(result["ok"], result)
         self.assertEqual(["one", "two"], result["created"])
@@ -167,7 +167,7 @@ class ComposeApplyTests(unittest.TestCase):
             result = self._deploy(cfg)
             self.controllers[result["name"]]["metadata"].pop("uid")
             return result
-        with mock.patch.object(server, "run_deploy", side_effect=deploy):
+        with mock.patch.object(server.DEPLOY, "run_deploy", side_effect=deploy):
             result = self.apply({"text": STACK, "namespace": "lab"})
         self.assertFalse(result["ok"])
         self.assertEqual(["db"], result["created"])

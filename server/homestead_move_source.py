@@ -20,7 +20,9 @@ from contextvars import ContextVar
 import time
 import urllib.error
 
+import homestead_move as MOVE
 import homestead_names as NAMES
+import homestead_routes as ROUTER
 import homestead_vm_transfer_devices as VM_DEVICES
 from homestead_pod_resources import storage_gib
 from homestead_longhorn import move_snapshot_error
@@ -652,3 +654,50 @@ def target():
             "credentials": credentials,
             "reachable_off_cluster": bool(endpoint) and ".svc" not in endpoint,
             "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def _answer(call):
+    """A source step's answer as homestead_move gives one, but source recovery
+    still waiting on KubeVirt is a 503: the destination waits that out."""
+    def step():
+        try:
+            return call()
+        except PendingRecovery as error:
+            return ROUTER.Reply(503, {"error": str(error)})
+    return MOVE.answer(step)
+
+
+def _in(request, call):
+    """A read of one workload, scoped to the namespace the request names."""
+    arg = lambda key: (request.query.get(key) or [""])[0]
+    return _answer(lambda: in_namespace(arg("namespace"), call, arg("kind"), arg("name")))
+
+
+def _act(request):
+    """One step the destination asks of this side of a move."""
+    b = request.body
+    action, kind, name = b.get("action"), b.get("kind"), b.get("name")
+    identity = {"transfer_id": str(b.get("transfer_id") or ""),
+                "expected_uid": str(b.get("expected_uid") or "")}
+    claims = b.get("claims") if isinstance(b.get("claims"), list) else None
+    actions = {"quiesce": lambda: quiesce(kind, name, **identity,
+                                          expected_version=str(b.get("expected_version") or "")),
+               "backup": lambda: backup(kind, name, bool(b.get("retry_failed")), claims,
+                                        **identity, cleanup_id=str(b.get("cleanup_id") or "")),
+               "cleanup": lambda: cleanup(identity["transfer_id"], identity["expected_uid"]),
+               "release": lambda: release(kind, name, **identity),
+               "remove": lambda: remove(kind, name, bool(b.get("volumes")), claims)}
+    if action not in actions:
+        return ROUTER.Reply(400, {"error": "unknown move action"})
+    return _answer(lambda: in_namespace(b.get("namespace"), actions[action]))
+
+
+# Its routes and who may use them (homestead_routes.py): the half of a move
+# the far cluster calls, so an admin's.
+ROUTES = {
+    # Which release this is, asked by another Homestead before a move.
+    ("GET", "/api/move/definition"): ("admin", lambda request: _in(request, definition)),
+    ("GET", "/api/move/source-status"): ("admin", lambda request: _in(request, status)),
+    ("GET", "/api/move/target"): ("admin", lambda request: _answer(target)),
+    ("POST", "/api/move/source"): ("admin", _act),
+}
