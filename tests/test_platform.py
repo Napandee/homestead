@@ -93,6 +93,7 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("--node-taint node-role/tiebreaker=true:NoSchedule --node-label node-role/tiebreaker=true", guide["tiebreaker"])
         self.assertNotIn("node-role/tiebreaker", guide["server_join"])
         self.assertIn("K3S_URL=https://192.0.2.5:6443", guide["agent"])
+        self.assertIn("HS_ROLE=tiebreaker sh -s -- --check", guide["check"])
 
     def test_cluster_wide_settings_are_copied_in_both_forms(self):
         guide = self.with_args('["server","--cluster-init","--disable","traefik","--disable=servicelb",'

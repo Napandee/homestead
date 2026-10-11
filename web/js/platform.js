@@ -326,7 +326,9 @@ function joinCommandHtml(g, role) {
   const cmd = k3s && role === "tiebreaker" ? g.tiebreaker : k3s && role === "control-plane" ? g.server_join : g.agent;
   const shared = role !== "app" && k3s && !g.settings_known
     ? `<p class="dim xs">Homestead could not read the other servers' settings. Copy these from the first server's <span class="mono">/etc/rancher/k3s/config.yaml</span> or its service file, if it sets them: <span class="mono">${esc((g.shared_flags || []).join(" "))}</span>.</p>` : "";
-  return guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config || "")}`) + shared;
+  const check = role !== "app" && g.check
+    ? `<p class="dim xs">First check the machine can hold a vote - its disk, cgroups, network module, swap and power:</p>${guideCopy(role === "tiebreaker" ? g.check : g.check.replace("HS_ROLE=tiebreaker", "HS_ROLE=server"))}` : "";
+  return check + guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config || "")}`) + shared;
 }
 window.joinCommandHtml = joinCommandHtml;
 window.platformJoinRole = role => {

@@ -225,6 +225,9 @@ def join_guide():
                 # A server holding an etcd vote and nothing else (homestead_roles).
                 "tiebreaker": server_join + f" --node-taint {ROLES.KEY}=true:NoSchedule --node-label {ROLES.KEY}=true",
                 "shared_settings": shared, "settings_known": known, "shared_flags": list(SHARED_FLAGS),
+                # The installer's checks for a small server, run before it joins.
+                "check": ("curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh"
+                          " | sudo HS_ROLE=tiebreaker sh -s -- --check"),
                 "longhorn": "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils"}
     if p["distribution"] == "rke2":
         return {"distribution": "rke2", "server": server, "token_file": "/var/lib/rancher/rke2/server/node-token",

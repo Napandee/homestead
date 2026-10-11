@@ -27,6 +27,7 @@
 #
 # Unattended installation: set the answers in the environment.
 #   HS_ROLE=new|server|agent|tiebreaker|addons|harvester   installation mode
+#   --check: only the system checks, for HS_ROLE (default server); installs nothing
 #   HS_DIST=k3s|rke2                            distribution for a new cluster
 #   HS_NODE_IP=192.0.2.50                     this node's IP address
 #   HS_SERVER=192.0.2.50  HS_TOKEN=...        the cluster to join
@@ -79,6 +80,7 @@ while [ $# -gt 0 ]; do
     --report) ACTION=report; UI=text; shift ;;
     --fix-safe) ACTION=fix-safe; UI=text; shift ;;
     --skip-checks) SKIP_CHECKS=1; shift ;;
+    --check) ACTION=check; UI=text; shift ;;
     --text) UI=text; shift ;;
     --ref) [ $# -ge 2 ] || { printf 'Option --ref needs a release, for example --ref %s\n' "$REF" >&2; exit 2; }
       REF="$2"; shift 2 ;;
@@ -400,6 +402,11 @@ prechecks() { # role
       || check warn "Hardware virtualisation is not available. Virtual machines would run in emulation mode."
   fi
   case "$1" in server|tiebreaker) small_server_checks ;; esac
+  if [ "$ACTION" = check ]; then
+    msg "System Checks" "Results for $(hostname) as a $1:
+$REPORT"
+    exit "$FAILED"
+  fi
   if [ "$FAILED" = 1 ] && [ "$SKIP_CHECKS" = 0 ]; then
     msg "System Checks Failed" "Resolve the following before installing:
 $REPORT"
@@ -1651,9 +1658,11 @@ kind_name() {
   esac
 }
 
-[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || fail "The installer must run as root: curl ... | sudo sh"
+# The checks alone only read, and say themselves when they are not run as root.
+[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || [ "$ACTION" = check ] || fail "The installer must run as root: curl ... | sudo sh"
 banner() { say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ', dry run: no changes will be made')"; }
 case "$ACTION" in
+  check) ROLE=$(given HS_ROLE); prechecks "${ROLE:-server}" ;;
   console) banner; configure_console; exit $? ;;
   install) banner; do_install; exit 0 ;;
   doctor) doctor menu; exit 0 ;;

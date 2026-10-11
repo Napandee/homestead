@@ -225,6 +225,24 @@ a more practical planning allowance for Homestead's supporting services. Do not
 rely on a slow microSD card for etcd. Check the Pi OS cgroup requirements in the
 [K3s hardware and Raspberry Pi guide](https://docs.k3s.io/installation/requirements).
 
+Check the machine before it joins - the join guide shows this command for a
+server or a tiebreaker, and the installer runs the same checks itself:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo HS_ROLE=tiebreaker sh -s -- --check
+```
+
+It measures how fast the disk syncs (etcd needs under 10 ms - `fio` if
+installed, else `dd`), and checks the memory cgroup controller (on a Raspberry
+Pi, `cgroup_enable=memory cgroup_memory=1` in `/boot/firmware/cmdline.txt`),
+the `vxlan` kernel module, swap, and on a Pi any under-voltage or throttling.
+It installs nothing.
+
+On the on-board Ethernet of a Raspberry Pi 5, some kernels stall sending - the
+link stays up, nothing is sent, nothing is logged - until the Pi is
+power-cycled; the cluster rides it out on the other two votes. Until your
+kernel has the fix, `sudo ethtool -K eth0 tso off sg off` avoids it.
+
 Keep ordinary apps, VMs and Longhorn replicas on the two larger hosts: configure
 placement/taints and Longhorn node/disk scheduling explicitly. K3s servers can
 run workloads by default; neither a server role nor a small machine's size

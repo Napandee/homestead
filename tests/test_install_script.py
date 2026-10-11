@@ -80,6 +80,17 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("--node-ip 192.0.2.6 --tiebreaker", out)
         self.assertNotIn("--longhorn-volume", out, "a tiebreaker holds no Longhorn data")
 
+    def test_check_only_runs_the_checks_for_the_role_and_installs_nothing(self):
+        bin_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, bin_dir, ignore_errors=True)
+        stand_in(bin_dir, "curl", "exit 0")
+        stand_in(bin_dir, "dd", "echo '819200 bytes copied, 0.4 s, 2 MB/s' >&2")
+        code, out = run(["--check"], {"HS_ROLE": "tiebreaker"}, path_extra=bin_dir)
+        self.assertIn("System Checks", out)
+        self.assertIn("Disk syncs in", out)
+        self.assertNotIn("bootstrap-k3s.sh", out)
+        self.assertEqual(1, code, "the stand-in curl cannot reach the internet, so a check fails and it says so")
+
     def test_ref_needs_a_release(self):
         code, out = run(["--dry-run", "--ref"])
         self.assertEqual(2, code, out)

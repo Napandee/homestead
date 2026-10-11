@@ -59,3 +59,9 @@ test("on RKE2 a server or tiebreaker joins through the installer, never as an ag
   assert.match(setup().ctx.joinCommandHtml(rke2, "control-plane"), /HS_ROLE=server/);
   assert.match(setup().ctx.joinCommandHtml(rke2, "app"), /RKE2-AGENT-CMD/);
 });
+
+test("a server or tiebreaker is checked before it joins", () => {
+  const html = setup().ctx.joinCommandHtml({ ...GUIDE, check: "CHECK-CMD" }, "tiebreaker");
+  assert.match(html, /CHECK-CMD[^]*TIEBREAKER-CMD/);
+  assert.doesNotMatch(setup().ctx.joinCommandHtml({ ...GUIDE, check: "CHECK-CMD" }, "app"), /CHECK-CMD/);
+});
