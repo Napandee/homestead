@@ -53,7 +53,7 @@ class KeyTests(unittest.TestCase):
         stored = json.dumps(self.store)
         self.assertNotIn(token.split("_", 2)[2], stored, "the secret is never written down")
         self.assertNotIn("hash", json.dumps(keys.list_keys()), "nor its hash shown")
-        self.assertEqual({"id", "name", "owner", "scopes", "expires"}, set(keys.verify(token, "192.0.2.5")))
+        self.assertEqual({"id", "name", "owner", "scopes", "expires", "mcp"}, set(keys.verify(token, "192.0.2.5")))
 
     def test_every_key_expires_within_a_year_and_an_expired_one_is_refused(self):
         for ttl in (60, 400 * DAY, None, "soon"):
@@ -167,8 +167,9 @@ class KeyTests(unittest.TestCase):
         self.assertTrue(listed["last_used"])
 
     def test_a_signed_in_person_reaches_the_api_with_their_roles_scopes(self):
-        self.assertEqual(["read"], keys.scopes_for_role("viewer"))
-        self.assertEqual(["read", "containers:control", "vms:control"], keys.scopes_for_role("operator"))
+        self.assertEqual(["read", "logs:read"], keys.scopes_for_role("viewer"))
+        self.assertEqual(["read", "logs:read", "containers:control", "containers:manage", "vms:control", "vms:manage",
+                          "storage:manage"], keys.scopes_for_role("operator"))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,9 @@ can do what its scopes say and no more:
   hash alone is no help to anyone who reads it. Revoking deletes the record.
 * Refused keys are counted per address, as wrong passwords are; past twenty
   a wrong key is answered "too many" for a while - a right one never is.
+* A key reaches the MCP server (/mcp, homestead_mcp) only when it was made
+  with mcp allowed, and only while an admin has it switched on; there it
+  is held to the same scopes.
 
 When a key was last used, and from where, is kept on the data volume rather
 than in the Secret: a key in use must not rewrite the accounts, nor race a
@@ -38,9 +41,14 @@ PREFIX = "hsk_"
 TOKEN = re.compile(r"hsk_([0-9a-f]{12})_([A-Za-z0-9_-]{43})")
 # What each scope allows, and the role its maker must still hold for it.
 SCOPES = {
-    "read": ("viewer", "Read status: the cluster, nodes, containers, VMs, alerts and jobs"),
+    "read": ("viewer", "Read status: the cluster, nodes, containers, VMs, volumes, alerts and jobs"),
+    "logs:read": ("viewer", "Read containers' logs, which can hold passwords and tokens apps print"),
     "containers:control": ("operator", "Start, stop and restart containers"),
+    "containers:manage": ("operator", "Deploy, edit, scale and move containers (MCP); deleting one waits for a person"),
     "vms:control": ("operator", "Start, stop and restart virtual machines"),
+    "vms:manage": ("operator", "Create, edit and migrate virtual machines (MCP); deleting one waits for a person"),
+    "storage:manage": ("operator", "Create and resize volumes, snapshot and back them up (MCP); deleting, "
+                                   "reverting or restoring waits for a person"),
 }
 MIN_TTL = 3600
 MAX_TTL = 366 * 86400
@@ -124,12 +132,16 @@ def public(kid, rec, usage=None, now=None):
     now = now or time.time()
     used = (usage or {}).get(kid) or {}
     return {"id": kid, "name": rec["name"], "owner": rec["owner"], "scopes": list(rec["scopes"]),
+            "mcp": bool(rec.get("mcp")),
             "networks": list(rec.get("networks") or []), "created": rec["created"], "expires": rec["expires"],
             "expired": rec["expires"] <= now, "last_used": used.get("at"), "last_ip": used.get("ip", "")}
 
 
-def create(name, scopes, ttl_seconds, networks, owner):
-    """A new key, and its token - the only time the token exists outside the caller."""
+def create(name, scopes, ttl_seconds, networks, owner, mcp=False):
+    """A new key, and its token - the only time the token exists outside the
+    caller. mcp: whether it may also be used on the MCP server."""
+    if not isinstance(mcp, bool):
+        raise ValueError("say whether the key may be used by AI agents over MCP")
     name, scopes, networks = _name(name), _scopes(scopes), _networks(networks)
     try:
         ttl = int(ttl_seconds)
@@ -153,7 +165,7 @@ def create(name, scopes, ttl_seconds, networks, owner):
         kid = secrets.token_hex(6)
     secret = secrets.token_urlsafe(32)
     keys[kid] = {"name": name, "owner": owner, "scopes": scopes, "networks": networks,
-                 "created": now, "expires": now + ttl, "hash": _digest(secret)}
+                 "created": now, "expires": now + ttl, "hash": _digest(secret), "mcp": mcp}
     AUTH._save(data)
     return {"token": f"{PREFIX}{kid}_{secret}", "key": public(kid, keys[kid], now=now)}
 
@@ -226,7 +238,8 @@ def verify(token, addr, now=None, force=False):
     if not scopes:
         refuse(f"the API key {rec['name']} has no scope its maker's role still allows")
     _note_use(kid, addr, now)
-    return {"id": kid, "name": rec["name"], "owner": rec["owner"], "scopes": scopes, "expires": rec["expires"]}
+    return {"id": kid, "name": rec["name"], "owner": rec["owner"], "scopes": scopes, "expires": rec["expires"],
+            "mcp": bool(rec.get("mcp"))}
 
 
 def scopes_for_role(role):

@@ -2551,6 +2551,7 @@ import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
 import homestead_placement_mode as PLACEMODE
 import homestead_capacity as CAPACITY
+import homestead_mcp as MCP
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2714,6 +2715,9 @@ RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), 
               UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
               HOSTACCESS.require_target_as, OPS)
+MCP.bind(DATA_DIR, lambda: cached("settings", 15, get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
+    require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "") if p in ROUTE_POLICY.TARGET_CHECKED else None),
+    kget, lambda ns, name: delete_workload(ns, name))
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
@@ -2991,6 +2995,7 @@ def _alert_sources():
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
+    take("agents", MCP.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -3881,7 +3886,7 @@ def is_page_path(path):
     """
     clean = path or "/"
     last = clean.rstrip("/").rsplit("/", 1)[-1]
-    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz")
+    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz", "/mcp")
             and "." not in last and ".." not in clean and len(clean) < 200)
 
 
@@ -4368,8 +4373,8 @@ class H(HTTP.LimitedHandler):
         """An API key: for /api/v1 alone, checked, and the request let through
         with the key's scopes - which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
-        if not path.startswith("/api/v1/"):
-            self._send(401, {"error": "API keys work only on /api/v1; GET /api/v1/openapi.json lists what they can do"})
+        if not path.startswith("/api/v1/") and path != MCP.PATH:
+            self._send(401, {"error": "API keys work only on /api/v1 and /mcp; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
             key = API_KEYS.verify(token, self._client_ip(), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
@@ -4393,7 +4398,7 @@ class H(HTTP.LimitedHandler):
         # API control scopes carry operator authority, never an internal/admin
         # bypass of workload target checks, even when an admin issued the key.
         self.user = f"api-key:{key['name']}"
-        self.role = "operator" if any(scope.endswith(":control") for scope in key["scopes"]) else "viewer"
+        self.role = "operator" if any(scope.endswith((":control", ":manage")) for scope in key["scopes"]) else "viewer"
         HOSTACCESS.set_role(self.role)
         return None
 
@@ -4404,6 +4409,7 @@ class H(HTTP.LimitedHandler):
         if path == "/api/v1/openapi.json" and method == "GET":
             return self._send(200, API_V1.openapi(HOMESTEAD_VERSION, {s: text for s, (_, text) in API_KEYS.SCOPES.items()}))
         code, answer = API_V1.handle(method, path, query, body, auth)
+        MCP.audit_api(self.api_key, method, path, body, code, self._client_ip())
         return self._send(code, answer)
 
     def _module_route(self, method, path, query, body):
@@ -4494,7 +4500,7 @@ class H(HTTP.LimitedHandler):
         """
         headers = getattr(self, "headers", None) or {}
         # /api/v1 answers for this cluster alone: an API key never travels.
-        if FLEET.signed(headers) or FLEET.local_path(path) or path.startswith("/api/v1/"):
+        if FLEET.signed(headers) or FLEET.local_path(path) or path.startswith("/api/v1/") or path == MCP.PATH:
             return ""
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         named = headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
@@ -4595,6 +4601,8 @@ class H(HTTP.LimitedHandler):
                 return
             if p.startswith("/api/v1/"):
                 return self._api_v1("GET", p, q, None)
+            if p == MCP.PATH:       # no event stream: one JSON answer per POST
+                return self._send(405 if MCP.enabled() else 404, {"error": "POST JSON-RPC to /mcp"})
             if self._module_route("GET", p, q, None):
                 return
             if p == "/api/diagnostics/download":
@@ -4761,12 +4769,14 @@ class H(HTTP.LimitedHandler):
                 return
             # Whose request this is, for the change history (homestead_changes).
             CHANGES.REQUEST.user = getattr(self, "user", None)
+            if p == MCP.PATH:
+                return MCP.reply(self._send, self._raw_body(), self.api_key and {**self.api_key, "role": self.role}, self._client_ip(), self.headers)
             if int(self.headers.get("Content-Length") or 0) > MAX_BODY:
                 return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
             if not isinstance(b, dict):
                 return self._send(400, {"error": "a JSON object is required"})
-            if p in ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback", "/api/image-updates/preview"):
+            if p in ROUTE_POLICY.TARGET_CHECKED:
                 require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             addr = self._client_ip()
             if p.startswith("/api/v1/"):
@@ -4778,7 +4788,7 @@ class H(HTTP.LimitedHandler):
                 # never relayed from a linked cluster.
                 if self._fleet_from:
                     return self._send(403, {"error": "make API keys in this Homestead's own app"})
-                made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user)
+                made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user, b.get("mcp", False))
                 self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
                 return self._send(200, {"ok": True, **made})
             if p == "/api/auth/keys/revoke":

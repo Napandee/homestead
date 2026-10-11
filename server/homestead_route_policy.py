@@ -2,6 +2,12 @@
 here, or beside their handler in a feature module's ROUTES (homestead_routes.py)."""
 import homestead_routes as MODULE_ROUTES
 
+# Routes whose workload (body ns and name) server.py checks an operator may
+# act on before the route runs - for a request, and for an AI agent's tool
+# calling the route (homestead_agent_tools).
+TARGET_CHECKED = ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback",
+                  "/api/image-updates/preview")
+
 POLICY = {
     ('GET', '/api/auth/preferences/dashboard'): 'viewer',
     ('POST', '/api/auth/preferences/dashboard'): 'viewer',
