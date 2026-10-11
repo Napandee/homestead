@@ -20,7 +20,9 @@ import json
 import os
 import re
 import time
+import urllib.error
 
+import homestead_names as NAMES
 import homestead_shared as SHARED
 import homestead_routes
 
@@ -58,19 +60,52 @@ _TEMP = re.compile(r"(\.tmp$|^\.icon-|\.housekeeping$)")
 
 
 # server.py's tidy, which knows which logos are still used (bind).
-_bound = {"tidy": None}
+_bound = {"kget": None, "portal_links": lambda: []}
 
 
-def bind(data_dir="/data", tidy=None):
+def bind(data_dir="/data", kget=None, portal_links=None):
     global DATA_DIR
     DATA_DIR = data_dir
-    if tidy:
-        _bound["tidy"] = tidy
+    if kget:
+        _bound.update(kget=kget, portal_links=portal_links or (lambda: []))
+
+
+def referenced_icons():
+    """Every cached logo something still uses: apps, VMs and portal links.
+    If any of them cannot be read, None - and no logo is removed."""
+    kget, found = _bound["kget"], set()
+    try:
+        for d in kget("/apis/apps/v1/deployments").get("items", []):
+            found.add((d["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
+        try:
+            vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            vms = []
+        for v in vms:
+            found.add((v["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
+        for link in _bound["portal_links"]():
+            found.add(str(link.get("icon") or ""))
+    except Exception:
+        return None
+    return {f for f in found if f.startswith("/api/icons/")}
+
+
+def tidy_unused():
+    """The tidy, logos nothing uses included - daily on the leader, or asked for."""
+    refs = referenced_icons()
+    if refs is None:
+        # Not knowing what is in use, keep every logo; the rest still runs.
+        refs = {f"/api/icons/{os.path.basename(p)}" for p in _files("icons/*")}
+    result = tidy(refs)
+    homestead_routes.forget("housekeeping")
+    return result
 
 
 def tidy_now():
     """Tidy when asked, and say what was freed."""
-    result = _bound["tidy"]()
+    result = tidy_unused()
     mb = result["freed"] / 1024**2
     return {"ok": True, **result, "report": report(),
             "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"}

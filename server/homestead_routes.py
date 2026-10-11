@@ -37,6 +37,7 @@ import importlib
 
 MODULES = (
     "homestead_addons",
+    "homestead_alerts",
     "homestead_allocation_probe",
     "homestead_api_keys",
     "homestead_app_settings",

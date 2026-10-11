@@ -621,45 +621,13 @@ def logsearch_read(ns, pod, container, since, limit):
         return r.read(int(limit) + 1).decode("utf-8", "replace")
 
 
-def referenced_icons():
-    """Every cached logo something still uses: apps, VMs and portal links.
-    If any of them cannot be read, None - and no logo is removed."""
-    found = set()
-    try:
-        for d in kget("/apis/apps/v1/deployments").get("items", []):
-            found.add((d["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
-        try:
-            vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-            vms = []
-        for v in vms:
-            found.add((v["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
-        for link in PORTAL.stored():
-            found.add(str(link.get("icon") or ""))
-    except Exception:
-        return None
-    return {f for f in found if f.startswith("/api/icons/")}
-
-
-def housekeeping_tidy():
-    refs = referenced_icons()
-    if refs is None:
-        # Not knowing what is in use, keep every logo; the rest still runs.
-        refs = {f"/api/icons/{os.path.basename(p)}" for p in HOUSEKEEPING._files("icons/*")}
-    result = HOUSEKEEPING.tidy(refs)
-    _cache.pop("housekeeping", None)
-    return result
-
-
 def _housekeeping_loop():
     """Once a day on the leader, ten minutes after start: keep the data volume in bounds."""
     time.sleep(600)
     while True:
         if LEADER.is_leader():
             try:
-                housekeeping_tidy()
+                HOUSEKEEPING.tidy_unused()
                 beat("housekeeping", 86400, leader_only=True)
             except Exception as error:
                 beat("housekeeping", 86400, error, leader_only=True)
@@ -707,56 +675,6 @@ def set_schedule(b):
     _cache.pop("wl" if kind == "app" else "vms", None)
     return {"ok": True, "schedule": schedule,
             "detail": f"{name}: {SCHEDULES.describe(schedule).lower()}" if schedule else f"{name} is no longer on a schedule"}
-
-
-def _outage_target(b):
-    """(kind, ns, name, path) of the app or VM outage actions are for."""
-    kind = b.get("kind")
-    ns = _dns_name(b.get("ns"), "namespace")
-    if kind == "app":
-        name = _dns_name(b.get("name"), "workload name")
-        guard_managed_smb(ns, name)
-        return kind, ns, name, f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
-    if kind == "vm":
-        name = _dns_name(b.get("name"), "VM name")
-        return kind, ns, name, f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"
-    raise ValueError("outage actions are for an app or a VM")
-
-
-def set_outage_actions(b):
-    """What to do when an app or VM is down - nothing unless asked. An annotation, so nothing restarts."""
-    kind, ns, name, path = _outage_target(b)
-    on_port = True
-    if kind == "vm":
-        current = kget(path)
-        chosen = UPTIME.setting(NAMES.read((current.get("metadata") or {}).get("annotations") or {}, "uptime"))
-        on_port = chosen["mode"] in ("tcp", "http") and bool(chosen.get("port"))
-    actions = OUTAGE.clean(b.get("actions"), kind, on_port)
-    ksend("PATCH", path, {"metadata": {"annotations": {
-        NAMES.key(OUTAGE.KEY): json.dumps(actions, separators=(",", ":")) if actions else None}}},
-        ctype="application/merge-patch+json")
-    _cache.pop("wl" if kind == "app" else "vms", None)
-    said = []
-    if actions and actions.get("restart"):
-        r = actions["restart"]
-        said.append(f"restarted after {r['after_min']} min down, at most {r['max']} time{'s' if r['max'] != 1 else ''}")
-    if actions and actions.get("webhook"):
-        said.append("its webhook called")
-    return {"ok": True, "actions": actions,
-            "detail": f"When {name} is down: " + (" and ".join(said) if said else "nothing is done")}
-
-
-def test_outage_webhook(b):
-    kind, ns, name, _ = _outage_target(b)
-    url = OUTAGE.webhook_url(b.get("webhook"))
-    if not url:
-        raise ValueError("type the webhook address to test")
-    item = {"kind": kind, "ns": ns, "name": name}
-    try:
-        OUTAGE.post(url, OUTAGE.payload(item, "test"))
-    except Exception as error:
-        return {"ok": False, "detail": f"The webhook did not take it: {str(error)[:200]}"}
-    return {"ok": True, "detail": "The webhook took the test"}
 
 
 def outage_tick():
@@ -2813,9 +2731,10 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, NODES.node_temps, DATA_D
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR, setting=lambda b: set_uptime_setting(b))
-HOUSEKEEPING.bind(DATA_DIR, tidy=lambda: housekeeping_tidy())
+HOUSEKEEPING.bind(DATA_DIR, kget=lambda path: kget(path), portal_links=lambda: PORTAL.stored())
 SCHEDULES.bind(DATA_DIR, items=lambda: scheduled_items(), setter=lambda b: set_schedule(b))
-OUTAGE.bind(DATA_DIR, set_actions=lambda b: set_outage_actions(b), test_webhook=lambda b: test_outage_webhook(b))
+OUTAGE.bind(DATA_DIR, kget=lambda path: kget(path), ksend=lambda *a, **k: ksend(*a, **k),
+            dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: guard_managed_smb(ns, name))
 CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k))
 FORECAST.bind(DATA_DIR)
 

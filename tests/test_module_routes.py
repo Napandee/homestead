@@ -14,8 +14,8 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 11501
-MAX_PATH_BRANCHES = 273
+MAX_LINES = 5247
+MAX_PATH_BRANCHES = 63
 
 
 def handler_body(method):

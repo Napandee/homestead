@@ -300,5 +300,19 @@ class RouteTests(unittest.TestCase):
         self.assertIn("maskable", {i["purpose"] for i in manifest["icons"]})
 
 
+class BellRouteTests(unittest.TestCase):
+    def test_the_bell_is_answered_by_alerts_with_this_persons_devices(self):
+        import homestead_alerts as ALERTS
+        import homestead_push as PUSH
+        import homestead_routes as ROUTES
+        route = ROUTES.find("GET", "/api/alerts")
+        self.assertEqual(("homestead_alerts", "viewer"), (route.module, route.role))
+        self.assertIs(PUSH.devices, ALERTS.DEVICES[0], "push tells alerts whose devices are whose")
+        with mock.patch.object(ALERTS, "active", return_value=[{"announced": 1}, {"announced": 0}]),                 mock.patch.object(ALERTS, "log", return_value={"alerts": [{"category": "test"}, {"category": "hosts"}]}),                 mock.patch.object(ALERTS, "DEVICES", [lambda user: [{"user": user}]]):
+            answer = route.handler(ROUTES.Request("GET", "/api/alerts", {}, None, "ada", "viewer"))
+        self.assertEqual(([{"announced": 1}], [{"category": "hosts"}], [{"user": "ada"}]),
+                         (answer["active"], answer["log"], answer["devices"]))
+
+
 if __name__ == "__main__":
     unittest.main()
