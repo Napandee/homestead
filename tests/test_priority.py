@@ -292,7 +292,7 @@ class PriorityTests(unittest.TestCase):
                 mock.patch.object(server.WORKLOADS.CAPACITY_REVIEW, "enforce"), \
                 mock.patch.object(server.WORKLOADS.RESTRUCTURE, "copies", return_value=[]), \
                 mock.patch.object(server.WORKLOADS, "apply_reviewed_edit", return_value={"ok": True, "detail": "Saved"}), \
-                mock.patch.object(server.WORKLOADS.PRIORITY, "ensure", side_effect=lambda tiers: made.append(tiers) or
+                mock.patch.object(server.WORKLOADS.PRIORITY, "ensure", side_effect=lambda tiers, lad=None: made.append(tiers) or
                                   ["homestead-critical exists with value 500 and PreemptLowerPriority; it is kept"]):
             result = server.WORKLOADS.edit(mock.Mock(body={"ns": "lab", "name": "paperless", **body}))
         return made, result
@@ -368,7 +368,8 @@ class LadderTests(unittest.TestCase):
     def test_a_stale_homestead_critical_gets_a_new_name_above_the_default(self):
         lad = P.ladder([pc("x-normal", 10000, default=True), pc("homestead-critical", 1000)])
         self.assertEqual({"name": "homestead-critical-11000", "value": 11000, "create": True}, lad["critical"])
-        self.assertEqual("homestead-critical", lad["low"]["name"], "the stale one is below the default: low by number")
+        self.assertEqual("homestead-low", lad["low"]["name"], "a stale homestead-critical is never taken for low")
+        self.assertEqual(9000, lad["low"]["value"])
 
     def test_critical_must_preempt_and_ties_prefer_homestead_then_name(self):
         lad = P.ladder([pc("b-high", 5000), pc("homestead-critical-5000", 5000), pc("a-wait", 9000, never=True)])
@@ -397,6 +398,8 @@ class LadderTests(unittest.TestCase):
         self.assertEqual({"name": "homestead-critical-2000", "value": 2000, "create": True}, lad["critical"])
 
     def test_an_unreadable_class_list_behaves_as_today(self):
+        saved = P.kget
+        self.addCleanup(lambda: setattr(P, "kget", saved))
         def broken(path):
             raise urllib.error.HTTPError(path, 403, "no", {}, None)
         P.kget = broken
@@ -441,3 +444,70 @@ class TierOfTests(unittest.TestCase):
     def test_priority_of_gives_number_and_preemption(self):
         self.assertEqual((1000, False), P.priority_of({"priorityClassName": "x-low"}, self.lad))
         self.assertEqual((10000, True), P.priority_of({}, self.lad))
+
+
+class LadderWriteTests(unittest.TestCase):
+    def setUp(self):
+        # The ladder is cached for a few seconds; no test may leave its cluster behind.
+        self.addCleanup(lambda: P._LADDER.update(at=0, value=None))
+        self.posted, self.patched = [], []
+        self.items = list(X)
+        def kget(path):
+            if path == "/apis/scheduling.k8s.io/v1/priorityclasses":
+                return {"items": self.items}
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        def ksend(method, path, body=None, ctype=None):
+            (self.posted if method == "POST" else self.patched).append((path, body))
+            return {}
+        P.bind(kget, ksend, lambda dep: {}, ("lab", "homestead"), set())
+        P._LADDER.update(at=0, value=None)
+
+    def test_critical_writes_the_clusters_critical_class(self):
+        app = {"kind": "app", "ns": "lab", "name": "ha", "tier": "critical"}
+        P.patch(app)
+        self.assertEqual("x-critical", self.patched[0][1]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_normal_writes_no_class(self):
+        P.patch({"kind": "app", "ns": "lab", "name": "ha", "tier": "normal"})
+        self.assertIsNone(self.patched[0][1]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_a_class_is_made_only_when_none_fits_with_labels_and_a_description(self):
+        self.items = [pc("x-normal", 10000, default=True), pc("homestead-critical", 1000)]
+        P._LADDER.update(at=0, value=None)
+        P.ensure(("critical",))
+        body = self.posted[0][1]
+        self.assertEqual("homestead-critical-11000", body["metadata"]["name"])
+        self.assertEqual(11000, body["value"])
+        self.assertFalse(body["globalDefault"])
+        self.assertEqual("priority", body["metadata"]["labels"]["homestead.io/task"])
+        self.assertIn("x-normal (10000)", body["description"])
+
+    def test_nothing_is_made_when_the_cluster_has_the_class(self):
+        P.ensure(("critical", "low"))
+        self.assertEqual([], self.posted)
+
+    def test_edit_leaves_a_system_or_missing_class_alone(self):
+        import homestead_lifecycle as LC
+        for cls in ("system-node-critical", "gone"):
+            self.items = X + [pc("system-node-critical", 2_000_001_000)]
+            P._LADDER.update(at=0, value=None)
+            spec = {"priorityClassName": cls}
+            LC._apply_priority(spec, "critical")
+            self.assertEqual(cls, spec["priorityClassName"])
+
+    def test_the_list_warns_about_a_stale_homestead_class_still_in_use(self):
+        self.items = [pc("x-normal", 10000, default=True), pc("homestead-critical", 1000)]
+        P._LADDER.update(at=0, value=None)
+        dep = {"metadata": {"namespace": "lab", "name": "ha"},
+               "spec": {"template": {"spec": {"priorityClassName": "homestead-critical", "containers": []}}}}
+        with mock.patch.object(P, "_workloads", lambda: iter([("app", dep)])):
+            warnings = P.plan()["warnings"]
+        self.assertTrue(any("homestead-critical" in w and "lab/ha" in w for w in warnings), warnings)
+
+    def test_the_list_warns_about_a_missing_class(self):
+        dep = {"metadata": {"namespace": "lab", "name": "ha"},
+               "spec": {"template": {"spec": {"priorityClassName": "gone", "containers": []}}}}
+        with mock.patch.object(P, "_workloads", lambda: iter([("app", dep)])):
+            out = P.plan()
+        self.assertTrue(any("gone" in w for w in out["warnings"]))
+        self.assertIn("lab/ha", [s["id"] for s in out["skipped"]])

@@ -194,7 +194,7 @@ def edit(request):
     if b.get("priority") in ("critical", "low") and context.get("action") != RENAME.KIND and PRIORITY.tier_of(
             (kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}").get("spec") or {})
             .get("template", {}).get("spec") or {})[0] != b["priority"]:
-        notes = PRIORITY.ensure((b["priority"],))
+        notes = PRIORITY.ensure((b["priority"],), PRIORITY.ladder())
     if context.get("action") == RENAME.KIND:
         def admission(dep):
             return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],

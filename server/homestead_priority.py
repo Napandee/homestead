@@ -103,7 +103,12 @@ def ladder(items=None, now=None):
     defaults = sorted((r for r in rows if r["default"]), key=lambda r: r["value"])
     default = {"name": defaults[0]["name"], "value": defaults[0]["value"]} if defaults else {"name": None, "value": 0}
     d, warnings = default["value"], []
-    above = sorted((r for r in rows if not r["system"] and r["value"] > d and r["preempts"]),
+    # A Homestead class serves only the tier its name says: a stale
+    # homestead-critical below the default is never taken for low.
+    def ours_for(r, tier):
+        m = OURS.fullmatch(r["name"])
+        return not m or m.group(1) == tier
+    above = sorted((r for r in rows if not r["system"] and r["value"] > d and r["preempts"] and ours_for(r, "critical")),
                    key=lambda r: (-r["value"], not r["homestead"], r["name"]))
     if above:
         critical = {"name": above[0]["name"], "value": above[0]["value"], "create": False}
@@ -113,7 +118,7 @@ def ladder(items=None, now=None):
         if critical is None:
             warnings.append(f"Critical can't rank above the cluster default ({default['name'] or 'none'}, {d}): "
                             "there is no room, or its name is taken")
-    below = sorted((r for r in rows if not r["system"] and r["value"] < d),
+    below = sorted((r for r in rows if not r["system"] and r["value"] < d and ours_for(r, "low")),
                    key=lambda r: (r["preempts"], -r["value"], not r["homestead"], r["name"]))
     if below:
         low = {"name": below[0]["name"], "value": below[0]["value"], "create": False}
@@ -126,9 +131,9 @@ def ladder(items=None, now=None):
 def _fallback():
     """What Homestead assumed before it read the classes: its own two (and the
     legacy homestead-normal, at the default), and no default."""
-    return ladder([{"metadata": {"name": TIERS[t]["name"]}, "value": TIERS[t]["value"],
+    return dict(fallback=True, **ladder([{"metadata": {"name": TIERS[t]["name"]}, "value": TIERS[t]["value"],
                     "preemptionPolicy": TIERS[t]["preemptionPolicy"]} for t in ("critical", "low")]
-                  + [{"metadata": {"name": "homestead-normal"}, "value": 0}])
+                  + [{"metadata": {"name": "homestead-normal"}, "value": 0}]))
 
 
 def priority_of(spec, lad):
@@ -211,8 +216,19 @@ NO_PERMISSION = ("Homestead may not make priority classes yet: its permissions p
                  "Settings → Homestead → About this installation → Permissions says how to bring them up to date.")
 
 
-def ensure(tiers=("critical", "low")):
-    """The classes these tiers use, made where missing. One that exists with
+def class_for(tier, lad):
+    """The class a tier is written as: None for normal (the default)."""
+    if tier == "normal":
+        return None
+    step = lad.get(tier)
+    if not step:
+        raise ValueError(lad["warnings"][0] if lad["warnings"] else f"no class for {tier}")
+    return step["name"]
+
+
+def _ensure_by_name(tiers):
+    """Before the classes can be listed - permissions from before #429 - as
+    Homestead always did: its own classes, by name, made where missing. One that exists with
     another value or policy is kept as it is - someone made it - and said so."""
     notes = []
     for tier in tiers:
@@ -242,6 +258,39 @@ def ensure(tiers=("critical", "low")):
             # Made meanwhile by an edit or another job: there now, as wanted.
             if error.code != 409:
                 raise
+    return notes
+
+
+def ensure(tiers=("critical", "low"), lad=None):
+    """The classes these tiers use, made only where the ladder has none to
+    use. A class is never updated or deleted: its value cannot change, and
+    one in use must stay."""
+    lad = lad if lad is not None else ladder()
+    if lad.get("fallback"):
+        return _ensure_by_name(tiers)
+    notes = []
+    for tier in tiers:
+        step = lad.get(tier) if tier != "normal" else None
+        if tier != "normal" and not step:
+            raise ValueError(lad["warnings"][0] if lad["warnings"] else f"no class for {tier}")
+        if not step or not step["create"]:
+            continue
+        try:
+            ksend("POST", "/apis/scheduling.k8s.io/v1/priorityclasses", {
+                "apiVersion": "scheduling.k8s.io/v1", "kind": "PriorityClass",
+                "metadata": {"name": step["name"], "labels": {"app.kubernetes.io/managed-by": "homestead",
+                                                               "homestead.io/task": "priority"}},
+                "value": step["value"], "preemptionPolicy": TIERS[tier]["preemptionPolicy"], "globalDefault": False,
+                "description": (f"Homestead's {tier} tier: {'above' if tier == 'critical' else 'below'} the cluster default "
+                                f"{lad['default']['name'] or '(none)'} ({lad['default']['value']}). Made by Homestead; "
+                                "apps name it through their tier.")})
+            notes.append(f"made {step['name']} ({step['value']})")
+        except urllib.error.HTTPError as error:
+            if error.code == 403:
+                raise PermissionError(NO_PERMISSION)
+            if error.code != 409:
+                raise
+    _LADDER.update(at=0, value=None)
     return notes
 
 
@@ -286,17 +335,19 @@ def plan(chosen=None, role=None):
     normal, else what it has. chosen maps an app id to a tier. role: who
     asks; apps they may not change are left out, saying why."""
     apps, skipped = [], []
+    lad = ladder()
     for kind, dep in _workloads():
         meta = dep.get("metadata") or {}
         ns, name = meta.get("namespace", ""), meta.get("name", "")
         app_id = _row_id(kind, ns, name)
-        current, cls = tier_of(_pod_spec(dep))
+        current, cls = tier_of(_pod_spec(dep), lad)
         suggested, why = suggestion(dep)
         if kind == "app" and (ns, name) == own:
             skipped.append({"id": app_id, "why": "Homestead's own tier is critical once any app's is, so none can evict it"})
             continue
-        if current not in TIERS:
-            skipped.append({"id": app_id, "why": f"it uses the class {cls}, which Homestead does not keep; it is left alone"})
+        if current in ("system", "missing"):
+            skipped.append({"id": app_id, "class": cls, "why": (f"it names {cls}, which isn't a class here: its new pods are refused"
+                                                                if current == "missing" else f"it uses Kubernetes' own class {cls}")})
             continue
         try:
             guard(dep, ns, role)
@@ -305,7 +356,7 @@ def plan(chosen=None, role=None):
             continue
         owner = managed_by(dep)
         row = {"id": app_id, "kind": kind, "ns": ns, "name": name, "current": current, "suggested": suggested or "", "why": why,
-               "managed": owner.get("by", "")}
+               "managed": owner.get("by", ""), "class": cls}
         if owner:
             where = f" ({owner['source']})" if owner.get("source") else ""
             row["note"] = (f"{owner['by']} applies it{where}; set priorityClassName there" if owner.get("detected")
@@ -323,8 +374,22 @@ def plan(chosen=None, role=None):
         for app in changes[MAX_APPS:]:
             app["tier"] = app["current"]
         changes = changes[:MAX_APPS]
+    warnings = list(lad["warnings"])
+    missing = sorted((s["class"], s["id"]) for s in skipped if "isn't a class here" in s["why"])
+    for cls_name in sorted({c for c, _ in missing}):
+        ids = [i for c, i in missing if c == cls_name]
+        warnings.append(f"{', '.join(ids[:6])} name {cls_name}, which isn't a class on the cluster: their new pods are refused")
+    used = {}
+    for a in apps:
+        if a.get("class") and OURS.fullmatch(a["class"]) and a["class"] not in (
+                (lad["critical"] or {}).get("name"), (lad["low"] or {}).get("name")):
+            used.setdefault(a["class"], []).append(a["id"])
+    for cls_name, ids in sorted(used.items()):
+        value = next((r["value"] for r in lad["classes"] if r["name"] == cls_name), None)
+        warnings.append(f"{cls_name} ({value}) is no longer the class for its tier; {', '.join(ids[:6])} still use it "
+                        "and rank by its value until their tier is set again")
     return {"apps": apps, "skipped": sorted(skipped, key=lambda s: s["id"]), "max": MAX_APPS,
-            "changes": len(changes), "review_token": review_token(changes)}
+            "changes": len(changes), "review_token": review_token(changes), "warnings": warnings}
 
 
 def review_token(changes):
@@ -366,7 +431,7 @@ def check(ns, name, current, role=None, tier=None, kind="app"):
     if (kind == "app" and (ns, name) == own) or ns in system_ns or ns.startswith(SYSTEM) or managed_by(dep):
         raise ValueError(f"{app_id} is not one Homestead changes")
     guard(dep, ns, role)
-    now = tier_of(_pod_spec(dep))[0]
+    now = tier_of(_pod_spec(dep), ladder())[0]
     if tier and now == tier:
         return "applied"
     if now != current:
@@ -378,7 +443,7 @@ def patch(app):
     """Normal is no class at all: the class is removed rather than set. What
     a template copied from a pod carries (priority, preemptionPolicy) goes
     too: admission refuses a pod whose values are not its class's."""
-    cls = None if app["tier"] == "normal" else TIERS[app["tier"]]["name"]
+    cls = class_for(app["tier"], ladder())
     if app.get("kind") == "vm":
         # A VM's pod is made from its template when it starts: no restart now.
         ksend("PATCH", _path("vm", app["ns"], app["name"]), {"spec": {"template": {"spec": {"priorityClassName": cls}}}},
@@ -407,8 +472,8 @@ def status(item):
         if not is_leader():
             return "running", 0, item.get("message") or "Making the priority classes"
         try:
-            ref["notes"] = ensure(sorted({a["tier"] for a in apps}))
-        except PermissionError as error:
+            ref["notes"] = ensure(sorted({a["tier"] for a in apps}), ladder())
+        except (PermissionError, ValueError) as error:
             return "failed", 0, str(error)
         ref["classes"] = True
         return "running", 0, "Priority classes ready" + (f"; {'; '.join(ref['notes'])}" if ref["notes"] else "")
