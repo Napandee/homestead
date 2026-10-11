@@ -16,6 +16,8 @@ Worked out from what Homestead already knows, read only:
 It is a forecast, not a promise: Kubernetes decides at the time, with what is
 free then. Each line says why.
 """
+import homestead_roles as ROLES
+
 
 FAILOVER_WORDS = {
     "move": ("moves", "about 15 seconds after the host stops answering"),
@@ -86,7 +88,9 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
     placed = {(w["ns"], w["name"]): w for w in (placement or {}).get("workloads") or []}
     specs = {(d["metadata"]["namespace"], d["metadata"]["name"]): d["spec"]["template"]["spec"] for d in deployments or []}
     raw = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in raw_vms or []}
-    others_ready = [n["name"] for n in nodes if n["name"] != node and n.get("status") == "Ready"]
+    # A tiebreaker holds an etcd vote, not apps or VMs (homestead_roles).
+    others_ready = [n["name"] for n in nodes if n["name"] != node and n.get("status") == "Ready"
+                    and not ROLES.is_tiebreaker(n)]
     apps = []
     for w in workloads or []:
         if node not in (w.get("nodes") or []) or w.get("platform") or not w.get("desired"):

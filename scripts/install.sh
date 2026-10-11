@@ -26,7 +26,8 @@
 # failure, or with --text, plain prompts are used instead.
 #
 # Unattended installation: set the answers in the environment.
-#   HS_ROLE=new|server|agent|addons|harvester   installation mode
+#   HS_ROLE=new|server|agent|tiebreaker|addons|harvester   installation mode
+#   --check: only the system checks, for HS_ROLE (default server); installs nothing
 #   HS_DIST=k3s|rke2                            distribution for a new cluster
 #   HS_NODE_IP=192.0.2.50                     this node's IP address
 #   HS_SERVER=192.0.2.50  HS_TOKEN=...        the cluster to join
@@ -79,6 +80,7 @@ while [ $# -gt 0 ]; do
     --report) ACTION=report; UI=text; shift ;;
     --fix-safe) ACTION=fix-safe; UI=text; shift ;;
     --skip-checks) SKIP_CHECKS=1; shift ;;
+    --check) ACTION=check; UI=text; shift ;;
     --text) UI=text; shift ;;
     --ref) [ $# -ge 2 ] || { printf 'Option --ref needs a release, for example --ref %s\n' "$REF" >&2; exit 2; }
       REF="$2"; shift 2 ;;
@@ -399,6 +401,12 @@ prechecks() { # role
     kvm && check pass "Hardware virtualisation is available" \
       || check warn "Hardware virtualisation is not available. Virtual machines would run in emulation mode."
   fi
+  case "$1" in server|tiebreaker) small_server_checks ;; esac
+  if [ "$ACTION" = check ]; then
+    msg "System Checks" "Results for $(hostname) as a $1:
+$REPORT"
+    exit "$FAILED"
+  fi
   if [ "$FAILED" = 1 ] && [ "$SKIP_CHECKS" = 0 ]; then
     msg "System Checks Failed" "Resolve the following before installing:
 $REPORT"
@@ -406,6 +414,79 @@ $REPORT"
   fi
   msg "System Checks" "Results for $(hostname):
 $REPORT"
+}
+
+# ------------------------------------------------------------------ a small server
+# A server - a tiebreaker most of all - keeps etcd's data, which writes and
+# syncs to disk on every change: a slow card makes the whole cluster slow or
+# unstable. These run for the server and tiebreaker roles (#364).
+fio_p99_ms() { # fio's normal output on stdin -> the 99th percentile of its syncs, in whole ms
+  awk '/sync percentiles/ { unit = $3; on = 1; next }
+       on && /99\.00th=/ { v = $0; sub(/.*99\.00th=\[ */, "", v); sub(/\].*/, "", v)
+         d = unit ~ /nsec/ ? 1000000 : unit ~ /usec/ ? 1000 : 1; printf "%d\n", v / d; exit }'
+}
+dd_avg_ms() { # dd's stderr on stdin, writes -> the average time a synced write took, in whole ms
+  awk -v n="$1" '/copied/ { for (i = 1; i <= NF; i++) if ($i ~ /^s,?$/) { printf "%d\n", $(i - 1) * 1000 / n; exit } }'
+}
+etcd_sync_ms() {
+  # Where k3s will keep its data if it is there already; never made here, so a
+  # dry run changes nothing. The test file is removed afterwards.
+  dir=/var/lib/rancher; [ -d "$dir" ] && [ -w "$dir" ] || dir=/var/tmp
+  if have fio; then
+    # The C locale: a decimal comma or translated words would misread the time.
+    LC_ALL=C fio --name=homestead-etcd-check --directory="$dir" --rw=write --ioengine=sync --fdatasync=1 \
+      --size=22m --bs=2300 2>/dev/null | fio_p99_ms
+  else
+    LC_ALL=C dd if=/dev/zero of="$dir/homestead-etcd-check" bs=4k count=200 oflag=dsync 2>&1 >/dev/null | dd_avg_ms 200
+  fi
+  rm -f "$dir"/homestead-etcd-check*
+}
+cgroup_memory() {
+  grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null \
+    || awk '$1 == "memory" && $4 == 1 { found = 1 } END { exit !found }' /proc/cgroups 2>/dev/null
+}
+vxlan_available() { [ -d /sys/module/vxlan ] || modprobe -n vxlan >/dev/null 2>&1; }
+swap_on() { [ -n "$(swapon --show --noheadings 2>/dev/null)" ] || awk 'NR > 1 { found = 1 } END { exit !found }' /proc/swaps 2>/dev/null; }
+is_pi() { grep -q 'Raspberry Pi' /proc/device-tree/model 2>/dev/null; }
+pi_throttled() { have vcgencmd && vcgencmd get_throttled 2>/dev/null | sed -n 's/^throttled=//p'; }
+
+small_server_checks() {
+  ms=$(etcd_sync_ms)
+  if [ -z "$ms" ]; then check warn "Disk sync time could not be measured. etcd needs a disk that syncs in under 10 ms: an SSD, not a microSD card."
+  elif [ "$ms" -gt 10 ]; then check warn "Disk syncs in $ms ms. etcd needs under 10 ms; on this disk the cluster may be slow or unstable. Use an SSD."
+  else check pass "Disk syncs in $ms ms, fast enough for etcd"; fi
+  if cgroup_memory; then check pass "The memory cgroup controller is on"
+  elif is_pi; then check fail "The memory cgroup controller is off; k3s will not run. Add cgroup_enable=memory cgroup_memory=1 to /boot/firmware/cmdline.txt and reboot."
+  else check fail "The memory cgroup controller is off; k3s will not run. Enable it on the kernel command line and reboot."; fi
+  vxlan_available && check pass "The vxlan kernel module is available" \
+    || check fail "The vxlan kernel module is missing; the cluster network (flannel) needs it. Install your kernel's extra modules."
+  swap_on && check warn "Swap is on. Kubernetes runs best with swap off: swapoff -a, and remove it from /etc/fstab." \
+    || check pass "Swap is off"
+  if is_pi; then
+    t=$(pi_throttled)
+    case "$t" in
+      ""|0x0) check pass "No under-voltage or throttling reported" ;;
+      *) words=$(throttle_words "$t")
+        case "$words" in
+          *under-voltage*) advice="Use the official power supply" ;;
+          *temperature*|*capped*) advice="Give it better cooling" ;;
+          *) advice="Check its power and cooling" ;;
+        esac
+        check warn "This Raspberry Pi reports $t: ${words:-unknown flags}. $advice; a vote that drops out puts the cluster at risk." ;;
+    esac
+  fi
+}
+throttle_words() { # vcgencmd get_throttled bits, in words
+  v=$(printf '%d' "$1" 2>/dev/null || echo 0); words=""
+  [ $((v & 0x1)) -ne 0 ] && words="$words, under-voltage now"
+  [ $((v & 0x2)) -ne 0 ] && words="$words, frequency capped now"
+  [ $((v & 0x4)) -ne 0 ] && words="$words, throttled now"
+  [ $((v & 0x8)) -ne 0 ] && words="$words, soft temperature limit now"
+  [ $((v & 0x10000)) -ne 0 ] && words="$words, under-voltage since boot"
+  [ $((v & 0x20000)) -ne 0 ] && words="$words, frequency capped since boot"
+  [ $((v & 0x40000)) -ne 0 ] && words="$words, throttled since boot"
+  [ $((v & 0x80000)) -ne 0 ] && words="$words, soft temperature limit since boot"
+  printf '%s' "${words#, }"
 }
 
 # ------------------------------------------------------------------ versions
@@ -738,17 +819,18 @@ flow_new() {
   ROLE=$(choose HS_ROLE "Installation Mode" "Select how to install this machine:" \
     new "Create a new cluster" \
     server "Join an existing cluster as a server node" \
+    tiebreaker "Join an existing cluster as a tiebreaker (an etcd vote only)" \
     agent "Join an existing cluster as a worker node") || exit
   [ "$ROLE" = harvester ] && fail "This machine is not a Harvester node."
   case "$ROLE" in
     new) pick_dist ;;
-    server|agent) find_cluster ;;
+    server|agent|tiebreaker) find_cluster ;;
   esac
   pick_ip
   prechecks "$ROLE"
   case "$ROLE" in
     new) new_cluster ;;
-    server|agent) join_cluster "$ROLE" ;;
+    server|agent|tiebreaker) join_cluster "$ROLE" ;;
     addons) add_to_cluster ;;
     *) fail "Unknown installation mode: $ROLE" ;;
   esac
@@ -890,18 +972,19 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   finish_new
 }
 
-join_cluster() { # server|agent
+join_cluster() { # server|agent|tiebreaker
   token=$(ask HS_TOKEN "Cluster Token" "Enter the cluster token. To display it, run this command on an existing server node:
 
   sudo cat $(token_file)" "" secret) || exit
   [ -n "$token" ] || fail "No cluster token was entered."
   SECRET="$token"
-  mode=agent; [ "$1" = server ] && mode=join
-  pick_longhorn_volume
+  case "$1" in server|tiebreaker) mode=join ;; *) mode=agent ;; esac
+  # A tiebreaker holds an etcd vote and no Longhorn data (#364).
+  if [ "$1" = tiebreaker ]; then LH_VOLUME=""; LH_LINE=""; else pick_longhorn_volume; fi
   pick_console
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
-  Installation mode    Join an existing cluster as a $([ "$1" = server ] && echo "server node" || echo "worker node")
+  Installation mode    Join an existing cluster as a $(case "$1" in server) echo "server node" ;; tiebreaker) echo "tiebreaker (an etcd vote only)" ;; *) echo "worker node" ;; esac)
   Distribution         $(dist_name)
   Cluster              $url
   Host console         $(console_line)
@@ -911,7 +994,7 @@ join_cluster() { # server|agent
 
 Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
   # shellcheck disable=SC2046
-  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $(dist_flag) $(version_args k8s)$(volume_args)
+  bootstrap 3 "$mode" "$url" "$token" --node-ip "$NODE_IP" $([ "$1" = tiebreaker ] && echo --tiebreaker) $(dist_flag) $(version_args k8s)$(volume_args)
   install_console
   msg "Installation Complete" "$(hostname) has joined the cluster. It appears on the Homestead Nodes page within a few minutes."
 }
@@ -1575,9 +1658,11 @@ kind_name() {
   esac
 }
 
-[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || fail "The installer must run as root: curl ... | sudo sh"
+# The checks alone only read, and say themselves when they are not run as root.
+[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || [ "$ACTION" = check ] || fail "The installer must run as root: curl ... | sudo sh"
 banner() { say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ', dry run: no changes will be made')"; }
 case "$ACTION" in
+  check) ROLE=$(given HS_ROLE); prechecks "${ROLE:-server}" ;;
   console) banner; configure_console; exit $? ;;
   install) banner; do_install; exit 0 ;;
   doctor) doctor menu; exit 0 ;;

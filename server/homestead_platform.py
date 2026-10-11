@@ -7,9 +7,12 @@ which distribution runs them, so each page can check before it relies on one:
 the VM pages need KubeVirt, the volume pages Longhorn, and so on. What is
 missing is said, with how to add it, rather than failing.
 """
+import json
 import re
+import shlex
 import time
 import homestead_multus as MULTUS
+import homestead_roles as ROLES
 
 kget = None
 _cached = {"at": 0.0, "value": None}
@@ -154,18 +157,77 @@ def detect(force=False):
     return value
 
 
+# The settings a joining server must share with the ones there (k3s refuses
+# or misbehaves otherwise), and the local-path folder, which a server joining
+# without it would point existing local-path volumes elsewhere (#364). Flags
+# that take a value, then ones that do not. Nothing else is copied: the token,
+# the agent token and a datastore address with its password never are.
+SHARED_VALUE_FLAGS = ("--cluster-cidr", "--service-cidr", "--cluster-dns", "--cluster-domain", "--flannel-backend",
+                      "--disable", "--egress-selector-mode", "--default-local-storage-path")
+SHARED_SWITCHES = ("--disable-network-policy", "--disable-kube-proxy", "--disable-cloud-controller",
+                   "--disable-helm-controller", "--secrets-encryption", "--embedded-registry")
+SHARED_FLAGS = SHARED_VALUE_FLAGS + SHARED_SWITCHES
+
+
+def shared_server_args(nodes):
+    """The cluster-wide settings a server runs with, from the first Ready
+    server's k3s.io/node-args (k3s records its arguments there, the token
+    hidden), shell-quoted for a command line. ([], False) when none can be
+    read - the guide then names the flags to copy by hand."""
+    for node in nodes:
+        meta = node.get("metadata") or {}
+        labels = meta.get("labels") or {}
+        ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                    for c in (node.get("status") or {}).get("conditions") or [])
+        if not ready or not any(k in labels for k in ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")):
+            continue
+        try:
+            args = json.loads((meta.get("annotations") or {}).get("k3s.io/node-args") or "")
+        except ValueError:
+            continue
+        if not isinstance(args, list):
+            continue
+        out, i = [], 0
+        while i < len(args):
+            flag, value = str(args[i]), None
+            if "=" in flag:
+                flag, value = flag.split("=", 1)
+            if flag in SHARED_SWITCHES:
+                # config.yaml's "x: false" arrives as --x=false: off, not on.
+                if str(value).lower() not in ("false", "0", "no"):
+                    out.append(flag)
+            elif flag in SHARED_VALUE_FLAGS:
+                if value is None and i + 1 < len(args):
+                    i += 1
+                    value = str(args[i])
+                if value is not None:
+                    out += [flag, shlex.quote(value)]
+            i += 1
+        return out, True
+    return [], False
+
+
 def join_guide():
     """How to add a machine to a k3s or RKE2 cluster: the command, the server
     address, and where the token is - Homestead cannot read it."""
     p = detect()
     server = p["control_plane"][0] if p["control_plane"] else ""
     if p["distribution"] == "k3s":
+        shared, known = shared_server_args(_items("/api/v1/nodes"))
+        server_join = (f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=\"v{p['version']}\" "
+                       f"K3S_TOKEN=<token> sh -s - server --server https://{server or '<server>'}:6443"
+                       + "".join(f" {a}" for a in shared))
         return {"distribution": "k3s", "server": server, "token_file": "/var/lib/rancher/k3s/server/node-token",
                 "version": p["version"],
                 "agent": (f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=\"v{p['version']}\" "
                           f"K3S_URL=https://{server or '<server>'}:6443 K3S_TOKEN=<token> sh -"),
-                "server_join": (f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=\"v{p['version']}\" "
-                                f"K3S_TOKEN=<token> sh -s - server --server https://{server or '<server>'}:6443"),
+                "server_join": server_join,
+                # A server holding an etcd vote and nothing else (homestead_roles).
+                "tiebreaker": server_join + f" --node-taint {ROLES.KEY}=true:NoSchedule --node-label {ROLES.KEY}=true",
+                "shared_settings": shared, "settings_known": known, "shared_flags": list(SHARED_FLAGS),
+                # The installer's checks for a small server, run before it joins.
+                "check": ("curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh"
+                          " | sudo HS_ROLE=tiebreaker sh -s -- --check"),
                 "longhorn": "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils"}
     if p["distribution"] == "rke2":
         return {"distribution": "rke2", "server": server, "token_file": "/var/lib/rancher/rke2/server/node-token",

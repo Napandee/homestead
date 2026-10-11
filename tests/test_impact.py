@@ -100,6 +100,14 @@ class VmTests(AppTests):
         return {"metadata": {"namespace": "lab", "name": name},
                 "spec": {"template": {"spec": {"domain": {"devices": devices or {}}}}}}
 
+    def test_a_vm_is_never_sent_to_a_tiebreaker(self):
+        nodes = NODES + [{"name": "pi", "status": "Ready", "schedulable": True, "hardware": {},
+                          "labels": {"node-role/tiebreaker": "true"},
+                          "taints": [{"key": "node-role/tiebreaker", "value": "true", "effect": "NoSchedule"}]}]
+        found = IMPACT.preview("node2", [], [], [self.vm(disks=[])], [self.raw()], [], [], nodes)
+        self.assertEqual(["node1", "node3"], self.outcome(found, "ha-os")["to"])
+        self.assertNotIn("pi", found["others_ready"])
+
     def test_a_vm_moves_and_says_it_moves_live_on_a_drain(self):
         r = self.outcome(self.run_preview([], vms=[self.vm()], raw_vms=[self.raw()],
                                           volumes=[vol("ha-os-disk", [("node2", True), ("node3", True)])]), "ha-os")

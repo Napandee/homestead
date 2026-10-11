@@ -27,6 +27,7 @@ import homestead_names as NAMES
 import homestead_routes
 import homestead_multus as MULTUS
 import homestead_pod_resources as RESOURCES
+import homestead_roles as ROLES
 
 kget = ksend = None
 platform = None          # what the cluster has, from homestead_platform
@@ -422,7 +423,12 @@ def vip_interface():
     announces VIPs; empty when the probes do not agree or have not said,
     and kube-vip then finds it itself."""
     try:
-        found = {data.get("default_interface") for data in (probes() or {}).values()}
+        # A tiebreaker never runs kube-vip, so its interface has no say.
+        try:
+            skip = ROLES.tiebreakers((kget("/api/v1/nodes") or {}).get("items") or [])
+        except Exception:
+            skip = set()
+        found = {data.get("default_interface") for name, data in (probes() or {}).items() if name not in skip}
     except Exception:
         return ""
     found.discard(None)
@@ -431,6 +437,14 @@ def vip_interface():
 
 # ARP on a pinned interface needs both to put an address on it and answer for it.
 KUBE_VIP_SECURITY = "securityContext:\n  capabilities:\n    add:\n    - NET_ADMIN\n    - NET_RAW\n"
+# Never on a tiebreaker (homestead_roles): a host kept for an etcd vote must not
+# answer for every app's VIP over its one small link. The chart's own default
+# is no affinity, so this replaces nothing; it also takes kube-vip off a host
+# marked a tiebreaker after kube-vip started there, which a NoSchedule taint
+# alone would not.
+KUBE_VIP_AFFINITY = ("affinity:\n  nodeAffinity:\n    requiredDuringSchedulingIgnoredDuringExecution:\n"
+                     "      nodeSelectorTerms:\n      - matchExpressions:\n        - key: node-role/tiebreaker\n"
+                     "          operator: DoesNotExist\n")
 
 
 def kube_vip_values(interface, class_only, election="global"):
@@ -451,7 +465,8 @@ def kube_vip_values(interface, class_only, election="global"):
         env["vip_interface"] = interface
     if class_only:
         env.update(lb_class_only="true", lb_class_name=VIP_CLASS)
-    return "env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items()) + KUBE_VIP_SECURITY
+    return ("env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items())
+            + KUBE_VIP_SECURITY + KUBE_VIP_AFFINITY)
 
 
 def install_kube_vip(cfg=None):

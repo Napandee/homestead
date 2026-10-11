@@ -71,9 +71,10 @@ def _delete(path):
         pass
 
 
-def run(node, script, timeout=120, wait=60, sleep=time.sleep):
+def run(node, script, timeout=120, wait=60, sleep=time.sleep, stdin=b""):
     """Run script as root on node's host; (stdout text, stderr text). The
-    helper is made for this run and removed after it."""
+    helper is made for this run and removed after it. stdin, when given,
+    is what the script reads: a secret goes there, never on its command line."""
     path = f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}"
     if _get(path):
         # One left from a run that did not finish.
@@ -100,7 +101,8 @@ def run(node, script, timeout=120, wait=60, sleep=time.sleep):
         # is tried again for a while (seen on RKE2 after a host failed).
         for attempt in range(EXEC_TRIES):
             try:
-                out, err = exec_in(NS, pod_name(node), HOST + [script], timeout=timeout, container="host")
+                out, err = exec_in(NS, pod_name(node), HOST + [script], timeout=timeout, container="host",
+                                   **({"stdin": stdin} if stdin else {}))
                 return out.decode("utf-8", "replace"), err
             except ConnectionError as error:
                 if not getattr(error, "retry", False) or attempt == EXEC_TRIES - 1:

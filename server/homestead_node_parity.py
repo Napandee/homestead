@@ -41,6 +41,7 @@ import time
 import urllib.error
 
 import homestead_addons as addons
+import homestead_roles as ROLES
 import homestead_shared as SHARED
 
 kget = ksend = hostrun = platform = probes = None
@@ -118,6 +119,14 @@ def _get(path):
         return None
 
 
+def _vote_only():
+    """The tiebreakers: they never run kube-vip (its affinity), so their
+    interfaces have no say in the one it announces on. Empty when the nodes
+    cannot be read - every node counts, as before."""
+    found = _get("/api/v1/nodes")
+    return ROLES.tiebreakers((found or {}).get("items") or []) if isinstance(found, dict) else set()
+
+
 def _ready_nodes():
     return [n["metadata"]["name"] for n in (kget("/api/v1/nodes") or {}).get("items", [])
             if any(c.get("type") == "Ready" and c.get("status") == "True"
@@ -190,7 +199,8 @@ def kube_vip():
     if not match:
         return ""
     try:
-        found = {str(data.get("default_interface") or "") for data in (probes() or {}).values()}
+        skip = _vote_only()
+        found = {str(data.get("default_interface") or "") for name, data in (probes() or {}).items() if name not in skip}
     except Exception:
         return ""
     found.discard("")
@@ -220,7 +230,9 @@ def _ours(values):
         env[match.group(1)] = match.group(2)
         index += 1
     rest = "\n".join(lines[index:]).strip("\n")
-    if rest and rest + "\n" != addons.KUBE_VIP_SECURITY:
+    # What Homestead has written over the releases: nothing after the env, the
+    # capabilities, and then the affinity that keeps kube-vip off tiebreakers.
+    if rest and rest + "\n" not in (addons.KUBE_VIP_SECURITY, addons.KUBE_VIP_SECURITY + addons.KUBE_VIP_AFFINITY):
         return None
     return env, bool(rest)
 
@@ -263,7 +275,8 @@ def kube_vip_settings():
         # from there could not put the VIPs on it.
         try:
             reported = probes() or {}
-            ready = _ready_nodes()
+            skip = _vote_only()
+            ready = [name for name in _ready_nodes() if name not in skip]
         except Exception:
             reported, ready = {}, []
         found = {str((reported.get(node) or {}).get("default_interface") or "") for node in ready}

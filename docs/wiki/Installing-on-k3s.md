@@ -225,12 +225,55 @@ a more practical planning allowance for Homestead's supporting services. Do not
 rely on a slow microSD card for etcd. Check the Pi OS cgroup requirements in the
 [K3s hardware and Raspberry Pi guide](https://docs.k3s.io/installation/requirements).
 
+Check the machine before it joins - the join guide shows this command for a
+server or a tiebreaker, and the installer runs the same checks itself:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo HS_ROLE=tiebreaker sh -s -- --check
+```
+
+It measures how fast the disk syncs (etcd needs under 10 ms - `fio` if
+installed, else `dd`), and checks the memory cgroup controller (on a Raspberry
+Pi, `cgroup_enable=memory cgroup_memory=1` in `/boot/firmware/cmdline.txt`),
+the `vxlan` kernel module, swap, and on a Pi any under-voltage or throttling.
+It installs nothing.
+
+On the on-board Ethernet of a Raspberry Pi 5, some kernels stall sending - the
+link stays up, nothing is sent, nothing is logged - until the Pi is
+power-cycled; the cluster rides it out on the other two votes. Until your
+kernel has the fix, `sudo ethtool -K eth0 tso off sg off` avoids it.
+
 Keep ordinary apps, VMs and Longhorn replicas on the two larger hosts: configure
 placement/taints and Longhorn node/disk scheduling explicitly. K3s servers can
 run workloads by default; neither a server role nor a small machine's size
 automatically excludes it. System DaemonSets may still run there. Advanced users
 can configure a [dedicated etcd server](https://docs.k3s.io/installation/server-roles)
-using K3s's role controls; Homestead's standard join flow creates a regular server.
+using K3s's role controls. Homestead's join guide (**Cluster → Add a host**)
+offers it as **Tiebreaker (votes only)**: its command joins a regular server
+with the taint and label below and, on k3s, the other servers' cluster-wide
+settings - read from a server's `k3s.io/node-args`, never its token. The
+installer joins one with `HS_ROLE=tiebreaker`, setting the taint and label (on
+RKE2 the guide sends you there); it does not copy settings, which matter only
+where the first server was set up with ones of its own. To set one up by hand instead, mark
+it before k3s first starts, in `/etc/rancher/k3s/config.yaml`:
+
+```yaml
+node-taint: ["node-role/tiebreaker=true:NoSchedule"]
+node-label: ["node-role/tiebreaker=true"]
+```
+
+Homestead then treats it as holding a vote only: kube-vip never runs there, so
+no app's address is answered over its link, and its interface has no say in
+the one kube-vip announces on; it holds no Longhorn copies; and "If this host
+goes down" never offers it as a home for an app or a VM. If you added an
+`affinity` of your own to kube-vip's values to keep it off the small server,
+remove it: Homestead leaves values it did not write alone, and its own values
+already keep kube-vip off a tiebreaker.
+
+**Cluster** lists the etcd members with a **tiebreaker** badge on such a host.
+With two members - no failure margin - Cluster and the setup guide offer **Add a
+tiebreaker** on k3s and RKE2, which opens the join guide with that role chosen;
+the health check says a tiebreaker would fix it.
 
 The small server supplies **control-plane quorum**, not a third storage copy.
 With only two storage hosts, choose two replicas on different hosts rather than
@@ -242,6 +285,49 @@ remains, and the surviving main host must fit the workloads. An ARM node does
 not make x86-only apps or VM guests portable. If using V2, review
 [selective activation and Homestead's setup limitation](Storage#longhorn-v2-support-and-considerations)
 before adding the small node.
+
+If you already have an app host to spare, [make it a server](#making-an-app-host-a-server) instead.
+
+### Making an app host a server
+
+A cluster with one or two servers can gain an etcd vote from an app host
+it already has. In **Nodes**, open the host's **Host actions** and choose
+**Make server…**. It is offered on k3s with embedded etcd only.
+
+The review checks first, and changes nothing while anything stops it:
+- the host is a Ready app host, not a tiebreaker, and Homestead does not run on it;
+- every etcd member is Ready, and the host runs the servers' k3s version;
+- the servers' shared settings can be read;
+- the host has its node password (`/etc/rancher/node/password`) and the
+  `kube-system/<host>.node-password.k3s` Secret, so it comes back as the same Node;
+- its apps fit on the other hosts, by CPU and by memory.
+
+Then a job, in the job tray:
+1. cordons the host and moves its apps off;
+2. reads the server token from a server host and passes it to this host on
+   its helper's input, never on a command line, into a root-only file the
+   reinstall deletes. Afterwards the host keeps the token where every k3s
+   server does (`/var/lib/rancher/k3s/server/token`, and the installer's
+   `/etc/systemd/system/k3s.service.env`);
+3. removes the k3s agent and installs a server with the cluster's settings and
+   the host's own (`--node-ip`, `--flannel-iface`, labels and taints, kubelet
+   arguments);
+4. waits for the host to come back as an etcd member, then uncordons it.
+
+The host is out of service for several minutes. It keeps its Node, labels,
+Longhorn disks and volume copies, and its local-path folders.
+
+Nothing else may restart or update a host while this runs: a reboot, an OS
+update or a platform upgrade that is under way stops it at the review.
+
+If the installer cannot be downloaded, nothing is removed and the host stays
+an app host. If the reinstall fails later, k3s is left as the installer left
+it: stopping a server that joined etcd would cost a vote, not save one. The
+job shows the last lines of `/var/log/homestead-promote.log`, and how to bring
+the host back as an app host.
+
+Don't use **Remove…** for this: removing a host discards its volume copies,
+and with them any volume that has a single copy there.
 
 ### Volume copies as the cluster grows
 

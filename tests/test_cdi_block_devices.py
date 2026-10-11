@@ -74,7 +74,7 @@ class BootstrapDeviceTests(unittest.TestCase):
             # The release is looked up (a redirect to its tag); the installer itself is a no-op.
             prelude = ('set -eu\nsay() { :; }\nsystemctl() { :; }\n'
                        'curl() { case "$*" in *url_effective*) echo https://github.com/rancher/rke2/releases/tag/v1.34.6+rke2r1 ;; *) echo ":" ;; esac; }\n')
-            prelude += 'NODE_IP=192.0.2.11\nJOIN_TAINT=homestead.io/storage-pending=longhorn:PreferNoSchedule\nRKE2_VERSION=""\n'
+            prelude += 'NODE_IP=192.0.2.11\nJOIN_TAINT=homestead.io/storage-pending=longhorn:PreferNoSchedule\nJOIN_LABEL=node-role/tiebreaker=true\nRKE2_VERSION=""\n'
             for role in ("server", "agent"):
                 result = subprocess.run([SH], input=prelude + body +
                     f"\ninstall_rke2 {role} https://192.0.2.10:9345 fixture-token\n",
@@ -86,6 +86,7 @@ class BootstrapDeviceTests(unittest.TestCase):
                 self.assertIn("node-ip: 192.0.2.11\n", settings)
                 self.assertIn("token: fixture-token\n", settings)
                 self.assertEqual("enable-servicelb: true" in settings, role == "server")
+                self.assertIn('node-label:\n  - "node-role/tiebreaker=true"\n', settings)
 
 
 class BlockImportDiagnosticsTests(unittest.TestCase):

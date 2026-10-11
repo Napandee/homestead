@@ -1628,6 +1628,13 @@ ssh_pwauth: true
         message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
       return { operation: op, steps: [], background: true };
     },
+    "/api/node/promote/plan": url => ({ node: url.searchParams.get("node"), blockers: [],
+      warnings: ["3 → 4 members: an even count adds no failure margin", `${url.searchParams.get("node")} is out of service for several minutes while k3s reinstalls`],
+      facts: { version: "v1.31.4+k3s1", server: "192.0.2.10", settings: ["--cluster-cidr", "10.42.0.0/16"],
+        host_settings: ["--node-ip", "192.0.2.14"], members: ["harvester-node1", "harvester-node2", "harvester-node3"], replicas: 3 },
+      review_token: "demo-promote" }),
+    "/api/node/promote": () => ({ ok: true, operation: { id: "demo-promote", kind: "host-promote", status: "running", progress: 10,
+      title: "Make a host a server", message: "Moving apps off" }, detail: "Making the host a server; follow it in the job tray" }),
     "/api/quorum": { members: ["harvester-node1", "harvester-node2", "harvester-node3"], ready: ["harvester-node1", "harvester-node2", "harvester-node3"],
       total: 3, quorum_needs: 2, can_lose: 1, power_enabled: true },
     "/api/node/impact": url => ({ node: url.searchParams.get("node"),
@@ -1691,7 +1698,8 @@ ssh_pwauth: true
     "/api/cluster": { generated_at: 1789891200, state: "attention",
       summary: "The platform is online, with resilience or warning items to review.",
       versions: { harvester: "1.6.0", kubernetes: "1.34.1+rke2r1" },
-      control_plane: { total: 2, ready: 2, etcd_total: 2, etcd_ready: 2, quorum_needed: 2, quorum_margin: 0, state: "attention" },
+      control_plane: { total: 2, ready: 2, etcd_total: 2, etcd_ready: 2, quorum_needed: 2, quorum_margin: 0, state: "attention",
+        members: [{ name: "harvester-node1", ready: true, role: "server" }, { name: "harvester-node2", ready: true, role: "server" }] },
       nodes: nodes.map(n => ({ name: n.name, ready: true, status: "Ready", roles: n.roles,
         schedulable: n.schedulable, pressure: [], cpu_pct: n.cpu_pct, memory_pct: n.mem_pct,
         disk_pct: n.fs_pct, pods: n.pods, version: "v1.34.1+rke2r1", os: "Harvester v1.6.0" })),
@@ -2141,7 +2149,11 @@ ssh_pwauth: true
     "/api/disks/retire": { ok: true, operation: { id: "op-retire" } },
     "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
       agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
-      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443',
+      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage',
+      tiebreaker: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage --node-taint node-role/tiebreaker=true:NoSchedule --node-label node-role/tiebreaker=true',
+      check: "curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo HS_ROLE=tiebreaker sh -s -- --check",
+      shared_settings: ["--disable", "traefik", "--default-local-storage-path", "/var/lib/rancher/k3s/storage"], settings_known: true,
+      shared_flags: ["--cluster-cidr", "--service-cidr", "--cluster-dns", "--cluster-domain", "--flannel-backend", "--disable", "--egress-selector-mode", "--default-local-storage-path", "--disable-network-policy", "--disable-kube-proxy", "--disable-cloud-controller", "--disable-helm-controller", "--secrets-encryption", "--embedded-registry"],
       longhorn: "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils" },
     "/api/resources/kinds": [
       ["Workloads", "", "v1", "pods", "Pod", true], ["Workloads", "apps", "v1", "deployments", "Deployment", true],
@@ -2818,7 +2830,7 @@ ssh_pwauth: true
       issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
     placement: { done: false, applies: true, mode: "", unreserved: 4, notes: [], hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: false, tainted: false, takes_work: true }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
-      ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [] },
+      ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [], tiebreakers: [] },
     clocks: { done: true, applies: false },
     address: { done: true, applies: true, url: "http://192.0.2.245:8088", service_url: "http://homestead.lab.svc:8088", vips: 3, load_balancer: "kube-vip", harvester: true },
     lan: { done: demoPlatform === "harvester", applies: true,
@@ -2895,7 +2907,8 @@ ssh_pwauth: true
       attached: volumes.filter(row => row.state === "attached").length, reasons: [] });
     const cluster = responses["/api/cluster"];
     Object.assign(cluster, { state: "healthy", summary: "Cluster services and all three control-plane nodes are healthy", warnings: [] });
-    Object.assign(cluster.control_plane, { total: 3, ready: 3, etcd_total: 3, etcd_ready: 3, quorum_needed: 2, quorum_margin: 1, state: "healthy" });
+    Object.assign(cluster.control_plane, { total: 3, ready: 3, etcd_total: 3, etcd_ready: 3, quorum_needed: 2, quorum_margin: 1, state: "healthy",
+      members: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: true, role: "server" })) });
     cluster.nodes[2].roles = [...nodes[2].roles];
     cluster.onboarding.reason = "Three control-plane nodes provide a one-node failure margin.";
     demoSetup.steps.health = { done: true, applies: true, summary: cluster.summary, issues: [] };
