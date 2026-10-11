@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+import homestead_routes
 
 kget = ksend = None
 CONTROLLER_NS = "kube-system"
@@ -367,3 +368,12 @@ def job_status(item):
     if status.get("failed") and not status.get("active"):
         return "failed", 100, f"Helm failed; the {ref['name']} job's log in {ref['namespace']} says why"
     return "running", 40 if status.get("active") else 10, "Helm is running" if status.get("active") else "Starting Helm"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/helm/search"): ("viewer", lambda request: search((request.query.get("q") or [""])[0])),
+    ("GET", "/api/helm/chart"): ("viewer", lambda request: chart((request.query.get("repo") or [""])[0], (request.query.get("name") or [""])[0])),
+    ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached("helm", 10, releases)),
+    ("GET", "/api/helm/release"): ("viewer", lambda request: release((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
+}

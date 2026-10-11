@@ -141,9 +141,9 @@ Tests fail when the two disagree.
 
 ## Code quality
 
-- **Small, finished changes.** A pull request does one thing completely:
-  the code, its tests, its demo data and any docs it changes. Leave unrelated
-  clean-ups for a pull request of their own.
+- **Finished changes.** A pull request does its job completely: the code,
+  its tests, its demo data and any docs it changes. Leave unrelated clean-ups
+  for a pull request of their own.
 - **Check before acting.** Code that changes a cluster reads the current state
   first and refuses, with a reason, when it would harm a running workload or
   lose data. Say in the test which case it refuses.
@@ -157,8 +157,14 @@ Tests fail when the two disagree.
 ## Commits and pull requests
 
 - Pull requests target `dev`. `main` only receives releases.
-- One topic per pull request, with the tests passing and each commit signed
-  off (see [Sign-off](#sign-off)).
+- One pull request per issue, with the tests passing and each commit signed
+  off (see [Sign-off](#sign-off)). A large feature is still one pull request:
+  split it into commits, one per part, and list the parts in the description
+  so each can be reviewed in turn.
+- Don't stack pull requests that depend on each other, or open the same
+  change in two of them. A fix the feature needs goes in as one of its
+  commits; a fix that stands alone, for another issue, gets a pull request
+  of its own.
 - A commit message's first line says what changed for a person using Homestead;
   the body says why, and anything a reviewer should look at closely.
 - Link the issue it fixes with `Fixes #123` in the description.

@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_setup as SETUP
+import homestead_share_servers as SERVERS
 
 
 class SetupTests(unittest.TestCase):
@@ -121,7 +122,7 @@ class UniFiSetupStateTests(unittest.TestCase):
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
                         (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (server, "vm_network_details", []),
-                        (server, "samba_state", {}), (server.LH, "backup_target", {}),
+                        (SERVERS, "samba_state", {}), (server.LH, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IMP, "list_sources", []), (server.API_KEYS, "list_keys", []),
                         (server.FLEET, "summary", {}), (server.HOST_CONSOLE, "inventory", {}),
@@ -139,7 +140,7 @@ class UniFiSetupStateTests(unittest.TestCase):
             with self.subTest(saved=saved), mock.patch.object(ipam, "kget", return_value={"metadata": {"resourceVersion": "7"},
                     "data": {ipam.DATA_KEY: json.dumps(saved)}}) as read, \
                     mock.patch.object(ipam, "ksend") as write, mock.patch.object(ipam, "_unifi_get") as probe:
-                self.assertEqual({"done": expected, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
+                self.assertEqual({"done": expected, "applies": True}, SETUP.state("admin", "admin")["steps"]["unifi"])
                 read.assert_called_once_with(f"/api/v1/namespaces/{ipam.NAMESPACE}/configmaps/{ipam._map()}")
                 write.assert_not_called(); probe.assert_not_called()
 
@@ -156,23 +157,44 @@ class UniFiSetupStateTests(unittest.TestCase):
         for saved, done in cases:
             with self.subTest(saved=saved), mock.patch.object(ipam, "kget", return_value={"metadata": {"resourceVersion": "7"},
                     "data": {ipam.DATA_KEY: json.dumps(saved)}}):
-                step = self.server.setup_state("admin", "admin")["steps"]["ipam"]
+                step = SETUP.state("admin", "admin")["steps"]["ipam"]
                 self.assertEqual(done, step["done"], step)
                 self.assertEqual(len(saved.get("subnets") or []), len(step["subnets"]))
 
     def test_missing_ipam_configuration_is_an_unfinished_step_without_an_error(self):
         with mock.patch.object(self.server.IPAM, "kget", side_effect=urllib.error.HTTPError("/configmap", 404, "Not found", None, None)):
-            self.assertEqual({"done": False, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
+            self.assertEqual({"done": False, "applies": True}, SETUP.state("admin", "admin")["steps"]["unifi"])
 
     def test_unreadable_ipam_configuration_keeps_a_real_error_and_cannot_complete_the_step(self):
         for code in (403, 503):
             with self.subTest(code=code), mock.patch.object(self.server.IPAM, "kget",
                     side_effect=urllib.error.HTTPError("/configmap", code, "Unavailable", None, None)):
-                step = self.server.setup_state("admin", "admin")["steps"]["unifi"]
+                step = SETUP.state("admin", "admin")["steps"]["unifi"]
                 self.assertFalse(step["done"])
                 self.assertTrue(step["applies"])
                 self.assertIn(str(code), step["error"])
                 self.assertNotIn("tuple", step["error"])
+
+
+class PlacementSetupStateTests(UniFiSetupStateTests):
+    """How hosts share the work: done once a way is chosen, and shown only
+    with two hosts taking work - read from the cluster, not only the demo."""
+
+    def step(self, found):
+        import homestead_placement_mode as PLACEMODE
+        real = SETUP.homestead_routes.cached
+        with mock.patch.object(PLACEMODE, "current", return_value=found), \
+                mock.patch.object(SETUP.homestead_routes, "cached",
+                                  side_effect=lambda key, ttl, fn: fn() if key == "placement" else real(key, ttl, fn)):
+            return SETUP.state("admin", "admin")["steps"]["placement"]
+
+    def test_the_step_is_done_once_a_way_is_chosen_default_included(self):
+        for chosen, done in (("", False), ("default", True), ("standby", True)):
+            found = self.step({"mode": chosen, "hosts": [], "applies": True})
+            self.assertEqual((done, True), (found["done"], found["applies"]), chosen)
+
+    def test_the_step_does_not_apply_with_one_host_taking_work(self):
+        self.assertFalse(self.step({"mode": "", "hosts": [], "applies": False})["applies"])
 
 
 class NetworkSetupStateTests(unittest.TestCase):
@@ -197,13 +219,13 @@ class NetworkSetupStateTests(unittest.TestCase):
         self.networks, self.samba = [], {"installed": False, "enabled": False}
         patch = mock.patch.object(server, "kget", side_effect=lambda _: {"items": self.networks})
         self.read = patch.start(); self.addCleanup(patch.stop)
-        patch = mock.patch.object(server, "samba_state", side_effect=lambda: self.samba)
+        patch = mock.patch.object(SERVERS, "samba_state", side_effect=lambda: self.samba)
         self.smb_read = patch.start(); self.addCleanup(patch.stop)
         patch = mock.patch.object(server, "ksend")
         self.write = patch.start(); self.addCleanup(patch.stop)
 
     def state(self, role="admin"):
-        state = self.server.setup_state("person", role)
+        state = SETUP.state("person", role)
         self.write.assert_not_called()
         return state["steps"]
 
@@ -259,12 +281,12 @@ class DeployArgsTests(unittest.TestCase):
 
     def test_args_reach_the_container_and_bad_ones_are_refused(self):
         import server
-        dep, _ = server.build_deployment({"name": "cloudflared", "image": "cloudflare/cloudflared:latest",
+        dep, _ = server.DEPLOY.build_deployment({"name": "cloudflared", "image": "cloudflare/cloudflared:latest",
                                           "args": ["tunnel", "--no-autoupdate", "run"], "network_mode": "internal"})
         self.assertEqual(["tunnel", "--no-autoupdate", "run"], dep["spec"]["template"]["spec"]["containers"][0]["args"])
         for bad in ("tunnel run", [1], ["x"] * 33, ["a" * 600]):
             with self.subTest(bad=str(bad)[:20]), self.assertRaises(ValueError):
-                server.build_deployment({"name": "c", "image": "busybox", "args": bad})
+                server.DEPLOY.build_deployment({"name": "c", "image": "busybox", "args": bad})
 
 
 if __name__ == "__main__":

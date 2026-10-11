@@ -83,7 +83,7 @@ class DeployTests(unittest.TestCase):
     def test_a_lan_container_has_no_service_and_joins_its_network(self):
         import server
         with mock.patch.object(server.HW, "features", lambda: []):
-            dep, svc = server.build_deployment({"name": "zigbee2mqtt", "namespace": "lab", "image": "koenkk/zigbee2mqtt",
+            dep, svc = server.DEPLOY.build_deployment({"name": "zigbee2mqtt", "namespace": "lab", "image": "koenkk/zigbee2mqtt",
                                                 "network_mode": "lan", "lan": LAN.clean(WANTED), "volumes": [],
                                                 "ports": [{"container": 8080, "expose": True}]})
         self.assertIsNone(svc)

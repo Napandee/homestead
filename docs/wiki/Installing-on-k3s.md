@@ -234,7 +234,10 @@ using K3s's role controls; Homestead's standard join flow creates a regular serv
 
 The small server supplies **control-plane quorum**, not a third storage copy.
 With only two storage hosts, choose two replicas on different hosts rather than
-requesting an unplaceable third copy. After a storage-host failure only one copy
+requesting an unplaceable third copy. Homestead counts only the hosts Longhorn
+stores on when it raises copies (below), so a small server Longhorn does not
+use - no Longhorn there, or scheduling turned off or an eviction asked on it or
+its disks - does not make it ask for a third. After a storage-host failure only one copy
 remains, and the surviving main host must fit the workloads. An ARM node does
 not make x86-only apps or VM guests portable. If using V2, review
 [selective activation and Homestead's setup limitation](Storage#longhorn-v2-support-and-considerations)
@@ -244,8 +247,13 @@ before adding the small node.
 
 The script sets Longhorn up with one copy of each volume, which is all one
 machine can hold. As machines join, Homestead raises the default for new
-volumes with them, up to three - while it is still the installer's one copy, so
-a number you chose is kept. Existing volumes keep their count: **Settings →
+volumes - and its own data volume - with the hosts Longhorn can store a copy on,
+up to three, while it is still the installer's one copy, so a number you chose
+is kept. A host counts when Longhorn reports it Ready and allows scheduling on
+it and on one of its disks, with no eviction asked: a node kept only for etcd
+votes, with no Longhorn running there, does not, so two
+storage hosts keep two copies rather than asking for a third that cannot be
+placed. Existing volumes keep their count: **Settings →
 Hardware and storage → Storage classes** makes a class with three copies the default. **Volumes** shows each volume's copies - `×1` in orange is a
 volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)

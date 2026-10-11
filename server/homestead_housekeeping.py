@@ -20,8 +20,11 @@ import json
 import os
 import re
 import time
+import urllib.error
 
+import homestead_names as NAMES
 import homestead_shared as SHARED
+import homestead_routes
 
 DATA_DIR = "/data"
 LOG_DAYS = 365
@@ -39,6 +42,8 @@ STORES = [
     ("Long-term stats", ["history.json", "history-live.json"], "live for an hour, five-minutely for 2 days, hourly for 90 days"),
     ("Change history", ["change-history.json"], "50 changes per app, for 180 days"),
     ("Storage forecast", ["storage-forecast.json"], "a figure a day for 90 days"),
+    ("Hosts coming back", ["recovery.json"], "which hosts returned in the last week, and whether that was dealt with"),
+    ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
     ("Alerts", ["alerts.json"], "what is active, and recent alerts"),
     ("Schedules", ["schedules.json"], "the last stop or start of each schedule"),
     ("Outage actions", ["outage-actions.json"], "restarts done during the current outage of each app"),
@@ -56,9 +61,56 @@ LOGS = ("image-update-history.jsonl", "console-audit.jsonl")
 _TEMP = re.compile(r"(\.tmp$|^\.icon-|\.housekeeping$)")
 
 
-def bind(data_dir="/data"):
+# server.py's tidy, which knows which logos are still used (bind).
+_bound = {"kget": None, "portal_links": lambda: []}
+
+
+def bind(data_dir="/data", kget=None, portal_links=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    if kget:
+        _bound.update(kget=kget, portal_links=portal_links or (lambda: []))
+
+
+def referenced_icons():
+    """Every cached logo something still uses: apps, VMs and portal links.
+    If any of them cannot be read, None - and no logo is removed."""
+    kget, found = _bound["kget"], set()
+    try:
+        for d in kget("/apis/apps/v1/deployments").get("items", []):
+            found.add((d["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
+        try:
+            vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            vms = []
+        for v in vms:
+            found.add((v["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
+        for link in _bound["portal_links"]():
+            found.add(str(link.get("icon") or ""))
+    except Exception:
+        return None
+    return {f for f in found if f.startswith("/api/icons/")}
+
+
+def tidy_unused():
+    """The tidy, logos nothing uses included - daily on the leader, or asked for."""
+    refs = referenced_icons()
+    if refs is None:
+        # Not knowing what is in use, keep every logo; the rest still runs.
+        refs = {f"/api/icons/{os.path.basename(p)}" for p in _files("icons/*")}
+    result = tidy(refs)
+    homestead_routes.forget("housekeeping")
+    return result
+
+
+def tidy_now():
+    """Tidy when asked, and say what was freed."""
+    result = tidy_unused()
+    mb = result["freed"] / 1024**2
+    return {"ok": True, **result, "report": report(),
+            "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"}
 
 
 def _all_files():
@@ -204,3 +256,10 @@ def alert_facts(rep):
                      "make its data volume larger under Volumes.",
              "resolved": "Homestead's data volume has room again", "href": "/settings#homestead-data",
              "signals": {"pct": round(pct)}}]
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/homestead/data"): ("admin", lambda request: homestead_routes.cached("housekeeping", 60, report)),
+    ("POST", "/api/homestead/data/tidy"): ("admin", lambda request: tidy_now()),
+}

@@ -27,7 +27,10 @@ import time
 import urllib.parse
 import urllib.request
 
+import homestead_names as NAMES
+import homestead_routes as ROUTER
 import homestead_shared as SHARED
+import homestead_uptime as UPTIME
 
 KEY = "outage-actions"
 UP_RESET = 30 * 60
@@ -37,9 +40,17 @@ DATA_DIR = "/data"
 _lock = threading.Lock()
 
 
-def bind(data_dir="/data"):
+# What server.py lends to read and write the app or VM, and to check its
+# name: the same functions its own routes use (bind).
+_bound = {"kget": None, "ksend": None, "dns_name": None, "guard": lambda ns, name: None}
+
+
+def bind(data_dir="/data", kget=None, ksend=None, dns_name=None, guard=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    for key, value in (("kget", kget), ("ksend", ksend), ("dns_name", dns_name), ("guard", guard)):
+        if value:
+            _bound[key] = value
 
 
 def _path():
@@ -275,3 +286,60 @@ def alert_facts(scheduled_report=None):
                           "body": s["last_error"], "resolved": f"{what}{name} could be restarted", "href": href,
                           "signals": {"error": s["last_error"]}})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+def target(b):
+    """(kind, ns, name, path) of the app or VM outage actions are for."""
+    kind = b.get("kind")
+    ns = _bound["dns_name"](b.get("ns"), "namespace")
+    if kind == "app":
+        name = _bound["dns_name"](b.get("name"), "workload name")
+        _bound["guard"](ns, name)
+        return kind, ns, name, f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
+    if kind == "vm":
+        name = _bound["dns_name"](b.get("name"), "VM name")
+        return kind, ns, name, f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"
+    raise ValueError("outage actions are for an app or a VM")
+
+
+def set_actions(b):
+    """What to do when an app or VM is down - nothing unless asked. An annotation, so nothing restarts."""
+    kind, ns, name, path = target(b)
+    on_port = True
+    if kind == "vm":
+        current = _bound["kget"](path)
+        chosen = UPTIME.setting(NAMES.read((current.get("metadata") or {}).get("annotations") or {}, "uptime"))
+        on_port = chosen["mode"] in ("tcp", "http") and bool(chosen.get("port"))
+    actions = clean(b.get("actions"), kind, on_port)
+    _bound["ksend"]("PATCH", path, {"metadata": {"annotations": {
+        NAMES.key(KEY): json.dumps(actions, separators=(",", ":")) if actions else None}}},
+        ctype="application/merge-patch+json")
+    ROUTER.forget("wl" if kind == "app" else "vms")
+    said = []
+    if actions and actions.get("restart"):
+        r = actions["restart"]
+        said.append(f"restarted after {r['after_min']} min down, at most {r['max']} time{'s' if r['max'] != 1 else ''}")
+    if actions and actions.get("webhook"):
+        said.append("its webhook called")
+    return {"ok": True, "actions": actions,
+            "detail": f"When {name} is down: " + (" and ".join(said) if said else "nothing is done")}
+
+
+def test_webhook(b):
+    kind, ns, name, _ = target(b)
+    url = webhook_url(b.get("webhook"))
+    if not url:
+        raise ValueError("type the webhook address to test")
+    item = {"kind": kind, "ns": ns, "name": name}
+    try:
+        post(url, payload(item, "test"))
+    except Exception as error:
+        return {"ok": False, "detail": f"The webhook did not take it: {str(error)[:200]}"}
+    return {"ok": True, "detail": "The webhook took the test"}
+
+
+ROUTES = {
+    ("POST", "/api/monitoring/actions"): ("operator", lambda request: set_actions(request.body)),
+    ("POST", "/api/monitoring/actions/test"): ("operator", lambda request: test_webhook(request.body)),
+}

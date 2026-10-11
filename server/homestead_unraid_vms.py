@@ -745,3 +745,11 @@ def status(item):
             return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
         return "succeeded", 100, ref["detail"]
     return "failed", 100, "Unknown import step"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/sources/vms"): ("admin", lambda request: listing(str(request.body.get("name") or ""))),
+    ("POST", "/api/sources/vms/shutdown"): ("admin", lambda request: shutdown(str(request.body.get("source") or ""), request.body.get("vm"))),
+    ("POST", "/api/vms/import-unraid"): ("admin", lambda request: {"ok": True, "operation": start(request.body, request.user or "")}),
+}

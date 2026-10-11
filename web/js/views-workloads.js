@@ -551,6 +551,8 @@ function renderWorkloads() {
     { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
     { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
+    { label: "Set reservations from use…", icon: "sliders", run: "reservationsReview()", need: "operator", tip: "Reserve CPU and memory for apps from what they used over the last week" },
+    { label: "Priority tiers…", icon: "list", run: "priorityReview()", need: "operator", tip: "Which apps fit first when a host fails and the others are short of room" },
     { label: "Logos for apps without one", icon: "logo", run: "logoFixup()", need: "operator", tip: "Match apps with no logo to the app store's" },
     { label: "Change history", icon: "clock", run: "wlHistory()", tip: "Every app's changes: who, when and what" },
     { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" },
@@ -980,7 +982,7 @@ function balanceContainersHtml(b) {
     UI.lead(!b.on ? "Containers are left where they are."
       : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
       : plan.quiet === "even" ? "The hosts already carry similar CPU and memory; nothing is worth a restart."
-      : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, or has no other host it may run on. See Not moved below."
+      : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, only an admin can move it, or it has no other host it may run on. See Not moved below."
       : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),
     plan.metrics === false ? UI.callout("warn", "Usage is partly unknown", "A host reports no live CPU and memory, so the plan may be off. Check metrics-server.") : "",
     UI.section("Hosts", hosts),
@@ -1029,7 +1031,7 @@ function balanceReview() {
         ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "nothing worth moving"],
       ["Volume copies", !BALANCE.volumes.on ? "left where they are" : volumes.length
         ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "nothing to move"]]),
-    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host, the rest wait for you. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
+    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host within 10 minutes, the job stops there and the rest are not moved; once that container runs, review again to move the rest. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
     containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now") : "",
   ].join("");
   const go = $("#balanceGo");
@@ -1071,6 +1073,160 @@ window.balanceStart = async () => {
     toast((started.length ? `Started ${started.join(" and ")}, but ` : "") + e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Start balancing"; }
     if (e.body?.plan) { balancePlan("containers"); balancePlan("volumes"); }
+  } finally { window.refreshOperations?.(true); }
+};
+
+/* Reservations from a week of use, for many apps at once. The scheduler
+   places apps by what they reserve, so apps reserving nothing are ticked;
+   ones whose reservation only differs from their use are offered unticked,
+   as someone may have set it on purpose. Ticking plans again, so the review
+   token covers exactly what is started. */
+const RESERVE = { chosen: null, plan: null, asked: 0 };
+window.reservationsReview = async () => {
+  RESERVE.chosen = null; RESERVE.plan = null;
+  modal("Set reservations from use", `<div id="resPlan"><div class="empty"><span class="spin2"></span> Reading a week of use…</div></div>
+    ${UI.actions(UI.button("Set reservations", "reservationsStart()", { kind: "pri", id: "reserveGo", attrs: 'data-need="operator" disabled' }), UI.cancel())}`, true);
+  await reservationsPlan();
+};
+async function reservationsPlan() {
+  const pane = $("#resPlan");
+  if (!pane) return;
+  // Each tick plans again; an answer to an earlier tick is dropped.
+  const asked = ++RESERVE.asked;
+  const query = RESERVE.chosen ? `?${new URLSearchParams({ chosen: [...RESERVE.chosen].join(",") })}` : "";
+  let plan;
+  try { plan = await api(`/api/workloads/requests/plan${query}`); }
+  catch (e) { if (asked === RESERVE.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps' use", esc(e.message)); return; }
+  if (asked !== RESERVE.asked || !$("#resPlan")) return;
+  RESERVE.plan = plan;
+  if (!RESERVE.chosen) RESERVE.chosen = new Set(plan.apps.filter(a => a.chosen).map(a => a.id));
+  pane.innerHTML = reservationsHtml(plan);
+  const go = $("#reserveGo");
+  if (go) go.disabled = !RESERVE.chosen.size || RESERVE.chosen.size > plan.max;
+  window.applyRole?.();
+}
+/* A reservation in Edit's words (editCpuWords, editSpan in views-lifecycle.js).
+   What a container reserves now is what it reserves in effect: Kubernetes
+   takes a limit as the request where none is set, and the review says so. */
+const reserveNow = (c, r) => {
+  const value = r === "cpu" ? (c.cpu_now_m ? editCpuWords(c.cpu_now_m) : "none") : (c.memory_now_mi ? reservedMemory(c.memory_now_mi) : "none");
+  return (c.from_limit || []).includes(r) ? `${value} (its limit)` : value;
+};
+function reservationsHtml(plan) {
+  const apps = plan.apps || [], chosen = apps.filter(a => RESERVE.chosen.has(a.id));
+  const over = chosen.length > plan.max;
+  const rows = apps.map((a, i) => [
+    `<label class="rb-app"><input type="checkbox" id="res_${i}" ${RESERVE.chosen.has(a.id) ? "checked" : ""}
+      onchange="reservationsItem(${jsq(a.id)},this.checked)"> <span class="mono">${esc(a.id)}</span></label>${a.missing ? ` ${UI.chip("reserves nothing", "warn")}` : ""}`,
+    a.changes.map(c => `<div>${a.changes.length > 1 ? `<span class="mono">${esc(c.container)}</span> ` : ""}
+      <span>${esc(reserveNow(c, "cpu"))} → <b>${esc(editCpuWords(parseInt(c.cpu, 10)))}</b> CPU · ${esc(reserveNow(c, "memory"))} → <b>${esc(reservedMemory(parseInt(c.memory, 10)))}</b></span>
+      <span class="sub">usually at or under ${esc(editCpuWords(c.cpu_p95_m))} and ${esc(reservedMemory(c.mem_p95_mi))}, peak ${esc(reservedMemory(c.mem_max_mi))} over ${esc(editSpan(c))}${c.lowers ? " · lowers it" : ""}${c.capped.length ? " · held at its limit" : ""}${(c.from_limit || []).some(r => !c.capped.includes(r)) ? " · no longer reserves its whole limit" : ""}</span></div>`).join("")
+      + (a.replicas ? "" : `<div class="sub">Stopped: takes the new reservation when it next starts.</div>`)]);
+  const managed = (plan.skipped || []).filter(s => s.yaml), other = (plan.skipped || []).filter(s => !s.yaml);
+  return [
+    UI.lead(over ? `${chosen.length} apps are ticked; one run changes at most ${plan.max}. Untick some, and set the rest afterwards.`
+      : chosen.length ? `Sets what ${chosen.length} app${chosen.length === 1 ? "" : "s"} reserve${chosen.length === 1 ? "s" : ""} from their use over the last week. Each restarts once, one at a time.`
+      : apps.length ? "Tick the apps to change." : "Every app's reservation already matches its use, or has too few readings yet."),
+    rows.length ? UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Reservation", className: "grow" }], rows)) : "",
+    managed.length ? UI.more(`Applied by Flux or Argo CD · ${managed.length}`, managed.map(s => `<p><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</p>
+      <pre class="mono small">${esc(s.yaml)}</pre>`).join(""), false, "reserve-managed") : "",
+    other.length ? UI.more(`Not changed · ${other.length}`, `<ul class="ui-list">${other.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "reserve-other") : "",
+    UI.more("How the reservations are worked out", `<p>Each container's use is read every five minutes. The reservation is 95% of the week's readings with headroom - CPU 1.5 times, memory 1.25 times - and never above a limit. Apps reserving nothing are ticked; others are offered unticked, since a reservation may have been set on purpose.</p>
+      <p>Apps change one at a time, each waiting for the last to run again. An app with no host that has room for its new reservation, or changed since this review, is skipped. If one does not come back within ten minutes, the job stops and the rest are not changed. Follow and stop it in Jobs.</p>`, false, "reserve-how"),
+    chosen.length && !over ? UI.ack("reserveRestart", chosen.length === 1 ? "Restart it now" : `Restart these ${chosen.length} apps now`) : "",
+  ].join("");
+}
+window.reservationsItem = (id, on) => {
+  on ? RESERVE.chosen.add(id) : RESERVE.chosen.delete(id);
+  const go = $("#reserveGo");
+  if (go) go.disabled = true;
+  reservationsPlan();
+};
+window.reservationsStart = async () => {
+  // What was reviewed: the plan's own ticks, which its token covers.
+  const plan = RESERVE.plan, apps = (plan?.apps || []).filter(a => a.chosen);
+  if (!apps.length) return;
+  if (!$("#reserveRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  const button = $("#reserveGo");
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    await api("/api/workloads/requests", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apps: apps.map(a => ({ id: a.id, changes: a.changes })), review_token: plan.review_token, restart: true }) });
+    closeModal(); toast(`Setting reservations on ${apps.length} app${apps.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+  } catch (e) {
+    toast(e.message, "bad");
+    if (button) { button.disabled = false; button.textContent = "Set reservations"; }
+    // Planned again with the same ticks: what changed is shown, not a reset.
+    reservationsPlan();
+  } finally { window.refreshOperations?.(true); }
+};
+
+/* Priority tiers for many apps at once. Apps whose name or image suggests a
+   tier start set to it; the rest keep what they have. Changing a row plans
+   again, so the review token covers exactly what is started. */
+const PRIORITY = { picks: {}, plan: null, asked: 0 };
+window.priorityReview = async () => {
+  PRIORITY.picks = {}; PRIORITY.plan = null;
+  modal("Priority tiers", `<div id="prioPlan"><div class="empty"><span class="spin2"></span> Reading the apps…</div></div>
+    ${UI.actions(UI.button("Set tiers", "priorityStart()", { kind: "pri", id: "prioGo", attrs: 'data-need="operator" disabled' }), UI.cancel())}`, true);
+  await priorityPlan();
+};
+async function priorityPlan() {
+  const pane = $("#prioPlan");
+  if (!pane) return;
+  // Each change plans again; an answer to an earlier one is dropped.
+  const asked = ++PRIORITY.asked;
+  const picks = Object.entries(PRIORITY.picks).map(([id, tier]) => `${id}=${tier}`).join(",");
+  let plan;
+  try { plan = await api(`/api/workloads/priority/plan${picks ? `?${new URLSearchParams({ chosen: picks })}` : ""}`); }
+  catch (e) { if (asked === PRIORITY.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps", esc(e.message)); return; }
+  if (asked !== PRIORITY.asked || !$("#prioPlan")) return;
+  PRIORITY.plan = plan;
+  pane.innerHTML = priorityHtml(plan);
+  const go = $("#prioGo");
+  if (go) go.disabled = !plan.changes || plan.changes > plan.max;
+  window.applyRole?.();
+}
+function priorityHtml(plan) {
+  const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current), over = changes.length > plan.max;
+  const restarting = changes.filter(a => a.kind !== "vm").length, vms = changes.length - restarting;
+  const rows = apps.map((a, i) => [
+    `<span class="mono">${esc(a.kind === "vm" ? `${a.ns}/${a.name}` : a.id)}</span>${a.kind === "vm" ? ` ${UI.chip("VM")}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
+    `${prioritySelect(`prio_${i}`, a.tier, `${a.managed ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
+      <span class="sub">${esc(a.note || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
+  return [
+    UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
+      : changes.length ? [restarting ? `Changes the tier of ${restarting} app${restarting === 1 ? "" : "s"}. Each restarts once, one at a time.` : "",
+        vms ? `${vms} VM${vms === 1 ? " takes its" : "s take their"} new tier when ${vms === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
+      : "Every app keeps its tier. Choose a tier to change one."),
+    UI.section(`Apps and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
+    (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
+    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is no tier at all, as every app has now. VMs take tiers too, from their next start. Homestead joins the critical tier once any app is in it, so none can evict it; it restarts once to do so.</p>
+      <p>Homestead makes the classes a tier needs first, if missing. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
+    changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting} apps now`) : "",
+  ].join("");
+}
+window.priorityItem = (id, tier) => {
+  PRIORITY.picks[id] = tier;
+  const go = $("#prioGo");
+  if (go) go.disabled = true;
+  priorityPlan();
+};
+window.priorityStart = async () => {
+  const plan = PRIORITY.plan, changes = (plan?.apps || []).filter(a => a.tier !== a.current);
+  if (!changes.length) return;
+  if (!$("#prioRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  const button = $("#prioGo");
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    await api("/api/workloads/priority", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier })), review_token: plan.review_token, restart: true }) });
+    closeModal(); toast(`Setting the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+  } catch (e) {
+    toast(e.message, "bad");
+    if (button) { button.disabled = false; button.textContent = "Set tiers"; }
+    // Planned again with the same choices: what changed is shown, not a reset.
+    priorityPlan();
   } finally { window.refreshOperations?.(true); }
 };
 
@@ -1761,10 +1917,8 @@ window.wlConsole = (ns, name, fromRoute = false) => {
       <button class="btn pri" id="consoleConnect" onclick="consoleConnect()">Connect</button>
     </div>
     ${pods.length ? `<div class="console-security">Operator-only · session start and stop are audited; commands and output are not recorded.</div>
-      <div class="consolestate" id="consoleState">not connected</div>
-      <pre class="consoleview" id="consoleView" tabindex="0" aria-label="Container terminal output">Choose a pod and container, then connect.</pre>
-      <div class="consoleinput"><textarea id="consoleInput" rows="1" spellcheck="false" autocomplete="off" placeholder="Type a command · Enter sends · Shift+Enter adds a line"></textarea>
-        <button class="btn" onclick="consoleSend()">Send</button></div>`
+      <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
+      <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
       : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the workload and wait until its pod is running.</span></div>`}`, true);
   if (pods.length) consolePodChanged();
 };
@@ -1796,7 +1950,10 @@ function consoleSize() {
   return { cols: Math.max(20, Math.floor(view.clientWidth / 8.2)), rows: Math.max(5, Math.floor(view.clientHeight / 18)) };
 }
 
-window.consoleConnect = (attempt = 0) => {
+/* A container's shell in a real terminal, as a host's (nodeShell): what the
+   shell sends to drive the screen - colours, bracketed paste, a prompt
+   redrawn - is drawn, not printed, and keys go straight to it. */
+window.consoleConnect = async (attempt = 0) => {
   if (window.__consoleSocket) window.__consoleSocket.close();
   const pod = $("#consolePod")?.value, container = $("#consoleContainer")?.value;
   if (!pod || !container) return toast("Choose a running pod and container", "bad");
@@ -1804,35 +1961,62 @@ window.consoleConnect = (attempt = 0) => {
   const selected = $("#consoleShell").value;
   const shell = selected === "auto" ? shells[Math.min(attempt, shells.length - 1)] : selected;
   const ns = window.__consoleWorkload.ns;
+  const state = text => { const el = $("#consoleState"); if (el) el.textContent = text; };
+  state(`connecting · ${shell}`);
+  $("#consoleConnect").textContent = "Reconnect";
+  try { await loadXterm(); } catch (e) { return state(e.message); }
+  const host = $("#consoleTerm");
+  if (!host) return;
+  let term = window.__consoleTerm;
+  if (!term || !host.contains(term.element)) {
+    if (term) { try { term.dispose(); } catch (_) { /* gone with its dialog */ } }
+    const css = getComputedStyle(document.documentElement);
+    term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 5000, convertEol: false,
+      fontFamily: css.getPropertyValue("--mono").trim() || "ui-monospace, Menlo, Consolas, monospace",
+      theme: { background: "#0b0b0d", foreground: "#e8e8ea" } });
+    term.__fit = new FitAddon.FitAddon();
+    term.loadAddon(term.__fit);
+    term.open(host);
+    // Ctrl+C with text selected copies it, as in a terminal; only without a
+    // selection does it reach the shell as an interrupt.
+    term.attachCustomKeyEventHandler(event => {
+      if (event.type === "keydown" && event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c" && term.hasSelection()) {
+        navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+    term.onData(data => {
+      const socket = window.__consoleSocket;
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+    });
+    window.__consoleTerm = term;
+  }
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const query = new URLSearchParams({ ns, pod, container, shell });
   const socket = new WebSocket(fleetSocketUrl(`${protocol}//${location.host}/api/console?${query}`));
   window.__consoleSocket = socket;
   window.__consoleAttempt = attempt;
-  $("#consoleState").textContent = `connecting · ${shell}`;
-  $("#consoleConnect").textContent = "Reconnect";
-  socket.onopen = () => {
-    $("#consoleState").textContent = `connected · ${shell}`;
-    socket.send(JSON.stringify({ type: "resize", ...consoleSize() }));
-    $("#consoleInput").focus();
+  const resize = () => {
+    try { term.__fit.fit(); } catch (_) { /* not laid out yet */ }
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
   };
+  socket.onopen = () => { state(`connected · ${shell}`); resize(); term.focus(); };
   socket.onmessage = event => {
     let message;
     try { message = JSON.parse(event.data); } catch (_) { return; }
-    if (message.type === "output") consoleWrite(message.data, message.stream);
+    if (message.type === "output") term.write(message.data);
     else if (message.type === "error") {
       const canFallback = selected === "auto" && attempt < shells.length - 1 && /not found|executable|no such file/i.test(message.data || "");
-      if (canFallback) { consoleWrite(`\r\n${shell} unavailable; trying ${shells[attempt + 1]}…\r\n`, "stderr"); return consoleConnect(attempt + 1); }
-      consoleWrite(`\r\n${message.data || "Console error"}\r\n`, "stderr");
-    } else if (message.type === "disconnected") $("#consoleState").textContent = `disconnected · ${message.reason || "session ended"}`;
+      if (canFallback) { term.write(`\r\n\x1b[33m${shell} unavailable; trying ${shells[attempt + 1]}…\x1b[0m\r\n`); return consoleConnect(attempt + 1); }
+      term.write(`\r\n\x1b[31m${message.data || "Console error"}\x1b[0m\r\n`);
+    } else if (message.type === "disconnected") state(`disconnected · ${message.reason || "session ended"}`);
   };
-  socket.onclose = () => { if (window.__consoleSocket === socket) $("#consoleState").textContent = "disconnected · use Reconnect to try again"; };
-  socket.onerror = () => { if (window.__consoleSocket === socket) $("#consoleState").textContent = "connection unavailable · check role and pod state"; };
+  socket.onclose = () => { if (window.__consoleSocket === socket) state("disconnected · use Reconnect to try again"); };
+  socket.onerror = () => { if (window.__consoleSocket === socket) state("connection unavailable · check role and pod state"); };
   if (window.__consoleResize) window.__consoleResize.disconnect();
-  window.__consoleResize = new ResizeObserver(() => {
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", ...consoleSize() }));
-  });
-  window.__consoleResize.observe($("#consoleView"));
+  window.__consoleResize = new ResizeObserver(resize);
+  window.__consoleResize.observe(host);
 };
 
 /* Text selected in the console's input or its output, if any. */
@@ -2239,6 +2423,8 @@ window.doDeploy = async () => {
   if (DEPLOY_SUBMITTING) return;
   const sequence = ++DEPLOY_REVIEW_SEQUENCE;
   DEPLOY_REVIEW = null;
+  try { await logoReady("#d_icon"); } catch (e) { return deployInvalid(e.message, "#d_icon"); }
+  if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");

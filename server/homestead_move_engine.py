@@ -27,6 +27,7 @@ import urllib.parse
 import weakref
 
 import homestead_icons as ICONS
+import homestead_move as MOVE
 import homestead_names as NAMES
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_transfer_devices as VM_DEVICES
@@ -81,10 +82,17 @@ def _serialized(move_id):
         return _step_locks.setdefault(move_id, _step_lock(move_id))
 
 
-def bind(_kget, _ksend, longhorn, client, network, operations, data_dir, namespace):
-    global kget, ksend, LH, CLIENT, NETWORK, OPS, DATA_DIR, NS
+# server.py's check that an app is not one Homestead manages from elsewhere
+# (Network Shares), before a move of it starts.
+guard_managed_smb = lambda ns, name: None
+
+
+def bind(_kget, _ksend, longhorn, client, network, operations, data_dir, namespace, guard=None):
+    global kget, ksend, LH, CLIENT, NETWORK, OPS, DATA_DIR, NS, guard_managed_smb
     kget, ksend, LH, CLIENT, NETWORK, OPS = _kget, _ksend, longhorn, client, network, operations
     DATA_DIR, NS = data_dir, namespace
+    if guard:
+        guard_managed_smb = guard
     NAMES.bind(_kget)
 
 
@@ -1513,3 +1521,30 @@ def finish(move_id, volumes=False):
                         f"on {move['cluster']}")
     _store(move)
     return _public(move)
+
+
+def _plan_or_start(request, starting):
+    """Review a move, or start it, from what the request names."""
+    b = request.body
+    call = start if starting else plan
+    if starting and (b.get("kind") or "container") == "container":
+        guard_managed_smb(b.get("namespace") or NS, b.get("name"))
+    return MOVE.answer(lambda: call(
+        b.get("cluster"), b.get("kind") or "container", b.get("name"),
+        b.get("namespace") or NS, b.get("address_mode") or "shared",
+        b.get("address") or "", b.get("storage_class") or "",
+        b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
+        b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices")))
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/move/moves"): ("viewer", lambda request: moves()),
+    ("POST", "/api/move/moves/dismiss"): ("admin", lambda request: dismiss(request.body.get("id") or None)),
+    ("POST", "/api/move/plan"): ("admin", lambda request: _plan_or_start(request, False)),
+    ("POST", "/api/move/start"): ("admin", lambda request: _plan_or_start(request, True)),
+    ("POST", "/api/move/moves/retry"): ("admin", lambda request: MOVE.answer(lambda: retry(request.body.get("id")))),
+    ("POST", "/api/move/moves/abandon"): ("admin", lambda request: MOVE.answer(lambda: abandon(request.body.get("id")))),
+    ("POST", "/api/move/moves/finish"): ("admin", lambda request: MOVE.answer(
+        lambda: finish(request.body.get("id"), bool(request.body.get("volumes"))))),
+}

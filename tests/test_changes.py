@@ -151,5 +151,22 @@ class RouteTests(Base):
         self.assertEqual([(500, "lab", "sonarr", "james"), (503, "lab", "new", "")], CH._notes)
 
 
+
+class LoopTests(Base):
+    """The minutely look runs from here, so server.py only starts it."""
+
+    def test_the_leader_observes_the_apps_deployments_and_beats(self):
+        beats, saved = [], dict(CH._bound)
+        self.addCleanup(CH._bound.update, saved)
+        CH.bind(self.dir.name, deployments=lambda: ["web"], is_leader=lambda: True,
+                beat=lambda *args, **kwargs: beats.append(args))
+
+        class Stop(Exception):
+            pass
+        with mock.patch.object(CH, "observe") as observe, self.assertRaises(Stop):
+            CH.run(sleep=mock.Mock(side_effect=Stop))
+        self.assertEqual(["web"], observe.call_args.args[0])
+        self.assertEqual([("changes", 60)], beats)
+
 if __name__ == "__main__":
     unittest.main()

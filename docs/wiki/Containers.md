@@ -45,6 +45,21 @@ The form asks, in order:
   set too low can OOM-kill and restart the app. Edit shows each container's
   current values, including sidecars. Compose imports carry `mem_limit` and
   `deploy.resources.limits.memory` into Memory max.
+- **What it uses, and what to reserve.** Homestead records each app
+  container's CPU and memory every five minutes, from metrics-server (k3s and
+  RKE2 have it; without it, Settings -> Homestead says so), and keeps two
+  weeks. Edit shows, beside each reserved field, what the
+  container was usually at or under - 95% of readings over the last seven
+  days, to within about 5% - and its peak. After a day of readings it offers
+  a reservation: CPU at 1.5 times that usual use (at least 10m, a hundredth of
+  a core), memory at 1.25 times (at least 32 MiB), rounded up to 0.5% of a
+  core and 16 MiB, and never above a CPU limit or Memory max. A reservation
+  already within 10% of that is left alone; otherwise the suggestion says, for
+  CPU and memory apart, whether it raises or lowers each and from what. **Use suggested** only fills the
+  fields; nothing changes until you save, which restarts the app. The
+  scheduler places apps by what they reserve, not by what they use: an app
+  that reserves nothing, and has no limit Kubernetes would take instead, is
+  placed as if it used nothing.
 - **Network.** Which ports are reachable from your LAN, and on which address:
   automatic (the next free VIP), a **Specific VIP** you picked out under
   [Networking](Networking#add-default-and-choose-workload-vips), or shared with other apps on one address.
@@ -339,6 +354,10 @@ a time that has an update waiting, and:
 4. succeeds, or - if the rollout stalls or the app stops answering - rolls the
    image back and says so in the job, an alert and a push.
 
+No automatic update starts while a rebalance is moving containers. The same
+window can move containers back after a host returns
+([Settings](Settings#when-a-host-comes-back)).
+
 Only a newer build of the tag the app already follows is taken (a new digest of
 `:latest` or `:1.2`, never 1.2 to 2.0): a new version waits for you. An app that
 is not answering or not fully running beforehand is left alone, as there would
@@ -608,6 +627,110 @@ same input plus `capacity_token` and `confirm_capacity: true` to `/api/move`.
 Unreviewed calls are refused. Legacy `auto` calls must select and review an
 explicit suggested destination; it cannot change silently at execution time.
 
+### Balance hosts
+
+**Balance hosts** on Nodes, or **Rebalance containers…** in Containers' menu,
+evens out a cluster where one host ended up running most of the busy apps -
+after a reboot, say. It proposes the fewest moves (ten at most) that bring the
+busiest host down, each one worth its restart, by what the hosts and apps use
+now. Untick any move you do not want, then start it.
+
+Only what the scheduler could already place elsewhere moves: a Deployment with
+one copy, not pinned to its host, not on host-local storage, and only to hosts
+its hardware and placement rules allow. An app reading its volumes locally
+moves only to a host that holds a copy of them. An operator's review leaves out
+apps only an admin may change, as Move does, and the job checks again before
+each move. The review lists what was left out and why. The job moves one
+container at a time, waits until it runs on its new host, and stops if one
+does not come up within ten minutes; cancelling stops after the current one.
+
+With a hot spare ([Settings](Settings#how-hosts-share-the-work)), apps on
+standby hosts are moved off first - as far as the other hosts stay under 90%
+full - and nothing is moved onto them. **Settings → Placement → When a host
+comes back** can suggest or schedule this when a host returns.
+
+### Reservations from use, for many apps
+
+**Set reservations from use…** in Containers' **⋯** menu offers the
+reservation Edit would suggest for every app at once. Apps reserving nothing
+are ticked - at most 50, the most one run changes; apps whose reservation only
+differs from their use are listed unticked, since it may have been set on
+purpose. Ticking or unticking works the plan out again.
+
+These are left out, with the reason:
+
+- apps Flux or Argo CD apply, since their next sync would undo the change -
+  each shows a patch to commit instead, a Deployment with only the
+  containers' `resources` set;
+- Homestead itself, whose reservations come from its manifest;
+- apps with less than a day of readings;
+- for an operator, apps only an admin may change - management, system,
+  service-account or host-privileged ones, as in Edit.
+
+Starting it runs a job, **Set reservations on N apps**, that changes one app
+at a time - all its containers in one restart - and waits for it to run again
+before the next. An app is skipped, with the reason in the job, if its
+reservation was changed by hand since the review, if a limit lowered since
+would be below the new reservation, if it is paused or not running as it
+should, if no host it may run on has room for its new reservation, or if it
+is gone. Only the hosts the app may run on count - its pins, node selectors and
+required affinity, and the hosts' taints - so an app pinned to one full host
+is skipped however empty the others are. A stopped app takes its new
+reservation when it next starts. A container that reserved only through a
+limit is shown with that limit; a lower reservation means it no longer
+reserves all of it. One that does not come back within ten minutes stops the
+job; the rest are not changed, and the job says what that app reserved
+before. Follow and stop it in **Jobs**. An app scaled by a
+HorizontalPodAutoscaler on CPU or memory use scales against the new
+reservation, since its targets are a share of it.
+
+### Priority tiers
+
+When a host fails and the others cannot hold every app, the scheduler fits
+them by priority. Each app has a tier:
+
+- **Critical** fits first, and may evict any pod of a lower tier to fit - low
+  apps, and anything with no tier, VMs included - whenever it does not fit:
+  after a host fails, but also when it restarts, updates or grows. For what
+  the house depends on: home automation, passwords, a database, DNS or a
+  tunnel.
+- **Normal** is no tier at all, as every app has by default, and may evict low
+  apps to fit. (On a cluster with a default PriorityClass of its own, it means
+  that class.)
+- **Low** waits for room and evicts nothing, and is the first evicted by any
+  other app that needs room - a CI job can be stopped part way. For batch
+  work and CI runners.
+
+Set one app's tier in Edit → Placement → **When the cluster is short of
+room**, or many at once with **Priority tiers…** in Containers' **⋯** menu,
+where apps that look like home automation, a password manager, a database,
+DNS or a tunnel start at critical - not their exporters or backup helpers -
+and CI runners at low, at most 50 changes a run. Changing a tier restarts the
+app; the bulk job changes one app at a time, as reservations do.
+
+VMs have tiers too, in the same **Priority tiers…** list. A VM takes its tier
+when it next starts, so setting one restarts nothing; until then it keeps the
+one it started with.
+
+Homestead is never evicted by a critical app: once anything runs in the
+critical tier, Homestead puts itself there too - pods of one priority never
+evict each other - and restarts once to do so, waiting until no job is
+running. It keeps that class through updates, and keeps any class you gave it
+yourself.
+
+Homestead makes the PriorityClasses `homestead-critical` (1000) and
+`homestead-low` (-1000, never preempts) the first time a tier needs one; it
+makes neither the cluster's default. An app's tier is read from its pod, so
+one set by hand or by Flux shows as it is. Apps Flux or Argo CD apply are
+shown but changed there, not here; a class Homestead does not keep is left
+alone; and Homestead's own tier is not offered, since it follows the
+apps' as above. A critical app's
+suggested memory reservation has more headroom - 1.5 times its usual use -
+since a host short of memory evicts pods using more than they reserve before
+any within their reservation, whatever their tier; only among those does the
+tier count. To remove the classes, set those apps back to Normal first
+([Installing Homestead](Installing-Homestead)).
+
 ## Reviewed image updates and rollback
 
 Image updates and rollback show the exact immutable target images and a full-pod
@@ -683,6 +806,21 @@ the same way: the ports of any Service that selects them
 (such as Harvester's load balancers), their disks and those disks' replicas,
 with their host and address. A stopped VM is shown faded, since its disks are
 still there. Homestead's temporary browser, copy and import pods are hidden.
+Each app is one card named after its Deployment, StatefulSet or DaemonSet
+(a pod nothing owns is named after itself), apps of the same name in two
+namespaces stay apart, and a port is drawn to the app whose pods its Service
+selects - not to every app sharing an `app` label.
+
+Pods a Job starts are not drawn as apps. Scheduled jobs (CronJobs outside the
+system namespaces), such as a nightly backup per app, are listed under
+**Scheduled jobs**, collapsed beneath the containers: each with its last run,
+when it runs, and the volumes it uses. The count of failed last runs stays on
+the collapsed heading. A schedule set to UTC shows its next run. One with no
+time zone runs on the clock of the cluster's controller - on k3s often the
+host's local time - so it is put in words "on the cluster's clock", with no
+next run the page could get wrong. One with another time zone, or written in a
+form such as `@daily` or `SUN`, is shown as written. One-off Jobs are not
+shown.
 
 Each address is marked **VIP** or **node** (a node's own address) with the
 node answering for it, and an address no connection reaches is outlined in
@@ -690,7 +828,7 @@ red with the reason (see [Address map](Networking#address-map)).
 Each node lists its own address and the VIPs it answers for; hovering a node
 highlights its addresses, and hovering an address highlights its node.
 
-A volume no container or VM definition references is **disconnected**. Those
+A volume no container, VM or scheduled job references is **disconnected**. Those
 retained and old volumes are hidden by default; **Show disconnected** reveals a
 red group beneath the live volumes without letting it obscure the active paths.
 

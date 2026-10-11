@@ -56,13 +56,13 @@ class IconCacheTests(unittest.TestCase):
                "icon": "https://example.com/logo.png"}
         with mock.patch.object(server.ICONS, "persist", return_value="/api/icons/" + "a" * 64 + ".png"):
             server.persist_icon_config(cfg)
-        dep, _ = server.build_deployment(cfg)
+        dep, _ = server.DEPLOY.build_deployment(cfg)
         annotations = dep["metadata"]["annotations"]
         self.assertEqual("/api/icons/" + "a" * 64 + ".png", annotations["homestead.io/icon"])
         self.assertEqual("https://example.com/logo.png", annotations["homestead.io/icon-source"])
 
     def test_appstore_template_carries_icon(self):
-        cfg = server.template_to_cfg({
+        cfg = server.DEPLOY.template_to_cfg({
             "name": "Demo App", "repo": "example/demo:latest",
             "icon": "https://example.com/demo.png", "config": [],
         })

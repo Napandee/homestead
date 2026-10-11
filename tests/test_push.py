@@ -236,29 +236,29 @@ class DeliveryTests(unittest.TestCase):
         push.subscribe("me", {"endpoint": "https://fcm.googleapis.com/tablet"}, ["outage"])
         alerts.observe({"jobs": alerts.job_facts([{"id": "j", "status": "failed", "title": "Backup"}])}, 2)
 
-        phone = server.alerts_pending("me", "https://fcm.googleapis.com/phone")
+        phone = push.pending("me", "https://fcm.googleapis.com/phone")
         self.assertEqual(["Job failed: Backup"], [a["title"] for a in phone["alerts"]])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/phone")["alerts"])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/tablet")["alerts"])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/phone")["alerts"])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/tablet")["alerts"])
 
     def test_a_device_does_not_answer_for_another_user(self):
         push.subscribe("alice", {"endpoint": "https://fcm.googleapis.com/a"}, ["jobs"])
-        self.assertFalse(server.alerts_pending("bob", "https://fcm.googleapis.com/a")["known"])
+        self.assertFalse(push.pending("bob", "https://fcm.googleapis.com/a")["known"])
 
     def test_a_new_device_starts_from_now(self):
         alerts.observe({"jobs": []}, 1)
         alerts.observe({"jobs": alerts.job_facts([{"id": "j", "status": "failed", "title": "Old"}])}, 2)
         push.subscribe("me", {"endpoint": "https://fcm.googleapis.com/new"}, ["jobs"],
                        cursor=alerts.log(limit=0)["latest"])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/new")["alerts"])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/new")["alerts"])
 
     def test_a_test_reaches_only_the_device_that_asked(self):
         for name in ("one", "two"):
             push.subscribe("me", {"endpoint": f"https://fcm.googleapis.com/{name}"}, ["outage"])
         alerts.note({"key": "test:1", "category": "test", "title": "Test", "to": push.tag("https://fcm.googleapis.com/one")})
 
-        self.assertEqual(["Test"], [a["title"] for a in server.alerts_pending("me", "https://fcm.googleapis.com/one")["alerts"]])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/two")["alerts"])
+        self.assertEqual(["Test"], [a["title"] for a in push.pending("me", "https://fcm.googleapis.com/one")["alerts"]])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/two")["alerts"])
 
     def test_pushes_skip_devices_of_users_who_are_gone(self):
         push.subscribe("gone", {"endpoint": "https://fcm.googleapis.com/g"}, ["outage"])
@@ -289,7 +289,7 @@ class RouteTests(unittest.TestCase):
         import re
         root = Path(__file__).resolve().parents[1]
         worker = re.search(r'const VERSION = "([^"]+)"', (root / "web" / "sw.js").read_text(encoding="utf-8"))
-        release = re.search(r'"HOMESTEAD_VERSION", "([^"]+)"', (root / "server" / "server.py").read_text(encoding="utf-8"))
+        release = re.search(r'^VERSION = "([^"]+)"', (root / "server" / "homestead_version.py").read_text(encoding="utf-8"), re.M)
         self.assertEqual(release.group(1), worker.group(1))
 
     def test_every_icon_the_manifest_names_exists(self):
@@ -298,6 +298,20 @@ class RouteTests(unittest.TestCase):
         for icon in manifest["icons"]:
             self.assertTrue((web / icon["src"].lstrip("/")).is_file(), icon["src"])
         self.assertIn("maskable", {i["purpose"] for i in manifest["icons"]})
+
+
+class BellRouteTests(unittest.TestCase):
+    def test_the_bell_is_answered_by_alerts_with_this_persons_devices(self):
+        import homestead_alerts as ALERTS
+        import homestead_push as PUSH
+        import homestead_routes as ROUTES
+        route = ROUTES.find("GET", "/api/alerts")
+        self.assertEqual(("homestead_alerts", "viewer"), (route.module, route.role))
+        self.assertIs(PUSH.devices, ALERTS.DEVICES[0], "push tells alerts whose devices are whose")
+        with mock.patch.object(ALERTS, "active", return_value=[{"announced": 1}, {"announced": 0}]),                 mock.patch.object(ALERTS, "log", return_value={"alerts": [{"category": "test"}, {"category": "hosts"}]}),                 mock.patch.object(ALERTS, "DEVICES", [lambda user: [{"user": user}]]):
+            answer = route.handler(ROUTES.Request("GET", "/api/alerts", {}, None, "ada", "viewer"))
+        self.assertEqual(([{"announced": 1}], [{"category": "hosts"}], [{"user": "ada"}]),
+                         (answer["active"], answer["log"], answer["devices"]))
 
 
 if __name__ == "__main__":

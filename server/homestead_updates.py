@@ -20,7 +20,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import homestead_operations as OPS
 import homestead_rollout_capacity as ROLLOUT
+import homestead_routes as ROUTER
 import homestead_shared as SHARED
 
 
@@ -1246,3 +1248,73 @@ def progress(ns, name, dep=None):
             "rollout_at": ((spec.get("template", {}).get("metadata") or {}).get("annotations") or {}).get(ROLLOUT_AT, ""),
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
             "last_action": _annotation(dep, LAST_ACTION)}
+
+
+# server.py's helpers the routes below call, bound by name (bind_routes):
+# the update policy and the capacity review live there still.
+ROUTE_NEEDS = ("guard_managed_smb", "_dns_name", "get_app_settings", "save_app_settings", "set_update_mode",
+               "update_policy_status", "enforce_update_policy", "preview_image_update", "reviewed_image_update")
+
+
+def bind_routes(helpers):
+    missing = set(ROUTE_NEEDS) - set(helpers)
+    if missing:
+        raise TypeError("homestead_updates needs " + ", ".join(sorted(missing)))
+    globals().update({name: helpers[name] for name in ROUTE_NEEDS})
+
+
+def _report(request):
+    force = (request.query.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
+    # Settings › Homestead checks Homestead's own parts, not every app.
+    only = (request.query.get("only") or [""])[0] == "homestead"
+    answer = json.loads(json.dumps(homestead_report() if force and only else report(force)))
+    answer["policy"] = update_policy_status()
+    return answer
+
+
+def _set_channel(request):
+    settings = get_app_settings()
+    settings["updates"]["channel"] = request.body.get("channel")
+    return save_app_settings(settings)
+
+
+def _set_managed(request):
+    b = request.body
+    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
+    guard_managed_smb(ns, name)
+    result = set_managed(ns, name, b.get("by"))
+    ROUTER.forget("wl")
+    return result
+
+
+def _apply(request, action):
+    """An update or a rollback, after its capacity review, followed as a job."""
+    b = request.body
+    guard_managed_smb(b.get("ns"), b.get("name"))
+    if action == "update":
+        enforce_update_policy(b)
+    result = reviewed_image_update(b, action)
+    result["operation"] = OPS.start(
+        "image-" + action, ("Update " if action == "update" else "Roll back ") + b["name"],
+        {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
+        "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
+        {"namespace": b["ns"], "name": b["name"]})
+    ROUTER.forget("wl", "ov"); refresh_soon(b["ns"], b["name"])
+    return result
+
+
+# Its routes and who may use them (homestead_routes.py). server.py checks the
+# target is an app before apply, rollback and preview get here.
+ROUTES = {
+    ("GET", "/api/image-updates"): ("viewer", _report),
+    ("GET", "/api/image-updates/progress"): ("viewer", lambda request: progress(request.query["ns"][0], request.query["name"][0])),
+    # Read while a scan is in flight, so it needs no session cache
+    # and must not be served from one.
+    ("GET", "/api/image-updates/scan-progress"): ("viewer", lambda request: scan_progress()),
+    ("POST", "/api/image-updates/mode"): ("operator", lambda request: set_update_mode(request.body)),
+    ("POST", "/api/image-updates/channel"): ("admin", _set_channel),
+    ("POST", "/api/image-updates/preview"): ("operator", lambda request: preview_image_update(request.body)),
+    ("POST", "/api/image-updates/managed"): ("operator", _set_managed),
+    ("POST", "/api/image-updates/apply"): ("operator", lambda request: _apply(request, "update")),
+    ("POST", "/api/image-updates/rollback"): ("operator", lambda request: _apply(request, "rollback")),
+}

@@ -16,7 +16,7 @@ import server
 
 def disk(count=24, pending=0):
     report={"available":True,"reallocated":count,"pending":pending}
-    issues=server.smart_disk_issues(report)
+    issues=server.NODES.smart_disk_issues(report)
     return A.health_facts({"health_issues":[dict(i,kind="Disk",name="node/sda") for i in issues]})
 
 class AcknowledgementTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class AcknowledgementTests(unittest.TestCase):
         self.assertEqual([],A.for_user(A.log()["alerts"],"alice"))
         for endpoint in ("phone","tablet"):
             P.subscribe("alice",{"endpoint":"https://fcm.googleapis.com/"+endpoint},["degraded"])
-            answer=server.alerts_pending("alice","https://fcm.googleapis.com/"+endpoint)
+            answer=P.pending("alice","https://fcm.googleapis.com/"+endpoint)
             self.assertEqual([],answer["alerts"]);self.assertEqual(0,answer["active"])
     def test_a_single_sector_increase_rearms_after_hold_once(self):
         self.ack();self.assertEqual([],self.tick(disk(25)))
@@ -83,13 +83,13 @@ class AcknowledgementTests(unittest.TestCase):
         self.assertTrue(any(r["key"]==fact["key"] for r in A.active()))
     def test_new_worker_advances_only_after_confirmed_display_and_backlogs_coalesce(self):
         endpoint="https://fcm.googleapis.com/a";P.subscribe("alice",{"endpoint":endpoint},["degraded"])
-        first=server.alerts_pending("alice",endpoint,True)
-        self.assertEqual(first,server.alerts_pending("alice",endpoint,True))
+        first=P.pending("alice",endpoint,True)
+        self.assertEqual(first,P.pending("alice",endpoint,True))
         self.assertEqual(0,P.mine("alice",endpoint)["cursor"])
         P.advance("alice",endpoint,first["latest"])
-        self.assertEqual([],server.alerts_pending("alice",endpoint,True)["alerts"])
+        self.assertEqual([],P.pending("alice",endpoint,True)["alerts"])
         self.tick([]);self.tick([],60)
-        answer=server.alerts_pending("alice",endpoint,True)
+        answer=P.pending("alice",endpoint,True)
         self.assertEqual(["resolved"],[e["phase"] for e in answer["alerts"]])
     def test_legacy_history_gains_metrics_without_a_false_worsening(self):
         with A._lock:
@@ -100,8 +100,8 @@ class AcknowledgementTests(unittest.TestCase):
         self.tick(disk(25));self.assertEqual("worsened",self.tick(disk(25),60)[0]["phase"])
     def test_replacement_disk_does_not_inherit_acknowledgement(self):
         def device(serial):
-            nodes=[{"name":"node","status":"Ready","disk_issues":[dict(i,disk="sda",device_identity=serial) for i in server.smart_disk_issues({"available":True,"reallocated":24})]}]
-            report=server.classify_cluster_health(nodes,[],[])
+            nodes=[{"name":"node","status":"Ready","disk_issues":[dict(i,disk="sda",device_identity=serial) for i in server.NODES.smart_disk_issues({"available":True,"reallocated":24})]}]
+            report=server.CLUSTER.classify_cluster_health(nodes,[],[])
             return A.health_facts({"health_issues":report["health_issues"]})
         self.tick(device("drive-a"));self.tick(device("drive-a"),60);self.ack()
         self.tick(device("drive-b"));fresh=self.tick(device("drive-b"),60)
@@ -113,7 +113,7 @@ class AcknowledgementTests(unittest.TestCase):
     def test_badge_counts_active_conditions_independently_of_device_categories(self):
         endpoint="https://fcm.googleapis.com/jobs-only"
         P.subscribe("alice",{"endpoint":endpoint},["jobs"])
-        answer=server.alerts_pending("alice",endpoint,True)
+        answer=P.pending("alice",endpoint,True)
         self.assertEqual([],answer["alerts"]);self.assertEqual(1,answer["active"])
     def test_http_identity_csrf_conflicts_and_delivery_ownership(self):
         listener=HTTP.BoundedHTTPServer(("127.0.0.1",0),server.H,max_connections=2)

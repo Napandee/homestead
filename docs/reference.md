@@ -105,12 +105,13 @@ RKE2 run, and the pages that need one offer the same install.
 |---|---|
 | **Dashboard** | Cluster CPU/RAM/network/disk telemetry, transition-aware health, top consumers, configurable warnings, and 90 days of history with node availability, recorded with no browser open |
 | **MQTT** | Cluster and node stats to an MQTT broker with Home Assistant discovery |
-| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, and a card or row layout |
+| **Containers** | Guided App Store and image deployment, Docker Compose import, independent or sidecar pods, guarded Kubernetes workload rename, edit/move/logs/console, autostart, LAN port and exposure editing, one storage picker for new and existing containers, hardware passthrough, update checks, monitored rollout with live image-pull state, rollback, groups with folding dividers and a filter per group, a card or row layout, reservations suggested from a week of use and set for many apps at once, and priority tiers |
+| **Placement** | One choice for the whole cluster - Kubernetes' default, spread by capacity, or hot-spare standby hosts kept by a soft taint - containers moved back when a host returns (suggested, or in the update window), and a forecast of whether the other hosts have room if each one fails |
 | **Helm** | Every Helm release in the cluster with its values, notes, history and objects; charts found on Artifact Hub and installed, upgraded and uninstalled through the Helm controller k3s and RKE2 ship |
 | **App Store** | The Community Applications catalogue laid out as Unraid shows it - monthly spotlights, recently added, trending and top performing - with a full page per app, from the public feed or one you set |
 | **Virtual machines** | Create from a Harvester image, a download or an imported disk - on Harvester, or on k3s and RKE2 with KubeVirt installed from Settings - power actions, live migration between hosts, a console (the VM's screen or its serial port), and a k3s cluster made of VMs, with KubeVirt inside if asked |
 | **Portal** | A page of tiles for every web interface - containers picked from their exposed ports with their logos, and the router, switches, access points and NAS around them - in sections, with a live reachability dot |
-| **Architecture** | VIP → workload → Longhorn volume → replica dependency view, with containers and VMs separated, Homestead helper pods hidden, and unreferenced volumes behind a disconnected-data switch |
+| **Architecture** | VIP → workload → Longhorn volume → replica dependency view, one card per controller, with containers and VMs separated, scheduled jobs in a collapsed lane that counts failed last runs, Homestead helper pods hidden, and unreferenced volumes behind a disconnected-data switch |
 | **Networking** | Service, ClusterIP, VIP, ingress, listener ownership, orphaned-listener release, endpoint health and guided collision-free exposure; IP address management per subnet with scanning, device categories, bulk edits, CSV export and UniFi sync |
 | **Cluster** | k3s, RKE2 or Harvester version, control-plane and etcd quorum, node pressure, critical services, certificate requests, adding a host (k3s and RKE2 join commands, or a guide to Harvester's installer), and removing hosts - including ones that are dead for good |
 | **Linked clusters** | Link several Homesteads and manage them all from any one - only one need be reachable - with a switch in the top bar, an All clusters view of containers, VMs, nodes and volumes together, consoles and every action relayed, and roles kept across clusters; requests between clusters are signed with a shared key and no password is stored (docs/multi-cluster.md) |
@@ -622,6 +623,11 @@ It answers "was it busy last week?" and "has a node been dropping out?";
 Harvester's own monitoring (Prometheus and Grafana) is there for anything
 deeper.
 
+Each container's CPU and memory is read from metrics-server every five
+minutes as well, by the leading replica, and kept as a small histogram a day
+for fourteen days in `usage.json`; Edit suggests reservations from the last
+seven (see [Containers](wiki/Containers.md)).
+
 ## MQTT and Home Assistant
 
 **Settings → Monitoring** publishes cluster and node stats to an MQTT broker, with
@@ -682,8 +688,8 @@ install the app; if installation still fails, add an Access **Bypass** policy fo
 **Settings → Homestead** shows whether the parts that work in the background are
 working, refreshed every 15 seconds while it is open: how quickly the
 Kubernetes API answers, each copy of Homestead and which one leads, every
-background task (live charts, alerts, long-term stats, hardware detection,
-cluster moves) with when it last did its work and its last error, the node
+background task (live charts, alerts, long-term stats, app usage history,
+rebalance after a host returns, hardware detection, cluster moves) with when it last did its work and its last error, the node
 probe (nodes running it, reporting, and with drive health), SMB status, the
 permissions check, backup storage and MQTT. SMB can be switched off from Settings → Hardware and storage → Add-ons -
 shares stop being served, and their volumes, settings and passwords are kept -
@@ -1035,13 +1041,15 @@ adding what new features need and dropping what nothing uses any more - so an
 upgrade needs no `kubectl`. Rules added to that role by hand do not survive
 this; give anything extra its own role and binding.
 **Settings → Homestead → About this installation → Permissions** says what it last did.
+Until it has, features that need a new permission say so - priority tiers, for
+one, need to create PriorityClasses.
 
 That needs the right to edit its own role, which an older install does not
 have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.321/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.322-dev.4/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1052,7 +1060,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.321 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.322-dev.4 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1705,6 +1713,11 @@ elsewhere too. A moved container's single-node volume follows it only if
 Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
 pods; the dialog says whether it does and sets it, as does Settings > Hardware and storage.
 
+Kubernetes never moves a container back once its host returns. **Settings >
+Placement > When a host comes back** can raise an alert offering the moves, or
+make them in the update window, leaving apps whose backup job is due where
+they are (see [Settings](wiki/Settings.md#when-a-host-comes-back)).
+
 ## Container groups
 
 Homestead's own containers - Homestead itself, the Samba that serves shares,
@@ -1720,6 +1733,12 @@ within each group. A group is the `homestead.io/group` annotation on each
 Deployment, so it needs no list of its own and exists while something is in it.
 
 ## Placement rules
+
+Placement for the whole cluster - Kubernetes' default, spread by capacity, or
+hot-spare standby hosts - is one choice in **Settings → Placement**, beside
+moving containers back when a host returns and a forecast of the room left if
+each host fails ([Settings](wiki/Settings.md#how-hosts-share-the-work)). What
+follows is placement app by app.
 
 Start and deployment reviews show **Launch host** above the capacity estimates.
 Required hosts are pins; preferred hosts allow failover. With automatic placement,
@@ -1966,10 +1985,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.321`, the workflow publishes:
+For a release such as `v2.8.322-dev.4`, the workflow publishes:
 
 ```text
-ghcr.io/homestead-lab/homestead:2.8.321
+ghcr.io/homestead-lab/homestead:2.8.322-dev.4
 ghcr.io/homestead-lab/homestead:2.8
 ghcr.io/homestead-lab/homestead:2
 ghcr.io/homestead-lab/homestead:latest
@@ -1980,8 +1999,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.321
-git push origin v2.8.321
+git tag v2.8.322-dev.4
+git push origin v2.8.322-dev.4
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

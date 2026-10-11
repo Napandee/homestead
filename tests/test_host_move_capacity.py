@@ -38,7 +38,7 @@ class HostMoveCapacityTests(unittest.TestCase):
         self.current["spec"]["template"]["spec"]["containers"].append({"name": "helper", "resources": {
             "requests": {"memory": "1Gi"}, "limits": {"memory": "1Gi"}}})
         before = copy.deepcopy(self.current)
-        preview = server.preview_host_move(self.config)["capacity"]
+        preview = server.WORKLOADS.preview_host_move(self.config)["capacity"]
         self.assertEqual(6, preview["pod_request_gb"])
         self.assertEqual("Recreate", preview["rollout"]["strategy"])
         self.assertIn("unavailable during the restart", " ".join(preview["warnings"]))
@@ -104,12 +104,12 @@ class HostMoveCapacityTests(unittest.TestCase):
         self.objects["/api/v1/pods"] = urllib.error.HTTPError("pods", 503, "unavailable", {}, None)
         with mock.patch.object(server, "ksend") as send:
             with self.assertRaises(urllib.error.HTTPError):
-                server.reviewed_host_move({**self.config, "confirm_capacity": True})
+                server.WORKLOADS.reviewed_host_move({**self.config, "confirm_capacity": True})
         send.assert_not_called()
 
     def test_all_replicas_must_fit_selected_host(self):
         self.current["spec"]["replicas"] = 2
-        plan = server.preview_host_move(self.config)["capacity"]
+        plan = server.WORKLOADS.preview_host_move(self.config)["capacity"]
         self.assertTrue(plan["blocked"])
         self.assertTrue(plan["move"]["target"]["blocked"])
 
@@ -117,7 +117,7 @@ class HostMoveCapacityTests(unittest.TestCase):
         self.config.update(node=None)
         spec = self.current["spec"]["template"]["spec"]
         spec["nodeSelector"] = {"kubernetes.io/hostname": "a", "hardware/custom": "true"}
-        proposed, capacity, _ = server.move_capacity_plan(self.config)
+        proposed, capacity, _ = server.WORKLOADS.move_capacity_plan(self.config)
         self.assertEqual({"hardware/custom": "true"}, proposed["spec"]["template"]["spec"]["nodeSelector"])
         self.assertTrue(capacity["blocked"])
 
@@ -125,18 +125,18 @@ class HostMoveCapacityTests(unittest.TestCase):
         fixtures.RolloutCapacityTests.claim(self)
         self.objects["/api/v1/persistentvolumes/pv-data"]["spec"]["nodeAffinity"] = {"required": {"nodeSelectorTerms": [
             {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["a"]}]}]}}
-        self.assertTrue(server.preview_host_move(self.config)["capacity"]["blocked"])
+        self.assertTrue(server.WORKLOADS.preview_host_move(self.config)["capacity"]["blocked"])
 
     def test_unknown_memory_remains_warning(self):
         self.nodes[1]["mem_metrics_available"] = False
-        plan = server.preview_host_move(self.config)["capacity"]
+        plan = server.WORKLOADS.preview_host_move(self.config)["capacity"]
         self.assertFalse(plan["blocked"])
         self.assertIn("unavailable", " ".join(plan["move"]["target"]["warnings"]))
         self.assertTrue(plan["requires_confirmation"])
 
     def test_projection_over_100_percent_can_be_overridden_with_review(self):
         self.nodes[1]["mem_used_gb"] = 7
-        plan = server.preview_host_move(self.config)["capacity"]
+        plan = server.WORKLOADS.preview_host_move(self.config)["capacity"]
         target = next(n for n in plan["move"]["target"]["candidates"] if n["name"] == "b")
         self.assertEqual(150, target["projected_percent"])
         self.assertFalse(plan["blocked"])
@@ -160,19 +160,19 @@ class HostMoveCapacityTests(unittest.TestCase):
     def test_unsafe_or_ambiguous_legacy_inputs_are_rejected(self):
         for extra in ({"auto": True}, {"pin": "false"}, {"node": "missing"}, {"node": "../a"}):
             with self.assertRaises(ValueError):
-                server.move_capacity_plan({**self.config, **extra})
+                server.WORKLOADS.move_capacity_plan({**self.config, **extra})
         self.current["spec"]["paused"] = True
         with self.assertRaisesRegex(ValueError, "paused"):
-            server.move_capacity_plan(self.config)
+            server.WORKLOADS.move_capacity_plan(self.config)
         self.current["spec"].pop("paused")
         self.current["spec"]["template"]["spec"]["nodeName"] = "a"
         with self.assertRaisesRegex(ValueError, "nodeName"):
-            server.move_capacity_plan(self.config)
+            server.WORKLOADS.move_capacity_plan(self.config)
 
     def test_host_and_pod_local_data_warning(self):
         self.current["spec"]["template"]["spec"]["volumes"] = [
             {"name": "local", "hostPath": {"path": "/srv/data"}}, {"name": "scratch", "emptyDir": {}}]
-        warnings = " ".join(server.preview_host_move(self.config)["capacity"]["warnings"])
+        warnings = " ".join(server.WORKLOADS.preview_host_move(self.config)["capacity"]["warnings"])
         self.assertIn("not copied", warnings)
         self.assertIn("emptyDir data is lost", warnings)
 
@@ -180,30 +180,30 @@ class HostMoveCapacityTests(unittest.TestCase):
         self.nodes[1]["name"] = "b.example.test"
         self.nodes[1]["labels"]["kubernetes.io/hostname"] = "b.example.test"
         self.config["node"] = "b.example.test"
-        self.assertFalse(server.preview_host_move(self.config)["capacity"]["blocked"])
+        self.assertFalse(server.WORKLOADS.preview_host_move(self.config)["capacity"]["blocked"])
 
     def test_target_taints_and_declared_host_port_conflicts_block(self):
         self.nodes[1]["taints"] = [{"key": "reserved", "effect": "NoSchedule"}]
-        self.assertTrue(server.preview_host_move(self.config)["capacity"]["blocked"])
+        self.assertTrue(server.WORKLOADS.preview_host_move(self.config)["capacity"]["blocked"])
         self.nodes[1].pop("taints")
         self.current["spec"]["template"]["spec"]["containers"][0]["ports"] = [{"containerPort": 8123, "hostPort": 8123}]
         self.pods.append({"metadata": {"name": "other", "namespace": "lab"}, "status": {"phase": "Running"},
                           "spec": {"nodeName": "b", "containers": [{"ports": [{"containerPort": 8123, "hostPort": 8123}]}]}})
-        self.assertTrue(server.preview_host_move(self.config)["capacity"]["blocked"])
+        self.assertTrue(server.WORKLOADS.preview_host_move(self.config)["capacity"]["blocked"])
 
     def test_same_label_unrelated_pod_is_not_reclaimed(self):
         other = copy.deepcopy(self.pods[0])
         other["metadata"].update(name="unrelated", uid="other", ownerReferences=[])
         other["spec"]["nodeName"] = "b"
         self.pods.append(other)
-        self.assertTrue(server.preview_host_move(self.config)["capacity"]["blocked"])
+        self.assertTrue(server.WORKLOADS.preview_host_move(self.config)["capacity"]["blocked"])
 
     def test_put_conflict_propagates_without_retry_or_second_fetch(self):
         config = self.reviewed()
         conflict = urllib.error.HTTPError("deployment", 409, "changed", {}, None)
         with mock.patch.object(server, "ksend", side_effect=conflict) as send:
             with self.assertRaises(urllib.error.HTTPError):
-                server.reviewed_host_move(config)
+                server.WORKLOADS.reviewed_host_move(config)
         send.assert_called_once()
         self.assertEqual("10", send.call_args.args[2]["metadata"]["resourceVersion"])
 

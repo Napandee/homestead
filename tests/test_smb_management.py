@@ -8,15 +8,16 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_share_servers as SERVERS
 
 
 class SmbMigrationTests(unittest.TestCase):
     def setUp(self):
         self.namespace = server.SMB_NAMESPACE
-        self.old_dep = server._smb_path("deployments", "samba")
-        self.new_dep = server._smb_path("deployments", server.SMB_NAME)
-        self.old_svc = server._smb_path("services", "samba")
-        self.new_svc = server._smb_path("services", server.SMB_NAME)
+        self.old_dep = SERVERS._smb_path("deployments", "samba")
+        self.new_dep = SERVERS._smb_path("deployments", server.SMB_NAME)
+        self.old_svc = SERVERS._smb_path("services", "samba")
+        self.new_svc = SERVERS._smb_path("services", server.SMB_NAME)
         self.objects = {
             self.old_dep: {
                 "apiVersion": "apps/v1", "kind": "Deployment",
@@ -63,10 +64,10 @@ class SmbMigrationTests(unittest.TestCase):
         rows = [{"name": "media", "pvc": "share-media", "path": "/shares/media",
                  "user": "lab", "public": False}]
         creds = {"media": {"user": "lab", "password": "pw"}}
-        with mock.patch.object(server, "kget", self.get), \
-                mock.patch.object(server, "ksend", self.send), \
+        with mock.patch.object(SERVERS, "kget", self.get), \
+                mock.patch.object(SERVERS, "ksend", self.send), \
                 mock.patch.object(server.SHARES, "_state", return_value=(rows, creds, None, None, None)):
-            server.install_samba()
+            SERVERS.install_samba()
         self.assertNotIn(self.old_dep, self.objects)
         self.assertNotIn(self.old_svc, self.objects)
         dep = self.objects[self.new_dep]
@@ -83,11 +84,11 @@ class SmbMigrationTests(unittest.TestCase):
                 raise ValueError("service rejected")
             return self.send(method, path, body, **kwargs)
 
-        with mock.patch.object(server, "kget", self.get), \
-                mock.patch.object(server, "ksend", fail_new_service), \
+        with mock.patch.object(SERVERS, "kget", self.get), \
+                mock.patch.object(SERVERS, "ksend", fail_new_service), \
                 mock.patch.object(server.SHARES, "_state", return_value=([], {}, None, None, None)):
             with self.assertRaisesRegex(ValueError, "service rejected"):
-                server.install_samba()
+                SERVERS.install_samba()
         self.assertIn(self.old_dep, self.objects)
         self.assertIn(self.old_svc, self.objects)
         self.assertNotIn(self.new_dep, self.objects)
@@ -97,16 +98,16 @@ class SmbMigrationTests(unittest.TestCase):
         rows = [{"name": "media", "pvc": "share-media", "path": "/shares/media",
                  "user": "lab", "public": False}]
         creds = {"media": {"user": "lab", "password": "pw"}}
-        dep = server._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
+        dep = SERVERS._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
         dep = server.SHARES.configured_deployment(dep, rows, creds)
         container = dep["spec"]["template"]["spec"]["containers"][0]
         container["volumeMounts"].append({"name": "manual", "mountPath": "/shares/media"})
         dep["spec"]["template"]["spec"]["volumes"].append(
             {"name": "manual", "persistentVolumeClaim": {"claimName": "share-media"}})
         self.objects[self.new_dep] = dep
-        with mock.patch.object(server, "kget", self.get), \
+        with mock.patch.object(SERVERS, "kget", self.get), \
                 mock.patch.object(server.SHARES, "_state", return_value=(rows, creds, None, None, dep)):
-            state = server.samba_state()
+            state = SERVERS.samba_state()
         self.assertEqual(["media"], state["served_shares"])
         self.assertFalse(state["in_sync"])
 
@@ -114,15 +115,15 @@ class SmbMigrationTests(unittest.TestCase):
         rows = [{"name": "media", "pvc": "share-media", "path": "/shares/media",
                  "user": "lab", "public": False}]
         creds = {"media": {"user": "lab", "password": "pw"}}
-        dep = server._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
+        dep = SERVERS._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
         dep = server.SHARES.configured_deployment(dep, rows, creds)
         for item in dep["spec"]["template"]["spec"]["containers"][0]["env"]:
             if item["name"] == "PERMISSIONS":
                 item.pop("value")
         self.objects[self.new_dep] = dep
-        with mock.patch.object(server, "kget", self.get), \
+        with mock.patch.object(SERVERS, "kget", self.get), \
                 mock.patch.object(server.SHARES, "_state", return_value=(rows, creds, None, None, dep)):
-            state = server.samba_state()
+            state = SERVERS.samba_state()
         self.assertTrue(state["in_sync"])
 
     def test_general_workload_mutations_reject_managed_names(self):
@@ -142,17 +143,17 @@ class SmbMigrationTests(unittest.TestCase):
         pvc_path = f"/api/v1/namespaces/{self.namespace}/persistentvolumeclaims/share-media"
         config_path = f"/api/v1/namespaces/{self.namespace}/configmaps/{server.SHARES.CONFIGMAP()}"
         secret_path = f"/api/v1/namespaces/{self.namespace}/secrets/{server.SHARES.SECRET()}"
-        self.objects[self.new_dep] = server._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
-        self.objects[self.new_svc] = server._smb_new_object(self.objects[self.old_svc], server.SMB_NAME)
+        self.objects[self.new_dep] = SERVERS._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
+        self.objects[self.new_svc] = SERVERS._smb_new_object(self.objects[self.old_svc], server.SMB_NAME)
         for path in (pvc_path, config_path, secret_path):
             self.objects[path] = {"metadata": {"name": path.rsplit("/", 1)[1]}}
-        with mock.patch.object(server, "kget", self.get), \
-                mock.patch.object(server, "ksend", self.send), \
-                mock.patch.object(server, "samba_state", return_value={
+        with mock.patch.object(SERVERS, "kget", self.get), \
+                mock.patch.object(SERVERS, "ksend", self.send), \
+                mock.patch.object(SERVERS, "samba_state", return_value={
                     "installed": True, "enabled": True, "name": server.SMB_NAME}):
-            server.set_samba(False)
+            SERVERS.set_samba(False)
             self.assertEqual(0, self.objects[self.new_dep]["spec"]["replicas"])
-            server.remove_samba()
+            SERVERS.remove_samba()
         self.assertNotIn(self.new_dep, self.objects)
         self.assertNotIn(self.new_svc, self.objects)
         for path in (pvc_path, config_path, secret_path):

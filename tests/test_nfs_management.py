@@ -9,6 +9,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_nfs as NFS
 import server
+import homestead_share_servers as SERVERS
 
 
 class NfsExportTests(unittest.TestCase):
@@ -70,8 +71,8 @@ class NfsExportTests(unittest.TestCase):
 
 class NfsLifecycleTests(unittest.TestCase):
     def setUp(self):
-        self.dep = server._smb_path("deployments", NFS.NAME)
-        self.svc = server._smb_path("services", NFS.NAME)
+        self.dep = SERVERS._smb_path("deployments", NFS.NAME)
+        self.svc = SERVERS._smb_path("services", NFS.NAME)
         self.pvc = f"/api/v1/namespaces/{server.SMB_NAMESPACE}/persistentvolumeclaims/share-media"
         self.cm = f"/api/v1/namespaces/{server.SMB_NAMESPACE}/configmaps/{server.SHARES.CONFIGMAP()}"
         self.secret = f"/api/v1/namespaces/{server.SMB_NAMESPACE}/secrets/{server.SHARES.SECRET()}"
@@ -102,11 +103,11 @@ class NfsLifecycleTests(unittest.TestCase):
         return copy.deepcopy(body)
 
     def test_disabling_and_removing_nfs_never_delete_claims_or_smb_config(self):
-        with mock.patch.object(server, "kget", self.get), mock.patch.object(server, "ksend", self.send), \
+        with mock.patch.object(SERVERS, "kget", self.get), mock.patch.object(SERVERS, "ksend", self.send), \
                 mock.patch.object(server.SHARES, "_state", return_value=([], {}, None, None, None)):
-            server.set_nfs(False)
+            SERVERS.set_nfs(False)
             self.assertEqual(0, self.objects[self.dep]["spec"]["replicas"])
-            server.remove_nfs()
+            SERVERS.remove_nfs()
         self.assertNotIn(self.dep, self.objects)
         self.assertNotIn(self.svc, self.objects)
         for path in (self.pvc, self.cm, self.secret):
@@ -126,7 +127,7 @@ class NfsLifecycleTests(unittest.TestCase):
         with mock.patch.object(server.SHARES, "_pvc", return_value=pvc), \
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "kube-vip"}), \
                 mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg):
-            dep, svc = server._nfs_deployment(rows, "192.0.2.246")
+            dep, svc = SERVERS._nfs_deployment(rows, "192.0.2.246")
         self.assertEqual(NFS.NAME, dep["metadata"]["name"])
         self.assertEqual("Local", svc["spec"]["externalTrafficPolicy"])
         self.assertEqual("true", svc["metadata"]["annotations"]["homestead.io/exclusive-vip"])
@@ -140,7 +141,7 @@ class NfsLifecycleTests(unittest.TestCase):
         with mock.patch.object(server.SHARES, "_pvc", return_value=pvc), \
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "servicelb"}):
             with self.assertRaisesRegex(ValueError, "dedicated VIP"):
-                server._nfs_deployment(rows, "")
+                SERVERS._nfs_deployment(rows, "")
 
 
 class NfsRecoveryTests(unittest.TestCase):

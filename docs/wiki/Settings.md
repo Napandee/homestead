@@ -1,6 +1,6 @@
 # Settings
 
-Settings has eight sections: seven that change the cluster for everyone, and
+Settings has ten sections: nine that change the cluster for everyone, and
 **You**, which is yours and this browser's. The desktop top bar's gear opens
 **You**; on a phone, open Settings from **More** or your account icon.
 
@@ -8,11 +8,13 @@ Settings has eight sections: seven that change the cluster for everyone, and
 |---|---|
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
 | **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
+| **Placement** | How hosts share the work - Kubernetes' default, spread by capacity, or a hot spare; whether the other hosts have room if one fails; and whether containers move back when a host returns |
 | **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
 | **Connections** | UniFi Network, the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
+| **Troubleshooting** | bug reports and logs |
 | **You** | appearance, notifications on this device, refresh rate, your password and signing out |
 
 A section saves once: change what you like and a bar at its foot offers
@@ -152,6 +154,116 @@ Deployment.
 A notification about a new Homestead release links here: `/settings?tab=about`
 opens this tab, as `?tab=` does for any of them.
 
+## How hosts share the work
+
+**Placement → How hosts share the work** is one choice for the whole cluster,
+offered in the setup guide once two hosts take work. A host with a hard taint
+of its own - a tiebreaker kept only for etcd votes, say - takes no apps and is
+not counted:
+
+- **Kubernetes default** - apps are placed as Kubernetes places them; placement
+  is set app by app, in Edit.
+- **Spread by capacity** - each app goes to the host with most room left, so a
+  32 GB host carries about twice a 16 GB one. The scheduler already does this,
+  but by what apps *reserve*: an app that reserves nothing is placed as if it
+  used nothing. The setting says how many apps reserve nothing and links to
+  **Set reservations from use**. Choosing it changes no app.
+- **Hot spare** - the standby hosts you tick take apps only when the others
+  cannot. Homestead gives each the taint `homestead.io/standby=true:PreferNoSchedule`:
+  the scheduler avoids it while another host has room and uses it when none
+  has. No app changes, so it works for apps Flux, Argo CD or Helm apply.
+  Homestead keeps the taints in step with the setting every minute: it adds
+  its own and removes any taint with the key `homestead.io/standby`, leaves
+  every other taint alone, and never makes standby the last host taking work.
+  Balance hosts always moves apps off standby hosts first - as far as the
+  other hosts stay under 90% full - and never onto them, and weighs how even
+  the main hosts are without the standby ones. Ticking a host moves nothing
+  by itself: apps already on it stay until Balance hosts moves them, which the
+  setting offers. A host that refuses the taint is shown as not marked yet,
+  with why, and tried again every minute; a standby host coming back is no
+  reason to move anything, since nothing moves onto it.
+
+The taint is soft on purpose: a hard `NoSchedule` would also keep DaemonSets -
+Longhorn's, Homestead's probe - from rolling out on that host. Choosing either
+of the last two turns on **Suggest** under *When a host comes back* if it was
+off, visibly, since apps that moved while a host was away only come back that way.
+
+## If a host fails
+
+**Placement → If a host fails** takes each host in turn as failed and says
+whether the others have room for what it runs - for example *If node2
+fails, node1 would have 13.7 of 15 GiB of memory reserved; 3 low-tier apps
+would wait for room or be evicted.* A host whose CPU runs out first is
+described by its CPU instead. Each host is marked **fits**, **tight** (a host
+that takes some of the apps left 90% full or more), **apps wait**, **no host
+left**, or **unknown** when its preview could not be worked out. **Details** opens
+that host's *If this host goes down* preview, which shows the same forecast
+under **Room on the other hosts**: each remaining host's memory reserved now
+and after the move, and what would wait.
+
+The apps and VMs that would move are placed - not those that stop anyway
+(pinned, on host-local storage, or using hardware only that host has), nor
+those set to wait for their host to come back. Pods the preview does not list
+- a StatefulSet's, say - are counted as needing room on a host their own
+rules and its taints allow, should they be started elsewhere: on k3s a
+StatefulSet's pod on a host that is gone waits until it is deleted, by hand or
+by Longhorn's policy for a host that is down. A bare pod no controller owns
+does not move. They are placed the way the scheduler would: critical first,
+then normal, then low, largest first, each on an allowed host with room for it
+beside what is already there - the one with the most room left. Only when no
+host has room does an app evict lower tiers: a critical app may evict normal
+and low ones, a normal app low ones, on the host where the fewest apps must
+go; low apps wait and evict nothing. Only what apps *reserve* counts, so an
+app that reserves nothing fits anywhere on paper: the card and the dialog say
+how many of those there are, since the figures are then a floor. Counts are of
+apps, not of their copies.
+Apps already Pending, with no host, are counted apart: they wait whichever
+host fails. It is a forecast, not the scheduler - it does not weigh affinity
+between apps or the order pods restart in. The card is worked out when
+Placement is opened, and at most once a minute.
+
+## When a host comes back
+
+While a host is down or drained, its containers start on the others, and
+Kubernetes never moves them back. **Placement → When a host comes back** says
+what Homestead does once the host takes work again - Ready, and not cordoned,
+after it has been seen working before (a new host finishing joining is not
+"back"):
+
+- **No** - nothing. **Balance hosts** on Nodes, or **Rebalance containers…** in
+  Containers' menu, moves them when you choose.
+- **Suggest** - an alert under *Hosts joining* (a notification category on by
+  default) says the host is back and how many containers the rebalance would
+  move. Nothing moves until someone reviews it in Balance hosts.
+- **In the update window** - the same alert, then the rebalance runs by itself
+  in each opening of the update window, as the job a person would start,
+  titled *Rebalance N containers after host came back*. It does not start while
+  another job moves or restarts apps or changes hosts - an OS rollout or a
+  host's update, host power or a k3s change, a rebalance, a manual move, an
+  automatic or manual image update, reservations being set, a volume restore
+  or storage-class move, a VM migration, among others - and neither an
+  automatic update nor a scheduled OS rollout starts while it runs. The check
+  and the start are one step, so two that become due the same minute do not
+  both start. The window is used whatever the image update policy, notify
+  only included. The run can go on after the window closes: each move waits up
+  to ten minutes for its container to start. Apps Flux or Argo CD apply are
+  left out of it, since their next sync could move them back; move those by
+  hand, or in Git.
+
+In the window, an app is left where it is when a scheduled job (a CronJob)
+mounts its volume and is running, or runs while the rebalance may still be
+going - before the window closes, or within ten minutes a move for each
+container it would move - or has a schedule Homestead cannot read: the job has
+to run on the app's host while the volume is attached there. A CronJob without
+a time zone of its own runs on its controller's host clock - on k3s often
+local time - so Homestead allows for every clock its last run is consistent
+with, an hour either way in case the clocks have changed since. An app left
+where it is moves at the next opening.
+
+Only moves worth a restart are made, with the same checks as Balance hosts. A
+returned host is remembered until the rebalance finds nothing worth moving,
+and for a week at most; the alert clears then.
+
 ## Homestead's own health
 
 **About** shows whether the parts of Homestead that work in the background are
@@ -161,8 +273,9 @@ working, refreshed every 15 seconds:
 
 - how fast the Kubernetes API answers;
 - each copy of Homestead, and which one leads;
-- each background task - live charts, alerts, long-term stats, hardware
-  detection, moves - with when it last worked and its last error;
+- each background task - live charts, alerts, long-term stats, app usage
+  history, rebalance after a host returns, hardware detection, moves - with
+  when it last worked and its last error;
 - the node probe: how many hosts run it, report, and have drive health;
 - **Samba** - running, and on which address. Switch it off here (shares stop
   being served; volumes, settings and passwords are kept) and on again, which
@@ -173,7 +286,7 @@ working, refreshed every 15 seconds:
 
 **Settings › About › Homestead's data** shows what Homestead keeps on its own
 volume - monitoring and stats history, change history, the storage forecast,
-jobs, logs, logos and so on - each store's size and how long it keeps things,
+app usage, hosts coming back, jobs, logs, logos and so on - each store's size and how long it keeps things,
 and how full the volume is. Each store trims itself; once a day Homestead also
 trims its logs to a year (and 5,000 entries), removes logos nothing has used for
 30 days, and removes leftovers of interrupted writes. Past 80% full it keeps half

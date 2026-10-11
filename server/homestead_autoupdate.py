@@ -93,11 +93,15 @@ def candidates(workloads, report, answers):
     return sorted(out, key=lambda w: (w["ns"], w["name"]))
 
 
-def pick(workloads, report, answers, operations, window_open, policy):
-    """The one app to update now, or None. Nothing while a job of this kind runs."""
+def pick(workloads, report, answers, operations, window_open, policy, waits_for=()):
+    """The one app to update now, or None. Nothing while a job of this kind
+    runs, or one of waits_for - a rebalance that may be moving the app."""
     if not window_open or policy == "notify_only":
         return None
-    if any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in operations or []):
+    # Not finished is any state but these - a job being cancelled is still
+    # moving things, as the rebalance's own wait counts it.
+    if any(o.get("kind") in (KIND, *waits_for) and o.get("status") not in ("succeeded", "failed", "cancelled")
+           for o in operations or []):
         return None
     found = candidates(workloads, report, answers)
     return found[0] if found else None

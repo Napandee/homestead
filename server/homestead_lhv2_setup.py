@@ -11,6 +11,7 @@ import urllib.error
 import homestead_lhcapacity as CAP
 import homestead_hostrun as HOST
 import homestead_pod_resources as R
+import homestead_routes
 
 LH = CAP.LH
 LABEL = "homestead.io/longhorn-v2-setup"
@@ -389,3 +390,18 @@ def enable(body):
         ksend('PUT', LH + '/settings/data-engine-cpu-mask', setting)
     CAP.save({'v2': True}, allow_v2_enable=True)
     return plan()
+
+
+def _enable(body):
+    result = enable(body)
+    # Longhorn's capacity answer names V2; it is kept a few seconds.
+    homestead_routes.forget("lhcap")
+    return result
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/v2/plan"): ("admin", lambda request: plan()),
+    ("POST", "/api/longhorn/v2/prepare"): ("admin", lambda request: prepare(request.body)),
+    ("POST", "/api/longhorn/v2/enable"): ("admin", lambda request: _enable(request.body)),
+}

@@ -89,6 +89,7 @@ echo END
 
 OWN = ("", "")      # Homestead's namespace and Deployment, whose data volume follows the nodes
 LH_VOLUMES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes"
+LH_NODES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes"
 
 
 def bind(_kget, _ksend, _hostrun, _platform, _probes, data_dir="/data", own=("", "")):
@@ -121,6 +122,30 @@ def _ready_nodes():
     return [n["metadata"]["name"] for n in (kget("/api/v1/nodes") or {}).get("items", [])
             if any(c.get("type") == "Ready" and c.get("status") == "True"
                    for c in (n.get("status") or {}).get("conditions") or [])]
+
+
+def _stores(lh_node):
+    """Whether Longhorn can put a copy on this node: Longhorn's own record of
+    it is Ready - a record left behind on a host Longhorn no longer runs on is
+    not - scheduling is allowed and no eviction asked, on the node and on one
+    of its disks."""
+    spec, status = lh_node.get("spec") or {}, lh_node.get("status") or {}
+    ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions") or [])
+    usable = lambda part: part.get("allowScheduling") is not False and not part.get("evictionRequested")
+    return ready and usable(spec) and any(usable(disk) for disk in (spec.get("disks") or {}).values())
+
+
+def _storage_hosts(ready):
+    """The Ready nodes Longhorn can put a copy on (_stores). A node kept only
+    for etcd votes - a tiebreaker with a NoSchedule taint and no Longhorn - is
+    Ready but holds no copies, and a third copy asked for there leaves every
+    volume degraded (#364). None while Longhorn cannot say: nothing is raised
+    on a guess."""
+    found = _get(LH_NODES)
+    if not isinstance(found, dict):
+        return None
+    stores = {(n.get("metadata") or {}).get("name") for n in found.get("items") or [] if _stores(n)}
+    return [name for name in ready if name in stores]
 
 
 def hosts(ready, state, longhorn=True):
@@ -342,10 +367,11 @@ def stale_services(now=None):
     return removed
 
 
-def longhorn_copies(ready):
-    """The default copies raised with the nodes, while it is the installer's
-    one or the count Homestead set before. Returns (from, to), or None."""
-    want = max(1, min(3, len(ready)))
+def longhorn_copies(storing):
+    """The default copies raised with the hosts Longhorn stores on, while it
+    is the installer's one or the count Homestead set before. Returns (from,
+    to), or None."""
+    want = max(1, min(3, len(storing)))
     chart = _get(f"{HELMCHARTS}/longhorn")
     if not chart or want < 2:
         return None
@@ -373,11 +399,12 @@ def longhorn_copies(ready):
     return (have, want)
 
 
-def own_copies(ready):
-    """Homestead's own data volume raised with the nodes, while it keeps the
+def own_copies(storing):
+    """Homestead's own data volume raised with the hosts Longhorn stores on,
+    while it keeps the
     installer's one copy or the count Homestead set before. Returns the
     claims raised, as (claim, to)."""
-    want = max(1, min(3, len(ready)))
+    want = max(1, min(3, len(storing)))
     ns, name = OWN
     if want < 2 or not ns or not name:
         return []
@@ -407,27 +434,27 @@ _seen_ready = None
 
 
 def copies_tick():
-    """Every minute: once the number of Ready nodes changes, the default
-    copies follow. Returns a line for the log, or None."""
+    """Every minute: once the number of Ready nodes Longhorn stores on
+    changes, the default copies follow. Returns a line for the log, or None."""
     global _seen_ready
     p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2") or not p.get("longhorn"):
         return None
-    ready = _ready_nodes()
-    if len(ready) == _seen_ready:
+    storing = _storage_hosts(_ready_nodes())
+    if storing is None or len(storing) == _seen_ready:
         return None
-    raised = longhorn_copies(ready)
-    own = own_copies(ready)
-    _seen_ready = len(ready)
-    notes = [n for n in [_copies_note(raised, ready)] + [f"Homestead's data volume {claim} keeps {to} copies now"
+    raised = longhorn_copies(storing)
+    own = own_copies(storing)
+    _seen_ready = len(storing)
+    notes = [n for n in [_copies_note(raised, storing)] + [f"Homestead's data volume {claim} keeps {to} copies now"
                                                           for claim, to in own] if n]
     return "; ".join(notes) or None
 
 
-def _copies_note(raised, ready):
+def _copies_note(raised, storing):
     if not raised:
         return None
-    return (f"new Longhorn volumes keep {raised[1]} copies, now there are {len(ready)} nodes "
+    return (f"new Longhorn volumes keep {raised[1]} copies, now Longhorn stores on {len(storing)} hosts "
             "(existing volumes keep theirs; raise them on the Volumes page)")
 
 
@@ -453,8 +480,9 @@ def tick():
             out.append(("", f"kube-vip: {settled}"))
     for name in stale_services():
         out.append(("", f"removed the LoadBalancer Service {name}: its workload is gone, and it still asked for its VIP"))
-    if p.get("longhorn"):
-        note = _copies_note(longhorn_copies(ready), ready)
+    storage = _storage_hosts(ready) if p.get("longhorn") else None
+    if storage is not None:
+        note = _copies_note(longhorn_copies(storage), storage)
         if note:
             out.append(("", note))
     return out

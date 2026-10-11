@@ -291,6 +291,22 @@ def _tolerates(taint, tolerations):
     return False
 
 
+def may_run_on(spec, node):
+    """Whether a pod spec may be scheduled on a node object as the API gives
+    it: its node name, nodeSelector, required node affinity, and the node's
+    NoSchedule and NoExecute taints. Room is not weighed here."""
+    meta, node_spec = node.get("metadata") or {}, node.get("spec") or {}
+    name, labels = meta.get("name", ""), meta.get("labels") or {}
+    if spec.get("nodeName") and spec["nodeName"] != name:
+        return False
+    if any(labels.get(k) != v for k, v in (spec.get("nodeSelector") or {}).items()):
+        return False
+    if not _required_affinity_matches(spec, {"name": name, "labels": labels}):
+        return False
+    return all(taint.get("effect") not in ("NoSchedule", "NoExecute") or _tolerates(taint, spec.get("tolerations") or [])
+               for taint in node_spec.get("taints") or [])
+
+
 def _start_scheduler_check(spec, node):
     """Hard scheduling constraints relevant to a proposed pod start."""
     reasons, cautions = [], []
@@ -679,3 +695,9 @@ def move(ns, name, node, pin=False):
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "nodes", "impact:")
     return {"ok": True, "moved": name, "to": node or "any node", "mode": mode}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/move/plan"): ("admin", lambda request: plan(request.query["ns"][0], request.query["name"][0], float((request.query.get("cpu") or [0])[0]), float((request.query.get("mem") or [0])[0]))),
+}

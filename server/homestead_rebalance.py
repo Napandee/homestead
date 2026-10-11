@@ -21,6 +21,9 @@ import json
 import time
 import urllib.error
 
+import homestead_operations as OPS
+import homestead_routes as ROUTER
+
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 KIND = "volume-rebalance"
 # On a Longhorn volume while one of its copies moves: the copies it keeps.
@@ -362,3 +365,38 @@ def cancel_run(work, chosen):
     if i < len(moves) and ref.get("stage") in ("building", "settling") and ref.get("original"):
         _replicas(moves[i]["volume"], ref["original"])
     return f"Stopped after moving {ref.get('moved', 0)} cop{'y' if ref.get('moved', 0) == 1 else 'ies'}"
+
+
+def start_reviewed(b):
+    """Start the rebalance someone reviewed, as a job; a 409 with the plan as
+    it is now when it no longer holds, a 202 with the job when it starts."""
+    running = next((i for i in OPS.list_operations() if i.get("kind") == KIND
+                    and i.get("status") not in OPS.TERMINAL), None)
+    if running:
+        return ROUTER.Reply(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})
+    if b.get("moves") is not None:
+        # The copies reviewed, checked against Longhorn now - not a
+        # plan made again from sizes that grow while apps write.
+        try:
+            moves = reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
+        except ValueError as error:
+            return ROUTER.Reply(409, {"error": str(error), "plan": plan(b.get("exclude") or [])})
+        chosen = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
+    else:
+        chosen = plan(b.get("exclude") or [])
+        if chosen["review_token"] != b.get("review_token"):
+            return ROUTER.Reply(409, {"error": "Volume copies changed since the review; review again", "plan": chosen})
+    if not chosen["moves"]:
+        return ROUTER.Reply(409, {"error": "Nothing to move: the hosts are as even as they can be", "plan": chosen})
+    operation = OPS.start(KIND, f"Rebalance {len(chosen['moves'])} volume cop{'y' if len(chosen['moves']) == 1 else 'ies'}",
+                          {"kind": "Volume", "name": "rebalance"}, "/volumes",
+                          {"moves": chosen["moves"], "index": 0, "moved": 0, "stage": "add", "excluded": chosen["excluded"]},
+                          "Starting with the first copy")
+    return ROUTER.Reply(202, {"operation": operation})
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
+    ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
+}

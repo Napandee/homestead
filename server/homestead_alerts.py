@@ -352,3 +352,16 @@ def update_facts(report):
                                else f"A newer image is available{f' ({tags})' if tags else ''}"),
                       "href": "/settings?tab=updates"})
     return facts
+
+
+# The bell: what is happening, the recent log, and where this person is told -
+# their devices, which homestead_push keeps and sets here (DEVICES), so this
+# module needs nothing of push.
+DEVICES = [lambda user: []]
+
+ROUTES = {
+    ("GET", "/api/alerts"): ("viewer", lambda request: {
+        "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
+        "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
+        "devices": DEVICES[0](request.user)}),
+}

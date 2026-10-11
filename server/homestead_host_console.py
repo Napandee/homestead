@@ -267,3 +267,17 @@ def tick(now=None):
             saved = _read()
             want = wanted(saved)
     return done
+
+
+# Its routes and who may use them (homestead_routes.py).
+def act(body, user):
+    """The add-on on or off for every host; or one host looked at again."""
+    if "enabled" in body:
+        return set_cluster(bool(body.get("enabled")), user or "")
+    return {"ok": True, "operation": start(str(body.get("node") or ""), str(body.get("action") or "inspect"))}
+
+
+ROUTES = {
+    ("GET", "/api/host-console"): ("admin", lambda request: inventory()),
+    ("POST", "/api/host-console"): ("admin", lambda request: act(request.body, request.user)),
+}

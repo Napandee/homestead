@@ -16,6 +16,9 @@ setting drives Longhorn's and prepares the hosts, so that is what changes.
 """
 import json
 import urllib.error
+import homestead_disk_v2 as DISK_V2
+import homestead_operations as OPS
+import homestead_routes
 
 kget = ksend = None
 v2_status = lambda: {}
@@ -214,3 +217,20 @@ def alert_facts(cap):
                                f"a new replica there can be at most {node['room_gb']} GB"),
                       "href": "/volumes"})
     return facts
+
+
+def save_checked(cfg):
+    """save, refused when V2 would be switched off under a saved V2 disk
+    preparation; checked under the jobs' lock so none starts meanwhile."""
+    homestead_routes.forget("lhcap")
+    with OPS._lock:
+        if "v2" in cfg and not cfg["v2"] and DISK_V2.tasks():
+            raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
+        return save(cfg)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/capacity"): ("viewer", lambda request: homestead_routes.cached("lhcap", 15, status)),
+    ("POST", "/api/longhorn/settings"): ("admin", lambda request: save_checked(request.body)),
+}

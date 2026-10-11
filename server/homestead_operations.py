@@ -15,6 +15,7 @@ import json
 import copy
 import os
 import secrets
+import sys
 import threading
 import time
 import urllib.error
@@ -135,8 +136,11 @@ def _write(items):
             SHARED.write_json(os.path.join(DATA_DIR, LEGACY_MARKER), {"version": 1}, durable=True)
 
 
-def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
-    """Persist a newly started operation and return its public representation."""
+def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", unless=()):
+    """Persist a newly started operation and return its public representation.
+    unless: kinds of job that, while one is not finished, refuse this one -
+    checked under the same lock as the start, so two loops starting in the
+    same minute cannot both pass the check."""
     now = _now()
     item = {
         "id": secrets.token_hex(12), "kind": kind, "title": str(title)[:180],
@@ -152,6 +156,9 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
+        busy = next((i for i in items if i.get("kind") in set(unless or ()) and i.get("status") not in TERMINAL), None)
+        if busy:
+            raise ValueError(f"{busy.get('title') or busy.get('kind')} is running")
         import_targets = _cdi_targets(kind, ref)
         if import_targets and any(import_targets & _cdi_targets(i.get("kind"), i.get("ref") or {}) and
                                   (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
@@ -1069,3 +1076,45 @@ def log(operation_id):
         except Exception as error:
             sources = [{"title": "Output", "text": "", "note": f"could not be read: {error}"[:300]}]
     return {**_public(item), "history": item.get("history") or [], "sources": sources}
+
+
+# The recovery reviews of a stopped job, asked from the job tray: server.py's
+# reader, and the storage admissions it holds (bind_recovery).
+_recovery = {"read": None, "helper": None, "restart": None, "runtime": None}
+
+
+def bind_recovery(read, helper_admission, restart_admission, runtime_check):
+    _recovery.update(read=read, helper=helper_admission, restart=restart_admission, runtime=runtime_check)
+
+
+def _recover(kind, step):
+    """A recovery route: preview takes the job's id, the rest the whole body."""
+    def route(request):
+        import homestead_storage_recovery as STORAGE_RECOVERY
+        import homestead_vm_mutation_recovery as VM_MUTATION_RECOVERY
+        import homestead_vm_power_recovery as VM_POWER_RECOVERY
+        ops = sys.modules[__name__]
+        what = request.body.get("id", "") if step == "preview" else request.body
+        if kind == "storage":
+            return getattr(STORAGE_RECOVERY, step)(what, ops, _recovery["read"], request.user, _recovery["helper"],
+                                                   _recovery["restart"], runtime_check=_recovery["runtime"])
+        module = VM_POWER_RECOVERY if kind == "power" else VM_MUTATION_RECOVERY
+        return getattr(module, step)(what, ops, _recovery["read"], request.user)
+    return route
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/operations/dismiss"): ("operator", lambda request: dismiss_finished() if request.body.get("all")
+                                          else dismiss(request.body["id"])),
+    ("POST", "/api/operations/power-recovery/preview"): ("admin", _recover("power", "preview")),
+    ("POST", "/api/operations/power-recovery/resolve"): ("admin", _recover("power", "resolve")),
+    ("POST", "/api/operations/vm-recovery/preview"): ("admin", _recover("vm", "preview")),
+    ("POST", "/api/operations/vm-recovery/resolve"): ("admin", _recover("vm", "resolve")),
+    ("POST", "/api/operations/storage-recovery/preview"): ("admin", _recover("storage", "preview")),
+    ("POST", "/api/operations/storage-recovery/act"): ("admin", _recover("storage", "act")),
+    ("GET", "/api/operations"): ("viewer", lambda request: list_operations()),
+    ("GET", "/api/operations/log"): ("viewer", lambda request: log((request.query.get("id") or [""])[0])),
+    ("POST", "/api/operations/resume"): ("admin", lambda request: resume(request.body.get("id", ""))),
+    ("POST", "/api/operations/cancel-plan"): ("operator", lambda request: cancel_plan(request.body.get("id", ""))),
+}

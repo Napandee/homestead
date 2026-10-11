@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_volume_usage as usage
 import server
+import homestead_storage as STORAGE
 
 GIB = 1024 ** 3
 STAMP = "2026-09-26T19:00:00Z"
@@ -140,10 +141,10 @@ class VolumeUsageIntegrationTests(unittest.TestCase):
             if path == "/api/v1/persistentvolumeclaims":
                 return {"items": [self.claim]}
             return {"items": []}
-        with patch.object(server, "kget", get), patch.object(server, "claim_references", return_value={}), \
+        with patch.object(STORAGE, "kget", get), patch.object(STORAGE, "claim_references", return_value={}), \
              patch.object(server, "cached", side_effect=lambda key, ttl, fn: fn()), \
              patch.object(server.VOLUME_USAGE, "collect", return_value=self.metrics) as collect:
-            return server.get_volumes()[0], collect
+            return STORAGE.get_volumes()[0], collect
 
     def test_footprint_above_capacity_is_preserved_not_used_for_bar(self):
         row, _ = self.read()

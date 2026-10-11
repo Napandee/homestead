@@ -9,6 +9,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_api_errors as errors
 import server
+import homestead_storage as STORAGE
 
 GIB = 1024 ** 3
 
@@ -72,8 +73,8 @@ class ApiErrorTests(unittest.TestCase):
         handler._send = mock.Mock()
         pvc = {"spec": {"storageClassName": "example-storage", "volumeName": "example-volume",
                         "resources": {"requests": {"storage": "5Gi"}}}, "status": {"phase": "Bound"}}
-        with mock.patch.object(server, "kget", side_effect=[pvc, {"allowVolumeExpansion": True}]), \
-                mock.patch.object(server, "ksend", side_effect=rejection(capacity_error())) as send:
+        with mock.patch.object(STORAGE, "kget", side_effect=[pvc, {"allowVolumeExpansion": True}]), \
+                mock.patch.object(STORAGE, "ksend", side_effect=rejection(capacity_error())) as send:
             handler.do_POST()
         code, body = handler._send.call_args.args
         self.assertEqual(422, code)

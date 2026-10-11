@@ -9,6 +9,9 @@ import math
 import time
 import urllib.error
 
+import homestead_operations as OPS
+import homestead_storage_guard as STORAGE_GUARD
+
 
 kget = ksend = snapshots = backups = None
 cache = None
@@ -445,3 +448,36 @@ def delete_orphan(plan, cfg):
     return {"ok": True, "orphan": True, "namespace": plan["namespace"], "name": plan["name"],
             "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"],
             "message": "Retained backing-data deletion requested; external backups are kept"}
+
+
+def _review(plan):
+    """A deletion plan with what Homestead's own storage jobs hold."""
+    return STORAGE_GUARD.review(plan, OPS, kget)
+
+
+def delete_reviewed(cfg):
+    """Delete as reviewed, recorded as a job, under the jobs' lock so no
+    storage job starts on the volume meanwhile."""
+    with OPS._lock:
+        result = delete(cfg, validate=_review)
+        result["operation"] = OPS.start(
+            "volume-delete", f"Delete volume {result['name']}",
+            {"kind": "PersistentVolumeClaim", "name": result["name"],
+             "namespace": result["namespace"]},
+            "/volumes", {"namespace": result["namespace"], "name": result["name"],
+                          "action": result["action"], "pv": result["pv"],
+                          "orphan": result.get("orphan", False),
+                          "volume": result["longhorn_volume"]}, result["message"])
+    return result
+
+
+def _q(request, name, default=""):
+    return (request.query.get(name) or [default])[0]
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/volumes/delete-plan"): ("viewer", lambda request: _review(deletion_plan(
+        _q(request, "ns", DEFAULT_NAMESPACE), _q(request, "name"), _q(request, "volume")))),
+    ("POST", "/api/volumes/delete"): ("admin", lambda request: delete_reviewed(request.body)),
+}

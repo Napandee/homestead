@@ -19,6 +19,7 @@ import os
 import time
 
 import homestead_shared as SHARED
+import homestead_routes
 
 DATA_DIR = "/data"
 FILE = "history.json"
@@ -267,3 +268,12 @@ def uptime(now=None):
                                  if e.get("node") == name and e.get("kind") == "reboot"][-50:],
                      "since": rows[0][0] if rows else None}
     return {"nodes": out, "step": STEP}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/history/long"): ("viewer", lambda request: series((request.query.get("range") or ["24h"])[0])),
+    ("GET", "/api/nodes/uptime"): ("viewer", lambda request: homestead_routes.cached("uptime", 60, uptime)),
+    # Never hold the global cache mutex while writing to a client.
+    ("GET", "/api/history"): ("viewer", lambda request: live_series()),
+}

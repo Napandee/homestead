@@ -7,6 +7,9 @@ import re
 import time
 import urllib.error
 
+import homestead_operations as OPS
+import homestead_storage_guard as STORAGE_GUARD
+
 API = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 kget = ksend = None
 TIMEOUT = 3600
@@ -162,3 +165,18 @@ def resume_resolve(item):
     if item.get("message") == "Carrying on from where it stopped":
         item["ref"]["since"] = time.time()
     return resolve(item)
+
+
+def start_guarded(cfg):
+    """start, holding the volume's storage fence so no other storage job
+    changes it while this one is set up."""
+    with STORAGE_GUARD.volume(OPS, kget, cfg.get("volume")):
+        return start(cfg, OPS)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/lh/snapshot/delete-plan"): ("viewer", lambda request: plan((request.query.get("volume") or [""])[0], (request.query.get("name") or [""])[0])),
+    ("GET", "/api/lh/snapshot-progress"): ("viewer", lambda request: progress((request.query.get("volume") or [""])[0])),
+    ("POST", "/api/lh/snapshot/delete"): ("admin", lambda request: {"ok": True, "operation": start_guarded(request.body)}),
+}

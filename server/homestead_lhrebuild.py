@@ -11,6 +11,7 @@ and steps aside the moment anything else wants the volume.
 """
 import time
 import urllib.error
+import homestead_routes
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 SETTING = "offline-replica-rebuilding"
@@ -23,13 +24,16 @@ _gave_up = {}           # volume -> when a hold on it ran out; tried again a day
 
 kget = ksend = None
 _enabled = lambda: True     # Homestead's own preference, for Longhorn without the setting
+app_settings = save_app_settings = None     # server.py's settings, where that preference is kept
 
 
-def bind(_kget, _ksend, enabled=None):
-    global kget, ksend, _enabled
+def bind(_kget, _ksend, enabled=None, settings=None, save_settings=None):
+    global kget, ksend, _enabled, app_settings, save_app_settings
     kget, ksend = _kget, _ksend
     if enabled is not None:
         _enabled = enabled
+    if settings is not None:
+        app_settings, save_app_settings = settings, save_settings
 
 
 def _items(path):
@@ -223,3 +227,28 @@ def alert_facts(state):
                       "resolved": f"{row['claim']} has its copies again",
                       "body": body, "href": "/volumes"})
     return facts
+
+
+def save_preference(enabled):
+    """Offline rebuilding on or off: Homestead's preference, kept in its
+    settings, and Longhorn's setting where it has one."""
+    homestead_routes.forget("lhrebuild")
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be true or false")
+    settings = app_settings()
+    settings["longhorn"] = {"offline_rebuilding": enabled}
+    save_app_settings(settings)
+    return save(enabled)
+
+
+def _rebuild(volume):
+    homestead_routes.forget("lhrebuild", "volumes")
+    return rebuild_now(volume)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/offline-rebuilding"): ("viewer", lambda request: homestead_routes.cached("lhrebuild", 30, status)),
+    ("POST", "/api/longhorn/offline-rebuilding"): ("admin", lambda request: save_preference(request.body.get("enabled"))),
+    ("POST", "/api/longhorn/rebuild"): ("operator", lambda request: _rebuild(str(request.body.get("volume") or ""))),
+}

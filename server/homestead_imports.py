@@ -32,6 +32,7 @@ import homestead_source_ssh as SOURCE_SSH
 import homestead_capacity_review as SOURCE_REVIEW
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_network as VMNETWORK
+import homestead_routes
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -2746,3 +2747,155 @@ def commit_vm(prepared, before_save=None, send=None):
 
 def create_vm(cfg, platform=None, default_class=""):
     return commit_vm(prepare_vm(cfg, platform, default_class))
+
+
+# server.py's helpers the routes below call, bound by name (bind_routes):
+# an import's capacity review lives there still.
+ROUTE_NEEDS = ("guard_managed_smb", "preview_import", "reviewed_import", "workload_service_names")
+
+
+def bind_routes(helpers):
+    missing = set(ROUTE_NEEDS) - set(helpers)
+    if missing:
+        raise TypeError("homestead_imports needs " + ", ".join(sorted(missing)))
+    globals().update({name: helpers[name] for name in ROUTE_NEEDS})
+
+
+def _prepull(request):
+    b = request.body
+    result = prepull(b["image"], b.get("nodes"))
+    result["operation"] = OPS.start(
+        "image-pull", f"Pull {b['image']}",
+        {"kind": "Image", "name": b["image"], "namespace": NS},
+        "/image-cache", {"namespace": NS, "name": result["daemonset"]})
+    return result
+
+
+def _cleanup_image(request):
+    b = request.body
+    result = cleanup_image(b.get("digest"), b.get("nodes"))
+    result["operation"] = OPS.start(
+        "image-cleanup", f"Clean cached image {result['digest'][:19]}…",
+        {"kind": "Image", "name": result["image"], "namespace": NS},
+        "/image-cache", {"namespace": NS, "pods": result["pods"]})
+    return result
+
+
+def _delete_vm_image(request):
+    homestead_routes.forget("vmimages")
+    b = request.body
+    return delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", ""))
+
+
+def _delete_import(request):
+    """An import's record, and what it made that the request also names."""
+    b = request.body
+    plan = import_cleanup_plan(b.get("name"), b.get("namespace"))
+    if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
+        raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
+    made = {row["name"] for row in plan["volumes"] if row["created"]}
+    # The request names claims; asking for all of them is the old
+    # boolean, which an import with one volume still sends.
+    wanted = [str(claim) for claim in (b.get("remove_volumes") or [])]
+    if b.get("remove_volume") and not wanted:
+        wanted = [row["name"] for row in plan["volumes"] if row["created"]]
+    borrowed = [claim for claim in wanted if claim not in made]
+    if borrowed:
+        raise ValueError(f"this import copied into {', '.join(sorted(borrowed))} "
+                         "without creating it, so it will not delete it")
+    if b.get("remove_workload") and plan["workload"]:
+        guard_managed_smb(plan["namespace"], plan["workload"])
+    result = delete_import(b.get("name"), b.get("namespace"))
+    if result.get("journalled"):
+        return {**result, "removed": [], "releasing": []}
+    removed = []
+    if b.get("remove_workload") and plan["workload"]:
+        ns, name = plan["namespace"], plan["workload"]
+        services = set(workload_service_names(ns, name)) | {name}
+        ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        for service in sorted(services):
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
+            except urllib.error.HTTPError:
+                pass
+        removed.append(f"workload {name}")
+        # Its pod holds the same claims the caller may be deleting
+        # next, so wait for it to go rather than leaving them
+        # Terminating behind the pvc-protection finaliser.
+        wait_for_pods_gone(ns, f"app={name}")
+        homestead_routes.forget("wl", "ov", "network")
+    for claim in wanted:
+        ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
+                        f"persistentvolumeclaims/{claim}")
+        removed.append(f"volume {claim}")
+        homestead_routes.forget("vol", "stor")
+    # A claim something still mounts only gets a deletion stamp, so
+    # say it is releasing rather than reporting it gone.
+    releasing = []
+    for claim in wanted:
+        try:
+            live = kget(f"/api/v1/namespaces/{plan['namespace']}/"
+                        f"persistentvolumeclaims/{claim}")
+        except Exception:
+            continue
+        if (live.get("metadata", {}) or {}).get("deletionTimestamp"):
+            releasing.append(claim)
+    result["releasing"] = releasing
+    if removed:
+        result["message"] = result["message"] + " with " + " and ".join(removed)
+    if result.get("releasing"):
+        result["message"] += (" — " + ", ".join(result["releasing"])
+                              + " will finish deleting once released")
+    result["removed"] = removed
+    return result
+
+
+# Its routes and who may use them (homestead_routes.py).
+def _schedule_saved(request):
+    save_job(request.body)
+    return {"ok": True}
+
+
+def _schedule_run(request):
+    run_job_now(request.body["name"])
+    return {"ok": True}
+
+
+ROUTES = {
+    ("POST", "/api/schedules"): ("operator", _schedule_saved),
+    ("POST", "/api/schedules/run"): ("operator", _schedule_run),
+    ("POST", "/api/images/prepull"): ("operator", _prepull),
+    ("POST", "/api/images/cleanup"): ("admin", _cleanup_image),
+    ("POST", "/api/images/vm/delete"): ("admin", _delete_vm_image),
+    ("POST", "/api/images/forget-rollback"): ("admin", lambda request: forget_rollback(
+        request.body.get("namespace") or NS, request.body.get("name", ""))),
+    ("POST", "/api/imports/delete"): ("admin", _delete_import),
+    ("POST", "/api/import/preview"): ("admin", lambda request: preview_import(request.body)),
+    ("POST", "/api/import"): ("admin", lambda request: reviewed_import(request.body)),
+    ("GET", "/api/vm-disks"): ("viewer", lambda request: list_vm_disks()),
+    ("GET", "/api/sources"): ("admin", lambda request: list_sources()),
+    ("GET", "/api/imports"): ("viewer", lambda request: import_status()),
+    ("POST", "/api/imports/cleanup-plan"): ("admin", lambda request: import_cleanup_plan(request.body.get("name"), request.body.get("namespace"))),
+    ("POST", "/api/images/prepull/stop"): ("operator", lambda request: stop_prepull(request.body.get("name"))),
+    ("POST", "/api/images/scan"): ("admin", lambda request: start_image_scan()),
+    ("POST", "/api/schedules/delete"): ("operator", lambda request: del_job(request.body["name"])),
+    ("POST", "/api/sources/scan"): ("admin", lambda request: scan_source(request.body.get("name"), request.user)),
+    ("POST", "/api/sources/trust"): ("admin", lambda request: trust_source(request.body, request.user)),
+    ("POST", "/api/sources/inspect"): ("admin", lambda request: inspect_source_container(request.body["name"], request.body["container"])),
+    ("GET", "/api/images/vm"): ("viewer", lambda request: homestead_routes.cached("vmimages", 15, vm_image_cache)),
+    ("GET", "/api/vmimages"): ("viewer", lambda request: homestead_routes.cached("vmimg", 30, list_vm_images)),
+    ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, image_cache)),
+    ("GET", "/api/schedules"): ("viewer", lambda request: homestead_routes.cached("cron", 8, list_jobs)),
+    ("POST", "/api/sources/measure"): ("admin", lambda request: measure_source_paths(request.body.get("name"), request.body.get("paths") or [], request.body.get("seconds", 25))),
+    ("POST", "/api/sources"): ("admin", lambda request: {"ok": True, "sources": add_source(request.body["name"], request.body["host"], request.body["user"], request.body.get("password"), request.body.get("kind", "unraid"), request.body.get("base_path", "/mnt/user/appdata"), request.body.get("port", 22))}),
+    ("POST", "/api/sources/delete"): ("admin", lambda request: {"ok": True, "sources": del_source(request.body["name"])}),
+    ("POST", "/api/sources/browse"): ("admin", lambda request: {"entries": browse_source(request.body["name"], request.body.get("path"))}),
+    ("POST", "/api/sources/containers"): ("admin", lambda request: {"containers": source_containers(request.body["name"])}),
+    ("GET", "/api/volumes/ownership"): ("viewer", lambda request: ownership_hint(
+        (request.query.get("namespace") or [NS])[0], (request.query.get("name") or [""])[0])),
+    ("GET", "/api/vm-disks/import-plan"): ("viewer", lambda request: vm_disk_import_plan(
+        (request.query.get("ns") or [NS])[0], (request.query.get("name") or [""])[0])),
+    ("POST", "/api/volumes/chown"): ("admin", lambda request: chown_claim(
+        request.body.get("namespace") or NS, request.body.get("name"), request.body.get("uid"), request.body.get("gid"))),
+    ("POST", "/api/vm-disks/import"): ("admin", lambda request: import_vm_disk(request.body, ops=OPS)),
+}
