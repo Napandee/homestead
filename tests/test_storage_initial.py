@@ -166,7 +166,7 @@ class InitialStorageTests(unittest.TestCase):
             handler._client_ip = lambda: "127.0.0.1"
             handler._send = mock.Mock()
             with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
-                    mock.patch.object(server, "storage_runtime_check", side_effect=gate) as checked, \
+                    mock.patch.object(server.STORAGE, "runtime_check", side_effect=gate) as checked, \
                     mock.patch.object(rc, "start_reviewed", side_effect=AssertionError("legacy engine called")):
                 handler.do_POST()
                 checked.assert_called_once()

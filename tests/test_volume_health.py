@@ -2,6 +2,7 @@ import sys, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_storage as STORAGE
 
 
 def volume(**status):
@@ -13,7 +14,7 @@ class VolumeHealthReasonTests(unittest.TestCase):
     """"degraded" alone sends people to the Longhorn UI to find out why."""
 
     def test_a_failing_condition_is_quoted_back(self):
-        reason, conditions, _ = server._volume_health_reason(volume(
+        reason, conditions, _ = STORAGE._volume_health_reason(volume(
             robustness="degraded",
             conditions=[{"type": "Scheduled", "status": "False",
                          "reason": "ReplicaSchedulingFailure",
@@ -23,7 +24,7 @@ class VolumeHealthReasonTests(unittest.TestCase):
         self.assertEqual(1, len(conditions))
 
     def test_a_condition_without_a_message_falls_back_to_its_reason(self):
-        reason, _, _ = server._volume_health_reason(volume(
+        reason, _, _ = STORAGE._volume_health_reason(volume(
             robustness="degraded",
             conditions=[{"type": "Scheduled", "status": "False",
                          "reason": "ReplicaSchedulingFailure", "message": ""}]))
@@ -31,7 +32,7 @@ class VolumeHealthReasonTests(unittest.TestCase):
         self.assertEqual("ReplicaSchedulingFailure", reason)
 
     def test_the_scheduling_annotation_is_used_when_conditions_say_nothing(self):
-        reason, _, scheduling = server._volume_health_reason(volume(
+        reason, _, scheduling = STORAGE._volume_health_reason(volume(
             robustness="degraded", conditions=[{"type": "Scheduled", "status": "True"}],
             annotations={"longhorn.io/volume-scheduling-error": "insufficient storage"}))
 
@@ -39,13 +40,13 @@ class VolumeHealthReasonTests(unittest.TestCase):
         self.assertEqual("insufficient storage", scheduling)
 
     def test_a_rebuilding_volume_says_it_is_still_usable(self):
-        reason, _, _ = server._volume_health_reason(volume(robustness="degraded"))
+        reason, _, _ = STORAGE._volume_health_reason(volume(robustness="degraded"))
 
         self.assertIn("rebuilding", reason)
         self.assertIn("readable and writable", reason)
 
     def test_a_faulted_volume_says_what_that_means(self):
-        reason, _, _ = server._volume_health_reason(volume(robustness="faulted"))
+        reason, _, _ = STORAGE._volume_health_reason(volume(robustness="faulted"))
 
         self.assertIn("cannot be attached", reason)
 
@@ -54,7 +55,7 @@ class VolumeHealthReasonTests(unittest.TestCase):
         is False for every volume that has no backing image to wait for, which
         is nearly all of them - reading that as a fault called a resting
         volume broken."""
-        reason, _, _ = server._volume_health_reason(volume(
+        reason, _, _ = STORAGE._volume_health_reason(volume(
             robustness="unknown",
             conditions=[{"type": "WaitForBackingImage", "status": "False",
                          "reason": "", "message": ""},
@@ -64,7 +65,7 @@ class VolumeHealthReasonTests(unittest.TestCase):
         self.assertEqual("", reason)
 
     def test_a_volume_actually_waiting_for_a_backing_image_says_so(self):
-        reason, _, _ = server._volume_health_reason(volume(
+        reason, _, _ = STORAGE._volume_health_reason(volume(
             robustness="unknown",
             conditions=[{"type": "WaitForBackingImage", "status": "True",
                          "reason": "WaitForBackingImage",
@@ -78,19 +79,19 @@ class VolumeHealthReasonTests(unittest.TestCase):
         few = [{"type": "TooManySnapshots", "status": "False"}]
 
         self.assertEqual("too many snapshots",
-                         server._volume_health_reason(volume(robustness="healthy",
+                         STORAGE._volume_health_reason(volume(robustness="healthy",
                                                              conditions=many))[0])
-        self.assertEqual("", server._volume_health_reason(volume(robustness="healthy",
+        self.assertEqual("", STORAGE._volume_health_reason(volume(robustness="healthy",
                                                                  conditions=few))[0])
 
     def test_a_healthy_volume_has_nothing_to_explain(self):
-        reason, _, _ = server._volume_health_reason(volume(
+        reason, _, _ = STORAGE._volume_health_reason(volume(
             robustness="healthy", conditions=[{"type": "Scheduled", "status": "True"}]))
 
         self.assertEqual("", reason)
 
     def test_a_long_message_is_trimmed_rather_than_flooding_a_table_cell(self):
-        reason, _, _ = server._volume_health_reason(volume(
+        reason, _, _ = STORAGE._volume_health_reason(volume(
             robustness="faulted",
             conditions=[{"type": "Scheduled", "status": "False", "message": "x" * 900}]))
 
@@ -107,13 +108,13 @@ class MovingCopyTests(unittest.TestCase):
 
     def test_a_volume_moving_a_copy_with_every_copy_whole_is_not_degraded(self):
         moving = volume(robustness="degraded", annotations={server.REBALANCE.MOVING: "2"})
-        self.assertEqual(2, server._moving_copy(moving, whole=2))
-        self.assertEqual(2, server._moving_copy(moving), "the storage map has no copy detail and trusts the mark")
+        self.assertEqual(2, STORAGE._moving_copy(moving, whole=2))
+        self.assertEqual(2, STORAGE._moving_copy(moving), "the storage map has no copy detail and trusts the mark")
 
     def test_a_copy_lost_meanwhile_is_still_degraded(self):
         moving = volume(robustness="degraded", annotations={server.REBALANCE.MOVING: "2"})
-        self.assertEqual(0, server._moving_copy(moving, whole=1))
+        self.assertEqual(0, STORAGE._moving_copy(moving, whole=1))
 
     def test_faulted_and_unmarked_volumes_are_reported_as_they_are(self):
-        self.assertEqual(0, server._moving_copy(volume(robustness="faulted", annotations={server.REBALANCE.MOVING: "2"}), whole=2))
-        self.assertEqual(0, server._moving_copy(volume(robustness="degraded"), whole=3))
+        self.assertEqual(0, STORAGE._moving_copy(volume(robustness="faulted", annotations={server.REBALANCE.MOVING: "2"}), whole=2))
+        self.assertEqual(0, STORAGE._moving_copy(volume(robustness="degraded"), whole=3))

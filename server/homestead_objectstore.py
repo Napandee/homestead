@@ -65,6 +65,9 @@ _target_lock = threading.RLock()
 import homestead_platform as PLATFORM
 import homestead_networking as NETWORK
 import homestead_longhorn as LH
+import homestead_move as MOVE
+import homestead_move_source as MOVE_SOURCE
+import homestead_routes
 
 
 SINGLE_CLASS = "homestead-single-copy"
@@ -757,10 +760,26 @@ def remove(keep_data=True):
             "detail": "object storage removed" + ("" if keep_data else ", including its volume")}
 
 
+def _transfers(b):
+    """Open or close transfers, answered as a linked cluster expects: it
+    stops on a 4xx and waits out a 5xx, so a refusal comes back as a 409."""
+    try:
+        return set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100), str(b.get("lb_ip") or ""),
+                             str(b.get("vip_mode") or ""), int(b.get("port") or 0))
+    except MOVE_SOURCE.PendingRecovery as error:
+        return homestead_routes.Reply(503, {"error": str(error)})
+    except (ValueError, PermissionError) as error:
+        return homestead_routes.Reply(409, {"error": str(error)})
+    except MOVE.Unreachable as error:
+        return homestead_routes.Reply(502, {"error": str(error)})
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/objectstore/transfers"): ("admin", lambda request: _transfers(request.body)),
     ("GET", "/api/objectstore"): ("viewer", lambda request: status()),
     ("GET", "/api/objectstore/transfers"): ("admin", lambda request: transfers()),
     ("POST", "/api/objectstore/deploy"): ("admin", lambda request: deploy(request.body)),
     ("POST", "/api/objectstore/remove"): ("admin", lambda request: remove(bool(request.body.get("keep_data", True)))),
+    ("POST", "/api/objectstore/longhorn"): ("admin", lambda request: request_target(replace=bool(request.body.get("replace", True)))),
 }

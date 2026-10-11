@@ -2,6 +2,7 @@ import sys, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_storage as STORAGE
 
 
 def lh(name, claim, pv_status="Bound"):
@@ -27,6 +28,10 @@ class VolumeUseTests(unittest.TestCase):
     container's volume looked like one nothing uses at all."""
 
     def setUp(self):
+        # STORAGE reads the cluster through server.py's client in these tests.
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
         self.saved = server.kget
         world = {
             "/apis/longhorn.io/v1beta2/volumes": [lh("pv-nc", "nextcloud-data"), lh("pv-scratch", "scratch"),
@@ -54,7 +59,7 @@ class VolumeUseTests(unittest.TestCase):
         server.kget = self.saved
 
     def rows(self):
-        return {row["pvc_name"] + ("(old)" if row["name"] == "pv-old" else ""): row for row in server.get_volumes()}
+        return {row["pvc_name"] + ("(old)" if row["name"] == "pv-old" else ""): row for row in STORAGE.get_volumes()}
 
     def test_a_stopped_containers_volume_names_it(self):
         self.assertEqual(["Deployment/nextcloud"], self.rows()["nextcloud-data"]["used_by"])

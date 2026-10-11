@@ -554,7 +554,7 @@ def _forecast_loop():
     while True:
         if LEADER.is_leader():
             try:
-                FORECAST.observe(cached("vol", 8, get_volumes), LHCAP.status())
+                FORECAST.observe(cached("vol", 8, STORAGE.get_volumes), LHCAP.status())
                 beat("forecast", 3600, leader_only=True)
             except Exception as error:
                 beat("forecast", 3600, error, leader_only=True)
@@ -855,341 +855,6 @@ def set_uptime_setting(b):
           {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True, "value": value, "detail": f"{name} is {UPTIME.describe_setting(value)}"}
-
-
-def _moving_copy(volume, whole=None):
-    """The copies a volume keeps while Homestead moves one of them, or 0.
-
-    Moving a copy builds the new one first, so the volume asks Longhorn for
-    one more than it keeps and Longhorn calls it degraded meanwhile. With at
-    least that many whole copies (when known) it is not short of anything."""
-    keeps = ((volume.get("metadata") or {}).get("annotations") or {}).get(REBALANCE.MOVING) or ""
-    if not str(keeps).isdigit() or str((volume.get("status") or {}).get("robustness") or "").lower() != "degraded":
-        return 0
-    return int(keeps) if whole is None or whole >= int(keeps) else 0
-
-
-def _volume_health_reason(volume):
-    """Why Longhorn is unhappy with a volume, in its own words.
-
-    "degraded" on its own sends people to the Longhorn UI to find out what it
-    means. The conditions carry the answer - most often that a replica cannot
-    be scheduled because no node has room for it.
-    """
-    status = volume.get("status", {}) or {}
-    annotations = volume.get("metadata", {}).get("annotations", {}) or {}
-    conditions = []
-    for condition in status.get("conditions", []) or []:
-        conditions.append({"type": condition.get("type", ""),
-                           "status": condition.get("status", ""),
-                           "reason": condition.get("reason", ""),
-                           "message": (condition.get("message") or "")[:300]})
-    # Longhorn's volume conditions do not share a polarity: Scheduled is False
-    # when replicas cannot be placed, while WaitForBackingImage is False in the
-    # ordinary case of a volume that has no backing image to wait for. Reading
-    # every False as trouble reported a detached volume as broken.
-    failing = [row for row in conditions
-               if (row["status"] == "False" and row["type"] == "Scheduled")
-               or (row["status"] == "True" and row["type"] in ("TooManySnapshots",
-                                                               "WaitForBackingImage"))]
-    scheduling = annotations.get("longhorn.io/volume-scheduling-error", "") or ""
-    robustness = str(status.get("robustness", "") or "").lower()
-    reason = ""
-    if failing:
-        first = failing[0]
-        reason = first["message"] or first["reason"] or f"{first['type']} is failing"
-    elif scheduling:
-        reason = scheduling
-    elif robustness == "degraded":
-        # Longhorn reports no condition while it is simply catching up.
-        reason = "a replica is rebuilding; the volume is readable and writable meanwhile"
-    elif robustness == "faulted":
-        reason = "every replica is unusable, so the volume cannot be attached"
-    return reason[:300], conditions, scheduling
-
-
-def _engine_progress(engines):
-    """Rebuilds and restores in flight, per volume, from Longhorn's engines.
-
-    The volume object only says "degraded" or "restoreRequired"; how far a
-    replica rebuild or a backup restore has got is on the engine, keyed by
-    replica address. The slowest replica is the one the volume waits on.
-    """
-    out = {}
-    for engine in engines:
-        volume = (engine.get("spec", {}) or {}).get("volumeName") or \
-            (engine.get("metadata", {}).get("labels", {}) or {}).get("longhornvolume", "")
-        if not volume:
-            continue
-        status = engine.get("status", {}) or {}
-        entry = out.setdefault(volume, {})
-        rebuilding = [row for row in (status.get("rebuildStatus") or {}).values()
-                      if row and (row.get("isRebuilding") or row.get("error"))]
-        if rebuilding:
-            entry["rebuild"] = {
-                "pct": min(int(row.get("progress") or 0) for row in rebuilding),
-                "replicas": len(rebuilding),
-                "error": next((str(row["error"])[:300] for row in rebuilding if row.get("error")), ""),
-            }
-        restoring = [row for row in (status.get("restoreStatus") or {}).values()
-                     if row and (row.get("isRestoring") or row.get("error"))]
-        if restoring:
-            entry["restore"] = {
-                "pct": min(int(row.get("progress") or 0) for row in restoring),
-                "error": next((str(row["error"])[:300] for row in restoring if row.get("error")), ""),
-            }
-    return {name: entry for name, entry in out.items() if entry}
-
-
-def claim_references():
-    """Every claim something is defined to use, running or not: (namespace,
-    claim) -> ["Deployment/plex", ...].
-
-    Longhorn knows only the pods using a volume now, so a stopped container's
-    volume looked the same as one nothing uses at all - and only the second
-    is safe to think about deleting.
-    """
-    refs = {}
-
-    def note(ns, claims, what):
-        for claim in claims:
-            if claim:
-                refs.setdefault((ns, claim), []).append(what)
-
-    def claims_of(podspec):
-        return [(v.get("persistentVolumeClaim") or {}).get("claimName") for v in (podspec or {}).get("volumes") or []]
-
-    for kind, path, spec_of in (
-            ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
-            ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
-            ("DaemonSet", "/apis/apps/v1/daemonsets", lambda o: o["spec"]["template"]["spec"]),
-            ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
-        try:
-            items = kget(path).get("items", [])
-        except Exception:
-            continue
-        for obj in items:
-            try:
-                note(obj["metadata"]["namespace"], claims_of(spec_of(obj)), f"{kind}/{obj['metadata']['name']}")
-            except (KeyError, TypeError):
-                continue
-        if kind == "StatefulSet":
-            # A StatefulSet's own claims are made from its template, named
-            # <template>-<set>-<n>; they belong to it too.
-            for obj in items:
-                name, ns = obj["metadata"]["name"], obj["metadata"]["namespace"]
-                for template in (obj.get("spec") or {}).get("volumeClaimTemplates") or []:
-                    prefix = f"{(template.get('metadata') or {}).get('name', '')}-{name}-"
-                    refs.setdefault(("__prefix__", ns, prefix), []).append(f"StatefulSet/{name}")
-    try:
-        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
-        vms = []
-    for vm in vms:
-        volumes = ((((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
-        claims = [(v.get("persistentVolumeClaim") or {}).get("claimName") or (v.get("dataVolume") or {}).get("name")
-                  for v in volumes]
-        note(vm["metadata"]["namespace"], claims, f"VM/{vm['metadata']['name']}")
-    return refs
-
-
-def _references_for(refs, ns, claim):
-    found = list(refs.get((ns, claim)) or [])
-    for key, owners in refs.items():
-        if key[0] == "__prefix__" and key[1] == ns and claim.startswith(key[2]):
-            found.extend(owners)
-    return sorted(set(found))
-
-
-def other_volumes():
-    """Claims on classes that are not Longhorn - k3s's local-path, NFS and
-    the like - which Longhorn's list leaves out: each with its state, and why
-    one is stuck when its provisioner has said."""
-    longhorn = {row["name"] for row in storage_classes() if row["provisioner"] == LONGHORN_PROVISIONER}
-    try:
-        reasons = {}
-        for event in kget("/api/v1/events?fieldSelector=reason%3DProvisioningFailed").get("items", []):
-            obj = event.get("involvedObject") or {}
-            if obj.get("kind") == "PersistentVolumeClaim":
-                reasons[(obj.get("namespace"), obj.get("name"))] = (event.get("message") or "")[:300]
-    except Exception:
-        reasons = {}
-    # A claim backed by a Longhorn volume is Longhorn whatever its class says:
-    # restored claims name a one-off restore class that older releases removed.
-    try:
-        drivers = {pv["metadata"]["name"]: ((pv.get("spec") or {}).get("csi") or {}).get("driver", "")
-                   for pv in kget("/api/v1/persistentvolumes").get("items", [])}
-    except Exception:
-        drivers = {}
-    out = []
-    for pvc in kget("/api/v1/persistentvolumeclaims").get("items", []):
-        meta, spec, status = pvc["metadata"], pvc.get("spec") or {}, pvc.get("status") or {}
-        klass = spec.get("storageClassName") or ""
-        if (klass in longhorn or meta["namespace"] in SYS_NS
-                or drivers.get(spec.get("volumeName") or "") == LONGHORN_PROVISIONER):
-            continue
-        phase = status.get("phase", "")
-        out.append({"namespace": meta["namespace"], "name": meta["name"], "volume": spec.get("volumeName") or "",
-                    "storage_class": klass or "(none)",
-                    "phase": phase, "access_modes": spec.get("accessModes") or [],
-                    "size": (status.get("capacity") or {}).get("storage")
-                            or ((spec.get("resources") or {}).get("requests") or {}).get("storage", ""),
-                    "reason": reasons.get((meta["namespace"], meta["name"]), "") if phase != "Bound" else ""})
-    return sorted(out, key=lambda row: (row["phase"] == "Bound", row["namespace"], row["name"]))
-
-
-def volume_copies():
-    """Longhorn volume -> where each copy of it is: host, disk folder, and the
-    disk's name as Homestead set it up (/mnt/<device>), the OS disk said so."""
-    base = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
-    replicas = kget(f"{base}/replicas").get("items", [])
-    tags = {}
-    try:
-        for node in kget(f"{base}/nodes").get("items", []):
-            for name, disk in ((node.get("spec") or {}).get("disks") or {}).items():
-                uuid = (((node.get("status") or {}).get("diskStatus") or {}).get(name) or {}).get("diskUUID")
-                if uuid:
-                    tags[uuid] = disk.get("tags") or []
-    except Exception:
-        pass
-    out = {}
-    # A volume with no running copy is detached. Its copies are stopped, not
-    # lost: Longhorn counts one that was healthy and has not failed as whole,
-    # and so does the reboot review (homestead_power) - so here too (#379).
-    attached = {(r.get("spec") or {}).get("volumeName") for r in replicas
-                if (r.get("status") or {}).get("currentState") == "running"}
-    for r in replicas:
-        spec, status = r.get("spec") or {}, r.get("status") or {}
-        if not spec.get("volumeName"):
-            continue
-        detached = spec["volumeName"] not in attached
-        path = (spec.get("diskPath") or "").rstrip("/")
-        disk_tags = tags.get(spec.get("diskID"), [])
-        os_disk = "os" in disk_tags or path in ("/var/lib/longhorn", "/var/lib/harvester/defaultdisk")
-        label = ("OS disk" if os_disk else path.rsplit("/", 1)[-1] if path.startswith("/mnt/") else path) or "?"
-        out.setdefault(spec["volumeName"], []).append({
-            "node": spec.get("nodeID", ""), "path": path, "disk": label, "os": os_disk,
-            "healthy": not spec.get("failedAt") and (status.get("currentState") == "running"
-                                                     or detached and bool(spec.get("healthyAt"))),
-            "detached": detached,
-            "whole": LHREBUILD.whole(r),
-            "state": status.get("currentState", "") or ("failed" if spec.get("failedAt") else "stopped")})
-    for rows in out.values():
-        rows.sort(key=lambda c: (c["node"], c["disk"]))
-    return out
-
-
-def get_volumes():
-    try:
-        vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        return []
-    try:
-        copies = volume_copies()
-    except Exception:
-        copies = {}
-    try:
-        refs = claim_references()
-    except Exception:
-        refs = None
-    try:
-        progress = _engine_progress(
-            kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines").get("items", []))
-    except Exception:
-        progress = {}
-    try:
-        pvcs = {(p["metadata"]["namespace"], p["metadata"]["name"]): p
-                for p in kget("/api/v1/persistentvolumeclaims").get("items", [])}
-    except Exception:
-        pvcs = {}
-    active_claims = {}
-    for volume in vols:
-        status = volume.get("status", {})
-        ks = status.get("kubernetesStatus", {}) or {}
-        key = (ks.get("namespace", ""), ks.get("pvcName", ""))
-        claim = pvcs.get(key)
-        if status.get("state") == "attached" and claim and claim.get("spec", {}).get("volumeName") == volume["metadata"]["name"]:
-            active_claims[key] = claim
-    # Cache only telemetry, keyed by claim identities/bindings; never re-label
-    # an old retained copy with the replacement claim's filesystem usage.
-    usage_key = "volume-filesystems:" + repr(sorted((k, p.get("metadata", {}).get("uid"), p.get("spec", {}).get("volumeName")) for k, p in active_claims.items()))
-    filesystems = cached(usage_key, 20, lambda: VOLUME_USAGE.collect(kget, active_claims)) if active_claims else {}
-    # A cached observation must also expire if telemetry stops arriving.
-    filesystems = {key: sample for key, sample in filesystems.items()
-                   if -5 <= time.time() - sample["sample_at"] <= 120}
-    out = []
-    for v in vols:
-        st = v.get("status", {})
-        sp = v.get("spec", {})
-        ks = st.get("kubernetesStatus", {}) or {}
-        wls = ks.get("workloadsStatus") or []
-        pvc_obj = pvcs.get((ks.get("namespace", ""), ks.get("pvcName", "")), {})
-        pvc_spec = pvc_obj.get("spec", {}) or {}
-        health_reason, conditions, scheduling_error = _volume_health_reason(v)
-        # Kept after its claim went - an old copy from a storage class change,
-        # or a claim deleted with its data retained. Longhorn still names the
-        # claim it had, which may now be another volume's.
-        unclaimed = str(ks.get("pvStatus") or "") == "Released" or bool(
-            ks.get("pvcName") and not pvc_obj and pvcs) or bool(
-            pvc_obj and (pvc_obj.get("spec") or {}).get("volumeName") not in ("", None, v["metadata"]["name"]))
-        # Longhorn retains workload names after the final pod releases a
-        # volume. These describe past use, not a current attachment. In
-        # particular, retained CDI scratch PVs must still appear as unused.
-        if unclaimed or ks.get("lastPodRefAt"):
-            wls = []
-        filesystem = filesystems.get((ks.get("namespace", ""), ks.get("pvcName", ""))) if not unclaimed and st.get("state") == "attached" else None
-        moving = _moving_copy(v, len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")}))
-        if moving:
-            health_reason = (f"moving a copy to another host: the new one is built first, and the volume keeps its "
-                             f"{moving} whole cop{'y' if moving == 1 else 'ies'} meanwhile")
-        out.append({
-            "name": v["metadata"]["name"],
-            "pvc_name": ks.get("pvcName", ""),
-            "namespace": ks.get("namespace", ""),
-            "attached": sorted({w.get("workloadName") or w.get("podName") or ""
-                                for w in wls if w.get("workloadName") or w.get("podName")}),
-            "attached_to": ", ".join(sorted({w.get("workloadName") or w.get("podName") or ""
-                                             for w in wls if w.get("workloadName") or w.get("podName")})),
-            "pod_status": ", ".join(sorted({w.get("podStatus", "") for w in wls if w.get("podStatus")})),
-            "last_used": ks.get("lastPodRefAt") or ks.get("lastPVCRefAt") or "",
-            "last_used_secs": age_secs(ks.get("lastPodRefAt") or ks.get("lastPVCRefAt") or ""),
-            "created": v["metadata"].get("creationTimestamp", ""),
-            "state": st.get("state", "?"),
-            "robustness": "healthy" if moving else st.get("robustness", "?"),
-            "rebalancing": bool(moving),
-            "node": st.get("currentNodeID", ""),
-            "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
-            "replicas": moving or sp.get("numberOfReplicas", 0),
-            "copies": copies.get(v["metadata"]["name"], []),
-            # Detached with fewer whole copies than it asks for: Longhorn
-            # repairs that only offline, or while something uses the volume.
-            "copies_short": (lambda whole: {"whole": whole, "wanted": int(sp.get("numberOfReplicas") or 0),
-                                            "offline": sp.get("offlineRebuilding") or "ignored"}
-                             if st.get("state") == "detached" and whole < int(sp.get("numberOfReplicas") or 0) else None)(
-                len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")})),
-            "engine": str(sp.get("dataEngine") or "v1").lower(),
-            "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
-            "filesystem": filesystem,
-            "used_pct": (filesystem or {}).get("used_pct"),
-            "access_modes": pvc_spec.get("accessModes", []) or [],
-            "storage_class": pvc_spec.get("storageClassName", ""),
-            "health_reason": health_reason,
-            "conditions": [row for row in conditions if row["status"] == "False"],
-            "scheduling_error": scheduling_error,
-            # What is defined to use it, running or not; None when that could
-            # not be read, so nothing is called orphaned on a guess.
-            "used_by": (_references_for(refs, ks.get("namespace", ""), ks.get("pvcName", ""))
-                        if refs is not None and ks.get("pvcName") and pvc_obj and not unclaimed else None),
-            "unclaimed": unclaimed,
-            "rebuild": progress.get(v["metadata"]["name"], {}).get("rebuild"),
-            # A restored volume keeps restoreRequired until its data is all
-            # in, even between engine updates that carry no restore rows. A
-            # disaster-recovery standby keeps it for good, so is left out.
-            "restore": progress.get(v["metadata"]["name"], {}).get("restore") or (
-                {"pct": 0, "error": ""}
-                if st.get("restoreRequired") and not st.get("isStandby") else None),
-        })
-    return sorted(out, key=lambda x: x["name"])
 
 
 def pod_container_rows(pod):
@@ -1542,7 +1207,7 @@ def protection_issues(jobs, target):
 def get_overview():
     nodes = NODES.get_nodes()
     wl = WORKLOADS.get_workloads()
-    vols = get_volumes()
+    vols = STORAGE.get_volumes()
     pods = kget("/api/v1/pods").get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
@@ -1574,53 +1239,6 @@ def get_overview():
         "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
         "lb_ip": NETWORK.shared_vip(),
-    }
-
-
-def get_storage():
-    """Cluster storage rollup for the dashboard: capacity, usage, replica health."""
-    vols = get_volumes()
-    try:
-        lhnodes = kget("/apis/longhorn.io/v1beta2/nodes").get("items", [])
-    except Exception:
-        lhnodes = []
-    cap = avail = 0
-    disks = []
-    for n in lhnodes:
-        for did, d in (n.get("status", {}).get("diskStatus", {}) or {}).items():
-            c = d.get("storageMaximum") or 0
-            a = d.get("storageAvailable") or 0
-            cap += c
-            avail += a
-            disks.append({"node": n["metadata"]["name"],
-                          "cap_gb": round(c / 1024**3, 1),
-                          "avail_gb": round(a / 1024**3, 1),
-                          "sched_gb": round((d.get("storageScheduled") or 0) / 1024**3, 1)})
-    prov = sum(v["size_gb"] for v in vols)
-    used = sum(v["actual_gb"] for v in vols)
-    return {
-        "cap_gb": round(cap / 1024**3, 1),
-        "avail_gb": round(avail / 1024**3, 1),
-        "used_gb": round((cap - avail) / 1024**3, 1),
-        "used_pct": round((cap - avail) / cap * 100, 1) if cap else 0,
-        "provisioned_gb": round(prov, 1),
-        "actual_gb": round(used, 1),
-        "volumes": len(vols),
-        "healthy": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "healthy"]),
-        "degraded": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "degraded"]),
-        "faulted": len([v for v in vols if v["state"] == "attached" and v["robustness"] == "faulted"]),
-        # Detached is a resting state, not a mystery: nothing is mounting the
-        # volume, so there is no live replica health to report.
-        "detached": len([v for v in vols if v["state"] != "attached"]),
-        "unknown": len([v for v in vols if v["state"] != "attached"]),
-        "attached": len([v for v in vols if v["state"] == "attached"]),
-        "reasons": [{"name": v.get("pvc_name") or v["name"], "robustness": v["robustness"],
-                     "reason": v["health_reason"]}
-                    # Only volumes something is actually using: a detached one
-                    # has no live health, so it has nothing to explain.
-                    for v in vols if v.get("health_reason") and v["robustness"] != "healthy"
-                    and v["state"] == "attached"][:8],
-        "disks": disks,
     }
 
 
@@ -1795,163 +1413,8 @@ def _pvc_rows(namespace):
     return sorted(rows, key=lambda row: row["name"])
 
 
-SAMBA_IMAGE = os.environ.get("SAMBA_IMAGE", "dperson/samba:latest")
-SMB_NAME = NAMES.object_name("smb")
-
-
-def _optional_smb(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
-def _smb_path(kind, name):
-    return f"/api{'/v1' if kind == 'services' else 's/apps/v1'}/namespaces/{SMB_NAMESPACE}/{kind}/{name}"
-
-
-def _smb_new_object(old, name):
-    """Prepare a copied Kubernetes object for POST under its new name."""
-    previous_address = next((item.get("ip", "") for item in
-                             ((old.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "")
-    body = copy.deepcopy(old)
-    body.pop("status", None)
-    meta = body.setdefault("metadata", {})
-    for field in ("resourceVersion", "uid", "generation", "creationTimestamp", "managedFields",
-                  "selfLink", "deletionTimestamp", "deletionGracePeriodSeconds", "ownerReferences"):
-        meta.pop(field, None)
-    meta["name"] = name
-    meta.setdefault("labels", {})["app"] = name
-    meta["labels"][NAMES.key("managed")] = "true"
-    if body.get("kind") == "Service":
-        body["spec"]["selector"] = {"app": name}
-        annotations = meta.setdefault("annotations", {})
-        if (previous_address and body["spec"].get("type") == "LoadBalancer"
-                and not any(key in annotations for key in
-                            ("kube-vip.io/loadbalancerIPs", "metallb.universe.tf/loadBalancerIPs"))
-                and not body["spec"].get("loadBalancerIP")):
-            annotations.update(PLATFORM.vip_annotations(previous_address))
-        for field in ("clusterIP", "clusterIPs", "ipFamilies", "healthCheckNodePort"):
-            body["spec"].pop(field, None)
-        for port in body["spec"].get("ports", []) or []:
-            port.pop("nodePort", None)
-    else:
-        body["spec"]["selector"] = {"matchLabels": {"app": name}}
-        body["spec"]["template"].setdefault("metadata", {}).setdefault("labels", {})["app"] = name
-        body["spec"]["template"]["spec"]["containers"][0]["name"] = name
-    return body
-
-
-def _migrate_samba(legacy):
-    with SHARES.LOCK:
-        return _migrate_samba_locked(legacy)
-
-
-def _migrate_samba_locked(legacy):
-    """Recreate the legacy workload under Homestead's name and preserve its VIP.
-
-    The replacement starts at zero replicas so RWO claims are never mounted by
-    both pods. If cutover fails, the old Deployment and Service are restored.
-    """
-    old_dep_path = _smb_path("deployments", "samba")
-    new_dep_path = _smb_path("deployments", SMB_NAME)
-    old_svc_path = _smb_path("services", "samba")
-    new_svc_path = _smb_path("services", SMB_NAME)
-    old_service = _optional_smb(old_svc_path)
-    rows, credentials, *_ = SHARES._state()
-    new_dep = _smb_new_object(legacy, SMB_NAME)
-    replicas = int((legacy.get("spec") or {}).get("replicas", 1) or 0)
-    new_dep["spec"]["replicas"] = 0
-    new_dep = SHARES.configured_deployment(new_dep, rows, credentials)
-    if old_service:
-        new_service = _smb_new_object(old_service, SMB_NAME)
-    else:
-        cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE,
-               "namespace": SMB_NAMESPACE, "ports": [{"container": 445, "name": "smb", "expose": True}],
-               "vip_mode": "automatic"}
-        cfg = NETWORK.prepare_deploy(cfg)
-        _, new_service = DEPLOY.build_deployment(cfg)
-    made_dep = removed_service = made_service = stopped_old = False
-    try:
-        ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", new_dep)
-        made_dep = True
-        if old_service:
-            ksend("DELETE", old_svc_path)
-            removed_service = True
-        ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", new_service)
-        made_service = True
-        if replicas:
-            ksend("PATCH", old_dep_path, {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-            stopped_old = True
-            ksend("PATCH", new_dep_path, {"spec": {"replicas": replicas}},
-                  ctype="application/merge-patch+json")
-            deadline = time.time() + SHARES.ROLLOUT_TIMEOUT
-            while time.time() < deadline:
-                live = _optional_smb(new_dep_path) or {}
-                status = live.get("status") or {}
-                if (int(status.get("readyReplicas", 0) or 0) >= replicas and
-                        int(status.get("updatedReplicas", 0) or 0) >= replicas and
-                        int(status.get("observedGeneration", 0) or 0) >=
-                        int((live.get("metadata") or {}).get("generation", 0) or 0)):
-                    break
-                time.sleep(1.5)
-            else:
-                raise ValueError("homestead-smb did not become ready; the former Samba workload was restored")
-        ksend("DELETE", old_dep_path)
-    except Exception as error:
-        recovery = []
-        for action in (
-            lambda: ksend("PATCH", new_dep_path, {"spec": {"replicas": 0}},
-                          ctype="application/merge-patch+json") if made_dep else None,
-            lambda: ksend("DELETE", new_svc_path) if made_service else None,
-            lambda: ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services",
-                          _smb_new_object(old_service, "samba")) if removed_service else None,
-            lambda: ksend("PATCH", old_dep_path, {"spec": {"replicas": replicas}},
-                          ctype="application/merge-patch+json") if stopped_old else None,
-            lambda: ksend("DELETE", new_dep_path) if made_dep else None,
-        ):
-            try:
-                action()
-            except Exception as failure:
-                recovery.append(str(failure)[:120])
-        if recovery:
-            raise RuntimeError(f"SMB migration failed: {error}; recovery needs attention: "
-                               + "; ".join(recovery)) from error
-        raise
-    _cache.pop("wl", None); _cache.pop("network", None)
-    return kget(new_dep_path)
-
-
-def install_samba(address=""):
-    """The Samba server shares are served from, made when the first share is:
-    SMB on port 445 at an address of its own - the one chosen, or the next
-    free one. Shares are its arguments, which Homestead writes, so it starts
-    with none."""
-    existing = _optional_smb(_smb_path("deployments", SMB_NAME))
-    if existing:
-        return existing
-    legacy = _optional_smb(_smb_path("deployments", "samba"))
-    if legacy:
-        return _migrate_samba(legacy)
-    cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
-           "ports": [{"container": 445, "name": "smb", "protocol": "TCP", "expose": True}],
-           "vip_mode": "manual" if address else "automatic", "lb_ip": address,
-           "args": ["-g", "server min protocol = SMB2"],
-           "env": {**SHARES.filesystem_identity(), "PERMISSIONS": ""}}
-    cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = DEPLOY.build_deployment(cfg)
-    created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
-    if svc:
-        try:
-            ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-        except Exception:
-            ksend("DELETE", _smb_path("deployments", SMB_NAME))
-            raise
-    _cache.pop("wl", None); _cache.pop("network", None)
-    return created
+import homestead_share_servers as SHARE_SERVERS
+SMB_NAME = SHARE_SERVERS.SMB_NAME
 
 
 def rollout_review_context(current):
@@ -2444,306 +1907,8 @@ def _note_default_class(rows):
                 globals()[module].STORAGE_CLASS = chosen
 
 
-def cleanup_restore_classes():
-    """Remove unused restore classes, retaining those needed for PVC expansion.
-
-    Bound claims still need their class for resizing. Restore classes are
-    excluded from regular pickers separately, so retaining them adds no clutter.
-    """
-    try:
-        claims = kget("/api/v1/persistentvolumeclaims")
-        if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
-            return []
-        volumes = kget("/api/v1/persistentvolumes")
-        classes = kget("/apis/storage.k8s.io/v1/storageclasses")
-        if any("items" not in collection or (collection.get("metadata") or {}).get("continue")
-               for collection in (volumes, classes)):
-            return []
-        in_use = {STORAGE_RESIZE.storage_class(p) for p in claims["items"]}
-        in_use.update((p.get("spec") or {}).get("storageClassName") for p in volumes["items"])
-        items = classes["items"]
-    except Exception:
-        return []
-    removed = []
-    for item in items:
-        name = item["metadata"]["name"]
-        if name.startswith("homestead-restore-") and name not in in_use:
-            try:
-                ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
-                removed.append(name)
-            except Exception:
-                pass
-    for key in list(_cache):
-        if key.startswith(("stor", "sc")):
-            _cache.pop(key, None)
-    return removed
-
-
-DEFAULT_CLASS_ANNOTATION = "storageclass.kubernetes.io/is-default-class"
-LONGHORN_PROVISIONER = "driver.longhorn.io"
-
-
-def storage_class_usage():
-    """How many claims each class is backing, so deletion can be guarded."""
-    counts = {}
-    claims = kget("/api/v1/persistentvolumeclaims")
-    if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
-        raise ValueError("Could not check every claim using the storage classes; try again")
-    for item in claims["items"]:
-        name = STORAGE_RESIZE.storage_class(item)
-        if name:
-            counts[name] = counts.get(name, 0) + 1
-    return counts
-
-
-def storage_class_inventory():
-    usage = storage_class_usage()
-    rows = storage_classes()
-    for row in rows:
-        row["in_use"] = usage.get(row["name"], 0)
-    return rows
-
-
-def create_storage_class(cfg):
-    """Create a Longhorn StorageClass.
-
-    Kubernetes treats a StorageClass as immutable apart from its default flag
-    and expansion setting, so Homestead offers create and delete rather than an
-    edit that would silently do nothing.
-    """
-    name = _dns_name(cfg.get("name"), "storage class name")
-    if any(row["name"] == name for row in storage_classes()):
-        raise ValueError(f"storage class {name} already exists")
-    replicas = int(cfg.get("replicas", 2) or 2)
-    if not 1 <= replicas <= 5:
-        raise ValueError("replica count must be between 1 and 5")
-    stale = int(cfg.get("stale_replica_timeout", 30) or 30)
-    if not 1 <= stale <= 2880:
-        raise ValueError("stale replica timeout must be between 1 and 2880 minutes")
-    # Kept unless asked otherwise: deleting an app should not take its data.
-    reclaim = str(cfg.get("reclaim_policy") or "Retain")
-    if reclaim not in ("Delete", "Retain"):
-        raise ValueError("reclaim policy must be Delete or Retain")
-    # Written explicitly, the way Harvester writes its own classes: a blank
-    # parameter and an explicit false behave the same in Longhorn but do not
-    # read the same to anyone comparing two classes.
-    parameters = {"numberOfReplicas": str(replicas), "staleReplicaTimeout": str(stale),
-                  "migratable": "true" if cfg.get("migratable") else "false",
-                  "encrypted": "true" if cfg.get("encrypted") else "false"}
-    engine = str(cfg.get("engine") or "v1").lower()
-    if engine not in ("v1", "v2"):
-        raise ValueError("the data engine is v1 or v2")
-    # Where the copies go. Longhorn's own default puts each on a different
-    # host, so a one-host cluster can never place a second. "disks" lets
-    # copies share a host but never a disk: a failed disk is survived there,
-    # a failed host is not. (Longhorn 1.6 and later read these per class.)
-    copies = str(cfg.get("copies") or "hosts")
-    if copies not in ("hosts", "disks"):
-        raise ValueError("copies go on different hosts or different disks")
-    if copies == "disks":
-        parameters.update(replicaSoftAntiAffinity="enabled", replicaDiskSoftAntiAffinity="disabled")
-    warning = ""
-    disk_tags, node_tags = DISKS.clean_tags(cfg.get("disk_tags")), DISKS.clean_tags(cfg.get("node_tags"))
-    if disk_tags:
-        parameters["diskSelector"] = ",".join(disk_tags)
-    if node_tags:
-        parameters["nodeSelector"] = ",".join(node_tags)
-    if disk_tags or node_tags:
-        # Every replica needs a node of its own with a disk that fits; fewer
-        # than that and a volume runs a copy short, or does not start at all.
-        reach = DISKS.tag_reach(disk_tags, node_tags)
-        wanted = " and ".join(x for x in (f"a disk tagged {', '.join(disk_tags)}" if disk_tags else "",
-                                          f"the node tags {', '.join(node_tags)}" if node_tags else "") if x)
-        if not reach:
-            warning += f"; no node has {wanted} yet, so its volumes will not schedule until one does"
-        elif len(reach) < replicas:
-            warning += (f"; only {', '.join(reach)} ha{'s' if len(reach) == 1 else 've'} {wanted}, fewer than "
-                        f"its {replicas} replicas, so its volumes will run degraded")
-    if engine == "v2":
-        parameters["dataEngine"] = "v2"
-        v2 = v2_engine_status()
-        if not v2["enabled"]:
-            warning = "; V2 is switched off in Longhorn, so its volumes will not schedule until it is on"
-        elif not v2["ready_nodes"]:
-            warning = "; no node has a V2 disk and hugepages yet, so its volumes will not schedule"
-    body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
-            "metadata": {"name": name, "labels": {NAMES.key("managed"): "true"},
-                         "annotations": {DEFAULT_CLASS_ANNOTATION: "true"} if cfg.get("default") else {}},
-            "provisioner": str(cfg.get("provisioner") or LONGHORN_PROVISIONER),
-            "parameters": parameters,
-            "allowVolumeExpansion": bool(cfg.get("expandable", True)),
-            "reclaimPolicy": reclaim,
-            "volumeBindingMode": "Immediate"}
-    if cfg.get("default"):
-        _clear_default_class(name)
-    ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
-    return {"ok": True, "name": name, "classes": storage_class_inventory(),
-            "message": (f"Storage class {name} created" +
-                        (" and made the default" if cfg.get("default") else "") + warning)}
-
-
-V2_HUGEPAGES_MB = 2048
-
-
-def _quantity_mb(value):
-    """A Kubernetes memory quantity in MiB: "2Gi", "1024Mi", "0"."""
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGT]i?)?", str(value or "0").strip())
-    if not match:
-        return 0
-    number, unit = float(match.group(1)), match.group(2) or ""
-    scale = {"": 1 / 1024**2, "Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1024**2,
-             "K": 1000 / 1024**2, "M": 1000**2 / 1024**2, "G": 1000**3 / 1024**2, "T": 1000**4 / 1024**2}[unit]
-    return int(number * scale)
-
-
-def v2_engine_status():
-    """Whether Longhorn's V2 data engine can take volumes, node by node.
-
-    V2 (SPDK) needs three things: the engine switched on - on Harvester by its
-    own longhorn-v2-data-engine-enabled setting, which drives Longhorn's - and,
-    on each node that will hold a replica, a disk handed to Longhorn as a block
-    device and 2 GiB of hugepages. Without them a V2 volume never schedules,
-    which is worth knowing before creating a class for it."""
-    def setting(path):
-        try:
-            item = kget(path)
-            return str(item.get("value") or item.get("default") or "").lower() == "true"
-        except Exception:
-            return None
-
-    enabled = setting("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/settings/v2-data-engine")
-    harvester = setting("/apis/harvesterhci.io/v1beta1/settings/longhorn-v2-data-engine-enabled")
-    try:
-        hugepages = {node["metadata"]["name"]: _quantity_mb(
-            ((node.get("status", {}) or {}).get("allocatable", {}) or {}).get("hugepages-2Mi"))
-            for node in kget("/api/v1/nodes").get("items", [])}
-    except Exception:
-        hugepages = {}
-    nodes = []
-    try:
-        longhorn_nodes = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes").get("items", [])
-    except Exception:
-        longhorn_nodes = []
-    try:
-        probes = NODES.node_temps()
-    except Exception:
-        probes = {}
-    for node in longhorn_nodes:
-        name = node["metadata"]["name"]
-        disks = ((node.get("spec", {}) or {}).get("disks", {}) or {}).values()
-        block = [disk for disk in disks if str(disk.get("diskType", "")).lower() == "block"
-                 and disk.get("allowScheduling", True)]
-        pages = hugepages.get(name, 0)
-        facts = (probes.get(name) or {}).get("v2") or {}
-        modules = facts.get("modules") or {}
-        cpu = True if facts.get("arch") in ("aarch64", "arm64") else facts.get("sse4_2")
-        # Each check: True, False, or None where the node probe has not said.
-        checks = {"cpu": cpu,
-                  "modules": all(modules.values()) if modules else None,
-                  "hugepages": pages >= V2_HUGEPAGES_MB,
-                  "disk": bool(block)}
-        missing = ([] if block else ["a V2 (block) disk"]) + (
-            [] if pages >= V2_HUGEPAGES_MB else [f"{V2_HUGEPAGES_MB // 1024} GiB of hugepages (has {pages} MiB)"]) + (
-            [f"kernel modules {', '.join(m for m, ok in modules.items() if not ok)}"] if checks["modules"] is False else []) + (
-            ["a CPU with SSE4.2"] if cpu is False else [])
-        nodes.append({"name": name, "block_disks": len(block), "hugepages_mb": pages,
-                      "ready": not missing, "missing": missing, "checks": checks,
-                      "missing_modules": [m for m, ok in modules.items() if not ok]})
-    ready = sum(1 for node in nodes if node["ready"])
-    platform = PLATFORM.detect()
-    try:
-        longhorn = COMPONENTS.longhorn_version()
-    except Exception:
-        longhorn = ""
-    return {"enabled": bool(enabled), "harvester_setting": harvester, "nodes": nodes,
-            "ready_nodes": ready, "total_nodes": len(nodes),
-            "distribution": platform.get("distribution", ""), "longhorn_version": longhorn,
-            # V2 is Longhorn's to run from 1.8; before that it is an experiment.
-            "longhorn_ok": bool(COMPONENTS.parse(longhorn)) and COMPONENTS.parse(longhorn)[:2] >= (1, 8)}
-
-
-def _chosen_default_path():
-    return os.path.join(DATA_DIR, "default-class.json")
-
-
-def chosen_default_class():
-    """The class someone made the default here, if anyone has."""
-    try:
-        with open(_chosen_default_path(), encoding="utf-8") as handle:
-            return str((json.load(handle) or {}).get("name") or "")
-    except (OSError, ValueError, AttributeError):
-        return ""
-
-
-def reconcile_default_class():
-    """k3s marks its local-path class as the default again every time it
-    starts, and Longhorn's chart marks its own; with two defaults a claim
-    that names no class lands on either. Keep one: the class chosen here,
-    else a Longhorn one over local-path. Returns (kept, demoted) or None."""
-    rows = storage_classes()
-    defaults = [row for row in rows if row["default"]]
-    if len(defaults) < 2:
-        return None
-    names = [row["name"] for row in defaults]
-    chosen = chosen_default_class()
-    keep = (chosen if chosen in names
-            else next((row["name"] for row in defaults if row["provisioner"] == LONGHORN_PROVISIONER), names[0]))
-    _clear_default_class(keep)
-    return keep, [name for name in names if name != keep]
-
-
-def _clear_default_class(keep):
-    for row in storage_classes():
-        if row["default"] and row["name"] != keep:
-            ksend("PATCH", f"/apis/storage.k8s.io/v1/storageclasses/{row['name']}",
-                  {"metadata": {"annotations": {DEFAULT_CLASS_ANNOTATION: "false"}}},
-                  ctype="application/merge-patch+json")
-
-
-def set_default_storage_class(name):
-    name = _dns_name(name, "storage class name")
-    row = next((item for item in storage_classes() if item["name"] == name), None)
-    if not row:
-        raise ValueError(f"storage class {name} does not exist")
-    if row["internal"]:
-        raise ValueError(f"{name} is reserved by Harvester and cannot be the default")
-    _clear_default_class(name)
-    ksend("PATCH", f"/apis/storage.k8s.io/v1/storageclasses/{name}",
-          {"metadata": {"annotations": {DEFAULT_CLASS_ANNOTATION: "true"}}},
-          ctype="application/merge-patch+json")
-    # Kept, so a class k3s marks as default again at its next start is put
-    # back. Only a convenience: the class is the default whether or not this
-    # is written.
-    try:
-        SHARED.write_json(_chosen_default_path(), {"name": name, "at": int(time.time())})
-    except OSError as error:
-        print(f"storage: could not remember {name} as the chosen default: {error}", flush=True)
-    return {"ok": True, "classes": storage_class_inventory(),
-            "message": f"{name} is now the default storage class"}
-
-
-def delete_storage_class(name):
-    name = _dns_name(name, "storage class name")
-    rows = storage_class_inventory()
-    row = next((item for item in rows if item["name"] == name), None)
-    if not row:
-        raise ValueError(f"storage class {name} does not exist")
-    if row["internal"]:
-        raise ValueError(f"{name} is reserved by Harvester and must not be deleted")
-    if row["default"]:
-        raise ValueError(f"{name} is the default class; make another class the default first")
-    if row["in_use"]:
-        raise ValueError(f"{name} still backs {row['in_use']} claim"
-                         f"{'s' if row['in_use'] != 1 else ''}; existing volumes keep working, "
-                         "but the class cannot be removed while claims reference it")
-    volumes = kget("/api/v1/persistentvolumes")
-    if "items" not in volumes or (volumes.get("metadata") or {}).get("continue"):
-        raise ValueError("Could not check every backing volume; the StorageClass was not deleted")
-    if any((pv.get("spec") or {}).get("storageClassName") == name for pv in volumes["items"]):
-        raise ValueError("This StorageClass still backs a persistent volume; keep it so retained data can be recovered and resized")
-    ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
-    return {"ok": True, "classes": storage_class_inventory(),
-            "message": f"Storage class {name} deleted; existing volumes are untouched"}
+import homestead_storage_classes as STORAGE_CLASSES
+import homestead_storage as STORAGE
 
 
 def vm_default_class(rows=None):
@@ -3074,204 +2239,13 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
         create_pvc(ns, name, size_gb, sc, access_mode)
         return ""
     try:
-        users = _references_for(claim_references(), ns, name)
+        users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
     except Exception:
         users = ["something"]
     if users:
         raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
                          "give this app's volume another name, or choose the existing one to share it")
     return name
-
-
-def create_volume(cfg):
-    name = (cfg.get("name") or "").strip().lower()
-    ns = cfg.get("namespace") or DEFAULT_NS
-    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", name):
-        raise ValueError("volume name must be lowercase letters, numbers and dashes")
-    size = int(cfg.get("size_gb", 10))
-    if size < 1:
-        raise ValueError("volume size must be at least 1 GB")
-    mode = cfg.get("access_mode", "ReadWriteOnce")
-    if mode not in ("ReadWriteOnce", "ReadWriteMany"):
-        raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-    out = create_pvc(ns, name, size, cfg.get("storage_class") or STORAGE_CLASS, mode)
-    for k in list(_cache):
-        if k.startswith(("vol", "stor", "flow")):
-            _cache.pop(k, None)
-    return {"ok": True, "name": name, "namespace": ns, "pvc": out}
-
-
-def _restore_class_repair(pvc):
-    """Reconstruct a missing Homestead restore class from its bound CSI volumes."""
-    spec, meta = pvc.get("spec") or {}, pvc.get("metadata") or {}
-    name = spec.get("storageClassName") or ""
-    labels = meta.get("labels") or {}
-    if (not re.fullmatch(r"homestead-restore-[0-9a-f]{16}", name)
-            or labels.get("app.kubernetes.io/managed-by") != "homestead"
-            or labels.get("homestead.io/restored-volume") != "true"
-            or not (meta.get("annotations") or {}).get("homestead.io/restored-from-backup")):
-        raise ValueError("Only missing classes from Homestead restores can be repaired here")
-    claims = kget("/api/v1/persistentvolumeclaims")
-    if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
-        raise ValueError("Could not check every claim using this StorageClass")
-    users = [c for c in claims["items"] if ((c.get("metadata") or {}).get("annotations") or {}).get(
-                 "volume.beta.kubernetes.io/storage-class", (c.get("spec") or {}).get("storageClassName")) == name]
-    if not meta.get("uid") or not any((c.get("metadata") or {}).get("uid") == meta["uid"] for c in users):
-        raise ValueError("The claim changed; reopen the volume editor")
-    parameters = None
-    reclaim = None
-    for claim in users:
-        cs, cm = claim.get("spec") or {}, claim.get("metadata") or {}
-        if (claim.get("status") or {}).get("phase") != "Bound" or cm.get("deletionTimestamp") or not cs.get("volumeName"):
-            raise ValueError("Every claim using this class must be bound and not being deleted")
-        pv = kget("/api/v1/persistentvolumes/" + urllib.parse.quote(cs["volumeName"], safe=""))
-        ps = pv.get("spec") or {}
-        ref, csi = ps.get("claimRef") or {}, ps.get("csi") or {}
-        if (ps.get("storageClassName") != name or (pv.get("status") or {}).get("phase") != "Bound"
-                or not cm.get("uid") or ref.get("uid") != cm["uid"]
-                or ref.get("name") != cm.get("name") or ref.get("namespace") != cm.get("namespace")
-                or csi.get("driver") != "driver.longhorn.io"):
-            raise ValueError("The backing volume does not match the restored claim")
-        attrs = {k: v for k, v in (csi.get("volumeAttributes") or {}).items()
-                 if k not in ("storage.kubernetes.io/csiProvisionerIdentity", "share")}
-        if not attrs.get("fromBackup") or not all(isinstance(v, str) for v in attrs.values()):
-            raise ValueError("The backing volume has no usable restore parameters")
-        if csi.get("fsType"):
-            attrs["fsType"] = csi["fsType"]
-        policy = ps.get("persistentVolumeReclaimPolicy")
-        if policy not in ("Delete", "Retain") or (parameters is not None and (parameters != attrs or reclaim != policy)):
-            raise ValueError("The volumes using this class have different storage settings")
-        parameters, reclaim = attrs, policy
-    return {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
-            "metadata": {"name": name, "labels": {"app.kubernetes.io/managed-by": "homestead", "homestead.io/restore-class": "true"},
-                         "annotations": {"homestead.io/resize-support-repaired": "true"}},
-            "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
-            "reclaimPolicy": reclaim, "volumeBindingMode": "Immediate", "parameters": parameters}
-
-
-def repair_restore_classes():
-    """Put back the restore classes older releases removed while claims still
-    used them. Those claims kept working, but Kubernetes will not resize a
-    claim whose class is gone, and Homestead listed them as "other" volumes.
-    Each class is rebuilt from its own bound volumes (_restore_class_repair),
-    which refuses anything it cannot match exactly."""
-    claims = kget("/api/v1/persistentvolumeclaims")
-    if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
-        return []
-    classes = kget("/apis/storage.k8s.io/v1/storageclasses")
-    if "items" not in classes or (classes.get("metadata") or {}).get("continue"):
-        return []
-    present = {item["metadata"]["name"] for item in classes["items"]}
-    repaired = []
-    for pvc in claims["items"]:
-        name = (pvc.get("spec") or {}).get("storageClassName") or ""
-        if not name.startswith("homestead-restore-") or name in present:
-            continue
-        try:
-            ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", _restore_class_repair(pvc))
-            repaired.append(name)
-            present.add(name)
-        except (ValueError, urllib.error.HTTPError) as error:
-            print(f"restore class {name} not repaired: {str(error)[:160]}", flush=True)
-    if repaired:
-        for key in list(_cache):
-            if key.startswith(("stor", "sc", "vol")):
-                _cache.pop(key, None)
-    return repaired
-
-
-def repair_volume_class(cfg):
-    ns, name = cfg.get("namespace") or DEFAULT_NS, cfg.get("name") or ""
-    pvc = kget(f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/persistentvolumeclaims/{urllib.parse.quote(name, safe='')}")
-    class_name = (pvc.get("spec") or {}).get("storageClassName") or ""
-    if cfg.get("confirm") != class_name or not class_name:
-        raise ValueError("Review the missing StorageClass before restoring it")
-    try:
-        kget("/apis/storage.k8s.io/v1/storageclasses/" + urllib.parse.quote(class_name, safe=""))
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-    else:
-        raise ValueError("The StorageClass already exists; reopen the volume editor")
-    body = _restore_class_repair(pvc)
-    ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
-    for key in list(_cache):
-        if key.startswith(("stor", "sc", "vol")):
-            _cache.pop(key, None)
-    return {"ok": True, "detail": "Resize support repaired. You can now enlarge the volume."}
-
-
-def volume_edit_options(namespace, name, pvc=None):
-    """Read current Kubernetes expansion prerequisites without changing storage."""
-    if not name:
-        raise ValueError("Choose a volume")
-    ns = urllib.parse.quote(namespace or DEFAULT_NS, safe="")
-    claim = urllib.parse.quote(name, safe="")
-    if pvc is None:
-        pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
-    spec = pvc.get("spec") or {}
-    requested_mb = _quantity_mb((spec.get("resources") or {}).get("requests", {}).get("storage", "0"))
-    result = STORAGE_RESIZE.options(pvc, kget)
-    result.update(requested_gb=-(-requested_mb // 1024) if requested_mb else 0, repair_class=False)
-    if result.pop("missing_class"):
-        result["reason"] = "This volume's StorageClass was removed. An administrator must repair its resize support before increasing the size."
-        try:
-            _restore_class_repair(pvc)
-            result["repair_class"] = True
-        except (ValueError, urllib.error.HTTPError):
-            pass
-    return result
-
-
-def edit_volume(cfg):
-    """Grow a PVC and optionally change Longhorn replica count.
-
-    Only what changed is sent. Longhorn's volumes live in its namespace; the
-    replica count was written to a path without it, which Kubernetes answers
-    "404 page not found" - after the size had already been changed, so every
-    save of the form reported a failure that had half happened.
-    """
-    ns, name = cfg.get("namespace") or DEFAULT_NS, cfg["name"]
-    pvc_path = f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/persistentvolumeclaims/{urllib.parse.quote(name, safe='')}"
-    pvc = kget(pvc_path)
-    reps = cfg.get("replicas")
-    if reps is not None:
-        reps = int(reps)
-        if not 1 <= reps <= 5:
-            raise ValueError("replica count must be between 1 and 5")
-    done = []
-    if cfg.get("size_gb"):
-        wanted = int(cfg["size_gb"])
-        requested_mb = _quantity_mb(((pvc.get("spec") or {}).get("resources") or {})
-                                    .get("requests", {}).get("storage", "0"))
-        now_gb = -(-requested_mb // 1024) if requested_mb else 0
-        if now_gb and wanted < now_gb:
-            raise ValueError(f"{name} is {now_gb} GB; volumes can grow but not shrink")
-        if wanted != now_gb:
-            options = volume_edit_options(ns, name, pvc)
-            if not options["can_expand"]:
-                raise ValueError(options["reason"])
-            STORAGE_RESIZE.check_upgrade(pvc, kget)
-            ksend("PATCH", pvc_path,
-                  {"spec": {"resources": {"requests": {"storage": f"{wanted}Gi"}}}},
-                  ctype="application/merge-patch+json")
-            done.append(f"growing to {wanted} GB")
-    vol_name = pvc.get("spec", {}).get("volumeName")
-    if reps is not None and vol_name:
-        path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{vol_name}"
-        try:
-            current = int(((kget(path).get("spec") or {}).get("numberOfReplicas")) or 0)
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-            current = None          # not a Longhorn volume: nothing to set
-        if current is not None and current != reps:
-            ksend("PATCH", path, {"spec": {"numberOfReplicas": reps}}, ctype="application/merge-patch+json")
-            done.append(f"{reps} cop{'y' if reps == 1 else 'ies'}")
-    for k in list(_cache):
-        if k.startswith(("vol", "stor", "flow")):
-            _cache.pop(k, None)
-    return {"ok": True, "name": name, "detail": (f"{name}: " + ", ".join(done)) if done else f"{name} is unchanged"}
 
 
 def apply_deploy_bindings(cfg):
@@ -3457,7 +2431,7 @@ FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
 MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 NODES.bind(kget, ksend, DEFAULT_NS, SYS_NS, get_app_settings, DEFAULT_APP_SETTINGS,
-           lambda: WORKLOADS.get_workloads(), get_volumes, parse_cpu, parse_mem, _dns_name)
+           lambda: WORKLOADS.get_workloads(), STORAGE.get_volumes, parse_cpu, parse_mem, _dns_name)
 def _resolve_storage_class():
     """An empty STORAGE_CLASS means the cluster's default. It cannot stay
     empty: a claim asking for class "" asks for no class at all, and never
@@ -3476,7 +2450,7 @@ IMP.bind(kget, ksend, create_pvc, DEPLOY.build_deployment, DEFAULT_NS, _cache, H
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
-LH.bind(kget, ksend, _cache, STORAGE_CLASS)
+LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
@@ -3548,7 +2522,7 @@ for _kind in ("vm-create", "vm-edit"):
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
 def cleanup_restores():
-    for cleanup in (cleanup_restore_classes, LH.cleanup_restore_snapshots):
+    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, LH.cleanup_restore_snapshots):
         try:
             cleanup()
         except Exception as error:
@@ -3813,10 +2787,14 @@ VM_REVIEW.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k), DE
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
-LHCAP.bind(kget, ksend, v2_engine_status)
-LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True))
+STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node_temps(), _cache, DATA_DIR, DEFAULT_NS,
+                     selectable_storage_classes, shared_storage_classes, storage_class_facts)
+STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, storage_runtime_check)
+LHCAP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status)
+LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True),
+               settings=get_app_settings, save_settings=save_app_settings)
 import homestead_lhv2_setup as LHV2_SETUP
-LHV2_SETUP.bind(kget, ksend, v2_engine_status, OPS, DEFAULT_NS)
+LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
 OPS.RESOLVERS["longhorn-v2-prepare"] = LHV2_SETUP.progress
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
@@ -3890,20 +2868,13 @@ OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
 OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
-                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS)
+                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
+                  lambda: cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 
 def _storage_classes():
     return {c["metadata"]["name"]: c.get("parameters") or {}
             for c in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])}
-
-
-def start_restore_test(ns, name, why="Test now"):
-    """Start one restore test as a job."""
-    return OPS.start(RESTORE_TEST.KIND, f"Restore test of {name}",
-                     {"kind": "Deployment", "name": name, "namespace": ns},
-                     "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
-                     "Finding each volume's newest backup")
 
 
 def restore_tests_tick():
@@ -3913,7 +2884,7 @@ def restore_tests_tick():
                                settings.get("restore_tests", {}).get("enabled", False),
                                update_policy_status(settings)["window_open"], time.time(), _storage_classes())
     if chosen:
-        start_restore_test(chosen["ns"], chosen["name"], "monthly")
+        RESTORE_TEST.start_test(chosen["ns"], chosen["name"], "monthly")
     return chosen
 
 
@@ -3927,27 +2898,6 @@ def _restore_tests_loop():
                 beat("restore-tests", 3600, error, leader_only=True)
                 print(f"restore-tests: {str(error)[:160]}", flush=True)
         time.sleep(3600)
-
-
-def restore_tests_view():
-    """Every app with Longhorn volumes: what a test would restore, and its last result."""
-    out = []
-    running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
-               for o in OPS.list_operations() if o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running")}
-    for w in cached("wl", 5, WORKLOADS.get_workloads):
-        if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
-                or w.get("managed_nfs") or w.get("site"):
-            continue
-        dep = kget(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
-        rows, without = RESTORE_TEST.plan(w["ns"], dep)
-        if not rows and not without:
-            continue
-        out.append({"ns": w["ns"], "name": w["name"], "icon": w.get("icon", ""), "restores": rows, "without": without,
-                    "last": w.get("restore_tested"), "running": f"{w['ns']}/{w['name']}" in running,
-                    "due": RESTORE_TEST.due(w, time.time())})
-    settings = get_app_settings()
-    return {"enabled": settings.get("restore_tests", {}).get("enabled", False), "every_days": RESTORE_TEST.EVERY // 86400,
-            "apps": sorted(out, key=lambda r: (not r["restores"], r["ns"], r["name"]))}
 
 
 def _prune_snapshot(volume, name):
@@ -4101,7 +3051,7 @@ def delete_workload(ns, name):
 
 
 # Every job can be cancelled; what that does for each kind is said there.
-CANCEL.bind(kget, ksend, delete_workload, lambda: cleanup_restore_classes())
+CANCEL.bind(kget, ksend, delete_workload, lambda: STORAGE_CLASSES.cleanup_restore_classes())
 CANCEL.register(OPS)
 OPS.CANCELLERS["reclass"] = (CANCEL.reclass_plan, storage_legacy_cancel)
 # What each job has to show for itself: a pod's log, a VM's console.
@@ -4356,7 +3306,7 @@ def _host_fix_loop():
                     HOST_OS.tick()
                     # Restored volumes whose class an older release removed.
                     try:
-                        repaired = repair_restore_classes()
+                        repaired = STORAGE_CLASSES.repair_restore_classes()
                         if repaired:
                             print(f"storage: restore classes put back for resizing: {', '.join(repaired)}", flush=True)
                     except Exception as error:
@@ -4383,7 +3333,7 @@ def _host_fix_loop():
                     # VMs made before 2.8.228 hold their ISO read-only and cannot start.
                     for name in ISOS.unlock():
                         print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
-                    fixed = reconcile_default_class()
+                    fixed = STORAGE_CLASSES.reconcile_default_class()
                     if fixed:
                         print(f"storage: {fixed[0]} kept as the default class; "
                               f"{', '.join(fixed[1])} no longer default", flush=True)
@@ -4828,312 +3778,10 @@ def _data_move_status(item):
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
-def samba_state():
-    """The Samba server shares are served from: whether it runs, and where."""
-    dep = _optional_smb(_smb_path("deployments", SMB_NAME)) or _optional_smb(
-        _smb_path("deployments", "samba"))
-    try:
-        rows, credentials, *_ = SHARES._state()
-        configured = {row["name"] for row in rows}
-        config_error = ""
-    except Exception as error:
-        configured = set()
-        credentials = {}
-        rows = []
-        config_error = str(error)[:160]
-    if not dep:
-        return {"installed": False, "enabled": False, "shares": len(configured), "image": SAMBA_IMAGE,
-                "name": SMB_NAME, "served_shares": [], "in_sync": not configured and not config_error,
-                **({"error": config_error} if config_error else {})}
-    name = dep["metadata"]["name"]
-    status = dep.get("status") or {}
-    address = ""
-    try:
-        svc = _optional_smb(_smb_path("services", SMB_NAME)) or _optional_smb(
-            _smb_path("services", "samba")) or {}
-        address = next((i.get("ip", "") for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "") \
-            or ((svc.get("metadata") or {}).get("annotations") or {}).get("kube-vip.io/loadbalancerIPs", "") \
-            or ((svc.get("metadata") or {}).get("annotations") or {}).get("metallb.universe.tf/loadBalancerIPs", "") \
-            or ((svc.get("spec") or {}).get("loadBalancerIP") or "")
-    except Exception:
-        pass
-    containers = ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
-    container = containers[0]
-    paths = {mount.get("mountPath") for mount in container.get("volumeMounts", []) or []}
-    args = container.get("args") or []
-    served = {arg.split(";", 1)[0] for index, flag in enumerate(args[:-1]) if flag == "-s"
-              for arg in [args[index + 1]] if ";" in arg and arg.split(";", 2)[1] in paths}
-    try:
-        recovery = SHARES.RECOVERY.read(dep)
-        offline = SHARES.RECOVERY.offline_shares(dep, rows)
-    except Exception as error:
-        recovery, offline = {}, []
-        config_error = str(error)[:160]
-    expected_names = configured - {item["name"] for item in offline}
-    in_sync = served == expected_names and not config_error and name == SMB_NAME
-    if in_sync:
-        try:
-            expected = SHARES.configured_deployment(dep, rows, credentials)
-            expected_spec = expected["spec"]["template"]["spec"]
-            live_spec = dep["spec"]["template"]["spec"]
-            expected_container = expected_spec["containers"][0]
-            in_sync = (all(SHARES.SPECS.same(container.get(field), expected_container.get(field))
-                           for field in ("args", "env", "volumeMounts"))
-                       and live_spec.get("volumes", []) == expected_spec.get("volumes", [])
-                       and SHARES.SPECS.same(live_spec.get("initContainers", []), expected_spec.get("initContainers", []))
-                       and container.get("image") == SAMBA_IMAGE)
-        except Exception as error:
-            config_error = str(error)[:160]
-            in_sync = False
-    desired = int((dep.get("spec") or {}).get("replicas", 1) or 0)
-    return {"installed": True, "enabled": desired > 0, "desired": desired, "name": name,
-            "ready": int(status.get("readyReplicas", 0) or 0), "address": address,
-            "shares": len(configured), "served_shares": sorted(served), "in_sync": in_sync,
-            "offline_shares": offline, "partial": bool(offline),
-            "recovery_pending": recovery.get("pending", {}), "recovery_warning": recovery.get("warning", ""),
-            "recovery_failures": recovery.get("restore_failures", {}),
-            "image": container.get("image", ""), **({"error": config_error} if config_error else {})}
-
-
-def set_samba(enabled, address=""):
-    """Samba on or off. Off stops serving; every share, its volume and its
-    password are kept for when it is switched back on. On installs it first
-    if the cluster has none, with the shares already defined."""
-    state = samba_state()
-    name = state["name"]
-    if not enabled:
-        if state["installed"]:
-            ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-        _cache.pop("wl", None)
-        return {"ok": True, "detail": "Samba is stopping; the shares, their volumes and passwords are kept"}
-    if not state["installed"]:
-        install_samba(address)
-        rows, credentials, *_ = SHARES._state()
-        if rows:
-            SHARES.apply_samba(rows, credentials)
-        _cache.pop("wl", None)
-        return {"ok": True, "detail": "Samba is being installed" + (f" with {len(rows)} share{'s' if len(rows) != 1 else ''}" if rows else "")}
-    if name == "samba":
-        install_samba()
-        name = SMB_NAME
-    ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 1}},
-          ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
-    return {"ok": True, "detail": "Samba is starting"}
-
-
-def remove_samba():
-    """Uninstall only the SMB workload and address; never touch share data."""
-    with SHARES.LOCK:
-        removed = []
-        for name in (SMB_NAME, "samba"):
-            for kind in ("deployments", "services"):
-                path = _smb_path(kind, name)
-                if _optional_smb(path) is not None:
-                    ksend("DELETE", path)
-                    removed.append(f"{kind}/{name}")
-        _cache.pop("wl", None)
-        _cache.pop("network", None)
-    return {"ok": True, "removed": removed,
-            "detail": "SMB server removed. Share definitions, passwords, PVCs and their data were kept."}
-
-
-def repair_samba(address=""):
-    """Apply the saved inventory now, with the same rollout guard as edits."""
-    with SHARES.LOCK:
-        install_samba(address)
-        result = SHARES.reconcile_samba(SAMBA_IMAGE, retry_recovery=True)
-    _cache.pop("wl", None)
-    return {"ok": True, "detail": "SMB mappings checked; recovered storage must pass the stability check before shares return" if result["state"] == "current"
-            else "SMB is being repaired from the saved shares", "server": samba_state()}
-
-
-def nfs_state():
-    """The opt-in NFSv4 gateway is independent of the SMB server and PVCs."""
-    dep = _optional_smb(_smb_path("deployments", NFS.NAME))
-    svc = _optional_smb(_smb_path("services", NFS.NAME))
-    rows, *_ = SHARES._state()
-    names = [row["name"] for row in rows if row.get("nfs_clients")]
-    desired = int(((dep or {}).get("spec") or {}).get("replicas", 0) or 0)
-    ingress = ((((svc or {}).get("status") or {}).get("loadBalancer") or {}).get("ingress") or [])
-    address = next((item.get("ip", "") for item in ingress if item.get("ip")), "")
-    annotations = (((svc or {}).get("metadata") or {}).get("annotations") or {})
-    address = address or annotations.get("kube-vip.io/loadbalancerIPs", "") or annotations.get(
-        "metallb.universe.tf/loadBalancerIPs", "")
-    return {"installed": bool(dep), "enabled": bool(dep) and desired > 0,
-            "name": NFS.NAME, "image": NFS.IMAGE, "exports": names, "address": address,
-            "ready": int(((dep or {}).get("status") or {}).get("readyReplicas", 0) or 0),
-            "desired": desired, "recovery": nfs_recovery(rows, dep)}
-
-
-def nfs_recovery(rows, deployment=None):
-    errors, volumes = [], []
-    def read(path, default, label):
-        try:
-            return kget(path)
-        except Exception:
-            errors.append(f"{label} could not be checked.")
-            return default
-    nodes = read("/api/v1/nodes", {}, "Node availability").get("items", [])
-    lh = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
-    replicas = read(f"{lh}/replicas", {}, "Storage replicas").get("items")
-    policy = read(f"{lh}/settings/node-down-pod-deletion-policy", {}, "Longhorn node recovery").get("value")
-    for pvc in sorted({row["pvc"] for row in rows if row.get("nfs_clients") and row.get("pvc")}):
-        claim = read(f"/api/v1/namespaces/{SMB_NAMESPACE}/persistentvolumeclaims/{pvc}", {}, pvc)
-        name = (claim.get("spec") or {}).get("volumeName")
-        volume = read(f"{lh}/volumes/{name}", None, f"{pvc} replication") if name else None
-        volumes.append({"pvc": pvc, "volume": volume})
-    try:
-        platform = PLATFORM.detect()
-    except Exception:
-        platform = {}
-        errors.append("Load balancer availability could not be checked.")
-    podspec = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
-    return NFS.recovery_report(nodes, volumes, replicas, platform, policy, errors, podspec)
-
-
-def _nfs_inventory(current=None):
-    rows, _, config, _, _ = SHARES._state()
-    identified = NFS.export_ids(rows, current)
-    if identified != rows:
-        SHARES._save_config(identified, config)
-    return identified
-
-
-def _nfs_exports(rows):
-    return NFS.exports(rows, SHARES._pvc)
-
-
-def _nfs_deployment(rows, address=""):
-    selected = _nfs_exports(rows)
-    if not selected:
-        raise ValueError("choose at least one NFS export in Network Shares first")
-    if PLATFORM.detect().get("load_balancer") == "servicelb":
-        raise ValueError("NFS needs a dedicated VIP that preserves client IPs; install kube-vip under Cluster Add-ons first")
-    cfg = {"name": NFS.NAME, "container_name": NFS.NAME, "namespace": SMB_NAMESPACE,
-           "image": NFS.IMAGE, "cpu": "50m", "memory": "128Mi",
-           "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
-           "vip_mode": "manual" if address else "automatic", "lb_ip": address, "exclusive_vip": True}
-    cfg = NETWORK.prepare_deploy(cfg)
-    dep, svc = DEPLOY.build_deployment(cfg)
-    dep = NFS.configure(dep, selected)
-    if svc:
-        # NFS's CIDR rules must see the real client address, not a node SNAT.
-        svc["spec"]["externalTrafficPolicy"] = "Local"
-        svc["metadata"].setdefault("annotations", {})[NAMES.key("exclusive-vip")] = "true"
-    return dep, svc
-
-
-@SHARES.serialized
-def reconcile_nfs(rows=None):
-    """Keep a running NFS gateway's exports aligned with the saved inventory."""
-    dep_path = _smb_path("deployments", NFS.NAME)
-    current = _optional_smb(dep_path)
-    if not current:
-        return {"state": "absent"}
-    if rows is None:
-        rows = _nfs_inventory(current)
-    selected = _nfs_exports(rows)
-    if not selected:
-        if int((current.get("spec") or {}).get("replicas", 0) or 0):
-            ksend("PATCH", dep_path, {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-        return {"state": "off", "exports": 0}
-    wanted = NFS.configure(current, selected)
-    if NFS.same_pod_config(current, wanted):
-        return {"state": "current", "exports": len(selected)}
-    ksend("PUT", dep_path, wanted)
-    _cache.pop("wl", None)
-    return {"state": "updated", "exports": len(selected)}
-
-
-def set_nfs(enabled, address=""):
-    with SHARES.LOCK:
-        path = _smb_path("deployments", NFS.NAME)
-        current = _optional_smb(path)
-        if not enabled:
-            if current:
-                ksend("PATCH", path, {"spec": {"replicas": 0}},
-                      ctype="application/merge-patch+json")
-            _cache.pop("wl", None)
-            return {"ok": True, "detail": "NFS stopped; exports, shares and every PVC were kept"}
-        rows = _nfs_inventory(current)
-        _nfs_exports(rows)
-        if not any(row.get("nfs_clients") for row in rows):
-            raise ValueError("choose at least one NFS export in Network Shares first")
-        if not current:
-            dep, svc = _nfs_deployment(rows, address)
-            ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
-            try:
-                ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-            except Exception:
-                ksend("DELETE", path)
-                raise
-        else:
-            reconcile_nfs(rows)
-            if _optional_smb(_smb_path("services", NFS.NAME)) is None:
-                _, svc = _nfs_deployment(rows, address)
-                ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
-            ksend("PATCH", path, {"spec": {"replicas": 1}},
-                  ctype="application/merge-patch+json")
-        _cache.pop("wl", None)
-        return {"ok": True, "detail": "NFS is starting; exports use NFSv4/TCP on port 2049"}
-
-
-def remove_nfs():
-    """Remove only the NFS address and daemon, never a claim or share record."""
-    with SHARES.LOCK:
-        current = _optional_smb(_smb_path("deployments", NFS.NAME))
-        if current:
-            _nfs_inventory(current)
-        removed = []
-        for kind in ("deployments", "services"):
-            path = _smb_path(kind, NFS.NAME)
-            if _optional_smb(path) is not None:
-                ksend("DELETE", path)
-                removed.append(f"{kind}/{NFS.NAME}")
-        _cache.pop("wl", None)
-        _cache.pop("network", None)
-    return {"ok": True, "removed": removed,
-            "detail": "NFS server removed. Export settings, SMB shares, PVCs and data were kept."}
-
-
-def set_nfs_export(name, clients, read_only=True):
-    """Save one explicit export; an empty client network removes that export."""
-    with SHARES.LOCK:
-        rows, _, config_obj, _, _ = SHARES._state()
-        rows = NFS.export_ids(rows, _optional_smb(_smb_path("deployments", NFS.NAME)))
-        row = next((item for item in rows if item.get("name") == name), None)
-        if row is None:
-            raise ValueError("share not found")
-        previous = copy.deepcopy(rows)
-        if clients:
-            row["nfs_clients"] = NFS.client_network(clients)
-            row["nfs_read_only"] = bool(read_only)
-        else:
-            row.pop("nfs_clients", None)
-            row.pop("nfs_read_only", None)
-        _nfs_exports(rows)
-        config_path = f"/api/v1/namespaces/{SMB_NAMESPACE}/configmaps/{SHARES.CONFIGMAP()}"
-        written = SHARES._save_config(rows, config_obj)
-        try:
-            reconcile_nfs(rows)
-        except Exception:
-            SHARES._restore_object(config_path, config_obj, written)
-            try:
-                reconcile_nfs(previous)
-            except Exception:
-                pass
-            raise
-        return {"ok": True, "exports": nfs_state()["exports"],
-                "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
-
-
 # Looked up when asked, so a test that patches one is the one used.
 SELF_HEALTH.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k),
                  lambda dep=None: homestead_data_volume(dep), _heartbeats,
-                 lambda: NODES.node_temps(), lambda: samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
+                 lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
                                          "Join plans were replaced by the install guide")
@@ -5141,9 +3789,11 @@ OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
 OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
-SHARES.install = install_samba
+SHARES.install = SHARE_SERVERS.install_samba
+SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,
+                   shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: guard_managed_smb(ns, name), lambda: NODES.node_temps())
-FLOW.bind(lambda path: kget(path), SYS_NS, lambda annotations: display_icon(annotations), _moving_copy,
+FLOW.bind(lambda path: kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
           parse_cpu, parse_mem, age_secs)
 FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)
@@ -5165,7 +3815,7 @@ API_KEYS.bind(DATA_DIR)
 # Looked up when asked, so a test that patches one is the one the guide reads.
 SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
-           samba=lambda: samba_state())
+           samba=lambda: SHARE_SERVERS.samba_state())
 API_V1.bind(nodes=lambda: cached("nodes", 5, NODES.get_nodes), workloads=lambda: cached("wl", 5, WORKLOADS.get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
@@ -5516,7 +4166,7 @@ FLEET_LISTS = {
     "workloads": lambda: cached("wl", 5, WORKLOADS.get_workloads),
     "vms": lambda: cached("vms", 5, VMS.list_vms),
     "nodes": lambda: cached("nodes", 5, NODES.get_nodes),
-    "volumes": lambda: cached("vol", 8, get_volumes),
+    "volumes": lambda: cached("vol", 8, STORAGE.get_volumes),
     "flow": lambda: FLOW.view(),
 }
 
@@ -6162,23 +4812,6 @@ class H(HTTP.LimitedHandler):
                 return self._move(ONBOARD.cleanup_report)
             if p == "/api/cluster/removal":
                 return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
-            if p == "/api/volumes/other":
-                return self._send(200, cached("volother", 10, other_volumes))
-            if p == "/api/volumes":
-                return self._send(200, cached("vol", 8, get_volumes))
-            if p == "/api/volumes/edit-options":
-                return self._send(200, volume_edit_options((q.get("ns") or [DEFAULT_NS])[0],
-                                                          (q.get("name") or [""])[0]))
-            if p == "/api/volumes/delete-plan":
-                plan = VOLUMES.deletion_plan((q.get("ns") or [DEFAULT_NS])[0],
-                    (q.get("name") or [""])[0], (q.get("volume") or [""])[0])
-                return self._send(200, STORAGE_GUARD.review(plan, OPS, kget))
-            if p == "/api/storage":
-                return self._send(200, cached("stor", 10, get_storage))
-            if p == "/api/shares/server":
-                return self._send(200, samba_state())
-            if p == "/api/shares/nfs/server":
-                return self._send(200, nfs_state())
             if p == "/api/snapshot-files/plan":
                 return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
@@ -6189,48 +4822,12 @@ class H(HTTP.LimitedHandler):
                 if p.endswith("/download"):
                     return self._send_stream(SNAPSHOT_FILES.download(ns, session, path))
                 return self._send(200, SNAPSHOT_FILES.read(ns, session, "list", path))
-            if p == "/api/volumes/ownership":
-                return self._send(200, IMP.ownership_hint(
-                    (q.get("namespace") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
-            if p == "/api/shares/options":
-                return self._send(200, share_storage_options())
-            if p == "/api/vm-disks/import-plan":
-                return self._send(200, IMP.vm_disk_import_plan(
-                    (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
-            if p == "/api/lh/restore/plan":
-                return self._send(200, LH.restore_plan(
-                    (q.get("backup") or [""])[0],
-                    (q.get("ns") or [DEFAULT_NS])[0],
-                    (q.get("name") or [""])[0]))
-            if p == "/api/storageclasses":
-                classes = storage_classes()
-                if (q.get("facts") or [""])[0] == "1":
-                    return self._send(200, {"names": selectable_storage_classes(classes),
-                                            "shared": shared_storage_classes(classes),
-                                            "facts": storage_class_facts(classes)})
-                return self._send(200, selectable_storage_classes(classes))
-            if p == "/api/storage/classes":
-                return self._send(200, storage_class_inventory())
-            if p == "/api/storage/v2":
-                return self._send(200, v2_engine_status())
-            if p == "/api/pvcs":
-                ns = (q.get("ns") or [DEFAULT_NS])[0]
-                items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
-                return self._send(200, [{"name": i["metadata"]["name"],
-                                         "size": (i.get("status", {}).get("capacity", {}) or {}).get("storage") or
-                                                 i["spec"]["resources"]["requests"]["storage"],
-                                         "status": i.get("status", {}).get("phase", "Unknown"),
-                                         "access_modes": i.get("spec", {}).get("accessModes", []),
-                                         "storage_class": i.get("spec", {}).get("storageClassName", "")}
-                                        for i in items])
             if p == "/api/logos":
                 try:
                     return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-            if p == "/api/restore-tests":
-                return self._send(200, restore_tests_view())
             if p == "/api/logos/missing":
                 try:
                     apps = DEPLOY.fetch_appstore()
@@ -6461,253 +5058,29 @@ class H(HTTP.LimitedHandler):
                         guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
                                          meta.get("name"))
                 return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
-            if p == "/api/restore-tests/settings":
-                enabled = b.get("enabled")
-                if not isinstance(enabled, bool):
-                    raise ValueError("enabled must be true or false")
-                settings = get_app_settings()
-                settings["restore_tests"] = {"enabled": enabled}
-                save_app_settings(settings)
-                return self._send(200, {"ok": True, "enabled": enabled,
-                                        "detail": "Apps with backups are restore-tested monthly" if enabled else "Monthly restore tests are off"})
-            if p == "/api/restore-tests/run":
-                ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-                if any(o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
-                    raise ValueError("a restore test is already running; one runs at a time")
-                return self._send(200, {"ok": True, "operation": start_restore_test(ns, name)})
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
                 return self._send(200, SNAPSHOT_FILES.close(b.get("namespace"), b.get("session")))
-            if p == "/api/volumes/chown":
-                return self._send(200, IMP.chown_claim(
-                    b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))
-            if p == "/api/storage/classes":
-                return self._send(200, create_storage_class(b))
-            if p == "/api/storage/classes/default":
-                return self._send(200, set_default_storage_class(b.get("name")))
-            if p == "/api/storage/classes/delete":
-                return self._send(200, delete_storage_class(b.get("name")))
-            if p == "/api/shares":
-                access = b.get("access_mode")
-                if access == "ReadWriteMany" and (b.get("storage_class") or STORAGE_CLASS) not in shared_storage_classes():
-                    # One SMB server mounts every share: a class that cannot
-                    # serve many nodes (k3s's local-path) still serves it.
-                    access = "ReadWriteOnce"
-                result = SHARES.create_share(
-                    b["name"], b.get("size_gb", 10), b.get("user", "lab"),
-                    b.get("password"), b.get("public", False), b.get("read_only", False),
-                    b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-                    access, b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
-                deployment = result.pop("deployment", None)
-                if deployment:
-                    result["operation"] = OPS.start(
-                        "deployment", f"Create share {b['name']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
-                        "Restarting Samba with the new share")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/users":
-                result = SHARES.save_user(b.get("user"), b.get("password"), b.get("action", "create"))
-                if result.pop("deployment", None):
-                    result["operation"] = OPS.start(
-                        "deployment", f"Update SMB user {result['user']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
-                        "Restarting Samba with updated credentials")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/edit":
-                result = SHARES.edit_share(
-                    b["name"], b.get("size_gb"), b.get("user", "lab"),
-                    b.get("password"), b.get("public", False), b.get("read_only", False))
-                deployment = result.pop("deployment", None)
-                if deployment:
-                    result["operation"] = OPS.start(
-                        "deployment", f"Update share {b['name']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
-                        "Restarting Samba with updated access")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/delete":
-                share = next((row for row in SHARES.list_shares() if row.get("name") == b["name"]), None)
-                old_export = (share or {}).get("nfs_clients", "")
-                if old_export:
-                    set_nfs_export(b["name"], "")
-                try:
-                    result = SHARES.delete_share(b["name"])
-                except Exception:
-                    if old_export:
-                        set_nfs_export(b["name"], old_export, share.get("nfs_read_only", True))
-                    raise
-                deployment = result.pop("deployment", None)
-                if deployment:
-                    result["operation"] = OPS.start(
-                        "share-remove", f"Remove share {b['name']}",
-                        {"kind": "Deployment", "name": SMB_NAME, "namespace": SMB_NAMESPACE},
-                        "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep",
-                                    "uid": deployment.get("metadata", {}).get("uid"), "since": time.time(),
-                                    "removed_claims": result.get("removed_claims", [])},
-                        "Restarting Samba without the removed share")
-                return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/nfs":
-                return self._send(200, set_nfs_export(
-                    b.get("name", ""), str(b.get("clients") or "").strip(),
-                    b.get("read_only") is not False))
             if p == "/api/cluster/remove-node":
                 return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
                                                               bool(b.get("gone"))))
             if p == "/api/cluster/cleanup/run":
                 return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
-            if p == "/api/objectstore/transfers":
-                return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
-                                                                str(b.get("lb_ip") or ""), str(b.get("vip_mode") or ""),
-                                                                int(b.get("port") or 0)))
-            if p == "/api/objectstore/longhorn":
-                return self._send(200, OBJECTS.request_target(replace=bool(b.get("replace", True))))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
-            if p == "/api/longhorn/settings":
-                _cache.pop("lhcap", None)
-                with OPS._lock:
-                    if "v2" in b and not b["v2"] and DISK_V2.tasks():
-                        raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
-                    return self._send(200, LHCAP.save(b))
-            if p == "/api/longhorn/offline-rebuilding":
-                _cache.pop("lhrebuild", None)
-                enabled = b.get("enabled")
-                if not isinstance(enabled, bool):
-                    raise ValueError("enabled must be true or false")
-                settings = get_app_settings()
-                settings["longhorn"] = {"offline_rebuilding": enabled}
-                save_app_settings(settings)
-                return self._send(200, LHREBUILD.save(enabled))
-            if p == "/api/longhorn/rebalance":
-                running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
-                                and i.get("status") not in OPS.TERMINAL), None)
-                if running:
-                    return self._send(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})
-                if b.get("moves") is not None:
-                    # The copies reviewed, checked against Longhorn now - not a
-                    # plan made again from sizes that grow while apps write.
-                    try:
-                        moves = REBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
-                    except ValueError as error:
-                        return self._send(409, {"error": str(error), "plan": REBALANCE.plan(b.get("exclude") or [])})
-                    plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
-                else:
-                    plan = REBALANCE.plan(b.get("exclude") or [])
-                    if plan["review_token"] != b.get("review_token"):
-                        return self._send(409, {"error": "Volume copies changed since the review; review again", "plan": plan})
-                if not plan["moves"]:
-                    return self._send(409, {"error": "Nothing to move: the hosts are as even as they can be", "plan": plan})
-                operation = OPS.start(REBALANCE.KIND, f"Rebalance {len(plan['moves'])} volume cop{'y' if len(plan['moves']) == 1 else 'ies'}",
-                                      {"kind": "Volume", "name": "rebalance"}, "/volumes",
-                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "add", "excluded": plan["excluded"]},
-                                      "Starting with the first copy")
-                return self._send(202, {"operation": operation})
-            if p == "/api/longhorn/rebuild":
-                _cache.pop("lhrebuild", None)
-                _cache.pop("volumes", None)
-                return self._send(200, LHREBUILD.rebuild_now(str(b.get("volume") or "")))
-            if p == "/api/longhorn/v2/upgrade/settings":
-                return self._send(200, LHV2_UPGRADE.configure(b, OPS))
-            if p == "/api/longhorn/v2/enable":
-                result = LHV2_SETUP.enable(b)
-                _cache.pop("lhcap", None)
-                return self._send(200, result)
-            if p == "/api/vm-disks/import":
-                result = IMP.import_vm_disk(b, ops=OPS)
-                return self._send(200, result)
-            if p == "/api/volumes/create":
-                return self._send(200, create_volume(b))
-            if p == "/api/volumes/edit":
-                return self._send(200, edit_volume(b))
-            if p == "/api/volumes/repair-class":
-                return self._send(200, repair_volume_class(b))
             if p == "/api/self/samba":
-                return self._send(200, set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+                return self._send(200, SHARE_SERVERS.set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/self/nfs":
-                return self._send(200, set_nfs(bool(b.get("enabled")), str(b.get("address") or "").strip()))
+                return self._send(200, SHARE_SERVERS.set_nfs(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/addons/smb/remove":
                 if b.get("confirm") != SMB_NAME:
                     raise ValueError(f"type {SMB_NAME} to remove the SMB server")
-                return self._send(200, remove_samba())
+                return self._send(200, SHARE_SERVERS.remove_samba())
             if p == "/api/addons/nfs/remove":
                 if b.get("confirm") != NFS.NAME:
                     raise ValueError(f"type {NFS.NAME} to remove the NFS server")
-                return self._send(200, remove_nfs())
-            if p == "/api/shares/repair":
-                return self._send(200, repair_samba(str(b.get("address") or "").strip()))
-            if p == "/api/storage/classes/cleanup":
-                removed = cleanup_restore_classes()
-                return self._send(200, {"ok": True, "removed": removed,
-                                        "detail": f"removed {len(removed)} class{'es' if len(removed) != 1 else ''} left by restores"
-                                                  if removed else "nothing to remove: every restore class is still in use"})
-            if p == "/api/volumes/reclass/plan":
-                return self._send(200, STORAGE_WORKFLOW.preview({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
-                                                               runtime_check=storage_runtime_check))
-            if p == "/api/volumes/reclass/start":
-                op = STORAGE_WORKFLOW.start_reviewed({**b, "namespace": b.get("namespace") or DEFAULT_NS}, self.user, OPS,
-                                                    runtime_check=storage_runtime_check)
-                _cache.pop("vol", None)
-                return self._send(200, {"ok": True, "operation": op})
-            if p == "/api/volumes/old-copies/remove":
-                _cache.pop("vol", None)
-                return self._send(200, RECLASS.remove_old_copy(b.get("pv", ""), OPS))
-            if p == "/api/volumes/delete":
-                with OPS._lock:
-                    result = VOLUMES.delete(b, validate=lambda plan: STORAGE_GUARD.review(plan, OPS, kget))
-                    result["operation"] = OPS.start(
-                        "volume-delete", f"Delete volume {result['name']}",
-                        {"kind": "PersistentVolumeClaim", "name": result["name"],
-                         "namespace": result["namespace"]},
-                        "/volumes", {"namespace": result["namespace"], "name": result["name"],
-                                      "action": result["action"], "pv": result["pv"],
-                                      "orphan": result.get("orphan", False),
-                                      "volume": result["longhorn_volume"]}, result["message"])
-                return self._send(200, result)
-            if p == "/api/lh/job/run":
-                result = LH.run_job(b.get("name"))
-                result["operation"] = OPS.start(
-                    "protect-run", f"Run {b['name']} now", {"kind": "Job", "name": result["job"],
-                                                            "namespace": result["namespace"]},
-                    "/data-protection", {"namespace": result["namespace"], "name": result["job"]}, "Starting")
-                return self._send(200, result)
-            if p == "/api/lh/snapshot/delete":
-                return self._send(200, {"ok": True, "operation": storage_volume_action(
-                    b.get("volume"), lambda: SNAPSHOT_DELETE.start(b, OPS))})
-            if p == "/api/lh/snapshot/revert":
-                operation = storage_volume_action(b.get("volume"), lambda: REVERT.start(
-                    str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS))
-                return self._send(200, {"ok": True, "operation": operation,
-                                        "detail": "Rolling back: what uses it stops first, then starts again"})
-            if p == "/api/lh/backup":
-                result = LH.create_backup(b["volume"], b.get("name"))
-                if result.get("backup"):
-                    result["operation"] = OPS.start(
-                        "backup", f"Back up {b['volume']}",
-                        {"kind": "Volume", "name": b["volume"], "namespace": "longhorn-system"},
-                        "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
-                return self._send(200, result)
-            if p == "/api/lh/restore":
-                with OPS._lock:
-                    plan = LH.restore_plan(
-                        b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
-                    if plan.get("conflict"):
-                        return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
-                    b["restore_id"] = secrets.token_hex(12)
-                    b["annotations"] = {"homestead.io/restore-id": b["restore_id"]}
-                    result = LH.restore_backup(b)
-                    b["source_size_bytes"] = result["source_size_bytes"]
-                    result["operation"] = OPS.start(
-                        "volume-restore", f"Restore {result['name']}",
-                        {"kind": "PersistentVolumeClaim", "name": result["name"],
-                         "namespace": result["namespace"]},
-                        "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
-                        {"namespace": result["namespace"], "name": result["name"],
-                         "backup": result["backup"], "restore_config": b,
-                         "restore_started": result["created"]}, result["message"])
-                return self._send(200, result)
+                return self._send(200, SHARE_SERVERS.remove_nfs())
             if p == "/api/operations/cancel":
                 # The route lets any operator in; what the job's own cancel
                 # does - delete VMs, stop a volume move - may need more.
@@ -6812,10 +5185,10 @@ def _samba_loop():
         if LEADER.is_leader():
             try:
                 with self_data_activity():
-                    state = samba_state()
+                    state = SHARE_SERVERS.samba_state()
                     if state.get("name") == "samba" and state.get("installed"):
-                        install_samba()
-                    result = SHARES.reconcile_samba(SAMBA_IMAGE)
+                        SHARE_SERVERS.install_samba()
+                    result = SHARES.reconcile_samba(SHARE_SERVERS.SAMBA_IMAGE)
                 beat("samba", 60, leader_only=True)
                 if result.get("state") == "repaired":
                     print("network shares: restored SMB settings from the share inventory", flush=True)
@@ -6824,7 +5197,7 @@ def _samba_loop():
                 print(f"network shares: {str(error)[:180]}", flush=True)
             try:
                 with self_data_activity():
-                    nfs_result = reconcile_nfs()
+                    nfs_result = SHARE_SERVERS.reconcile_nfs()
                 if nfs_result.get("state") == "updated":
                     print("network shares: restored NFS exports from the share inventory", flush=True)
             except Exception as error:

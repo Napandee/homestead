@@ -2,6 +2,7 @@ import sys, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 def klass(name, default=False, **parameters):
@@ -15,6 +16,10 @@ class ClassChoiceTests(unittest.TestCase):
     another class the default in Volumes changed nothing Homestead chose."""
 
     def setUp(self):
+        # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
         self.saved = server.kget, server.ksend, server.STORAGE_CLASS, server.LC.STORAGE_CLASS, server.LH.STORAGE_CLASS
         self.classes = [klass("longhorn-r2"), klass("longhorn-v1-1x", default=True, numberOfReplicas="1"),
                         klass("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", backingImage="default-image-151065"),
@@ -56,7 +61,7 @@ class ClassChoiceTests(unittest.TestCase):
         self.pvcs = [{"spec": {"storageClassName": "homestead-restore-deee238ba869b8e0"}, "status": {"phase": "Pending"}},
                      {"spec": {"storageClassName": "homestead-restore-155ade32ea106399"}, "status": {"phase": "Bound"}}]
         self.classes.append(klass("homestead-restore-unused", fromBackup="s3://b/backups?volume=z"))
-        removed = server.cleanup_restore_classes()
+        removed = STORAGE_CLASSES.cleanup_restore_classes()
         self.assertEqual(["homestead-restore-unused"], removed)
         self.assertEqual([("DELETE", "/apis/storage.k8s.io/v1/storageclasses/homestead-restore-unused")], self.sent)
 
@@ -64,23 +69,23 @@ class ClassChoiceTests(unittest.TestCase):
         self.pvcs = [{"metadata": {"deletionTimestamp": "2026-01-01T00:00:00Z",
                                    "annotations": {"volume.beta.kubernetes.io/storage-class": "homestead-restore-155ade32ea106399"}},
                       "status": {"phase": "Bound"}}]
-        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], STORAGE_CLASSES.cleanup_restore_classes())
         self.assertEqual([], self.sent)
 
     def test_failed_claim_inventory_never_deletes_classes(self):
         server.kget = lambda path: (_ for _ in ()).throw(RuntimeError("API unavailable"))
-        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], STORAGE_CLASSES.cleanup_restore_classes())
         self.assertEqual([], self.sent)
 
     def test_incomplete_claim_inventory_never_deletes_classes(self):
         server.kget = lambda path: {"items": [], "metadata": {"continue": "next-page"}}
-        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], STORAGE_CLASSES.cleanup_restore_classes())
         self.assertEqual([], self.sent)
 
     def test_retained_backing_volume_keeps_its_restore_class_without_a_claim(self):
         self.pvs = [{"spec": {"storageClassName": "homestead-restore-155ade32ea106399",
                               "persistentVolumeReclaimPolicy": "Retain"}, "status": {"phase": "Released"}}]
-        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], STORAGE_CLASSES.cleanup_restore_classes())
         self.assertEqual([], self.sent)
 
 

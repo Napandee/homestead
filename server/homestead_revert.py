@@ -20,6 +20,9 @@ import time
 import urllib.error
 import urllib.request
 
+import homestead_operations as OPS
+import homestead_storage_guard as STORAGE_GUARD
+
 LHNS = "longhorn-system"
 API = f"/apis/longhorn.io/v1beta2/namespaces/{LHNS}"
 BACKEND = "http://longhorn-backend.longhorn-system:9500/v1"
@@ -231,7 +234,17 @@ def cancel_run(item, _options):
     return _put_back(item["ref"], "Cancelled")[2]
 
 
+def start_guarded(b):
+    """start, holding the volume's storage fence: rolling back stops and
+    starts what uses it and writes through Longhorn's own API too."""
+    with STORAGE_GUARD.volume(OPS, kget, b.get("volume")):
+        operation = start(str(b.get("volume") or ""), str(b.get("snapshot") or ""), OPS)
+    return {"ok": True, "operation": operation,
+            "detail": "Rolling back: what uses it stops first, then starts again"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/lh/snapshot/revert/plan"): ("viewer", lambda request: plan((request.query.get("volume") or [""])[0], (request.query.get("snapshot") or [""])[0])),
+    ("POST", "/api/lh/snapshot/revert"): ("admin", lambda request: start_guarded(request.body)),
 }

@@ -2,6 +2,7 @@ import sys, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_storage as STORAGE
 
 
 def engine(volume, rebuild=None, restore=None):
@@ -22,7 +23,7 @@ class EngineProgressTests(unittest.TestCase):
     the volume, so Volumes showed "degraded" with no idea of when it ends."""
 
     def test_a_rebuild_reports_its_slowest_replica(self):
-        progress = server._engine_progress([engine("pvc-a", rebuild={
+        progress = STORAGE._engine_progress([engine("pvc-a", rebuild={
             "tcp://10.0.0.1:10000": {"isRebuilding": True, "progress": 72},
             "tcp://10.0.0.2:10000": {"isRebuilding": True, "progress": 35},
             "tcp://10.0.0.3:10000": {"isRebuilding": False, "progress": 0}})])
@@ -30,21 +31,21 @@ class EngineProgressTests(unittest.TestCase):
         self.assertEqual({"pct": 35, "replicas": 2, "error": ""}, progress["pvc-a"]["rebuild"])
 
     def test_a_restore_reports_its_progress(self):
-        progress = server._engine_progress([engine("pvc-b", restore={
+        progress = STORAGE._engine_progress([engine("pvc-b", restore={
             "tcp://10.0.0.1:10000": {"isRestoring": True, "progress": 41},
             "tcp://10.0.0.2:10000": {"isRestoring": True, "progress": 44}})])
 
         self.assertEqual({"pct": 41, "error": ""}, progress["pvc-b"]["restore"])
 
     def test_a_failed_restore_says_why(self):
-        progress = server._engine_progress([engine("pvc-c", restore={
+        progress = STORAGE._engine_progress([engine("pvc-c", restore={
             "tcp://10.0.0.1:10000": {"isRestoring": False, "progress": 12,
                                      "error": "backup target unreachable"}})])
 
         self.assertEqual("backup target unreachable", progress["pvc-c"]["restore"]["error"])
 
     def test_finished_work_leaves_nothing_behind(self):
-        progress = server._engine_progress([engine("pvc-d",
+        progress = STORAGE._engine_progress([engine("pvc-d",
             rebuild={"tcp://10.0.0.1:10000": {"isRebuilding": False, "progress": 100}},
             restore={"tcp://10.0.0.1:10000": {"isRestoring": False, "progress": 100,
                                               "lastRestored": "backup-1"}})])
@@ -54,6 +55,10 @@ class EngineProgressTests(unittest.TestCase):
 
 class VolumesListTests(unittest.TestCase):
     def setUp(self):
+        # STORAGE reads the cluster through server.py's client in these tests.
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
         self._kget = server.kget
 
     def tearDown(self):
@@ -67,7 +72,7 @@ class VolumesListTests(unittest.TestCase):
                 return {"items": engines}
             return {"items": []}
         server.kget = kget
-        return {row["name"]: row for row in server.get_volumes()}
+        return {row["name"]: row for row in STORAGE.get_volumes()}
 
     def test_the_list_carries_rebuild_and_restore_progress(self):
         rows = self.serve(
@@ -98,7 +103,7 @@ class VolumesListTests(unittest.TestCase):
             return {"items": [lh_volume("pvc-a")] if path.endswith("/volumes") else []}
         server.kget = kget
 
-        rows = server.get_volumes()
+        rows = STORAGE.get_volumes()
 
         self.assertEqual(["pvc-a"], [row["name"] for row in rows])
         self.assertIsNone(rows[0]["rebuild"])

@@ -32,6 +32,8 @@ import urllib.error
 import urllib.parse
 
 import homestead_names as NAMES
+import homestead_operations as OPS
+import homestead_routes
 import homestead_capacity_review as REVIEW
 import homestead_storage_journal as JOURNAL
 import homestead_storage_conflicts as CONFLICTS
@@ -1006,7 +1008,13 @@ def _remove_old_copy(pv):
     return {"ok": True, "detail": f"removing the old copy {pv}"}
 
 
+def _remove_old_copy_route(pv):
+    homestead_routes.forget("vol")
+    return remove_old_copy(pv, OPS)
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/volumes/old-copies"): ("viewer", lambda request: old_copies()),
+    ("POST", "/api/volumes/old-copies/remove"): ("admin", lambda request: _remove_old_copy_route(request.body.get("pv", ""))),
 }

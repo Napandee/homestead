@@ -2891,4 +2891,11 @@ ROUTES = {
     ("POST", "/api/sources/delete"): ("admin", lambda request: {"ok": True, "sources": del_source(request.body["name"])}),
     ("POST", "/api/sources/browse"): ("admin", lambda request: {"entries": browse_source(request.body["name"], request.body.get("path"))}),
     ("POST", "/api/sources/containers"): ("admin", lambda request: {"containers": source_containers(request.body["name"])}),
+    ("GET", "/api/volumes/ownership"): ("viewer", lambda request: ownership_hint(
+        (request.query.get("namespace") or [NS])[0], (request.query.get("name") or [""])[0])),
+    ("GET", "/api/vm-disks/import-plan"): ("viewer", lambda request: vm_disk_import_plan(
+        (request.query.get("ns") or [NS])[0], (request.query.get("name") or [""])[0])),
+    ("POST", "/api/volumes/chown"): ("admin", lambda request: chown_claim(
+        request.body.get("namespace") or NS, request.body.get("name"), request.body.get("uid"), request.body.get("gid"))),
+    ("POST", "/api/vm-disks/import"): ("admin", lambda request: import_vm_disk(request.body, ops=OPS)),
 }
