@@ -99,6 +99,9 @@ def public(row, full=False):
     out = {k: row.get(k) for k in ("id", "tool", "title", "status", "reason", "created", "expires", "ended",
                                     "decided_by", "detail", "role", "escalated")}
     out["key"] = row["key"].get("name")
+    for field in ("created", "expires", "ended"):
+        if isinstance(row.get(field), (int, float)):
+            out[f"{field}_at"] = TOOLS.when(row[field])
     out["action"] = (row.get("summary") or {}).get("action", row.get("title"))
     if full:
         out.update(summary=row.get("summary"), args=AUDIT.redact(row.get("args") or {}), owner=row["key"].get("owner"),
@@ -116,6 +119,11 @@ def get(rid, key=None):
     if not row or (key is not None and row["key"].get("id") != key.get("id")):
         raise TOOLS.ToolError("there is no such request for this key")
     return row
+
+
+def pending_count():
+    with _lock:
+        return sum(1 for r in _settle(_load(), time.time()).values() if r["status"] == "pending")
 
 
 def listing(role):
@@ -196,7 +204,7 @@ def alert_facts():
              "title": f"An AI agent asks to {(r.get('summary') or {}).get('action', r['title']).lower()}"[:200],
              "body": (f"Key {r['key'].get('name')}" + (f": {r['reason']}" if r.get("reason") else "") +
                       ". Review it before it expires."),
-             "resolved": "Answered", "href": f"/agents?request={r['id']}"}
+             "resolved": "Answered", "href": f"/agents?request={r['id']}", "urgent": True}
             for r in rows.values() if r["status"] == "pending"]
 
 

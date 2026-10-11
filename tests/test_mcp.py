@@ -23,7 +23,7 @@ import homestead_routes as ROUTER
 
 def key(scopes=("read",), mcp=True, role="viewer", kid="k1", name="claude"):
     return {"id": kid, "name": name, "owner": "ada", "scopes": list(scopes), "expires": time.time() + 3600,
-            "mcp": mcp, "role": role}
+            "mcp": mcp, "role": role, "kind": "key"}
 
 
 def rpc(method, params=None, rid=1):
@@ -150,6 +150,28 @@ class CallTests(Base):
         self.assertFalse(result["isError"])
         self.assertEqual("ok", AUDIT.recent()[0]["outcome"])
 
+    def test_volumes_come_a_line_each_and_one_in_full(self):
+        row = {"namespace": "lab", "pvc_name": "data", "name": "pvc-1", "size_gb": 10, "conditions": ["x"] * 50,
+               "engine": "v1", "used_by": [{"kind": "Deployment", "name": "web"}]}
+        with mock.patch.object(TOOLS, "call", return_value=[row, {**row, "pvc_name": "other", "namespace": "media"}]):
+            lines = self.call("list_volumes", {"namespace": "lab"}, key())["content"][0]["text"]
+            full = self.call("list_volumes", {"name": "data"}, key())["content"][0]["text"]
+        self.assertNotIn("conditions", lines)
+        self.assertNotIn("other", lines)
+        self.assertIn("conditions", full)
+
+    def test_a_refused_scale_says_what_the_review_found_and_how_to_accept_it(self):
+        k = key(["read", "containers:manage"], role="operator")
+        refused = TOOLS.ToolError("review node memory before starting", {"error": "x", "plan": {"warnings": ["k3s-1 would be 92% reserved"]}})
+        with mock.patch.object(TOOLS, "call", side_effect=refused):
+            text = self.call("scale_container", {"namespace": "lab", "name": "web", "replicas": 2}, k)["content"][0]["text"]
+        self.assertIn("92% reserved", text)
+        self.assertIn("confirm_capacity: true", text)
+
+    def test_times_are_given_as_dates_too(self):
+        answer = self.call("whoami", {}, key())["structuredContent"]
+        self.assertRegex(answer.get("expires_at", ""), r"^20\d\d-\d\d-\d\dT")
+
     def test_an_argument_a_tool_does_not_take_is_refused(self):
         result = self.call("list_volumes", {"namespace": "lab", "everything": True}, key())
         self.assertIn("takes no everything", result["content"][0]["text"])
@@ -225,6 +247,18 @@ class ApprovalTests(Base):
         self.assertEqual(("pending", "it is unused"), (row["status"], row["reason"]))
         self.assertIn("web-data", row["summary"]["keeps"])
         self.assertEqual("agents", MCP.alert_facts()[0]["category"])
+
+    def test_the_bell_raises_it_on_the_first_look_and_counts_it(self):
+        import homestead_alerts as ALERTS
+        rid = self.ask_delete()["request"]
+        before = ALERTS.DATA_DIR
+        ALERTS.bind(self.folder.name)
+        try:
+            raised = ALERTS.observe({"agents": MCP.alert_facts()})
+            self.assertEqual([f"agents:{rid}"], [e["key"] for e in raised], "no 60 s hold: it expires if nobody sees it")
+        finally:
+            ALERTS.bind(before)
+        self.assertEqual({"enabled": True, "pending": 1}, ALERTS.AGENTS[0]())
 
     def test_a_person_without_the_role_cannot_approve_it(self):
         rid = self.ask_delete()["request"]

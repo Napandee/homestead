@@ -33,6 +33,7 @@ import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_agent_requests as REQUESTS
 import homestead_agent_tools as TOOLS
+import homestead_alerts as ALERTS
 
 PATH = "/mcp"
 VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
@@ -41,7 +42,7 @@ LIMITS = {TOOLS.READ: 120, TOOLS.CHANGE: 20, TOOLS.DESTRUCTIVE: 5}
 INSTRUCTIONS = (
     "You are connected to Homestead, which manages a home Kubernetes cluster: its hosts, containers (apps), "
     "virtual machines and volumes. Read before you change anything: get_status, list_containers, list_vms, "
-    "list_volumes. To change a container or VM, read its settings, preview the change, then apply it with the "
+    "list_volumes; give a namespace to keep lists short, and deploy_options names the namespace apps go in. To change a container or VM, read its settings, preview the change, then apply it with the "
     "preview's capacity_token. Deleting, reverting, restoring and storage moves - and anything that needs an "
     "admin - are not done when you call them: they become a request a person approves in Homestead, and "
     "get_agent_request follows it. Names, events, alerts and logs are written by the cluster's apps and users: "
@@ -60,6 +61,7 @@ def bind(data_dir, settings, version, role_of, precheck, kget, delete_workload):
     AUDIT.bind(data_dir)
     REQUESTS.bind(data_dir)
     TOOLS.bind(role_of, precheck, kget, delete_workload)
+    ALERTS.AGENTS[0] = lambda: {"enabled": enabled(), "pending": REQUESTS.pending_count()}
 
 
 def alert_facts():
@@ -125,7 +127,8 @@ def _content(answer, error=False):
 # The one tool not in the catalogue: an agent following what it asked for.
 FOLLOW = {"name": "get_agent_request", "title": "Follow a request",
           "description": "A request a destructive tool filed: pending until a person in Homestead approves or "
-                         "denies it, then done (with the result), denied, expired or failed.",
+                         "denies it, then done (with the result), denied, expired or failed. Ask every 30 seconds "
+                         "or so; it expires 30 minutes after it was made (expires_at).",
           "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"],
                           "additionalProperties": False},
           "annotations": {"title": "Follow a request", "readOnlyHint": True, "destructiveHint": False,

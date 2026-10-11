@@ -78,16 +78,20 @@ function paintBell() {
       <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
       <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
       ${op.progress != null && Number.isFinite(Number(op.progress)) ? `<span class="jobmeter"><span style="width:${Math.max(0, Math.min(100, Number(op.progress)))}%"></span></span>` : ""}</button>`;
-  const alertCount=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged).length;
+  // AI agents' requests have a line of their own, which opens them, so
+  // their alerts are not counted twice.
+  const waitingAgents = window.PWA_ALERTS?.report?.agents?.pending || 0;
+  const alertCount=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged && a.category !== "agents").length;
   const rows = [
+    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "danger") : "",
     alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), "danger") : "",
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
     errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",
     ...failedJobs.slice(0, 3).map(op => row(`openJob(${jsq(op.id || "")})`, "alert", `${op.title} failed`, "danger")),
   ].filter(Boolean);
-  const count = alertCount + images + (waiting.length ? 1 : 0) + failedJobs.length;
-  const words = [alertCount ? plural(alertCount,"active alert") : "", active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
+  const count = waitingAgents + alertCount + images + (waiting.length ? 1 : 0) + failedJobs.length;
+  const words = [waitingAgents ? plural(waitingAgents, "AI agent request") : "", alertCount ? plural(alertCount,"active alert") : "", active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
     errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : ""].filter(Boolean).join(", ") || "Nothing needs you";
   const badge = $("#bellCount"), dot = $("#bellErrors"), summary = bell.querySelector("summary");
   if (badge) { badge.textContent = count; badge.classList.toggle("hidden", !count); }
