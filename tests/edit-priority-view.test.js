@@ -44,3 +44,9 @@ test("Priority tiers shows what is wrong in one notice", () => {
   assert.equal((html.match(/class="ui-callout /g) || []).length, 1);
   assert.match(html, /Check first[^]*lab\/ha name gone[^]*homestead-critical \(1000\)/);
 });
+
+test("a class Homestead couldn't check is left as it is", () => {
+  const html = field(load(), { priority: "unknown", priority_class: "x-normal" });
+  assert.doesNotMatch(html, /id="e_priority"/);
+  assert.match(html, /couldn't read the cluster's classes/);
+});

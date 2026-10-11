@@ -1,26 +1,27 @@
 """Priority tiers: which apps fit first when the cluster is short of room.
 
 When a host fails, its apps start on the others; if those cannot hold them
-all, the scheduler fits them in its own order, and the home automation can
-wait behind a media scanner (#347). Kubernetes orders pods by their
-PriorityClass, so Homestead keeps two of its own and calls having none a tier:
+all, the scheduler fits them by priority, and the home automation can wait
+behind a media scanner (#347). A pod's priority is the value of its
+PriorityClass, fixed when the pod is made; one naming no class gets the
+cluster's globalDefault class, or 0 without one. So a tier is a number
+relative to that default (#429), whatever the class is called:
 
-* critical (homestead-critical) - fits first, and may evict any pod of lower
-  priority to fit: low apps, and every pod with no class - other apps and
-  VMs. For what the house depends on. Homestead itself joins this class once
-  anything uses it (protect), since pods of one priority never evict each
-  other.
-* normal - no class at all, as every app has now. On a cluster with a
-  globalDefault class of its own, "no class" means that one.
-* low (homestead-low) - waits, and never evicts anything (preemptionPolicy
-  Never): batch work and CI runners.
+* critical - above the default: fits first, and may evict pods of lower
+  priority to fit. For what the house depends on.
+* normal - the default.
+* low - below it: waits, and is evicted first. Batch work and CI runners.
 
-Homestead makes neither the cluster's globalDefault, which would apply to
-every new pod - system pods included - and makes each only when it is first
-used. An app's tier is read from its pod spec, so a class set by hand or by
-Flux is shown as it is; a class Homestead does not keep is shown by name and
-left alone. homestead-normal - a class #347's first plan suggested making by
-hand - still reads as normal.
+The ladder (ladder()) reads the cluster's classes once and says which class
+each tier uses: the cluster's own where one fits - critical the highest
+class above the default that may preempt, low the highest below it,
+preferring one that never preempts - and otherwise one Homestead makes, just
+above or below the default (homestead-critical, homestead-low, or with the
+value in the name when that one is taken at another value). Kubernetes' own
+classes, and the platform's (Longhorn's sits at 1e9), are never a tier's.
+Homestead never updates or deletes a class, and never makes one the default.
+When the classes can't be read it does as it did before #429, and protect()
+waits rather than guess.
 
 VMs have tiers too, set in their template: a VM takes its tier when it next
 starts, so setting one restarts nothing.
@@ -28,9 +29,8 @@ starts, so setting one restarts nothing.
 Changing a tier changes the pod template, so the app restarts once. Like the
 reservations (homestead_requests), the tiers are reviewed as a list and
 applied by a job one app at a time; Flux- and Argo-applied apps get the line
-to commit instead. Homestead's own tier is not offered: it is critical once
-anything is (protect), and has no class before. Neither its manifest nor an
-update names a class, and an apply keeps a field it does not name.
+to commit instead. Homestead's own tier is not offered: protect() keeps it at
+least as high as any app, and never below the default.
 """
 import hashlib
 import json
@@ -65,7 +65,10 @@ def _rows(items):
         value = int(c.get("value") or 0)
         rows.append({"name": name, "value": value, "default": bool(c.get("globalDefault")),
                      "preempts": (c.get("preemptionPolicy") or "PreemptLowerPriority") != "Never",
-                     "system": value > SYSTEM_VALUE, "homestead": bool(OURS.fullmatch(name))})
+                     # Kubernetes' own (above 1e9) and the platform's - Longhorn's
+                     # longhorn-critical sits at exactly 1e9 - are never a tier's class.
+                     "system": value >= SYSTEM_VALUE or name.startswith(SYSTEM) or name.startswith("system-"),
+                     "homestead": bool(OURS.fullmatch(name))})
     return rows
 
 
@@ -94,8 +97,8 @@ def ladder(items=None, now=None):
             return _LADDER["value"]
         try:
             items = kget("/apis/scheduling.k8s.io/v1/priorityclasses").get("items", [])
-        except Exception:
-            return _fallback()
+        except Exception as error:
+            return _fallback(forbidden=isinstance(error, urllib.error.HTTPError) and error.code == 403)
         out = ladder(items)
         _LADDER.update(at=now, value=out)
         return out
@@ -113,7 +116,7 @@ def ladder(items=None, now=None):
     if above:
         critical = {"name": above[0]["name"], "value": above[0]["value"], "create": False}
     else:
-        value = min(d + STEP, SYSTEM_VALUE)
+        value = min(d + STEP, SYSTEM_VALUE - 1)   # 1e9 itself is the platform's (Longhorn's)
         critical = _made("critical", value, rows) if value > d else None
         if critical is None:
             warnings.append(f"Critical can't rank above the cluster default ({default['name'] or 'none'}, {d}): "
@@ -128,10 +131,10 @@ def ladder(items=None, now=None):
             "normal": default["name"], "warnings": warnings}
 
 
-def _fallback():
+def _fallback(forbidden=True):
     """What Homestead assumed before it read the classes: its own two (and the
     legacy homestead-normal, at the default), and no default."""
-    return dict(fallback=True, **ladder([{"metadata": {"name": TIERS[t]["name"]}, "value": TIERS[t]["value"],
+    return dict(fallback=True, forbidden=forbidden, **ladder([{"metadata": {"name": TIERS[t]["name"]}, "value": TIERS[t]["value"],
                     "preemptionPolicy": TIERS[t]["preemptionPolicy"]} for t in ("critical", "low")]
                   + [{"metadata": {"name": "homestead-normal"}, "value": 0}]))
 
@@ -191,9 +194,11 @@ def tier_of(spec, lad=None):
     lad = lad if lad is not None else ladder()
     name = (spec or {}).get("priorityClassName") or ""
     number, _ = priority_of(spec, lad)
+    row = next((r for r in lad["classes"] if r["name"] == name), None) if name else None
     if number is None:
-        return "missing", name
-    if number > SYSTEM_VALUE:
+        # Not listed: missing - unless the list itself couldn't be read.
+        return ("unknown" if lad.get("fallback") else "missing"), name
+    if number >= SYSTEM_VALUE or (row is not None and row["system"]):
         return "system", name
     d = lad["default"]["value"]
     return ("critical" if number > d else "low" if number < d else "normal"), name
@@ -267,6 +272,8 @@ def ensure(tiers=("critical", "low"), lad=None):
     one in use must stay."""
     lad = lad if lad is not None else ladder()
     if lad.get("fallback"):
+        if not lad.get("forbidden"):
+            raise ValueError("Homestead couldn't read the cluster's priority classes just now; nothing was made. Try again")
         return _ensure_by_name(tiers)
     notes = []
     for tier in tiers:
@@ -334,7 +341,7 @@ def plan(chosen=None, role=None):
     set to in the review: by default the suggestion for an app still at
     normal, else what it has. chosen maps an app id to a tier. role: who
     asks; apps they may not change are left out, saying why."""
-    apps, skipped = [], []
+    apps, skipped, own_seen, values = [], [], None, []
     lad = ladder()
     for kind, dep in _workloads():
         meta = dep.get("metadata") or {}
@@ -342,8 +349,15 @@ def plan(chosen=None, role=None):
         app_id = _row_id(kind, ns, name)
         current, cls = tier_of(_pod_spec(dep), lad)
         suggested, why = suggestion(dep)
+        if not (kind == "app" and (ns, name) == own):
+            values.append((priority_of(_pod_spec(dep), lad)[0], app_id))
         if kind == "app" and (ns, name) == own:
+            own_seen = (cls, (meta.get("annotations") or {}).get(f"homestead.io/{MARK}") == cls and bool(cls),
+                        priority_of(_pod_spec(dep), lad)[0])
             skipped.append({"id": app_id, "why": "Homestead's own tier is critical once any app's is, so none can evict it"})
+            continue
+        if current == "unknown":
+            skipped.append({"id": app_id, "class": cls, "why": f"it names {cls}, which Homestead couldn't check just now; it is left alone"})
             continue
         if current in ("system", "missing"):
             skipped.append({"id": app_id, "class": cls, "why": (f"it names {cls}, which isn't a class here: its new pods are refused"
@@ -381,13 +395,19 @@ def plan(chosen=None, role=None):
         warnings.append(f"{', '.join(ids[:6])} name {cls_name}, which isn't a class on the cluster: their new pods are refused")
     used = {}
     for a in apps:
-        if a.get("class") and OURS.fullmatch(a["class"]) and a["class"] not in (
-                (lad["critical"] or {}).get("name"), (lad["low"] or {}).get("name")):
+        named = OURS.fullmatch(a.get("class") or "")
+        if named and a["class"] != lad["default"]["name"] and named.group(1) != tier_of({"priorityClassName": a["class"]}, lad)[0]:
             used.setdefault(a["class"], []).append(a["id"])
     for cls_name, ids in sorted(used.items()):
         value = next((r["value"] for r in lad["classes"] if r["name"] == cls_name), None)
-        warnings.append(f"{cls_name} ({value}) is no longer the class for its tier; {', '.join(ids[:6])} still use it "
+        warnings.append(f"{cls_name} ({value}) no longer ranks as its name says; {', '.join(ids[:6])} still use it "
                         "and rank by its value until their tier is set again")
+    # Homestead below an app, on a class a person gave it (protect() leaves that alone).
+    if own_seen and own_seen[0] and not own_seen[1] and own_seen[2] is not None:
+        above = sorted((v, i) for v, i in values if v is not None and v > own_seen[2] and v < SYSTEM_VALUE)
+        if above:
+            warnings.append(f"Homestead ({own_seen[0]}, {own_seen[2]}) ranks below {above[-1][1]} ({above[-1][0]}), which can "
+                            "evict it: give it a class at least as high, or remove its class so Homestead sets its own")
     return {"apps": apps, "skipped": sorted(skipped, key=lambda s: s["id"]), "max": MAX_APPS,
             "changes": len(changes), "review_token": review_token(changes), "warnings": warnings}
 
@@ -551,40 +571,55 @@ def protect():
     """Homestead at least as high as any app, and never below the default, so
     no app can evict it. It marks the class it set itself, and moves itself up
     when an app comes to rank higher; a class a person set is left alone.
-    Never while a job runs, which its restart would interrupt."""
+    Never while a job runs, which its restart would interrupt, and never on a
+    guess: when the classes can't be read, it waits for the next minute."""
     ns, name = own
     if not ns or not name:
         return None
     lad = ladder()
+    if lad.get("fallback"):
+        return None
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     meta, spec = dep.get("metadata") or {}, _pod_spec(dep)
     current = spec.get("priorityClassName") or ""
     marked = (meta.get("annotations") or {}).get(f"homestead.io/{MARK}")
-    # Its own doing before #429: homestead-critical at 1000, at or below the default.
-    adopted = current == "homestead-critical" and any(
-        r["name"] == current and r["value"] == 1000 and r["value"] <= lad["default"]["value"] for r in lad["classes"])
+    # Its own doing before #429: homestead-critical at 1000, which protect() set unmarked.
+    adopted = current == "homestead-critical" and any(r["name"] == current and r["value"] == 1000 for r in lad["classes"])
     if current and not (marked == current or adopted):
         return None
     d = lad["default"]["value"]
     tops = [priority_of(p.get("spec") or {}, lad)[0] for p in kget("/api/v1/pods").get("items", [])
             if (p.get("metadata") or {}).get("namespace") not in system_ns]
-    highest = max([t for t in tops if t is not None and t <= SYSTEM_VALUE] or [d])
+    highest = max([t for t in tops if t is not None and t < SYSTEM_VALUE] or [d])
+    now_value = priority_of(spec, lad)[0] if current else d
+
+    def busy():
+        return operations and any(i.get("status") not in operations.TERMINAL for i in operations.list_operations())
+
+    def send(cls):
+        ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+              {"metadata": {"annotations": {f"homestead.io/{MARK}": cls}},
+               "spec": {"template": {"spec": {"priorityClassName": cls, "priority": None, "preemptionPolicy": None}}}},
+              ctype="application/strategic-merge-patch+json")
     if highest <= d:
+        # Nothing ranks above the default; a class of its own below it goes.
+        if current and now_value is not None and now_value < d and not busy():
+            send(None)
+            return f"Homestead runs at the cluster default again, not {current} below it; it restarts once"
         return None
     candidates = [r for r in lad["classes"] if not r["system"] and r["preempts"] and r["value"] >= highest]
-    target = min(candidates, key=lambda r: (r["value"], r["name"]))["name"] if candidates else class_for("critical", lad)
-    now_value = priority_of(spec, lad)[0] if current else d
+    try:
+        target = min(candidates, key=lambda r: (r["value"], r["name"]))["name"] if candidates else class_for("critical", lad)
+    except ValueError:
+        return None   # no class can rank above the default; Priority tiers says so
     target_value = next((r["value"] for r in lad["classes"] if r["name"] == target), highest)
     if current == target or (now_value is not None and now_value >= target_value):
         return None
-    if operations and any(i.get("status") not in operations.TERMINAL for i in operations.list_operations()):
+    if busy():
         return None
     if not candidates:
         ensure(("critical",), lad)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-          {"metadata": {"annotations": {f"homestead.io/{MARK}": target}},
-           "spec": {"template": {"spec": {"priorityClassName": target, "priority": None, "preemptionPolicy": None}}}},
-          ctype="application/strategic-merge-patch+json")
+    send(target)
     return f"Homestead runs as {target} now, so no app can evict it; it restarts once"
 
 

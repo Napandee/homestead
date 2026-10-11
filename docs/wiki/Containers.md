@@ -737,7 +737,8 @@ A tier is read from the number a class gives a pod, against the cluster's
 default class (or 0 without one): above it is critical, equal normal, below
 low. So a cluster's own classes - set by hand, by Flux or by a chart - show
 as the tier they really are. Homestead uses those classes where they fit:
-critical is the highest class above the default, low the highest below it.
+critical is the highest class above the default, low the highest below it
+(preferring one that never preempts).
 Only when none fits does it make `homestead-critical` or `homestead-low`,
 just above or below the default (with the value in the name, such as
 `homestead-critical-11000`, when the plain name is taken by an older class),

@@ -233,6 +233,7 @@ function priorityFixed(w) {
   if (w.priority_owner) return `Set priorityClassName where ${w.priority_owner} applies it.`;
   if (w.priority === "system") return "Kubernetes' own class; it is left as it is.";
   if (w.priority === "missing") return "This class isn't on the cluster: the app's new pods are refused until it is.";
+  if (w.priority === "unknown") return "Homestead couldn't read the cluster's classes just now; it is left as it is.";
   return "";
 }
 

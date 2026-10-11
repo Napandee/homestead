@@ -552,7 +552,7 @@ def _apply_priority(spec, tier):
         raise ValueError("the priority tier must be critical, normal or low")
     lad = PRIORITY.ladder()
     current, _ = PRIORITY.tier_of(spec, lad)
-    if current in ("system", "missing") or current == tier:
+    if current in ("system", "missing", "unknown") or current == tier:
         return
     cls = PRIORITY.class_for(tier, lad)
     if cls is None:
