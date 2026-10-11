@@ -185,6 +185,15 @@ def edit(request):
     # Homestead's manifest sets its own priority on every upgrade.
     if is_self(b.get("ns", ""), b.get("name", "")):
         b.pop("priority", None)
+    # An app Flux or Argo CD applies keeps its tier where it is applied
+    # (#429): a change here would be put back at their next sync.
+    if "priority" in b:
+        dep_now = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
+        owner = UPDATES.managed_by(dep_now)
+        if owner:
+            if PRIORITY.tier_of(((dep_now.get("spec") or {}).get("template") or {}).get("spec") or {})[0] != b["priority"]:
+                raise ValueError(f"{b['name']}'s tier is set where {owner['by']} applies it; set priorityClassName there")
+            b.pop("priority", None)
     prepared, context, plan = edit_capacity_plan(b)
     CAPACITY_REVIEW.enforce(b, plan, context)
     # The class is made only when an app first moves into its tier:
@@ -744,6 +753,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "failover": FAILOVER.mode_of(pspec),
         # Homestead's own follows the apps': critical once any is (PRIORITY.protect).
         "priority": "self" if is_self(ns, name) else PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
+        # Flux or Argo CD when they apply it: Edit then shows its tier read-only (#429).
+        "priority_owner": "" if is_self(ns, name) else (UPDATES.managed_by(deployment) or {}).get("by", ""),
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),

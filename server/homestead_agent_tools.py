@@ -264,7 +264,7 @@ def _appstore(args, ctx):
 # --- changes
 def _clean(settings):
     """Settings as an agent sends them back: get_container_settings says
-    "self" or "other" for a priority class it does not set, which a save
+    "self", "system" or "missing" for a class it does not set, which a save
     takes as a tier to set - so such a priority is left out."""
     settings = dict(settings or {})
     if settings.get("priority") not in (None, "critical", "normal", "low"):

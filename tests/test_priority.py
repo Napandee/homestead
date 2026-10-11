@@ -340,6 +340,17 @@ if __name__ == "__main__":
 P = priority
 
 
+def keep_bindings(case):
+    """A test that binds a fake cluster into homestead_priority puts the real
+    bindings back after it, and forgets the ladder it read: other modules'
+    tests read tiers through the same module."""
+    saved = (P.kget, P.ksend, P.managed_by, P.own, P.system_ns)
+    def restore():
+        P.kget, P.ksend, P.managed_by, P.own, P.system_ns = saved
+        P._LADDER.update(at=0, value=None)
+    case.addCleanup(restore)
+
+
 def pc(name, value, default=False, never=False):
     c = {"metadata": {"name": name}, "value": value}
     if default:
@@ -448,6 +459,7 @@ class TierOfTests(unittest.TestCase):
 
 class LadderWriteTests(unittest.TestCase):
     def setUp(self):
+        keep_bindings(self)
         # The ladder is cached for a few seconds; no test may leave its cluster behind.
         self.addCleanup(lambda: P._LADDER.update(at=0, value=None))
         self.posted, self.patched = [], []
@@ -515,6 +527,7 @@ class LadderWriteTests(unittest.TestCase):
 
 class ProtectTests(unittest.TestCase):
     def setUp(self):
+        keep_bindings(self)
         self.addCleanup(lambda: P._LADDER.update(at=0, value=None))
         self.items, self.patched, self.posted = list(X), [], []
         self.own = {"metadata": {"namespace": "lab", "name": "homestead", "annotations": {}},
@@ -583,3 +596,35 @@ class ProtectTests(unittest.TestCase):
     def test_system_namespace_pods_do_not_count(self):
         self.app(100000, ns="kube-system")
         self.assertIsNone(P.protect())
+
+
+class OwnershipTests(unittest.TestCase):
+    """#429: apps Homestead doesn't own keep their tier where they're applied."""
+    def edit(self, body, owner):
+        dep = deployment("paperless")
+        with mock.patch.object(server.WORKLOADS, "kget", return_value=dep), \
+                mock.patch.object(server.WORKLOADS, "guard_managed_smb"), \
+                mock.patch.object(server.WORKLOADS, "guard_self"), \
+                mock.patch.object(server.WORKLOADS.UPDATES, "managed_by", return_value=owner), \
+                mock.patch.object(server.WORKLOADS, "edit_capacity_plan", return_value=({"deployment": dep}, {}, {})), \
+                mock.patch.object(server.WORKLOADS.CAPACITY_REVIEW, "enforce"), \
+                mock.patch.object(server.WORKLOADS.RESTRUCTURE, "copies", return_value=[]), \
+                mock.patch.object(server.WORKLOADS, "apply_reviewed_edit", return_value={"ok": True, "detail": "Saved"}), \
+                mock.patch.object(server.WORKLOADS.PRIORITY, "ensure", return_value=[]):
+            return server.WORKLOADS.edit(mock.Mock(body={"ns": "lab", "name": "paperless", **body}))
+
+    def test_edit_refuses_a_tier_change_on_an_app_flux_applies(self):
+        flux = {"by": "Flux", "source": "Kustomization flux-system/apps", "detected": True}
+        with self.assertRaisesRegex(ValueError, "Flux"):
+            self.edit({"priority": "critical"}, flux)
+        self.assertTrue(self.edit({"priority": "normal"}, flux)["ok"], "an unchanged tier is accepted")
+
+    def test_edit_still_sets_a_tier_on_an_app_homestead_owns(self):
+        self.assertTrue(self.edit({"priority": "critical"}, {})["ok"])
+
+    def test_the_edit_payload_names_who_owns_the_tier(self):
+        dep = deployment("paperless")
+        dep["metadata"].setdefault("labels", {})["kustomize.toolkit.fluxcd.io/name"] = "apps"
+        with mock.patch.object(server.LC, "seed_configs", return_value=[]):
+            payload = server.WORKLOADS.workload_edit_payload("lab", "paperless", dep, hardware_definitions=[], services=[])
+        self.assertEqual("Flux", payload["priority_owner"])
