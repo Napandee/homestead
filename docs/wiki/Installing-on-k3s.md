@@ -230,10 +230,12 @@ placement/taints and Longhorn node/disk scheduling explicitly. K3s servers can
 run workloads by default; neither a server role nor a small machine's size
 automatically excludes it. System DaemonSets may still run there. Advanced users
 can configure a [dedicated etcd server](https://docs.k3s.io/installation/server-roles)
-using K3s's role controls; Homestead's standard join flow creates a regular server.
-
-Mark it as a **tiebreaker** before k3s first starts, in
-`/etc/rancher/k3s/config.yaml`:
+using K3s's role controls. Homestead's join guide (**Cluster → Add a host**)
+offers it as **Tiebreaker (votes only)**: its command joins a regular server
+with the taint and label below and the other servers' cluster-wide settings -
+read from a server's `k3s.io/node-args`, never its token - and the installer
+does the same with `HS_ROLE=tiebreaker`. To set one up by hand instead, mark
+it before k3s first starts, in `/etc/rancher/k3s/config.yaml`:
 
 ```yaml
 node-taint: ["node-role/tiebreaker=true:NoSchedule"]
