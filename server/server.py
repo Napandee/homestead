@@ -4421,7 +4421,8 @@ class H(HTTP.LimitedHandler):
         if route is None:
             return False
         answer = route.handler(MODULE_ROUTES.Request(method, path, query, body,
-                                                     getattr(self, "user", None), getattr(self, "role", None), self._client_ip()))
+                                                     getattr(self, "user", None), getattr(self, "role", None),
+                                                     self._client_ip() if getattr(self, "client_address", None) else ""))
         if isinstance(answer, MODULE_ROUTES.Stream):
             return self._send_stream(answer) or True
         if isinstance(answer, MODULE_ROUTES.Raw):
