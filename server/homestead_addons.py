@@ -27,6 +27,7 @@ import homestead_names as NAMES
 import homestead_routes
 import homestead_multus as MULTUS
 import homestead_pod_resources as RESOURCES
+import homestead_roles as ROLES
 
 kget = ksend = None
 platform = None          # what the cluster has, from homestead_platform
@@ -422,7 +423,12 @@ def vip_interface():
     announces VIPs; empty when the probes do not agree or have not said,
     and kube-vip then finds it itself."""
     try:
-        found = {data.get("default_interface") for data in (probes() or {}).values()}
+        # A tiebreaker never runs kube-vip, so its interface has no say.
+        try:
+            skip = ROLES.tiebreakers((kget("/api/v1/nodes") or {}).get("items") or [])
+        except Exception:
+            skip = set()
+        found = {data.get("default_interface") for name, data in (probes() or {}).items() if name not in skip}
     except Exception:
         return ""
     found.discard(None)

@@ -186,6 +186,33 @@ class NodeParityTests(unittest.TestCase):
         import homestead_roles as ROLES
         self.assertIn(f"key: {ROLES.KEY}\n", PARITY.addons.KUBE_VIP_AFFINITY)
 
+    def test_a_tiebreaker_on_another_interface_does_not_stop_the_pin(self):
+        probes = {"a": {"default_interface": "enp3s0"}, "b": {"default_interface": "enp3s0"},
+                  "pi": {"default_interface": "eth0"}}
+        cluster = self.vip_cluster(PARITY.addons.kube_vip_values("", False), nodes=("a", "b", "pi"), probes=probes)
+        pi = next(n for n in cluster.objects["/api/v1/nodes"]["items"] if n["metadata"]["name"] == "pi")
+        pi["metadata"]["labels"] = {"node-role/tiebreaker": "true"}
+        PARITY.kube_vip_settings()
+        sent = next(body for _, path, body in cluster.sent if path == f"{HELM}/kube-vip")
+        self.assertIn('vip_interface: "enp3s0"', sent["spec"]["valuesContent"])
+
+    def test_a_tiebreakers_interface_does_not_unpin_the_others(self):
+        probes = {"a": {"default_interface": "enp3s0"}, "pi": {"default_interface": "eth0"}}
+        cluster = self.vip_cluster(PARITY.addons.kube_vip_values("enp3s0", False), nodes=("a", "pi"), probes=probes)
+        pi = next(n for n in cluster.objects["/api/v1/nodes"]["items"] if n["metadata"]["name"] == "pi")
+        pi["metadata"]["labels"] = {"node-role/tiebreaker": "true"}
+        self.assertEqual("", PARITY.kube_vip())
+        self.assertEqual([], cluster.sent)
+
+    def test_a_new_kube_vip_install_is_pinned_without_asking_the_tiebreaker(self):
+        nodes = {"items": [node("a"), node("pi")]}
+        nodes["items"][1]["metadata"]["labels"] = {"node-role/tiebreaker": "true"}
+        probes = {"a": {"default_interface": "enp3s0"}, "pi": {"default_interface": "eth0"}}
+        saved = (PARITY.addons.kget, PARITY.addons.probes)
+        self.addCleanup(lambda: setattr(PARITY.addons, "kget", saved[0]) or setattr(PARITY.addons, "probes", saved[1]))
+        PARITY.addons.kget, PARITY.addons.probes = (lambda path: nodes), (lambda: probes)
+        self.assertEqual("enp3s0", PARITY.addons.vip_interface())
+
     def test_kube_vip_values_someone_else_wrote_are_left_alone(self):
         cluster = self.kube_vip_cluster('env:\n  svc_election: "true"\nextraArgs:\n  - --foo\n')
         self.bind(cluster, longhorn=False)
