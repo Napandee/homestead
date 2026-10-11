@@ -250,9 +250,11 @@ automatically excludes it. System DaemonSets may still run there. Advanced users
 can configure a [dedicated etcd server](https://docs.k3s.io/installation/server-roles)
 using K3s's role controls. Homestead's join guide (**Cluster → Add a host**)
 offers it as **Tiebreaker (votes only)**: its command joins a regular server
-with the taint and label below and the other servers' cluster-wide settings -
-read from a server's `k3s.io/node-args`, never its token - and the installer
-does the same with `HS_ROLE=tiebreaker`. To set one up by hand instead, mark
+with the taint and label below and, on k3s, the other servers' cluster-wide
+settings - read from a server's `k3s.io/node-args`, never its token. The
+installer joins one with `HS_ROLE=tiebreaker`, setting the taint and label (on
+RKE2 the guide sends you there); it does not copy settings, which matter only
+where the first server was set up with ones of its own. To set one up by hand instead, mark
 it before k3s first starts, in `/etc/rancher/k3s/config.yaml`:
 
 ```yaml
@@ -267,6 +269,11 @@ goes down" never offers it as a home for an app or a VM. If you added an
 `affinity` of your own to kube-vip's values to keep it off the small server,
 remove it: Homestead leaves values it did not write alone, and its own values
 already keep kube-vip off a tiebreaker.
+
+**Cluster** lists the etcd members with a **tiebreaker** badge on such a host.
+With two members - no failure margin - Cluster and the setup guide offer **Add a
+tiebreaker** on k3s and RKE2, which opens the join guide with that role chosen;
+the health check says a tiebreaker would fix it.
 
 The small server supplies **control-plane quorum**, not a third storage copy.
 With only two storage hosts, choose two replicas on different hosts rather than
