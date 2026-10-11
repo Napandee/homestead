@@ -110,6 +110,26 @@ class SetupTests(unittest.TestCase):
 
 
 
+class ReplicaTests(unittest.TestCase):
+    """Two copies of Homestead share the guide's file but not their caches."""
+
+    def test_a_skip_through_one_copy_shows_through_every_other(self):
+        import os
+        import homestead_routes as ROUTES
+        folder = tempfile.mkdtemp()
+        SETUP.bind(folder)
+        keys = []
+        route = ROUTES.find("GET", "/api/setup")
+        request = ROUTES.Request("GET", "/api/setup", {}, None, "ada", "admin")
+        with mock.patch.object(ROUTES, "cached", side_effect=lambda key, seconds, fn: keys.append(key) or {}):
+            route.handler(request)
+            SETUP.skip("hostname", True, "ada", admin=True)
+            os.utime(SETUP._path(), ns=(1, SETUP.stamp() + 1_000_000))   # a later write, as another copy's would be
+            route.handler(request)
+        self.assertNotEqual(keys[0], keys[1], "the view cached before the skip is not the one answered after it")
+        self.assertIn("hostname", SETUP.skips("ada"))
+
+
 class UniFiSetupStateTests(unittest.TestCase):
     def setUp(self):
         import server
