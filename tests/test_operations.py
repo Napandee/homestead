@@ -26,6 +26,10 @@ class OperationTests(unittest.TestCase):
             return self.objects[(namespace, name)]
 
         operations.bind(get, self.tmp.name, progress)
+        # Importing server.py (another test may) wraps this resolver with one
+        # that reads through server's own Kubernetes client.
+        self.enterContext(mock.patch.dict(operations.RESOLVERS,
+                                          {"volume-restore": operations._volume_restore}))
 
     def tearDown(self):
         self.tmp.cleanup()
