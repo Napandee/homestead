@@ -269,7 +269,7 @@ class PriorityTests(unittest.TestCase):
             self.running = [{"kind": "deployment", "status": "running"}]
             self.assertIsNone(priority.protect(), "a job runs, which its restart would interrupt")
             self.running = []
-            self.assertIn("no critical app can evict it", priority.protect())
+            self.assertIn("no app can evict it", priority.protect())
         patch = [s for s in self.sent if s[0] == "PATCH"][0]
         self.assertEqual("/apis/apps/v1/namespaces/homestead/deployments/homestead", patch[1])
         self.assertEqual("homestead-critical", patch[2]["spec"]["template"]["spec"]["priorityClassName"])
@@ -511,3 +511,75 @@ class LadderWriteTests(unittest.TestCase):
             out = P.plan()
         self.assertTrue(any("gone" in w for w in out["warnings"]))
         self.assertIn("lab/ha", [s["id"] for s in out["skipped"]])
+
+
+class ProtectTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(lambda: P._LADDER.update(at=0, value=None))
+        self.items, self.patched, self.posted = list(X), [], []
+        self.own = {"metadata": {"namespace": "lab", "name": "homestead", "annotations": {}},
+                    "spec": {"template": {"spec": {"containers": []}}}}
+        self.pods = []
+        def kget(path):
+            if path == "/apis/scheduling.k8s.io/v1/priorityclasses":
+                return {"items": self.items}
+            if path == "/apis/apps/v1/namespaces/lab/deployments/homestead":
+                return self.own
+            if path == "/api/v1/pods":
+                return {"items": self.pods}
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        def ksend(method, path, body=None, ctype=None):
+            (self.posted if method == "POST" else self.patched).append(body)
+            return {}
+        P.bind(kget, ksend, lambda dep: {}, ("lab", "homestead"), {"kube-system"})
+        P._LADDER.update(at=0, value=None)
+
+    def app(self, priority, ns="lab"):
+        self.pods.append({"metadata": {"namespace": ns}, "spec": {"priority": priority}})
+
+    def test_protect_does_nothing_until_an_app_ranks_above_normal(self):
+        self.app(10000)
+        self.assertIsNone(P.protect())
+        self.assertEqual([], self.patched)
+
+    def test_protect_joins_the_critical_class_and_marks_it(self):
+        self.app(100000)
+        P.protect()
+        spec = self.patched[0]["spec"]["template"]["spec"]
+        self.assertEqual("x-critical", spec["priorityClassName"])
+        self.assertEqual("x-critical", self.patched[0]["metadata"]["annotations"]["homestead.io/priority-protect"])
+
+    def test_protect_ranks_above_any_app_class(self):
+        self.items = X + [pc("x-infra", 500000)]
+        self.app(500000)
+        P.protect()
+        self.assertEqual("x-infra", self.patched[0]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_a_marked_class_below_the_target_moves_up(self):
+        self.own["spec"]["template"]["spec"]["priorityClassName"] = "x-low"
+        self.own["metadata"]["annotations"]["homestead.io/priority-protect"] = "x-low"
+        self.app(100000)
+        P.protect()
+        self.assertEqual("x-critical", self.patched[0]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_a_class_someone_set_is_left_alone(self):
+        self.own["spec"]["template"]["spec"]["priorityClassName"] = "x-low"
+        self.app(100000)
+        self.assertIsNone(P.protect())
+
+    def test_the_old_homestead_critical_at_1000_below_the_default_is_adopted(self):
+        self.items = X + [pc("homestead-critical", 1000)]
+        self.own["spec"]["template"]["spec"]["priorityClassName"] = "homestead-critical"
+        self.app(100000)
+        P.protect()
+        self.assertEqual("x-critical", self.patched[0]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_it_waits_for_jobs(self):
+        self.app(100000)
+        ops = mock.Mock(TERMINAL={"succeeded"}, list_operations=lambda: [{"status": "running"}])
+        with mock.patch.object(P, "operations", ops):
+            self.assertIsNone(P.protect())
+
+    def test_system_namespace_pods_do_not_count(self):
+        self.app(100000, ns="kube-system")
+        self.assertIsNone(P.protect())

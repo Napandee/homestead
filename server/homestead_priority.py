@@ -544,27 +544,48 @@ def start(body, role=None):
 
 
 # ------------------------------------------------- Homestead's own tier
+MARK = "priority-protect"   # homestead.io/priority-protect: the class protect() set itself
+
+
 def protect():
-    """Homestead in homestead-critical once anything runs there, so no
-    critical app can evict it - pods of one priority never evict each other.
-    Not while a job runs, which its restart would interrupt; never over a
-    class someone gave it. Returns a line for the log, or None."""
+    """Homestead at least as high as any app, and never below the default, so
+    no app can evict it. It marks the class it set itself, and moves itself up
+    when an app comes to rank higher; a class a person set is left alone.
+    Never while a job runs, which its restart would interrupt."""
     ns, name = own
     if not ns or not name:
         return None
+    lad = ladder()
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    critical = TIERS["critical"]["name"]
-    if _pod_spec(dep).get("priorityClassName"):
+    meta, spec = dep.get("metadata") or {}, _pod_spec(dep)
+    current = spec.get("priorityClassName") or ""
+    marked = (meta.get("annotations") or {}).get(f"homestead.io/{MARK}")
+    # Its own doing before #429: homestead-critical at 1000, at or below the default.
+    adopted = current == "homestead-critical" and any(
+        r["name"] == current and r["value"] == 1000 and r["value"] <= lad["default"]["value"] for r in lad["classes"])
+    if current and not (marked == current or adopted):
         return None
-    if not any((p.get("spec") or {}).get("priorityClassName") == critical
-               for p in kget("/api/v1/pods").get("items", [])):
+    d = lad["default"]["value"]
+    tops = [priority_of(p.get("spec") or {}, lad)[0] for p in kget("/api/v1/pods").get("items", [])
+            if (p.get("metadata") or {}).get("namespace") not in system_ns]
+    highest = max([t for t in tops if t is not None and t <= SYSTEM_VALUE] or [d])
+    if highest <= d:
+        return None
+    candidates = [r for r in lad["classes"] if not r["system"] and r["preempts"] and r["value"] >= highest]
+    target = min(candidates, key=lambda r: (r["value"], r["name"]))["name"] if candidates else class_for("critical", lad)
+    now_value = priority_of(spec, lad)[0] if current else d
+    target_value = next((r["value"] for r in lad["classes"] if r["name"] == target), highest)
+    if current == target or (now_value is not None and now_value >= target_value):
         return None
     if operations and any(i.get("status") not in operations.TERMINAL for i in operations.list_operations()):
         return None
+    if not candidates:
+        ensure(("critical",), lad)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-          {"spec": {"template": {"spec": {"priorityClassName": critical, "priority": None, "preemptionPolicy": None}}}},
+          {"metadata": {"annotations": {f"homestead.io/{MARK}": target}},
+           "spec": {"template": {"spec": {"priorityClassName": target, "priority": None, "preemptionPolicy": None}}}},
           ctype="application/strategic-merge-patch+json")
-    return f"Homestead runs as {critical} now, so no critical app can evict it; it restarts once"
+    return f"Homestead runs as {target} now, so no app can evict it; it restarts once"
 
 
 def run(sleep=time.sleep):
