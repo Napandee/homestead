@@ -295,6 +295,33 @@ def node_duties(pods):
     return duties
 
 
+def workload_names(npods, sys_ns):
+    """The apps on a host, by name, and as namespace/name - the second for
+    moving one from its host page without guessing its namespace (#366)."""
+    names, ids = set(), set()
+    for p in npods:
+        meta = p["metadata"]
+        app = meta.get("labels", {}).get("app") or meta["name"].rsplit("-", 2)[0]
+        if meta["namespace"] in sys_ns or NAMES.label_of(meta, "task") or \
+                (meta.get("labels", {}).get("app") or "") in (NAMES.NODEPROBE, "image-prepull"):
+            continue
+        names.add(app)
+        ids.add(f"{meta['namespace']}/{_owner_name(meta) or app}")
+    return sorted(names), sorted(ids)
+
+
+def _owner_name(meta):
+    """The controller a pod belongs to, by name: a ReplicaSet's Deployment
+    (its name less the template hash), or a StatefulSet, DaemonSet or Job."""
+    owner = next((o for o in meta.get("ownerReferences") or [] if o.get("controller")), None)
+    if not owner:
+        return ""
+    name, hash_ = owner.get("name") or "", (meta.get("labels") or {}).get("pod-template-hash")
+    if owner.get("kind") == "ReplicaSet" and hash_ and name.endswith("-" + hash_):
+        return name[:-len(hash_) - 1]
+    return name
+
+
 def get_nodes():
     nodes = kget("/api/v1/nodes")
     try:
@@ -335,11 +362,7 @@ def get_nodes():
         ccpu = float(cap.get("cpu", 1))
         cmem = parse_mem(cap.get("memory"))
         npods = [p for p in pods.get("items", []) if p.get("spec", {}).get("nodeName") == name]
-        wl = sorted({p["metadata"].get("labels", {}).get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
-                     for p in npods if p["metadata"]["namespace"] not in SYS_NS
-                     and not NAMES.label_of(p["metadata"], "task")
-                     and (p["metadata"].get("labels", {}).get("app") or "") not in
-                         (NAMES.NODEPROBE, "image-prepull")})
+        wl, wl_ids = workload_names(npods, SYS_NS)
         probed = (temps.get(name) or {}).get("devices") or {}
         annotations = n["metadata"].get("annotations", {}) or {}
         try:
@@ -374,6 +397,7 @@ def get_nodes():
             "hardware": hardware,
             "hardware_inventory": hardware_inventory,
             "workloads": wl,
+            "workload_ids": wl_ids,
             "kernel": n["status"].get("nodeInfo", {}).get("kernelVersion", ""),
             "os": n["status"].get("nodeInfo", {}).get("osImage", ""),
             "schedulable": not n.get("spec", {}).get("unschedulable", False),

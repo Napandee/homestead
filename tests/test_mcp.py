@@ -407,7 +407,8 @@ class CatalogueTests(unittest.TestCase):
         "/api/setup/complete": "the setup guide is a person's", "/api/setup/hide": "the setup guide is a person's",
         "/api/setup/skip": "the setup guide is a person's", "/api/compose/parse": "preview_compose reads the file",
         "/api/logo-fit/keep": "the browser resizes logos", "/api/logo-fit/resized": "the browser resizes logos",
-        "/api/hardware/rescan": "hosts are read-only to agents", "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
+        "/api/hardware/rescan": "hosts are read-only to agents",
+        "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):
@@ -426,6 +427,13 @@ class CatalogueTests(unittest.TestCase):
                 self.assertNotEqual("admin", tool.role, tool.name)
         self.assertTrue({"delete_container", "delete_vm", "delete_volume", "delete_snapshot", "revert_to_snapshot",
                          "restore_backup", "delete_backup", "change_storage_class"} <= destructive)
+
+    def test_balance_tools_take_chosen_moves(self):
+        """#366: an agent reviews and starts moves it chose, as a person does."""
+        preview = next(t for t in TOOLS.TOOLS if t.name == "preview_container_rebalance")
+        self.assertIn("picks", preview.schema["properties"])
+        start = next(t for t in TOOLS.TOOLS if t.name == "rebalance_containers")
+        self.assertIn("picks", start.description)
 
     def test_the_wiki_lists_every_tool(self):
         page = (ROOT / "docs" / "wiki" / "AI-agents.md").read_text(encoding="utf-8")

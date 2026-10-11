@@ -108,14 +108,14 @@
     { name: "harvester-node1", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
       cpu_pct: 22.4, cpu_used: 1.79, cpu_cap: 8, mem_pct: 61.7, mem_used_gb: 9.6, mem_cap_gb: 15.6,
       fs_pct: 48.3, fs_used_gb: 168, fs_cap_gb: 348, rx_mbps: 8.4, tx_mbps: 3.1,
-      pods: 54, pods_sys: 46, pods_wl: 8, vms: 1, workloads: ["home-assistant", "mosquitto", "homestead-smb"],
+      pods: 54, pods_sys: 46, pods_wl: 8, vms: 1, workloads: ["home-assistant", "mosquitto", "homestead-smb"], workload_ids: ["lab/home-assistant", "lab/mosquitto", "lab/homestead-smb"],
       hardware: { igpu: true }, temps: { cpu_c: 39, max_c: 51, max_source: "NVMe nvme0", cpu_model: "Intel(R) Core(TM) i5-12500T", sensors: 4, smart_helper: { available: true },
         disks: [withHealth({ name: "nvme0n1", model: "Samsung SSD 970 EVO Plus", serial: "DEMO-NVME-01", kind: "NVMe", size_gb: 465.8,
           read_mbps: 18.42, write_mbps: 6.17, smart: smartDisk("nvme0n1", "Samsung SSD 970 EVO Plus", "DEMO-NVME-01", 41, 8421) })] } },
     { name: "harvester-node2", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
       cpu_pct: 41.8, cpu_used: 3.34, cpu_cap: 8, mem_pct: 54.1, mem_used_gb: 8.4, mem_cap_gb: 15.6,
       fs_pct: 28.4, fs_used_gb: 66, fs_cap_gb: 232, rx_mbps: 21.9, tx_mbps: 12.6,
-      pods: 47, pods_sys: 42, pods_wl: 5, vms: 0, workloads: ["frigate", "homestead"],
+      pods: 47, pods_sys: 42, pods_wl: 5, vms: 0, workloads: ["frigate", "homestead"], workload_ids: ["lab/frigate", "lab/homestead"],
       hardware: { igpu: true, coral_usb: true }, temps: { cpu_c: 34, max_c: 47, max_source: "CPU package", cpu_model: "Intel(R) N100", sensors: 5, smart_helper: { available: true },
         disks: [withHealth({ name: "sda", model: "WDC WD100EFAX", serial: "DEMO-SATA-02", kind: "HDD", size_gb: 931.5,
           read_mbps: 3.26, write_mbps: 12.91,
@@ -124,7 +124,7 @@
     { name: "harvester-node3", status: "Ready", roles: ["worker"], schedulable: true,
       cpu_pct: 16.3, cpu_used: 0.65, cpu_cap: 4, mem_pct: 46.2, mem_used_gb: 7.2, mem_cap_gb: 15.6,
       fs_pct: 41.4, fs_used_gb: 144, fs_cap_gb: 348, rx_mbps: 5.8, tx_mbps: 2.4,
-      pods: 31, pods_sys: 28, pods_wl: 3, vms: 0, workloads: ["paperless"],
+      pods: 31, pods_sys: 28, pods_wl: 3, vms: 0, workloads: ["paperless"], workload_ids: ["lab/paperless"],
       hardware: {}, temps: { cpu_c: 36, max_c: 45, max_source: "Motherboard", cpu_model: "AMD Ryzen 5 5600G with Radeon Graphics", sensors: 3, smart_helper: { available: true },
         disks: [withHealth({ name: "nvme0n1", model: "Kingston NV2", serial: "DEMO-NVME-03", kind: "NVMe", size_gb: 465.8,
           read_mbps: 0.74, write_mbps: 1.15, smart: smartDisk("nvme0n1", "Kingston NV2", "DEMO-NVME-03", 38, 3912) })] } },
@@ -2004,6 +2004,15 @@ ssh_pwauth: true
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/workloads/rebalance/review": (url, init) => {
+      const picks = JSON.parse(init?.body || "{}").picks || [];
+      const rows = picks.map((p, i) => ({ id: p.id, from: "harvester-node1", to: p.to, cpu_m: 250, mem_mb: 512, reserves: true,
+        why: p.to === "harvester-node1" ? "it already runs on harvester-node1" : i >= 10 ? "at most 10 at a time" : "" }));
+      const moves = rows.filter(r => !r.why).map(r => ({ id: r.id, from: r.from, to: r.to }));
+      return { rows, moves, blocked: !moves.length, review_token: moves.length ? "demo-moves" : "",
+        hosts: [...new Set(moves.map(m => m.to))].map(name => ({ name, eligible: true, metrics_available: true, used_gb: 9, capacity_gb: 32,
+          projected_gb: 9 + moves.filter(m => m.to === name).length * 0.5, projected_percent: 30, over: false })) };
+    },
     "/api/workloads/rebalance/plan": url => {
       const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
       const all = [{ ns: "lab", name: "frigate", id: "lab/frigate", from: "harvester-node2", to: "harvester-node1", cpu_m: 1400, mem_gb: 1.8, near: true },

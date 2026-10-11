@@ -229,6 +229,8 @@ const DIALOGS = [
   ["balance-containers", "nodes", "balanceHosts('containers')"],
   ["balance-volumes", "nodes", "balanceHosts('volumes')"],
   ["balance-review", "nodes", "balanceHosts('review')"],
+  ["move-several", "workloads", "moveSeveral()"],
+  ["move-several-review", "workloads", "moveSeveral(['lab/frigate','lab/home-assistant'],'harvester-node3')"],
   ["node-single-host-reboot", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','reboot')"],
   ["node-single-host-shutdown", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','poweroff')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
