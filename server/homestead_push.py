@@ -41,8 +41,9 @@ CATEGORIES = {
     "jobs": "Failed jobs: background operations that need review",
     "joins": "Hosts joining: registration and readiness",
     "updates": "Updates: container images, host updates and platform upgrade results",
+    "agents": "AI agents: requests waiting for someone to approve them",
 }
-DEFAULT_CATEGORIES = ["outage", "degraded", "jobs", "joins"]
+DEFAULT_CATEGORIES = ["outage", "degraded", "jobs", "joins", "agents"]
 
 
 def bind(data_dir, contact=""):

@@ -57,6 +57,8 @@ DEFAULTS = {
     "placement": {"rebalance": "off", "mode": "", "standby_nodes": []},
     # Monthly restore tests of every app with backups (homestead_restore_test).
     "restore_tests": {"enabled": False},
+    # The MCP server for AI agents (homestead_mcp): off until an admin turns it on.
+    "mcp": {"enabled": False},
 }
 
 
@@ -132,6 +134,10 @@ def validate(value):
     if not isinstance(tests, bool):
         raise ValueError("restore tests must be on or off")
     out["restore_tests"] = {"enabled": tests}
+    mcp = ((value or {}).get("mcp") or {}).get("enabled", False)
+    if not isinstance(mcp, bool):
+        raise ValueError("the MCP server must be on or off")
+    out["mcp"] = {"enabled": mcp}
     site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")

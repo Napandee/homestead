@@ -54,6 +54,7 @@ const PAGES = [
   ["data-protection-filtered", "protect", "protectFilter({show:'never'},true)"],
   ["cluster", "cluster"],
   ["resources", "resources"],
+  ["agents", "agents"],
   ["networking", "network", "networkTab('overview')"],
   ["network-services", "network", "networkTab('services')"],
   ["network-vips", "network", "networkTab('vips')"],

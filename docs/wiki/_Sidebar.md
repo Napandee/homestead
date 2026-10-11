@@ -25,6 +25,7 @@
 - [Settings](Settings)
 - [How hosts share the work](Settings#how-hosts-share-the-work)
 - [API](API)
+- [AI agents](AI-agents)
 
 **Help**
 - [Troubleshooting](Troubleshooting)

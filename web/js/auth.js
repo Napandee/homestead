@@ -496,7 +496,7 @@ window.apiKeysPaint = async () => {
   STATE.data.apiKeys = found;
   // A list of like things: a stacked table, its buttons an actionBar.
   const rows = found.keys.map(k => `<tr>
-      <td><b>${esc(k.name)}</b> ${k.expired ? '<span class="tag bad">expired</span>' : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
+      <td><b>${esc(k.name)}</b> ${k.expired ? '<span class="tag bad">expired</span>' : ""}${k.mcp ? ' <span class="tag">MCP</span>' : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
       <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}</div>` : ""}` : '<span class="dim">never</span>'}</td>
@@ -516,6 +516,8 @@ window.apiKeyNew = () => {
     + `<div class="sec">What it may do</div>`
     + Object.entries(scopes).map(([scope, text]) => settingRow(`<span class="mono">${esc(scope)}</span>`, esc(text),
       `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${scope === "read" ? "checked" : ""}><span></span></label>`)).join("")
+    + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. Off, it works only on the API.",
+      '<label class="toggle"><input type="checkbox" id="ak_mcp"><span></span></label>')
     + UI.fields(UI.field("Expires after", `<select id="ak_ttl">${API_TTLS.map(([label, s]) => `<option value="${s}" ${s === 90 * 86400 ? "selected" : ""}>${label}</option>`).join("")}</select>`),
       UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: "Addresses or networks it may be used from; anywhere if empty. Homestead sees the address a request arrives from - behind the cluster's load balancer that can be a node's - so check \"used from\" on the card first." }))
     + UI.actions(UI.cancel() + UI.button("Make key", "apiKeyMake(this)", { kind: "pri" })));
@@ -523,7 +525,7 @@ window.apiKeyNew = () => {
 
 window.apiKeyMake = async button => {
   const body = { name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
-    ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
+    mcp: $("#ak_mcp").checked, ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
   if (!body.name) return toast("give the key a name", "bad");
   if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
   button.disabled = true;

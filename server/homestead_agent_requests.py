@@ -1,0 +1,207 @@
+"""Agent requests: what an AI agent asked for that a person has to approve (#417).
+
+A destructive tool (homestead_agent_tools) - a delete, a revert, a restore,
+a storage move - or a change only an admin may make never runs on an
+agent's say-so. It is planned, and the plan is filed here as a request: the
+bell shows it and a push notification announces it (category "agents"),
+and it opens on the Agents page with what the plan says will happen.
+
+Anyone whose role allows the action may approve it or deny it - an admin
+for what only admins may do in the app. Approving plans it again, as that
+person, and runs it only when the new plan is the one that was reviewed
+(digest): a volume replaced since, a snapshot gone, a capacity that no
+longer fits, and it fails instead, saying so; the agent can ask again.
+
+A request waits TTL at most, and a key may have MAX_PENDING waiting. They
+are kept on the data volume, so every Homestead replica sees the same list,
+and are dropped KEEP after they end.
+"""
+import json
+import os
+import secrets
+import threading
+import time
+
+import homestead_agent_audit as AUDIT
+import homestead_agent_tools as TOOLS
+import homestead_auth as AUTH
+import homestead_shared as SHARED
+
+DATA_DIR = "/data"
+FILE = "agent-requests.json"
+TTL = 30 * 60
+MAX_PENDING = 10
+KEEP = 7 * 86400
+_lock = threading.Lock()
+
+
+def bind(data_dir):
+    global DATA_DIR
+    DATA_DIR = data_dir
+
+
+def _path():
+    return os.path.join(DATA_DIR, FILE)
+
+
+def _load():
+    try:
+        with open(_path(), encoding="utf-8") as handle:
+            found = json.load(handle)
+        return found if isinstance(found, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save(rows):
+    SHARED.write_json(_path(), rows)
+
+
+def _settle(rows, now):
+    """Waiting past TTL is expired, and written down once; ended long enough
+    ago is dropped. Saved when anything changed. Called under _lock."""
+    changed = False
+    for rid in list(rows):
+        row = rows[rid]
+        if row["status"] == "pending" and row["expires"] <= now:
+            row.update(status="expired", ended=now, detail="Nobody approved it in time; the agent can ask again")
+            AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "expired", addr=row.get("addr", ""))
+            changed = True
+        if row["status"] not in ("pending", "running") and row.get("ended", now) + KEEP < now:
+            rows.pop(rid)
+            changed = True
+    if changed:
+        _save(rows)
+    return rows
+
+
+def create(tool, args, summary, role, key, reason="", addr="", escalated=False):
+    """File a planned action for a person: the request, as the agent sees it."""
+    now = time.time()
+    with _lock:
+        rows = _settle(_load(), now)
+        waiting = [r for r in rows.values() if r["status"] == "pending" and r["key"].get("id") == key.get("id")]
+        if len(waiting) >= MAX_PENDING:
+            raise TOOLS.ToolError(f"{len(waiting)} requests from this key are already waiting for a person; "
+                                  "wait for them to be answered")
+        rid = secrets.token_hex(8)
+        rows[rid] = {"id": rid, "tool": tool.name, "title": tool.title, "args": args, "summary": summary,
+                     "digest": TOOLS.digest(summary), "role": role, "escalated": escalated,
+                     "key": {k: key.get(k) for k in ("id", "name", "owner")}, "reason": str(reason or "")[:300],
+                     "addr": str(addr or "")[:64], "created": now, "expires": now + TTL, "status": "pending"}
+        _save(rows)
+    return public(rows[rid])
+
+
+def public(row, full=False):
+    """A request without the plan's raw data - unless full, for the page a
+    person reviews it on."""
+    out = {k: row.get(k) for k in ("id", "tool", "title", "status", "reason", "created", "expires", "ended",
+                                    "decided_by", "detail", "role", "escalated")}
+    out["key"] = row["key"].get("name")
+    out["action"] = (row.get("summary") or {}).get("action", row.get("title"))
+    if full:
+        out.update(summary=row.get("summary"), args=AUDIT.redact(row.get("args") or {}), owner=row["key"].get("owner"),
+                   addr=row.get("addr"), result=row.get("result"))
+    elif row.get("status") == "done":
+        out["result"] = row.get("result")
+    return out
+
+
+def get(rid, key=None):
+    """One request; for an agent, only one its own key filed."""
+    with _lock:
+        rows = _settle(_load(), time.time())
+    row = rows.get(str(rid or ""))
+    if not row or (key is not None and row["key"].get("id") != key.get("id")):
+        raise TOOLS.ToolError("there is no such request for this key")
+    return row
+
+
+def listing(role):
+    """Waiting first, then the latest ended, for the bell and the page."""
+    with _lock:
+        rows = _settle(_load(), time.time())
+    ordered = sorted(rows.values(), key=lambda r: (r["status"] != "pending", -r["created"]))
+    return {"requests": [{**public(r, full=True), "can_decide": AUTH.allows(role, r["role"])} for r in ordered[:100]],
+            "pending": sum(1 for r in rows.values() if r["status"] == "pending")}
+
+
+def _take(rid, user, role, status):
+    """The request, moved out of pending under the lock, so two people
+    deciding at once cannot both run it."""
+    with _lock:
+        rows = _settle(_load(), time.time())
+        row = rows.get(str(rid or ""))
+        if not row:
+            raise ValueError("there is no such request")
+        if row["status"] != "pending":
+            raise ValueError(f"it is {row['status']} already")
+        if not AUTH.allows(role, row["role"]):
+            raise PermissionError(f"approving this needs the {row['role']} role")
+        row.update(status=status, decided_by=user, decided_at=time.time())
+        _save(rows)
+    return row
+
+
+def _end(rid, **changes):
+    with _lock:
+        rows = _load()
+        if rid in rows:
+            rows[rid].update(ended=time.time(), **changes)
+            _save(rows)
+            return rows[rid]
+    return changes
+
+
+def deny(rid, user, role):
+    row = _take(rid, user, role, "denied")
+    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "denied", detail=f"denied by {user}",
+                 addr=row.get("addr", ""), approved_by=user)
+    return public(_end(rid, detail=f"Denied by {user}"))
+
+
+def approve(rid, user, role):
+    """Plan it again as user; run it only if that plan is the one reviewed."""
+    row = _take(rid, user, role, "running")
+    tool = TOOLS.BY_NAME.get(row["tool"])
+    ctx = {"user": f"{user} (approving {row['key'].get('name')})", "role": role, "fresh": True,
+           "auth": {"name": user, "kind": "session", "expires": None, "scopes": [s for s in ("read",)]}}
+    try:
+        if tool is None:
+            raise TOOLS.ToolError("this Homestead no longer has that tool")
+        if tool.kind == TOOLS.DESTRUCTIVE:
+            summary, body = tool.plan(row["args"], ctx)
+            if TOOLS.digest(summary) != row["digest"]:
+                raise TOOLS.ToolError("what it would do has changed since it was asked for; nothing was done, "
+                                      "and the agent can ask again")
+            result = tool.execute(body, ctx)
+        else:
+            result = tool.run(row["args"], ctx)
+    except (TOOLS.ToolError, TOOLS.NeedsApproval, ValueError, PermissionError, KeyError) as error:
+        AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "error", detail=str(error),
+                     addr=row.get("addr", ""), approved_by=user)
+        return public(_end(rid, status="failed", detail=str(error)[:400]))
+    clipped, _ = TOOLS.clip(result)
+    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "approved", detail=f"approved by {user}",
+                 addr=row.get("addr", ""), approved_by=user)
+    return public(_end(rid, status="done", result=clipped, detail=f"Approved by {user}"))
+
+
+def alert_facts():
+    """One bell entry per waiting request; it clears when it is answered."""
+    with _lock:
+        rows = _settle(_load(), time.time())
+    return [{"key": f"agents:{r['id']}", "category": "agents", "severity": "info",
+             "title": f"An AI agent asks to {(r.get('summary') or {}).get('action', r['title']).lower()}"[:200],
+             "body": (f"Key {r['key'].get('name')}" + (f": {r['reason']}" if r.get("reason") else "") +
+                      ". Review it before it expires."),
+             "resolved": "Answered", "href": f"/agents?request={r['id']}"}
+            for r in rows.values() if r["status"] == "pending"]
+
+
+ROUTES = {
+    ("GET", "/api/agents/requests"): ("viewer", lambda request: listing(request.role)),
+    ("POST", "/api/agents/requests/approve"): ("viewer", lambda request: approve(request.body.get("id"), request.user, request.role)),
+    ("POST", "/api/agents/requests/deny"): ("viewer", lambda request: deny(request.body.get("id"), request.user, request.role)),
+}

@@ -600,7 +600,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site",
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true },
       info: { version: "2.8.323", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
@@ -2728,12 +2728,63 @@ ssh_pwauth: true
   });
   const ago = minutes => Math.floor(Date.now() / 1000) - minutes * 60;
   const demoKeys = { scopes: { read: "Read status: the cluster, nodes, containers, VMs, alerts and jobs",
-      "containers:control": "Start, stop and restart containers", "vms:control": "Start, stop and restart virtual machines" },
+      "logs:read": "Read container and VM logs",
+      "containers:control": "Start, stop and restart containers", "vms:control": "Start, stop and restart virtual machines",
+      "containers:manage": "Deploy, change and delete containers (deleting waits for a person to approve)",
+      "vms:manage": "Create, change and delete virtual machines (deleting waits for a person to approve)",
+      "storage:manage": "Snapshot, back up, restore and move volumes (data-losing steps wait for a person to approve)" },
     min_ttl: 3600, max_ttl: 366 * 86400,
     keys: [{ id: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", scopes: ["read", "containers:control"], networks: ["192.0.2.20"],
              created: ago(60 * 24 * 12), expires: ago(-60 * 24 * 78), expired: false, last_used: ago(2), last_ip: "192.0.2.20" },
            { id: "8c41e07a9b55", name: "Ops agent", owner: "demo", scopes: ["read"], networks: [],
-             created: ago(60 * 24 * 40), expires: ago(60 * 24), expired: true, last_used: ago(60 * 30), last_ip: "198.51.100.7" }] };
+             created: ago(60 * 24 * 40), expires: ago(60 * 24), expired: true, last_used: ago(60 * 30), last_ip: "198.51.100.7" },
+           { id: "5b72d9e0c314", name: "Claude Code", owner: "demo", scopes: ["read", "logs:read", "containers:manage", "storage:manage"], networks: ["192.0.2.31"], mcp: true,
+             created: ago(60 * 24 * 3), expires: ago(-60 * 24 * 27), expired: false, last_used: ago(4), last_ip: "192.0.2.31" }] };
+  // AI agents (#417): what is waiting for a person, what was answered, and the calls made.
+  const demoAgent = { pending: [
+    { id: "a1f03c9d52e7b814", tool: "delete_container", title: "Delete a container", status: "pending", reason: "lab/old-wiki has been stopped for 40 days and the user asked me to clean up unused apps",
+      created: ago(6), expires: ago(-24), ended: null, decided_by: null, detail: "", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
+      action: "Delete the container lab/old-wiki", summary: { action: "Delete the container lab/old-wiki", uid: "7c1e2d44-0f3a-4a8b-9d52-6b1f0e3a9c10", replicas: 0, volumes_kept: ["old-wiki-data (20 GiB)"], network_exposure: "none" },
+      args: { namespace: "lab", name: "old-wiki" }, result: null },
+    { id: "b72e5a10c9d4f386", tool: "deploy_container", title: "Deploy a container", status: "pending", reason: "Set up Grafana as requested",
+      created: ago(2), expires: ago(-28), ended: null, decided_by: null, detail: "", role: "admin", escalated: true, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
+      action: "Deploy grafana/grafana:11 into lab with a LoadBalancer on 192.0.2.60", summary: { action: "Deploy grafana/grafana:11 into lab with a LoadBalancer on 192.0.2.60", image: "docker.io/grafana/grafana:11",
+        namespace: "lab", ports: [3000], load_balancer_ip: "192.0.2.60", why_admin: "It publishes a new address on the network" },
+      args: { image: "grafana/grafana:11", namespace: "lab", ports: [3000] }, result: null }],
+    finished: [
+    { id: "c4d81f7e0a3b2956", tool: "delete_snapshot", title: "Delete a snapshot", status: "done", reason: "Free space on frigate-config", created: ago(95), expires: ago(65), ended: ago(92),
+      decided_by: "demo", detail: "Deleted the snapshot snap-0412 of frigate-config", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
+      action: "Delete the snapshot snap-0412 of frigate-config", summary: { action: "Delete the snapshot snap-0412 of frigate-config", plan: { volume: "frigate-config", size_gb: 4.2 } }, args: { volume: "frigate-config", snapshot: "snap-0412" }, result: { ok: true } },
+    { id: "d9a2b6c15e847f03", tool: "restore_backup", title: "Restore a backup", status: "failed", reason: "", created: ago(300), expires: ago(270), ended: ago(288),
+      decided_by: "demo", detail: "The cluster changed since you reviewed this: the volume paperless-data is now 24 GiB, not 20 GiB. Ask the agent to try again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
+      action: "Restore the backup backup-7f3a91 as the volume lab/paperless-data", summary: { action: "Restore the backup backup-7f3a91 as the volume lab/paperless-data", plan: { size_gb: 20 } }, args: { backup: "backup-7f3a91" }, result: null },
+    { id: "e0b3c7d2a9f15846", tool: "delete_vm", title: "Delete a VM", status: "denied", reason: "Not used", created: ago(1500), expires: ago(1470), ended: ago(1490),
+      decided_by: "demo", detail: "denied by demo", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
+      action: "Delete the VM lab/test-win", summary: { action: "Delete the VM lab/test-win", disks: ["test-win-root"] }, args: { namespace: "lab", name: "test-win" }, result: null },
+    { id: "f1c4d8e3b0a26957", tool: "delete_container", title: "Delete a container", status: "expired", reason: "", created: ago(2900), expires: ago(2870), ended: ago(2870),
+      decided_by: null, detail: "Nobody approved it in time; the agent can ask again", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
+      action: "Delete the container lab/scratch", summary: { action: "Delete the container lab/scratch", replicas: 0 }, args: { namespace: "lab", name: "scratch" }, result: null }] };
+  responses["/api/agents/requests"] = () => ({ pending: demoAgent.pending.length,
+    requests: [...demoAgent.pending, ...demoAgent.finished].map(r => ({ ...r, can_decide: r.role !== "admin" || ROLE === "admin" })) });
+  const demoAgentDecide = approve => (url, init) => {
+    const id = JSON.parse(init?.body || "{}").id, at = demoAgent.pending.findIndex(r => r.id === id);
+    if (at < 0) return { error: "it is not waiting" };
+    const [r] = demoAgent.pending.splice(at, 1);
+    Object.assign(r, approve ? { status: "done", detail: "Demo: " + r.action + " (nothing was changed)", result: { ok: true } } : { status: "denied", detail: "denied by demo" }, { ended: ago(0), decided_by: "demo" });
+    demoAgent.finished.unshift(r);
+    return r;
+  };
+  responses["/api/agents/requests/approve"] = demoAgentDecide(true);
+  responses["/api/agents/requests/deny"] = demoAgentDecide(false);
+  responses["/api/agents/audit"] = { keep_days: 30, calls: [
+    { at: ago(2), key: "5b72d9e0c314", name: "Claude Code", owner: "demo", via: "mcp", action: "deploy_container", args: { image: "grafana/grafana:11" }, outcome: "pending", detail: "waiting for an admin", addr: "192.0.2.31" },
+    { at: ago(6), key: "5b72d9e0c314", name: "Claude Code", owner: "demo", via: "mcp", action: "delete_container", args: { namespace: "lab", name: "old-wiki" }, outcome: "pending", detail: "waiting for a person", addr: "192.0.2.31" },
+    { at: ago(9), key: "5b72d9e0c314", name: "Claude Code", owner: "demo", via: "mcp", action: "list_containers", args: {}, outcome: "ok", detail: "", addr: "192.0.2.31" },
+    { at: ago(12), key: "5b72d9e0c314", name: "Claude Code", owner: "demo", via: "mcp", action: "get_logs", args: { name: "frigate" }, outcome: "ok", detail: "", addr: "192.0.2.31" },
+    { at: ago(90), key: "5b72d9e0c314", name: "Claude Code", owner: "demo", via: "mcp", action: "delete_snapshot", args: { snapshot: "snap-0412" }, outcome: "approved", detail: "approved by demo", addr: "192.0.2.31", approved_by: "demo" },
+    { at: ago(130), key: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", via: "api", action: "GET /api/v1/status", args: {}, outcome: "ok", detail: "", addr: "192.0.2.20" },
+    { at: ago(300), key: "8c41e07a9b55", name: "Ops agent", owner: "demo", via: "mcp", action: "restore_backup", args: { backup: "backup-7f3a91" }, outcome: "error", detail: "the cluster changed since you reviewed this", addr: "198.51.100.7" },
+    { at: ago(310), key: "8c41e07a9b55", name: "Ops agent", owner: "demo", via: "mcp", action: "scale_container", args: {}, outcome: "refused", detail: "the key lacks containers:manage", addr: "198.51.100.7" }] };
   responses["/api/auth/keys"] = (url, init) => {
     if (init?.method !== "POST") return demoKeys;
     const body = JSON.parse(init.body || "{}");
@@ -2917,6 +2968,12 @@ ssh_pwauth: true
       image.candidate_tag = channel === "dev" ? "2.9.0-dev.1" : "2.9.0";
       image.candidate = "ghcr.io/homestead-lab/homestead:" + image.candidate_tag;
       return new Response(JSON.stringify(responses["/api/settings"]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    // A change to the app settings is kept for the visit, so a switch stays where it was put.
+    if (key === "/api/settings" && init?.method === "POST") {
+      const sent = JSON.parse(init.body || "{}");
+      if (sent.mcp) responses["/api/settings"].mcp = { enabled: !!sent.mcp.enabled };
+      return new Response(JSON.stringify({ ok: true, ...responses["/api/settings"] }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];
     let value = typeof configured === "function" ? configured(url, init) : configured;

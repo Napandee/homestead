@@ -267,6 +267,7 @@ async function viewSettings() {
         ${users.length ? `<div class="tblwrap"><table class="tbl stack dense" id="usersTable"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th>${can("admin") ? "<th></th>" : ""}</tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
       `, {tab:`access`, wide:false})}
       ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading keys</div>', {tab:"access",id:"apiKeysCard",wide:false}) : ""}
+      ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading agent settings</div>', {tab:"access",id:"mcpCard",wide:false}) : ""}
 
       ${pwaCard()}
 
@@ -339,6 +340,7 @@ async function viewSettings() {
   if (window.storageClassesPaint) storageClassesPaint();
   if (window.addonsPaint) addonsPaint();
   if (window.apiKeysPaint) apiKeysPaint();
+  if (window.mcpCardPaint) mcpCardPaint();
   if (window.fleetSettingsPaint) fleetSettingsPaint();
   if (window.homesteadUpdateCardPaint) {
     homesteadUpdateCardPaint();
