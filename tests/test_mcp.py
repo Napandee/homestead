@@ -407,7 +407,8 @@ class CatalogueTests(unittest.TestCase):
         "/api/setup/complete": "the setup guide is a person's", "/api/setup/hide": "the setup guide is a person's",
         "/api/setup/skip": "the setup guide is a person's", "/api/compose/parse": "preview_compose reads the file",
         "/api/logo-fit/keep": "the browser resizes logos", "/api/logo-fit/resized": "the browser resizes logos",
-        "/api/hardware/rescan": "hosts are read-only to agents", "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
+        "/api/hardware/rescan": "hosts are read-only to agents",
+        "/api/workloads/rebalance/review": "the Balance tools take picks in a later commit", "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):

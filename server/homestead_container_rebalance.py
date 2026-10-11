@@ -38,6 +38,7 @@ import urllib.parse
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
+import homestead_pod_resources as RESOURCES
 import homestead_routes as ROUTER
 
 KIND = "container-rebalance"
@@ -141,6 +142,22 @@ def _allowed(dep, ns, role):
         return False
 
 
+def _budget_why(ns, labels, budgets):
+    """A disruption budget that allows no restart of this app now. A move
+    rewrites the Deployment, which does not ask the Eviction API, so the
+    budget is checked here or not at all."""
+    for budget in budgets:
+        meta, spec = budget.get("metadata") or {}, budget.get("spec") or {}
+        selector = spec.get("selector")
+        # An empty selector covers every pod in its namespace (policy/v1);
+        # no selector at all covers none.
+        everything = selector == {} and meta.get("namespace") == ns
+        if (everything or selector and _term_matches({"labelSelector": selector}, meta.get("namespace"), ns, labels)) \
+                and int((budget.get("status") or {}).get("disruptionsAllowed") or 0) < 1:
+            return f"its disruption budget {meta.get('namespace')}/{meta.get('name')} allows no restart now"
+    return ""
+
+
 def inventory(role=None):
     """Hosts and apps; role, when given, is who the moves are for - an app
     they may not change is listed with why, as one that cannot move is."""
@@ -155,6 +172,7 @@ def inventory(role=None):
                        "takes": _ready(node) and not (node.get("spec") or {}).get("unschedulable"), "node": node,
                        "metrics": name in usage}
     pods = _items("/api/v1/pods")
+    budgets = _items("/apis/policy/v1/poddisruptionbudgets")
     pod_usage = {}
     for m in _items("/apis/metrics.k8s.io/v1beta1/pods"):
         meta = m.get("metadata") or {}
@@ -200,6 +218,8 @@ def inventory(role=None):
             why = "its volume keeps its only copy on its host (strict-local), so it runs there"
         if not why and not _allowed(dep, ns, role):
             why = ADMIN_ONLY
+        if not why:
+            why = _budget_why(ns, ((spec.get("template") or {}).get("metadata") or {}).get("labels") or {}, budgets)
         apps.append({"ns": ns, "name": name, "id": f"{ns}/{name}", "host": where[0], "dep": dep,
                      "cpu": sum(u[0] for u in use), "mem": sum(u[1] for u in use), "why": why,
                      "near": set.intersection(*[copies.get(v, set()) for v in volumes]) if volumes and all(volumes) else None,
@@ -438,6 +458,117 @@ def reviewed(moves, exclude, token, role=None):
     return out
 
 
+GI = 1024 ** 3
+GI_MB = 1024 ** 2
+
+
+def _requests(template):
+    """CPU (millicores) and memory (bytes) one copy of the app asks for."""
+    return float(RESOURCES.pod_request(template, "cpu")), float(RESOURCES.pod_request(template, "memory"))
+
+
+def picked(picks, role=None):
+    """Moves a person chose - [{id, to}] - each marked with why it can't go,
+    and the destinations' requests counted together: what each already
+    runs, plus every pick sent there."""
+    if not isinstance(picks, list) or not picks or \
+            any(not isinstance(p, dict) or not isinstance(p.get("id"), str) or not isinstance(p.get("to"), str) for p in picks):
+        raise ValueError("Choose the containers to move, and where to")
+    hosts, apps = inventory(role)
+    by_id = {a["id"]: a for a in apps}
+    summary = {n.get("name"): n for n in (summaries() if summaries else [])}
+    used = {n: [0.0, 0.0] for n in hosts}
+    for p in _items("/api/v1/pods"):
+        where = (p.get("spec") or {}).get("nodeName")
+        if where in used and (p.get("status") or {}).get("phase") in ("Running", "Pending"):
+            cpu_r, mem_r = _requests(p.get("spec") or {})
+            used[where][0] += cpu_r; used[where][1] += mem_r
+    rows, seen, going = [], set(), {}
+    for pick in picks:
+        if pick["id"] in seen:
+            continue
+        seen.add(pick["id"])
+        app, to = by_id.get(pick["id"]), pick["to"]
+        if not app:
+            rows.append({"id": pick["id"], "ns": "", "name": "", "from": "", "to": to, "why": "it is not running as a single-copy Deployment Homestead can move",
+                         "cpu_m": 0, "mem_mb": 0, "reserves": False})
+            continue
+        template = ((app["dep"].get("spec") or {}).get("template") or {}).get("spec") or {}
+        cpu_r, mem_r = _requests(template)
+        host = hosts.get(to)
+        why = app["why"]
+        if not why and (app["dep"].get("spec") or {}).get("paused"):
+            why = "its rollouts are paused, so a move would not take effect"
+        if not why and template.get("nodeName"):
+            why = "it names its host directly (nodeName)"
+        if not why and template.get("topologySpreadConstraints"):
+            why = "it has spread rules, which decide where it runs"
+        if not why and app["host"] == to:
+            why = f"it already runs on {to}"
+        if not why and (not host or not host["takes"]):
+            why = f"{to} takes no new containers"
+        if not why:
+            fits, reasons = satisfies(summary.get(to, host["node"]), requirements(app["dep"]))
+            if not fits:
+                why = f"{to} can't run it: {'; '.join(reasons) or 'its hardware or labels'}"
+        if not why and any(other["host"] == to and _kept_apart(app, other) for other in apps if other is not app):
+            why = f"it is kept apart from an app on {to}"
+        if not why and any(_kept_apart(app, by_id[other]) for other in going.get(to, ())):
+            why = f"it is kept apart from another container going to {to}"
+        if not why and sum(len(v) for v in going.values()) >= MAX_MOVES:
+            why = f"at most {MAX_MOVES} at a time"
+        if not why:
+            going.setdefault(to, []).append(app["id"])
+        rows.append({"id": app["id"], "ns": app["ns"], "name": app["name"], "from": app["host"], "to": to, "why": why,
+                     "cpu_m": round(cpu_r), "mem_mb": round(mem_r / GI_MB), "reserves": bool(cpu_r or mem_r),
+                     "near": bool(app["near"] and to in app["near"])})
+    # The destinations, with every pick sent there counted together.
+    out_hosts = []
+    for name in sorted(going):
+        cpu_in = sum(r["cpu_m"] for r in rows if r["to"] == name and not r["why"])
+        mem_in = sum(r["mem_mb"] * GI_MB for r in rows if r["to"] == name and not r["why"])
+        h = hosts[name]
+        cpu_after, mem_after = used[name][0] + cpu_in, used[name][1] + mem_in
+        over = cpu_after > h["cpu_total"] or mem_after > h["mem_total"]
+        out_hosts.append({"name": name, "eligible": True, "metrics_available": True,
+                          "used_gb": round(used[name][1] / GI, 1), "capacity_gb": round(h["mem_total"] / GI, 1),
+                          "projected_gb": round(mem_after / GI, 1), "projected_percent": round(100 * mem_after / h["mem_total"]),
+                          "cpu_before_m": round(used[name][0]), "cpu_after_m": round(cpu_after), "cpu_total_m": round(h["cpu_total"]),
+                          "over": over})
+        if over:
+            for r in rows:
+                if r["to"] == name and not r["why"]:
+                    r["why"] = f"no room on {name} with the others (requests {round(cpu_after)}m of {round(h['cpu_total'])}m CPU, " \
+                               f"{round(mem_after / GI, 1)} of {round(h['mem_total'] / GI, 1)} GiB)"
+    moves = [{"ns": r["ns"], "name": r["name"], "id": r["id"], "from": r["from"], "to": r["to"],
+              "cpu_m": r["cpu_m"], "mem_gb": round(r["mem_mb"] / 1024, 2), "near": r["near"]} for r in rows if not r["why"]]
+    return {"rows": rows, "moves": moves, "hosts": out_hosts, "blocked": not moves,
+            "review_token": review_token(moves, []) if moves else ""}
+
+
+def _note(ref, move, result, detail=""):
+    ref.setdefault("results", []).append({"id": move["id"], "to": move["to"], "result": result, "detail": detail})
+
+
+def _summary(ref):
+    """Each app's result for the job's message - failures first, six named."""
+    results = ref.get("results") or []
+    order = {"failed": 0, "not reached": 1, "skipped": 2, "moved": 3}
+    words = {"moved": "Moved {id} to {to}", "skipped": "Skipped {id}: {detail}", "failed": "{id} failed: {detail}",
+             "not reached": "{id} not reached"}
+    named = [words[r["result"]].format(**r) for r in sorted(results, key=lambda r: order[r["result"]])]
+    return "; ".join(named[:6]) + (f"; and {len(named) - 6} more" if len(named) > 6 else "")
+
+
+def _halt(ref, i, move, detail):
+    """Moves a person chose stop at the first that does not go: it fails,
+    and the rest are not reached."""
+    _note(ref, move, "failed", detail)
+    for rest in ref["moves"][i + 1:]:
+        _note(ref, rest, "not reached")
+    return "failed", int(100 * i / max(1, len(ref["moves"]))), _summary(ref)
+
+
 # --------------------------------------------------------------- the job
 def start(plan, why="", role=None, unless=()):
     """The job for a reviewed plan - or one Homestead made itself, in the
@@ -445,14 +576,20 @@ def start(plan, why="", role=None, unless=()):
     move is checked for them again as it is made; None for Homestead's own.
     unless: kinds of job that, while one runs, refuse this one (OPS.start)."""
     moves = plan["moves"]
-    return operations.start(KIND, f"Rebalance {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
+    verb = "Move" if plan.get("stop_on_failure") else "Rebalance"
+    return operations.start(KIND, f"{verb} {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
                             {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                            {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"], "role": role},
+                            {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"], "role": role,
+                             "stop_on_failure": bool(plan.get("stop_on_failure")), "results": []},
                             "Starting with the first container", unless=unless)
 
 
-def _running_on(ns, name):
+def _running_on(ns, name, keep=None):
+    """(settled, hosts); keep, when given, receives the Deployment read, so
+    the checks before a move need not read it again."""
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if keep is not None:
+        keep["dep"] = dep
     status, spec, meta = dep.get("status") or {}, dep.get("spec") or {}, dep.get("metadata") or {}
     settled = (int(status.get("observedGeneration") or 0) >= int(meta.get("generation") or 0)
                and int(status.get("updatedReplicas") or 0) == int(spec.get("replicas") or 0)
@@ -468,6 +605,8 @@ def status(item):
     ref = item["ref"]
     moves, i, done = ref["moves"], ref.get("index", 0), ref.get("moved", 0)
     if i >= len(moves):
+        if ref.get("stop_on_failure"):
+            return "succeeded", 100, _summary(ref)
         skipped = ref.get("skipped") or []
         return "succeeded", 100, (f"Moved {done} container{'' if done == 1 else 's'}"
                                   + (f"; left {len(skipped)}: " + "; ".join(skipped[:4]) if skipped else ""))
@@ -476,29 +615,38 @@ def status(item):
     if not is_leader():
         return "running", progress, item.get("message") or f"Moving {move['id']}"
     stage, now = ref.get("stage", "move"), time.time()
+
+    def skip(reason):
+        """A move that does not go: a person's own choice stops here, the
+        rest not reached; Balance's own plan skips it and carries on."""
+        if ref.get("stop_on_failure"):
+            return _halt(ref, i, move, reason)
+        _note(ref, move, "skipped", reason)
+        ref.setdefault("skipped", []).append(f"{move['id']}: {reason}")
+        ref.update(index=i + 1)
+        return "running", progress, f"Skipped {move['id']}: {reason}"
     if stage == "move":
+        seen = {}
         try:
-            _, hosts = _running_on(move["ns"], move["name"])
+            _, hosts = _running_on(move["ns"], move["name"], seen)
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
             hosts = set()
         if hosts != {move["from"]}:
-            ref.setdefault("skipped", []).append(f"{move['id']}: it moved or changed since the review")
-            ref.update(index=i + 1)
-            return "running", progress, f"Skipped {move['id']}: it moved or changed since the review"
+            return skip("it moved or changed since the review")
+        dep = seen.get("dep") or {}
         if "generation" in move:
-            try:
-                now_generation = int(((kget(f"/apis/apps/v1/namespaces/{move['ns']}/deployments/{move['name']}")
-                                       .get("metadata") or {}).get("generation")) or 0)
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise
-                now_generation = -1
+            now_generation = int((dep.get("metadata") or {}).get("generation") or 0) if dep else -1
             if now_generation != move["generation"]:
-                ref.setdefault("skipped", []).append(f"{move['id']}: it changed since the review")
-                ref.update(index=i + 1)
-                return "running", progress, f"Skipped {move['id']}: it changed since the review"
+                return skip("it changed since the review")
+        # A budget made or tightened since the review, or used up by an
+        # earlier move: a Deployment rewrite never asks the Eviction API.
+        labels = (((dep.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("labels") or {}
+        budget = _budget_why(move["ns"], labels, [b for b in _items("/apis/policy/v1/poddisruptionbudgets")
+                                                  if (b.get("metadata") or {}).get("namespace") == move["ns"]])
+        if budget:
+            return skip(budget)
         # The job runs with no request behind it: asked again for whoever
         # started it, since the app may have changed since the review, and
         # the move written as them, so the fence on Kubernetes writes checks
@@ -511,22 +659,25 @@ def status(item):
             with HOSTACCESS.acting_as(role):
                 apply(move["ns"], move["name"], move["to"])
         except PermissionError:
-            ref.setdefault("skipped", []).append(f"{move['id']}: {ADMIN_ONLY}")
-            ref.update(index=i + 1)
-            return "running", progress, f"Skipped {move['id']}: {ADMIN_ONLY}"
+            return skip(ADMIN_ONLY)
         except ValueError as error:
-            ref.setdefault("skipped", []).append(f"{move['id']}: {str(error)[:160]}")
-            ref.update(index=i + 1)
-            return "running", progress, f"Skipped {move['id']}: {str(error)[:160]}"
+            return skip(str(error)[:160])
         ref.update(stage="starting", started=now)
+        if ref.get("stop_on_failure"):
+            moved = [r["id"] for r in ref.get("results") or [] if r["result"] == "moved"]
+            return "running", progress, (f"{i + 1} of {len(moves)}: " + (f"moved {', '.join(moved)}; " if moved else "")
+                                         + f"moving {move['id']} to {move['to']}")
         return "running", progress, f"Moving {move['id']} to {move['to']} ({i + 1} of {len(moves)}); it restarts there"
     if stage == "starting":
         settled, hosts = _running_on(move["ns"], move["name"])
         if settled and hosts and move["from"] not in hosts:
+            _note(ref, move, "moved")
             ref.update(index=i + 1, stage="move", moved=done + 1)
             return "running", int(100 * (i + 1) / len(moves)), f"{move['id']} runs on {', '.join(sorted(hosts))}"
         if now - ref.get("started", now) > 600:
             # Stop rather than restart more: one that did not come up is looked at first.
+            if ref.get("stop_on_failure"):
+                return _halt(ref, i, move, f"did not start on {move['to']} within 10 minutes")
             return "failed", progress, (f"{move['id']} did not start on {move['to']} within 10 minutes; the rest were not moved. "
                                         f"Moved {done} before it. Check its events in Containers")
         return "running", progress, f"Waiting for {move['id']} to start on {move['to']} ({i + 1} of {len(moves)})"
@@ -541,7 +692,14 @@ def cancel_plan(item):
 
 
 def cancel_run(work, chosen):
-    moved = (work.get("ref") or {}).get("moved", 0)
+    ref = work.get("ref") or {}
+    if ref.get("stop_on_failure"):
+        # The one moving now finishes its restart; the rest are not reached.
+        first = ref.get("index", 0) + (1 if ref.get("stage") == "starting" else 0)
+        for move in ref.get("moves", [])[first:]:
+            _note(ref, move, "not reached")
+        return "Stopped: " + _summary(ref)
+    moved = ref.get("moved", 0)
     return f"Stopped after moving {moved} container{'' if moved == 1 else 's'}"
 
 
@@ -556,6 +714,19 @@ def start_run(request):
     if b.get("restart") is not True:
         return ROUTER.Reply(409, {"error": "Moving a container restarts it; confirm the restarts"})
     role = request.role
+    if b.get("picks") is not None:
+        try:
+            now = picked(b["picks"], role=role)
+        except PermissionError as error:
+            return ROUTER.Reply(403, {"error": str(error)})
+        except ValueError as error:
+            return ROUTER.Reply(409, {"error": str(error)})
+        if not now["moves"] or not _token_ok(now["moves"], [], b.get("review_token")):
+            return ROUTER.Reply(409, {"error": "The containers or hosts changed since the review, or it is more than ten "
+                                               "minutes old; review again", "plan": now})
+        generations = {row[0]: row[2] for row in _versions(now["moves"])}
+        moves = [{**m, "generation": generations.get(m["id"], 0)} for m in now["moves"]]
+        return ROUTER.Reply(202, {"operation": start({"moves": moves, "excluded": [], "stop_on_failure": True}, role=role)})
     if b.get("moves") is not None:
         # The moves reviewed, checked against the cluster now -
         # not a plan made again from load that moves by the second.
@@ -580,4 +751,5 @@ ROUTES = {
     ("GET", "/api/workloads/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
                                                                             avoid=standby(), role=request.role)),
     ("POST", "/api/workloads/rebalance"): ("operator", start_run),
+    ("POST", "/api/workloads/rebalance/review"): ("viewer", lambda request: picked((request.body or {}).get("picks"), role=request.role)),
 }
