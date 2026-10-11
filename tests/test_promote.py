@@ -112,9 +112,15 @@ class ScriptTests(unittest.TestCase):
             self.assertNotIn("rm -rf", str(caught.exception))
         PROMOTE.check_token("K10abc::server:def")
 
+    def test_a_value_with_a_line_break_never_reaches_the_host(self):
+        evil = "x" + chr(10) + "HSSCRIPT" + chr(10) + "touch /pwned"
+        with self.assertRaisesRegex(ValueError, "control character"):
+            PROMOTE.promote_script("v1.33.4+k3s1", "192.0.2.10", ["--node-label", evil])
+        self.assertFalse(PROMOTE.unprintable(["--node-ip", "'192.0.2.11'"]))
+
     def test_scripts_parse_under_dash(self):
         for text in (self.body(), PROMOTE.launch_script("op1", 6, self.body())):
-            with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
+            with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, newline="") as f:
                 f.write(text)
             result = subprocess.run([SH, "-n", f.name], capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)

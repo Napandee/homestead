@@ -98,6 +98,14 @@ def own_labels(node):
     return out
 
 
+def unprintable(values):
+    """Whether any value carries a control character. The script goes to the
+    host inside a quoted heredoc: a line break and the heredoc's end word in
+    a value read from a Node's annotations would end it early, and what came
+    after would run as root. Quoting alone does not stop that."""
+    return any(ord(c) < 32 or ord(c) == 127 for v in values for c in str(v))
+
+
 def promote_script(version, server, args):
     """What the unit runs on the host. The installer is fetched before
     anything is removed (exit 20: nothing changed); the node password is
@@ -105,6 +113,8 @@ def promote_script(version, server, args):
     happens. k3s is left as the installer leaves it: stopping a server that
     joined etcd never protects quorum, and with one member before it would
     lose it."""
+    if unprintable([version, server, *args]):
+        raise ValueError("A setting read from the cluster has a control character in it; nothing was changed")
     return "\n".join([
         "set -eu",
         f"trap 'rm -f {TOKEN}' EXIT",
@@ -280,6 +290,9 @@ def plan(node):
         if "UNINSTALL" not in out:
             blockers.append(f"{node} has no /usr/local/bin/k3s-agent-uninstall.sh: was k3s installed another way?")
     host_settings, dropped = node_flags(host)
+    if unprintable([version, (p.get("control_plane") or [""])[0], *shared, *host_settings]):
+        blockers.append("A setting in the nodes' k3s.io/node-args has a control character in it; "
+                        "check the servers' and this host's k3s arguments")
     for flag in (f for f in dropped if f in RENAMING_FLAGS):
         blockers.append(f"{node} was started with {flag}: as a server it would register under another name")
     if dropped:
