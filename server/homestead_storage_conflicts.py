@@ -69,7 +69,7 @@ def require_clear(items, kind, ref, resource=None):
     if (kind in ("longhorn-v2-upgrade", "cluster-shutdown", "os-rollout") and any(i.get("kind") == "disk-v2-convert" and unresolved(i) for i in items)
             or kind == "disk-v2-convert" and any(i.get("kind") in ("longhorn-v2-upgrade", "cluster-shutdown", "os-rollout") and i.get("status") not in TERMINAL for i in items)):
         raise ValueError("Finish disk preparation before upgrading V2 instance managers or shutting down hosts.")
-    host_kinds = {"disk-v2-convert", "node-power", "host-os", "longhorn-v2-prepare", "disk-retire"}
+    host_kinds = {"disk-v2-convert", "node-power", "host-os", "host-promote", "longhorn-v2-prepare", "disk-retire"}
     if kind in host_kinds and any(i.get("ref", {}).get("node") == ref.get("node")
             and i.get("kind") in host_kinds and (kind == "disk-v2-convert" or i.get("kind") == "disk-v2-convert")
             and (unresolved(i) if i.get("kind") == "disk-v2-convert" else i.get("status") not in TERMINAL) for i in items):

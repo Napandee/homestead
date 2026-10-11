@@ -304,3 +304,389 @@ class PlanTests(PlanBase):
     def test_route_is_admin(self):
         self.assertEqual("admin", PROMOTE.ROUTES[("GET", "/api/node/promote/plan")][0])
 
+
+class Ops:
+    """homestead_operations, enough of it: one job, phases recorded."""
+    def __init__(self):
+        self.items, self.phases = [], []
+
+    def start(self, kind, title, resource, href, ref, message="", unless=()):
+        item = {"id": "op1", "kind": kind, "title": title, "ref": dict(ref), "status": "running", "progress": 0, "message": message}
+        self.items.append(item)
+        return item
+
+    def read(self):
+        return self.items
+
+    def record_phase(self, op_id, phase, progress, message, owner=None, **updates):
+        item = self.items[0]
+        worker = item["ref"].get("worker")
+        if owner and worker and worker != owner:
+            raise OPS.Superseded(f"{worker} carries this job on now")
+        if item["status"] in ("succeeded", "failed", "cancelled"):
+            raise ValueError("Maintenance job has ended; refusing further actions")
+        item["ref"].update(updates, phase=phase)
+        item["status"] = "failed" if phase == "failed" else "running"
+        item["message"] = message
+        self.phases.append((phase, message))
+
+
+class JobTests(PlanBase):
+    def setUp(self):
+        super().setUp()
+        self.ops, self.cordons, self.drains = Ops(), [], []
+        self.host.out = self.answer
+        self.token = "K10abcdef::server:0123456789"
+        self.probe = "MARKED\nACTIVE\n"
+        more = [mock.patch.object(PROMOTE, "OPS_START", self.ops.start),
+                mock.patch.object(PROMOTE, "OPS_RECORD", self.ops.record_phase),
+                mock.patch.object(PROMOTE, "OPS_READ", self.ops.read),
+                mock.patch.object(PROMOTE, "POD", "homestead-a"),
+                mock.patch.object(PROMOTE, "_thread", lambda target: target()),
+                mock.patch.object(PROMOTE, "is_leader", lambda: True),
+                mock.patch.object(LIFECYCLE, "set_cordon", lambda n, on: self.cordons.append((n, on))),
+                mock.patch.object(LIFECYCLE, "drain", lambda n, **k: self.drains.append((n, k)) or {"ok": True}),
+                mock.patch.object(PLATFORM, "join_guide", lambda: {"agent": "AGENT-JOIN-CMD"})]
+        for p in more:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in more])
+        PROMOTE._ACTIVE.clear()
+
+    def answer(self, node, script):
+        if PROMOTE.TOKEN_FILE in script:
+            return self.token + "\n"
+        if "systemd-run" in script:
+            return "STARTED\n"
+        if "MARKED" in script:
+            return self.probe
+        return "PASSWORD\nUNINSTALL\n"
+
+    def started(self):
+        return PROMOTE.start("app-1", PROMOTE.plan("app-1")["review_token"])
+
+    def test_stale_review_is_refused(self):
+        with self.assertRaises(ValueError):
+            PROMOTE.start("app-1", "0" * 64)
+        self.assertEqual([], self.ops.items)
+
+    def test_blocked_plan_is_refused(self):
+        token = PROMOTE.plan("app-1")["review_token"]
+        self.cluster.secrets.clear()
+        with self.assertRaises(ValueError):
+            PROMOTE.start("app-1", token)
+
+    def test_start_drains_reads_token_and_launches(self):
+        item = self.started()
+        self.assertEqual([("app-1", True)], self.cordons)
+        self.assertEqual("app-1", self.drains[0][0])
+        self.assertTrue(self.drains[0][1]["include_system"] and self.drains[0][1]["wait"])
+        token_reads = [n for n, s in self.host.calls if PROMOTE.TOKEN_FILE in s]
+        self.assertEqual(["server-1"], token_reads)
+        launch = [i for i, (n, s) in enumerate(self.host.calls) if n == "app-1" and "systemd-run" in s]
+        self.assertEqual(1, len(launch))
+        self.assertNotIn(self.token, self.host.calls[launch[0]][1])
+        self.assertEqual(self.token.encode(), self.host.stdins[launch[0]])
+        self.assertEqual("running", item["ref"]["phase"])
+
+    def test_token_never_stored_or_reported(self):
+        item = self.started()
+        import json as _json
+        self.assertNotIn(self.token, _json.dumps(item))
+        self.assertFalse(any(self.token in m for _, m in self.ops.phases))
+
+    def test_token_read_prefers_a_server_that_is_not_a_tiebreaker(self):
+        self.cluster.nodes[0]["metadata"]["labels"]["node-role/tiebreaker"] = "true"
+        self.started()
+        self.assertEqual(["server-2"], [n for n, s in self.host.calls if PROMOTE.TOKEN_FILE in s])
+
+    def test_bad_token_fails_job_without_launching(self):
+        self.token = "K10 $(id)"
+        item = self.started()
+        self.assertEqual("failed", item["status"])
+        self.assertNotIn("$(id)", item["message"])
+        self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
+        self.assertIn(("app-1", False), self.cordons)
+
+    def test_drain_failure_fails_and_uncordons(self):
+        with mock.patch.object(LIFECYCLE, "drain", mock.Mock(side_effect=ValueError("drain timed out"))):
+            item = self.started()
+        self.assertEqual("failed", item["status"])
+        self.assertIn("drain timed out", item["message"])
+        self.assertEqual([("app-1", True), ("app-1", False)], self.cordons)
+
+    def test_resume_restarts_thread_once(self):
+        item = self.started()
+        item["ref"]["phase"] = "draining"
+        threads = []
+        with mock.patch.object(PROMOTE, "_thread", lambda target: threads.append(target)):
+            PROMOTE.status(item)
+            PROMOTE.status(item)
+        self.assertEqual(1, len(threads))
+
+    def run_with(self, out, item=None, now=None):
+        item = item or self.started()
+        self.probe = out if callable(out) else "MARKED\n" + out
+        if callable(out):
+            self.host.out = out
+        return item, PROMOTE.status(item, now=now or item["ref"]["running_since"] + 30)
+
+    def test_running_follows_the_unit(self):
+        item, result = self.run_with("[INFO]  Starting k3s\n")
+        self.assertEqual("running", result[0])
+        self.assertIn("Starting k3s", result[2])
+
+    def test_running_unreachable_is_running_then_fails_after_limit(self):
+        def boom(node, script):
+            raise RuntimeError("pod did not start")
+        item, result = self.run_with(boom)
+        self.assertEqual("running", result[0])
+        result = PROMOTE.status(item, now=item["ref"]["running_since"] + PROMOTE.RUN_LIMIT + 1)
+        self.assertEqual("failed", result[0])
+        self.assertIn(PROMOTE.LOG, result[2])
+
+    def test_running_failure_message_has_rejoin(self):
+        _, result = self.run_with("CODE 1\ncurl: (6) Could not resolve host\n")
+        self.assertEqual("failed", result[0])
+        self.assertIn("AGENT-JOIN-CMD", result[2])
+        self.assertIn("code 1", result[2])
+        self.assertNotIn("k3s is stopped", result[2])
+
+    def test_running_code_10_is_the_node_password(self):
+        _, result = self.run_with("CODE 10\n")
+        self.assertEqual("failed", result[0])
+        self.assertIn("node password", result[2])
+
+    def test_running_success_moves_to_joining(self):
+        item, result = self.run_with("CODE 0\n")
+        self.assertEqual("running", result[0])
+        self.assertEqual("joining", item["ref"]["phase"])
+
+    def joined_item(self):
+        item, _ = self.run_with("CODE 0\n")
+        n = self.cluster.nodes[2]
+        n["metadata"]["labels"].update({"node-role.kubernetes.io/control-plane": "true", "node-role.kubernetes.io/etcd": "true"})
+        return item
+
+    def test_joining_waits_for_etcd(self):
+        item = self.joined_item()
+        result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)
+        self.assertEqual("running", result[0])
+
+    def test_joining_done_uncordons(self):
+        item = self.joined_item()
+        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+                                                                   "ready": ["server-1", "server-2", "app-1"], "total": 3,
+                                                                   "quorum_needs": 2, "can_lose": 1}):
+            result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)
+        self.assertEqual("succeeded", result[0])
+        self.assertIn("3 etcd members", result[2])
+        self.assertEqual(("app-1", False), self.cordons[-1])
+
+    def test_joining_new_uid_fails(self):
+        item = self.joined_item()
+        self.cluster.nodes[2]["metadata"]["uid"] = "uid-new"
+        self.assertEqual("failed", PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)[0])
+
+    def test_joining_reports_a_lost_label(self):
+        item = self.joined_item()
+        del self.cluster.nodes[2]["metadata"]["labels"]["homelab/zone"]
+        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+                                                                   "ready": ["server-1", "server-2", "app-1"], "total": 3,
+                                                                   "quorum_needs": 2, "can_lose": 1}):
+            result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)
+        self.assertEqual("succeeded", result[0])
+        self.assertIn("homelab/zone", result[2])
+
+    def test_joining_deadline(self):
+        item = self.joined_item()
+        self.assertEqual("failed", PROMOTE.status(item, now=item["ref"]["joining_since"] + PROMOTE.JOIN_LIMIT + 1)[0])
+
+    def test_cancel_only_while_draining(self):
+        item = self.started()
+        self.assertFalse(PROMOTE.cancel_plan(item)["can"])
+        item["ref"]["phase"] = "draining"
+        self.assertTrue(PROMOTE.cancel_plan(item)["can"])
+        PROMOTE.cancel_run(item, {})
+        self.assertEqual(("app-1", False), self.cordons[-1])
+
+    def test_bind_registers_resolver_and_canceller(self):
+        self.assertIs(OPS.RESOLVERS[PROMOTE.KIND], PROMOTE.status)
+        self.assertEqual((PROMOTE.cancel_plan, PROMOTE.cancel_run), OPS.CANCELLERS[PROMOTE.KIND])
+
+    def test_post_route_is_admin(self):
+        self.assertEqual("admin", PROMOTE.ROUTES[("POST", "/api/node/promote")][0])
+
+
+class KindTests(unittest.TestCase):
+    def test_host_promote_is_a_host_job(self):
+        import homestead_recovery as RECOVERY
+        self.assertIn("host-promote", RECOVERY.MOVES_OR_RESTARTS)
+        source = (Path(__file__).resolve().parents[1] / "server" / "homestead_storage_conflicts.py").read_text()
+        self.assertIn('"host-promote"', source)
+
+
+class FixTests(JobTests):
+    """The final review's findings (2026-10-11)."""
+
+    def test_start_on_a_follower_leaves_the_job_to_the_leader(self):
+        with mock.patch.object(PROMOTE, "is_leader", lambda: False):
+            item = self.started()
+        self.assertEqual([], self.drains)
+        self.assertEqual("draining", item["ref"]["phase"])
+
+    def test_the_thread_claims_the_job_and_writes_as_its_worker(self):
+        item = self.started()
+        self.assertEqual("homestead-a", item["ref"]["worker"])
+
+    def test_another_worker_stops_this_thread(self):
+        def taken(*a, **k):
+            self.ops.items[0]["ref"]["worker"] = "homestead-b"
+            return {"ok": True}
+        with mock.patch.object(LIFECYCLE, "drain", taken):
+            item = self.started()
+        self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
+        self.assertNotEqual("failed", item["status"])
+
+    def test_cancelled_before_launch_launches_nothing(self):
+        def cancel(*a, **k):
+            self.ops.items[0]["status"] = "cancelling"
+            return {"ok": True}
+        with mock.patch.object(LIFECYCLE, "drain", cancel):
+            self.started()
+        self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
+
+    def test_a_launch_error_is_followed_not_reported_unchanged(self):
+        def lost(node, script):
+            if "systemd-run" in script:
+                raise ConnectionError("stream closed")
+            return self.answer(node, script)
+        self.host.out = lost
+        item = self.started()
+        self.assertEqual("running", item["status"])
+        self.assertNotIn(("app-1", False), self.cordons)
+        self.assertNotIn("not changed", item["message"])
+
+    def test_a_launch_that_never_started_fails_unchanged_once_seen(self):
+        def lost(node, script):
+            if "systemd-run" in script:
+                raise ConnectionError("stream closed")
+            return self.answer(node, script)
+        self.host.out = lost
+        item = self.started()
+        self.probe = "\n"   # reachable: no marker, no unit, no status
+        result = PROMOTE.status(item, now=item["ref"]["running_since"] + 30)
+        self.assertEqual("failed", result[0])
+        self.assertIn("not changed", result[2])
+        self.assertEqual(("app-1", False), self.cordons[-1])
+
+    def test_probes_wait_briefly_and_are_spaced(self):
+        item = self.started()
+        since = item["ref"]["running_since"]
+        calls = len(self.host.calls)
+        self.assertEqual("running", PROMOTE.status(item, now=since + 5)[0])
+        self.assertEqual(calls, len(self.host.calls), "no probe while the unit settles")
+        PROMOTE.status(item, now=since + 30)
+        PROMOTE.status(item, now=since + 40)
+        self.assertEqual(calls + 1, len(self.host.calls), "one probe per interval")
+        self.assertLessEqual(self.host.waits[-1], 5)
+
+    def test_download_failure_says_unchanged_and_uncordons(self):
+        _, result = self.run_with("CODE 20\n")
+        self.assertEqual("failed", result[0])
+        self.assertIn("still an app host", result[2])
+        self.assertEqual(("app-1", False), self.cordons[-1])
+
+    def test_code_10_says_how_to_rejoin(self):
+        _, result = self.run_with("CODE 10\n")
+        self.assertIn("app-1.node-password.k3s", result[2])
+        self.assertIn("AGENT-JOIN-CMD", result[2])
+
+    def test_installer_error_after_joining_carries_on(self):
+        item, _ = self.run_with("CODE 1\n", now=None) if False else (None, None)
+        item = self.started()
+        self.cluster.nodes[2]["metadata"]["labels"].update({"node-role.kubernetes.io/control-plane": "true",
+                                                            "node-role.kubernetes.io/etcd": "true"})
+        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+                                                                   "ready": ["server-1", "server-2", "app-1"], "total": 3,
+                                                                   "quorum_needs": 2, "can_lose": 1}):
+            _, result = self.run_with("CODE 1\n", item=item)
+        self.assertEqual("running", result[0])
+        self.assertEqual("joining", item["ref"]["phase"])
+
+    def test_drain_messages_do_not_mention_power(self):
+        def slow(n, progress=None, **k):
+            progress("draining", 10, "Waiting for drained pods to leave: lab/db-0; power has not been sent")
+            raise ValueError("Host remains cordoned; drain timed out after 2 minutes. Pods have not left the host: lab/db-0. "
+                             "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
+        with mock.patch.object(LIFECYCLE, "drain", slow):
+            item = self.started()
+        text = " ".join(m for _, m in self.ops.phases)
+        self.assertNotIn("ower", text)
+        self.assertNotIn("remains cordoned", text)
+        self.assertIn("lab/db-0", item["message"])
+
+    def test_a_missing_longhorn_node_is_reported(self):
+        item = self.joined_item()
+        real = self.cluster.kget
+        def kget(path):
+            if "/longhorn-system/nodes/" in path:
+                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+            return real(path)
+        PROMOTE.bind(kget, lambda *a, **k: {}, self.host, lambda: "server-1")
+        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+                                                                   "ready": ["server-1", "server-2", "app-1"], "total": 3,
+                                                                   "quorum_needs": 2, "can_lose": 1}):
+            result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)
+        self.assertEqual("succeeded", result[0])
+        self.assertIn("Longhorn", result[2])
+
+
+class HostrunStdinTests(unittest.TestCase):
+    def test_stdin_reaches_the_exec(self):
+        import homestead_hostrun as HOSTRUN
+        seen, pods = {}, {}
+        def ksend(method, path, body=None):
+            if method == "POST":
+                pods["p"] = {"status": {"phase": "Running"}}
+            return {}
+        HOSTRUN.bind(lambda path: pods.get("p") or {}, ksend,
+                     lambda ns, pod, argv, **k: seen.update(k) or (b"OK", ""), "lab")
+        with mock.patch.object(HOSTRUN, "_get", lambda path: pods.get("p")), \
+             mock.patch.object(HOSTRUN, "_delete", lambda path: pods.pop("p", None)):
+            HOSTRUN.run("app-1", "cat", stdin=b"secret", sleep=lambda s: None)
+        self.assertEqual(b"secret", seen.get("stdin"))
+
+
+class ClaimTests(JobTests):
+    def test_a_job_cancelled_before_its_thread_runs_is_left_alone(self):
+        threads = []
+        with mock.patch.object(PROMOTE, "_thread", lambda target: threads.append(target)):
+            item = self.started()
+        item["status"] = "cancelling"
+        threads[0]()
+        self.assertEqual("cancelling", item["status"])
+        self.assertEqual([], self.drains)
+
+
+class WiringTests(unittest.TestCase):
+    """server.py sits at its line cap: the module wires itself when
+    homestead_routes loads it at start, through hostrun's binding."""
+    def test_server_py_does_not_name_the_module(self):
+        source = (Path(__file__).resolve().parents[1] / "server" / "server.py").read_text()
+        self.assertFalse("homestead_promote" in source, "server.py names homestead_promote")
+
+    def test_import_registers_the_job_and_reaches_kubernetes_through_hostrun(self):
+        import importlib
+        import homestead_hostrun as HOSTRUN
+        import homestead_self as SELF
+        seen = []
+        saved = (HOSTRUN.kget, HOSTRUN.ksend)
+        self.addCleanup(lambda: setattr(HOSTRUN, "kget", saved[0]) or setattr(HOSTRUN, "ksend", saved[1]))
+        fresh = importlib.reload(PROMOTE)
+        self.assertIs(OPS.RESOLVERS[fresh.KIND], fresh.status)
+        self.assertEqual((fresh.cancel_plan, fresh.cancel_run), OPS.CANCELLERS[fresh.KIND])
+        HOSTRUN.kget = lambda path: seen.append(path) or {"spec": {"nodeName": "server-1"}}
+        with mock.patch.dict("os.environ", {"HOSTNAME": "homestead-a"}):
+            self.assertEqual("server-1", fresh.own_node())
+        self.assertEqual([f"/api/v1/namespaces/{SELF.NS}/pods/homestead-a"], seen)
+        self.assertIs(fresh.hostrun, HOSTRUN)

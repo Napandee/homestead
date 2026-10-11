@@ -51,7 +51,7 @@ managed_by = lambda dep: {}
 # The other jobs that move or restart apps, or change hosts, by the kind
 # their modules give them, beside the ones server.py names by their module's
 # KIND: the run waits for every one of them.
-MOVES_OR_RESTARTS = ("host-os", "cluster-shutdown", "deployment", "move", "workload-copy", "workload-rename",
+MOVES_OR_RESTARTS = ("host-os", "host-promote", "cluster-shutdown", "deployment", "move", "workload-copy", "workload-rename",
                      "restructure", "reclass", "volume-restore", "snapshot-revert", "self-data-move",
                      "self-data-handoff", "self-data-prepare", "vm-migration", "vm-power", "image-update",
                      "image-rollback", "disk-retire", "disk-v2-convert", "longhorn-v2-prepare",
