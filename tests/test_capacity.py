@@ -216,3 +216,55 @@ class EveryHostTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NumberTests(unittest.TestCase):
+    """#429: the forecast ranks by each pod's priority number, as the scheduler does."""
+    def test_a_homestead_critical_pod_at_1000_does_not_evict_an_x_normal_one(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True},
+                        {"metadata": {"name": "homestead-critical"}, "value": 1000}])
+        moving = pod("ha", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="homestead-critical", priority=1000)
+        there = pod("web", "b", mem="3Gi")
+        there["spec"].update(priorityClassName="x-normal", priority=10000)
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("ha", to=("b",)))
+        self.assertEqual([], f["evicted"])
+        self.assertEqual(["lab/ha"], [w["id"] for w in f["waits"]])
+
+    def test_an_x_critical_pod_evicts_an_x_low_one(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-critical"}, "value": 100000},
+                        {"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True},
+                        {"metadata": {"name": "x-low"}, "value": 1000, "preemptionPolicy": "Never"}])
+        moving = pod("vault", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="x-critical", priority=100000)
+        there = pod("ci", "b", mem="3Gi")
+        there["spec"].update(priorityClassName="x-low", priority=1000, preemptionPolicy="Never")
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("vault", to=("b",)))
+        self.assertEqual([("lab/ci", "b")], [(e["id"], e["on"]) for e in f["evicted"]])
+
+    def test_within_critical_the_higher_number_evicts_the_lower(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-infra"}, "value": 500000},
+                        {"metadata": {"name": "x-critical"}, "value": 100000}])
+        moving = pod("dns", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="x-infra", priority=500000)
+        there = pod("vault", "b", mem="3Gi")
+        there["spec"].update(priorityClassName="x-critical", priority=100000)
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("dns", to=("b",)))
+        self.assertEqual([("lab/vault", "b")], [(e["id"], e["on"]) for e in f["evicted"]])
+
+    def test_a_class_above_the_default_that_never_preempts_waits(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-patient"}, "value": 50000, "preemptionPolicy": "Never"}])
+        moving = pod("backup", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="x-patient", priority=50000, preemptionPolicy="Never")
+        there = pod("web", "b", mem="3Gi")
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("backup", to=("b",)))
+        self.assertEqual([], f["evicted"])
+        self.assertEqual(["lab/backup"], [w["id"] for w in f["waits"]])
