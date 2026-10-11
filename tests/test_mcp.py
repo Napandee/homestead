@@ -177,6 +177,23 @@ class CallTests(Base):
         row = REQUESTS.get(answer["request"])
         self.assertEqual(("admin", True), (row["role"], row["escalated"]))
 
+    def test_an_approved_host_access_deploy_is_reviewed_again_as_the_admin(self):
+        k = key(["read", "containers:manage"], role="operator")
+        settings = {"name": "x", "image": "busybox", "privileged": True, "capacity_token": "old"}
+        with mock.patch.object(TOOLS, "call", side_effect=HOSTACCESS.Refused("privileged mode is for admins to give")):
+            rid = self.call("deploy_container", {"settings": settings}, k)["structuredContent"]["request"]
+        seen = []
+
+        def route(method, path, query=None, body=None, *, user, role):
+            seen.append((path, role, dict(body or {})))
+            return {"capacity_token": "fresh", "capacity": {}} if path == "/api/preview" else {"ok": True}
+        with mock.patch.object(TOOLS, "call", side_effect=route):
+            self.assertEqual("done", REQUESTS.approve(rid, "ada", "admin")["status"])
+        self.assertEqual(["/api/preview", "/api/deploy"], [p for p, _, _ in seen])
+        self.assertEqual({"admin"}, {r for _, r, _ in seen})
+        self.assertNotIn("capacity_token", seen[0][2], "the agent's old token is not reviewed again")
+        self.assertEqual(("fresh", True), (seen[1][2]["capacity_token"], seen[1][2]["confirm_capacity"]))
+
     def test_logs_come_back_as_untrusted_text_without_control_codes(self):
         self.objects = {"/apis/apps/v1/namespaces/lab/deployments/web": {"spec": {"selector": {"matchLabels": {"app": "web"}}}},
                         "/api/v1/namespaces/lab/pods?labelSelector=app%3Dweb": {
@@ -247,6 +264,8 @@ class ApprovalTests(Base):
             self.assertEqual("expired", REQUESTS.get(rid)["status"])
             with self.assertRaisesRegex(ValueError, "expired already"):
                 REQUESTS.approve(rid, "ada", "admin")
+            REQUESTS.get(rid)
+        self.assertEqual(1, sum(1 for r in AUDIT.recent() if r["outcome"] == "expired"), "written down once")
 
     def test_an_agent_follows_only_its_own_keys_requests(self):
         rid = self.ask_delete()["request"]
@@ -358,6 +377,30 @@ class ServerDoorTests(unittest.TestCase):
                 except PermissionError:
                     refused = True
             self.assertTrue(refused, extra)
+
+    def post(self, message, key_record):
+        body = json.dumps(message).encode()
+        h, server = self.handler("/mcp", headers={"Authorization": "Bearer hsk_x", "Host": "homestead.example.com"}, body=body)
+        with mock.patch.object(server.API_KEYS, "verify", return_value=key_record),                 mock.patch.object(server.MCP, "enabled", return_value=True):
+            h.do_POST()
+        return h._send.call_args[0]
+
+    def test_a_whole_request_through_the_server(self):
+        k = {"id": "1", "name": "claude", "owner": "ada", "scopes": ["read"], "expires": 9, "mcp": True}
+        code, answer = self.post({"jsonrpc": "2.0", "id": 7, "method": "tools/list"}, k)
+        self.assertEqual(200, code)
+        self.assertIn("list_containers", {t["name"] for t in answer["result"]["tools"]})
+        code, answer = self.post({"jsonrpc": "2.0", "id": 8, "method": "tools/list"}, {**k, "mcp": False})
+        self.assertEqual(403, code)
+
+    def test_get_is_405_while_on_and_404_while_off(self):
+        import server
+        for on, code in ((True, 405), (False, 404)):
+            h, _ = self.handler("/mcp", "GET", headers={"Authorization": "Bearer hsk_x"})
+            k = {"id": "1", "name": "claude", "owner": "ada", "scopes": ["read"], "expires": 9, "mcp": True}
+            with mock.patch.object(server.API_KEYS, "verify", return_value=k), mock.patch.object(server.MCP, "enabled", return_value=on):
+                h.do_GET()
+            self.assertEqual(code, h._send.call_args[0][0])
 
     def test_mcp_never_travels_to_a_linked_cluster(self):
         h, server = self.handler("/mcp", headers={"X-Homestead-Cluster": "shed1", "Authorization": "Bearer hsk_x"})

@@ -223,11 +223,21 @@ def _appstore(args, ctx):
 
 
 # --- changes
+def _clean(settings):
+    """Settings as an agent sends them back: get_container_settings says
+    "self" or "other" for a priority class it does not set, which a save
+    takes as a tier to set - so such a priority is left out."""
+    settings = dict(settings or {})
+    if settings.get("priority") not in (None, "critical", "normal", "low"):
+        settings.pop("priority")
+    return settings
+
+
 def _with_review(preview_path, apply_path):
     """The app's two steps in one, for an approved run: review now, as the
     approver, then apply with that review's token."""
     def run(args, ctx):
-        settings = dict(args.get("settings") or {})
+        settings = _clean(args.get("settings"))
         if ctx.get("fresh"):
             settings.pop("capacity_token", None)
             review = call("POST", preview_path, body=settings, **_as(ctx))
@@ -240,7 +250,7 @@ def _with_review(preview_path, apply_path):
 
 def _preview(path):
     def run(args, ctx):
-        return call("POST", path, body=dict(args.get("settings") or {}), **_as(ctx))
+        return call("POST", path, body=_clean(args.get("settings")), **_as(ctx))
     return _guarded(run)
 
 
@@ -379,8 +389,9 @@ TOOLS = [
     Tool("get_container", "Container", "read", READ, "One container's state.", {"namespace": NS, "name": NAME_ARG},
          ["namespace", "name"], run=_v1("/api/v1/containers/{namespace}/{name}")),
     Tool("get_container_settings", "Container settings", "read", READ,
-         "A container's settings as Edit shows them: image, ports, variables, volumes, resources, placement. "
-         "Change what you need and pass them to preview_edit_container.",
+         "A container's settings as Edit shows them. To change it, send them back to preview_edit_container "
+         "with ns and name kept and what you need changed: containers (each one's image, env, ports, volumes, "
+         "cpu, memory), replicas, placement, node, failover, priority (critical, normal or low), monitoring.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_settings),
     Tool("list_events", "Events", "read", READ, "Kubernetes' recent events for a container or VM, newest first.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_events),

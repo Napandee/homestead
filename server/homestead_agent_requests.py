@@ -58,14 +58,20 @@ def _save(rows):
 
 
 def _settle(rows, now):
-    """Waiting past TTL is expired; ended long enough ago is dropped."""
+    """Waiting past TTL is expired, and written down once; ended long enough
+    ago is dropped. Saved when anything changed. Called under _lock."""
+    changed = False
     for rid in list(rows):
         row = rows[rid]
         if row["status"] == "pending" and row["expires"] <= now:
             row.update(status="expired", ended=now, detail="Nobody approved it in time; the agent can ask again")
             AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "expired", addr=row.get("addr", ""))
+            changed = True
         if row["status"] not in ("pending", "running") and row.get("ended", now) + KEEP < now:
             rows.pop(rid)
+            changed = True
+    if changed:
+        _save(rows)
     return rows
 
 
@@ -116,7 +122,6 @@ def listing(role):
     """Waiting first, then the latest ended, for the bell and the page."""
     with _lock:
         rows = _settle(_load(), time.time())
-        _save(rows)
     ordered = sorted(rows.values(), key=lambda r: (r["status"] != "pending", -r["created"]))
     return {"requests": [{**public(r, full=True), "can_decide": AUTH.allows(role, r["role"])} for r in ordered[:100]],
             "pending": sum(1 for r in rows.values() if r["status"] == "pending")}
