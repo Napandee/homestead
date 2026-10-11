@@ -40,7 +40,10 @@ function etcdMembersHtml(cp, admin) {
   // The join guide is for k3s and RKE2; Harvester adds hosts its own way.
   const joinable = ["k3s", "rke2"].includes(STATE.platform?.distribution) && !STATE.platform?.harvester;
   const add = cp.etcd_total === 2 && admin && joinable ? ` ${UI.button("Add a tiebreaker", "platformJoinGuide('tiebreaker')")}` : "";
-  return members.length ? `<small class="etcd-members">${members.join(" · ")}${add}</small>` : "";
+  // On k3s an app host can be the third vote too (#364).
+  const promote = cp.etcd_total === 2 && admin && STATE.platform?.distribution === "k3s" && !STATE.platform?.harvester
+    ? ' <span class="dim xs">or make an app host a server from its Host actions</span>' : "";
+  return members.length ? `<small class="etcd-members">${members.join(" · ")}${add}${promote}</small>` : "";
 }
 window.etcdMembersHtml = etcdMembersHtml;
 

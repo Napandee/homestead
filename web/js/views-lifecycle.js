@@ -636,6 +636,10 @@ window.nodeActions = async name => {
   const off = qr.power_enabled === false;
   const host = ((typeof STATE !== "undefined" && STATE.data.nodes) || []).find(n => n.name === name) || {};
   const cordoned = host.schedulable === false;
+  const platform = (typeof STATE !== "undefined" && STATE.platform) || {};
+  // An app host on k3s with etcd can be made a server in place (#364).
+  const promotable = platform.distribution === "k3s" && !platform.harvester && (qr.members || []).length > 0
+    && !(host.roles || []).some(r => ["control-plane", "etcd", "master"].includes(r));
   const workloads = impact.workloads || [], stranded = impact.stranded || [];
   const action = (title, detail, buttonHtml, tone = "neutral") =>
     `<div class="ui-insight-row">${UI.statusDot(tone)}<div><b>${esc(title)}</b><small>${esc(detail)}</small></div><div class="ui-insight-action">${buttonHtml}</div></div>`;
@@ -652,6 +656,8 @@ window.nodeActions = async name => {
           + "Reviewed first: what moves, what waits for the host, and its volume copies.",
         UI.button("Reboot…", `nodePowerReview(${jsArg(name)},'reboot')`, { attrs: 'data-need="admin"' })
         + UI.button("Shut down…", `nodePowerReview(${jsArg(name)},'poweroff')`, { kind: "danger", attrs: 'data-need="admin"' }))}
+    ${promotable ? action("Make this a server", "Gives the cluster another etcd vote. Its apps move off while k3s reinstalls; its storage stays.",
+      UI.button("Make server…", `nodePromoteReview(${jsArg(name)})`, { attrs: 'data-need="admin"' })) : ""}
     ${action("Remove from cluster", "Take this host out for good, after checking quorum and volume copies.",
       UI.button("Remove…", `nodeRemoval(${jsArg(name)})`, { kind: "danger", attrs: 'data-need="admin"' }), "bad")}
   </div>`;
@@ -680,6 +686,44 @@ window.nodeCordon = async (node, cordon) => {
 };
 window.nodeDrain = async node => {
   evacuateNode(node);
+};
+/* Make an app host a server in place (#364): reviewed first, then a job. */
+window.nodePromoteReview = async node => {
+  let plan;
+  try { plan = await api(`/api/node/promote/plan?${new URLSearchParams({ node })}`); }
+  catch (e) { return toast(`Could not check ${node}: ${e.message}`, "bad"); }
+  window.__nodePromotePlan = plan;
+  const f = plan.facts || {}, blockers = plan.blockers || [], warnings = plan.warnings || [];
+  const list = rows => `<ul>${rows.map(r => `<li>${esc(r)}</li>`).join("")}</ul>`;
+  const notice = blockers.length ? UI.callout("bad", "Can't make it a server", list(blockers))
+    : warnings.length ? UI.callout("warn", "Check first", list(warnings)) : "";
+  const facts = UI.facts([
+    ["k3s", `<span class="mono">${esc(f.version || "?")}</span>`],
+    ["Joins through", `<span class="mono">${esc(f.server || "?")}</span>`],
+    ["Volume copies here", `${esc(f.replicas ?? "unknown")} · they stay`]]);
+  // The flags the server is started with: detail most people do not need.
+  const settings = UI.more("Settings", UI.facts([
+    ["The cluster's", `<span class="mono">${esc((f.settings || []).join(" ") || "none")}</span>`],
+    ["This host's", `<span class="mono">${esc((f.host_settings || []).join(" ") || "none")}</span>`]]));
+  const stages = UI.steps([
+    { title: "Drain", detailHtml: `Cordon ${esc(node)} and move its apps off` },
+    { title: "Reinstall", detailHtml: "Remove the k3s agent and install a server, keeping the node's identity" },
+    { title: "Join etcd", detailHtml: `Wait for ${esc(node)} to come back as a member, then uncordon it` }]);
+  childModal(`Make a server · ${node}`, UI.lead(`Makes ${esc(node)} a server: the cluster gains an etcd vote, and the host keeps its storage.`)
+    + notice + facts + stages + settings
+    + (blockers.length ? "" : UI.ack("promoteAck", `Take ${node} out of service while k3s reinstalls`))
+    + UI.actions(UI.cancel() + UI.button("Make server", `nodePromoteStart(${jsArg(node)})`,
+      { kind: "pri", disabled: blockers.length > 0, attrs: 'data-need="admin"' })));
+  window.applyRole?.();
+};
+window.nodePromoteStart = async node => {
+  const plan = window.__nodePromotePlan || {};
+  if (!$("#promoteAck")?.checked) return toast(`Confirm taking ${node} out of service first`, "warn");
+  try {
+    const r = await api("/api/node/promote", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, review_token: plan.review_token }) });
+    toast(r.detail || `Making ${node} a server`, "ok"); closeModal(); refresh(true);
+  } catch (e) { toast(e.message, "bad"); }
 };
 let NODE_POWER_REVIEW_SEQUENCE = 0;
 window.nodePowerReview = async (node, action, force = false) => {

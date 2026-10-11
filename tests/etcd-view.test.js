@@ -45,3 +45,12 @@ test("the tiebreaker badge is a neutral tag", () => {
   const html = ctx.etcdMembersHtml({ etcd_total: 3, members: [{ name: "pi", ready: true, role: "tiebreaker" }] }, true);
   assert.match(html, /pill slim neutral">tiebreaker/);
 });
+
+test("two members on k3s also point to making an app host a server", () => {
+  const ctx = load(["web/js/views-cluster.js"]);
+  const cp = { etcd_total: 2, members: [{ name: "one", ready: true, role: "server" }, { name: "two", ready: true, role: "server" }] };
+  ctx.STATE.platform = { distribution: "k3s", harvester: false };
+  assert.match(ctx.etcdMembersHtml(cp, true), /app host[^]*Host actions/);
+  ctx.STATE.platform = { distribution: "rke2", harvester: false };
+  assert.doesNotMatch(ctx.etcdMembersHtml(cp, true), /app host/);
+});

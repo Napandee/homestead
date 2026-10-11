@@ -232,6 +232,7 @@ const DIALOGS = [
   ["node-single-host-reboot", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','reboot')"],
   ["node-single-host-shutdown", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','poweroff')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
+  ["node-promote", "nodes", "nodePromoteReview('harvester-node1')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
   ["deploy-preview", "deploy", "UI.selectSection('containerDeploy','summary')", "click:previewYaml"],

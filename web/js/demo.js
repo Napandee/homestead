@@ -1628,6 +1628,13 @@ ssh_pwauth: true
         message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
       return { operation: op, steps: [], background: true };
     },
+    "/api/node/promote/plan": url => ({ node: url.searchParams.get("node"), blockers: [],
+      warnings: ["3 → 4 members: an even count adds no failure margin", `${url.searchParams.get("node")} is out of service for several minutes while k3s reinstalls`],
+      facts: { version: "v1.31.4+k3s1", server: "192.0.2.10", settings: ["--cluster-cidr", "10.42.0.0/16"],
+        host_settings: ["--node-ip", "192.0.2.14"], members: ["harvester-node1", "harvester-node2", "harvester-node3"], replicas: 3 },
+      review_token: "demo-promote" }),
+    "/api/node/promote": () => ({ ok: true, operation: { id: "demo-promote", kind: "host-promote", status: "running", progress: 10,
+      title: "Make a host a server", message: "Moving apps off" }, detail: "Making the host a server; follow it in the job tray" }),
     "/api/quorum": { members: ["harvester-node1", "harvester-node2", "harvester-node3"], ready: ["harvester-node1", "harvester-node2", "harvester-node3"],
       total: 3, quorum_needs: 2, can_lose: 1, power_enabled: true },
     "/api/node/impact": url => ({ node: url.searchParams.get("node"),
