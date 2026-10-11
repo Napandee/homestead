@@ -399,19 +399,8 @@ def update_policy_status(settings=None, now=None):
     update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
     policy = update.get("policy", "approval_required")
     maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
-    current = time.gmtime(time.time() if now is None else now)
-    hour, minute = (int(part) for part in maintenance["start"].split(":"))
-    start_minute = hour * 60 + minute
-    current_minute = current.tm_hour * 60 + current.tm_min
     duration = int(maintenance["duration_minutes"])
-    # A window may cross midnight. In that case early minutes belong to the
-    # previous configured day, not the current one.
-    today_open = current.tm_wday in maintenance["days"] and (
-        start_minute <= current_minute < min(1440, start_minute + duration))
-    previous_day = (current.tm_wday - 1) % 7
-    carry = max(0, start_minute + duration - 1440)
-    carry_open = previous_day in maintenance["days"] and current_minute < carry
-    window_open = bool(today_open or carry_open)
+    window_open = RECOVERY.window(maintenance, time.time() if now is None else now)[0]
     if policy == "notify_only":
         allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
     elif policy == "maintenance_window" and not window_open:
@@ -467,6 +456,7 @@ def save_app_settings(value):
         ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     _cache.pop("settings", None)
     UPDATES.invalidate()
+    PLACEMODE.saved(settings["placement"])
     # A different catalogue source is a different catalogue.
     for key in [k for k in _cache if k.startswith("appstore")]:
         _cache.pop(key, None)
@@ -547,37 +537,6 @@ def _unifi_loop():
                 beat("unifi", 600, leader_only=True)
                 print(f"unifi: {str(error)[:160]}", flush=True)
         time.sleep(600)
-
-
-def _forecast_loop():
-    """Hourly on the leader: today's usage of each volume, disk and the pool."""
-    while True:
-        if LEADER.is_leader():
-            try:
-                FORECAST.observe(cached("vol", 8, STORAGE.get_volumes), LHCAP.status())
-                beat("forecast", 3600, leader_only=True)
-            except Exception as error:
-                beat("forecast", 3600, error, leader_only=True)
-                print(f"forecast: {str(error)[:160]}", flush=True)
-        time.sleep(3600)
-
-
-def _changes_loop():
-    """Every minute on the leader: what changed in each app since the last look."""
-    last = time.time()
-    while True:
-        started = time.time()
-        if LEADER.is_leader():
-            try:
-                deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
-                        if d["metadata"]["namespace"] not in SYS_NS]
-                CHANGES.observe(deps, now=started, since=last)
-                beat("changes", 60, leader_only=True)
-            except Exception as error:
-                beat("changes", 60, error, leader_only=True)
-                print(f"changes: {str(error)[:160]}", flush=True)
-        last = started
-        time.sleep(max(5, 60 - (time.time() - started)))
 
 
 def change_undo_plan(body):
@@ -2013,7 +1972,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND)
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -2390,7 +2349,7 @@ def rebalance_move(ns, name, node):
 
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
-                PLACE.get_nodes)
+                PLACE.get_nodes, HOSTACCESS.require_target_as, OPS, lambda: PLACEMODE.standby_hosts())
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
@@ -2586,6 +2545,12 @@ import homestead_outage as OUTAGE
 import homestead_changes as CHANGES
 import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
+import homestead_usage as USAGE
+import homestead_requests as RESERVE
+import homestead_recovery as RECOVERY
+import homestead_priority as PRIORITY
+import homestead_placement_mode as PLACEMODE
+import homestead_capacity as CAPACITY
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2735,8 +2700,20 @@ HOUSEKEEPING.bind(DATA_DIR, kget=lambda path: kget(path), portal_links=lambda: P
 SCHEDULES.bind(DATA_DIR, items=lambda: scheduled_items(), setter=lambda b: set_schedule(b))
 OUTAGE.bind(DATA_DIR, kget=lambda path: kget(path), ksend=lambda *a, **k: ksend(*a, **k),
             dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: guard_managed_smb(ns, name))
-CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k))
-FORECAST.bind(DATA_DIR)
+CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
+             deployments=lambda: [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
+FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
+USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
+RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
+             HOSTACCESS.require_target_as, OPS)
+PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, get_app_settings), SYS_NS)
+CAPACITY.bind(kget, NODES.node_impact, NODES._impact_sources, FLOW._flow_owner, lambda pod: NAMES.label_of(pod["metadata"], "task"))
+RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS,
+              lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
+              (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,
+              UPDATES.managed_by)
+PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
+              HOSTACCESS.require_target_as, OPS)
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
@@ -2839,14 +2816,18 @@ def autoupdate_tick():
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
     chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,
-                             status["window_open"], status["policy"])
+                             status["window_open"], status["policy"], (CREBALANCE.KIND,))
     if not chosen:
         return None
-    OPS.start(AUTOUPDATE.KIND, f"Update {chosen['name']} automatically",
-              {"kind": "Deployment", "name": chosen["name"], "namespace": chosen["ns"]},
-              "/containers?" + urllib.parse.urlencode({"find": chosen["name"]}),
-              {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
-              "Snapshotting its volumes before the update")
+    try:
+        # Refused under the job list's lock if a rebalance started since the look.
+        OPS.start(AUTOUPDATE.KIND, f"Update {chosen['name']} automatically",
+                  {"kind": "Deployment", "name": chosen["name"], "namespace": chosen["ns"]},
+                  "/containers?" + urllib.parse.urlencode({"find": chosen["name"]}),
+                  {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
+                  "Snapshotting its volumes before the update", unless=(CREBALANCE.KIND,))
+    except ValueError:
+        return None
     _cache.pop("wl", None)
     return chosen
 
@@ -3009,6 +2990,7 @@ def _alert_sources():
     take("outage", lambda: OUTAGE.alert_facts())
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
+    take("recovery", RECOVERY.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -5165,8 +5147,10 @@ def start_background_tasks():
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
     threading.Thread(target=_housekeeping_loop, name="housekeeping", daemon=True).start()
     threading.Thread(target=_schedules_loop, name="schedules", daemon=True).start()
-    threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
-    threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
+    threading.Thread(target=CHANGES.run, name="changes", daemon=True).start()
+    threading.Thread(target=FORECAST.run, name="forecast", daemon=True).start()
+    threading.Thread(target=USAGE.run, name="usage", daemon=True).start()
+    threading.Thread(target=RECOVERY.run, name="recovery", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()

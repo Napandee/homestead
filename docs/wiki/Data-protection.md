@@ -124,6 +124,13 @@ Schedules are picked as shapes - every few hours, daily, weekdays, monthly -
 and written to cron for you. Longhorn keeps time in UTC; the editor shows the
 next three runs in your own time. **Run now** starts one at once.
 
+Longhorn's snapshots and backups work wherever an app runs, since Longhorn
+takes them from the volume, not from the app's host - so they do not hold an
+app in place. A CronJob of your own that mounts an app's volume - a nightly
+database dump, say - keeps that app where it is when containers move back
+after a host returns in the update window, if it runs while the rebalance may
+still be going ([Settings](Settings#when-a-host-comes-back)).
+
 ### Weekly trim, by default
 
 Files deleted inside a volume leave their space allocated in Longhorn until

@@ -33,11 +33,12 @@ function nextRun(cron) {
   const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;
   return `<span class="small" data-tip="${esc(localTime(at))}, your time">${soon}</span>`;
 }
-function lastRunText(j) {
+/* where: what says why a run failed - Longhorn's own jobs by default. */
+function lastRunText(j, where = "its pod's log in longhorn-system") {
   if (j.running) return '<span class="pill slim med">running</span>';
   if (!j.last_run) return '<span class="dim">not yet</span>';
   const ago = fmtAgo(Math.max(0, (Date.now() - Date.parse(j.last_run)) / 1000));
-  return j.last_failed ? `<span class="pill slim crit" data-tip="The last run did not finish; its pod's log in longhorn-system says why">failed</span> <span class="dim xs">${esc(ago)}</span>`
+  return j.last_failed ? `<span class="pill slim crit" data-tip="${esc(`The last run did not finish; ${where} says why`)}">failed</span> <span class="dim xs">${esc(ago)}</span>`
     : `<span class="small">${esc(ago)}</span>`;
 }
 

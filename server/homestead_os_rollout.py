@@ -33,6 +33,7 @@ import os
 import time
 import urllib.error
 
+import homestead_operations as OPS
 import homestead_shared as SHARED
 
 kget = platform = host_os = None
@@ -156,6 +157,16 @@ def _ready(item):
 
 def _nodes():
     return {n["metadata"]["name"]: n for n in (kget("/api/v1/nodes") or {}).get("items", [])}
+
+
+def _rebalancing():
+    """Whether Balance hosts is moving containers: an update window's
+    rollout drains and reboots the hosts it is moving them to, so the
+    scheduled one waits for it. An unreadable job list does not hold it up."""
+    try:
+        return any(i.get("kind") == "container-rebalance" and i.get("status") not in OPS.TERMINAL for i in OPS._read())
+    except Exception:
+        return False
 
 
 def start(reason="asked", now=None):
@@ -389,6 +400,8 @@ def tick(now=None):
         _save(state)
     if not running and due(state, now):
         try:
+            if _rebalancing():
+                raise ValueError("containers are being rebalanced; it waits for that to finish")
             start("schedule", now)
         except ValueError as error:
             print(f"OS updates: the window opened but {error}", flush=True)

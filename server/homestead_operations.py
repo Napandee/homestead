@@ -136,8 +136,11 @@ def _write(items):
             SHARED.write_json(os.path.join(DATA_DIR, LEGACY_MARKER), {"version": 1}, durable=True)
 
 
-def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
-    """Persist a newly started operation and return its public representation."""
+def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", unless=()):
+    """Persist a newly started operation and return its public representation.
+    unless: kinds of job that, while one is not finished, refuse this one -
+    checked under the same lock as the start, so two loops starting in the
+    same minute cannot both pass the check."""
     now = _now()
     item = {
         "id": secrets.token_hex(12), "kind": kind, "title": str(title)[:180],
@@ -153,6 +156,9 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
+        busy = next((i for i in items if i.get("kind") in set(unless or ()) and i.get("status") not in TERMINAL), None)
+        if busy:
+            raise ValueError(f"{busy.get('title') or busy.get('kind')} is running")
         import_targets = _cdi_targets(kind, ref)
         if import_targets and any(import_targets & _cdi_targets(i.get("kind"), i.get("ref") or {}) and
                                   (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))

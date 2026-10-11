@@ -291,6 +291,22 @@ def _tolerates(taint, tolerations):
     return False
 
 
+def may_run_on(spec, node):
+    """Whether a pod spec may be scheduled on a node object as the API gives
+    it: its node name, nodeSelector, required node affinity, and the node's
+    NoSchedule and NoExecute taints. Room is not weighed here."""
+    meta, node_spec = node.get("metadata") or {}, node.get("spec") or {}
+    name, labels = meta.get("name", ""), meta.get("labels") or {}
+    if spec.get("nodeName") and spec["nodeName"] != name:
+        return False
+    if any(labels.get(k) != v for k, v in (spec.get("nodeSelector") or {}).items()):
+        return False
+    if not _required_affinity_matches(spec, {"name": name, "labels": labels}):
+        return False
+    return all(taint.get("effect") not in ("NoSchedule", "NoExecute") or _tolerates(taint, spec.get("tolerations") or [])
+               for taint in node_spec.get("taints") or [])
+
+
 def _start_scheduler_check(spec, node):
     """Hard scheduling constraints relevant to a proposed pod start."""
     reasons, cautions = [], []

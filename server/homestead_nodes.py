@@ -402,17 +402,24 @@ def get_nodes():
     return out
 
 
-def node_impact(node):
-    """If this host goes down: what stops, moves and is at risk (homestead_impact)."""
-    node = _dns_name(node, "host name")
-    nodes = cached("nodes", 5, get_nodes)
-    if not any(n["name"] == node for n in nodes):
-        raise ValueError(f"there is no host {node}")
+def _impact_sources():
+    """The Deployments and VMs every host's impact preview reads."""
     deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
     try:
         raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
     except Exception:
         raw_vms = []
+    return deployments, raw_vms
+
+
+def node_impact(node, sources=None):
+    """If this host goes down: what stops, moves and is at risk (homestead_impact).
+    sources: _impact_sources(), when several hosts are previewed at once."""
+    node = _dns_name(node, "host name")
+    nodes = cached("nodes", 5, get_nodes)
+    if not any(n["name"] == node for n in nodes):
+        raise ValueError(f"there is no host {node}")
+    deployments, raw_vms = sources or _impact_sources()
     try:
         # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
         places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}

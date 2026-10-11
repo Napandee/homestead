@@ -123,5 +123,13 @@ class SiteNameTests(unittest.TestCase):
         self.assertEqual("", server.APP_SETTINGS.validate({"site_name": "   "})["site_name"])
 
 
+class PlacementSettingTests(unittest.TestCase):
+    def test_moving_back_after_a_host_returns_defaults_to_off_and_takes_only_its_modes(self):
+        self.assertEqual("off", server.APP_SETTINGS.validate({})["placement"]["rebalance"])
+        self.assertEqual("window", server.APP_SETTINGS.validate({"placement": {"rebalance": "window"}})["placement"]["rebalance"])
+        with self.assertRaisesRegex(ValueError, "off, suggest or window"):
+            server.APP_SETTINGS.validate({"placement": {"rebalance": "always"}})
+
+
 if __name__ == "__main__":
     unittest.main()

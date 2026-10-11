@@ -45,6 +45,13 @@ linked cluster, which applies its own rules to them.
   processes or IPC, and host folders are for admins to give
   (`homestead_host_access.py`). Editing or opening a console in an existing
   privileged workload also requires an admin.
+- **Bulk jobs**: setting reservations or priority tiers for many apps checks
+  each app as the person who started it, as Edit does - an operator cannot
+  reach a management, service-account or host-privileged workload through
+  them.
+- **Scheduling**: Homestead may create PriorityClasses (Kubernetes cannot
+  limit creating them by name) and reads only its own two. A critical app may
+  evict any pod with no tier when room is short; operators can set it.
 - **Files**: the volume browser refuses `..` and quotes every path it passes
   to its helper pod; nothing runs through a shell with request data.
 - **The pod**: runs as a non-root user with a read-only root filesystem, no
@@ -90,9 +97,12 @@ command already started inside the guest or container has terminated.
 
 Operators cannot exec or replace code in management/system workloads, helper
 pods, nondefault service accounts or workloads with host privileges. Checks apply
-to the original identity and the proposed manifest, including sidecars. New
-ordinary deployments do not mount service-account tokens. Custom installations
-must also avoid granting powerful Kubernetes rights to the default service account.
+to the original identity and the proposed manifest, including sidecars. A
+background job an operator starts - rebalancing containers - is checked for that
+operator when it is reviewed, and each change it makes is written as them, since
+the job itself runs with no request behind it. New ordinary deployments do not
+mount service-account tokens. Custom installations must also avoid granting
+powerful Kubernetes rights to the default service account.
 API control keys are limited to the same ordinary workload targets; their scopes
 never select the internal authorization bypass.
 

@@ -2,6 +2,7 @@ import datetime
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -83,6 +84,18 @@ class RolloutTests(unittest.TestCase):
     def finish_restarts(self):
         for op in self.ops.values():
             op["status"] = "succeeded"
+
+    def test_a_scheduled_rollout_waits_while_containers_are_rebalanced(self):
+        with mock.patch.object(ROLLOUT, "due", return_value=True), \
+                mock.patch.object(ROLLOUT.OPS, "_read", return_value=[{"kind": "container-rebalance", "status": "running"}]), \
+                mock.patch.object(ROLLOUT, "start") as start:
+            ROLLOUT.tick()
+            start.assert_not_called()
+        with mock.patch.object(ROLLOUT, "due", return_value=True), \
+                mock.patch.object(ROLLOUT.OPS, "_read", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
+                mock.patch.object(ROLLOUT, "start") as start:
+            ROLLOUT.tick()
+            start.assert_called_once()
 
     def test_hosts_are_updated_one_at_a_time_with_its_own_host_last(self):
         rollout = ROLLOUT.start(now=1000)

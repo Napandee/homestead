@@ -600,7 +600,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Main site",
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site",
       info: { version: "2.8.322-dev.3", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
@@ -1728,11 +1728,18 @@ ssh_pwauth: true
           : [{ name: "web", container: 8123, protocol: "TCP", host: 8123, expose: true }],
         hardware: index ? [] : (found.hardware || []), volumes: index ? [] : [{ name: "config",
           source: `${found.name}-config`, path: "/config", read_only: false, kind: "existing",
-          value: `${found.name}-config`, managed: false }] }));
+          value: `${found.name}-config`, managed: false }],
+        // A week of recorded use: the app outgrew what it reserves, and its
+        // sidecar has only a few hours so far.
+        usage: index ? { days: 1, hours: 3, samples: 40, rounds: 40, window_days: 7, since: "", cpu_p95_m: 3, cpu_max_m: 6, mem_p95_mi: 21, mem_max_mi: 24,
+            why: "A suggestion needs a day of readings; 3 hours so far." }
+          : { days: 7, hours: 168, samples: 2016, rounds: 2016, window_days: 7, since: "", cpu_p95_m: 118, cpu_max_m: 640, mem_p95_mi: 412, mem_max_mi: 598,
+            suggest: { cpu: "180m", memory: "528Mi", capped: [], cpu_now_m: 50, memory_now_mi: 128, cpu_change: "raise", memory_change: "raise", lowers: false, differs: true } } }));
       return { ns: found.ns, name: found.name, container_name: containers[0].name,
         pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
+        priority: found.name === "home-assistant" ? "critical" : "normal", priority_class: found.name === "home-assistant" ? "homestead-critical" : "",
         seed_configs: [], volumes: containers[0].volumes, containers };
     },
     "/api/portal": (url, init) => {
@@ -2009,6 +2016,59 @@ ssh_pwauth: true
         skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" }] };
     },
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
+    // Each host as if it failed; harvester-node2 is the issue's own example.
+    "/api/capacity/forecast": { unreserved: 4, pending: 0, hosts: [
+      { node: "harvester-node1", verdict: "fits", moving: 5, unreserved: 1, waits: [], evicted: [],
+        sentence: "If harvester-node1 fails, harvester-node3 would have 9.2 of 15 GiB of memory reserved. It fits.",
+        hosts: [{ name: "harvester-node2", mem_gib: 8.1, mem_before_gib: 6.4, mem_alloc_gib: 15, cpu_m: 2100, cpu_alloc_m: 8000, full: 0.54, received: true },
+          { name: "harvester-node3", mem_gib: 9.2, mem_before_gib: 5.9, mem_alloc_gib: 15, cpu_m: 2600, cpu_alloc_m: 8000, full: 0.613, received: true }] },
+      { node: "harvester-node2", verdict: "waits", moving: 9, unreserved: 2,
+        sentence: "If harvester-node2 fails, harvester-node1 would have 13.7 of 15 GiB of memory reserved; 3 low-tier apps would wait for room or be evicted.",
+        waits: [{ id: "ci/actions-runner", tier: "low", why: "low tier: it waits for room and evicts nothing", mem_gib: 2 },
+          { id: "media/tdarr", tier: "low", why: "low tier: it waits for room and evicts nothing", mem_gib: 1.5 }],
+        evicted: [{ id: "lab/paperless-consumer", tier: "low", why: "evicted from harvester-node1 to make room for lab/home-assistant", on: "harvester-node1", mem_gib: 0.75 }],
+        hosts: [{ name: "harvester-node1", mem_gib: 13.7, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 5200, cpu_alloc_m: 8000, full: 0.913, received: true },
+          { name: "harvester-node3", mem_gib: 12.9, mem_before_gib: 8.8, mem_alloc_gib: 15, cpu_m: 4100, cpu_alloc_m: 8000, full: 0.86, received: true }] },
+      { node: "harvester-node3", verdict: "tight", moving: 4, unreserved: 1, waits: [], evicted: [],
+        sentence: "If harvester-node3 fails, harvester-node1 would have 13.6 of 15 GiB of memory reserved. Tight, but it fits.",
+        hosts: [{ name: "harvester-node1", mem_gib: 13.6, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 4300, cpu_alloc_m: 8000, full: 0.907, received: true },
+          { name: "harvester-node2", mem_gib: 11.2, mem_before_gib: 8.1, mem_alloc_gib: 15, cpu_m: 3800, cpu_alloc_m: 8000, full: 0.747, received: true }] }] },
+    "/api/placement": { mode: "standby", unreserved: 4, notes: [], applies: true, hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: true, tainted: true, takes_work: true }] },
+    "/api/workloads/priority/plan": url => {
+      const picks = Object.fromEntries((url.searchParams.get("chosen") || "").split(",").filter(x => x.includes("=")).map(x => x.split("=")));
+      const rows = [
+        { id: "lab/home-assistant", current: "normal", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
+        { id: "lab/vaultwarden", current: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
+        { id: "lab/frigate", current: "normal", suggested: "", why: "" },
+        { id: "lab/paperless", current: "normal", suggested: "", why: "" },
+        { id: "ci/actions-runner", current: "normal", suggested: "low", why: "looks like batch or CI work" },
+        { id: "media/jellyfin", current: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" }];
+      const apps = rows.map(r => {
+        const [ns, name] = r.id.split("/");
+        const fallback = r.suggested && r.current === "normal" && !r.managed ? r.suggested : r.current;
+        return { ns, name, managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
+      }).sort((a, b) => ["critical", "normal", "low"].indexOf(a.tier) - ["critical", "normal", "low"].indexOf(b.tier) || a.id.localeCompare(b.id));
+      const changes = apps.filter(a => a.tier !== a.current);
+      return { apps, changes: changes.length, max: 50, review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."),
+        skipped: [{ id: "lab/unifi", why: "it uses the class unifi-high, which Homestead does not keep; it is left alone" }] };
+    },
+    "/api/workloads/priority": { operation: { id: "demo-priority", kind: "set-priority", title: "Set the priority tier of 2 apps", status: "running", progress: 0, message: "Making the priority classes", cancellable: true } },
+    "/api/workloads/requests/plan": url => {
+      const change = (container, cpu_now, memory_now, cpu, memory, p95c, p95m, maxm) => ({ container, cpu_now, memory_now, cpu, memory,
+        cpu_now_m: parseInt(cpu_now, 10) || 0, memory_now_mi: parseInt(memory_now, 10) || 0, from_limit: [],
+        capped: [], missing: !cpu_now && !memory_now, lowers: false, cpu_p95_m: p95c, mem_p95_mi: p95m, mem_max_mi: maxm, days: 7, hours: 168 });
+      const apps = [
+        { id: "lab/paperless", ns: "lab", name: "paperless", replicas: 1, missing: true, changes: [change("paperless", "", "", "65m", "480Mi", 42, 380, 512)] },
+        { id: "lab/home-assistant", ns: "lab", name: "home-assistant", replicas: 1, missing: true,
+          changes: [change("home-assistant", "", "", "120m", "848Mi", 78, 676, 790), change("mqtt-sidecar", "", "", "10m", "32Mi", 3, 21, 24)] },
+        { id: "lab/frigate", ns: "lab", name: "frigate", replicas: 1, missing: false, changes: [change("frigate", "50m", "128Mi", "180m", "528Mi", 118, 412, 598)] }];
+      const asked = url.searchParams.get("chosen"), chosen = asked === null ? apps.filter(a => a.missing).map(a => a.id) : asked.split(",").filter(Boolean);
+      return { apps: apps.map(a => ({ ...a, chosen: chosen.includes(a.id) })), max: 50, review_token: "demo-requests-" + chosen.join("."),
+        skipped: [{ id: "media/jellyfin", why: "Flux applies it (Kustomization flux-system/apps) and would undo the change at its next sync; commit this instead",
+            yaml: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: jellyfin\n  namespace: media\nspec:\n  template:\n    spec:\n      containers:\n      - name: jellyfin\n        resources:\n          requests:\n            cpu: 240m\n            memory: 1104Mi" },
+          { id: "lab/unifi", why: "A suggestion needs a day of readings; 8 hours so far." }] };
+    },
+    "/api/workloads/requests": { operation: { id: "demo-requests", kind: "set-requests", title: "Set reservations on 2 apps", status: "running", progress: 0, message: "Starting with the first app", cancellable: true } },
     "/api/longhorn/rebalance/plan": url => {
       const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
       const all = [{ volume: "pvc-demo-frigate", claim: "lab/frigate-recordings", app: "lab/frigate", from: "harvester-node2", to: "harvester-node1", size_gb: 120, attached: true },
@@ -2490,11 +2550,21 @@ ssh_pwauth: true
         { id: "v:ubuntu", name: "ubuntu-2404", replicas: 1, size_gb: 40, robustness: "healthy", attached: "harvester-node3" },
         { id: "v:router", name: "router-disk", replicas: 1, size_gb: 16, robustness: "unknown", attached: "" },
         { id: "v:orphan", name: "paperless-old-copy", replicas: 1, size_gb: 100, robustness: "unknown", attached: "" }],
-      workloads: [{ id: "w:frigate", name: "frigate", ns: "lab", kind: "container", node: "harvester-node2", hardware: ["igpu", "coral_usb"], uptime: 472221, cpu: .84, mem_mb: 1840, claims: [{ pvc: "frigate-config", vid: "v:frigate" }], ports: [{ name: "web", port: 5000, vip: "192.0.2.214" }] },
-        { id: "w:home", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }] },
-        { id: "w:paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }] },
+      workloads: [{ id: "w:lab/frigate", name: "frigate", ns: "lab", kind: "container", node: "harvester-node2", hardware: ["igpu", "coral_usb"], uptime: 472221, cpu: .84, mem_mb: 1840, claims: [{ pvc: "frigate-config", vid: "v:frigate" }], ports: [{ name: "web", port: 5000, vip: "192.0.2.214" }] },
+        { id: "w:lab/home-assistant", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }] },
+        { id: "w:lab/paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }] },
         { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.0.2.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.0.2.217" }] },
         { id: "w:vm-router", name: "router", ns: "lab", kind: "vm", node: "", running: false, state: "Stopped", ip: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [{ pvc: "router-disk", vid: "v:router" }], ports: [] }],
+      // A nightly backup per app, as a cluster with ReadWriteOnce volumes has:
+      // one failed last night, so the collapsed lane still says so.
+      jobs: [{ id: "j:lab/backup-frigate", name: "backup-frigate", ns: "lab", schedule: "15 2 * * *", time_zone: "", suspended: false,
+          last_run: new Date(Date.now() - 9 * 3600e3).toISOString(), last_success: "", running: 0, last_failed: true, claims: [{ pvc: "frigate-config", vid: "v:frigate" }] },
+        { id: "j:lab/backup-home-assistant", name: "backup-home-assistant", ns: "lab", schedule: "0 2 * * *", time_zone: "", suspended: false,
+          last_run: new Date(Date.now() - 9.2 * 3600e3).toISOString(), last_success: new Date(Date.now() - 9.2 * 3600e3 + 40e3).toISOString(),
+          running: 0, last_failed: false, claims: [{ pvc: "home-assistant", vid: "v:home" }] },
+        { id: "j:lab/backup-paperless", name: "backup-paperless", ns: "lab", schedule: "30 2 * * *", time_zone: "", suspended: false,
+          last_run: new Date(Date.now() - 8.7 * 3600e3).toISOString(), last_success: new Date(Date.now() - 8.7 * 3600e3 + 52e3).toISOString(),
+          running: 0, last_failed: false, claims: [{ pvc: "paperless-data", vid: "v:paperless" }] }],
       vips: [{ id: "i:192.0.2.214", ip: "192.0.2.214", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "frigate", port: 5000 }] },
         { id: "i:192.0.2.215", ip: "192.0.2.215", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "home-assistant", port: 8123 }] },
         { id: "i:192.0.2.216", ip: "192.0.2.216", kind: "vip", node: "harvester-node1", state: "ok", ports: [{ app: "paperless", port: 8000 }] },
@@ -2675,6 +2745,7 @@ ssh_pwauth: true
   const demoSetup = { skips: [], hidden: false, opened: true, admin: true, personal: ["appearance", "phone", "notifications"], steps: {
     health: { done: false, applies: true, summary: "One workload is not ready",
       issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
+    placement: { done: false, applies: true, mode: "", unreserved: 4, notes: [], hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: false, tainted: false, takes_work: true }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
       ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [] },
     clocks: { done: true, applies: false },

@@ -23,7 +23,7 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 # Steps that are each person's own; the rest are the cluster's, for admins.
 PERSONAL = ("appearance", "phone", "notifications")
-STEPS = ("health", "quorum", "clocks", "address", "lan", "https", "hostname", "disks", "storage", "smb",
+STEPS = ("health", "quorum", "placement", "clocks", "address", "lan", "https", "hostname", "disks", "storage", "smb",
          "backups", "config", "osupdates", "appearance", "phone", "notifications", "people",
          "unifi", "unraid", "homeassistant", "linked", "starter", "console")
 _lock = threading.Lock()
@@ -246,6 +246,14 @@ def state(user, role):
             return {"done": servers != 2, "applies": True, "servers": servers, "members": q["members"],
                     "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
         step("quorum", quorum)
+
+        def placement():
+            # Done once a way is chosen - Kubernetes' default counts - and
+            # shown only with two hosts taking work, or a standby one set.
+            import homestead_placement_mode as PLACEMODE
+            found = cached("placement", 15, PLACEMODE.current)
+            return {**found, "done": bool(found.get("mode")), "applies": bool(found.get("applies"))}
+        step("placement", placement)
 
         def clocks():
             known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, _bound["nodes"])}
