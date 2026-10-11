@@ -2661,7 +2661,7 @@ def ktable(path, timeout=20):
         return json.loads(r.read().decode())
 
 
-RESOURCES.bind(kget, ksend, ktable)
+RESOURCES.bind(kget, ksend, ktable, lambda kind, ns, name: guard_smb_object(kind, ns, name), DEFAULT_NS)
 VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(annotations), DEFAULT_NS,
          lambda b: set_vm_logos(b), lambda b: set_vm_monitoring(b))
 # Looked up as each call is made, so what a test puts in their place is used.
@@ -4785,19 +4785,13 @@ class H(HTTP.LimitedHandler):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p == "/api/auth/keys":
-                # Made in this Homestead's own app, by someone signed in to it:
-                # never relayed from a linked cluster.
+            if p in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit"):
+                # Made, changed and revoked in this Homestead's own app, by
+                # someone signed in to it: never relayed from a linked cluster.
                 if self._fleet_from:
-                    return self._send(403, {"error": "make API keys in this Homestead's own app"})
-                made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user, b.get("mcp", False))
-                self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
-                return self._send(200, {"ok": True, **made})
-            if p == "/api/auth/keys/revoke":
-                if self._fleet_from:
-                    return self._send(403, {"error": "revoke API keys in this Homestead's own app"})
-                done = API_KEYS.revoke(b.get("id"))
-                self._signin("key-revoked", self.user, detail=done["name"])
+                    return self._send(403, {"error": "manage API keys in this Homestead's own app"})
+                done, event, detail = API_KEYS.manage(p.rsplit("/", 1)[-1], b, self.user)
+                self._signin(event, self.user, detail=detail)
                 return self._send(200, done)
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
@@ -4842,10 +4836,6 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/namespaces/create":
-                return self._move(lambda: NSMOD.create(b.get("name")))
-            if p == "/api/namespaces/delete":
-                return self._move(lambda: NSMOD.delete(b.get("name"), str(b.get("confirm") or "")))
             if p == "/api/push/test":
                 endpoint = str(b.get("endpoint") or "")
                 if not PUSH.mine(self.user, endpoint):
@@ -4955,22 +4945,6 @@ class H(HTTP.LimitedHandler):
                                                           "action": action},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
-            if p == "/api/resources/save":
-                guard_smb_object(b.get("resource"), b.get("ns"), b.get("name"))
-                return self._send(200, RESOURCES.save_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
-                                                             b.get("ns", ""), b.get("name", ""), b.get("yaml", "")))
-            if p == "/api/resources/delete":
-                guard_smb_object(b.get("resource"), b.get("ns"), b.get("name"))
-                return self._send(200, RESOURCES.delete_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
-                                                               b.get("ns", ""), b.get("name", "")))
-            if p == "/api/resources/create":
-                for document in re.split(r"^---[ \t]*$", b.get("yaml", ""), flags=re.M):
-                    if document.strip():
-                        obj = RESOURCES._parse(document)
-                        meta = obj.get("metadata") or {}
-                        guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
-                                         meta.get("name"))
-                return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
@@ -4994,17 +4968,6 @@ class H(HTTP.LimitedHandler):
                 if b.get("confirm") != NFS.NAME:
                     raise ValueError(f"type {NFS.NAME} to remove the NFS server")
                 return self._send(200, SHARE_SERVERS.remove_nfs())
-            if p == "/api/operations/cancel":
-                # The route lets any operator in; what the job's own cancel
-                # does - delete VMs, stop a volume move - may need more.
-                try:
-                    result = OPS.cancel(b.get("id", ""), b.get("options") or {}, b.get("confirm", ""),
-                                        allowed=lambda need: AUTH.allows(self.role, need), by=self.user)
-                except PermissionError as error:
-                    return self._send(403, {"error": str(error), "role": self.role})
-                for key in ("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2"):
-                    _cache.pop(key, None)
-                return self._send(200, result)
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})

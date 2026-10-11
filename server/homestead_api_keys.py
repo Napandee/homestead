@@ -50,6 +50,27 @@ SCOPES = {
     "vms:manage": ("operator", "Create, edit and migrate virtual machines (MCP); deleting one waits for a person"),
     "storage:manage": ("operator", "Create and resize volumes, snapshot and back them up (MCP); deleting, "
                                    "reverting or restoring waits for a person"),
+    "network:manage": ("operator", "Expose apps and keep the IP address plan (MCP)"),
+    "cluster:manage": ("admin", "Namespaces and raw Kubernetes objects (MCP); every change waits for an admin to approve it"),
+}
+# A scope brings the ones it builds on: managing an area includes
+# controlling it, and every scope includes reading. Applied when a key is
+# used, so keys made before keep working with what they now include.
+IMPLIES = {
+    "logs:read": ("read",),
+    "containers:control": ("read",),
+    "containers:manage": ("containers:control", "read"),
+    "vms:control": ("read",),
+    "vms:manage": ("vms:control", "read"),
+    "storage:manage": ("read",),
+    "network:manage": ("read",),
+    "cluster:manage": ("read",),
+}
+# The key dialog's presets: ticks for the boxes below them.
+PRESETS = {
+    "Read only": ["read"],
+    "Operate": ["read", "containers:control", "vms:control"],
+    "Manage everything": ["read", "logs:read", "containers:manage", "vms:manage", "storage:manage", "network:manage"],
 }
 MIN_TTL = 3600
 MAX_TTL = 366 * 86400
@@ -103,6 +124,15 @@ def _name(value):
     if not 1 <= len(name) <= 60 or not name.isprintable():
         raise ValueError("give the key a name of up to 60 characters, such as Home Assistant")
     return name
+
+
+def effective(scopes):
+    """The scopes chosen, with the ones each includes (IMPLIES), in SCOPES' order."""
+    found = set()
+    for scope in scopes:
+        found.add(scope)
+        found.update(IMPLIES.get(scope, ()))
+    return [s for s in SCOPES if s in found]
 
 
 def _scopes(values):
@@ -169,6 +199,65 @@ def create(name, scopes, ttl_seconds, networks, owner, mcp=False):
                  "created": now, "expires": now + ttl, "hash": _digest(secret), "mcp": mcp}
     AUTH._save(data)
     return {"token": f"{PREFIX}{kid}_{secret}", "key": public(kid, keys[kid], now=now)}
+
+
+def edit(kid, changes, editor):
+    """A key's name, scopes, networks, MCP use or expiry changed. Its token
+    stays the same, so whatever uses it carries on; a replica sees the change
+    within FRESH_FOR. ttl_seconds sets a new expiry counted from now."""
+    if AUTH.role_of(editor) != "admin":
+        raise PermissionError("only an administrator can change API keys")
+    changes = changes or {}
+    data = AUTH._load(force=True)
+    keys = data.get("api_keys") or {}
+    rec = keys.get(str(kid or ""))
+    if not rec:
+        raise ValueError("no such key")
+    new, said = dict(rec), []
+    if "name" in changes:
+        name = _name(changes["name"])
+        if name != rec["name"] and any(r.get("name") == name for k, r in keys.items() if k != kid):
+            raise ValueError(f"there is already a key named {name}")
+        new["name"] = name
+    if "scopes" in changes:
+        new["scopes"] = _scopes(changes["scopes"])
+    if "networks" in changes:
+        new["networks"] = _networks(changes["networks"])
+    if "mcp" in changes:
+        if not isinstance(changes["mcp"], bool):
+            raise ValueError("say whether the key may be used by AI agents over MCP")
+        new["mcp"] = changes["mcp"]
+    if changes.get("ttl_seconds") not in (None, ""):
+        try:
+            ttl = int(changes["ttl_seconds"])
+        except (TypeError, ValueError):
+            raise ValueError("choose how long the key lasts") from None
+        if not MIN_TTL <= ttl <= MAX_TTL:
+            raise ValueError("a key lasts between an hour and a year")
+        new["expires"] = int(time.time()) + ttl
+    for field, label in (("name", "name"), ("scopes", "scopes"), ("networks", "networks"), ("mcp", "MCP"),
+                         ("expires", "expiry")):
+        if new.get(field) != rec.get(field):
+            said.append(label)
+    keys[kid] = new
+    AUTH._save(data)
+    return {"key": public(kid, new), "changed": said}
+
+
+def manage(action, body, user):
+    """The app's three key routes, as server.py hands them over: (answer,
+    sign-in history event, its detail)."""
+    body = body or {}
+    if action == "keys":
+        made = create(body.get("name"), body.get("scopes"), body.get("ttl_seconds"), body.get("networks"), user,
+                      body.get("mcp", False))
+        return {"ok": True, **made}, "key-added", f"{made['key']['name']}: {', '.join(made['key']['scopes'])}"
+    if action == "revoke":
+        done = revoke(body.get("id"))
+        return done, "key-revoked", done["name"]
+    done = edit(body.get("id"), {k: body[k] for k in ("name", "scopes", "networks", "mcp", "ttl_seconds") if k in body}, user)
+    return ({"ok": True, **done}, "key-changed",
+            f"{done['key']['name']}: {', '.join(done['changed']) or 'nothing'} changed")
 
 
 def list_keys():
@@ -239,7 +328,7 @@ def verify(token, addr, now=None, force=False):
     owner = (data.get("users") or {}).get(rec["owner"])
     if not owner:
         refuse(f"the API key {rec['name']} belonged to an account that no longer exists")
-    scopes = [s for s in rec["scopes"] if s in SCOPES and AUTH.allows(owner.get("role", "viewer"), SCOPES[s][0])]
+    scopes = [s for s in effective(rec["scopes"]) if AUTH.allows(owner.get("role", "viewer"), SCOPES[s][0])]
     if not scopes:
         refuse(f"the API key {rec['name']} has no scope its maker's role still allows")
     _note_use(kid, addr, now)
@@ -255,5 +344,6 @@ def scopes_for_role(role):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/auth/keys"): ("admin", lambda request: {"keys": list_keys(), "scopes": {s: text for s, (_, text) in SCOPES.items()}, "min_ttl": MIN_TTL, "max_ttl": MAX_TTL,
+                                                         "implies": {s: list(v) for s, v in IMPLIES.items()}, "presets": PRESETS,
                                                          "you": CLIENTADDR.about(request.addr)}),
 }

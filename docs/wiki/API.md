@@ -29,6 +29,8 @@ an agent's tool list.
   | `containers:manage` | Deploy, edit, scale and move containers (AI agents, over MCP) |
   | `vms:manage` | Create, edit and migrate virtual machines (AI agents, over MCP) |
   | `storage:manage` | Create and resize volumes, snapshot and back them up (AI agents, over MCP) |
+  | `network:manage` | Expose apps and keep the IP address plan (AI agents, over MCP) |
+  | `cluster:manage` | Namespaces and raw Kubernetes objects; each change waits for an admin (AI agents, over MCP) |
 
 - **Expires after** - a day to a year. There are no keys that never expire.
 - **Only from** (optional) - addresses or networks it may be used from, such as
@@ -45,6 +47,16 @@ an agent's tool list.
 The key is shown **once**, as `hsk_<id>_<secret>`. Homestead keeps only a hash
 of it; if you lose it, revoke it and make another. Revoking stops a key within
 a couple of seconds on every copy of Homestead. Removing a user removes their keys.
+
+**Edit** on a key's row changes its name, scopes, networks, MCP use or expiry
+(counted again from now). The key itself stays the same, so whatever uses it
+carries on, and the change takes effect within a couple of seconds. Each
+change is in the sign-in history.
+
+A scope includes the ones it builds on: every scope includes `read`, and
+`containers:manage` and `vms:manage` include `containers:control` and
+`vms:control`. The dialog's **Read only**, **Operate** and **Manage everything**
+set the boxes for you.
 
 The card lists each key's scopes, when it expires, and when and from where it
 was last used. Making, revoking and refusing keys are recorded in the sign-in

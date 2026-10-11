@@ -1104,7 +1104,23 @@ def _recover(kind, step):
 
 
 # Its routes and who may use them (homestead_routes.py).
+def _cancel_route(request):
+    """Cancel a job. The route lets any operator in; what the job's own cancel
+    does - delete VMs, stop a volume move - may need more, checked here."""
+    import homestead_auth as AUTH
+    import homestead_routes as ROUTER
+    b = request.body
+    try:
+        result = cancel(b.get("id", ""), b.get("options") or {}, b.get("confirm", ""),
+                        allowed=lambda need: AUTH.allows(request.role, need), by=request.user)
+    except PermissionError as error:
+        return ROUTER.Reply(403, {"error": str(error), "role": request.role})
+    ROUTER.forget("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2")
+    return result
+
+
 ROUTES = {
+    ("POST", "/api/operations/cancel"): ("operator", _cancel_route),
     ("POST", "/api/operations/dismiss"): ("operator", lambda request: dismiss_finished() if request.body.get("all")
                                           else dismiss(request.body["id"])),
     ("POST", "/api/operations/power-recovery/preview"): ("admin", _recover("power", "preview")),

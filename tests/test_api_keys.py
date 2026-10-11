@@ -44,6 +44,42 @@ class KeyTests(unittest.TestCase):
     def make(self, scopes=("read",), ttl=30 * DAY, networks=(), owner="ada", name="Home Assistant"):
         return keys.create(name, list(scopes), ttl, list(networks), owner)
 
+    def test_managing_an_area_includes_controlling_and_reading_it(self):
+        token = self.make(scopes=["containers:manage"])["token"]
+        self.assertEqual(["read", "containers:control", "containers:manage"], keys.verify(token, "192.0.2.5")["scopes"])
+        self.assertEqual(["read", "logs:read"], keys.effective(["logs:read"]))
+
+    def test_a_key_is_changed_in_place_and_its_token_keeps_working(self):
+        made = self.make(scopes=["read"])
+        before = self.store["api_keys"][made["key"]["id"]]["expires"]
+        done = keys.edit(made["key"]["id"], {"name": "Claude", "scopes": ["read", "vms:manage"], "mcp": True,
+                                              "networks": ["192.0.2.0/24"], "ttl_seconds": 7 * DAY}, "ada")
+        self.assertEqual({"name", "scopes", "networks", "MCP", "expiry"}, set(done["changed"]))
+        self.assertNotEqual(before, self.store["api_keys"][made["key"]["id"]]["expires"])
+        auth._store_cache.update(at=0, data=None)
+        key = keys.verify(made["token"], "192.0.2.9")
+        self.assertEqual(("Claude", True), (key["name"], key["mcp"]))
+        self.assertIn("vms:manage", key["scopes"])
+
+    def test_changing_a_key_is_an_admins_and_keeps_names_unique(self):
+        made = self.make()
+        self.make(name="Other")
+        with self.assertRaises(PermissionError):
+            keys.edit(made["key"]["id"], {"scopes": ["read"]}, "bob")
+        with self.assertRaisesRegex(ValueError, "already a key named"):
+            keys.edit(made["key"]["id"], {"name": "Other"}, "ada")
+        with self.assertRaisesRegex(ValueError, "no such key"):
+            keys.edit("nope", {}, "ada")
+        self.assertEqual([], keys.edit(made["key"]["id"], {}, "ada")["changed"])
+
+    def test_the_apps_key_routes_say_what_to_record(self):
+        made, event, _ = keys.manage("keys", {"name": "Bot", "scopes": ["read"], "ttl_seconds": DAY, "networks": []}, "ada")
+        self.assertEqual("key-added", event)
+        _, event, detail = keys.manage("edit", {"id": made["key"]["id"], "scopes": ["read", "logs:read"]}, "ada")
+        self.assertEqual(("key-changed", "Bot: scopes changed"), (event, detail))
+        _, event, _ = keys.manage("revoke", {"id": made["key"]["id"]}, "ada")
+        self.assertEqual("key-revoked", event)
+
     def test_a_key_is_shown_once_and_kept_only_as_a_hash(self):
         # URL-safe secrets may contain underscores, including near the end.
         with patch.object(keys.secrets, "token_urlsafe", return_value="A" * 41 + "_E"):
@@ -131,7 +167,7 @@ class KeyTests(unittest.TestCase):
 
     def test_a_key_never_outranks_its_maker(self):
         token = self.make(scopes=["read", "containers:control"])["token"]
-        self.assertEqual(["containers:control", "read"], keys.verify(token, "192.0.2.5")["scopes"])
+        self.assertEqual(["read", "containers:control"], keys.verify(token, "192.0.2.5")["scopes"])
         auth.set_role("bob", "admin", "ada")
         auth.set_role("ada", "viewer", "bob")
         self.assertEqual(["read"], keys.verify(token, "192.0.2.5")["scopes"], "demoted: control is gone")
@@ -169,7 +205,7 @@ class KeyTests(unittest.TestCase):
     def test_a_signed_in_person_reaches_the_api_with_their_roles_scopes(self):
         self.assertEqual(["read", "logs:read"], keys.scopes_for_role("viewer"))
         self.assertEqual(["read", "logs:read", "containers:control", "containers:manage", "vms:control", "vms:manage",
-                          "storage:manage"], keys.scopes_for_role("operator"))
+                          "storage:manage", "network:manage"], keys.scopes_for_role("operator"))
 
 
 if __name__ == "__main__":

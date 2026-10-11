@@ -27,17 +27,22 @@ ticked. A key without that tick does not work on `/mcp`, and a browser session
 never does.
 
 A key acts as an **operator at most**, even when an administrator made it.
-Choose scopes for what the agent should do:
+Choose scopes for what the agent should do - every scope includes `read`, and
+managing an area includes controlling it - or start from the dialog's
+**Read only**, **Operate** or **Manage everything**. **Edit** on a key changes
+its scopes later without a new token:
 
 | Scope | Lets the agent |
 |---|---|
 | `read` | See the cluster: nodes, containers, VMs, volumes, backups, alerts and jobs |
 | `logs:read` | Read containers' logs (they can hold passwords apps print, so it is separate) |
-| `containers:control` | Start, stop and restart containers |
-| `containers:manage` | Deploy, install, edit, scale and move containers; ask to delete one |
+| `containers:control` | Start, stop and restart containers; cancel and dismiss jobs |
+| `containers:manage` | Deploy, install, edit, scale, move and update containers; their settings, schedules, uptime checks and change history; ask to delete one |
 | `vms:control` | Start, stop and restart virtual machines |
-| `vms:manage` | Create, edit and migrate VMs; ask to delete one |
-| `storage:manage` | Create and grow volumes, snapshot and back up; ask to delete, revert or restore |
+| `vms:manage` | Create, edit and migrate VMs; ISOs and k3s clusters of VMs; ask to delete one |
+| `storage:manage` | Create and grow volumes, snapshot and back up, backup groups and jobs, balance storage; ask to delete, revert or restore |
+| `network:manage` | Expose apps, and keep the IP address plan |
+| `cluster:manage` | Namespaces and raw Kubernetes objects - only an admin may change them, so each change waits for an admin to approve it |
 
 Give the agent `read` alone first and see what it makes of your cluster. Add
 scopes when you want it to act. Use HTTPS: the key travels in a header. Set
@@ -93,18 +98,24 @@ Tools come in three classes:
 - **change** - changes something, and is checked first (see below).
 - **destructive** - cannot be undone, so it only *asks*: a person approves it in Homestead.
 
-### Cluster
+### Cluster and jobs
 
 | Tool | What it does | Scope | Class |
 |---|---|---|---|
-| `get_agent_request` | Follows a request a destructive tool filed: pending, then done, denied, expired or failed | any key | read |
 | `whoami` | This key: its name, its scopes and when it expires | any key | read |
 | `get_status` | The cluster at a glance: nodes, containers, VMs and alerts, counted | `read` | read |
 | `list_nodes` | Every host with its health and use | `read` | read |
 | `list_alerts` | What is wrong right now, as the app's bell shows it | `read` | read |
 | `get_job` | A background job by the id an action answered with | `read` | read |
-| `storage_forecast` | When each volume, disk and the pool is expected to fill | `read` | read |
 | `host_failure_forecast` | For every host: if it failed, whether the others would have room for what it runs, tier by tier | `read` | read |
+| `list_jobs` | Background jobs, newest first: what runs, what finished and what failed | `read` | read |
+| `get_job_log` | What a job wrote as it ran: its pod's log, or its steps | `read` | read |
+| `preview_cancel_job` | What cancelling a job would undo and keep, and the options and confirmation it needs | `containers:control` | change |
+| `cancel_job` | Cancels a running job as preview_cancel_job described: pass its options and, when it asked, confirm | `containers:control` | change |
+| `dismiss_job` | Takes a finished job off the list, or every finished one with all: true | `containers:control` | change |
+| `list_cluster_events` | Kubernetes' recent warnings and events across the cluster | `read` | read |
+| `get_placement` | The placement mode, each host's part, standby hosts, and how many apps reserve nothing | `read` | read |
+| `get_agent_request` | Follows a request a destructive tool filed, until a person answers it | any key | read |
 
 ### Containers
 
@@ -112,7 +123,7 @@ Tools come in three classes:
 |---|---|---|---|
 | `list_containers` | Every container (app) with its state | `read` | read |
 | `get_container` | One container's state | `read` | read |
-| `get_container_settings` | A container's settings as Edit shows them: image, ports, variables, volumes, resources, placement | `read` | read |
+| `get_container_settings` | A container's settings as Edit shows them | `read` | read |
 | `list_events` | Kubernetes' recent events for a container or VM, newest first | `read` | read |
 | `get_container_logs` | A container's last lines of output (at most 500) | `logs:read` | read |
 | `deploy_options` | What a new container can use: storage classes, networks, hosts, hardware, addresses | `read` | read |
@@ -121,16 +132,50 @@ Tools come in three classes:
 | `container_stop` | Stops a container (scales it to zero) | `containers:control` | change |
 | `container_restart` | Restarts a container's pods | `containers:control` | change |
 | `preview_deploy` | What deploying these settings would create, and its capacity review, without creating anything | `containers:manage` | change |
-| `deploy_container` | Deploys a container with the settings preview_deploy reviewed, its capacity_token and, when the review asked for it, confirm_capacity: true | `containers:manage` | change |
+| `deploy_container` | Deploys a container | `containers:manage` | change |
 | `install_app` | Installs an App Store app, with overrides to its defaults | `containers:manage` | change |
 | `preview_compose` | What a Docker Compose file would deploy, and its review, without deploying it | `containers:manage` | change |
 | `apply_compose` | Deploys a Compose file as preview_compose reviewed it | `containers:manage` | change |
 | `preview_edit_container` | What saving these settings (from get_container_settings, changed) would do: what restarts, and the capacity review | `containers:manage` | change |
-| `edit_container` | Saves a container's settings as preview_edit_container reviewed them | `containers:manage` | change |
+| `edit_container` | Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside settings, its capacity_token and confirm_capacity: true | `containers:manage` | change |
 | `scale_container` | Sets how many copies of a container run | `containers:manage` | change |
 | `preview_move_container` | Whether a container fits on another host, and its capacity_token for move_container | `containers:manage` | change |
 | `move_container` | Moves a container to another host as preview_move_container reviewed it | `containers:manage` | change |
 | `delete_container` | Asks to delete a container and its Services; its volumes are kept | `containers:manage` | destructive |
+| `get_change_history` | What changed in an app and when - each change can be undone with undo_change | `read` | read |
+| `preview_undo_change` | What undoing a change from get_change_history would restore | `containers:manage` | change |
+| `undo_change` | Restores an app's settings from before a change, as preview_undo_change reviewed it | `containers:manage` | change |
+| `list_image_updates` | Which apps have a newer image, and how each is updated (automatically, in the window, or by hand) | `read` | read |
+| `update_container_image` | Updates an app to its newer image, after the capacity review | `containers:manage` | change |
+| `rollback_container_image` | Puts an app back on the image it had before its last update, after the capacity review, as update_container_image | `containers:manage` | change |
+| `get_image_update_progress` | How an app's image update or rollback is going | `read` | read |
+| `set_image_update_mode` | How an app's image updates are made: settings with ns, name and mode, as list_image_updates shows the modes | `containers:manage` | change |
+| `set_managed_by` | Marks an app as updated by something else (Flux, Argo CD, a person) so Homestead offers no updates, or clears it with an empty by | `containers:manage` | change |
+| `set_primary_port` | The port the app's link opens; 0 to let Homestead choose | `containers:manage` | change |
+| `set_failover` | For many apps: items, each {ns, name, mode} with mode move, wait or default | `containers:manage` | change |
+| `set_container_groups` | The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group) | `containers:manage` | change |
+| `set_container_logos` | Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo | `containers:manage` | change |
+| `preview_priority_tiers` | Every app and VM with its tier and a suggestion; chosen as id=tier pairs (lab/web=critical,vm:lab/win=low) | `read` | read |
+| `set_priority_tiers` | Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current and tier), review_token, restart: true} | `containers:manage` | change |
+| `preview_reservations` | What each app used over the past week and the reservation suggested; chosen limits it to these app ids | `read` | read |
+| `set_reservations` | Applies reservations as preview_reservations reviewed them: settings {apps, review_token, restart: true} | `containers:manage` | change |
+| `preview_container_rebalance` | Which containers Balance hosts would move to even the hosts out; exclude: app ids to leave alone | `read` | read |
+| `rebalance_containers` | Moves containers as preview_container_rebalance planned: settings {moves, review_token, restart: true, exclude} | `containers:manage` | change |
+| `get_uptime` | Each app's and VM's uptime check and how it has answered | `read` | read |
+| `set_uptime_check` | How an app or VM is checked: settings {kind, ns, name, mode (auto, tcp, http, off), port, path} | `containers:manage` | change |
+| `set_outage_actions` | What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook}} | `containers:manage` | change |
+| `test_outage_webhook` | Sends a test call to the webhook an app's or VM's outage actions would call: settings {kind, ns, name, webhook} | `containers:manage` | change |
+
+### Schedules
+
+| Tool | What it does | Scope | Class |
+|---|---|---|---|
+| `list_schedules` | Scheduled jobs (CronJobs) and when they last ran | `read` | read |
+| `save_schedule` | Creates or changes a scheduled job: name, image, command, schedule (cron, UTC) and suspend | `containers:manage` | change |
+| `run_schedule` | Runs a scheduled job once, now | `containers:manage` | change |
+| `delete_schedule` | Asks to delete a scheduled job | `containers:manage` | destructive |
+| `list_power_schedules` | When apps and VMs are stopped and started on a schedule | `read` | read |
+| `set_power_schedule` | When an app or VM stops and starts: settings as list_power_schedules shows one (kind, ns, name, stop, start, days) | `containers:manage` | change |
 
 ### Virtual machines
 
@@ -147,12 +192,22 @@ Tools come in three classes:
 | `edit_vm` | Saves a VM's settings as preview_edit_vm reviewed them | `vms:manage` | change |
 | `migrate_vm` | Live-migrates a running VM to another host | `vms:manage` | change |
 | `delete_vm` | Asks to delete a VM, and its disks when delete_disks is true | `vms:manage` | destructive |
+| `get_vm_settings` | A VM's settings as Edit shows them; change them and pass them to preview_edit_vm | `read` | read |
+| `preview_vm_power` | Whether a VM can start, stop, restart or pause now, and its review: settings {ns, name, action} | `vms:control` | change |
+| `vm_power` | Starts, stops, restarts, pauses or resumes a VM as preview_vm_power reviewed it (settings plus its capacity_token) | `vms:control` | change |
+| `set_vm_logos` | Logos for VMs, as set_container_logos | `vms:manage` | change |
+| `set_vm_monitoring` | How VMs are checked: settings as the VMs page sends them | `vms:manage` | change |
+| `list_isos` | ISO images VMs can install from | `read` | read |
+| `prepare_iso` | Makes an ISO on a network share ready to install VMs from | `vms:manage` | change |
+| `preview_k3s_cluster` | What building a k3s cluster from new VMs would make, and its review | `vms:manage` | change |
+| `create_k3s_cluster` | Builds it as preview_k3s_cluster reviewed it | `vms:manage` | change |
 
 ### Storage
 
 | Tool | What it does | Scope | Class |
 |---|---|---|---|
-| `list_volumes` | Every volume: size, use, health, copies and what uses it | `read` | read |
+| `storage_forecast` | When each volume, disk and the pool is expected to fill | `read` | read |
+| `list_volumes` | Every volume in a line each: size, use, health, copies and what uses it | `read` | read |
 | `list_snapshots` | A volume's snapshots | `read` | read |
 | `list_backups` | Backups, of one volume or all | `read` | read |
 | `create_volume` | Creates an empty volume | `storage:manage` | change |
@@ -166,9 +221,46 @@ Tools come in three classes:
 | `restore_backup` | Asks to restore a backup as a new volume | `storage:manage` | destructive |
 | `delete_backup` | Asks to delete a backup from the backup target | `storage:manage` | destructive |
 | `change_storage_class` | Asks to move a volume's data to another storage class; what uses it stops while it copies | `storage:manage` | destructive |
+| `get_backup_overview` | Backup and snapshot jobs, the groups that hold volumes to them, and the backup target | `read` | read |
+| `save_backup_group` | Creates or changes a group of volumes and the jobs that apply to it: settings {name, jobs, volumes, original} | `storage:manage` | change |
+| `save_backup_job` | Creates or changes a recurring backup or snapshot job: settings {name, task (backup or snapshot), cron, retain, concurrency, groups} | `storage:manage` | change |
+| `assign_backups` | Adds volumes to (or, with enabled false, takes them out of) a group or a job | `storage:manage` | change |
+| `delete_backup_group` | Asks to delete a backup group; its volumes stop being backed up by its jobs | `storage:manage` | destructive |
+| `delete_backup_job` | Asks to delete a recurring backup or snapshot job | `storage:manage` | destructive |
+| `trim_volume` | Gives a volume's freed space back to its disks | `storage:manage` | change |
+| `rebuild_volume` | Rebuilds missing copies of a detached volume now | `storage:manage` | change |
+| `preview_storage_rebalance` | Which volume copies would move to even out the disks; exclude: volumes to leave alone | `read` | read |
+| `rebalance_storage` | Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude} | `storage:manage` | change |
+| `remove_old_volume_copy` | Asks to delete the data a storage-class move left behind | `storage:manage` | destructive |
+| `list_cached_images` | Container images pre-pulled onto the hosts | `read` | read |
+| `prepull_image` | Pulls an image onto hosts ahead of time, so an app starts fast; nodes to limit which | `storage:manage` | change |
+| `stop_prepull` | Stops pre-pulling an image | `storage:manage` | change |
 
-Each tool uses the same routes and checks as the web app, so what Homestead
-would refuse a person it refuses the agent.
+### Networking
+
+| Tool | What it does | Scope | Class |
+|---|---|---|---|
+| `get_networking` | Services, addresses (VIPs), ports and what listens where | `read` | read |
+| `preview_service` | What a Service exposing an app's ports would be, and its review: settings {namespace, name, workload, ports, type, vip_mode, vip} | `network:manage` | change |
+| `create_service` | Creates or updates a Service as preview_service reviewed it | `network:manage` | change |
+| `get_ip_addresses` | The address plan: subnets, records and what was seen on the network | `read` | read |
+| `free_ip_addresses` | Addresses that are free to use | `read` | read |
+| `save_ip_record` | Notes what an address is for: settings {ip, name, notes, reserved} | `network:manage` | change |
+| `save_ip_records` | Applies the same changes to many addresses | `network:manage` | change |
+| `import_ip_records` | Imports address records from CSV text | `network:manage` | change |
+| `scan_subnet` | Looks for what answers on a subnet | `network:manage` | change |
+| `save_subnets` | The subnets the address plan covers: each {cidr, name} | `network:manage` | change |
+| `sync_unifi` | Reads clients and leases from the UniFi controller now | `network:manage` | change |
+
+### Kubernetes objects
+
+| Tool | What it does | Scope | Class |
+|---|---|---|---|
+| `create_namespace` | Creates a namespace for apps | `cluster:manage` | change |
+| `delete_namespace` | Asks to delete an empty namespace | `cluster:manage` | destructive |
+| `create_resources` | Creates the Kubernetes objects in a YAML manifest | `cluster:manage` | change |
+| `save_resource` | Replaces one object with this YAML | `cluster:manage` | change |
+| `delete_resource` | Asks to delete one Kubernetes object | `cluster:manage` | destructive |
 
 ## How changes work
 
