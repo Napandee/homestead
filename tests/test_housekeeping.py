@@ -119,8 +119,8 @@ class ServerTests(Base):
     def test_unknown_references_keep_every_logo(self):
         import server
         self.put("icons/a.png", age=90 * 86400)
-        with mock.patch.object(server, "referenced_icons", return_value=None), mock.patch.object(server, "HOUSEKEEPING", HK):
-            server.housekeeping_tidy()
+        with mock.patch.object(HK, "referenced_icons", return_value=None):
+            HK.tidy_unused()
         self.assertTrue((self.d / "icons" / "a.png").exists(), "not knowing what is used, nothing is removed")
 
 

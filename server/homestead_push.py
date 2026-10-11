@@ -258,13 +258,10 @@ def status(user, endpoint):
             "failures": (row or {}).get("failures", 0)}
 
 
-# Its routes and who may use them (homestead_routes.py). The alerts a person
-# is shown come with their devices, so the bell's routes are here too.
+# Its routes and who may use them (homestead_routes.py). The bell's own list
+# is homestead_alerts'; it is told this person's devices from here.
+ALERTS.DEVICES[0] = devices
 ROUTES = {
-    ("GET", "/api/alerts"): ("viewer", lambda request: {
-        "active": [a for a in ALERTS.active(user=request.user) if a.get("announced", 0) > 0],
-        "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
-        "devices": devices(request.user)}),
     ("POST", "/api/alerts/pending"): ("viewer", lambda request: pending(
         request.user, str(request.body.get("endpoint") or ""), request.body.get("confirm_delivery") is True)),
     # A new device starts from the latest alert: it is not sent the backlog.

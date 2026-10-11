@@ -141,9 +141,9 @@ class ServerTests(unittest.TestCase):
         sent = []
         with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
              mock.patch.object(server, "guard_managed_smb"):
-            r = server.set_outage_actions({"kind": "app", "ns": "lab", "name": "frigate",
+            r = server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate",
                                            "actions": {"restart": {"after_min": 5, "max": 3}}})
-            server.set_outage_actions({"kind": "app", "ns": "lab", "name": "frigate", "actions": None})
+            server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate", "actions": None})
         self.assertEqual({"metadata": {"annotations": {"homestead.io/outage-actions": '{"restart":{"after_min":5,"max":3}}'}}}, sent[0][2])
         self.assertIsNone(sent[1][2]["metadata"]["annotations"]["homestead.io/outage-actions"])
         self.assertIn("at most 3 times", r["detail"])
@@ -153,9 +153,9 @@ class ServerTests(unittest.TestCase):
         vm = {"metadata": {"annotations": {}}}
         with mock.patch.object(server, "kget", return_value=vm), mock.patch.object(server, "ksend"):
             with self.assertRaises(ValueError):
-                server.set_outage_actions({"kind": "vm", "ns": "lab", "name": "ha", "actions": {"restart": {"after_min": 5, "max": 1}}})
+                server.OUTAGE.set_actions({"kind": "vm", "ns": "lab", "name": "ha", "actions": {"restart": {"after_min": 5, "max": 1}}})
             vm["metadata"]["annotations"]["homestead.io/uptime"] = "tcp:22"
-            server.set_outage_actions({"kind": "vm", "ns": "lab", "name": "ha", "actions": {"restart": {"after_min": 5, "max": 1}}})
+            server.OUTAGE.set_actions({"kind": "vm", "ns": "lab", "name": "ha", "actions": {"restart": {"after_min": 5, "max": 1}}})
 
     def test_busy_while_a_job_runs_on_it(self):
         import server
