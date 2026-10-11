@@ -16,7 +16,7 @@ const HealthInsights = (() => {
       else if (cp.etcd_total === 1)
         rows.push(item("quorum","low","Single control-plane host","This cluster's state is kept on one host, so it has no failover: if that host fails, the cluster comes back only from an etcd snapshot. That is normal for a one-node cluster. Keep snapshots (k3s takes one every 12 hours; the node doctor can take one now) and copy them to another machine. Three server nodes would survive the loss of one.","cluster"));
       else if (cp.etcd_total === 2)
-        rows.push(item("quorum","medium","Two etcd members have no failure margin","Add a third etcd server. Both current members are required for quorum.","cluster"));
+        rows.push(item("quorum","medium","Two etcd members have no failure margin","Add a third etcd server - or a small machine as a tiebreaker, which holds a vote and runs no apps (Cluster → Add a host). Both current members are required for quorum.","cluster"));
       else if (cp.quorum_margin === 0)
         rows.push(item("quorum","medium","No etcd failure margin",`${cp.etcd_ready} of ${cp.etcd_total} etcd members are ready, the fewest that keep quorum: losing one more stops the control plane. Bring the others back before changing hosts.`,"cluster"));
     }

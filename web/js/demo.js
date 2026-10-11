@@ -1691,7 +1691,8 @@ ssh_pwauth: true
     "/api/cluster": { generated_at: 1789891200, state: "attention",
       summary: "The platform is online, with resilience or warning items to review.",
       versions: { harvester: "1.6.0", kubernetes: "1.34.1+rke2r1" },
-      control_plane: { total: 2, ready: 2, etcd_total: 2, etcd_ready: 2, quorum_needed: 2, quorum_margin: 0, state: "attention" },
+      control_plane: { total: 2, ready: 2, etcd_total: 2, etcd_ready: 2, quorum_needed: 2, quorum_margin: 0, state: "attention",
+        members: [{ name: "harvester-node1", ready: true, role: "server" }, { name: "harvester-node2", ready: true, role: "server" }] },
       nodes: nodes.map(n => ({ name: n.name, ready: true, status: "Ready", roles: n.roles,
         schedulable: n.schedulable, pressure: [], cpu_pct: n.cpu_pct, memory_pct: n.mem_pct,
         disk_pct: n.fs_pct, pods: n.pods, version: "v1.34.1+rke2r1", os: "Harvester v1.6.0" })),
@@ -2813,7 +2814,7 @@ ssh_pwauth: true
       issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
     placement: { done: false, applies: true, mode: "", unreserved: 4, notes: [], hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: false, tainted: false, takes_work: true }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
-      ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [] },
+      ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [], tiebreakers: [] },
     clocks: { done: true, applies: false },
     address: { done: true, applies: true, url: "http://192.0.2.245:8088", service_url: "http://homestead.lab.svc:8088", vips: 3, load_balancer: "kube-vip", harvester: true },
     lan: { done: demoPlatform === "harvester", applies: true,
@@ -2890,7 +2891,8 @@ ssh_pwauth: true
       attached: volumes.filter(row => row.state === "attached").length, reasons: [] });
     const cluster = responses["/api/cluster"];
     Object.assign(cluster, { state: "healthy", summary: "Cluster services and all three control-plane nodes are healthy", warnings: [] });
-    Object.assign(cluster.control_plane, { total: 3, ready: 3, etcd_total: 3, etcd_ready: 3, quorum_needed: 2, quorum_margin: 1, state: "healthy" });
+    Object.assign(cluster.control_plane, { total: 3, ready: 3, etcd_total: 3, etcd_ready: 3, quorum_needed: 2, quorum_margin: 1, state: "healthy",
+      members: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: true, role: "server" })) });
     cluster.nodes[2].roles = [...nodes[2].roles];
     cluster.onboarding.reason = "Three control-plane nodes provide a one-node failure margin.";
     demoSetup.steps.health = { done: true, applies: true, summary: cluster.summary, issues: [] };
