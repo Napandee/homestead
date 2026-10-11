@@ -26,6 +26,13 @@ def deployment(name, ns="lab", image="busybox", cls="", labels=None):
             "status": {"observedGeneration": 1, "replicas": 1, "updatedReplicas": 1, "readyReplicas": 1}}
 
 
+def vm(name, ns="lab", cls=""):
+    spec = {"domain": {"devices": {}}}
+    if cls:
+        spec["priorityClassName"] = cls
+    return {"metadata": {"name": name, "namespace": ns}, "spec": {"runStrategy": "Always", "template": {"spec": spec}}}
+
+
 def not_found(path):
     return urllib.error.HTTPError(path, 404, "not found", {}, io.BytesIO())
 
@@ -47,12 +54,23 @@ class PriorityTests(unittest.TestCase):
             "media/jellyfin": deployment("jellyfin", ns="media", labels={"kustomize.toolkit.fluxcd.io/name": "apps"}),
             "homestead/homestead": deployment("homestead", ns="homestead"),
         }
-        self.classes, self.sent = {}, []
+        self.classes, self.sent, self.vms, self.pods = {}, [], {}, []
         priority.bind(self.kget, self.ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
 
     def kget(self, path):
         if path == "/apis/apps/v1/deployments":
             return {"items": [copy.deepcopy(d) for d in self.deps.values()]}
+        if path == priority.VMS:
+            if self.vms is None:
+                raise not_found(path)
+            return {"items": [copy.deepcopy(v) for v in self.vms.values()]}
+        if path == "/api/v1/pods":
+            return {"items": copy.deepcopy(self.pods)}
+        if "/virtualmachines/" in path:
+            ns, name = path.split("/namespaces/")[1].split("/virtualmachines/")
+            if f"{ns}/{name}" not in self.vms:
+                raise not_found(path)
+            return copy.deepcopy(self.vms[f"{ns}/{name}"])
         if "/priorityclasses/" in path:
             name = path.rsplit("/", 1)[1]
             if name not in self.classes:
@@ -138,7 +156,7 @@ class PriorityTests(unittest.TestCase):
         plan = priority.plan()
         apps = {a["id"]: a for a in plan["apps"]}
         self.assertNotIn("homestead/homestead", apps)
-        self.assertIn("set by its manifest", {s["id"]: s for s in plan["skipped"]}["homestead/homestead"]["why"])
+        self.assertIn("critical once any app", {s["id"]: s for s in plan["skipped"]}["homestead/homestead"]["why"])
         self.assertEqual("normal", apps["media/jellyfin"]["tier"])
         self.assertIn("set priorityClassName there", apps["media/jellyfin"]["note"])
         self.assertIn("unifi-high", {s["id"]: s for s in plan["skipped"]}["lab/unifi"]["why"])
@@ -217,6 +235,50 @@ class PriorityTests(unittest.TestCase):
         before = [a["id"] for a in priority.plan()["apps"]]
         after = [a["id"] for a in priority.plan({"lab/paperless": "critical"})["apps"]]
         self.assertEqual(before, after)
+
+    def test_vms_have_tiers_set_in_their_template_with_no_restart(self):
+        self.vms = {"lab/windows": vm("windows"), "lab/haos": vm("haos", cls="homestead-critical")}
+        plan = priority.plan({"vm:lab/windows": "low"})
+        rows = {a["id"]: a for a in plan["apps"]}
+        self.assertEqual(("vm", "normal", "low"), (rows["vm:lab/windows"]["kind"], rows["vm:lab/windows"]["current"],
+                                                   rows["vm:lab/windows"]["tier"]))
+        self.assertEqual("critical", rows["vm:lab/haos"]["current"])
+        apps = priority.reviewed([rows["vm:lab/windows"]], priority.plan({"vm:lab/windows": "low", "lab/home-assistant": "normal",
+                                                                            "ci/actions-runner": "normal"})["review_token"])
+        self.assertEqual([("vm", "lab", "windows")], [(a["kind"], a["ns"], a["name"]) for a in apps])
+        item = {"ref": {"apps": apps, "index": 0, "done": 0, "stage": "apply"}}
+        priority.status(item)
+        self.assertIn("when it next starts", priority.status(item)[2])
+        patch = [s for s in self.sent if s[0] == "PATCH"][0]
+        self.assertEqual(("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/windows",
+                          {"spec": {"template": {"spec": {"priorityClassName": "homestead-low"}}}}, "application/merge-patch+json"),
+                         patch[1:])
+        self.assertEqual(("succeeded", 100), priority.status(item)[:2])
+
+    def test_a_cluster_without_kubevirt_plans_its_apps_only(self):
+        self.vms = None
+        self.assertFalse([a for a in priority.plan()["apps"] if a["kind"] == "vm"])
+
+    def test_homestead_joins_critical_once_anything_runs_there(self):
+        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: list(self.running))
+        self.running = []
+        with mock.patch.object(priority, "operations", jobs):
+            self.assertIsNone(priority.protect(), "nothing is critical yet")
+            self.pods = [{"spec": {"priorityClassName": "homestead-critical"}}]
+            self.running = [{"kind": "deployment", "status": "running"}]
+            self.assertIsNone(priority.protect(), "a job runs, which its restart would interrupt")
+            self.running = []
+            self.assertIn("no critical app can evict it", priority.protect())
+        patch = [s for s in self.sent if s[0] == "PATCH"][0]
+        self.assertEqual("/apis/apps/v1/namespaces/homestead/deployments/homestead", patch[1])
+        self.assertEqual("homestead-critical", patch[2]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_homestead_keeps_a_class_it_already_has(self):
+        self.pods = [{"spec": {"priorityClassName": "homestead-critical"}}]
+        for cls in ("homestead-critical", "system-cluster-critical"):
+            self.deps["homestead/homestead"]["spec"]["template"]["spec"]["priorityClassName"] = cls
+            self.assertIsNone(priority.protect())
+        self.assertFalse(self.sent)
 
     def edit(self, body, current_class=None):
         """The Edit route, with everything after the priority step stood in for."""

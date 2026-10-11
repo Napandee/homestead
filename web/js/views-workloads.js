@@ -1189,19 +1189,21 @@ async function priorityPlan() {
 }
 function priorityHtml(plan) {
   const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current), over = changes.length > plan.max;
+  const restarting = changes.filter(a => a.kind !== "vm").length, vms = changes.length - restarting;
   const rows = apps.map((a, i) => [
-    `<span class="mono">${esc(a.id)}</span>${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
+    `<span class="mono">${esc(a.kind === "vm" ? `${a.ns}/${a.name}` : a.id)}</span>${a.kind === "vm" ? ` ${UI.chip("VM")}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
     `${prioritySelect(`prio_${i}`, a.tier, `${a.managed ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
       <span class="sub">${esc(a.note || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
   return [
     UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
-      : changes.length ? `Changes the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}. Each restarts once, one at a time.`
+      : changes.length ? [restarting ? `Changes the tier of ${restarting} app${restarting === 1 ? "" : "s"}. Each restarts once, one at a time.` : "",
+        vms ? `${vms} VM${vms === 1 ? " takes its" : "s take their"} new tier when ${vms === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
       : "Every app keeps its tier. Choose a tier to change one."),
-    UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
+    UI.section(`Apps and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
-    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, Homestead included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is no tier at all, as every app has now.</p>
+    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is no tier at all, as every app has now. VMs take tiers too, from their next start. Homestead joins the critical tier once any app is in it, so none can evict it; it restarts once to do so.</p>
       <p>Homestead makes the classes a tier needs first, if missing. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
-    changes.length && !over ? UI.ack("prioRestart", changes.length === 1 ? "Restart it now" : `Restart these ${changes.length} apps now`) : "",
+    changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting} apps now`) : "",
   ].join("");
 }
 window.priorityItem = (id, tier) => {
