@@ -315,7 +315,10 @@ wait_crd() {
 channel_release() { # k3s|rke2 channel
   repo=k3s-io/k3s; [ "$1" = rke2 ] && repo=rancher/rke2
   for url in "https://update.$1.io/v1-release/channels/$2" "https://github.com/$repo/releases/latest"; do
-    where=$(curl -sfL --retry 5 --retry-all-errors --retry-delay 3 --max-time 60 -o /dev/null \
+    # The channel server is given seconds, not minutes - it has taken no
+    # connections since October 2026 - and GitHub its five tries.
+    case "$url" in https://update.*) tries=1 ;; *) tries=5 ;; esac
+    where=$(curl -sfL --retry "$tries" --retry-all-errors --retry-delay 3 --connect-timeout 5 --max-time 60 -o /dev/null \
       -w '%{url_effective}' "$url" 2>/dev/null) || where=""
     case "${where##*/}" in v[0-9]*) echo "${where##*/}"; return 0 ;; esac
   done

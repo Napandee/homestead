@@ -10,6 +10,48 @@ LONGHORN = [{"tag_name": "v1.10.0-rc1", "prerelease": True}, {"tag_name": "v1.9.
             {"tag_name": "v1.8.2"}, {"tag_name": "v1.8.1"}, {"tag_name": "v1.7.3"}]
 
 
+K3S_GITHUB = [{"tag_name": "v1.34.2-rc1+k3s1", "prerelease": True}, {"tag_name": "v1.34.1+k3s1"},
+              {"tag_name": "v1.33.5+k3s1"}, {"tag_name": "v1.33.4+k3s2"}, {"tag_name": "v1.33.5+k3s2"},
+              {"tag_name": "v1.32.9+k3s1"}, {"tag_name": "v1.32.9"}]
+
+
+class ChannelFallbackTests(unittest.TestCase):
+    def releases(self, answer):
+        C._releases.clear()
+        C.bind(None, None, None, None, None, answer)
+        try:
+            return C.releases("k3s", force=True)
+        finally:
+            C._releases.clear()
+
+    def test_the_channel_server_names_the_newest_of_each_minor(self):
+        value, error = self.releases(lambda url: K3S_CHANNELS)
+        self.assertEqual(["v1.33.4+k3s1", "v1.32.8+k3s1", "v1.31.12+k3s1"], value)
+        self.assertEqual("", error)
+
+    def test_github_stands_in_when_the_channel_server_takes_no_connection(self):
+        def answer(url):
+            if "update.k3s.io" in url:
+                raise TimeoutError("timed out")
+            self.assertIn("k3s-io/k3s", url)
+            return K3S_GITHUB
+        value, error = self.releases(answer)
+        # The newest k3s build of each minor; no test build, no bare tag.
+        self.assertEqual(["v1.34.1+k3s1", "v1.33.5+k3s2", "v1.32.9+k3s1"], value)
+        self.assertEqual("", error)
+
+    def test_github_stands_in_when_the_channel_server_answers_nothing_usable(self):
+        value, _ = self.releases(lambda url: {"data": []} if "update.k3s.io" in url else K3S_GITHUB)
+        self.assertEqual("v1.34.1+k3s1", value[0])
+
+    def test_neither_answering_is_said(self):
+        def answer(url):
+            raise TimeoutError("timed out")
+        value, error = self.releases(answer)
+        self.assertEqual([], value)
+        self.assertIn("timed out", error)
+
+
 class VersionTests(unittest.TestCase):
     def test_one_minor_at_a_time(self):
         available = ["v1.9.1", "v1.9.0", "v1.8.2", "v1.8.1", "v1.7.3"]
