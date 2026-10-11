@@ -159,8 +159,8 @@ Tools come in three classes:
 | `set_priority_tiers` | Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current and tier), review_token, restart: true} | `containers:manage` | change |
 | `preview_reservations` | What each app used over the past week and the reservation suggested; chosen limits it to these app ids | `read` | read |
 | `set_reservations` | Applies reservations as preview_reservations reviewed them: settings {apps, review_token, restart: true} | `containers:manage` | change |
-| `preview_container_rebalance` | Which containers Balance hosts would move to even the hosts out; exclude: app ids to leave alone | `read` | read |
-| `rebalance_containers` | Moves containers as preview_container_rebalance planned: settings {moves, review_token, restart: true, exclude} | `containers:manage` | change |
+| `preview_container_rebalance` | Which containers Balance hosts would move to even the hosts out; exclude: app ids to leave alone. With picks [{id, to}]: the review of those moves - why each can't go, and the hosts' room with all of them | `read` | read |
+| `rebalance_containers` | Moves containers as preview_container_rebalance reviewed them: settings {moves, review_token, restart: true, exclude}, or {picks, review_token, restart: true} for chosen moves, which stop at the first that does not go | `containers:manage` | change |
 | `get_uptime` | Each app's and VM's uptime check and how it has answered | `read` | read |
 | `set_uptime_check` | How an app or VM is checked: settings {kind, ns, name, mode (auto, tcp, http, off), port, path} | `containers:manage` | change |
 | `set_outage_actions` | What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook}} | `containers:manage` | change |

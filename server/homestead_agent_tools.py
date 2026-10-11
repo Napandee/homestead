@@ -131,6 +131,8 @@ S, I, B = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}
 NS = {"type": "string", "description": "The namespace, as list_containers or list_vms shows it"}
 NAME_ARG = {"type": "string", "description": "Its name"}
 SETTINGS = {"type": "object", "additionalProperties": True}
+PICKS = {"type": "array", "description": "Containers to move and where: [{id: \"namespace/name\", to: host}]",
+         "items": {"type": "object", "properties": {"id": S, "to": S}, "required": ["id", "to"], "additionalProperties": False}}
 
 
 class Tool:
@@ -477,6 +479,13 @@ def _route(method, path):
     return execute
 
 
+def _rebalance_preview(args, ctx):
+    """Balance's own plan, or - with picks - the review of moves chosen (#366)."""
+    if args.get("picks"):
+        return call("POST", "/api/workloads/rebalance/review", body={"picks": args["picks"]}, **_as(ctx))
+    return _get("/api/workloads/rebalance/plan", {"exclude": "exclude"})(args, ctx)
+
+
 TOOLS = [
     # ---- status (read)
     Tool("whoami", "Who am I", None, READ, "This key: its name, its scopes and when it expires.", run=_v1("/api/v1/whoami")),
@@ -732,10 +741,12 @@ TOOLS = [
          "Applies reservations as preview_reservations reviewed them: settings {apps, review_token, restart: true}.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/requests")),
     Tool("preview_container_rebalance", "Preview balancing hosts", "read", READ,
-         "Which containers Balance hosts would move to even the hosts out; exclude: app ids to leave alone.",
-         {"exclude": S}, run=_get("/api/workloads/rebalance/plan", {"exclude": "exclude"})),
+         "Which containers Balance hosts would move to even the hosts out; exclude: app ids to leave alone. "
+         "With picks [{id, to}]: the review of those moves - why each can't go, and the hosts' room with all of them.",
+         {"exclude": S, "picks": PICKS}, run=_rebalance_preview),
     Tool("rebalance_containers", "Balance hosts", "containers:manage", CHANGE,
-         "Moves containers as preview_container_rebalance planned: settings {moves, review_token, restart: true, exclude}.",
+         "Moves containers as preview_container_rebalance reviewed them: settings {moves, review_token, restart: true, exclude}, "
+         "or {picks, review_token, restart: true} for chosen moves, which stop at the first that does not go.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/rebalance")),
     Tool("get_uptime", "Uptime checks", "read", READ, "Each app's and VM's uptime check and how it has answered.",
          run=_get("/api/uptime")),
