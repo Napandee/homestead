@@ -199,7 +199,9 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
 
 class PullWatchLifecycleTests(unittest.TestCase):
     def setUp(self):
-        for field, value in (("NS", "lab"), ("_ASKED", {}), ("_LAYERS", {})):
+        import tempfile
+        for field, value in (("NS", "lab"), ("_ASKED", {}), ("_SHARED_AT", {}), ("_LAYERS", {}),
+                             ("DATA_DIR", tempfile.mkdtemp())):
             patch = mock.patch.object(pull, field, value)
             patch.start()
             self.addCleanup(patch.stop)
@@ -236,6 +238,17 @@ class PullWatchLifecycleTests(unittest.TestCase):
         self.assertEqual("DELETE", send.call_args.args[0])
         self.assertEqual({"uid": "watch-uid"}, send.call_args.args[2]["preconditions"])
         self.assertEqual({}, pull._ASKED)
+
+    def test_a_watcher_asked_about_through_the_other_copy_is_kept(self):
+        """Two copies of Homestead: this one never asked, the other did just now."""
+        pod = watcher()
+        pull._asked(pod["metadata"]["name"], now=100)     # as the other copy writes it
+        pull._ASKED.clear()                                # this copy's own memory: nothing
+        with mock.patch.object(names, "find", return_value=[pod]), mock.patch.object(pull, "ksend") as send:
+            pull.sweep(now=100 + pull.IDLE - 1)
+            send.assert_not_called()
+            pull.sweep(now=100 + 2 * pull.IDLE)
+            send.assert_called_once()
 
     def test_recently_requested_watcher_stays_but_finished_one_is_collected(self):
         pod = watcher()
