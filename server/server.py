@@ -5067,36 +5067,8 @@ class H(HTTP.LimitedHandler):
                                                               bool(b.get("gone"))))
             if p == "/api/cluster/cleanup/run":
                 return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
-            if p == "/api/objectstore/transfers":
-                return self._move(lambda: OBJECTS.set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100),
-                                                                str(b.get("lb_ip") or ""), str(b.get("vip_mode") or ""),
-                                                                int(b.get("port") or 0)))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
-            if p == "/api/longhorn/rebalance":
-                running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
-                                and i.get("status") not in OPS.TERMINAL), None)
-                if running:
-                    return self._send(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})
-                if b.get("moves") is not None:
-                    # The copies reviewed, checked against Longhorn now - not a
-                    # plan made again from sizes that grow while apps write.
-                    try:
-                        moves = REBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
-                    except ValueError as error:
-                        return self._send(409, {"error": str(error), "plan": REBALANCE.plan(b.get("exclude") or [])})
-                    plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
-                else:
-                    plan = REBALANCE.plan(b.get("exclude") or [])
-                    if plan["review_token"] != b.get("review_token"):
-                        return self._send(409, {"error": "Volume copies changed since the review; review again", "plan": plan})
-                if not plan["moves"]:
-                    return self._send(409, {"error": "Nothing to move: the hosts are as even as they can be", "plan": plan})
-                operation = OPS.start(REBALANCE.KIND, f"Rebalance {len(plan['moves'])} volume cop{'y' if len(plan['moves']) == 1 else 'ies'}",
-                                      {"kind": "Volume", "name": "rebalance"}, "/volumes",
-                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "add", "excluded": plan["excluded"]},
-                                      "Starting with the first copy")
-                return self._send(202, {"operation": operation})
             if p == "/api/self/samba":
                 return self._send(200, SHARE_SERVERS.set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/self/nfs":
@@ -5109,25 +5081,6 @@ class H(HTTP.LimitedHandler):
                 if b.get("confirm") != NFS.NAME:
                     raise ValueError(f"type {NFS.NAME} to remove the NFS server")
                 return self._send(200, SHARE_SERVERS.remove_nfs())
-            if p == "/api/lh/restore":
-                with OPS._lock:
-                    plan = LH.restore_plan(
-                        b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
-                    if plan.get("conflict"):
-                        return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
-                    b["restore_id"] = secrets.token_hex(12)
-                    b["annotations"] = {"homestead.io/restore-id": b["restore_id"]}
-                    result = LH.restore_backup(b)
-                    b["source_size_bytes"] = result["source_size_bytes"]
-                    result["operation"] = OPS.start(
-                        "volume-restore", f"Restore {result['name']}",
-                        {"kind": "PersistentVolumeClaim", "name": result["name"],
-                         "namespace": result["namespace"]},
-                        "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
-                        {"namespace": result["namespace"], "name": result["name"],
-                         "backup": result["backup"], "restore_config": b,
-                         "restore_started": result["created"]}, result["message"])
-                return self._send(200, result)
             if p == "/api/operations/cancel":
                 # The route lets any operator in; what the job's own cancel
                 # does - delete VMs, stop a volume move - may need more.

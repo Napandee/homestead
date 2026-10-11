@@ -24,6 +24,7 @@ import re
 import secrets
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import homestead_operations as OPS
 import homestead_routes
@@ -1170,8 +1171,31 @@ def backup_now(b):
     return result
 
 
+def restore_reviewed(b):
+    """Restore a backup as a job, or a 409 with the plan when what it would
+    make is already there. Planned and started under the jobs' lock."""
+    with OPS._lock:
+        plan = restore_plan(b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
+        if plan.get("conflict"):
+            return homestead_routes.Reply(409, {"error": plan["conflict"]["message"], "plan": plan})
+        b["restore_id"] = secrets.token_hex(12)
+        b["annotations"] = {"homestead.io/restore-id": b["restore_id"]}
+        result = restore_backup(b)
+        b["source_size_bytes"] = result["source_size_bytes"]
+        result["operation"] = OPS.start(
+            "volume-restore", f"Restore {result['name']}",
+            {"kind": "PersistentVolumeClaim", "name": result["name"],
+             "namespace": result["namespace"]},
+            "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
+            {"namespace": result["namespace"], "name": result["name"],
+             "backup": result["backup"], "restore_config": b,
+             "restore_started": result["created"]}, result["message"])
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/lh/restore"): ("admin", lambda request: restore_reviewed(request.body)),
     ("POST", "/api/lh/job"): ("operator", lambda request: save_job(request.body)),
     ("POST", "/api/lh/job/delete"): ("admin", lambda request: delete_job(request.body["name"])),
     ("POST", "/api/lh/snapshot"): ("operator", lambda request: create_snapshot(request.body["volume"], request.body.get("name"))),
