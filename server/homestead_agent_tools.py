@@ -24,8 +24,10 @@ shells and exec, Secrets, the file manager, host power and updates,
 Homestead's own workloads (their routes refuse it), and linked clusters.
 """
 import hashlib
+import datetime
 import json
 import re
+import sys
 import urllib.error
 import urllib.parse
 
@@ -36,7 +38,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_routes as ROUTER
 
 READ, CHANGE, DESTRUCTIVE = "read", "change", "destructive"
-MAX_RESULT = 120000          # characters of JSON an answer may hand the agent
+MAX_RESULT = 40000           # characters of JSON an answer may hand the agent: under clients' limits
 NAME = re.compile(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?")
 # Fields that change from one plan to the next without the action changing.
 VOLATILE = {"capacity_token", "review_token", "token", "expires", "at", "now", "checked_at", "generated_at",
@@ -54,7 +56,12 @@ def bind(role_of, precheck, kget, delete_workload):
 
 
 class ToolError(Exception):
-    """A refusal to hand back to the agent, in words."""
+    """A refusal to hand back to the agent, in words; data is the route's
+    whole answer, when it gave one (a capacity review, say)."""
+
+    def __init__(self, message, data=None):
+        super().__init__(message)
+        self.data = data
 
 
 class NeedsApproval(Exception):
@@ -94,7 +101,7 @@ def call(method, path, query=None, body=None, *, user, role):
     if isinstance(answer, ROUTER.Reply):
         if answer.code >= 400:
             message = answer.body.get("error") if isinstance(answer.body, dict) else str(answer.body)
-            raise ToolError(str(message or f"refused ({answer.code})")[:600])
+            raise ToolError(str(message or f"refused ({answer.code})")[:600], answer.body)
         return answer.body
     if isinstance(answer, ROUTER.Raw):
         body_text = answer.body if isinstance(answer.body, str) else bytes(answer.body).decode("utf-8", "replace")
@@ -160,8 +167,15 @@ def _v1(endpoint_path, method="GET"):
         code, answer = API_V1.handle(method, endpoint_path.format(**params), query, {}, ctx["auth"])
         if code >= 400:
             raise ToolError((answer or {}).get("error") or f"refused ({code})")
+        if isinstance(answer, dict) and isinstance(answer.get("expires"), (int, float)):
+            answer = {**answer, "expires_at": when(answer["expires"])}
         return answer
     return run
+
+
+def when(seconds):
+    """A time an agent reads: ISO 8601, UTC."""
+    return datetime.datetime.fromtimestamp(float(seconds), datetime.timezone.utc).isoformat(timespec="seconds")
 
 
 def _summary(data):
@@ -192,10 +206,33 @@ def _events(args, ctx):
                                                  "name": _name(args.get("name"), "name")}, **_as(ctx))
 
 
+VOLUME_FIELDS = ("namespace", "pvc_name", "name", "size_gb", "actual_gb", "used_pct", "state", "robustness",
+                 "replicas", "storage_class", "access_modes", "attached_to", "used_by", "health_reason")
+
+
 def _volumes(args, ctx):
+    """Every volume in a line each - the page's rows carry far more than an
+    agent can take in one answer; name one for all of its fields."""
     rows = call("GET", "/api/volumes", **_as(ctx))
-    ns = args.get("namespace")
-    return [r for r in rows if not ns or r.get("namespace") == ns] if isinstance(rows, list) else rows
+    if not isinstance(rows, list):
+        return rows
+    ns, name = args.get("namespace"), args.get("name")
+    rows = [r for r in rows if (not ns or r.get("namespace") == ns)
+            and (not name or name in (r.get("pvc_name"), r.get("name")))]
+    if name:
+        return rows
+    return [{k: r.get(k) for k in VOLUME_FIELDS if r.get(k) not in (None, "", [])} for r in rows]
+
+
+def _deploy_options(args, ctx):
+    """What a new container can use, without every deployment's volumes."""
+    found = call("GET", "/api/deploy/options", {"ns": args.get("namespace") or ""}, **_as(ctx))
+    if not isinstance(found, dict):
+        return found
+    found = dict(found)
+    found["deployments"] = [d.get("name") for d in found.get("deployments") or [] if isinstance(d, dict)]
+    found["default_namespace"] = getattr(sys.modules.get("homestead_deploy"), "DEFAULT_NS", "")
+    return found
 
 
 def _logs(args, ctx):
@@ -252,6 +289,21 @@ def _preview(path):
     def run(args, ctx):
         return call("POST", path, body=_clean(args.get("settings")), **_as(ctx))
     return _guarded(run)
+
+
+def _scale(args, ctx):
+    """scale, saying how to accept a capacity review it was refused with."""
+    try:
+        return _post("/api/scale", {"namespace": "ns", "name": "name", "replicas": "replicas",
+                                    "confirm_capacity": "confirm_capacity"})(args, ctx)
+    except ToolError as error:
+        plan = error.data.get("plan") if isinstance(error.data, dict) else None
+        if not isinstance(plan, dict) or args.get("confirm_capacity"):
+            raise
+        warnings = "; ".join(map(str, plan.get("warnings") or plan.get("reasons") or []))[:800]
+        then = ("It cannot fit, so it cannot be accepted." if plan.get("blocked") else
+                "If that is acceptable, call scale_container again with confirm_capacity: true.")
+        raise ToolError(f"{error}. The capacity review: {warnings or 'no details'}. {then}", error.data) from None
 
 
 def _post(path, fields):
@@ -402,7 +454,7 @@ TOOLS = [
           "lines": {"type": "integer", "minimum": 10, "maximum": 500}}, ["namespace", "name"], run=_logs),
     Tool("deploy_options", "Deploy options", "read", READ,
          "What a new container can use: storage classes, networks, hosts, hardware, addresses.",
-         {"namespace": NS}, run=lambda args, ctx: call("GET", "/api/deploy/options", {"ns": args.get("namespace") or ""}, **_as(ctx))),
+         {"namespace": NS}, run=_deploy_options),
     Tool("search_app_store", "Search the App Store", "read", READ, "Apps the App Store offers, by name or category.",
          {"query": S, "category": S}, run=_appstore),
     *[Tool(f"container_{a}", f"{a.capitalize()} a container", "containers:control", CHANGE, desc,
@@ -413,14 +465,15 @@ TOOLS = [
                       ("restart", "Restarts a container's pods."))],
     Tool("preview_deploy", "Preview a deploy", "containers:manage", CHANGE,
          "What deploying these settings would create, and its capacity review, without creating anything. "
-         "deploy_options lists what can be chosen. Pass the answer's capacity_token to deploy_container.",
+         "deploy_options lists what can be chosen, and the namespace apps go in (default_namespace). Leave out "
+         "ports for a container nothing connects to. Pass the answer's capacity_token to deploy_container.",
          {"settings": {**SETTINGS, "description": "The deploy settings: name, image, namespace, ports, env, volumes, "
                                                    "cpu, memory, replicas, network_mode, node and the rest of Deploy's fields"}},
          ["settings"], run=_preview("/api/preview")),
     Tool("deploy_container", "Deploy a container", "containers:manage", CHANGE,
-         "Deploys a container with the settings preview_deploy reviewed, its capacity_token and, when the review "
-         "asked for it, confirm_capacity: true. Privileged mode, host paths, host networking or added capabilities "
-         "make it a request a person must approve.",
+         "Deploys a container. settings: exactly what preview_deploy reviewed, plus - inside settings - the "
+         "capacity_token it answered with and, when it said requires_confirmation, confirm_capacity: true. "
+         "Privileged mode, host paths, host networking or added capabilities make it a request a person must approve.",
          {"settings": SETTINGS}, ["settings"], run=_with_review("/api/preview", "/api/deploy")),
     Tool("install_app", "Install from the App Store", "containers:manage", CHANGE,
          "Installs an App Store app, with overrides to its defaults.",
@@ -439,16 +492,16 @@ TOOLS = [
          "capacity review. Pass its capacity_token to edit_container.",
          {"settings": SETTINGS}, ["settings"], run=_preview("/api/edit/preview")),
     Tool("edit_container", "Edit a container", "containers:manage", CHANGE,
-         "Saves a container's settings as preview_edit_container reviewed them. The change is in its change "
+         "Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside "
+         "settings, its capacity_token and confirm_capacity: true. The change is in the container's change "
          "history and can be undone there.",
          {"settings": SETTINGS}, ["settings"], run=_with_review("/api/edit/preview", "/api/edit")),
     Tool("scale_container", "Scale a container", "containers:manage", CHANGE,
-         "Sets how many copies of a container run. A scale that needs room is refused with the review; "
-         "pass confirm_capacity: true to accept its warnings.",
+         "Sets how many copies of a container run. A scale that needs room is refused with the capacity "
+         "review's warnings; call again with confirm_capacity: true to accept them.",
          {"namespace": NS, "name": NAME_ARG, "replicas": {"type": "integer", "minimum": 0, "maximum": 100},
           "confirm_capacity": B}, ["namespace", "name", "replicas"],
-         run=_guarded(_post("/api/scale", {"namespace": "ns", "name": "name", "replicas": "replicas",
-                                           "confirm_capacity": "confirm_capacity"}))),
+         run=_guarded(_scale)),
     Tool("preview_move_container", "Preview a move", "containers:manage", CHANGE,
          "Whether a container fits on another host, and its capacity_token for move_container.",
          {"namespace": NS, "name": NAME_ARG, "node": S, "pin": B}, ["namespace", "name", "node"],
@@ -491,8 +544,10 @@ TOOLS = [
          {"namespace": NS, "name": NAME_ARG, "delete_disks": B}, ["namespace", "name"], plan=_plan_delete_vm,
          execute=_route("POST", "/api/vm/delete"), role="admin"),
     # ---- volumes
-    Tool("list_volumes", "List volumes", "read", READ, "Every volume: size, use, health, copies and what uses it.",
-         {"namespace": NS}, run=_volumes),
+    Tool("list_volumes", "List volumes", "read", READ,
+         "Every volume in a line each: size, use, health, copies and what uses it. Give name (the claim or the "
+         "Longhorn volume) for all of one volume's details.",
+         {"namespace": NS, "name": {"type": "string", "description": "One volume, for all its details"}}, run=_volumes),
     Tool("list_snapshots", "List snapshots", "read", READ, "A volume's snapshots.",
          {"volume": {"type": "string", "description": "The Longhorn volume, as list_volumes gives it"}}, ["volume"],
          run=lambda args, ctx: call("GET", "/api/lh/snapshots", {"volume": _name(args.get("volume"), "volume")}, **_as(ctx))),

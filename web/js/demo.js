@@ -2914,7 +2914,7 @@ ssh_pwauth: true
       demoSetup.steps.health = { done: false, applies: true, summary: overview.health_summary, issues: overview.health_issues };
     }
   }
-  responses["/api/alerts"] = {devices:[],log:[],active:scenario === "healthy" ? [] : [
+  responses["/api/alerts"] = {devices:[],log:[],agents:{enabled:true,pending:2},active:scenario === "healthy" ? [] : [
     {key:"health:Disk:harvester-node2/sda",version:"demo-drive-24",severity:"degraded",category:"degraded",title:"Drive harvester-node2/sda needs attention",body:"24 reallocated sectors",href:"/nodes",acknowledged:false},
     {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false}
   ]};
