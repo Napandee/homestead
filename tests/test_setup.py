@@ -197,6 +197,18 @@ class PlacementSetupStateTests(UniFiSetupStateTests):
         self.assertFalse(self.step({"mode": "", "hosts": [], "applies": False})["applies"])
 
 
+class QuorumSetupStateTests(UniFiSetupStateTests):
+    def test_the_quorum_step_names_its_tiebreakers(self):
+        nodes = [{"name": "one", "status": "Ready", "roles": ["control-plane", "etcd"], "labels": {}, "taints": []},
+                 {"name": "pi", "status": "Ready", "roles": ["control-plane", "etcd"],
+                  "labels": {"node-role/tiebreaker": "true"}, "taints": []}]
+        real = SETUP.homestead_routes.cached
+        with mock.patch.object(SETUP.homestead_routes, "cached",
+                               side_effect=lambda key, ttl, fn: nodes if key == "nodes" else real(key, ttl, fn)):
+            step = SETUP.state("admin", "admin")["steps"]["quorum"]
+        self.assertEqual(["pi"], step["tiebreakers"])
+
+
 class NetworkSetupStateTests(unittest.TestCase):
     def setUp(self):
         import server

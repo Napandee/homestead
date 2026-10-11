@@ -33,6 +33,20 @@ function clusterServiceCard(service) {
   </article>`;
 }
 
+/* The etcd members, a tiebreaker told apart (homestead_roles): with two there
+   is no failure margin, and a small machine can be the third vote. */
+function etcdMembersHtml(cp, admin) {
+  const members = (cp.members || []).map(m => `${esc(m.name)}${m.role === "tiebreaker" ? ' <span class="pill slim neutral">tiebreaker</span> <span class="dim xs">votes only</span>' : ""}${m.ready ? "" : ' <span class="pill slim crit">down</span>'}`);
+  // The join guide is for k3s and RKE2; Harvester adds hosts its own way.
+  const joinable = ["k3s", "rke2"].includes(STATE.platform?.distribution) && !STATE.platform?.harvester;
+  const add = cp.etcd_total === 2 && admin && joinable ? ` ${UI.button("Add a tiebreaker", "platformJoinGuide('tiebreaker')")}` : "";
+  // On k3s an app host can be the third vote too (#364).
+  const promote = cp.etcd_total === 2 && admin && STATE.platform?.distribution === "k3s" && !STATE.platform?.harvester
+    ? ' <span class="dim xs">or make an app host a server from its Host actions</span>' : "";
+  return members.length ? `<small class="etcd-members">${members.join(" · ")}${add}${promote}</small>` : "";
+}
+window.etcdMembersHtml = etcdMembersHtml;
+
 async function viewCluster() {
   const report = await api("/api/cluster");
   STATE.data.cluster = report;
@@ -57,7 +71,7 @@ async function viewCluster() {
       : `<section><span>Harvester</span><b>${versions.harvester ? `v${esc(versions.harvester)}` : "Not reported"}</b><small>Host operating platform</small></section>`}
     <section><span>Kubernetes</span><b>${versions.kubernetes ? `v${esc(versions.kubernetes)}` : "Not reported"}</b><small>Cluster API version</small></section>
     <section><span>Control plane</span><b>${cp.ready ?? 0}/${cp.total ?? 0} ready</b><small>API and scheduling hosts</small></section>
-    <section><span>etcd quorum ${tip("The number of additional ready etcd members that can be lost before the control plane loses quorum.")}</span><b>${esc(marginCopy)}</b><small>${cp.etcd_ready ?? 0}/${cp.etcd_total ?? 0} ready · ${cp.quorum_needed ?? "—"} needed</small></section>
+    <section><span>etcd quorum ${tip("The number of additional ready etcd members that can be lost before the control plane loses quorum.")}</span><b>${esc(marginCopy)}</b><small>${cp.etcd_ready ?? 0}/${cp.etcd_total ?? 0} ready · ${cp.quorum_needed ?? "—"} needed</small>${etcdMembersHtml(cp, can("admin"))}</section>
   </div>`)}
 
   ${(report.unavailable || []).length ? `<div class="note"><b>Partial platform data.</b> ${esc(report.unavailable.map(row => row.section).join(", "))} could not be read. Other sections remain live.</div>` : ""}

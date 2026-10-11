@@ -150,12 +150,12 @@
     list.forEach((s, i) => {
       const x = 6 + i * (w + gap);
       b += box(x, 8, w, 60, s.ready ? "dg-node" : "dg-node dg-bad", 8) + text(x + 12, 28, clip(s.name, 20), "dg-b")
-        + text(x + 12, 44, s.ready ? "server · ready" : "server · down", "dg-xs dg-dim")
+        + text(x + 12, 44, `${s.tiebreaker ? "tiebreaker" : "server"} · ${s.ready ? "ready" : "down"}`, "dg-xs dg-dim")
         + box(x + w - 58, 40, 48, 18, s.ready ? "dg-vol-box" : "dg-vol-box dg-dash", 5) + text(x + w - 34, 53, "vote", "dg-xs", "middle");
     });
     if (ghost) {
       const x = 6 + 2 * (w + gap);
-      b += box(x, 8, w, 60, "dg-node dg-dash", 8) + text(x + 12, 28, "a third server", "dg-dim")
+      b += box(x, 8, w, 60, "dg-node dg-dash", 8) + text(x + 12, 28, "a third server or a tiebreaker", "dg-dim")
         + box(x + w - 58, 40, 48, 18, "dg-vol-box dg-dash", 5) + text(x + w - 34, 53, "vote", "dg-xs dg-dim", "middle");
     }
     const n = list.length, need = Math.floor(n / 2) + 1, lose = Math.max(0, n - need);

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_container_rebalance as C
+import homestead_capacity_review as CAPACITY_REVIEW
 
 GI = 1024 ** 3
 
@@ -56,6 +57,7 @@ class Cluster:
                 {"metadata": {"namespace": "lab", "name": f"{n}-abc-0"}, "containers": [{"usage": {"cpu": c, "memory": m}}]}
                 for n, (_, c, m) in apps.items()]},
             "/apis/apps/v1/replicasets": {"items": [replicaset(n) for n in apps]},
+            "/apis/policy/v1/poddisruptionbudgets": {"items": []},
         }
         self.moved = []
 
@@ -78,6 +80,7 @@ class Cluster:
 
 
 def bind(c, satisfies=lambda n, r: (True, [])):
+    CAPACITY_REVIEW.bind(lambda: b"test-key")
     C.bind(c.get, lambda dep: {}, satisfies, c.apply, ("lab", "homestead"), lambda: True)
 
 
@@ -231,7 +234,6 @@ class PlanTests(unittest.TestCase):
         plan = C.plan()
         # Live CPU moves by the second: the same moves are the review.
         c.objects["/apis/metrics.k8s.io/v1beta1/pods"]["items"][0]["containers"][0]["usage"]["cpu"] = "1450m"
-        self.assertEqual(plan["review_token"], C.plan()["review_token"])
         moves = C.reviewed(plan["moves"], [], plan["review_token"])
         self.assertEqual([(m["id"], m["from"], m["to"]) for m in plan["moves"]], [(m["id"], m["from"], m["to"]) for m in moves])
 
@@ -255,6 +257,38 @@ class PlanTests(unittest.TestCase):
         c.objects["/api/v1/nodes"]["items"] = [node("k1", cordoned=True), node("k2"), node("k3")]
         bind(c)
         self.assertTrue(all(m["to"] == "k3" for m in C.plan()["moves"]))
+
+
+class SignedReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.c = Cluster(); bind(self.c)
+        self.plan = C.plan()
+
+    def test_the_token_is_signed_and_expires(self):
+        token = self.plan["review_token"]
+        self.assertRegex(token, r"^\d+\.[0-9a-f]{64}$")
+        with mock.patch("time.time", return_value=time.time() + C.CAPACITY_REVIEW.TTL + 5):
+            with self.assertRaisesRegex(ValueError, "review again"):
+                C.reviewed(self.plan["moves"], [], token)
+
+    def test_an_edit_to_an_app_after_the_review_needs_a_new_review(self):
+        app = self.plan["moves"][0]["name"]
+        self.c.deps[app]["metadata"]["generation"] = 2
+        with self.assertRaisesRegex(ValueError, "review again"):
+            C.reviewed(self.plan["moves"], [], self.plan["review_token"])
+
+    def test_reviewed_moves_carry_the_generation_reviewed(self):
+        moves = C.reviewed(self.plan["moves"], [], self.plan["review_token"])
+        self.assertEqual(1, moves[0]["generation"])
+
+    def test_the_job_skips_an_app_edited_after_the_review(self):
+        moves = C.reviewed(self.plan["moves"], [], self.plan["review_token"])
+        item = {"id": "op1", "ref": {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": [], "role": None}}
+        self.c.deps[moves[0]["name"]]["metadata"]["generation"] = 2
+        state, _, message = C.status(item)
+        self.assertEqual("running", state)
+        self.assertIn("changed since the review", message)
+        self.assertEqual([], self.c.moved)
 
 
 class JobTests(unittest.TestCase):
@@ -440,3 +474,213 @@ class HostPathTests(unittest.TestCase):
         for path, storage in (("/dev/dri", False), ("/dev/bus/usb", False), ("/dev/net/tun", False),
                               ("/mnt/user/media", True), ("/srv/data", True), ("/devices", True)):
             self.assertEqual(storage, C._host_storage({"hostPath": {"path": path}}), path)
+
+
+def requests(dep, cpu="500m", memory="1Gi"):
+    dep["spec"]["template"]["spec"]["containers"] = [{"name": "c", "resources": {"requests": {"cpu": cpu, "memory": memory}}}]
+    return dep
+
+
+class PickedTests(unittest.TestCase):
+    def setUp(self):
+        self.c = Cluster()
+        for name in ("frigate", "ha", "tiny"):
+            requests(self.c.deps[name])
+        self.c.objects["/apis/policy/v1/poddisruptionbudgets"] = {"items": []}
+        bind(self.c)
+
+    def why(self, picks, app):
+        return next(r["why"] for r in C.picked(picks)["rows"] if r["id"] == app)
+
+    def test_chosen_moves_go_where_they_are_sent(self):
+        plan = C.picked([{"id": "lab/ha", "to": "k1"}, {"id": "lab/tiny", "to": "k3"}])
+        self.assertEqual([("lab/ha", "k2", "k1"), ("lab/tiny", "k2", "k3")],
+                         [(m["id"], m["from"], m["to"]) for m in plan["moves"]])
+        self.assertFalse(plan["blocked"])
+        self.assertRegex(plan["review_token"], r"^\d+\.")
+
+    def test_a_pinned_app_is_a_row_with_its_reason_not_a_failure(self):
+        plan = C.picked([{"id": "lab/plex", "to": "k1"}, {"id": "lab/ha", "to": "k1"}])
+        self.assertEqual(["lab/ha"], [m["id"] for m in plan["moves"]])
+        self.assertIn("pinned", self.why([{"id": "lab/plex", "to": "k1"}], "lab/plex"))
+
+    def test_each_new_reason(self):
+        self.c.deps["ha"]["spec"]["paused"] = True
+        self.assertIn("paused", self.why([{"id": "lab/ha", "to": "k1"}], "lab/ha"))
+        self.c.deps["ha"]["spec"]["paused"] = False
+        self.c.deps["ha"]["spec"]["template"]["spec"]["nodeName"] = "k2"
+        self.assertIn("nodeName", self.why([{"id": "lab/ha", "to": "k1"}], "lab/ha"))
+        del self.c.deps["ha"]["spec"]["template"]["spec"]["nodeName"]
+        self.c.deps["ha"]["spec"]["template"]["spec"]["topologySpreadConstraints"] = [{"maxSkew": 1}]
+        self.assertIn("spread", self.why([{"id": "lab/ha", "to": "k1"}], "lab/ha"))
+        del self.c.deps["ha"]["spec"]["template"]["spec"]["topologySpreadConstraints"]
+        self.assertIn("already runs on k2", self.why([{"id": "lab/ha", "to": "k2"}], "lab/ha"))
+        bind(self.c, satisfies=lambda n, r: (False, ["no GPU"]))
+        self.assertIn("no GPU", self.why([{"id": "lab/ha", "to": "k1"}], "lab/ha"))
+
+    def test_a_cordoned_destination_takes_none(self):
+        self.c.objects["/api/v1/nodes"]["items"] = [node("k1", cordoned=True), node("k2"), node("k3")]
+        bind(self.c)
+        self.assertIn("takes no new containers", self.why([{"id": "lab/ha", "to": "k1"}], "lab/ha"))
+
+    def test_a_budget_allowing_no_restart_blocks_a_pick_and_balance(self):
+        self.c.objects["/apis/policy/v1/poddisruptionbudgets"]["items"] = [{
+            "metadata": {"namespace": "lab", "name": "ha-pdb"}, "spec": {"selector": {"matchLabels": {"app": "ha"}}},
+            "status": {"disruptionsAllowed": 0}}]
+        self.c.deps["ha"]["spec"]["template"]["metadata"] = {"labels": {"app": "ha"}}
+        self.assertIn("disruption budget lab/ha-pdb", self.why([{"id": "lab/ha", "to": "k1"}], "lab/ha"))
+        self.assertIn("lab/ha", [s["id"] for s in C.plan()["skipped"]])
+
+    def test_two_picks_that_fit_apart_but_not_together(self):
+        for name in ("frigate", "ha"):
+            requests(self.c.deps[name], cpu="100m", memory="9Gi")
+        plan = C.picked([{"id": "lab/frigate", "to": "k1"}, {"id": "lab/ha", "to": "k1"}])
+        self.assertEqual([], plan["moves"])
+        self.assertTrue(all("no room on k1 with the others" in r["why"] for r in plan["rows"]))
+        k1 = next(h for h in plan["hosts"] if h["name"] == "k1")
+        self.assertTrue(k1["over"])
+        self.assertEqual("", C.picked([{"id": "lab/frigate", "to": "k1"}])["rows"][0]["why"], "alone it fits")
+
+    def test_picks_kept_apart_from_each_other_do_not_go_together(self):
+        self.c.deps["tiny"]["spec"]["template"]["metadata"] = {"labels": {"app": "tiny"}}
+        self.c.deps["ha"]["spec"]["template"]["spec"]["affinity"] = {"podAntiAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": [{"topologyKey": "kubernetes.io/hostname",
+                                                                "labelSelector": {"matchLabels": {"app": "tiny"}}}]}}
+        plan = C.picked([{"id": "lab/tiny", "to": "k1"}, {"id": "lab/ha", "to": "k1"}])
+        self.assertEqual(["lab/tiny"], [m["id"] for m in plan["moves"]])
+        self.assertIn("kept apart", self.why([{"id": "lab/tiny", "to": "k1"}, {"id": "lab/ha", "to": "k1"}], "lab/ha"))
+
+    def test_a_pick_twice_is_one_row(self):
+        plan = C.picked([{"id": "lab/ha", "to": "k1"}, {"id": "lab/ha", "to": "k3"}])
+        self.assertEqual(1, len(plan["rows"]))
+        self.assertEqual("k1", plan["moves"][0]["to"])
+
+    def test_a_missing_app_is_a_row_with_a_reason(self):
+        plan = C.picked([{"id": "lab/gone", "to": "k1"}])
+        self.assertTrue(plan["blocked"])
+        self.assertIn("not running", plan["rows"][0]["why"])
+
+    def test_more_than_ten_picks(self):
+        for n in range(12):
+            name = f"app{n}"
+            self.c.deps[name] = requests(deployment(name), cpu="10m", memory="10Mi")
+            self.c.pods.append(pod(name, "k2"))
+            self.c.objects["/apis/apps/v1/replicasets"]["items"].append(replicaset(name))
+        plan = C.picked([{"id": f"lab/app{n}", "to": "k1"} for n in range(12)])
+        self.assertEqual(10, len(plan["moves"]))
+        self.assertEqual(2, sum("at most 10" in r["why"] for r in plan["rows"]))
+
+    def test_apps_reserving_nothing_are_said_so(self):
+        plan = C.picked([{"id": "lab/plex", "to": "k1"}, {"id": "lab/ha", "to": "k1"}])
+        self.c.deps["ha"]["spec"]["template"]["spec"].pop("containers")
+        plan = C.picked([{"id": "lab/ha", "to": "k1"}])
+        self.assertFalse(plan["rows"][0]["reserves"])
+
+    def test_bad_input_is_refused(self):
+        for bad in (None, [], [{"id": "lab/ha"}], ["lab/ha"]):
+            with self.assertRaises(ValueError):
+                C.picked(bad)
+
+    def test_the_review_route_is_open_to_a_viewer(self):
+        self.assertEqual("viewer", C.ROUTES[("POST", "/api/workloads/rebalance/review")][0])
+
+
+class PickedJobTests(unittest.TestCase):
+    def setUp(self):
+        self.c = Cluster()
+        for name in ("frigate", "ha", "tiny"):
+            requests(self.c.deps[name])
+        self.c.objects["/apis/policy/v1/poddisruptionbudgets"] = {"items": []}
+        bind(self.c)
+
+    def started(self, picks):
+        import homestead_routes as ROUTES
+        plan = C.picked(picks)
+        body = {"picks": picks, "review_token": plan["review_token"], "restart": True}
+        # bind() passes no operations module, so the job's starter is faked here.
+        start = mock.Mock(side_effect=lambda kind, title, res, href, ref, msg, unless=(): {"id": "op1", "ref": ref})
+        with mock.patch.object(C.OPS, "list_operations", return_value=[]), \
+                mock.patch.object(C, "operations", mock.Mock(start=start)):
+            reply = C.start_run(ROUTES.Request("POST", "/api/workloads/rebalance", {}, body, "op", "admin"))
+        return reply, start
+
+    def test_picks_start_a_job_that_stops_on_failure(self):
+        reply, start = self.started([{"id": "lab/ha", "to": "k1"}])
+        self.assertEqual(202, reply.code)
+        ref = start.call_args[0][4]
+        self.assertTrue(ref["stop_on_failure"])
+        self.assertEqual(["lab/ha"], [m["id"] for m in ref["moves"]])
+
+    def test_a_stale_pick_review_is_refused_with_a_fresh_one(self):
+        import homestead_routes as ROUTES
+        body = {"picks": [{"id": "lab/ha", "to": "k1"}], "review_token": "1.00", "restart": True}
+        with mock.patch.object(C.OPS, "list_operations", return_value=[]):
+            reply = C.start_run(ROUTES.Request("POST", "/api/workloads/rebalance", {}, body, "op", "admin"))
+        self.assertEqual(409, reply.code)
+        self.assertIn("rows", reply.body["plan"])
+
+    def item(self, picks):
+        _, start = self.started(picks)
+        return {"id": "op1", "ref": start.call_args[0][4]}
+
+    def test_a_change_before_a_move_fails_the_job_and_leaves_the_rest(self):
+        item = self.item([{"id": "lab/ha", "to": "k1"}, {"id": "lab/tiny", "to": "k3"}])
+        self.c.deps["ha"]["metadata"]["generation"] = 2
+        state, _, message = C.status(item)
+        self.assertEqual("failed", state)
+        self.assertEqual(["failed", "not reached"], [r["result"] for r in item["ref"]["results"]])
+        self.assertIn("lab/ha", message)
+        self.assertIn("not reached", message)
+        self.assertEqual([], self.c.moved)
+
+    def test_balance_still_skips_and_carries_on(self):
+        moves = C.reviewed(C.plan()["moves"], [], C.plan()["review_token"])
+        item = {"id": "op2", "ref": {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": [], "role": None}}
+        self.c.deps[moves[0]["name"]]["metadata"]["generation"] = 2
+        self.assertEqual("running", C.status(item)[0])
+        self.assertEqual("skipped", item["ref"]["results"][0]["result"])
+
+    def test_results_are_in_the_final_message(self):
+        item = self.item([{"id": "lab/ha", "to": "k1"}])
+        self.assertEqual("running", C.status(item)[0])            # moved, now starting
+        self.c.pods[1]["spec"]["nodeName"] = "k1"                  # ha runs on k1 now
+        C.status(item)
+        state, _, message = C.status(item)
+        self.assertEqual("succeeded", state)
+        self.assertIn("Moved lab/ha to k1", message)
+        self.assertEqual("moved", item["ref"]["results"][0]["result"])
+
+
+class ReviewFixTests(PickedJobTests):
+    """The final review's findings (#366)."""
+    def test_a_budget_tightened_after_the_start_stops_a_chosen_move(self):
+        item = self.item([{"id": "lab/ha", "to": "k1"}])
+        self.c.deps["ha"]["spec"]["template"]["metadata"] = {"labels": {"app": "ha"}}
+        self.c.objects["/apis/policy/v1/poddisruptionbudgets"]["items"] = [{
+            "metadata": {"namespace": "lab", "name": "ha-pdb"}, "spec": {"selector": {"matchLabels": {"app": "ha"}}},
+            "status": {"disruptionsAllowed": 0}}]
+        state, _, message = C.status(item)
+        self.assertEqual("failed", state)
+        self.assertIn("disruption budget", message)
+        self.assertEqual([], self.c.moved)
+
+    def test_an_empty_selector_budget_covers_its_whole_namespace(self):
+        budgets = [{"metadata": {"namespace": "lab", "name": "all"}, "spec": {"selector": {}}, "status": {"disruptionsAllowed": 0}}]
+        self.assertIn("lab/all", C._budget_why("lab", {"app": "ha"}, budgets))
+        self.assertEqual("", C._budget_why("media", {"app": "ha"}, budgets))
+
+    def test_the_running_message_says_what_moved_so_far(self):
+        item = self.item([{"id": "lab/ha", "to": "k1"}, {"id": "lab/tiny", "to": "k3"}])
+        C.status(item)                                         # ha: moving
+        self.c.pods[1]["spec"]["nodeName"] = "k1"
+        C.status(item)                                         # ha runs on k1
+        _, _, message = C.status(item)                         # tiny: moving
+        self.assertIn("2 of 2", message)
+        self.assertIn("moved lab/ha", message)
+        self.assertIn("moving lab/tiny", message)
+
+    def test_cancel_records_the_rest_as_not_reached(self):
+        item = self.item([{"id": "lab/ha", "to": "k1"}, {"id": "lab/tiny", "to": "k3"}])
+        message = C.cancel_run(item, {})
+        self.assertEqual(["not reached", "not reached"], [r["result"] for r in item["ref"]["results"]])
+        self.assertIn("lab/ha not reached", message)

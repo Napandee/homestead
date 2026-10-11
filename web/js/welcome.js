@@ -154,12 +154,15 @@ const SETUP_STEPS = {
   },
   quorum: {
     title: "Nodes and quorum", lead: s => s.servers === 2
-      ? "The control plane needs a majority of its servers. With two servers, both must be available. Use three to tolerate one server failure."
+      ? "The control plane needs a majority of its servers. With two servers, both must be available. A third server - or a small machine as a tiebreaker, holding only a vote - lets it lose one."
       : s.servers >= 3 ? `The control plane has ${s.servers} servers and can tolerate ${Math.max(0, s.servers - (Math.floor(s.servers / 2) + 1))} server failures while maintaining a majority.`
       : "A single server is suitable for a lab, but has no control-plane failover. Use three servers for redundancy.",
     body: s => window.Diagram ? Diagram.quorum((s.members?.length ? s.members : (s.nodes || []).map(n => n.name)).map(name =>
-      ({ name, ready: (s.ready || []).includes(name) || (s.nodes || []).some(n => n.name === name && n.ready) }))) : "",
-    actions: () => [{ label: "Add a node", run: "platformJoinGuide()", pri: true }],
+      ({ name, ready: (s.ready || []).includes(name) || (s.nodes || []).some(n => n.name === name && n.ready),
+        tiebreaker: (s.tiebreakers || []).includes(name) }))) : "",
+    actions: s => [s.servers === 2 && ["k3s", "rke2"].includes(window.STATE?.platform?.distribution)
+      ? { label: "Add a tiebreaker", run: "platformJoinGuide('tiebreaker')", pri: true }
+      : { label: "Add a node", run: "platformJoinGuide()", pri: true }],
     more: "<p>Worker nodes run applications and can hold Longhorn replicas. They do not count towards the control-plane majority.</p>",
   },
   placement: {

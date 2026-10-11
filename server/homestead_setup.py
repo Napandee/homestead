@@ -239,12 +239,16 @@ def state(user, role):
         step("health", health)
 
         def quorum():
+            import homestead_roles as ROLES
             q = LC.quorum_report()
+            raw_nodes = cached("nodes", 5, _bound["nodes"])
             nodes = [{"name": n["name"], "ready": n.get("status") == "Ready", "roles": n.get("roles") or []}
-                     for n in cached("nodes", 5, _bound["nodes"])]
+                     for n in raw_nodes]
             servers = q["total"] or sum(1 for n in nodes if any(r in ("control-plane", "master", "etcd") for r in n["roles"])) or 1
             return {"done": servers != 2, "applies": True, "servers": servers, "members": q["members"],
-                    "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
+                    "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes,
+                    # Badged in the guide's diagram: a vote, not an app host.
+                    "tiebreakers": sorted(ROLES.tiebreakers(raw_nodes))}
         step("quorum", quorum)
 
         def placement():

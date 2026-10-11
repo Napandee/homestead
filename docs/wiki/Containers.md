@@ -642,12 +642,27 @@ moves only to a host that holds a copy of them. An operator's review leaves out
 apps only an admin may change, as Move does, and the job checks again before
 each move. The review lists what was left out and why. The job moves one
 container at a time, waits until it runs on its new host, and stops if one
-does not come up within ten minutes; cancelling stops after the current one.
+does not come up within ten minutes; cancelling stops after the current one. The review
+holds for ten minutes, and an app edited after it is skipped.
 
 With a hot spare ([Settings](Settings#how-hosts-share-the-work)), apps on
 standby hosts are moved off first - as far as the other hosts stay under 90%
 full - and nothing is moved onto them. **Settings → Placement → When a host
 comes back** can suggest or schedule this when a host returns.
+
+### Moving several at once
+
+**Move several…** in Containers' menu, or **Select** on a host page's On this host card, moves the containers you
+tick to a host you choose - one host for all of them, or another for any one.
+
+The review shows each container's move, or why it stays: pinned to its host, storage on its host, more than one
+copy, paused, a host named in its spec, spread rules, already there, a host that can't run it, kept apart from what
+is there, a disruption budget that allows no restart now, or more than ten at once. The hosts' memory is shown with
+every container sent there counted, so two that fit apart but not together are both marked.
+
+One job moves them, one at a time, each restarting on its new host. It stops at the first that does not go - one
+edited since the review, one that did not start within ten minutes - and says what happened to each. The review
+holds for ten minutes.
 
 ### Reservations from use, for many apps
 

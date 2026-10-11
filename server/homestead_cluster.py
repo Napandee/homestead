@@ -3,6 +3,7 @@ import math
 import re
 import time
 from datetime import datetime, timezone
+import homestead_roles as ROLES
 import homestead_routes
 
 
@@ -178,6 +179,10 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
     warnings = _warning_rows(events, now)
     control = [row for row in nodes if "control-plane" in row["roles"] or "master" in row["roles"]]
     etcd = [row for row in nodes if "etcd" in row["roles"]]
+    # Each member and what it is: a tiebreaker holds a vote and nothing else.
+    vote_only = ROLES.tiebreakers(raw_nodes or [])
+    members = sorted(({"name": row["name"], "ready": row["ready"], "role": "tiebreaker" if row["name"] in vote_only else "server"}
+                      for row in etcd), key=lambda m: m["name"])
     etcd_ready = sum(1 for row in etcd if row["ready"])
     quorum_needed = math.floor(len(etcd) / 2) + 1 if etcd else 0
     quorum_margin = etcd_ready - quorum_needed if etcd else None
@@ -203,6 +208,8 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
         recommended_role = "Control plane + etcd"
         role_reason = (f"The cluster has {len(etcd)} etcd member{'s' if len(etcd) != 1 else ''}. "
                        "An odd three-member control plane provides a useful one-node failure margin.")
+        if len(etcd) == 2:
+            role_reason += " A small machine can be the third vote as a tiebreaker: it runs no apps and holds no storage."
     else:
         recommended_role = "Worker"
         role_reason = "The control plane already has an odd etcd membership; add compute capacity without changing quorum."
@@ -212,7 +219,7 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
                      "harvester": _harvester_version(harvester_version, nodes)},
         "control_plane": {"total": len(control), "ready": sum(1 for row in control if row["ready"]),
                           "etcd_total": len(etcd), "etcd_ready": etcd_ready,
-                          "quorum_needed": quorum_needed, "quorum_margin": quorum_margin,
+                          "quorum_needed": quorum_needed, "quorum_margin": quorum_margin, "members": members,
                           "state": quorum_state},
         "nodes": nodes,
         "capacity": {"pressure": pressure, "unready": unready,
