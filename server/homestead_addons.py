@@ -431,6 +431,14 @@ def vip_interface():
 
 # ARP on a pinned interface needs both to put an address on it and answer for it.
 KUBE_VIP_SECURITY = "securityContext:\n  capabilities:\n    add:\n    - NET_ADMIN\n    - NET_RAW\n"
+# Never on a tiebreaker (homestead_roles): a host kept for an etcd vote must not
+# answer for every app's VIP over its one small link. The chart's own default
+# is no affinity, so this replaces nothing; it also takes kube-vip off a host
+# marked a tiebreaker after kube-vip started there, which a NoSchedule taint
+# alone would not.
+KUBE_VIP_AFFINITY = ("affinity:\n  nodeAffinity:\n    requiredDuringSchedulingIgnoredDuringExecution:\n"
+                     "      nodeSelectorTerms:\n      - matchExpressions:\n        - key: node-role/tiebreaker\n"
+                     "          operator: DoesNotExist\n")
 
 
 def kube_vip_values(interface, class_only, election="global"):
@@ -451,7 +459,8 @@ def kube_vip_values(interface, class_only, election="global"):
         env["vip_interface"] = interface
     if class_only:
         env.update(lb_class_only="true", lb_class_name=VIP_CLASS)
-    return "env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items()) + KUBE_VIP_SECURITY
+    return ("env:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in env.items())
+            + KUBE_VIP_SECURITY + KUBE_VIP_AFFINITY)
 
 
 def install_kube_vip(cfg=None):

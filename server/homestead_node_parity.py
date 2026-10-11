@@ -220,7 +220,9 @@ def _ours(values):
         env[match.group(1)] = match.group(2)
         index += 1
     rest = "\n".join(lines[index:]).strip("\n")
-    if rest and rest + "\n" != addons.KUBE_VIP_SECURITY:
+    # What Homestead has written over the releases: nothing after the env, the
+    # capabilities, and then the affinity that keeps kube-vip off tiebreakers.
+    if rest and rest + "\n" not in (addons.KUBE_VIP_SECURITY, addons.KUBE_VIP_SECURITY + addons.KUBE_VIP_AFFINITY):
         return None
     return env, bool(rest)
 
