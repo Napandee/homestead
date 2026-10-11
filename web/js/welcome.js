@@ -458,15 +458,16 @@ async function viewSetup() {
   const chapters = setupVisible(state);
   const ids = chapters.flatMap(([, list]) => list);
   const status = Object.fromEntries(ids.map(id => [id, setupStatus(id, state.steps, state.skips)]));
-  const done = ids.filter(id => status[id] === "done").length;
+  // A step skipped by choice is dealt with: it counts, as a done one does.
+  const done = ids.filter(id => status[id] === "done" || status[id] === "skipped").length;
   const wanted = new URLSearchParams(location.search).get("step");
   const open = ids.includes(wanted) ? wanted : "intro";
-  const mark = (s, id) => `<span class="setup-mark ${s}${id === "appearance" && s === "done" ? " confirmed" : ""}" aria-hidden="true">${s === "done" ? "✓" : s === "attention" ? "!" : ""}</span>`;
+  const mark = (s, id) => `<span class="setup-mark ${s}${id === "appearance" && s === "done" ? " confirmed" : ""}" aria-hidden="true">${s === "done" || s === "skipped" ? "✓" : s === "attention" ? "!" : ""}</span>`;
   const nav = UI.workspaceNav([{key:"intro",label:"Start here",markerHtml:mark("todo")}, ...chapters.flatMap(([title,list],c) => list.map(id => ({
     key:id,label:SETUP_STEPS[id].title,group:`${c + 1} · ${title}`,markerHtml:mark(status[id],id),
     ariaLabel:SETUP_STEPS[id].title + ': ' + setupStatusLabel(id,status[id],state.steps[id])
   })))], {label:"Setup steps",selected:open,guide:true,onSelect:key => `setupOpen(${jsArg(key)})`});
-  paint(`${UI.pageHeader(`Setup`, `${done} of ${ids.length} steps complete${state.admin ? "" : " · your preferences"}${state.completed ? " · guide completed" : ""}`, `<span class="setup-meter" aria-hidden="true"><span style="width:${ids.length ? Math.round(done / ids.length * 100) : 0}%"></span></span>
+  paint(`${UI.pageHeader(`Setup`, `${done} of ${ids.length} steps complete or skipped${state.admin ? "" : " · your preferences"}${state.completed ? " · guide completed" : ""}`, `<span class="setup-meter" aria-hidden="true"><span style="width:${ids.length ? Math.round(done / ids.length * 100) : 0}%"></span></span>
         ${actionBar([{ label: state.hidden || state.completed ? "Show reminders again" : "Don’t show again", run: `setupReminders(${!(state.hidden || state.completed)})` }])}`)}
     ${UI.workspace(nav, setupStepHtml(open, state, status, ids), {id:"setupPage",guide:true,contentId:"setupStep",pickerHtml:`<label class="setup-picker">Setup step<select id="setupSelect" onchange="setupOpen(this.value)"><option value="intro"${open === "intro" ? " selected" : ""}>Start here</option>${chapters.map(([title, list]) => `<optgroup label="${esc(title)}">${list.map(id => `<option value="${id}"${id === open ? " selected" : ""}>${esc(SETUP_STEPS[id].title)} · ${esc(setupStatusLabel(id, status[id], state.steps[id]))}</option>`).join("")}</optgroup>`).join("")}</select></label>`})}`);
   if (open === "storage") setupStorageLoad();

@@ -67,6 +67,17 @@ def load():
         return {}
 
 
+def stamp():
+    """When the guide's memory last changed, as the file says. Part of each
+    person's cached view's name: a skip made through one copy of Homestead
+    shows at once through every other, whose cache would otherwise answer
+    with the view from before it for half a minute."""
+    try:
+        return os.stat(_path()).st_mtime_ns
+    except OSError:
+        return 0
+
+
 def _save(state):
     SHARED.write_json(_path(), state, durable=True)
 
@@ -369,7 +380,7 @@ def _changed(answer):
 ROUTES = {
     # Many checks: kept for each person half a minute.
     ("GET", "/api/setup"): ("viewer", lambda request: homestead_routes.cached(
-        f"setup:{request.role}:{request.user}", 30, lambda: state(request.user, request.role))),
+        f"setup:{request.role}:{request.user}:{stamp()}", 30, lambda: state(request.user, request.role))),
     ("POST", "/api/setup/skip"): ("viewer", _changed(lambda request: skip(
         str(request.body.get("step") or ""), bool(request.body.get("skip", True)), request.user, request.role == "admin"))),
     ("POST", "/api/setup/hide"): ("viewer", _changed(lambda request: hide(request.user, request.body.get("hidden", True)))),
