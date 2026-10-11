@@ -49,6 +49,8 @@ REPOS = {"longhorn": "longhorn/longhorn", "kubevirt": "kubevirt/kubevirt",
          "cdi": "kubevirt/containerized-data-importer", "harvester": "harvester/harvester",
          "macvtap": "kubevirt/macvtap-cni"}
 CHANNELS = {"k3s": "https://update.k3s.io/v1-release/channels", "rke2": "https://update.rke2.io/v1-release/channels"}
+# Where a distribution's releases are when its channel server does not answer.
+CHANNEL_REPOS = {"k3s": "k3s-io/k3s", "rke2": "rancher/rke2"}
 NOTES = {"longhorn": "https://github.com/longhorn/longhorn/releases/tag/{}",
          "kubevirt": "https://github.com/kubevirt/kubevirt/releases/tag/{}",
          "cdi": "https://github.com/kubevirt/containerized-data-importer/releases/tag/{}",
@@ -143,10 +145,7 @@ def releases(kind, force=False):
             _apps[kind] = dict(pairs)
             value = [version for version, _ in pairs]
         elif kind in CHANNELS:
-            data = fetch_json(CHANNELS[kind]).get("data") or []
-            # One channel per minor (v1.31, v1.32 ...), each naming its newest.
-            value = [row.get("latest", "") for row in data
-                     if re.fullmatch(r"v\d+\.\d+", str(row.get("name") or row.get("id") or ""))]
+            value = channel_releases(kind)
         else:
             value = [row.get("tag_name", "") for row in fetch_json(GITHUB.format(REPOS[kind]))
                      if not row.get("prerelease") and not row.get("draft")]
@@ -156,6 +155,30 @@ def releases(kind, force=False):
         value = (cached or {}).get("value") or []
     _releases[kind] = {"at": time.time(), "value": value, "error": error}
     return value, error
+
+
+def channel_releases(kind):
+    """The newest release of each minor of k3s or RKE2: from Rancher's
+    channel server, or - when it does not answer, as it stopped doing in
+    October 2026 - from the project's own GitHub releases."""
+    try:
+        data = fetch_json(CHANNELS[kind]).get("data") or []
+        # One channel per minor (v1.31, v1.32 ...), each naming its newest.
+        value = [row.get("latest", "") for row in data
+                 if re.fullmatch(r"v\d+\.\d+", str(row.get("name") or row.get("id") or ""))]
+        if value:
+            return value
+    except Exception:
+        pass
+    newest = {}
+    for row in fetch_json(GITHUB.format(CHANNEL_REPOS[kind])):
+        tag, version = row.get("tag_name", ""), parse(row.get("tag_name", ""))
+        # A release of the distribution itself (v1.33.5+k3s1), never a test build.
+        if row.get("prerelease") or row.get("draft") or not version or "+" not in tag:
+            continue
+        if version > (parse(newest.get(version[:2], "")) or ()):
+            newest[version[:2]] = tag
+    return list(newest.values())
 
 
 _apps = {}
