@@ -549,37 +549,6 @@ def _unifi_loop():
         time.sleep(600)
 
 
-def _forecast_loop():
-    """Hourly on the leader: today's usage of each volume, disk and the pool."""
-    while True:
-        if LEADER.is_leader():
-            try:
-                FORECAST.observe(cached("vol", 8, STORAGE.get_volumes), LHCAP.status())
-                beat("forecast", 3600, leader_only=True)
-            except Exception as error:
-                beat("forecast", 3600, error, leader_only=True)
-                print(f"forecast: {str(error)[:160]}", flush=True)
-        time.sleep(3600)
-
-
-def _changes_loop():
-    """Every minute on the leader: what changed in each app since the last look."""
-    last = time.time()
-    while True:
-        started = time.time()
-        if LEADER.is_leader():
-            try:
-                deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
-                        if d["metadata"]["namespace"] not in SYS_NS]
-                CHANGES.observe(deps, now=started, since=last)
-                beat("changes", 60, leader_only=True)
-            except Exception as error:
-                beat("changes", 60, error, leader_only=True)
-                print(f"changes: {str(error)[:160]}", flush=True)
-        last = started
-        time.sleep(max(5, 60 - (time.time() - started)))
-
-
 def change_undo_plan(body):
     """Undo one change: the app's settings from before it, reviewed like any rollout."""
     ns, name = _dns_name(body.get("ns"), "namespace"), _dns_name(body.get("name"), "workload name")
@@ -2735,8 +2704,9 @@ HOUSEKEEPING.bind(DATA_DIR, kget=lambda path: kget(path), portal_links=lambda: P
 SCHEDULES.bind(DATA_DIR, items=lambda: scheduled_items(), setter=lambda b: set_schedule(b))
 OUTAGE.bind(DATA_DIR, kget=lambda path: kget(path), ksend=lambda *a, **k: ksend(*a, **k),
             dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: guard_managed_smb(ns, name))
-CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k))
-FORECAST.bind(DATA_DIR)
+CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
+             deployments=lambda: [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
+FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
@@ -5165,8 +5135,8 @@ def start_background_tasks():
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
     threading.Thread(target=_housekeeping_loop, name="housekeeping", daemon=True).start()
     threading.Thread(target=_schedules_loop, name="schedules", daemon=True).start()
-    threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
-    threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
+    threading.Thread(target=CHANGES.run, name="changes", daemon=True).start()
+    threading.Thread(target=FORECAST.run, name="forecast", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()

@@ -33,10 +33,16 @@ SHOW_DAYS = 60            # the page lists what fills within this
 NOISE = 0.002             # a change under 0.2% of capacity is not worth a write
 _lock = threading.Lock()
 
+# server.py's, for the loop: today's volumes and pool, whether this replica
+# leads, and the heartbeat Settings shows.
+_bound = {"read": None, "is_leader": lambda: False, "beat": lambda *args, **kwargs: None}
 
-def bind(data_dir="/data"):
+
+def bind(data_dir="/data", read=None, is_leader=None, beat=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    if read:
+        _bound.update(read=read, is_leader=is_leader, beat=beat)
 
 
 def _path():
@@ -190,3 +196,16 @@ def alert_facts(rows):
 ROUTES = {
     ("GET", "/api/storage/forecast"): ("viewer", lambda request: {"rows": report(), "warn_days": WARN_DAYS, "show_days": SHOW_DAYS, "min_days": MIN_DAYS}),
 }
+
+
+def run(sleep=time.sleep):
+    """Hourly on the leader: today's usage of each volume, disk and the pool."""
+    while True:
+        if _bound["is_leader"]():
+            try:
+                observe(*_bound["read"]())
+                _bound["beat"]("forecast", 3600, leader_only=True)
+            except Exception as error:
+                _bound["beat"]("forecast", 3600, error, leader_only=True)
+                print(f"forecast: {str(error)[:160]}", flush=True)
+        sleep(3600)

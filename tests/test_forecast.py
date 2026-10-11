@@ -102,5 +102,39 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual("critical", F.alert_facts(rows)[0]["severity"])
 
 
+
+class LoopTests(unittest.TestCase):
+    """The hourly look runs from here, so server.py only starts it."""
+
+    def run_once(self, read, leader=True):
+        beats = []
+        saved = dict(F._bound)
+        self.addCleanup(F._bound.update, saved)
+        F.bind(F.DATA_DIR, read, lambda: leader, lambda *args, **kwargs: beats.append(args))
+
+        class Stop(Exception):
+            pass
+        with mock.patch.object(F, "observe") as observe, self.assertRaises(Stop):
+            F.run(sleep=mock.Mock(side_effect=Stop))
+        return observe, beats
+
+    def test_the_leader_records_todays_figures_and_beats(self):
+        observe, beats = self.run_once(lambda: (["volumes"], {"pool": 1}))
+        observe.assert_called_once_with(["volumes"], {"pool": 1})
+        self.assertEqual([("forecast", 3600)], beats)
+
+    def test_a_failed_read_is_beaten_as_an_error_and_the_loop_goes_on(self):
+        def read():
+            raise RuntimeError("longhorn unreachable")
+        observe, beats = self.run_once(read)
+        observe.assert_not_called()
+        self.assertEqual("forecast", beats[0][0])
+        self.assertIn("unreachable", str(beats[0][2]))
+
+    def test_another_replica_leaves_it_alone(self):
+        observe, beats = self.run_once(lambda: ([], {}), leader=False)
+        observe.assert_not_called()
+        self.assertEqual([], beats)
+
 if __name__ == "__main__":
     unittest.main()

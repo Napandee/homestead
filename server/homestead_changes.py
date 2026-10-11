@@ -42,15 +42,19 @@ REQUEST = threading.local() # who the request on this thread is for
 BY_SCHEDULE = "schedule"    # a power schedule's stop or start: not a change to record
 
 
-# server.py's review of an undo, and its writer (bind).
-_bound = {"plan": None, "ksend": None}
+# server.py's review of an undo, and its writer (bind); for the loop, the
+# apps' Deployments, whether this replica leads, and the heartbeat.
+_bound = {"plan": None, "ksend": None, "deployments": None,
+          "is_leader": lambda: False, "beat": lambda *args, **kwargs: None}
 
 
-def bind(data_dir="/data", plan=None, ksend=None):
+def bind(data_dir="/data", plan=None, ksend=None, deployments=None, is_leader=None, beat=None):
     global DATA_DIR
     DATA_DIR = data_dir
     if plan:
         _bound.update(plan=plan, ksend=ksend)
+    if deployments:
+        _bound.update(deployments=deployments, is_leader=is_leader, beat=beat)
 
 
 def _path():
@@ -307,3 +311,19 @@ ROUTES = {
     ("POST", "/api/changes/undo"): ("operator", lambda request: undo(request.body)),
     ("GET", "/api/changes"): ("viewer", lambda request: {"entries": history((request.query.get("ns") or [""])[0] or None, (request.query.get("name") or [""])[0] or None)}),
 }
+
+
+def run(sleep=time.sleep):
+    """Every minute on the leader: what changed in each app since the last look."""
+    last = time.time()
+    while True:
+        started = time.time()
+        if _bound["is_leader"]():
+            try:
+                observe(_bound["deployments"](), now=started, since=last)
+                _bound["beat"]("changes", 60, leader_only=True)
+            except Exception as error:
+                _bound["beat"]("changes", 60, error, leader_only=True)
+                print(f"changes: {str(error)[:160]}", flush=True)
+        last = started
+        sleep(max(5, 60 - (time.time() - started)))
