@@ -35,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 import homestead_routes as ROUTER
@@ -372,11 +373,36 @@ def plan(exclude=(), avoid=(), role=None):
             "metrics": all(h["metrics"] for h in hosts.values()), "review_token": token}
 
 
+def _versions(moves):
+    """Each app's uid and generation, as the review binds them: generation
+    changes when someone edits the app, not when its status does, so a
+    move made minutes into the job is checked against an edit, not noise."""
+    out = []
+    for m in moves:
+        try:
+            meta = kget(f"/apis/apps/v1/namespaces/{m['ns']}/deployments/{m['name']}").get("metadata") or {}
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            meta = {}
+        out.append([m["id"], meta.get("uid", ""), int(meta.get("generation") or 0)])
+    return sorted(out)
+
+
+def _review_body(moves, exclude):
+    return {"moves": [[m["id"], m["from"], m["to"]] for m in moves], "exclude": sorted(exclude or ())}
+
+
 def review_token(moves, exclude):
-    """What was reviewed: which container goes from where to where, and what
-    was vetoed - not the live load figures, which move by the second."""
-    return hashlib.sha256(json.dumps([[[m["id"], m["from"], m["to"]] for m in moves], sorted(exclude or ())],
-                                     sort_keys=True).encode()).hexdigest()[:20]
+    """What was reviewed - which container goes from where to where, what
+    was vetoed, and each app as it stood - signed for ten minutes. Not the
+    live load figures, which move by the second."""
+    return CAPACITY_REVIEW.issue(_review_body(moves, exclude), {"action": "container-moves", "apps": _versions(moves)})
+
+
+def _token_ok(moves, exclude, token):
+    return CAPACITY_REVIEW.valid({**_review_body(moves, exclude), "capacity_token": token},
+                                 {"action": "container-moves", "apps": _versions(moves)})
 
 
 def reviewed(moves, exclude, token, role=None):
@@ -389,8 +415,9 @@ def reviewed(moves, exclude, token, role=None):
     keys = ("ns", "name", "id", "from", "to")
     if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
         raise ValueError("Review the containers to move again")
-    if review_token(moves, exclude) != token:
-        raise ValueError("The moves differ from the review; review again")
+    if not _token_ok(moves, exclude, token):
+        raise ValueError("The moves differ from the review, it is more than ten minutes old, "
+                         "or a container was edited since; review again")
     hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
@@ -405,6 +432,9 @@ def reviewed(moves, exclude, token, role=None):
             raise ValueError(f"{m['to']} cannot take {m['id']} now; review again")
         out.append({**{k: m[k] for k in keys}, "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2),
                     "near": bool(app["near"] and m["to"] in app["near"])})
+    generations = {row[0]: row[2] for row in _versions(moves)}
+    for move in out:
+        move["generation"] = generations.get(move["id"], 0)
     return out
 
 
@@ -457,6 +487,18 @@ def status(item):
             ref.setdefault("skipped", []).append(f"{move['id']}: it moved or changed since the review")
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {move['id']}: it moved or changed since the review"
+        if "generation" in move:
+            try:
+                now_generation = int(((kget(f"/apis/apps/v1/namespaces/{move['ns']}/deployments/{move['name']}")
+                                       .get("metadata") or {}).get("generation")) or 0)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                now_generation = -1
+            if now_generation != move["generation"]:
+                ref.setdefault("skipped", []).append(f"{move['id']}: it changed since the review")
+                ref.update(index=i + 1)
+                return "running", progress, f"Skipped {move['id']}: it changed since the review"
         # The job runs with no request behind it: asked again for whoever
         # started it, since the app may have changed since the review, and
         # the move written as them, so the fence on Kubernetes writes checks

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_container_rebalance as C
+import homestead_capacity_review as CAPACITY_REVIEW
 
 GI = 1024 ** 3
 
@@ -78,6 +79,7 @@ class Cluster:
 
 
 def bind(c, satisfies=lambda n, r: (True, [])):
+    CAPACITY_REVIEW.bind(lambda: b"test-key")
     C.bind(c.get, lambda dep: {}, satisfies, c.apply, ("lab", "homestead"), lambda: True)
 
 
@@ -231,7 +233,6 @@ class PlanTests(unittest.TestCase):
         plan = C.plan()
         # Live CPU moves by the second: the same moves are the review.
         c.objects["/apis/metrics.k8s.io/v1beta1/pods"]["items"][0]["containers"][0]["usage"]["cpu"] = "1450m"
-        self.assertEqual(plan["review_token"], C.plan()["review_token"])
         moves = C.reviewed(plan["moves"], [], plan["review_token"])
         self.assertEqual([(m["id"], m["from"], m["to"]) for m in plan["moves"]], [(m["id"], m["from"], m["to"]) for m in moves])
 
@@ -255,6 +256,38 @@ class PlanTests(unittest.TestCase):
         c.objects["/api/v1/nodes"]["items"] = [node("k1", cordoned=True), node("k2"), node("k3")]
         bind(c)
         self.assertTrue(all(m["to"] == "k3" for m in C.plan()["moves"]))
+
+
+class SignedReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.c = Cluster(); bind(self.c)
+        self.plan = C.plan()
+
+    def test_the_token_is_signed_and_expires(self):
+        token = self.plan["review_token"]
+        self.assertRegex(token, r"^\d+\.[0-9a-f]{64}$")
+        with mock.patch("time.time", return_value=time.time() + C.CAPACITY_REVIEW.TTL + 5):
+            with self.assertRaisesRegex(ValueError, "review again"):
+                C.reviewed(self.plan["moves"], [], token)
+
+    def test_an_edit_to_an_app_after_the_review_needs_a_new_review(self):
+        app = self.plan["moves"][0]["name"]
+        self.c.deps[app]["metadata"]["generation"] = 2
+        with self.assertRaisesRegex(ValueError, "review again"):
+            C.reviewed(self.plan["moves"], [], self.plan["review_token"])
+
+    def test_reviewed_moves_carry_the_generation_reviewed(self):
+        moves = C.reviewed(self.plan["moves"], [], self.plan["review_token"])
+        self.assertEqual(1, moves[0]["generation"])
+
+    def test_the_job_skips_an_app_edited_after_the_review(self):
+        moves = C.reviewed(self.plan["moves"], [], self.plan["review_token"])
+        item = {"id": "op1", "ref": {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": [], "role": None}}
+        self.c.deps[moves[0]["name"]]["metadata"]["generation"] = 2
+        state, _, message = C.status(item)
+        self.assertEqual("running", state)
+        self.assertIn("changed since the review", message)
+        self.assertEqual([], self.c.moved)
 
 
 class JobTests(unittest.TestCase):
