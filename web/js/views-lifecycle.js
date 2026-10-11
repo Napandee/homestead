@@ -215,7 +215,7 @@ window.FAILOVER_HELP = FAILOVER_HELP;
 
 /* Which apps fit first when the cluster is short of room. */
 const PRIORITY_HELP = {
-  critical: "Fits first, and whenever it does not fit - after a host fails, or as it restarts, updates or grows - may evict any pod of a lower tier: low apps, and anything with no tier, Homestead included. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
+  critical: "Fits first, and whenever it does not fit - after a host fails, or as it restarts, updates or grows - may evict any pod of a lower tier: low apps, and anything with no tier, VMs included - but not Homestead, which joins this tier once any app is in it. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
   normal: "Fits in turn, as every app does by default, and may evict low apps to fit.",
   low: "Waits for room and never evicts anything; any other app that needs room evicts it first. For batch work and CI runners.",
 };

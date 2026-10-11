@@ -51,7 +51,9 @@ linked cluster, which applies its own rules to them.
   them.
 - **Scheduling**: Homestead may create PriorityClasses (Kubernetes cannot
   limit creating them by name) and reads only its own two. A critical app may
-  evict any pod with no tier when room is short; operators can set it.
+  evict any pod with no tier, VMs included, when room is short; operators can
+  set it. Homestead joins the critical tier itself once any app is in it, so
+  no app can evict it.
 - **Files**: the volume browser refuses `..` and quotes every path it passes
   to its helper pod; nothing runs through a shell with request data.
 - **The pod**: runs as a non-root user with a read-only root filesystem, no

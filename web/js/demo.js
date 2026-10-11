@@ -2042,11 +2042,12 @@ ssh_pwauth: true
         { id: "lab/frigate", current: "normal", suggested: "", why: "" },
         { id: "lab/paperless", current: "normal", suggested: "", why: "" },
         { id: "ci/actions-runner", current: "normal", suggested: "low", why: "looks like batch or CI work" },
-        { id: "media/jellyfin", current: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" }];
+        { id: "media/jellyfin", current: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
+        { id: "vm:lab/windows-desktop", kind: "vm", current: "normal", suggested: "", why: "" }];
       const apps = rows.map(r => {
-        const [ns, name] = r.id.split("/");
+        const [ns, name] = r.id.replace(/^vm:/, "").split("/");
         const fallback = r.suggested && r.current === "normal" && !r.managed ? r.suggested : r.current;
-        return { ns, name, managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
+        return { ns, name, kind: "app", managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
       }).sort((a, b) => ["critical", "normal", "low"].indexOf(a.tier) - ["critical", "normal", "low"].indexOf(b.tier) || a.id.localeCompare(b.id));
       const changes = apps.filter(a => a.tier !== a.current);
       return { apps, changes: changes.length, max: 50, review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."),

@@ -690,10 +690,10 @@ When a host fails and the others cannot hold every app, the scheduler fits
 them by priority. Each app has a tier:
 
 - **Critical** fits first, and may evict any pod of a lower tier to fit - low
-  apps, and anything with no tier, Homestead itself included - whenever it
-  does not fit: after a host fails, but also when it restarts, updates or
-  grows. For what the house depends on: home automation, passwords, a
-  database, DNS or a tunnel.
+  apps, and anything with no tier, VMs included - whenever it does not fit:
+  after a host fails, but also when it restarts, updates or grows. For what
+  the house depends on: home automation, passwords, a database, DNS or a
+  tunnel.
 - **Normal** is no tier at all, as every app has by default, and may evict low
   apps to fit. (On a cluster with a default PriorityClass of its own, it means
   that class.)
@@ -708,12 +708,23 @@ DNS or a tunnel start at critical - not their exporters or backup helpers -
 and CI runners at low, at most 50 changes a run. Changing a tier restarts the
 app; the bulk job changes one app at a time, as reservations do.
 
+VMs have tiers too, in the same **Priority tiers…** list. A VM takes its tier
+when it next starts, so setting one restarts nothing; until then it keeps the
+one it started with.
+
+Homestead is never evicted by a critical app: once anything runs in the
+critical tier, Homestead puts itself there too - pods of one priority never
+evict each other - and restarts once to do so, waiting until no job is
+running. It keeps that class through updates, and keeps any class you gave it
+yourself.
+
 Homestead makes the PriorityClasses `homestead-critical` (1000) and
 `homestead-low` (-1000, never preempts) the first time a tier needs one; it
 makes neither the cluster's default. An app's tier is read from its pod, so
 one set by hand or by Flux shows as it is. Apps Flux or Argo CD apply are
 shown but changed there, not here; a class Homestead does not keep is left
-alone; and Homestead's own tier is set by its manifest. A critical app's
+alone; and Homestead's own tier is not offered, since it follows the
+apps' as above. A critical app's
 suggested memory reservation has more headroom - 1.5 times its usual use -
 since a host short of memory evicts pods using more than they reserve before
 any within their reservation, whatever their tier; only among those does the

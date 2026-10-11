@@ -270,7 +270,7 @@ class BindingTests(unittest.TestCase):
                               "cluster-shutdown", "self-data-move", "vm-migration", "image-update"}, waits)
 
     def test_every_kind_waited_for_is_one_homestead_starts(self):
-        source = "".join(path.read_text() for path in (Path(__file__).resolve().parents[1] / "server").glob("*.py"))
+        source = "".join(path.read_text(encoding="utf-8") for path in (Path(__file__).resolve().parents[1] / "server").glob("*.py"))
         for kind in server.RECOVERY.MOVES_OR_RESTARTS:
             # Named once in the list itself, and at least once where its job is made.
             self.assertTrue(source.count(f'"{kind}"') >= 2 or kind.startswith("image-"), kind)

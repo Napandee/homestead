@@ -742,7 +742,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),
-        # Homestead's own is set by its manifest, which every upgrade applies.
+        # Homestead's own follows the apps': critical once any is (PRIORITY.protect).
         "priority": "self" if is_self(ns, name) else PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",

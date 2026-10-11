@@ -5151,6 +5151,7 @@ def start_background_tasks():
     threading.Thread(target=FORECAST.run, name="forecast", daemon=True).start()
     threading.Thread(target=USAGE.run, name="usage", daemon=True).start()
     threading.Thread(target=RECOVERY.run, name="recovery", daemon=True).start()
+    threading.Thread(target=PRIORITY.run, name="priority", daemon=True).start()
     threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()

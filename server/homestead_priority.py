@@ -6,8 +6,10 @@ wait behind a media scanner (#347). Kubernetes orders pods by their
 PriorityClass, so Homestead keeps two of its own and calls having none a tier:
 
 * critical (homestead-critical) - fits first, and may evict any pod of lower
-  priority to fit: low apps, and every pod with no class - other apps, and
-  infrastructure such as Homestead itself. For what the house depends on.
+  priority to fit: low apps, and every pod with no class - other apps and
+  VMs. For what the house depends on. Homestead itself joins this class once
+  anything uses it (protect), since pods of one priority never evict each
+  other.
 * normal - no class at all, as every app has now. On a cluster with a
   globalDefault class of its own, "no class" means that one.
 * low (homestead-low) - waits, and never evicts anything (preemptionPolicy
@@ -20,11 +22,15 @@ Flux is shown as it is; a class Homestead does not keep is shown by name and
 left alone. homestead-normal - a class #347's first plan suggested making by
 hand - still reads as normal.
 
+VMs have tiers too, set in their template: a VM takes its tier when it next
+starts, so setting one restarts nothing.
+
 Changing a tier changes the pod template, so the app restarts once. Like the
 reservations (homestead_requests), the tiers are reviewed as a list and
 applied by a job one app at a time; Flux- and Argo-applied apps get the line
-to commit instead. Homestead's own Deployment is left alone: its manifest is
-applied again on every upgrade and would put it back.
+to commit instead. Homestead's own tier is not offered: it is critical once
+anything is (protect), and has no class before. Neither its manifest nor an
+update names a class, and an apply keeps a field it does not name.
 """
 import hashlib
 import json
@@ -35,6 +41,7 @@ import urllib.error
 KIND = "set-priority"
 MAX_APPS = 50
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
+VMS = "/apis/kubevirt.io/v1/virtualmachines"
 TIERS = {
     "critical": {"name": "homestead-critical", "value": 1000, "preemptionPolicy": "PreemptLowerPriority",
                  "description": "Homestead: fits first, and may evict lower-priority pods to fit."},
@@ -138,11 +145,35 @@ def ensure(tiers=("critical", "low")):
     return notes
 
 
-def _deployments():
-    for dep in kget("/apis/apps/v1/deployments").get("items", []):
-        ns = (dep.get("metadata") or {}).get("namespace", "")
+def _workloads():
+    """("app", Deployment) and ("vm", VirtualMachine) outside the platform's
+    namespaces; no VMs where KubeVirt is not installed."""
+    try:
+        vms = kget(VMS).get("items", [])
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        vms = []
+    for kind, obj in [("app", d) for d in kget("/apis/apps/v1/deployments").get("items", [])] + [("vm", v) for v in vms]:
+        ns = (obj.get("metadata") or {}).get("namespace", "")
         if ns not in system_ns and not ns.startswith(SYSTEM):
-            yield dep
+            yield kind, obj
+
+
+def _row_id(kind, ns, name):
+    return f"vm:{ns}/{name}" if kind == "vm" else f"{ns}/{name}"
+
+
+def _split(row_id):
+    """(kind, ns, name) from a row's id: a VM's starts vm:."""
+    kind = "vm" if row_id.startswith("vm:") else "app"
+    ns, name = row_id[3:].split("/", 1) if kind == "vm" else row_id.split("/", 1)
+    return kind, ns, name
+
+
+def _path(kind, ns, name):
+    return (f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}" if kind == "vm"
+            else f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
 
 
 def _pod_spec(dep):
@@ -155,14 +186,14 @@ def plan(chosen=None, role=None):
     normal, else what it has. chosen maps an app id to a tier. role: who
     asks; apps they may not change are left out, saying why."""
     apps, skipped = [], []
-    for dep in _deployments():
+    for kind, dep in _workloads():
         meta = dep.get("metadata") or {}
         ns, name = meta.get("namespace", ""), meta.get("name", "")
-        app_id = f"{ns}/{name}"
+        app_id = _row_id(kind, ns, name)
         current, cls = tier_of(_pod_spec(dep))
         suggested, why = suggestion(dep)
-        if (ns, name) == own:
-            skipped.append({"id": app_id, "why": "Homestead's own tier is set by its manifest, which every upgrade applies again"})
+        if kind == "app" and (ns, name) == own:
+            skipped.append({"id": app_id, "why": "Homestead's own tier is critical once any app's is, so none can evict it"})
             continue
         if current == "other":
             skipped.append({"id": app_id, "why": f"it uses the class {cls}, which Homestead does not keep; it is left alone"})
@@ -173,7 +204,7 @@ def plan(chosen=None, role=None):
             skipped.append({"id": app_id, "why": str(error)})
             continue
         owner = managed_by(dep)
-        row = {"id": app_id, "ns": ns, "name": name, "current": current, "suggested": suggested or "", "why": why,
+        row = {"id": app_id, "kind": kind, "ns": ns, "name": name, "current": current, "suggested": suggested or "", "why": why,
                "managed": owner.get("by", "")}
         if owner:
             where = f" ({owner['source']})" if owner.get("source") else ""
@@ -214,25 +245,25 @@ def reviewed(changes, token, role=None):
         raise ValueError("The tiers differ from the review; review again")
     out = []
     for c in changes:
-        ns, name = c["id"].split("/", 1)
-        check(ns, name, c["current"], role)
-        out.append({"id": c["id"], "ns": ns, "name": name, "current": c["current"], "tier": c["tier"]})
+        kind, ns, name = _split(c["id"])
+        check(ns, name, c["current"], role, kind=kind)
+        out.append({"id": c["id"], "kind": kind, "ns": ns, "name": name, "current": c["current"], "tier": c["tier"]})
     return out
 
 
-def check(ns, name, current, role=None, tier=None):
+def check(ns, name, current, role=None, tier=None, kind="app"):
     """One app as it is now: still one Homestead - and the person who asked -
     may change, and still in the tier it was reviewed in. Returns "applied"
     when it already has the new tier: a change whose answer was lost is waited
     for, not counted as skipped."""
-    app_id = f"{ns}/{name}"
+    app_id = _row_id(kind, ns, name)
     try:
-        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        dep = kget(_path(kind, ns, name))
     except urllib.error.HTTPError as error:
         if error.code == 404:
             raise ValueError(f"{app_id} is gone")
         raise
-    if (ns, name) == own or ns in system_ns or ns.startswith(SYSTEM) or managed_by(dep):
+    if (kind == "app" and (ns, name) == own) or ns in system_ns or ns.startswith(SYSTEM) or managed_by(dep):
         raise ValueError(f"{app_id} is not one Homestead changes")
     guard(dep, ns, role)
     now = tier_of(_pod_spec(dep))[0]
@@ -248,6 +279,11 @@ def patch(app):
     a template copied from a pod carries (priority, preemptionPolicy) goes
     too: admission refuses a pod whose values are not its class's."""
     cls = None if app["tier"] == "normal" else TIERS[app["tier"]]["name"]
+    if app.get("kind") == "vm":
+        # A VM's pod is made from its template when it starts: no restart now.
+        ksend("PATCH", _path("vm", app["ns"], app["name"]), {"spec": {"template": {"spec": {"priorityClassName": cls}}}},
+              ctype="application/merge-patch+json")
+        return
     # preemptionPolicy too: admission refuses one that is not the class's,
     # and a low app's is Never.
     ksend("PATCH", f"/apis/apps/v1/namespaces/{app['ns']}/deployments/{app['name']}",
@@ -287,7 +323,7 @@ def status(item):
     stage, now = ref.get("stage", "apply"), time.time()
     if stage == "apply":
         try:
-            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"]) == "ready":
+            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"], app.get("kind", "app")) == "ready":
                 patch(app)
         except (ValueError, PermissionError, urllib.error.HTTPError) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 404, 409, 422):
@@ -296,6 +332,9 @@ def status(item):
             ref.setdefault("skipped", []).append(f"{app['id']}: {why[:160]}")
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {app['id']}: {why[:160]}"
+        if app.get("kind") == "vm":
+            ref.update(index=i + 1, done=done + 1)
+            return "running", int(100 * (i + 1) / len(apps)), f"{app['name']} takes {app['tier']} when it next starts"
         ref.update(stage="rolling", started=now)
         return "running", progress, f"Setting {app['id']} to {app['tier']} ({i + 1} of {len(apps)}); it restarts"
     if stage == "rolling":
@@ -337,6 +376,43 @@ def start(body, role=None):
                                           {"kind": "Deployment", "name": "priority"}, "/containers",
                                           {"apps": apps, "index": 0, "done": 0, "stage": "apply", "role": role},
                                           "Making the priority classes")}
+
+
+# ------------------------------------------------- Homestead's own tier
+def protect():
+    """Homestead in homestead-critical once anything runs there, so no
+    critical app can evict it - pods of one priority never evict each other.
+    Not while a job runs, which its restart would interrupt; never over a
+    class someone gave it. Returns a line for the log, or None."""
+    ns, name = own
+    if not ns or not name:
+        return None
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    critical = TIERS["critical"]["name"]
+    if _pod_spec(dep).get("priorityClassName"):
+        return None
+    if not any((p.get("spec") or {}).get("priorityClassName") == critical
+               for p in kget("/api/v1/pods").get("items", [])):
+        return None
+    if operations and any(i.get("status") not in operations.TERMINAL for i in operations.list_operations()):
+        return None
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+          {"spec": {"template": {"spec": {"priorityClassName": critical, "priority": None, "preemptionPolicy": None}}}},
+          ctype="application/strategic-merge-patch+json")
+    return f"Homestead runs as {critical} now, so no critical app can evict it; it restarts once"
+
+
+def run(sleep=time.sleep):
+    """Every minute on the leader: Homestead's own tier (protect)."""
+    while True:
+        if is_leader():
+            try:
+                said = protect()
+                if said:
+                    print(f"priority: {said}", flush=True)
+            except Exception as error:
+                print(f"priority: {str(error)[:160]}", flush=True)
+        sleep(60)
 
 
 def _picks(query):
