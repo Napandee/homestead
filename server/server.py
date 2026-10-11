@@ -2363,7 +2363,7 @@ RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
 LAN.bind(kget, ksend)
-PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS)
+PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS, DATA_DIR)
 
 
 def _pull_progress(node, image):
@@ -2992,7 +2992,7 @@ def _alert_sources():
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
-    take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
+    take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
     take("agents", MCP.alert_facts)

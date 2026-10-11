@@ -18,6 +18,7 @@ and are dropped KEEP after they end.
 """
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -69,6 +70,10 @@ def _settle(rows, now):
             changed = True
         if row["status"] not in ("pending", "running") and row.get("ended", now) + KEEP < now:
             rows.pop(rid)
+            try:
+                os.remove(os.path.join(DATA_DIR, f"agent-request-{rid}.decided"))
+            except OSError:
+                pass
             changed = True
     if changed:
         _save(rows)
@@ -135,9 +140,24 @@ def listing(role):
             "pending": sum(1 for r in rows.values() if r["status"] == "pending")}
 
 
+def _claim(rid):
+    """The one decision on a request, across every copy of Homestead: a file
+    made with O_EXCL on the shared data volume, which only one copy can make.
+    _lock alone holds within one copy; two people - or two clicks - reaching
+    two copies at once could otherwise both run it."""
+    if not re.fullmatch(r"[0-9a-f]{16}", str(rid or "")):
+        raise ValueError("there is no such request")
+    path = os.path.join(DATA_DIR, f"agent-request-{rid}.decided")
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        raise ValueError("someone else is deciding it, or has decided it") from None
+
+
 def _take(rid, user, role, status):
     """The request, moved out of pending under the lock, so two people
-    deciding at once cannot both run it."""
+    deciding at once cannot both run it - on this copy (_lock) or another
+    (_claim)."""
     with _lock:
         rows = _settle(_load(), time.time())
         row = rows.get(str(rid or ""))
@@ -147,6 +167,11 @@ def _take(rid, user, role, status):
             raise ValueError(f"it is {row['status']} already")
         if not AUTH.allows(role, row["role"]):
             raise PermissionError(f"approving this needs the {row['role']} role")
+        _claim(rid)
+        rows = _load()      # read again: another copy may have written since
+        row = rows.get(str(rid))
+        if not row or row["status"] != "pending":
+            raise ValueError(f"it is {(row or {}).get('status', 'gone')} already")
         row.update(status=status, decided_by=user, decided_at=time.time())
         _save(rows)
     return row

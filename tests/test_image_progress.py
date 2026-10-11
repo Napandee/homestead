@@ -53,7 +53,9 @@ class WatchParseTests(unittest.TestCase):
             if path == "/api/v1/nodes/node2":
                 return {"metadata": {"labels": {"kubernetes.io/arch": "amd64"}}}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        PULL.bind(kget, lambda m, p, b=None, **k: sent.append((m, p, b)), lambda p: "", lambda image, arch: LAYERS)
+        import tempfile
+        PULL.bind(kget, lambda m, p, b=None, **k: sent.append((m, p, b)), lambda p: "", lambda image, arch: LAYERS,
+                  data_dir=tempfile.mkdtemp())
         PULL._LAYERS.clear()
         with unittest.mock.patch("homestead_runtime.binaries", lambda: {"crictl": "/c", "ctr": "/t"}):
             result = PULL.progress("node2", "ghcr.io/blakeblackshear/frigate:stable")

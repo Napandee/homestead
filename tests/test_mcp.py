@@ -278,6 +278,15 @@ class ApprovalTests(Base):
         self.assertEqual("ada", AUDIT.recent()[0]["approved_by"])
         self.assertEqual([], MCP.alert_facts(), "answered: the bell clears")
 
+    def test_two_copies_of_homestead_cannot_both_run_a_request(self):
+        import os
+        rid = self.ask_delete()["request"]
+        # The other copy got there first: it holds the claim on the shared volume.
+        open(os.path.join(REQUESTS.DATA_DIR, f"agent-request-{rid}.decided"), "w").close()
+        with self.assertRaisesRegex(ValueError, "someone else is deciding it"):
+            REQUESTS.approve(rid, "ada", "admin")
+        self.assertEqual([], self.deleted)
+
     def test_a_plan_that_changed_since_it_was_asked_for_is_not_run(self):
         rid = self.ask_delete()["request"]
         self.objects["/apis/apps/v1/namespaces/lab/deployments/web"]["metadata"]["uid"] = "u2"   # replaced since
