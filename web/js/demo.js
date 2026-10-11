@@ -2132,7 +2132,10 @@ ssh_pwauth: true
     "/api/disks/retire": { ok: true, operation: { id: "op-retire" } },
     "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
       agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
-      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443',
+      server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage',
+      tiebreaker: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage --node-taint node-role/tiebreaker=true:NoSchedule --node-label node-role/tiebreaker=true',
+      shared_settings: ["--disable", "traefik", "--default-local-storage-path", "/var/lib/rancher/k3s/storage"], settings_known: true,
+      shared_flags: ["--cluster-cidr", "--service-cidr", "--cluster-dns", "--cluster-domain", "--flannel-backend", "--disable", "--egress-selector-mode", "--default-local-storage-path", "--disable-network-policy", "--disable-kube-proxy", "--disable-cloud-controller", "--disable-helm-controller", "--secrets-encryption", "--embedded-registry"],
       longhorn: "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils" },
     "/api/resources/kinds": [
       ["Workloads", "", "v1", "pods", "Pod", true], ["Workloads", "apps", "v1", "deployments", "Deployment", true],

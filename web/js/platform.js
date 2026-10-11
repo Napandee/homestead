@@ -308,10 +308,36 @@ window.addonInstall = async key => {
 /* Adding a host to a k3s or RKE2 cluster: the distribution's own installer,
    this cluster's address, and where the token lives - which Homestead
    cannot read, since it is a file on the server, not in the API. */
-window.platformJoinGuide = async () => {
+/* What each role does, and its command (homestead_platform.join_guide). */
+const JOIN_ROLES = [
+  ["app", "App host", "Runs apps and can hold storage."],
+  ["control-plane", "App host + control plane", "Also holds an etcd vote: three servers keep the cluster up through the loss of one."],
+  ["tiebreaker", "Tiebreaker (votes only)", "Holds an etcd vote and nothing else: no apps, no storage. A small, reliable machine on its own power - a Raspberry Pi beside two main hosts."],
+];
+const INSTALLER = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh";
+function joinCommandHtml(g, role) {
+  const k3s = g.distribution === "k3s";
+  // RKE2's guide installs an agent; a server holding a vote joins through the
+  // installer, which writes the role's config and checks the machine first.
+  if (!k3s && role !== "app") {
+    return `<p class="dim xs">On RKE2 the installer joins a ${role === "tiebreaker" ? "tiebreaker" : "server"}: it asks for this cluster's address and token, checks the machine, and writes the role's settings.</p>`
+      + guideCopy(`curl -sfL ${INSTALLER} | sudo HS_ROLE=${role === "tiebreaker" ? "tiebreaker" : "server"} sh`);
+  }
+  const cmd = k3s && role === "tiebreaker" ? g.tiebreaker : k3s && role === "control-plane" ? g.server_join : g.agent;
+  const shared = role !== "app" && k3s && !g.settings_known
+    ? `<p class="dim xs">Homestead could not read the other servers' settings. Copy these from the first server's <span class="mono">/etc/rancher/k3s/config.yaml</span> or its service file, if it sets them: <span class="mono">${esc((g.shared_flags || []).join(" "))}</span>.</p>` : "";
+  return guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config || "")}`) + shared;
+}
+window.joinCommandHtml = joinCommandHtml;
+window.platformJoinRole = role => {
+  const g = STATE.data.joinGuide;
+  if (g && $("#joinCmd")) $("#joinCmd").innerHTML = joinCommandHtml(g, role);
+};
+window.platformJoinGuide = async (role = "app") => {
   modal("Add a host", '<div class="empty"><span class="spin2"></span>reading the cluster</div>', true);
   let g;
   try { g = await api("/api/platform/join"); } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  STATE.data.joinGuide = g;
   const k3s = g.distribution === "k3s";
   if (!["k3s", "rke2"].includes(g.distribution)) {
     $("#mbody").innerHTML = `<p class="muted small">This cluster's distribution could not be told from its nodes, so Homestead cannot give its join steps. Use the installer that set the cluster up.</p>`;
@@ -323,9 +349,9 @@ window.platformJoinGuide = async () => {
       ${guideCopy(`sudo cat ${g.token_file}`)}
       <p class="dim xs">Anyone holding it can join a machine to this cluster, so keep it out of chats and notes.</p></section>
     <section class="guide-step"><h4><span>2</span>If it will hold Longhorn volumes</h4>${guideCopy(g.longhorn)}</section>
-    ${k3s ? `<section class="guide-step"><h4><span>3</span>Join as a worker</h4>${guideCopy(g.agent)}
-        <p class="dim xs">Or, to add a server that also runs the control plane (a cluster with an embedded etcd):</p>${guideCopy(g.server_join)}</section>`
-      : `<section class="guide-step"><h4><span>3</span>Install the agent</h4>${guideCopy(g.agent)}
-        <p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config)}</section>`}
+    <section class="guide-step"><h4><span>3</span>Choose what it does, and join it</h4>
+      <div class="answer-modes">${JOIN_ROLES.map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="joinRole" value="${value}"${value === role ? " checked" : ""}
+        onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div>
+      <div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
     <section class="guide-step"><h4><span>4</span>Watch it join</h4><p class="dim small">It appears on the Nodes page within a minute or two, and turns Ready once its networking is up.</p></section>`;
 };
