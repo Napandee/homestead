@@ -232,6 +232,22 @@ automatically excludes it. System DaemonSets may still run there. Advanced users
 can configure a [dedicated etcd server](https://docs.k3s.io/installation/server-roles)
 using K3s's role controls; Homestead's standard join flow creates a regular server.
 
+Mark it as a **tiebreaker** before k3s first starts, in
+`/etc/rancher/k3s/config.yaml`:
+
+```yaml
+node-taint: ["node-role/tiebreaker=true:NoSchedule"]
+node-label: ["node-role/tiebreaker=true"]
+```
+
+Homestead then treats it as holding a vote only: kube-vip never runs there, so
+no app's address is answered over its link, and its interface has no say in
+the one kube-vip announces on; it holds no Longhorn copies; and "If this host
+goes down" never offers it as a home for an app or a VM. If you added an
+`affinity` of your own to kube-vip's values to keep it off the small server,
+remove it: Homestead leaves values it did not write alone, and its own values
+already keep kube-vip off a tiebreaker.
+
 The small server supplies **control-plane quorum**, not a third storage copy.
 With only two storage hosts, choose two replicas on different hosts rather than
 requesting an unplaceable third copy. Homestead counts only the hosts Longhorn
