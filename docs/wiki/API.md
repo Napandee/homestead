@@ -29,6 +29,8 @@ an agent's tool list.
   | `containers:manage` | Deploy, edit, scale and move containers (AI agents, over MCP) |
   | `vms:manage` | Create, edit and migrate virtual machines (AI agents, over MCP) |
   | `storage:manage` | Create and resize volumes, snapshot and back them up (AI agents, over MCP) |
+  | `network:manage` | Expose apps and keep the IP address plan (AI agents, over MCP) |
+  | `cluster:manage` | Namespaces and raw Kubernetes objects; each change waits for an admin (AI agents, over MCP) |
 
 - **Expires after** - a day to a year. There are no keys that never expire.
 - **Only from** (optional) - addresses or networks it may be used from, such as

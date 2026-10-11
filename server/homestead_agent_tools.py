@@ -414,6 +414,63 @@ def _plan_reclass(args, ctx):
             {**body, "capacity_token": plan.get("capacity_token"), "confirm_capacity": True})
 
 
+# --- #424: helpers for the wider catalogue
+def _get(path, fields=None, compact=None):
+    """A read: the route's answer, its query from these arguments (route name:
+    argument name), made smaller by compact when given."""
+    def run(args, ctx):
+        query = {route: args.get(arg) for route, arg in (fields or {}).items()
+                 if args.get(arg) not in (None, "", False)}
+        answer = call("GET", path, query, **_as(ctx))
+        return compact(answer) if compact else answer
+    return run
+
+
+def _settings_post(path):
+    """A change whose body is the app's own form: the settings, as given."""
+    def run(args, ctx):
+        return call("POST", path, body=dict(args.get("settings") or {}), **_as(ctx))
+    return _guarded(run)
+
+
+def _jobs(answer):
+    rows = answer.get("operations", answer) if isinstance(answer, dict) else answer
+    return [{k: j.get(k) for k in ("id", "kind", "title", "status", "progress", "message", "started_at", "finished_at")}
+            for j in (rows or []) if isinstance(j, dict)][:100]
+
+
+def _plan_named(action, fields, extra=None):
+    """A destructive tool's plan when the route needs only names: what the
+    person approves is the action and the arguments themselves."""
+    def plan(args, ctx):
+        body = {route: args[arg] for arg, route in fields.items() if arg in args}
+        if extra:
+            body.update(extra(args))
+        names = ", ".join(f"{k} {v}" for k, v in sorted(body.items()) if k != "confirm")
+        return {"action": action.format(**{**args, **body}), "target": names}, body
+    return plan
+
+
+def _image_update(action):
+    """An image update or rollback, with its capacity review: the token from
+    preview_image_update, or - approved later - reviewed again as the approver."""
+    def run(args, ctx):
+        body = {"ns": _name(args.get("namespace"), "namespace"), "name": _name(args.get("name"), "name"), "action": action}
+        if ctx.get("fresh") or not args.get("capacity_token"):
+            review = call("POST", "/api/image-updates/preview", body=dict(body), **_as(ctx))
+            if (review.get("capacity") or {}).get("blocked"):
+                raise ToolError("it does not fit: " + "; ".join((review.get("capacity") or {}).get("reasons") or []), review)
+            if not ctx.get("fresh") and (review.get("capacity") or {}).get("requires_confirmation") and not args.get("confirm_capacity"):
+                return {"needs_confirmation": True, "review": review,
+                        "note": "Call again with this capacity_token and confirm_capacity: true to accept the review."}
+            body.update(capacity_token=review.get("capacity_token"), confirm_capacity=True)
+        else:
+            body.update(capacity_token=args["capacity_token"], confirm_capacity=bool(args.get("confirm_capacity")))
+        return call("POST", "/api/image-updates/apply" if action == "update" else "/api/image-updates/rollback",
+                    body=body, **_as(ctx))
+    return _guarded(run)
+
+
 def _route(method, path):
     def execute(body, ctx):
         return call(method, path, body=body, **_as(ctx))
@@ -595,6 +652,237 @@ TOOLS = [
          "must approve it in Homestead.", {"namespace": NS, "name": NAME_ARG, "storage_class": S},
          ["namespace", "name", "storage_class"], plan=_plan_reclass, execute=_route("POST", "/api/volumes/reclass/start"),
          role="admin"),
+    # ---- #424: jobs and history
+    Tool("list_jobs", "List jobs", "read", READ, "Background jobs, newest first: what runs, what finished and what failed.",
+         run=_get("/api/operations", compact=_jobs)),
+    Tool("get_job_log", "Job log", "read", READ, "What a job wrote as it ran: its pod's log, or its steps.", {"id": S}, ["id"],
+         run=_get("/api/operations/log", {"id": "id"})),
+    Tool("preview_cancel_job", "Preview cancelling a job", "containers:control", CHANGE,
+         "What cancelling a job would undo and keep, and the options and confirmation it needs.", {"id": S}, ["id"],
+         run=lambda args, ctx: call("POST", "/api/operations/cancel-plan", body={"id": args.get("id")}, **_as(ctx))),
+    Tool("cancel_job", "Cancel a job", "containers:control", CHANGE,
+         "Cancels a running job as preview_cancel_job described: pass its options and, when it asked, confirm.",
+         {"id": S, "options": SETTINGS, "confirm": S}, ["id"],
+         run=_post("/api/operations/cancel", {"id": "id", "options": "options", "confirm": "confirm"})),
+    Tool("dismiss_job", "Dismiss a job", "containers:control", CHANGE,
+         "Takes a finished job off the list, or every finished one with all: true.", {"id": S, "all": B},
+         run=_post("/api/operations/dismiss", {"id": "id", "all": "all"})),
+    Tool("list_cluster_events", "Cluster events", "read", READ, "Kubernetes' recent warnings and events across the cluster.",
+         run=_get("/api/events")),
+    Tool("get_change_history", "Change history", "read", READ,
+         "What changed in an app and when - each change can be undone with undo_change.", {"namespace": NS, "name": NAME_ARG},
+         ["namespace", "name"], run=_get("/api/changes", {"ns": "namespace", "name": "name"})),
+    Tool("preview_undo_change", "Preview undoing a change", "containers:manage", CHANGE,
+         "What undoing a change from get_change_history would restore. settings: the change to undo, as the history "
+         "gives it (namespace, name and the change's id).", {"settings": SETTINGS}, ["settings"],
+         run=_settings_post("/api/changes/undo/preview")),
+    Tool("undo_change", "Undo a change", "containers:manage", CHANGE,
+         "Restores an app's settings from before a change, as preview_undo_change reviewed it.", {"settings": SETTINGS},
+         ["settings"], run=_settings_post("/api/changes/undo")),
+    # ---- #424: container image updates
+    Tool("list_image_updates", "Image updates", "read", READ,
+         "Which apps have a newer image, and how each is updated (automatically, in the window, or by hand).",
+         {"refresh": {"type": "boolean", "description": "Check the registries again now"}},
+         run=_get("/api/image-updates", {"force": "refresh"})),
+    Tool("update_container_image", "Update a container's image", "containers:manage", CHANGE,
+         "Updates an app to its newer image, after the capacity review. Without capacity_token it reviews first and "
+         "answers needs_confirmation when the review has warnings; call again with the token and confirm_capacity: true.",
+         {"namespace": NS, "name": NAME_ARG, "capacity_token": S, "confirm_capacity": B}, ["namespace", "name"],
+         run=_image_update("update")),
+    Tool("rollback_container_image", "Roll back a container's image", "containers:manage", CHANGE,
+         "Puts an app back on the image it had before its last update, after the capacity review, as update_container_image.",
+         {"namespace": NS, "name": NAME_ARG, "capacity_token": S, "confirm_capacity": B}, ["namespace", "name"],
+         run=_image_update("rollback")),
+    Tool("get_image_update_progress", "Image update progress", "read", READ, "How an app's image update or rollback is going.",
+         {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"],
+         run=_get("/api/image-updates/progress", {"ns": "namespace", "name": "name"})),
+    Tool("set_image_update_mode", "Set how an app updates", "containers:manage", CHANGE,
+         "How an app's image updates are made: settings with ns, name and mode, as list_image_updates shows the modes.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/image-updates/mode")),
+    Tool("set_managed_by", "Say who manages an app", "containers:manage", CHANGE,
+         "Marks an app as updated by something else (Flux, Argo CD, a person) so Homestead offers no updates, or "
+         "clears it with an empty by.", {"namespace": NS, "name": NAME_ARG, "by": S}, ["namespace", "name"],
+         run=_post("/api/image-updates/managed", {"namespace": "ns", "name": "name", "by": "by"})),
+    # ---- #424: container settings in bulk and placement
+    Tool("set_primary_port", "Set an app's main port", "containers:manage", CHANGE,
+         "The port the app's link opens; 0 to let Homestead choose.", {"namespace": NS, "name": NAME_ARG, "port": I},
+         ["namespace", "name", "port"], run=_post("/api/workload/primary-port", {"namespace": "ns", "name": "name", "port": "port"})),
+    Tool("set_failover", "Set what happens when a host fails", "containers:manage", CHANGE,
+         "For many apps: items, each {ns, name, mode} with mode move, wait or default.",
+         {"items": {"type": "array", "items": SETTINGS}}, ["items"], run=_guarded(_post("/api/workloads/failover", {"items": "items"}))),
+    Tool("set_container_groups", "Group apps", "containers:manage", CHANGE,
+         "The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group).",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/group")),
+    Tool("set_container_logos", "Set apps' logos", "containers:manage", CHANGE,
+         "Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo.",
+         {"items": {"type": "array", "items": SETTINGS}}, ["items"], run=_post("/api/workloads/logo", {"items": "items"})),
+    Tool("get_placement", "How hosts share the work", "read", READ,
+         "The placement mode, each host's part, standby hosts, and how many apps reserve nothing.", run=_get("/api/placement")),
+    Tool("preview_priority_tiers", "Preview priority tiers", "read", READ,
+         "Every app and VM with its tier and a suggestion; chosen as id=tier pairs (lab/web=critical,vm:lab/win=low).",
+         {"chosen": S}, run=_get("/api/workloads/priority/plan", {"chosen": "chosen"})),
+    Tool("set_priority_tiers", "Set priority tiers", "containers:manage", CHANGE,
+         "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current "
+         "and tier), review_token, restart: true}. Each app restarts once, one at a time; VMs take theirs at next start.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/priority")),
+    Tool("preview_reservations", "Preview reservations from use", "read", READ,
+         "What each app used over the past week and the reservation suggested; chosen limits it to these app ids.",
+         {"chosen": S}, run=_get("/api/workloads/requests/plan", {"chosen": "chosen"})),
+    Tool("set_reservations", "Set reservations from use", "containers:manage", CHANGE,
+         "Applies reservations as preview_reservations reviewed them: settings {apps, review_token, restart: true}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/requests")),
+    Tool("preview_container_rebalance", "Preview balancing hosts", "read", READ,
+         "Which containers Balance hosts would move to even the hosts out; exclude: app ids to leave alone.",
+         {"exclude": S}, run=_get("/api/workloads/rebalance/plan", {"exclude": "exclude"})),
+    Tool("rebalance_containers", "Balance hosts", "containers:manage", CHANGE,
+         "Moves containers as preview_container_rebalance planned: settings {moves, review_token, restart: true, exclude}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/rebalance")),
+    Tool("get_uptime", "Uptime checks", "read", READ, "Each app's and VM's uptime check and how it has answered.",
+         run=_get("/api/uptime")),
+    Tool("set_uptime_check", "Set an uptime check", "containers:manage", CHANGE,
+         "How an app or VM is checked: settings {kind, ns, name, mode (auto, tcp, http, off), port, path}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/uptime/setting")),
+    Tool("set_outage_actions", "Set outage actions", "containers:manage", CHANGE,
+         "What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook}}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/monitoring/actions")),
+    Tool("test_outage_webhook", "Test an outage webhook", "containers:manage", CHANGE,
+         "Sends a test call to the webhook an app's or VM's outage actions would call: settings {kind, ns, name, webhook}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/monitoring/actions/test")),
+    # ---- #424: schedules
+    Tool("list_schedules", "Scheduled jobs", "read", READ, "Scheduled jobs (CronJobs) and when they last ran.",
+         run=_get("/api/schedules")),
+    Tool("save_schedule", "Save a scheduled job", "containers:manage", CHANGE,
+         "Creates or changes a scheduled job: name, image, command, schedule (cron, UTC) and suspend.",
+         {"name": NAME_ARG, "image": S, "command": S, "schedule": S, "suspend": B}, ["name"],
+         run=_guarded(_post("/api/schedules", {k: k for k in ("name", "image", "command", "schedule", "suspend")}))),
+    Tool("run_schedule", "Run a scheduled job now", "containers:manage", CHANGE, "Runs a scheduled job once, now.",
+         {"name": NAME_ARG}, ["name"], run=_post("/api/schedules/run", {"name": "name"})),
+    Tool("delete_schedule", "Delete a scheduled job", "containers:manage", DESTRUCTIVE,
+         "Asks to delete a scheduled job. A person must approve it in Homestead.", {"name": NAME_ARG}, ["name"],
+         plan=_plan_named("Delete the scheduled job {name}", {"name": "name"}),
+         execute=_route("POST", "/api/schedules/delete")),
+    Tool("list_power_schedules", "Power schedules", "read", READ, "When apps and VMs are stopped and started on a schedule.",
+         run=_get("/api/power-schedules")),
+    Tool("set_power_schedule", "Set a power schedule", "containers:manage", CHANGE,
+         "When an app or VM stops and starts: settings as list_power_schedules shows one (kind, ns, name, stop, start, days).",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/power-schedules/set")),
+    # ---- #424: VMs
+    Tool("get_vm_settings", "VM settings", "read", READ, "A VM's settings as Edit shows them; change them and pass them to "
+         "preview_edit_vm.", {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"],
+         run=_get("/api/vm", {"ns": "namespace", "name": "name"})),
+    Tool("preview_vm_power", "Preview a VM power change", "vms:control", CHANGE,
+         "Whether a VM can start, stop, restart or pause now, and its review: settings {ns, name, action}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/vm/power/preview")),
+    Tool("vm_power", "Change a VM's power", "vms:control", CHANGE,
+         "Starts, stops, restarts, pauses or resumes a VM as preview_vm_power reviewed it (settings plus its capacity_token).",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/vm/power")),
+    Tool("set_vm_logos", "Set VMs' logos", "vms:manage", CHANGE, "Logos for VMs, as set_container_logos.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/vms/logo")),
+    Tool("set_vm_monitoring", "Set how VMs are monitored", "vms:manage", CHANGE,
+         "How VMs are checked: settings as the VMs page sends them.", {"settings": SETTINGS}, ["settings"],
+         run=_settings_post("/api/vms/monitoring")),
+    Tool("list_isos", "Installer ISOs", "read", READ, "ISO images VMs can install from.", run=_get("/api/vm/isos")),
+    Tool("prepare_iso", "Prepare an ISO", "vms:manage", CHANGE, "Makes an ISO on a network share ready to install VMs from.",
+         {"share": S, "path": S}, ["share", "path"], run=_post("/api/vm/isos/prepare", {"share": "share", "path": "path"})),
+    Tool("preview_k3s_cluster", "Preview a k3s cluster of VMs", "vms:manage", CHANGE,
+         "What building a k3s cluster from new VMs would make, and its review.", {"settings": SETTINGS}, ["settings"],
+         run=_settings_post("/api/vm/k3s-cluster/plan")),
+    Tool("create_k3s_cluster", "Build a k3s cluster of VMs", "vms:manage", CHANGE,
+         "Builds it as preview_k3s_cluster reviewed it.", {"settings": SETTINGS}, ["settings"],
+         run=_settings_post("/api/vm/k3s-cluster")),
+    # ---- #424: storage
+    Tool("get_backup_overview", "Backups overview", "read", READ,
+         "Backup and snapshot jobs, the groups that hold volumes to them, and the backup target.", run=_get("/api/lh/overview")),
+    Tool("save_backup_group", "Save a backup group", "storage:manage", CHANGE,
+         "Creates or changes a group of volumes and the jobs that apply to it: settings {name, jobs, volumes, original}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/lh/group")),
+    Tool("save_backup_job", "Save a backup job", "storage:manage", CHANGE,
+         "Creates or changes a recurring backup or snapshot job: settings {name, task (backup or snapshot), cron, "
+         "retain, concurrency, groups}.", {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/lh/job")),
+    Tool("assign_backups", "Put volumes in a backup group or job", "storage:manage", CHANGE,
+         "Adds volumes to (or, with enabled false, takes them out of) a group or a job.",
+         {"volumes": {"type": "array", "items": S}, "name": S, "kind": {"type": "string", "enum": ["group", "job"]}, "enabled": B},
+         ["volumes", "name"], run=_post("/api/lh/assign", {"volumes": "volumes", "name": "name", "kind": "kind", "enabled": "enabled"})),
+    Tool("delete_backup_group", "Delete a backup group", "storage:manage", DESTRUCTIVE,
+         "Asks to delete a backup group; its volumes stop being backed up by its jobs. A person must approve it.",
+         {"name": S}, ["name"], plan=_plan_named("Delete the backup group {name}", {"name": "name"}),
+         execute=_route("POST", "/api/lh/group/delete"), role="admin"),
+    Tool("delete_backup_job", "Delete a backup job", "storage:manage", DESTRUCTIVE,
+         "Asks to delete a recurring backup or snapshot job. A person must approve it.", {"name": S}, ["name"],
+         plan=_plan_named("Delete the backup job {name}", {"name": "name"}), execute=_route("POST", "/api/lh/job/delete"),
+         role="admin"),
+    Tool("trim_volume", "Trim a volume", "storage:manage", CHANGE, "Gives a volume's freed space back to its disks.",
+         {"volume": S}, ["volume"], run=_post("/api/lh/trim", {"volume": "volume"})),
+    Tool("rebuild_volume", "Rebuild a volume's copies", "storage:manage", CHANGE,
+         "Rebuilds missing copies of a detached volume now.", {"volume": S}, ["volume"],
+         run=_post("/api/longhorn/rebuild", {"volume": "volume"})),
+    Tool("preview_storage_rebalance", "Preview balancing storage", "read", READ,
+         "Which volume copies would move to even out the disks; exclude: volumes to leave alone.",
+         {"exclude": S}, run=_get("/api/longhorn/rebalance/plan", {"exclude": "exclude"})),
+    Tool("rebalance_storage", "Balance storage", "storage:manage", CHANGE,
+         "Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude}.",
+         {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/longhorn/rebalance")),
+    Tool("remove_old_volume_copy", "Remove an old volume copy", "storage:manage", DESTRUCTIVE,
+         "Asks to delete the data a storage-class move left behind. A person must approve it.", {"pv": S}, ["pv"],
+         plan=_plan_named("Delete the old copy {pv} a storage move kept", {"pv": "pv"}),
+         execute=_route("POST", "/api/volumes/old-copies/remove"), role="admin"),
+    Tool("list_cached_images", "Cached images", "read", READ, "Container images pre-pulled onto the hosts.",
+         run=_get("/api/images")),
+    Tool("prepull_image", "Pre-pull an image", "storage:manage", CHANGE,
+         "Pulls an image onto hosts ahead of time, so an app starts fast; nodes to limit which.",
+         {"image": S, "nodes": {"type": "array", "items": S}}, ["image"],
+         run=_post("/api/images/prepull", {"image": "image", "nodes": "nodes"})),
+    Tool("stop_prepull", "Stop a pre-pull", "storage:manage", CHANGE, "Stops pre-pulling an image.", {"name": S}, ["name"],
+         run=_post("/api/images/prepull/stop", {"name": "name"})),
+    # ---- #424: networking
+    Tool("get_networking", "Networking", "read", READ, "Services, addresses (VIPs), ports and what listens where.",
+         run=_get("/api/network")),
+    Tool("preview_service", "Preview exposing an app", "network:manage", CHANGE,
+         "What a Service exposing an app's ports would be, and its review: settings {namespace, name, workload, ports, "
+         "type, vip_mode, vip}.", {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/network/plan")),
+    Tool("create_service", "Expose an app", "network:manage", CHANGE,
+         "Creates or updates a Service as preview_service reviewed it.", {"settings": SETTINGS}, ["settings"],
+         run=_settings_post("/api/network/services")),
+    Tool("get_ip_addresses", "IP addresses", "read", READ, "The address plan: subnets, records and what was seen on the network.",
+         run=_get("/api/ipam")),
+    Tool("free_ip_addresses", "Free IP addresses", "read", READ, "Addresses that are free to use.", run=_get("/api/ipam/free")),
+    Tool("save_ip_record", "Save an IP record", "network:manage", CHANGE,
+         "Notes what an address is for: settings {ip, name, notes, reserved}.", {"settings": SETTINGS}, ["settings"],
+         run=_settings_post("/api/ipam/record")),
+    Tool("save_ip_records", "Save IP records in bulk", "network:manage", CHANGE,
+         "Applies the same changes to many addresses.", {"ips": {"type": "array", "items": S}, "changes": SETTINGS},
+         ["ips", "changes"], run=_post("/api/ipam/bulk", {"ips": "ips", "changes": "changes"})),
+    Tool("import_ip_records", "Import IP records", "network:manage", CHANGE, "Imports address records from CSV text.",
+         {"csv": S}, ["csv"], run=_post("/api/ipam/import", {"csv": "csv"})),
+    Tool("scan_subnet", "Scan a subnet", "network:manage", CHANGE, "Looks for what answers on a subnet.",
+         {"subnet": S}, ["subnet"], run=_post("/api/ipam/scan", {"subnet": "subnet"})),
+    Tool("save_subnets", "Save subnets", "network:manage", CHANGE, "The subnets the address plan covers: each {cidr, name}.",
+         {"subnets": {"type": "array", "items": SETTINGS}}, ["subnets"], run=_post("/api/ipam/subnets", {"subnets": "subnets"})),
+    Tool("sync_unifi", "Sync from UniFi", "network:manage", CHANGE, "Reads clients and leases from the UniFi controller now.",
+         run=_post("/api/ipam/unifi/sync", {})),
+    # ---- #424: Kubernetes resources and namespaces (admin: each one is approved)
+    Tool("create_namespace", "Create a namespace", "cluster:manage", CHANGE,
+         "Creates a namespace for apps. Only an admin may: a person approves it in Homestead.", {"name": NAME_ARG}, ["name"],
+         run=_guarded(_post("/api/namespaces/create", {"name": "name"}))),
+    Tool("delete_namespace", "Delete a namespace", "cluster:manage", DESTRUCTIVE,
+         "Asks to delete an empty namespace. A person must approve it in Homestead.", {"name": NAME_ARG}, ["name"],
+         plan=_plan_named("Delete the namespace {name}", {"name": "name"}, lambda args: {"confirm": args.get("name")}),
+         execute=_route("POST", "/api/namespaces/delete"), role="admin"),
+    Tool("create_resources", "Create Kubernetes resources", "cluster:manage", CHANGE,
+         "Creates the Kubernetes objects in a YAML manifest. Only an admin may: a person approves it, seeing the manifest.",
+         {"yaml": S, "namespace": NS}, ["yaml"], run=_guarded(_post("/api/resources/create", {"yaml": "yaml", "namespace": "ns"}))),
+    Tool("save_resource", "Save a Kubernetes resource", "cluster:manage", CHANGE,
+         "Replaces one object with this YAML. Only an admin may: a person approves it, seeing the YAML.",
+         {"group": S, "version": S, "resource": S, "namespace": NS, "name": NAME_ARG, "yaml": S},
+         ["version", "resource", "name", "yaml"],
+         run=_guarded(_post("/api/resources/save", {"group": "group", "version": "version", "resource": "resource",
+                                                    "namespace": "ns", "name": "name", "yaml": "yaml"}))),
+    Tool("delete_resource", "Delete a Kubernetes resource", "cluster:manage", DESTRUCTIVE,
+         "Asks to delete one Kubernetes object. A person must approve it in Homestead.",
+         {"group": S, "version": S, "resource": S, "namespace": NS, "name": NAME_ARG}, ["version", "resource", "name"],
+         plan=_plan_named("Delete the {resource} {name}", {"group": "group", "version": "version", "resource": "resource",
+                                                          "namespace": "ns", "name": "name"}),
+         execute=_route("POST", "/api/resources/delete"), role="admin"),
 ]
 BY_NAME = {tool.name: tool for tool in TOOLS}
 SCOPES_USED = sorted({tool.scope for tool in TOOLS if tool.scope})

@@ -50,6 +50,8 @@ SCOPES = {
     "vms:manage": ("operator", "Create, edit and migrate virtual machines (MCP); deleting one waits for a person"),
     "storage:manage": ("operator", "Create and resize volumes, snapshot and back them up (MCP); deleting, "
                                    "reverting or restoring waits for a person"),
+    "network:manage": ("operator", "Expose apps and keep the IP address plan (MCP)"),
+    "cluster:manage": ("admin", "Namespaces and raw Kubernetes objects (MCP); every change waits for an admin to approve it"),
 }
 MIN_TTL = 3600
 MAX_TTL = 366 * 86400

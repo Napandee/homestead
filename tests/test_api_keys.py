@@ -169,7 +169,7 @@ class KeyTests(unittest.TestCase):
     def test_a_signed_in_person_reaches_the_api_with_their_roles_scopes(self):
         self.assertEqual(["read", "logs:read"], keys.scopes_for_role("viewer"))
         self.assertEqual(["read", "logs:read", "containers:control", "containers:manage", "vms:control", "vms:manage",
-                          "storage:manage"], keys.scopes_for_role("operator"))
+                          "storage:manage", "network:manage"], keys.scopes_for_role("operator"))
 
 
 if __name__ == "__main__":

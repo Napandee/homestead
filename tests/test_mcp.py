@@ -313,6 +313,45 @@ class ApprovalTests(Base):
         self.assertIn("already waiting", result["content"][0]["text"])
 
 
+class WiderCatalogueTests(Base):
+    """#424: the rest of what an operator can do."""
+
+    def test_an_image_update_with_warnings_asks_for_confirmation_then_runs(self):
+        k = key(["read", "containers:manage"], role="operator")
+        seen = []
+
+        def route(method, path, query=None, body=None, *, user, role):
+            seen.append((path, dict(body or {})))
+            if path == "/api/image-updates/preview":
+                return {"capacity": {"requires_confirmation": True, "warnings": ["tight"]}, "capacity_token": "t1"}
+            return {"ok": True}
+        with mock.patch.object(TOOLS, "call", side_effect=route):
+            first = self.call("update_container_image", {"namespace": "lab", "name": "web"}, k)["structuredContent"]
+            self.assertTrue(first["needs_confirmation"])
+            self.assertEqual(["/api/image-updates/preview"], [p for p, _ in seen])
+            self.call("update_container_image", {"namespace": "lab", "name": "web", "capacity_token": "t1",
+                                                 "confirm_capacity": True}, k)
+        self.assertEqual(("/api/image-updates/apply", {"ns": "lab", "name": "web", "action": "update",
+                                                      "capacity_token": "t1", "confirm_capacity": True}), seen[-1])
+
+    def test_deleting_a_schedule_waits_for_a_person_then_runs(self):
+        k = key(["read", "containers:manage"], role="operator")
+        answer = self.call("delete_schedule", {"name": "nightly"}, k)["structuredContent"]
+        self.assertEqual("pending_approval", answer["status"])
+        with mock.patch.object(TOOLS, "call", return_value={"ok": True}) as call:
+            self.assertEqual("done", REQUESTS.approve(answer["request"], "ada", "operator")["status"])
+        self.assertEqual(("POST", "/api/schedules/delete"), call.call_args[0][:2])
+        self.assertEqual({"name": "nightly"}, call.call_args[1]["body"])
+
+    def test_raw_kubernetes_changes_always_wait_for_an_admin(self):
+        k = key(["read", "cluster:manage"], role="operator")
+        answer = self.call("create_resources", {"yaml": "kind: ConfigMap, metadata: {name: x}"}, k)["structuredContent"]
+        self.assertEqual("pending_approval", answer["status"])
+        self.assertEqual("admin", REQUESTS.get(answer["request"])["role"])
+        with self.assertRaises(PermissionError):
+            REQUESTS.approve(answer["request"], "olly", "operator")
+
+
 class AuditTests(Base):
     def test_secrets_and_every_variables_value_are_hidden(self):
         AUDIT.record(key(), "mcp", "deploy_container", {"settings": {"image": "x", "env": {"DB_PASSWORD": "hunter2", "TZ": "UTC"},
@@ -358,7 +397,27 @@ class CatalogueTests(unittest.TestCase):
 
     def test_no_tool_reaches_what_agents_are_never_given(self):
         for _, path in self.routes():
-            self.assertFalse(path.startswith(self.NEVER), path)
+            self.assertFalse(any(path == p or path.startswith(p + "/") for p in self.NEVER), path)
+
+    # Operator routes deliberately not tools, and why (#424).
+    NOT_TOOLS = {
+        "/api/agents/requests/approve": "approving is a person's", "/api/agents/requests/deny": "deciding is a person's",
+        "/api/alerts/pending": "the app's own bell", "/api/push/status": "a browser's push subscription",
+        "/api/push/subscribe": "a browser's push subscription", "/api/push/unsubscribe": "a browser's push subscription",
+        "/api/setup/complete": "the setup guide is a person's", "/api/setup/hide": "the setup guide is a person's",
+        "/api/setup/skip": "the setup guide is a person's", "/api/compose/parse": "preview_compose reads the file",
+        "/api/logo-fit/keep": "the browser resizes logos", "/api/logo-fit/resized": "the browser resizes logos",
+        "/api/hardware/rescan": "hosts are read-only to agents", "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
+    }
+
+    def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):
+        """A new operator route fails this until it is a tool, or is listed
+        above with the reason it is not - agents keep up with the app."""
+        used = {path for _, path in self.routes()}
+        missing = sorted(r.path for r in ROUTER.table().values()
+                         if r.method == "POST" and r.role in ("viewer", "operator")
+                         and r.path not in used and r.path not in self.NOT_TOOLS)
+        self.assertEqual([], missing, "make these agent tools, or say in NOT_TOOLS why they are not")
 
     def test_admin_routes_are_reached_only_through_an_approval(self):
         destructive = {t.name for t in TOOLS.TOOLS if t.kind == TOOLS.DESTRUCTIVE}
@@ -367,6 +426,11 @@ class CatalogueTests(unittest.TestCase):
                 self.assertNotEqual("admin", tool.role, tool.name)
         self.assertTrue({"delete_container", "delete_vm", "delete_volume", "delete_snapshot", "revert_to_snapshot",
                          "restore_backup", "delete_backup", "change_storage_class"} <= destructive)
+
+    def test_the_wiki_lists_every_tool(self):
+        page = (ROOT / "docs" / "wiki" / "AI-agents.md").read_text(encoding="utf-8")
+        missing = [t.name for t in TOOLS.TOOLS if f"`{t.name}`" not in page]
+        self.assertEqual([], missing, "add them to docs/wiki/AI-agents.md's tool tables")
 
     def test_every_tool_has_a_scope_that_keys_can_hold(self):
         import homestead_api_keys as KEYS
