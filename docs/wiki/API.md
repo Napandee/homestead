@@ -33,9 +33,14 @@ an agent's tool list.
 - **Expires after** - a day to a year. There are no keys that never expire.
 - **Only from** (optional) - addresses or networks it may be used from, such as
   your Home Assistant's address. A key copied anywhere else is refused.
-  Homestead sees the address a request *arrives* from: behind the cluster's
-  load balancer that can be a node's address rather than the client's. Use the
-  key once without a limit and check "used … from" on its card before setting one.
+  Homestead sees the address a request *arrives* from. Its Service is a load
+  balancer that, as Kubernetes sets it up by default, rewrites that to the
+  address of the node it came through - on k3s one like `10.42.0.0`. Then
+  Homestead cannot tell clients apart, a limit refuses every client, and the
+  wrong-password lockout is shared by everyone coming through that node. The
+  API keys card says so when it is the case, a key's "used … from" is marked
+  **node**, and a refused key's error says why. Leave **Only from** empty
+  there. Keeping clients' own addresses is planned.
 
 The key is shown **once**, as `hsk_<id>_<secret>`. Homestead keeps only a hash
 of it; if you lose it, revoke it and make another. Revoking stops a key within

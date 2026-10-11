@@ -35,6 +35,7 @@ import threading
 import time
 
 import homestead_auth as AUTH
+import homestead_client_address as CLIENTADDR
 import homestead_shared as SHARED
 
 PREFIX = "hsk_"
@@ -173,7 +174,11 @@ def create(name, scopes, ttl_seconds, networks, owner, mcp=False):
 def list_keys():
     usage, now = _usage(), time.time()
     keys = AUTH._load().get("api_keys") or {}
-    return sorted((public(kid, rec, usage, now) for kid, rec in keys.items()), key=lambda k: -k["created"])
+    out = sorted((public(kid, rec, usage, now) for kid, rec in keys.items()), key=lambda k: -k["created"])
+    for key in out:
+        # Used from a node's address: its clients cannot be told apart (#420).
+        key["last_ip_node"] = bool(key["last_ip"]) and CLIENTADDR.is_node_address(key["last_ip"])
+    return out
 
 
 def revoke(kid):
@@ -230,7 +235,7 @@ def verify(token, addr, now=None, force=False):
     if rec["expires"] <= now:
         refuse(f"the API key {rec['name']} has expired")
     if not _allowed_from(rec, addr):
-        refuse(f"the API key {rec['name']} cannot be used from {addr}")
+        refuse(f"the API key {rec['name']} cannot be used from {addr}" + (f". {CLIENTADDR.note(addr)}" if CLIENTADDR.note(addr) else ""))
     owner = (data.get("users") or {}).get(rec["owner"])
     if not owner:
         refuse(f"the API key {rec['name']} belonged to an account that no longer exists")
@@ -249,5 +254,6 @@ def scopes_for_role(role):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/auth/keys"): ("admin", lambda request: {"keys": list_keys(), "scopes": {s: text for s, (_, text) in SCOPES.items()}, "min_ttl": MIN_TTL, "max_ttl": MAX_TTL}),
+    ("GET", "/api/auth/keys"): ("admin", lambda request: {"keys": list_keys(), "scopes": {s: text for s, (_, text) in SCOPES.items()}, "min_ttl": MIN_TTL, "max_ttl": MAX_TTL,
+                                                         "you": CLIENTADDR.about(request.addr)}),
 }

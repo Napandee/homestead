@@ -3718,6 +3718,7 @@ import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
+API_KEYS.CLIENTADDR.bind(lambda path: kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
 SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
@@ -4420,7 +4421,7 @@ class H(HTTP.LimitedHandler):
         if route is None:
             return False
         answer = route.handler(MODULE_ROUTES.Request(method, path, query, body,
-                                                     getattr(self, "user", None), getattr(self, "role", None)))
+                                                     getattr(self, "user", None), getattr(self, "role", None), self._client_ip()))
         if isinstance(answer, MODULE_ROUTES.Stream):
             return self._send_stream(answer) or True
         if isinstance(answer, MODULE_ROUTES.Raw):

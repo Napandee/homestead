@@ -499,10 +499,11 @@ window.apiKeysPaint = async () => {
       <td><b>${esc(k.name)}</b> ${k.expired ? '<span class="tag bad">expired</span>' : ""}${k.mcp ? ' <span class="tag">MCP</span>' : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
       <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
-      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}</div>` : ""}` : '<span class="dim">never</span>'}</td>
+      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ' <span class="tag" title="A node\'s address inside the cluster, not the client\'s">node</span>' : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
       <td>${actionBar([{ label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 1 })}</td></tr>`).join("");
   card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
         <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}
+    ${found.you?.node_address ? UI.callout("warn", "Homestead cannot see where requests come from", esc(found.you.note)) : ""}
     ${rows ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Key</th><th>May</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : '<div class="dim small">No keys yet.</div>'}
     <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, reach a host's shell, or change settings, whatever its scopes.
@@ -519,7 +520,9 @@ window.apiKeyNew = () => {
     + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. Off, it works only on the API.",
       '<label class="toggle"><input type="checkbox" id="ak_mcp"><span></span></label>')
     + UI.fields(UI.field("Expires after", `<select id="ak_ttl">${API_TTLS.map(([label, s]) => `<option value="${s}" ${s === 90 * 86400 ? "selected" : ""}>${label}</option>`).join("")}</select>`),
-      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: "Addresses or networks it may be used from; anywhere if empty. Homestead sees the address a request arrives from - behind the cluster's load balancer that can be a node's - so check \"used from\" on the card first." }))
+      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: STATE.data.apiKeys?.you?.node_address
+        ? `Leave this empty here: Homestead sees your request as coming from ${esc(STATE.data.apiKeys.you.address)}, a node's address inside the cluster, so it cannot tell clients apart and a limit would refuse them all.`
+        : "Addresses or networks it may be used from; anywhere if empty." }))
     + UI.actions(UI.cancel() + UI.button("Make key", "apiKeyMake(this)", { kind: "pri" })));
 };
 
