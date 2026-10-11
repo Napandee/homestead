@@ -141,7 +141,7 @@ window.mcpCardPaint = async () => {
   const url = location.origin + "/mcp";
   window.__mcpText = {
     url,
-    code: `claude mcp add --transport http homestead ${url} --header "Authorization: Bearer <key>"`,
+    code: `claude mcp add --transport http --scope user homestead ${url} --header "Authorization: Bearer <key>"`,
     desktop: JSON.stringify({ mcpServers: { homestead: { command: "npx", args: ["mcp-remote", url, "--header", "Authorization: Bearer ${HOMESTEAD_KEY}"],
       env: { HOMESTEAD_KEY: "hsk_..." } } } }, null, 2) };
   const copy = (name, label = "Copy") => `<button type="button" class="btn sm" onclick="copyText(window.__mcpText.${name}).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">${label}</button>`;
