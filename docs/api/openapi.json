@@ -38,7 +38,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "hsk_<id>_<secret>",
-        "description": "Scopes: `read` - Read status: the cluster, nodes, containers, VMs, alerts and jobs; `containers:control` - Start, stop and restart containers; `vms:control` - Start, stop and restart virtual machines"
+        "description": "Scopes: `read` - Read status: the cluster, nodes, containers, VMs, volumes, alerts and jobs; `logs:read` - Read containers' logs, which can hold passwords and tokens apps print; `containers:control` - Start, stop and restart containers; `containers:manage` - Deploy, edit, scale and move containers (MCP); deleting one waits for a person; `vms:control` - Start, stop and restart virtual machines; `vms:manage` - Create, edit and migrate virtual machines (MCP); deleting one waits for a person; `storage:manage` - Create and resize volumes, snapshot and back them up (MCP); deleting, reverting or restoring waits for a person; `network:manage` - Expose apps and keep the IP address plan (MCP); `cluster:manage` - Namespaces and raw Kubernetes objects (MCP); every change waits for an admin to approve it"
       }
     },
     "schemas": {

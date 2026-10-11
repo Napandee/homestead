@@ -67,6 +67,7 @@ probe - and your first sign-in.
 - [Moving between clusters](Moving-between-clusters) - bring workloads from one cluster to another
 - [Helm and Resources](Helm-and-resources) - charts, and every Kubernetes object
 - [API](API) - scoped, expiring API keys for Home Assistant, scripts and AI agents
+- [AI agents](AI-agents) - let Claude or another MCP client look after the cluster, with a person approving anything destructive
 - [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health, and how hosts share the work
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 

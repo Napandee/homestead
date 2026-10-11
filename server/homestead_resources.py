@@ -45,9 +45,19 @@ CATEGORIES = [
 ]
 
 
-def bind(_kget, _ksend, _table_get):
+# server.py's guard that keeps this editor from going round Network Shares,
+# and the namespace a manifest without one goes in (bind).
+_guard = [lambda kind, ns, name: None]
+_default_ns = ["lab"]
+
+
+def bind(_kget, _ksend, _table_get, guard=None, default_ns=None):
     global kget, ksend, table_get
     kget, ksend, table_get = _kget, _ksend, _table_get
+    if guard:
+        _guard[0] = guard
+    if default_ns:
+        _default_ns[0] = default_ns
 
 
 def _category(group, resource):
@@ -227,7 +237,30 @@ def _refusal(error):
 
 
 # Its routes and who may use them (homestead_routes.py).
+def _save(b):
+    _guard[0](b.get("resource"), b.get("ns"), b.get("name"))
+    return save_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
+                       b.get("ns", ""), b.get("name", ""), b.get("yaml", ""))
+
+
+def _delete(b):
+    _guard[0](b.get("resource"), b.get("ns"), b.get("name"))
+    return delete_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""), b.get("ns", ""), b.get("name", ""))
+
+
+def _create(b):
+    for document in re.split(r"^---[ \t]*$", b.get("yaml", ""), flags=re.M):
+        if document.strip():
+            obj = _parse(document)
+            meta = obj.get("metadata") or {}
+            _guard[0](obj.get("kind"), meta.get("namespace") or b.get("ns") or _default_ns[0], meta.get("name"))
+    return create_objects(b.get("yaml", ""), b.get("ns") or _default_ns[0])
+
+
 ROUTES = {
+    ("POST", "/api/resources/save"): ("admin", lambda request: _save(request.body)),
+    ("POST", "/api/resources/delete"): ("admin", lambda request: _delete(request.body)),
+    ("POST", "/api/resources/create"): ("admin", lambda request: _create(request.body)),
     ("GET", "/api/resources/kinds"): ("viewer", lambda request: discover(force=(request.query.get("force") or [""])[0] == "1")),
     ("GET", "/api/resources/events"): ("viewer", lambda request: events_for((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], (request.query.get("uid") or [""])[0])),
 }

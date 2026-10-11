@@ -126,7 +126,20 @@ def delete(name, confirm=""):
 
 
 # Its routes and who may use them (homestead_routes.py).
+def _refusing(fn):
+    """A refusal is a 409 with its reason, as it always was."""
+    def route(request):
+        import homestead_routes as ROUTER
+        try:
+            return fn(request.body)
+        except (ValueError, PermissionError) as error:
+            return ROUTER.Reply(409, {"error": str(error)})
+    return route
+
+
 ROUTES = {
+    ("POST", "/api/namespaces/create"): ("admin", _refusing(lambda b: create(b.get("name")))),
+    ("POST", "/api/namespaces/delete"): ("admin", _refusing(lambda b: delete(b.get("name"), str(b.get("confirm") or "")))),
     ("GET", "/api/namespaces/manage"): ("viewer", lambda request: inventory()),
     # Places to put an app: Harvester's, Rancher's and Kubernetes'
     # own namespaces are left out unless all are asked for.

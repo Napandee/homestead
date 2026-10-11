@@ -2551,6 +2551,7 @@ import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
 import homestead_placement_mode as PLACEMODE
 import homestead_capacity as CAPACITY
+import homestead_mcp as MCP
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -2660,7 +2661,7 @@ def ktable(path, timeout=20):
         return json.loads(r.read().decode())
 
 
-RESOURCES.bind(kget, ksend, ktable)
+RESOURCES.bind(kget, ksend, ktable, lambda kind, ns, name: guard_smb_object(kind, ns, name), DEFAULT_NS)
 VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(annotations), DEFAULT_NS,
          lambda b: set_vm_logos(b), lambda b: set_vm_monitoring(b))
 # Looked up as each call is made, so what a test puts in their place is used.
@@ -2714,6 +2715,9 @@ RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), 
               UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
               HOSTACCESS.require_target_as, OPS)
+MCP.bind(DATA_DIR, lambda: cached("settings", 15, get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
+    require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "") if p in ROUTE_POLICY.TARGET_CHECKED else None),
+    kget, lambda ns, name: delete_workload(ns, name))
 
 
 OPS.RESOLVERS["host-os"] = HOST_OS.status
@@ -2991,6 +2995,7 @@ def _alert_sources():
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
+    take("agents", MCP.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -3713,6 +3718,7 @@ import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
+API_KEYS.CLIENTADDR.bind(lambda path: kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
 SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
@@ -3864,7 +3870,7 @@ def _service_listeners(deployment, services):
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
-    "/schedules", "/monitoring", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup",
+    "/schedules", "/monitoring", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup", "/agents",
 })
 
 
@@ -3881,7 +3887,7 @@ def is_page_path(path):
     """
     clean = path or "/"
     last = clean.rstrip("/").rsplit("/", 1)[-1]
-    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz")
+    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz", "/mcp")
             and "." not in last and ".." not in clean and len(clean) < 200)
 
 
@@ -4368,8 +4374,8 @@ class H(HTTP.LimitedHandler):
         """An API key: for /api/v1 alone, checked, and the request let through
         with the key's scopes - which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
-        if not path.startswith("/api/v1/"):
-            self._send(401, {"error": "API keys work only on /api/v1; GET /api/v1/openapi.json lists what they can do"})
+        if not path.startswith("/api/v1/") and path != MCP.PATH:
+            self._send(401, {"error": "API keys work only on /api/v1 and /mcp; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
             key = API_KEYS.verify(token, self._client_ip(), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
@@ -4393,7 +4399,7 @@ class H(HTTP.LimitedHandler):
         # API control scopes carry operator authority, never an internal/admin
         # bypass of workload target checks, even when an admin issued the key.
         self.user = f"api-key:{key['name']}"
-        self.role = "operator" if any(scope.endswith(":control") for scope in key["scopes"]) else "viewer"
+        self.role = "operator" if any(scope.endswith((":control", ":manage")) for scope in key["scopes"]) else "viewer"
         HOSTACCESS.set_role(self.role)
         return None
 
@@ -4404,6 +4410,7 @@ class H(HTTP.LimitedHandler):
         if path == "/api/v1/openapi.json" and method == "GET":
             return self._send(200, API_V1.openapi(HOMESTEAD_VERSION, {s: text for s, (_, text) in API_KEYS.SCOPES.items()}))
         code, answer = API_V1.handle(method, path, query, body, auth)
+        MCP.audit_api(self.api_key, method, path, body, code, self._client_ip())
         return self._send(code, answer)
 
     def _module_route(self, method, path, query, body):
@@ -4414,7 +4421,8 @@ class H(HTTP.LimitedHandler):
         if route is None:
             return False
         answer = route.handler(MODULE_ROUTES.Request(method, path, query, body,
-                                                     getattr(self, "user", None), getattr(self, "role", None)))
+                                                     getattr(self, "user", None), getattr(self, "role", None),
+                                                     self._client_ip() if getattr(self, "client_address", None) else ""))
         if isinstance(answer, MODULE_ROUTES.Stream):
             return self._send_stream(answer) or True
         if isinstance(answer, MODULE_ROUTES.Raw):
@@ -4494,7 +4502,7 @@ class H(HTTP.LimitedHandler):
         """
         headers = getattr(self, "headers", None) or {}
         # /api/v1 answers for this cluster alone: an API key never travels.
-        if FLEET.signed(headers) or FLEET.local_path(path) or path.startswith("/api/v1/"):
+        if FLEET.signed(headers) or FLEET.local_path(path) or path.startswith("/api/v1/") or path == MCP.PATH:
             return ""
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         named = headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
@@ -4595,6 +4603,8 @@ class H(HTTP.LimitedHandler):
                 return
             if p.startswith("/api/v1/"):
                 return self._api_v1("GET", p, q, None)
+            if p == MCP.PATH:       # no event stream: one JSON answer per POST
+                return self._send(405 if MCP.enabled() else 404, {"error": "POST JSON-RPC to /mcp"})
             if self._module_route("GET", p, q, None):
                 return
             if p == "/api/diagnostics/download":
@@ -4761,31 +4771,27 @@ class H(HTTP.LimitedHandler):
                 return
             # Whose request this is, for the change history (homestead_changes).
             CHANGES.REQUEST.user = getattr(self, "user", None)
+            if p == MCP.PATH:
+                return MCP.reply(self._send, self._raw_body(), self.api_key and {**self.api_key, "role": self.role}, self._client_ip(), self.headers)
             if int(self.headers.get("Content-Length") or 0) > MAX_BODY:
                 return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
             if not isinstance(b, dict):
                 return self._send(400, {"error": "a JSON object is required"})
-            if p in ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback", "/api/image-updates/preview"):
+            if p in ROUTE_POLICY.TARGET_CHECKED:
                 require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             addr = self._client_ip()
             if p.startswith("/api/v1/"):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p == "/api/auth/keys":
-                # Made in this Homestead's own app, by someone signed in to it:
-                # never relayed from a linked cluster.
+            if p in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit"):
+                # Made, changed and revoked in this Homestead's own app, by
+                # someone signed in to it: never relayed from a linked cluster.
                 if self._fleet_from:
-                    return self._send(403, {"error": "make API keys in this Homestead's own app"})
-                made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user)
-                self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
-                return self._send(200, {"ok": True, **made})
-            if p == "/api/auth/keys/revoke":
-                if self._fleet_from:
-                    return self._send(403, {"error": "revoke API keys in this Homestead's own app"})
-                done = API_KEYS.revoke(b.get("id"))
-                self._signin("key-revoked", self.user, detail=done["name"])
+                    return self._send(403, {"error": "manage API keys in this Homestead's own app"})
+                done, event, detail = API_KEYS.manage(p.rsplit("/", 1)[-1], b, self.user)
+                self._signin(event, self.user, detail=detail)
                 return self._send(200, done)
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
@@ -4830,10 +4836,6 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/namespaces/create":
-                return self._move(lambda: NSMOD.create(b.get("name")))
-            if p == "/api/namespaces/delete":
-                return self._move(lambda: NSMOD.delete(b.get("name"), str(b.get("confirm") or "")))
             if p == "/api/push/test":
                 endpoint = str(b.get("endpoint") or "")
                 if not PUSH.mine(self.user, endpoint):
@@ -4943,22 +4945,6 @@ class H(HTTP.LimitedHandler):
                                                           "action": action},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
-            if p == "/api/resources/save":
-                guard_smb_object(b.get("resource"), b.get("ns"), b.get("name"))
-                return self._send(200, RESOURCES.save_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
-                                                             b.get("ns", ""), b.get("name", ""), b.get("yaml", "")))
-            if p == "/api/resources/delete":
-                guard_smb_object(b.get("resource"), b.get("ns"), b.get("name"))
-                return self._send(200, RESOURCES.delete_object(b.get("group", ""), b.get("version", ""), b.get("resource", ""),
-                                                               b.get("ns", ""), b.get("name", "")))
-            if p == "/api/resources/create":
-                for document in re.split(r"^---[ \t]*$", b.get("yaml", ""), flags=re.M):
-                    if document.strip():
-                        obj = RESOURCES._parse(document)
-                        meta = obj.get("metadata") or {}
-                        guard_smb_object(obj.get("kind"), meta.get("namespace") or b.get("ns") or DEFAULT_NS,
-                                         meta.get("name"))
-                return self._send(200, RESOURCES.create_objects(b.get("yaml", ""), b.get("ns") or DEFAULT_NS))
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
@@ -4982,17 +4968,6 @@ class H(HTTP.LimitedHandler):
                 if b.get("confirm") != NFS.NAME:
                     raise ValueError(f"type {NFS.NAME} to remove the NFS server")
                 return self._send(200, SHARE_SERVERS.remove_nfs())
-            if p == "/api/operations/cancel":
-                # The route lets any operator in; what the job's own cancel
-                # does - delete VMs, stop a volume move - may need more.
-                try:
-                    result = OPS.cancel(b.get("id", ""), b.get("options") or {}, b.get("confirm", ""),
-                                        allowed=lambda need: AUTH.allows(self.role, need), by=self.user)
-                except PermissionError as error:
-                    return self._send(403, {"error": str(error), "role": self.role})
-                for key in ("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2"):
-                    _cache.pop(key, None)
-                return self._send(200, result)
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})

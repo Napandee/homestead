@@ -2,6 +2,12 @@
 here, or beside their handler in a feature module's ROUTES (homestead_routes.py)."""
 import homestead_routes as MODULE_ROUTES
 
+# Routes whose workload (body ns and name) server.py checks an operator may
+# act on before the route runs - for a request, and for an AI agent's tool
+# calling the route (homestead_agent_tools).
+TARGET_CHECKED = ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback",
+                  "/api/image-updates/preview")
+
 POLICY = {
     ('GET', '/api/auth/preferences/dashboard'): 'viewer',
     ('POST', '/api/auth/preferences/dashboard'): 'viewer',
@@ -31,6 +37,7 @@ POLICY = {
     ('POST', '/api/alerts/delivered'): 'viewer',
     ('POST', '/api/auth/keys'): 'admin',
     ('POST', '/api/auth/keys/revoke'): 'admin',
+    ('POST', '/api/auth/keys/edit'): 'admin',
     ('POST', '/api/auth/login'): 'operator',
     ('POST', '/api/auth/logout'): 'viewer',
     ('POST', '/api/auth/password'): 'viewer',
@@ -46,13 +53,7 @@ POLICY = {
     ('POST', '/api/helm/install'): 'admin',
     ('POST', '/api/helm/uninstall'): 'admin',
     ('POST', '/api/helm/upgrade'): 'admin',
-    ('POST', '/api/namespaces/create'): 'admin',
-    ('POST', '/api/namespaces/delete'): 'admin',
-    ('POST', '/api/operations/cancel'): 'operator',
     ('POST', '/api/push/test'): 'viewer',
-    ('POST', '/api/resources/create'): 'admin',
-    ('POST', '/api/resources/delete'): 'admin',
-    ('POST', '/api/resources/save'): 'admin',
     ('POST', '/api/self/data/abandon'): 'admin',
     ('POST', '/api/self/data/move'): 'admin',
     ('POST', '/api/self/data/move/preview'): 'admin',
@@ -153,9 +154,7 @@ POLICY.update({
     ('GET', '/api/move/start'): "admin",
     ('POST', '/api/move/target'): "admin",
     ('GET', '/api/namespaces/create'): "admin",
-    ('POST', '/api/namespaces/create'): "admin",
     ('GET', '/api/namespaces/delete'): "admin",
-    ('POST', '/api/namespaces/delete'): "admin",
     ('GET', '/api/network/service/delete'): "admin",
     ('GET', '/api/network/vips/add'): "admin",
     ('GET', '/api/network/vips/default'): "admin",

@@ -24,6 +24,7 @@ const VIEWS = {
   cluster:   ["Cluster",        "system",    viewCluster,   true],
   settings:  ["Settings",       "system",    viewSettings,  false],
   setup:     ["Setup",          "system",    () => viewSetup(), false],
+  agents:    ["AI agent requests", "system", () => viewAgents(), true],
 };
 
 const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal", "helm"]);

@@ -180,6 +180,10 @@ and UniFi sync.
 **Imports** - containers and VMs from an Unraid server, a Docker Compose file,
 or a VM disk image (qcow2, VMDK).
 
+**AI agents** - an MCP server so Claude Code and other agents can look after
+the cluster, with a person approving anything destructive
+([guide](https://github.com/homestead-lab/homestead/wiki/AI-agents)).
+
 **API** - scoped, expiring API keys for Home Assistant, scripts and AI agents,
 on a versioned, self-describing API ([OpenAPI](docs/api/openapi.json),
 [guide](https://github.com/homestead-lab/homestead/wiki/API)).

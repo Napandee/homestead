@@ -108,6 +108,22 @@ powerful Kubernetes rights to the default service account.
 API control keys are limited to the same ordinary workload targets; their scopes
 never select the internal authorization bypass.
 
+**AI agents (MCP)** are off until an administrator turns them on, and `/mcp`
+answers `404` while off. Only a key made with "Allow AI agents (MCP)" works
+there, never a browser session, and a browser Origin must be Homestead's own. A
+key acts as an operator at most, even when an administrator made it, and sees
+only the tools its scopes allow. Deletes, snapshot reverts, restores, backup
+deletes, storage class changes and changes that need an administrator do not
+run: they become agent requests that a person approves or denies on the
+`/agents` page. On approval Homestead plans again as the approver and runs only
+if the plan is unchanged; requests expire after 30 minutes, with at most 10
+pending per key. Calls are limited per key per minute (120 reads, 20 changes, 5
+destructive), requests to 256 KiB with no batches. Logs and other app-written
+text return marked as untrusted data, control codes stripped. Users, keys,
+settings, shells and exec, Secrets, the file manager, host power and updates,
+Homestead itself and linked clusters are never offered. Every key call is
+audited for 30 days with secrets and environment values hidden.
+
 Remote icons connect only to resolved public addresses, with hostname-verified
 TLS and the same policy on redirects. Downloads have size and time bounds.
 Compose/YAML inputs have depth and expanded-alias budgets. Volume saves require

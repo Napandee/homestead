@@ -149,7 +149,9 @@ def observe(results, now=None):
                 # A condition may ask to be held longer before it is raised:
                 # one that settles by itself on its own time (a cluster
                 # coming back) is not news within it.
-                elif fact.get("event") or now - row["since"] >= max(HOLD, int(fact.get("hold") or 0)):
+                # One that waits on a person - an AI agent's request - is
+                # raised on the first look: it expires if nobody sees it.
+                elif fact.get("event") or fact.get("urgent") or now - row["since"] >= max(HOLD, int(fact.get("hold") or 0)):
                     entry = _append(state, row, "raised", now)
                     row["announced"], row["notice"] = entry["id"], _snapshot(row)
                     fresh.append(entry)
@@ -358,10 +360,13 @@ def update_facts(report):
 # their devices, which homestead_push keeps and sets here (DEVICES), so this
 # module needs nothing of push.
 DEVICES = [lambda user: []]
+# AI agents' requests waiting for a person, and whether agents may connect -
+# homestead_mcp sets it - so the bell and the sidebar can lead to /agents.
+AGENTS = [lambda: {"enabled": False, "pending": 0}]
 
 ROUTES = {
     ("GET", "/api/alerts"): ("viewer", lambda request: {
         "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
         "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
-        "devices": DEVICES[0](request.user)}),
+        "devices": DEVICES[0](request.user), "agents": AGENTS[0]()}),
 }
