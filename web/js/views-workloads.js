@@ -478,7 +478,7 @@ window.wgRenameApply = () => {
   if (!name) return toast("Name the group", "bad");
   if (name === from) return manageWorkloadGroups(true);
   if (WG.group === from) WG.group = name;
-  saveWorkloadGroup(items, name, true);
+  saveWorkloadGroup(items, name, true, from);
 };
 
 /* Ungrouping every container in a group removes it. */
@@ -496,11 +496,11 @@ window.wgUngroupApply = () => {
 };
 
 window.checkedWorkloads = () => wgItems(wgRows().filter(w => WG.picked.has(wgKey(w))));
-window.saveWorkloadGroup = async (items, group, stay = false) => {
+window.saveWorkloadGroup = async (items, group, stay = false, renamedFrom = "") => {
   if (!items || !items.length) return toast("Tick at least one container", "bad");
   try {
     const result = await api("/api/workloads/group", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, group: String(group || "").trim() }) });
+      body: JSON.stringify({ items, group: String(group || "").trim(), ...(renamedFrom ? { renamed_from: renamedFrom } : {}) }) });
     toast(result.detail, "ok");
     const moved = new Set(items.map(item => `${item.ns}/${item.name}`));
     (STATE.data.wl || []).forEach(w => { if (moved.has(`${w.ns}/${w.name}`)) w.group = result.group; });

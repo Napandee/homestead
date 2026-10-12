@@ -722,6 +722,10 @@ TOOLS = [
     Tool("set_container_groups", "Group apps", "containers:manage", CHANGE,
          "The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group).",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/group")),
+    Tool("set_group_tier", "Set a group's priority tier", "containers:manage", CHANGE,
+         "The tier the apps that follow a group take: group, and tier critical, normal, low or none. Only the "
+         "tier is saved and nothing restarts; preview_priority_tiers then lists the apps that need a restart.",
+         {"group": S, "tier": S}, ["group", "tier"], run=_post("/api/workloads/group-tier", {"group": "group", "tier": "tier"})),
     Tool("set_container_logos", "Set apps' logos", "containers:manage", CHANGE,
          "Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo.",
          {"items": {"type": "array", "items": SETTINGS}}, ["items"], run=_post("/api/workloads/logo", {"items": "items"})),

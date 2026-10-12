@@ -11,6 +11,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_group_tiers as GROUPS
 import homestead_priority as P
+import homestead_route_policy as ROUTE_POLICY
+import homestead_routes as ROUTER
 import homestead_updates as UPDATES
 # Binds every module as the app does, before any test runs, so use() always
 # puts the app's own bindings back - never a module's unbound defaults.
@@ -234,6 +236,159 @@ class ResolveTests(unittest.TestCase):
         dep = app("web", group="Home", follows=True, cls="x-low", labels=FLUX)
         self.assertEqual({"tier": "low", "class": "x-low", "source": "own", "runs": "low"},
                          GROUPS.resolve(dep, {}, LAD, managed=True))
+
+
+class MembershipTests(unittest.TestCase):
+    def setUp(self):
+        self.cluster = Cluster([app("ha"), app("db", cls="x-critical"), app("web", labels=FLUX),
+                                app("homestead", ns="homestead"),
+                                app("frigate", group="Home", follows=True),
+                                app("plex", group="Media", follows=True, cls="x-low", wrote="x-low")],
+                               {"Home": "critical", "Media": "low"})
+        use(self, self.cluster)
+
+    def move(self, group, *names, **extra):
+        items = [{"ns": "homestead" if n == "homestead" else "lab", "name": n} for n in names]
+        return GROUPS.set_workload_groups({"group": group, "items": items, **extra})
+
+    def test_joining_a_group_follows_it(self):
+        result = self.move("Home", "ha")
+        self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group"}, self.cluster.annotations("lab/ha"))
+        self.assertEqual(1, result["following"])
+
+    def test_an_app_with_a_class_of_its_own_joins_without_following(self):
+        self.move("Home", "db")
+        self.assertEqual({"homestead.io/group": "Home"}, self.cluster.annotations("lab/db"))
+
+    def test_an_app_flux_applies_joins_without_following(self):
+        self.move("Home", "web")
+        self.assertEqual({"homestead.io/group": "Home"}, self.cluster.annotations("lab/web"))
+
+    def test_homestead_itself_joins_without_following(self):
+        self.move("Home", "homestead")
+        self.assertEqual({"homestead.io/group": "Home"}, self.cluster.annotations("homestead/homestead"))
+
+    def test_joining_touches_no_template(self):
+        before = copy.deepcopy(self.cluster.deps["lab/ha"]["spec"])
+        self.move("Home", "ha", "db")
+        self.assertEqual(before, self.cluster.deps["lab/ha"]["spec"])
+        self.assertTrue(all(set(body) == {"metadata"} for _, _, body, _ in self.cluster.deployment_writes()))
+
+    def test_ungrouping_removes_the_marker_and_leaves_the_class(self):
+        self.move("", "plex")
+        self.assertEqual({}, self.cluster.annotations("lab/plex"))
+        self.assertEqual("x-low", self.cluster.deps["lab/plex"]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_moving_to_another_group_keeps_the_marker(self):
+        self.move("Media", "frigate")
+        self.assertEqual({"homestead.io/group": "Media", "homestead.io/tier": "group"}, self.cluster.annotations("lab/frigate"))
+
+    def test_a_group_that_ends_loses_its_tier(self):
+        self.move("Media", "frigate")          # Home's only app
+        self.assertEqual({"Media": "low"}, self.cluster.tiers())
+
+    def test_a_group_that_still_has_apps_keeps_its_tier(self):
+        self.move("Home", "ha")
+        self.move("Media", "frigate")
+        self.assertEqual({"Home": "critical", "Media": "low"}, self.cluster.tiers())
+
+    def test_renaming_moves_the_tier_to_the_new_name(self):
+        self.move("House", "frigate", renamed_from="Home")
+        self.assertEqual({"House": "critical", "Media": "low"}, self.cluster.tiers())
+        self.assertEqual("group", self.cluster.annotations("lab/frigate")["homestead.io/tier"])
+
+    def test_renaming_into_a_group_with_a_tier_keeps_that_tier(self):
+        self.move("Media", "frigate", renamed_from="Home")
+        self.assertEqual({"Media": "low"}, self.cluster.tiers())
+
+    def test_a_change_of_groups_still_works_when_the_tiers_cant_be_read(self):
+        self.cluster.unreadable = http(403, MAP)
+        result = self.move("Home", "ha")
+        self.assertEqual("group", self.cluster.annotations("lab/ha")["homestead.io/tier"])
+        self.assertIn("couldn't", result["detail"])
+
+    def test_a_managed_add_on_is_refused_and_nothing_is_patched(self):
+        def refuse(ns, name):
+            raise ValueError("managed by Homestead")
+        GROUPS.guard_managed_smb = refuse     # restored by use()
+        with self.assertRaisesRegex(ValueError, "managed by Homestead"):
+            self.move("Home", "ha")
+        self.assertEqual([], self.cluster.sent)
+
+    def test_names_are_checked_before_anything_is_written(self):
+        with self.assertRaises(ValueError):
+            self.move("Home", "ha", renamed_from="x" * 41)
+        self.assertEqual([], self.cluster.sent)
+
+
+class GroupTierRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.cluster = Cluster([app("ha", group="Home", follows=True),
+                                app("frigate", group="Home", follows=True, cls="x-critical", wrote="x-critical"),
+                                app("db", group="Home", cls="x-low"), app("web", group="Home", labels=FLUX)], {})
+        use(self, self.cluster)
+
+    def test_setting_a_tier_writes_only_the_map(self):
+        result = GROUPS.set_group_tier({"group": "Home", "tier": "critical"})
+        self.assertEqual({"Home": "critical"}, self.cluster.tiers())
+        self.assertEqual([], self.cluster.deployment_writes(), "nothing restarts")
+        # ha and frigate follow; ha runs normal, so it needs a restart; web is Flux's, at normal.
+        self.assertEqual((2, 1, 1), (result["follow"], result["restart"], result["git"]))
+        self.assertEqual("critical", result["tier"])
+
+    def test_none_removes_the_groups_tier(self):
+        self.cluster.cm["data"]["group-tiers.json"] = json.dumps({"Home": "critical", "Media": "low"})
+        result = GROUPS.set_group_tier({"group": "Home", "tier": "none"})
+        self.assertEqual({"Media": "low"}, self.cluster.tiers())
+        self.assertEqual(("", 1), (result["tier"], result["restart"]), "frigate runs critical; the default is normal")
+
+    def test_the_first_save_makes_the_map(self):
+        self.cluster.cm = None
+        GROUPS.set_group_tier({"group": "Home", "tier": "low"})
+        method, path, body, _ = self.cluster.sent[-1]
+        self.assertEqual(("POST", f"/api/v1/namespaces/{NS}/configmaps"), (method, path))
+        self.assertEqual("true", body["metadata"]["labels"]["homestead.io/managed"])
+        self.assertEqual({"Home": "low"}, self.cluster.tiers())
+
+    def test_a_group_name_is_saved_as_groups_are_named(self):
+        GROUPS.set_group_tier({"group": "  Home  ", "tier": "low"})
+        self.assertEqual({"Home": "low"}, self.cluster.tiers())
+
+    def test_homesteads_group_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "its own tier"):
+            GROUPS.set_group_tier({"group": "Homestead", "tier": "critical"})
+        self.assertEqual([], self.cluster.sent)
+
+    def test_a_group_with_no_apps_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "no apps"):
+            GROUPS.set_group_tier({"group": "Garage", "tier": "critical"})
+        self.assertEqual([], self.cluster.sent)
+
+    def test_only_the_three_tiers_or_none(self):
+        with self.assertRaises(ValueError):
+            GROUPS.set_group_tier({"group": "Home", "tier": "urgent"})
+
+    def test_a_save_that_crosses_another_is_a_409_and_merges_nothing(self):
+        self.cluster.cm["data"]["group-tiers.json"] = json.dumps({"Home": "low"})
+        self.cluster.race = True
+        result = GROUPS.set_group_tier({"group": "Home", "tier": "critical"})
+        self.assertIsInstance(result, ROUTER.Reply)
+        self.assertEqual(409, result.code)
+        self.assertIn("changed elsewhere", result.body["error"])
+        self.assertEqual({"Home": "low"}, self.cluster.tiers())
+
+    def test_a_map_that_isnt_json_is_replaced_by_a_save(self):
+        self.cluster.cm["data"]["group-tiers.json"] = "not json"
+        GROUPS.set_group_tier({"group": "Home", "tier": "critical"})
+        self.assertEqual({"Home": "critical"}, self.cluster.tiers())
+
+    def test_setting_a_groups_tier_takes_the_role_setting_an_apps_tier_does(self):
+        self.assertEqual("operator", ROUTE_POLICY.role("/api/workloads/group-tier", "POST"))
+        for route in (("POST", "/api/workloads/group"), ("POST", "/api/workloads/group-tier")):
+            self.assertEqual("operator", GROUPS.ROUTES[route][0])
+        self.assertEqual("operator", ROUTE_POLICY.role("/api/workloads/group", "POST"))
+        self.assertEqual(ROUTE_POLICY.role("/api/workloads/priority", "POST"),
+                         ROUTE_POLICY.role("/api/workloads/group-tier", "POST"))
 
 
 if __name__ == "__main__":

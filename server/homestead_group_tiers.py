@@ -24,6 +24,7 @@ import json
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_routes as ROUTER
 # homestead_priority imports this module too; each reads the other's names
 # only when called, so either may be imported first.
 import homestead_priority as PRIORITY
@@ -146,3 +147,180 @@ def resolve(dep, tiers, ladder, *, kind="app", managed=False):
     if managed:
         return own
     return {"tier": "normal", "class": None, "source": "default", "runs": runs}
+
+
+CHANGED = "Group tiers changed elsewhere; try again"
+
+
+def workload_group(value):
+    """A group's name as stored: its own words, trimmed, one line."""
+    group = " ".join(str(value or "").split())
+    if len(group) > 40:
+        raise ValueError("a group name is at most 40 characters")
+    return group
+
+
+def _counts(get=None):
+    """How many apps each group has."""
+    counts = {}
+    for dep in (get or kget)(DEPLOYMENTS).get("items", []):
+        group = group_of(dep)
+        if group:
+            counts[group] = counts.get(group, 0) + 1
+    return counts
+
+
+def _write(tiers, version):
+    """The map, saved over the version read. A save that crosses another is
+    the API server's 409, passed on - never merged blindly."""
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": _map(), "namespace": NAMESPACE, "labels": {NAMES.key("managed"): "true"}},
+            "data": {DATA_KEY: json.dumps(dict(sorted(tiers.items())), indent=1)}}
+    if version is None:
+        ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
+    else:
+        body["metadata"]["resourceVersion"] = version
+        ksend("PUT", _path(), body)
+
+
+def _joins(dep):
+    """Whether an app just put in a group follows it - joining means
+    following - unless it has a class of its own, Flux or Argo CD applies it,
+    it is Homestead (protect() keeps its tier), or it follows already, as an
+    app moved from another group does. dep is the API server's answer to the
+    move; without one, it doesn't."""
+    if not isinstance(dep, dict) or follows(dep) or _spec(dep).get("priorityClassName"):
+        return False
+    meta = _meta(dep)
+    return not is_self(meta.get("namespace", ""), meta.get("name", "")) and not managed_by(dep)
+
+
+def _tidy(group, renamed_from):
+    """After a change of groups: a renamed group's tier moves to its new name,
+    unless that name has a tier already, and a group nothing is in any more
+    loses its tier. "" when done; else what to check. Never fails the change
+    of groups, which is made by then."""
+    for attempt in (1, 2):
+        try:
+            tiers, version = read()
+            if not tiers:
+                return ""
+            counts = _counts()
+            kept = dict(tiers)
+            if renamed_from and group and renamed_from != group and renamed_from in kept and not counts.get(renamed_from):
+                kept.setdefault(group, kept[renamed_from])
+            kept = {name: tier for name, tier in kept.items() if counts.get(name)}
+            if kept != tiers:
+                _write(kept, version)
+            return ""
+        except urllib.error.HTTPError as error:
+            if error.code == 409 and attempt == 1:
+                continue      # changed meanwhile: read it again and redo this on what is there now
+            break
+        except (OSError, ValueError):
+            break
+    return "the group tiers couldn't be brought up to date: check them in Priority tiers…"
+
+
+def set_workload_groups(b):
+    """Puts workloads in a group, or out of every group with a blank name.
+
+    The group is an annotation on each Deployment, so it travels with the
+    workload and needs no list of its own: a group exists while something is
+    in it. An app that joins a group follows its tier (the marker), unless it
+    has a tier of its own; one that leaves every group stops following; one
+    moved between groups follows its new group. renamed_from: the group's old
+    name, when the Manage groups dialog renames it, so its tier moves too.
+    Only annotations change, so nothing restarts."""
+    group = workload_group(b.get("group"))
+    renamed_from = workload_group(b.get("renamed_from"))
+    items = b.get("items") or []
+    if not items:
+        raise ValueError("choose at least one workload")
+    targets = [(_dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name"))
+               for item in items]
+    annotations = {GROUP: group or None}
+    if not group:
+        annotations.update({FOLLOW: None, WROTE: None})
+    following = 0
+    for ns, name in targets:
+        guard_managed_smb(ns, name)
+        path = f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
+        dep = ksend("PATCH", path, {"metadata": {"annotations": annotations}}, ctype="application/merge-patch+json")
+        if group and _joins(dep):
+            ksend("PATCH", path, {"metadata": {"annotations": {FOLLOW: "group"}}}, ctype="application/merge-patch+json")
+            following += 1
+    ROUTER.forget("wl")
+    count = len(items)
+    detail = f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")
+    note = _tidy(group, renamed_from)
+    return {"ok": True, "group": group, "following": following, "detail": detail + (f"; {note}" if note else "")}
+
+
+def effect(deps, tiers, lad=None):
+    """What a group's tiers mean for these apps now: how many follow their
+    group, how many of those need a restart to run with its tier, and how many
+    Flux or Argo CD apply that differ from it (to change in git)."""
+    lad = lad if lad is not None else PRIORITY.ladder()
+    out = {"follow": 0, "restart": 0, "git": 0}
+    for dep in deps:
+        owner = bool(managed_by(dep))
+        where = resolve(dep, tiers, lad, managed=owner)
+        if owner:
+            out["git"] += where["tier"] != where["runs"]
+        elif follows(dep):
+            out["follow"] += 1
+            out["restart"] += where["tier"] != where["runs"]
+    return out
+
+
+def _said(group, tier, counts):
+    head = f"{group} has no tier now" if tier == "none" else f"{group} is {tier} now"
+    n, restart, git = counts["follow"], counts["restart"], counts["git"]
+    parts = [f"{n} app{' follows' if n == 1 else 's follow'} it" if n else "no app follows it yet"]
+    if restart:
+        parts.append(f"{restart} need{'s' if restart == 1 else ''} a restart. Nothing restarts now: "
+                     f"start {'it' if restart == 1 else 'them'} from Priority tiers…")
+    if git:
+        parts.append(f"{git} applied by Flux or Argo CD must change in git")
+    return f"{head}: " + "; ".join(parts)
+
+
+def set_group_tier(b):
+    """A group's tier: critical, normal, low, or none to remove it. Only the
+    map is written - nothing restarts; Priority tiers then lists the apps that
+    need a restart. Homestead's own group is refused (it looks after its own
+    tier), as is a group no app is in."""
+    group = workload_group(b.get("group"))
+    tier = str(b.get("tier") or "")
+    if not group:
+        raise ValueError("choose a group")
+    if tier not in TIERS + ("none",):
+        raise ValueError("the tier must be critical, normal, low or none")
+    if group == OWN_GROUP:
+        raise ValueError(f"{OWN_GROUP} looks after its own tier: it ranks at least as high as any app")
+    members = [dep for dep in kget(DEPLOYMENTS).get("items", []) if group_of(dep) == group]
+    if not members:
+        raise ValueError(f"{group} has no apps; put apps in it first")
+    tiers, version = read()
+    new = dict(tiers or {})   # a map that isn't one is replaced
+    if tier == "none":
+        new.pop(group, None)
+    else:
+        new[group] = tier
+    if new != tiers:
+        try:
+            _write(new, version)
+        except urllib.error.HTTPError as error:
+            if error.code == 409:
+                return ROUTER.Reply(409, {"error": CHANGED})
+            raise
+    counts = effect(members, new)
+    return {"ok": True, "group": group, "tier": "" if tier == "none" else tier, **counts,
+            "detail": _said(group, tier, counts)}
+
+
+ROUTES = {
+    ("POST", "/api/workloads/group"): ("operator", lambda request: set_workload_groups(request.body)),
+    ("POST", "/api/workloads/group-tier"): ("operator", lambda request: set_group_tier(request.body)),
+}

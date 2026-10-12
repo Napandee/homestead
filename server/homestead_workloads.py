@@ -41,7 +41,7 @@ import homestead_updates as UPDATES
 import homestead_usage as USAGE
 
 # server.py's helpers this module calls, bound by name at start.
-NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload", "set_workload_groups",
+NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload",
          "guard_managed_smb", "guard_self", "_dns_name", "get_app_settings", "apply_reviewed_edit",
          "logsearch_read", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
          "is_managed_nfs", "homestead_part", "own_group", "pod_container_rows", "parse_cpu", "parse_mem",
@@ -774,7 +774,6 @@ ROUTES = {
     ("GET", "/api/workload"): ("viewer", edit_form),
     ("GET", "/api/logs"): ("viewer", logs),
     ("GET", "/api/logs/search"): ("viewer", search_logs),
-    ("POST", "/api/workloads/group"): ("operator", lambda request: set_workload_groups(request.body)),
     ("POST", "/api/workloads/logo"): ("operator", lambda request: set_workload_logos(request.body)),
     ("POST", "/api/workloads/failover"): ("operator", set_failover),
     ("POST", "/api/workload/primary-port"): ("operator", set_primary_port),

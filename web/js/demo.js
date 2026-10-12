@@ -2444,6 +2444,12 @@ ssh_pwauth: true
       const body = JSON.parse(init?.body || "{}"), group = String(body.group || "").trim();
       return { ok: true, group, detail: `${(body.items || []).length} moved` };
     },
+    "/api/workloads/group-tier": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), group = String(body.group || "").trim(), tier = body.tier === "none" ? "" : String(body.tier || "");
+      workloads.filter(w => w.group === group).forEach(w => { w.group_tier = tier; });
+      return { ok: true, group, tier, follow: 2, restart: 1, git: 0,
+        detail: `${group} ${tier ? `is ${tier}` : "has no tier"} now: 2 apps follow it; 1 needs a restart. Nothing restarts now: start it from Priority tiers…` };
+    },
     "/api/move/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { capacity_token: "demo-host-move", capacity: {

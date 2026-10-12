@@ -154,6 +154,7 @@ Tools come in three classes:
 | `set_primary_port` | The port the app's link opens; 0 to let Homestead choose | `containers:manage` | change |
 | `set_failover` | For many apps: items, each {ns, name, mode} with mode move, wait or default | `containers:manage` | change |
 | `set_container_groups` | The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group) | `containers:manage` | change |
+| `set_group_tier` | The tier the apps that follow a group take: group, and tier critical, normal, low or none. Only the tier is saved and nothing restarts; preview_priority_tiers then lists the apps that need a restart | `containers:manage` | change |
 | `set_container_logos` | Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo | `containers:manage` | change |
 | `preview_priority_tiers` | Every app and VM with its tier and a suggestion; chosen as id=tier pairs (lab/web=critical,vm:lab/win=low) | `read` | read |
 | `set_priority_tiers` | Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current and tier), review_token, restart: true} | `containers:manage` | change |
