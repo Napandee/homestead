@@ -220,6 +220,64 @@ class BootstrapTests(unittest.TestCase):
         pod["spec"]["nodeName"] = "other"
         with self.assertRaises(Held): self.setup.worker_fact()
 
+    # #437: on a cluster with a globalDefault PriorityClass, the Priority admission
+    # plugin gives every pod naming no class that class's name, value and policy.
+    DEFAULT = {"name": "x-normal", "value": 10000, "preemptionPolicy": "PreemptLowerPriority"}
+
+    def admitted_with(self, default=None, **spec):
+        body, target = self.setup.bodies[-2], self.setup.resources[-2]["target"]
+        pod = copy.deepcopy(body); pod["metadata"].update(uid="pod-uid", resourceVersion="1")
+        pod["spec"].update(spec)
+        B.admitted(body, pod, target, default=default)
+
+    def test_the_clusters_default_priority_class_is_what_admission_adds(self):
+        self.admitted_with(self.DEFAULT, priorityClassName="x-normal", priority=10000, preemptionPolicy="PreemptLowerPriority")
+
+    def test_any_other_class_or_value_is_still_held(self):
+        for spec in ({"priorityClassName": "x-high", "priority": 50000},
+                     {"priorityClassName": "x-normal", "priority": 50000},
+                     {"priorityClassName": "x-normal", "priority": 10000, "preemptionPolicy": "Never"}):
+            with self.assertRaises(Held, msg=spec):
+                self.admitted_with(self.DEFAULT, **spec)
+
+    def test_without_a_default_a_class_or_priority_is_still_held(self):
+        for spec in ({"priorityClassName": "x-normal", "priority": 10000}, {"priority": 10000}):
+            with self.assertRaises(Held, msg=spec):
+                self.admitted_with(None, **spec)
+
+    def test_the_default_is_read_from_the_clusters_classes(self):
+        classes = "/apis/scheduling.k8s.io/v1/priorityclasses"
+        self.assertIsNone(B.default_priority(self.c.read), "none listed: no default")
+        self.c.objects[classes] = {"items": [{"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True},
+                                             {"metadata": {"name": "x-critical"}, "value": 100000}]}
+        self.assertEqual(self.DEFAULT, B.default_priority(self.c.read))
+        self.c.objects[classes] = {"items": [{"metadata": {"name": "x-critical"}, "value": 100000}]}
+        self.assertIsNone(B.default_priority(self.c.read))
+
+    def default_admission(self, value=10000):
+        # The Priority plugin, on dry runs and real creates alike.
+        send = self.c.send
+        def admitting(method, path, body=None, *args, **kwargs):
+            if method == "POST" and path.split("?")[0].endswith("/pods") and not body["spec"].get("priorityClassName"):
+                body = copy.deepcopy(body)
+                body["spec"].update(priorityClassName="x-normal", priority=value, preemptionPolicy="PreemptLowerPriority")
+            return send(method, path, body, *args, **kwargs)
+        self.c.send = admitting
+
+    def test_helpers_are_made_on_a_cluster_with_a_default_class(self):
+        self.c.objects["/apis/scheduling.k8s.io/v1/priorityclasses"] = {"items": [
+            {"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True}]}
+        self.default_admission()
+        self.setup = self.fresh()
+        self.all_created()
+        self.assertEqual("x-normal", self.c.objects[self.setup.resources[-2]["target"]["path"]]["spec"]["priorityClassName"])
+
+    def test_without_reading_the_default_such_helpers_are_still_held(self):
+        self.default_admission()
+        self.setup = self.fresh()
+        with self.assertRaises(Held):
+            self.all_created()
+
     def test_pending_unready_or_restarted_worker_cannot_be_pinned(self):
         self.all_created()
         with self.assertRaisesRegex(Held, "Waiting"): self.setup.worker_fact()

@@ -46,8 +46,10 @@ def validate_receipt(receipt, job, *, now=None):
 
 
 class Preflight:
-    def __init__(self, scope, send, *, clock=time.time):
-        self.scope, self.send, self.clock = K.PreviewScope(scope), send, clock
+    def __init__(self, scope, send, *, clock=time.time, default=None):
+        # default: the cluster's default PriorityClass, read by the caller,
+        # since the preview scope may only send dry-run POSTs.
+        self.scope, self.send, self.clock, self.default = K.PreviewScope(scope), send, clock, default
 
     def _request(self, kind, body):
         namespace = self.scope.namespace
@@ -64,7 +66,7 @@ class Preflight:
     def _pod(self, body, result):
         target = {"apiVersion": "v1", "kind": "Pod", "namespace": self.scope.namespace, "name": body["metadata"]["name"]}
         try:
-            B.admitted(body, result, target, dry_run=True)
+            B.admitted(body, result, target, dry_run=True, default=self.default)
         except Exception:
             raise Held("Pod admission changed a reviewed setting or returned an unverifiable result. Nothing was created") from None
         # No UID/resourceVersion/timestamp from the simulated API object.

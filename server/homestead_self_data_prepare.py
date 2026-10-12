@@ -196,13 +196,13 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
             if approved["proposal"] != ref["admission"]["proposal"] or not set(approved["warnings"]) <= set(ref["admission"]["warnings"]):
                 raise J.Held("Binding-helper capacity warnings changed; review retained preparation resources")
             preview = send("POST", f"/api/v1/namespaces/{ns}/pods?dryRun=All&fieldValidation=Strict", copy.deepcopy(pod_body))
-            B.admitted(pod_body, preview, {"apiVersion": "v1", "kind": "Pod", "namespace": ns, "name": pod_body["metadata"]["name"]}, dry_run=True)
+            B.admitted(pod_body, preview, {"apiVersion": "v1", "kind": "Pod", "namespace": ns, "name": pod_body["metadata"]["name"]}, dry_run=True, default=B.default_priority(read))
             writer.write("binding-pod", "POST", f"/api/v1/namespaces/{ns}/pods", pod_body)
             return "running", 40, "Scheduling a temporary read-only binding pod on the selected host"
         pod = read(binder["target"]["path"])
         if J.identity(pod)["uid"] != binder["after"]["uid"]:
             raise J.Held("The binding pod was replaced; it will not be adopted")
-        B.admitted(pod_body, pod, binder["target"])
+        B.admitted(pod_body, pod, binder["target"], default=B.default_priority(read))
         if pod.get("status", {}).get("phase") in ("Failed", "Succeeded"):
             raise J.Held("The binding pod stopped before the destination bound; inspect retained resources")
         return "running", 50, "Waiting for scheduler placement and destination provisioning"
@@ -214,7 +214,7 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
     if binder and not removed:
         pod = read(binder["target"]["path"])
         if J.identity(pod)["uid"] != binder["after"]["uid"]: raise J.Held("The binding pod was replaced")
-        B.admitted(pod_body, pod, binder["target"])
+        B.admitted(pod_body, pod, binder["target"], default=B.default_priority(read))
         writer.write("release-binding", "DELETE", binder["target"]["path"], {"propagationPolicy": "Foreground"}, expected=J.identity(pod))
         return "running", 85, "Destination bound; waiting for the temporary binding pod to release its mount"
     if removed and writer.observe(removed) is not None:

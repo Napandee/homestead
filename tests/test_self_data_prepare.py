@@ -99,6 +99,25 @@ class PreparationTests(unittest.TestCase):
         self.assertIn(self.path("persistentvolumeclaims"), self.c.objects)
         self.assertEqual(2, self.c.objects[self.c.dep_path]["spec"]["replicas"])
 
+    def test_binding_pod_is_made_on_a_cluster_with_a_default_class(self):
+        # #437: the Priority plugin gives the helper the default class's name and value.
+        self.c.objects["/apis/scheduling.k8s.io/v1/priorityclasses"] = {"items": [
+            {"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True}]}
+        send = self.send
+        def admitting(method, path, body):
+            if method == "POST" and path.split("?")[0].endswith("/pods"):
+                body = copy.deepcopy(body)
+                body["spec"].update(priorityClassName="x-normal", priority=10000, preemptionPolicy="PreemptLowerPriority")
+            return send(method, path, body)
+        self.send = admitting
+        self.assertEqual(15, self.tick()[1])
+        self.assertEqual(40, self.tick()[1])
+        self.assertEqual(50, self.tick()[1])
+        self.c.objects[self.path("pods")]["spec"]["nodeName"] = "node1"
+        self.bind()
+        self.assertEqual(85, self.tick()[1])
+        self.assertEqual("succeeded", self.tick()[0])
+
     def test_immediate_binding_needs_no_helper_pod(self):
         self.sc["volumeBindingMode"] = "Immediate"
         self.item["ref"] = {**self.review()[3], "storage_writes": []}
