@@ -545,6 +545,15 @@ class JobTests(unittest.TestCase):
             self.started([app("ha", group="Home", follows=True)], {"Home": "critical"}, {"lab/ha"})
 
 
+import homestead_agent_tools as TOOLS
+
+
+class AgentToolTests(unittest.TestCase):
+    def test_an_agent_may_send_from_its_group_back(self):
+        self.assertEqual({"priority": "group"}, TOOLS._clean({"priority": "group"}))
+        self.assertEqual({}, TOOLS._clean({"priority": "self"}), "a class it doesn't set is still left out")
+
+
 if __name__ == "__main__":
     unittest.main()
 
