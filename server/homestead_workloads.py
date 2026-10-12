@@ -257,6 +257,7 @@ def get_workloads():
         svcs = kget("/api/v1/services").get("items", [])
     except Exception:
         svcs = []
+    tiers = GROUPS.stored(kget)    # each group's tier (#430); None when it can't be read
 
     out = []
     for d in deps:
@@ -413,6 +414,7 @@ def get_workloads():
             "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
             "restore_tested": RESTORE_TEST.last_result(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
+            "group_tier": None if tiers is None else tiers.get(NAMES.read(annotations, "group"), ""),
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
             "managed_nfs": is_managed_nfs(ns, name),

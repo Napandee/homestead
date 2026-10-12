@@ -699,3 +699,13 @@ class EditRouteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
             self.run_edit(app("ha", group="Home"), {"priority": "group"}, unreadable=True)
         self.assertEqual([], self.events)
+
+
+class WorkloadListTests(unittest.TestCase):
+    def test_each_row_carries_its_groups_tier(self):
+        cluster = Cluster([app("ha", group="Home"), app("plex", group="Media"), app("web")], {"Home": "critical"})
+        cluster.other = {"items": []}       # pods, metrics, services: none
+        use(self, cluster)
+        with mock.patch.object(server, "kget", side_effect=cluster.kget):
+            rows = {w["name"]: w for w in server.WORKLOADS.get_workloads()}
+        self.assertEqual(("critical", "", ""), (rows["ha"]["group_tier"], rows["plex"]["group_tier"], rows["web"]["group_tier"]))

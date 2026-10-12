@@ -99,6 +99,7 @@ const DIALOGS = [
   ["workload-edit", "workloads", "wlEdit('lab','frigate')"],
   ["workload-reservations", "workloads", "reservationsReview()"],
   ["workload-priority", "workloads", "priorityReview()"],
+  ["workload-group-tier", "workloads", "groupTier(groupKeyIndex('Home'))"],
   ["workload-edit-placement", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',4)"],
   ["workload-edit-add-container", "workloads", "wlEdit('lab','frigate')", "containerAdd('edit')"],
   ["workload-edit-hardware", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',1)"],

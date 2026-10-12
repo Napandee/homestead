@@ -298,9 +298,13 @@ window.foldWorkloadGroup = index => {
 };
 function workloadGroupHead(group, rows, folded) {
   const running = rows.filter(w => w.desired > 0 && w.ready === w.desired).length;
-  return `<button type="button" class="wgroup-head" aria-expanded="${!folded}" onclick="foldWorkloadGroup(${groupKeyIndex(group || NO_GROUP)})">
+  const head = `<button type="button" class="wgroup-head" aria-expanded="${!folded}" onclick="foldWorkloadGroup(${groupKeyIndex(group || NO_GROUP)})">
     <span class="wgroup-chevron">›</span><b>${esc(group || "Ungrouped")}</b>
     <span class="dim xs">${rows.length} workload${rows.length === 1 ? "" : "s"}${running < rows.length ? ` · ${running} running` : ""}</span></button>`;
+  // Homestead's own group looks after its own tier (#429); Ungrouped isn't a group.
+  if (!group || rows.every(w => w.homestead || w.platform)) return `<div class="wgroup-headrow">${head}</div>`;
+  const tier = rows.find(w => w.group_tier)?.group_tier || "";
+  return `<div class="wgroup-headrow">${head}${tier ? UI.chip(tier) : ""}${actionBar([{ label: "Tier…", run: `groupTier(${groupKeyIndex(group)})`, need: "operator" }], { shown: 1, label: `More for ${group}` })}</div>`;
 }
 function workloadSections(rows, layout, pick) {
   const { folded } = workloadGroupPrefs();
@@ -511,6 +515,52 @@ window.saveWorkloadGroup = async (items, group, stay = false, renamedFrom = "") 
     } else closeModal();
     renderWorkloads();
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* A group's tier (#430): the apps that follow it take it. Only the tier is
+   saved and nothing restarts; Priority tiers… lists the restarts to start. */
+const GROUP_TIER = { group: "", plan: null };
+function groupTierLine(plan, group, tier) {
+  if (!plan) return "Homestead couldn't read the apps just now; the tier can still be saved.";
+  const rows = (plan.apps || []).filter(a => a.group === group), want = tier === "none" ? "normal" : tier;
+  const follow = rows.filter(a => a.follows), restart = follow.filter(a => a.current !== want).length;
+  const git = tier === "none" ? 0 : rows.filter(a => a.managed && a.current !== want).length;
+  const lead = !follow.length ? `No app follows ${group}: each has a tier of its own.`
+    : `${follow.length} app${follow.length === 1 ? " follows" : "s follow"} ${group}; ${restart
+      ? `${restart} would need a restart. Nothing restarts now. Start ${restart === 1 ? "it" : "them"} from Priority tiers…` : "none would need a restart."}`;
+  return git ? `${lead} ${git} ${git === 1 ? "is" : "are"} applied by Flux or Argo CD: change ${git === 1 ? "it" : "them"} in git.` : lead;
+}
+window.groupTier = async index => {
+  const group = WL_GROUP_KEYS[index];
+  if (!group || group === NO_GROUP) return;
+  const now = (STATE.data.wl || []).find(w => w.group === group)?.group_tier || "none";
+  Object.assign(GROUP_TIER, { group, plan: null });
+  modal(`Tier for ${group}`, `<div class="ui-stack">
+    ${UI.lead(esc(`Apps that follow ${group} take this tier. Apps with a tier of their own keep it.`))}
+    ${UI.field("Tier", `<select id="gt_tier" aria-label="Tier for ${esc(group)}" onchange="groupTierEffect()">${["critical", "normal", "low", "none"].map(t =>
+      `<option value="${t}" ${t === now ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select>`)}
+    <p class="dim small" id="gt_effect" aria-live="polite">Reading the apps…</p>
+    ${UI.actions(UI.button("Save", "groupTierSave()", { kind: "pri", id: "gtGo", attrs: 'data-need="operator"' }), UI.cancel())}</div>`);
+  try { GROUP_TIER.plan = await api("/api/workloads/priority/plan"); } catch (e) { GROUP_TIER.plan = null; }
+  groupTierEffect();
+  window.applyRole?.();
+};
+window.groupTierEffect = () => {
+  const host = $("#gt_effect");
+  if (host) host.textContent = groupTierLine(GROUP_TIER.plan, GROUP_TIER.group, $("#gt_tier")?.value || "none");
+};
+window.groupTierSave = async () => {
+  const { group } = GROUP_TIER, tier = $("#gt_tier")?.value || "none", button = $("#gtGo");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/workloads/group-tier", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group, tier }) });
+    (STATE.data.wl || []).forEach(w => { if (w.group === group) w.group_tier = result.tier; });
+    closeModal(); toast(result.detail, "ok"); renderWorkloads();
+  } catch (e) {
+    toast(e.message, "bad");     // a 409: the tiers changed elsewhere; the dialog stays open to try again
+    if (button) button.disabled = false;
+  }
 };
 
 /* The platform's own containers - KubeVirt, CDI, the upgrade controller that

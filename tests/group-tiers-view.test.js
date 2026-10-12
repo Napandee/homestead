@@ -91,3 +91,25 @@ test("an app Flux applies stays read-only, in a group too", () => {
   const html = field(load(), { priority: "normal", priority_class: "x-normal", priority_owner: "Flux", priority_group: "Home", priority_group_tier: "critical" });
   assert.doesNotMatch(html, /id="e_priority"/);
 });
+
+test("a group's heading offers Tier… and shows its tier", () => {
+  const html = load().workloadGroupHead("Home", [{ name: "ha", group: "Home", group_tier: "critical", desired: 1, ready: 1 }], false);
+  assert.match(html, />Tier…</);
+  assert.match(html, /ui-chip[^>]*>critical</);
+});
+
+test("Homestead's own group and Ungrouped offer no tier", () => {
+  const c = load();
+  assert.doesNotMatch(c.workloadGroupHead("Homestead", [{ name: "homestead", group: "Homestead", homestead: "self", platform: "Homestead", desired: 1, ready: 1 }], false), /Tier…/);
+  assert.doesNotMatch(c.workloadGroupHead("", [{ name: "web", group: "", desired: 1, ready: 1 }], false), /Tier…/);
+});
+
+test("the Tier… dialog says what a tier would do before it is saved", () => {
+  const c = load(), p = plan([row("lab/ha", { group: "Home", follows: true }), row("lab/fr", { group: "Home", follows: true, current: "critical", tier: "critical" }),
+    row("lab/db", { group: "Home" }), row("lab/web", { group: "Home", managed: "Flux" })]);
+  assert.equal(c.groupTierLine(p, "Home", "critical"),
+    "2 apps follow Home; 1 would need a restart. Nothing restarts now. Start it from Priority tiers… 1 is applied by Flux or Argo CD: change it in git.");
+  assert.equal(c.groupTierLine(p, "Home", "none"), "2 apps follow Home; 1 would need a restart. Nothing restarts now. Start it from Priority tiers…");
+  assert.equal(c.groupTierLine(plan([row("lab/db", { group: "Home" })]), "Home", "low"), "No app follows Home: each has a tier of its own.");
+  assert.equal(c.groupTierLine(null, "Home", "low"), "Homestead couldn't read the apps just now; the tier can still be saved.");
+});

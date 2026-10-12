@@ -1743,7 +1743,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .wgroup-head b{font-size:13px;letter-spacing:.02em}
 .wgroup-chevron{display:inline-block;transition:transform .15s var(--e);transform:rotate(90deg);color:var(--mut)}
 .wgroup-head[aria-expanded="false"] .wgroup-chevron{transform:none}
-.wgroup.folded .wgroup-head{margin-bottom:4px}
+.wgroup-headrow{display:flex;align-items:center;gap:8px;margin:0 0 10px;border-bottom:1px solid var(--line)}
+.wgroup-headrow>.wgroup-head{flex:1 1 auto;width:auto;min-width:0;margin:0;border-bottom:0}
+.wgroup-headrow>.actionbar{flex:0 0 auto}
+.wgroup.folded .wgroup-headrow{margin-bottom:4px}
+.wltable tbody.grouphead .wgroup-headrow{margin:0;border-bottom:0}
 .wltable tbody.grouphead td{padding:0 12px;background:rgba(255,255,255,.02)}
 .wltable tbody.grouphead .wgroup-head{margin:0;border-bottom:0}
 .prio-line{overflow-wrap:anywhere}
