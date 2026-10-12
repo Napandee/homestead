@@ -324,3 +324,35 @@ ROUTES = {
     ("POST", "/api/workloads/group"): ("operator", lambda request: set_workload_groups(request.body)),
     ("POST", "/api/workloads/group-tier"): ("operator", lambda request: set_group_tier(request.body)),
 }
+
+
+STATUSES = ("in_line", "restart", "git", "outside", "cant_set", "unknown_group")
+
+
+def status(dep, where, owner):
+    """A plan row's status, from resolve()'s answer (where) and who applies
+    it (owner, managed_by's answer). cant_set is the plan's skipped list.
+    in_line: it runs with its tier. unknown_group: its group's tier can't be
+    read. git: Flux or Argo CD applies it, and it differs. restart: Homestead
+    applies it, it differs, and its class is the one Homestead wrote (or none
+    yet). outside: it follows its group, but its class isn't the one
+    Homestead wrote - someone changed it, and the job won't quietly undo it."""
+    if where["tier"] is None:
+        return "unknown_group"
+    if where["tier"] == where["runs"]:
+        return "in_line"
+    if owner:
+        return "git"
+    if (_spec(dep).get("priorityClassName") or "") != (_annotations(dep).get(WROTE) or ""):
+        return "outside"
+    return "restart"
+
+
+def git_line(owner, cls):
+    """The line to commit for an app Flux or Argo CD applies: its manifest's
+    field, or for a HelmRelease the chart's value (usually priorityClassName)."""
+    helm = str(owner.get("source") or "").startswith("HelmRelease")
+    field = "priorityClassName" if helm else "spec.template.spec.priorityClassName"
+    if cls:
+        return f"{field}: {cls}"
+    return f"remove {field}" + (" from the chart's values" if helm else "")

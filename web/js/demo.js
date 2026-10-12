@@ -2053,21 +2053,25 @@ ssh_pwauth: true
     "/api/placement": { mode: "standby", unreserved: 4, notes: [], applies: true, hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: true, tainted: true, takes_work: true }] },
     "/api/workloads/priority/plan": url => {
       const picks = Object.fromEntries((url.searchParams.get("chosen") || "").split(",").filter(x => x.includes("=")).map(x => x.split("=")));
+      const own = { group: "", follows: false, source: "own", status: "in_line" };
       const rows = [
-        { id: "lab/home-assistant", current: "normal", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
-        { id: "lab/vaultwarden", current: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
-        { id: "lab/frigate", current: "normal", suggested: "", why: "" },
-        { id: "lab/paperless", current: "normal", suggested: "", why: "" },
-        { id: "ci/actions-runner", current: "normal", suggested: "low", why: "looks like batch or CI work" },
-        { id: "media/jellyfin", current: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
-        { id: "vm:lab/windows-desktop", kind: "vm", current: "normal", suggested: "", why: "" }];
+        { ...own, id: "lab/home-assistant", current: "critical", wanted: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel",
+          group: "Home", follows: true, source: "group" },
+        { ...own, id: "lab/frigate", current: "normal", wanted: "critical", suggested: "", why: "", group: "Home", follows: true, source: "group", status: "restart" },
+        { ...own, id: "lab/vaultwarden", current: "critical", wanted: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
+        { ...own, id: "lab/paperless", current: "normal", wanted: "normal", suggested: "", why: "" },
+        { ...own, id: "ci/actions-runner", current: "normal", wanted: "normal", suggested: "low", why: "looks like batch or CI work" },
+        { ...own, id: "media/jellyfin", current: "normal", wanted: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
+        { ...own, id: "vm:lab/windows-desktop", kind: "vm", current: "normal", wanted: "normal", suggested: "", why: "" }];
+      const order = ["critical", "normal", "low"];
       const apps = rows.map(r => {
         const [ns, name] = r.id.replace(/^vm:/, "").split("/");
-        const fallback = r.suggested && r.current === "normal" && !r.managed ? r.suggested : r.current;
+        const fallback = r.status === "restart" ? r.wanted : r.suggested && r.current === "normal" && !r.managed && r.source === "own" ? r.suggested : r.current;
         return { ns, name, kind: "app", managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
-      }).sort((a, b) => ["critical", "normal", "low"].indexOf(a.tier) - ["critical", "normal", "low"].indexOf(b.tier) || a.id.localeCompare(b.id));
+      }).sort((a, b) => (a.status === "in_line") - (b.status === "in_line") || order.indexOf(a.current) - order.indexOf(b.current) || a.id.localeCompare(b.id));
       const changes = apps.filter(a => a.tier !== a.current);
-      return { apps, changes: changes.length, max: 50, review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."),
+      return { apps, groups: [{ name: "Home", tier: "critical", apps: 2 }], changes: changes.length, max: 50,
+        review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."), warnings: [],
         skipped: [{ id: "lab/unifi", why: "it uses the class unifi-high, which Homestead does not keep; it is left alone" }] };
     },
     "/api/workloads/priority": { operation: { id: "demo-priority", kind: "set-priority", title: "Set the priority tier of 2 apps", status: "running", progress: 0, message: "Making the priority classes", cancellable: true } },

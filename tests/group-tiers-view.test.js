@@ -22,3 +22,49 @@ test("renaming a group sends its old name, so its tier moves with it", async () 
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(sent, [["/api/workloads/group", { items: [{ ns: "lab", name: "frigate" }], group: "House", renamed_from: "Home" }]]);
 });
+
+const plan = (apps, groups = []) => ({ apps, groups, changes: 0, max: 50, skipped: [], warnings: [] });
+const row = (id, extra) => ({ id, kind: "app", ns: "lab", name: id.split("/")[1], current: "normal", tier: "normal", suggested: "", why: "",
+  managed: "", group: "", follows: false, wanted: "normal", source: "own", status: "in_line", ...extra });
+
+test("a row that follows its group says where its tier comes from, and that it needs a restart", () => {
+  const html = load().priorityHtml(plan([row("lab/ha", { group: "Home", follows: true, wanted: "critical", source: "group", status: "restart", tier: "critical" })]));
+  assert.match(html, /critical, from Home · runs normal/);
+  assert.match(html, /needs a restart/);
+});
+
+test("a tier of its own, and the default", () => {
+  const html = load().priorityHtml(plan([row("lab/db", { current: "low", tier: "low", wanted: "low" }), row("lab/web", { follows: true, source: "default" })]));
+  assert.match(html, /low, its own · in line/);
+  assert.match(html, /normal, the default · in line/);
+});
+
+test("an app Flux applies shows the line to commit", () => {
+  const html = load().priorityHtml(plan([row("lab/web", { managed: "Flux", group: "Home", wanted: "critical", source: "group", status: "git",
+    line: "spec.template.spec.priorityClassName: x-critical" })]));
+  assert.match(html, /change in git/);
+  assert.match(html, /spec\.template\.spec\.priorityClassName: x-critical/);
+});
+
+test("a class changed outside Homestead, and a group tier that can't be read, are said and not ticked", () => {
+  const html = load().priorityHtml(plan([
+    row("lab/ha", { group: "Home", follows: true, current: "low", tier: "low", wanted: "critical", source: "group", status: "outside" }),
+    row("lab/fr", { group: "Home", follows: true, wanted: null, source: "group", status: "unknown_group" })]));
+  assert.match(html, /changed outside Homestead/);
+  assert.match(html, /group tier unknown/);
+  assert.doesNotMatch(html, /was low|was normal/);
+});
+
+test("the groups are listed with their tiers", () => {
+  const html = load().priorityHtml(plan([], [{ name: "Home", tier: "critical", apps: 4 }, { name: "Media", tier: "", apps: 1 }, { name: "Lab", tier: null, apps: 2 }]));
+  assert.match(html, /<b>Home<\/b> critical · 4 apps/);
+  assert.match(html, /<b>Media<\/b> no tier · 1 app</);
+  assert.match(html, /<b>Lab<\/b> tier unknown · 2 apps/);
+});
+
+test("a row whose group tier is unknown has its select disabled, says why, and is not ticked", () => {
+  const html = load().priorityHtml(plan([row("lab/fr", { group: "Home", follows: true, wanted: null, source: "group", status: "unknown_group" })]));
+  assert.match(html, /<select[^>]*disabled/);
+  assert.match(html, /Group tiers couldn&#39;t be read|Group tiers couldn't be read/);
+  assert.doesNotMatch(html, /was normal/);
+});

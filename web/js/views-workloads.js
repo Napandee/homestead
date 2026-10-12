@@ -1299,13 +1299,27 @@ async function priorityPlan() {
   if (go) go.disabled = !plan.changes || plan.changes > plan.max;
   window.applyRole?.();
 }
+/* Where a row's tier comes from, and how it stands (#430). */
+const PRIORITY_STATUS = { in_line: ["in line", ""], restart: ["needs a restart", "warn"], git: ["change in git", "info"],
+  outside: ["changed outside Homestead", "warn"], unknown_group: ["group tier unknown", "bad"] };
+function prioritySource(a) {
+  if (a.source === "group") return a.wanted ? `${a.wanted}, from ${a.group}` : `from ${a.group}`;
+  if (a.source === "default") return "normal, the default";
+  return `${a.wanted || a.current}, its own`;
+}
+function priorityStatus(a) {
+  const [label, tone] = PRIORITY_STATUS[a.status] || PRIORITY_STATUS.in_line;
+  const runs = a.wanted && a.wanted !== a.current ? ` · runs ${a.current}` : "";
+  return `${esc(prioritySource(a) + runs)} · ${tone ? UI.chip(label, tone) : esc(label)}${a.line ? `<br><span class="mono prio-line">${esc(a.line)}</span>` : ""}`;
+}
 function priorityHtml(plan) {
   const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current), over = changes.length > plan.max;
   const restarting = changes.filter(a => a.kind !== "vm").length, vms = changes.length - restarting;
   const rows = apps.map((a, i) => [
     `<span class="mono">${esc(a.kind === "vm" ? `${a.ns}/${a.name}` : a.id)}</span>${a.kind === "vm" ? ` ${UI.chip("VM")}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
-    `${prioritySelect(`prio_${i}`, a.tier, `${a.managed ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
-      <span class="sub">${esc(a.note || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
+    `${prioritySelect(`prio_${i}`, a.tier, `${a.managed || a.status === "unknown_group" ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
+      <span class="sub">${priorityStatus(a)}</span>
+      <span class="sub">${esc(a.note || (a.status === "unknown_group" ? "Group tiers couldn't be read; try again shortly." : "") || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
   return [
     UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
       : changes.length ? [restarting ? `Changes the tier of ${restarting} app${restarting === 1 ? "" : "s"}. Each restarts once, one at a time.` : "",
@@ -1313,6 +1327,8 @@ function priorityHtml(plan) {
       : "Every app keeps its tier. Choose a tier to change one."),
     // What the cluster's classes get wrong (#429), said once.
     (plan.warnings || []).length ? UI.callout("warn", "Check first", `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`) : "",
+    (plan.groups || []).length ? UI.section(`Groups · ${plan.groups.length}`, `<ul class="ui-list">${plan.groups.map(g =>
+      `<li><b>${esc(g.name)}</b> ${esc(g.tier === null ? "tier unknown" : g.tier || "no tier")} · ${g.apps} app${g.apps === 1 ? "" : "s"}</li>`).join("")}</ul>`) : "",
     UI.section(`Apps and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
     UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>

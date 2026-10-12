@@ -1746,6 +1746,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .wgroup.folded .wgroup-head{margin-bottom:4px}
 .wltable tbody.grouphead td{padding:0 12px;background:rgba(255,255,255,.02)}
 .wltable tbody.grouphead .wgroup-head{margin:0;border-bottom:0}
+.prio-line{overflow-wrap:anywhere}
 .wg-list{display:grid;gap:8px;max-height:48vh;overflow:auto;padding-right:4px}
 .wg-item{display:grid;grid-template-columns:auto auto 1fr auto;align-items:center;gap:10px;padding:7px 9px;border-radius:9px;cursor:pointer}
 .wg-item:hover{background:rgba(255,255,255,.04)}

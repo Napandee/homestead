@@ -391,5 +391,159 @@ class GroupTierRouteTests(unittest.TestCase):
                          ROUTE_POLICY.role("/api/workloads/group-tier", "POST"))
 
 
+class PlanTests(unittest.TestCase):
+    def plan(self, deps, tiers, chosen=None, vms=None, unreadable=None):
+        self.cluster = Cluster(deps, tiers)
+        self.cluster.vms = vms or {}
+        self.cluster.unreadable = unreadable
+        use(self, self.cluster)
+        return P.plan(chosen)
+
+    def row(self, out, app_id):
+        return next(a for a in out["apps"] if a["id"] == app_id)
+
+    def test_following_a_group_set_to_critical_needs_a_restart_and_is_ticked(self):
+        out = self.plan([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        row = self.row(out, "lab/ha")
+        self.assertEqual(("normal", "critical", "group", "restart", "critical", "Home", True),
+                         (row["current"], row["wanted"], row["source"], row["status"], row["tier"], row["group"], row["follows"]))
+        self.assertEqual(1, out["changes"])
+
+    def test_an_app_that_runs_with_its_groups_tier_is_in_line(self):
+        out = self.plan([app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")], {"Home": "critical"})
+        self.assertEqual(("in_line", "critical"), (self.row(out, "lab/ha")["status"], self.row(out, "lab/ha")["tier"]))
+
+    def test_a_class_changed_outside_homestead_is_shown_not_ticked(self):
+        out = self.plan([app("ha", group="Home", follows=True, cls="x-low", wrote="x-critical")], {"Home": "critical"})
+        row = self.row(out, "lab/ha")
+        self.assertEqual(("outside", "low"), (row["status"], row["tier"]))
+        self.assertEqual(0, out["changes"])
+
+    def test_a_class_homestead_wrote_before_the_group_changed_needs_a_restart(self):
+        out = self.plan([app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")], {"Home": "low"})
+        self.assertEqual(("restart", "low"), (self.row(out, "lab/ha")["status"], self.row(out, "lab/ha")["tier"]))
+
+    def test_apps_flux_or_argo_apply_get_the_line_to_commit(self):
+        out = self.plan([app("web", group="Home", labels=FLUX), app("ha", group="Home", labels=HELM),
+                         app("db", group="Home", ann=ARGO)], {"Home": "critical"})
+        self.assertEqual("spec.template.spec.priorityClassName: x-critical", self.row(out, "lab/web")["line"])
+        self.assertEqual("priorityClassName: x-critical", self.row(out, "lab/ha")["line"])
+        self.assertEqual("spec.template.spec.priorityClassName: x-critical", self.row(out, "lab/db")["line"])
+        self.assertEqual({"git"}, {a["status"] for a in out["apps"]})
+        self.assertEqual(0, out["changes"], "none is ticked")
+
+    def test_an_app_flux_applies_moved_to_normal_is_told_to_remove_its_class(self):
+        out = self.plan([app("web", group="Home", cls="x-critical", labels=FLUX)], {"Home": "normal"})
+        self.assertEqual("remove spec.template.spec.priorityClassName", self.row(out, "lab/web")["line"])
+
+    def test_an_unreadable_map_leaves_followers_unknown_and_acts_on_none(self):
+        out = self.plan([app("ha", group="Home", follows=True), app("db", group="Home", cls="x-low")],
+                        {"Home": "critical"}, unreadable=http(500, MAP))
+        self.assertEqual(("unknown_group", "normal"), (self.row(out, "lab/ha")["status"], self.row(out, "lab/ha")["tier"]))
+        self.assertEqual("in_line", self.row(out, "lab/db")["status"])
+        self.assertEqual([{"name": "Home", "tier": None, "apps": 2}], out["groups"])
+        self.assertEqual(0, out["changes"])
+
+    def test_a_follower_with_a_class_that_isnt_on_the_cluster_cant_be_set(self):
+        out = self.plan([app("ha", group="Home", follows=True, cls="gone")], {"Home": "critical"})
+        self.assertEqual(["lab/ha"], [s["id"] for s in out["skipped"]], "cant_set: the skipped list, as today")
+        self.assertEqual([], out["apps"])
+
+    def test_vms_are_always_their_own(self):
+        win = {"metadata": {"name": "win", "namespace": "lab",
+                            "annotations": {"homestead.io/group": "Home", "homestead.io/tier": "group"}},
+               "spec": {"template": {"spec": {}}}}
+        out = self.plan([], {"Home": "critical"}, vms={"lab/win": win})
+        row = self.row(out, "vm:lab/win")
+        self.assertEqual(("own", "in_line", "", False), (row["source"], row["status"], row["group"], row["follows"]))
+
+    def test_groups_are_listed_with_their_tier(self):
+        out = self.plan([app("ha", group="Home", follows=True), app("frigate", group="Home"), app("plex", group="Media"),
+                         app("homestead", ns="homestead", group="Homestead")], {"Home": "critical"})
+        self.assertEqual([{"name": "Home", "tier": "critical", "apps": 2}, {"name": "Media", "tier": "", "apps": 1}], out["groups"])
+
+    def test_rows_out_of_line_come_first(self):
+        out = self.plan([app("a-web"), app("z-ha", group="Home", follows=True)], {"Home": "critical"})
+        self.assertEqual(["lab/z-ha", "lab/a-web"], [a["id"] for a in out["apps"]])
+
+    def test_hints_tick_only_apps_with_a_tier_of_their_own(self):
+        out = self.plan([app("home-assistant", group="Home", follows=True), app("vaultwarden")], {})
+        self.assertEqual("normal", self.row(out, "lab/home-assistant")["tier"], "it follows Home, which has no tier")
+        self.assertEqual("critical", self.row(out, "lab/vaultwarden")["tier"])
+
+    def test_a_pick_for_an_unknown_group_row_is_ignored_by_the_plan(self):
+        out = self.plan([app("ha", group="Home", follows=True)], {"Home": "critical"}, chosen={"lab/ha": "low"}, unreadable=http(500, MAP))
+        self.assertEqual(("unknown_group", "normal"), (self.row(out, "lab/ha")["status"], self.row(out, "lab/ha")["tier"]))
+        self.assertEqual(0, out["changes"])
+
+
+class JobTests(unittest.TestCase):
+    def review(self, deps, tiers, chosen=None):
+        self.cluster = Cluster(deps, tiers)
+        use(self, self.cluster)
+        out = P.plan(chosen)
+        return P.reviewed([a for a in out["apps"] if a["tier"] != a["current"]], out["review_token"])
+
+    def last_patch(self):
+        return next(body for method, path, body, _ in reversed(self.cluster.sent) if method == "PATCH")
+
+    def test_the_job_writes_the_marker_and_the_class_it_wrote(self):
+        apps = self.review([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        P.patch(apps[0])
+        self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group", "homestead.io/tier-class": "x-critical"},
+                         self.cluster.annotations("lab/ha"))
+        self.assertEqual("x-critical", self.cluster.deps["lab/ha"]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_a_tier_picked_against_the_group_becomes_the_apps_own(self):
+        apps = self.review([app("ha", group="Home", follows=True)], {"Home": "critical"}, chosen={"lab/ha": "low"})
+        P.patch(apps[0])
+        self.assertEqual({"homestead.io/group": "Home"}, self.cluster.annotations("lab/ha"))
+        self.assertEqual("x-low", self.cluster.deps["lab/ha"]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_an_own_tier_change_writes_no_annotations(self):
+        apps = self.review([app("db")], {}, chosen={"lab/db": "critical"})
+        P.patch(apps[0])
+        self.assertNotIn("metadata", self.last_patch())
+
+    def test_a_job_reviewed_before_this_version_writes_no_marker(self):
+        self.cluster = Cluster([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        use(self, self.cluster)
+        P.patch({"kind": "app", "ns": "lab", "name": "ha", "tier": "critical"})   # a ref stored before #430
+        self.assertNotIn("metadata", self.last_patch())
+
+    def started(self, deps, tiers, change):
+        """P.start() with the group map unreadable once the review is done."""
+        self.cluster = Cluster(deps, tiers)
+        use(self, self.cluster)
+        out = P.plan()
+        picked = [a for a in out["apps"] if a["id"] in change]
+        self.cluster.unreadable = http(500, MAP)
+        began = []
+        ops = mock.Mock(TERMINAL=("succeeded", "failed"), RESOLVERS={}, CANCELLERS={})
+        ops.list_operations.return_value = []
+        ops.start.side_effect = lambda *args: began.append(args) or {"id": "op"}
+        P.operations = ops
+        self.addCleanup(setattr, P, "operations", None)
+        body = {"changes": [{"id": a["id"], "current": a["current"], "tier": "critical"} for a in picked],
+                "review_token": P.review_token([{"id": a["id"], "current": a["current"], "tier": "critical"} for a in picked]),
+                "restart": True}
+        return P.start(body), began
+
+    def test_a_follower_whose_group_tier_cant_be_read_is_left_out_and_the_rest_goes_ahead(self):
+        _, began = self.started([app("ha", group="Home", follows=True), app("db")], {"Home": "critical"}, {"lab/ha", "lab/db"})
+        ref = began[0][4]
+        self.assertEqual(["lab/db"], [a["id"] for a in ref["apps"]])
+        self.assertEqual(["lab/ha: its group's tier couldn't be read, so it was left alone"], ref["skipped"])
+
+    def test_a_follower_whose_group_tier_cant_be_read_is_not_patched(self):
+        _, began = self.started([app("ha", group="Home", follows=True), app("db")], {"Home": "critical"}, {"lab/ha", "lab/db"})
+        self.assertNotIn("lab/ha", [a["id"] for a in began[0][4]["apps"]])
+        self.assertEqual([], [m for m, *_ in self.cluster.sent if m == "PATCH"])
+
+    def test_a_run_of_only_unreadable_followers_is_refused_plainly(self):
+        with self.assertRaisesRegex(ValueError, "couldn't be read"):
+            self.started([app("ha", group="Home", follows=True)], {"Home": "critical"}, {"lab/ha"})
+
+
 if __name__ == "__main__":
     unittest.main()
