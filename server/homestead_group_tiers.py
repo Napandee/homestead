@@ -356,3 +356,31 @@ def git_line(owner, cls):
     if cls:
         return f"{field}: {cls}"
     return f"remove {field}" + (" from the chart's values" if helm else "")
+
+
+def edit_tier(dep, choice, get=None):
+    """The tier Edit's choice means: a tier as it is, or "group" - its group's
+    tier, normal when the group has none. Refused for an app in no group (or
+    in Homestead's), and while the group tiers can't be read."""
+    if choice != "group":
+        return choice
+    group = group_of(dep)
+    if not group or group == OWN_GROUP:
+        raise ValueError(f"{_meta(dep).get('name', 'it')} isn't in a group; choose a tier")
+    tiers = stored(get)
+    if tiers is None:
+        raise ValueError("Homestead couldn't read the group tiers just now; try again, or choose a tier")
+    return tiers.get(group) or "normal"
+
+
+def edit_fields(dep, tier, get=None):
+    """What Edit shows for an app's tier: priority - "group" for an app that
+    follows its group, else the tier given (as tier_of reads it, or system,
+    missing, unknown); its group, "" for none or Homestead's own; and that
+    group's tier, "" for none or None when it can't be read. Sent back
+    unchanged, "group" keeps the app following."""
+    group = group_of(dep)
+    group = "" if group == OWN_GROUP else group
+    tiers = stored(get) if group else {}
+    return {"priority": "group" if group and follows(dep) and tier in TIERS else tier,
+            "priority_group": group, "priority_group_tier": None if tiers is None else tiers.get(group, "")}

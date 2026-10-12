@@ -68,3 +68,26 @@ test("a row whose group tier is unknown has its select disabled, says why, and i
   assert.match(html, /Group tiers couldn&#39;t be read|Group tiers couldn't be read/);
   assert.doesNotMatch(html, /was normal/);
 });
+
+const field = (c, w) => c.placementSection({ apart: [], together: [] }, { failover: "default", ...w }, [], []);
+
+test("Edit offers its group's tier first, for an app in a group", () => {
+  const html = field(load(), { priority: "group", priority_group: "Home", priority_group_tier: "critical" });
+  assert.match(html, /<option value="group" selected>From its group: critical, from Home<\/option>/);
+  assert.match(html, /takes Home's tier/);
+});
+
+test("a group with no tier is offered as normal", () => {
+  const html = field(load(), { priority: "low", priority_group: "Home", priority_group_tier: "" });
+  assert.match(html, /value="group"\s*>From its group: normal, Home has no tier/);
+  assert.match(html, /<option value="low" selected>/);
+});
+
+test("an app in no group has no group option", () => {
+  assert.doesNotMatch(field(load(), { priority: "normal", priority_group: "" }), /value="group"/);
+});
+
+test("an app Flux applies stays read-only, in a group too", () => {
+  const html = field(load(), { priority: "normal", priority_class: "x-normal", priority_owner: "Flux", priority_group: "Home", priority_group_tier: "critical" });
+  assert.doesNotMatch(html, /id="e_priority"/);
+});

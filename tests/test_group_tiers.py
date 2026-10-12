@@ -547,3 +547,155 @@ class JobTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import homestead_lifecycle as LC
+
+
+class EditTests(unittest.TestCase):
+    def setUp(self):
+        self.cluster = Cluster([], {"Home": "critical", "Media": "low"})
+        use(self, self.cluster)
+        patcher = mock.patch.object(LC, "kget", side_effect=self.cluster.kget)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def spec(self, dep):
+        return dep["spec"]["template"]["spec"]
+
+    def test_from_its_group_sets_the_marker_and_the_groups_class(self):
+        dep = app("ha", group="Home")
+        LC._apply_tier(dep, "group")
+        self.assertEqual("x-critical", self.spec(dep)["priorityClassName"])
+        self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group", "homestead.io/tier-class": "x-critical"},
+                         dep["metadata"]["annotations"])
+
+    def test_from_a_group_with_no_tier_is_normal_with_no_class(self):
+        dep = app("ha", group="Garage", cls="x-low")
+        LC._apply_tier(dep, "group")
+        self.assertNotIn("priorityClassName", self.spec(dep))
+        self.assertEqual({"homestead.io/group": "Garage", "homestead.io/tier": "group"}, dep["metadata"]["annotations"])
+
+    def test_choosing_a_tier_makes_it_the_apps_own(self):
+        dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
+        LC._apply_tier(dep, "low")
+        self.assertEqual("x-low", self.spec(dep)["priorityClassName"])
+        self.assertEqual({"homestead.io/group": "Home"}, dep["metadata"]["annotations"])
+
+    def test_from_its_group_is_refused_for_an_app_in_no_group(self):
+        with self.assertRaisesRegex(ValueError, "isn't in a group"):
+            LC._apply_tier(app("ha"), "group")
+
+    def test_from_its_group_waits_while_the_tiers_cant_be_read(self):
+        self.cluster.unreadable = http(500, MAP)
+        with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
+            LC._apply_tier(app("ha", group="Home"), "group")
+
+    def test_an_app_already_following_is_left_as_it_is_while_the_tiers_cant_be_read(self):
+        self.cluster.unreadable = http(500, MAP)
+        dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
+        before = copy.deepcopy(dep)
+        LC._apply_tier(dep, "group")
+        self.assertEqual(before, dep)
+
+    def test_a_class_that_isnt_on_the_cluster_is_left_alone(self):
+        dep = app("ha", group="Home", cls="gone")
+        LC._apply_tier(dep, "group")
+        self.assertEqual("gone", self.spec(dep)["priorityClassName"])
+        self.assertNotIn("homestead.io/tier", dep["metadata"]["annotations"])
+
+    def test_a_save_from_its_group_applies_the_groups_tier_now(self):
+        before = app("ha", group="Media", follows=True, cls="x-critical", wrote="x-critical")
+        after = copy.deepcopy(before)
+        LC._apply_tier(after, "group")
+        self.assertEqual("x-low", self.spec(after)["priorityClassName"])
+        self.assertTrue(LC.restarts(before, after), "the edit's review says it restarts")
+
+    def test_the_edit_form_offers_from_its_group(self):
+        dep = app("ha", group="Home", follows=True, cls="x-critical")
+        self.assertEqual({"priority": "group", "priority_group": "Home", "priority_group_tier": "critical"},
+                         GROUPS.edit_fields(dep, "critical", self.cluster.kget))
+
+    def test_the_edit_form_of_an_app_with_a_tier_of_its_own_shows_that_tier(self):
+        self.assertEqual({"priority": "low", "priority_group": "Garage", "priority_group_tier": ""},
+                         GROUPS.edit_fields(app("db", group="Garage", cls="x-low"), "low", self.cluster.kget))
+
+    def test_homesteads_own_group_offers_no_group(self):
+        self.assertEqual("", GROUPS.edit_fields(app("smb", group="Homestead"), "normal", self.cluster.kget)["priority_group"])
+
+    def test_a_system_or_missing_class_is_never_shown_as_from_its_group(self):
+        self.assertEqual("missing", GROUPS.edit_fields(app("ha", group="Home", follows=True, cls="gone"), "missing",
+                                                       self.cluster.kget)["priority"])
+
+    def test_settings_sent_back_unchanged_keep_a_follower_following(self):
+        dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
+        LC._apply_tier(dep, GROUPS.edit_fields(dep, "critical", self.cluster.kget)["priority"])
+        self.assertEqual("group", dep["metadata"]["annotations"]["homestead.io/tier"])
+
+    def test_the_tier_an_edit_choice_means(self):
+        self.assertEqual("critical", GROUPS.edit_tier(app("ha", group="Home"), "group", self.cluster.kget))
+        self.assertEqual("normal", GROUPS.edit_tier(app("ha", group="Garage"), "group", self.cluster.kget))
+        self.assertEqual("low", GROUPS.edit_tier(app("ha"), "low", self.cluster.kget))
+
+
+class EditRouteTests(unittest.TestCase):
+    """workloads.edit() with "From its group": the class is made before the
+    Deployment names it, and an unreadable map never blocks a follower."""
+
+    def setUp(self):
+        self.events, self.written = [], []
+
+    def run_edit(self, dep, body, unreadable=False):
+        import homestead_workloads as WL
+        cluster = Cluster([dep], {"Home": "critical"})
+        use(self, cluster)
+        if unreadable:
+            cluster.unreadable = http(500, MAP)
+        events, written = self.events, self.written
+
+        def apply(*args, **kwargs):
+            events.append("write")
+            written.append(copy.deepcopy(dep_after[0]))
+            return {"ok": True, "detail": "Saved"}
+
+        dep_after = [None]
+
+        def fake_plan(b):
+            prepared = LC.prepare_edit(b)
+            dep_after[0] = prepared["deployment"]
+            return {"deployment": dep_after[0]}, {}, {}
+
+        def ensure(tiers, lad=None):
+            events.append(("ensure", tiers))
+            return []
+
+        with mock.patch.object(WL, "kget", side_effect=cluster.kget), \
+                mock.patch.object(LC, "kget", side_effect=cluster.kget), \
+                mock.patch.object(WL, "guard_managed_smb"), mock.patch.object(WL, "guard_self"), \
+                mock.patch.object(WL, "edit_capacity_plan", side_effect=fake_plan), \
+                mock.patch.object(WL.CAPACITY_REVIEW, "enforce"), \
+                mock.patch.object(WL.RESTRUCTURE, "copies", return_value=[]), \
+                mock.patch.object(WL, "apply_reviewed_edit", side_effect=apply), \
+                mock.patch.object(WL.PRIORITY, "ensure", side_effect=ensure):
+            return WL.edit(mock.Mock(body={"ns": "lab", "name": dep["metadata"]["name"], **body}))
+
+    def test_from_its_group_makes_the_class_before_the_deployment_names_it(self):
+        self.run_edit(app("ha", group="Home"), {"priority": "group"})
+        self.assertEqual([("ensure", ("critical",)), "write"], self.events)
+        template = self.written[0]
+        self.assertEqual("x-critical", template["spec"]["template"]["spec"]["priorityClassName"])
+        self.assertEqual("group", template["metadata"]["annotations"]["homestead.io/tier"])
+        self.assertEqual("x-critical", template["metadata"]["annotations"]["homestead.io/tier-class"])
+
+    def test_a_follower_saved_while_the_tiers_cant_be_read_keeps_its_tier(self):
+        dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
+        self.run_edit(dep, {"priority": "group"}, unreadable=True)
+        self.assertEqual(["write"], self.events)
+        saved = self.written[0]
+        self.assertEqual("x-critical", saved["spec"]["template"]["spec"]["priorityClassName"])
+        self.assertEqual(dep["metadata"]["annotations"], saved["metadata"]["annotations"])
+
+    def test_a_non_follower_choosing_its_group_is_told_why_and_nothing_is_written(self):
+        with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
+            self.run_edit(app("ha", group="Home"), {"priority": "group"}, unreadable=True)
+        self.assertEqual([], self.events)

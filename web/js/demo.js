@@ -1747,7 +1747,8 @@ ssh_pwauth: true
         pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
-        priority: found.name === "home-assistant" ? "critical" : "normal", priority_class: found.name === "home-assistant" ? "homestead-critical" : "",
+        priority: found.group === "Home" ? "group" : "normal", priority_group: found.group && found.group !== "Homestead" ? found.group : "",
+        priority_group_tier: found.group_tier ?? "", priority_class: found.name === "home-assistant" ? "homestead-critical" : "",
         seed_configs: [], volumes: containers[0].volumes, containers };
     },
     "/api/portal": (url, init) => {
