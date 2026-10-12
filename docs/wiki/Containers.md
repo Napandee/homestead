@@ -745,9 +745,12 @@ group`. Putting an app in a group makes it follow, unless it already has a
 class of its own, Flux or Argo CD applies it, or it is Homestead itself
 (Homestead looks after its own tier). Moving it to another group
 keeps it following; ungrouping it stops it, and it keeps the class it runs
-with. In Edit → Placement, **From its group** (shown as, say, "critical, from
+with. Renaming a group moves its tier and its apps, and makes no app follow
+it. In Edit → Placement, **From its group** (shown as, say, "critical, from
 Home") follows the group, and a tier makes it the app's own. When this shipped,
-every app kept the tier it had as its own.
+every app kept the tier it had as its own. An app that was in a group before
+group tiers came keeps its own tier: to make it follow, choose **From its
+group** in Edit, or move it out of the group and back in.
 
 Setting a group's tier restarts nothing. **Priority tiers…** then lists every
 app with its tier, where it comes from, what it runs with now, and one status:

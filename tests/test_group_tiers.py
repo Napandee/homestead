@@ -297,6 +297,16 @@ class MembershipTests(unittest.TestCase):
         self.assertEqual({"House": "critical", "Media": "low"}, self.cluster.tiers())
         self.assertEqual("group", self.cluster.annotations("lab/frigate")["homestead.io/tier"])
 
+    def test_a_rename_makes_no_member_a_follower(self):
+        self.cluster = Cluster([app("frigate", group="Home", follows=True), app("ha", group="Home")], {"Home": "critical"})
+        use(self, self.cluster)
+        result = self.move("House", "frigate", "ha", renamed_from="Home")
+        self.assertEqual({"homestead.io/group": "House", "homestead.io/tier": "group"}, self.cluster.annotations("lab/frigate"))
+        self.assertEqual({"homestead.io/group": "House"}, self.cluster.annotations("lab/ha"), "it kept its own tier")
+        self.assertEqual([{"metadata": {"annotations": {"homestead.io/group": "House"}}}] * 2,
+                         [body for _, _, body, _ in self.cluster.deployment_writes()])
+        self.assertEqual(0, result["following"])
+
     def test_renaming_into_a_group_with_a_tier_keeps_that_tier(self):
         self.move("Media", "frigate", renamed_from="Home")
         self.assertEqual({"Media": "low"}, self.cluster.tiers())
@@ -511,6 +521,59 @@ class JobTests(unittest.TestCase):
         P.patch({"kind": "app", "ns": "lab", "name": "ha", "tier": "critical"})   # a ref stored before #430
         self.assertNotIn("metadata", self.last_patch())
 
+    def test_plan_rows_say_whether_the_job_keeps_an_app_following(self):
+        self.cluster = Cluster([app("ha", group="Home", follows=True), app("fr", group="Home", follows=True), app("db")],
+                               {"Home": "critical"})
+        use(self, self.cluster)
+        out = P.plan({"lab/fr": "low", "lab/db": "low"})
+        rows = {a["id"]: a for a in out["apps"]}
+        self.assertEqual((True, False, False), (rows["lab/ha"]["follow"], rows["lab/fr"]["follow"], rows["lab/db"]["follow"]))
+        flipped = [dict(a, follow=not a["follow"]) if a["id"] == "lab/ha" else a for a in out["apps"] if a["tier"] != a["current"]]
+        self.assertNotEqual(out["review_token"], P.review_token(flipped), "the token binds follow")
+
+    def test_a_group_tier_changed_between_review_and_start_is_refused(self):
+        self.cluster = Cluster([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        use(self, self.cluster)
+        out = P.plan()
+        changes = [a for a in out["apps"] if a["tier"] != a["current"]]
+        self.cluster.cm["data"]["group-tiers.json"] = json.dumps({"Home": "low"})
+        with self.assertRaisesRegex(ValueError, "review again"):
+            P.reviewed(changes, out["review_token"])
+
+    def test_a_follow_the_server_doesnt_see_is_refused(self):
+        self.cluster = Cluster([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        use(self, self.cluster)
+        changes = [dict(a, follow=False) for a in P.plan()["apps"] if a["tier"] != a["current"]]
+        with self.assertRaisesRegex(ValueError, "review again"):
+            P.reviewed(changes, P.review_token(changes))
+
+    def turn(self, apps):
+        """The job's turn for its first app, the classes already made."""
+        ref = {"apps": apps, "index": 0, "done": 0, "stage": "apply", "classes": True}
+        return P.status({"ref": ref}), ref
+
+    def test_an_app_ungrouped_before_its_turn_is_skipped_and_gets_no_marker(self):
+        apps = self.review([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        GROUPS.set_workload_groups({"group": "", "items": [{"ns": "lab", "name": "ha"}]})
+        sent = len(self.cluster.sent)
+        _, ref = self.turn(apps)
+        self.assertEqual(["lab/ha: it changed since the review, so it was left alone"], ref["skipped"])
+        self.assertEqual([], self.cluster.sent[sent:], "nothing written")
+        self.assertEqual({}, self.cluster.annotations("lab/ha"))
+
+    def test_an_app_moved_to_another_group_before_its_turn_is_skipped(self):
+        apps = self.review([app("ha", group="Home", follows=True), app("fr", group="Media")], {"Home": "critical"})
+        GROUPS.set_workload_groups({"group": "Media", "items": [{"ns": "lab", "name": "ha"}]})
+        _, ref = self.turn(apps)
+        self.assertEqual(["lab/ha: it changed since the review, so it was left alone"], ref["skipped"])
+
+    def test_an_app_unchanged_since_the_review_is_written_at_its_turn(self):
+        apps = self.review([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        (state, _, _), ref = self.turn(apps)
+        self.assertEqual(("running", "rolling", None), (state, ref["stage"], ref.get("skipped")))
+        self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group", "homestead.io/tier-class": "x-critical"},
+                         self.cluster.annotations("lab/ha"))
+
     def started(self, deps, tiers, change):
         """P.start() with the group map unreadable once the review is done."""
         self.cluster = Cluster(deps, tiers)
@@ -553,9 +616,6 @@ class AgentToolTests(unittest.TestCase):
         self.assertEqual({"priority": "group"}, TOOLS._clean({"priority": "group"}))
         self.assertEqual({}, TOOLS._clean({"priority": "self"}), "a class it doesn't set is still left out")
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 import homestead_lifecycle as LC
@@ -635,6 +695,10 @@ class EditTests(unittest.TestCase):
     def test_a_system_or_missing_class_is_never_shown_as_from_its_group(self):
         self.assertEqual("missing", GROUPS.edit_fields(app("ha", group="Home", follows=True, cls="gone"), "missing",
                                                        self.cluster.kget)["priority"])
+
+    def test_an_app_flux_applies_shows_its_own_tier_even_with_a_marker(self):
+        dep = app("web", group="Home", follows=True, cls="x-low", labels=FLUX)
+        self.assertEqual("low", GROUPS.edit_fields(dep, "low", self.cluster.kget)["priority"])
 
     def test_settings_sent_back_unchanged_keep_a_follower_following(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
@@ -718,3 +782,7 @@ class WorkloadListTests(unittest.TestCase):
         with mock.patch.object(server, "kget", side_effect=cluster.kget):
             rows = {w["name"]: w for w in server.WORKLOADS.get_workloads()}
         self.assertEqual(("critical", "", ""), (rows["ha"]["group_tier"], rows["plex"]["group_tier"], rows["web"]["group_tier"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

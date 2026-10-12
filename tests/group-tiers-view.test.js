@@ -113,3 +113,48 @@ test("the Tier… dialog says what a tier would do before it is saved", () => {
   assert.equal(c.groupTierLine(plan([row("lab/db", { group: "Home" })]), "Home", "low"), "No app follows Home: each has a tier of its own.");
   assert.equal(c.groupTierLine(null, "Home", "low"), "Homestead couldn't read the apps just now; the tier can still be saved.");
 });
+
+test("Set tiers sends back whether each app keeps following its group, as reviewed", async () => {
+  const c = load(), sent = [];
+  c.api = async (path, init) => { sent.push([path, JSON.parse(init.body)]); return {}; };
+  c.toast = () => {}; c.closeModal = () => {};
+  c.$ = sel => sel === "#prioRestart" ? { checked: true } : null;
+  vm.runInContext("PRIORITY", c).plan = { review_token: "t", apps: [row("lab/ha", { follows: true, follow: true, tier: "critical" }), row("lab/db", { follow: false, tier: "low" })] };
+  await c.window.priorityStart();
+  assert.deepEqual(sent[0][1].changes, [{ id: "lab/ha", current: "normal", tier: "critical", follow: true }, { id: "lab/db", current: "normal", tier: "low", follow: false }]);
+});
+
+function tierDialog(c, groupTier) {
+  const els = { "#gt_tier": { value: "" }, "#gtGo": { disabled: false }, "#gt_effect": {} };
+  let html = "";
+  c.modal = (_, body) => { html = body; };
+  c.api = async () => { throw new Error("no plan"); };
+  c.$ = sel => els[sel] || null; c.groupTierEffect = c.window.groupTierEffect;
+  vm.runInContext('WL_GROUP_KEYS = ["Home"]', c);
+  c.STATE.data.wl = [{ name: "ha", group: "Home", group_tier: groupTier }];
+  return { els, html: () => html };
+}
+
+test("the Tier… dialog preselects nothing, and waits for a choice, when the group's tier can't be read", async () => {
+  const c = load(), d = tierDialog(c, null);
+  await c.window.groupTier(0);
+  assert.doesNotMatch(d.html(), /<option value="(critical|normal|low|none)" selected/);
+  assert.match(d.html(), /<button[^>]*id="gtGo"[^>]*disabled|<button[^>]*disabled[^>]*id="gtGo"/);
+  assert.match(d.html(), /couldn(&#39;|')t read Home(&#39;|')s tier/);
+  assert.equal(d.els["#gtGo"].disabled, true, "Save stays off until a tier is chosen");
+  const sent = []; c.api = async (path, init) => { sent.push(init.body); return {}; };
+  await c.window.groupTierSave();
+  assert.deepEqual(sent, [], "nothing is saved without a choice");
+  d.els["#gt_tier"].value = "low";
+  c.window.groupTierEffect();
+  assert.equal(d.els["#gtGo"].disabled, false);
+});
+
+test("the Tier… dialog preselects the group's tier, or None, when it is known", async () => {
+  for (const [known, picked] of [["critical", "critical"], ["", "none"]]) {
+    const c = load(), d = tierDialog(c, known);
+    await c.window.groupTier(0);
+    assert.match(d.html(), new RegExp(`<option value="${picked}" selected`));
+    assert.doesNotMatch(d.html(), /couldn(&#39;|')t read/);
+  }
+});

@@ -230,7 +230,8 @@ def set_workload_groups(b):
     in it. An app that joins a group follows its tier (the marker), unless it
     has a tier of its own; one that leaves every group stops following; one
     moved between groups follows its new group. renamed_from: the group's old
-    name, when the Manage groups dialog renames it, so its tier moves too.
+    name, when the Manage groups dialog renames it, so its tier moves too; a
+    rename moves its apps, it doesn't join them, so none starts following.
     Only annotations change, so nothing restarts."""
     group = workload_group(b.get("group"))
     renamed_from = workload_group(b.get("renamed_from"))
@@ -247,7 +248,7 @@ def set_workload_groups(b):
         guard_managed_smb(ns, name)
         path = f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
         dep = ksend("PATCH", path, {"metadata": {"annotations": annotations}}, ctype="application/merge-patch+json")
-        if group and _joins(dep):
+        if group and not renamed_from and _joins(dep):
             ksend("PATCH", path, {"metadata": {"annotations": {FOLLOW: "group"}}}, ctype="application/merge-patch+json")
             following += 1
     ROUTER.forget("wl")
@@ -378,9 +379,11 @@ def edit_fields(dep, tier, get=None):
     follows its group, else the tier given (as tier_of reads it, or system,
     missing, unknown); its group, "" for none or Homestead's own; and that
     group's tier, "" for none or None when it can't be read. Sent back
-    unchanged, "group" keeps the app following."""
+    unchanged, "group" keeps the app following. An app Flux or Argo CD
+    applies shows its own tier, marker or not: it never follows."""
     group = group_of(dep)
     group = "" if group == OWN_GROUP else group
     tiers = stored(get) if group else {}
-    return {"priority": "group" if group and follows(dep) and tier in TIERS else tier,
+    following = group and follows(dep) and not managed_by(dep)   # Flux's or Argo CD's: shown as its own, read-only
+    return {"priority": "group" if following and tier in TIERS else tier,
             "priority_group": group, "priority_group_tier": None if tiers is None else tiers.get(group, "")}

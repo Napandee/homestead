@@ -2068,7 +2068,8 @@ ssh_pwauth: true
       const apps = rows.map(r => {
         const [ns, name] = r.id.replace(/^vm:/, "").split("/");
         const fallback = r.status === "restart" ? r.wanted : r.suggested && r.current === "normal" && !r.managed && r.source === "own" ? r.suggested : r.current;
-        return { ns, name, kind: "app", managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
+        const tier = r.managed ? r.current : (picks[r.id] || fallback);
+        return { ns, name, kind: "app", managed: "", ...r, tier, follow: r.follows && tier === r.wanted };
       }).sort((a, b) => (a.status === "in_line") - (b.status === "in_line") || order.indexOf(a.current) - order.indexOf(b.current) || a.id.localeCompare(b.id));
       const changes = apps.filter(a => a.tier !== a.current);
       return { apps, groups: [{ name: "Home", tier: "critical", apps: 2 }], changes: changes.length, max: 50,

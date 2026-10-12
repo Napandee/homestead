@@ -739,8 +739,8 @@ TOOLS = [
          "chosen as id=tier pairs (lab/web=critical,vm:lab/win=low).",
          {"chosen": S}, run=_get("/api/workloads/priority/plan", {"chosen": "chosen"})),
     Tool("set_priority_tiers", "Set priority tiers", "containers:manage", CHANGE,
-         "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current "
-         "and tier), review_token, restart: true}. Each app restarts once, one at a time; VMs take theirs at next start.",
+         "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current, "
+         "tier and follow), review_token, restart: true}. Each app restarts once, one at a time; VMs take theirs at next start.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/priority")),
     Tool("preview_reservations", "Preview reservations from use", "read", READ,
          "What each app used over the past week and the reservation suggested; chosen limits it to these app ids.",

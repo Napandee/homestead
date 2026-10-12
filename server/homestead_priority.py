@@ -400,6 +400,9 @@ def plan(chosen=None, role=None):
         row["tier"] = (chosen or {}).get(app_id, default) if not owner and row["status"] != "unknown_group" else current
         if row["tier"] not in TIERS:
             raise ValueError(f"{app_id}: the tier must be critical, normal or low")
+        # Whether the job keeps it following its group (else the tier set
+        # becomes its own); the review token binds it.
+        row["follow"] = row["follows"] and found["tier"] == row["tier"]
         apps.append(row)
     # What isn't in line first; then by the tier each has now, so a row stays
     # where it is as a tier is picked.
@@ -436,7 +439,7 @@ def plan(chosen=None, role=None):
 
 
 def review_token(changes):
-    rows = sorted([c["id"], c["current"], c["tier"]] for c in changes)
+    rows = sorted([c["id"], c["current"], c["tier"], bool(c.get("follow"))] for c in changes)
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()[:20]
 
 
@@ -456,8 +459,12 @@ def reviewed(changes, token, role=None):
     for c in changes:
         kind, ns, name = _split(c["id"])
         check(ns, name, c["current"], role, kind=kind)
+        following = _following(kind, ns, name, c["tier"], tiers)
+        # Whether it keeps following its group is part of what was reviewed.
+        if not following.get("unreadable") and bool(following.get("follow")) != bool(c.get("follow")):
+            raise ValueError(f"{c['id']}'s group tier changed since the review; review again")
         out.append({"id": c["id"], "kind": kind, "ns": ns, "name": name, "current": c["current"], "tier": c["tier"],
-                    **_following(kind, ns, name, c["tier"], tiers)})
+                    **following})
     return out
 
 
@@ -467,23 +474,30 @@ def _following(kind, ns, name, tier, tiers):
     becomes the app's own and the marker goes (marked). While the group tiers
     can't be read it is marked unreadable, and start() leaves it out of the
     job, saying so, whatever was reviewed (the plan shows it as unknown_group
-    and never ticks it). {} for every other app."""
+    and never ticks it). {} for a VM; an app's group and marker as they are
+    now go in seen, which check() compares at the app's turn in the job."""
     if kind == "vm":
         return {}
     dep = kget(_path(kind, ns, name))
+    seen = {"seen": _membership(dep)}
     if not GROUPS.follows(dep):
-        return {}
+        return seen
     wanted = GROUPS.resolve(dep, tiers, ladder())["tier"]
     if wanted is None:
-        return {"unreadable": True}
-    return {"marked": True, "follow": wanted == tier}
+        return {"unreadable": True, **seen}
+    return {"marked": True, "follow": wanted == tier, **seen}
 
 
-def check(ns, name, current, role=None, tier=None, kind="app"):
+def _membership(dep):
+    return {"group": GROUPS.group_of(dep), "marker": GROUPS.follows(dep)}
+
+
+def check(ns, name, current, role=None, tier=None, kind="app", seen=None):
     """One app as it is now: still one Homestead - and the person who asked -
     may change, and still in the tier it was reviewed in. Returns "applied"
     when it already has the new tier: a change whose answer was lost is waited
-    for, not counted as skipped."""
+    for, not counted as skipped. seen: its group and marker as reviewed
+    (#430); one that has changed since is left alone."""
     app_id = _row_id(kind, ns, name)
     try:
         dep = kget(_path(kind, ns, name))
@@ -497,6 +511,8 @@ def check(ns, name, current, role=None, tier=None, kind="app"):
     now = tier_of(_pod_spec(dep), ladder())[0]
     if tier and now == tier:
         return "applied"
+    if seen is not None and kind == "app" and _membership(dep) != seen:
+        raise ValueError("it changed since the review, so it was left alone")
     if now != current:
         raise ValueError(f"{app_id}'s tier changed since the review")
     return "ready"
@@ -555,7 +571,8 @@ def status(item):
     stage, now = ref.get("stage", "apply"), time.time()
     if stage == "apply":
         try:
-            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"], app.get("kind", "app")) == "ready":
+            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"], app.get("kind", "app"),
+                     app.get("seen")) == "ready":
                 patch(app)
         except (ValueError, PermissionError, urllib.error.HTTPError) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 404, 409, 422):

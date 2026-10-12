@@ -533,24 +533,29 @@ function groupTierLine(plan, group, tier) {
 window.groupTier = async index => {
   const group = WL_GROUP_KEYS[index];
   if (!group || group === NO_GROUP) return;
-  const now = (STATE.data.wl || []).find(w => w.group === group)?.group_tier || "none";
+  // null: the group tiers couldn't be read. Nothing is preselected then, so
+  // "None" is never saved by mistake; Save waits for a choice.
+  const known = (STATE.data.wl || []).find(w => w.group === group)?.group_tier, now = known === null ? "" : known || "none";
   Object.assign(GROUP_TIER, { group, plan: null });
   modal(`Tier for ${group}`, `<div class="ui-stack">
     ${UI.lead(esc(`Apps that follow ${group} take this tier. Apps with a tier of their own keep it.`))}
-    ${UI.field("Tier", `<select id="gt_tier" aria-label="Tier for ${esc(group)}" onchange="groupTierEffect()">${["critical", "normal", "low", "none"].map(t =>
+    ${UI.field("Tier", `<select id="gt_tier" aria-label="Tier for ${esc(group)}" onchange="groupTierEffect()">${now ? "" : '<option value="" selected disabled>Choose a tier</option>'}${["critical", "normal", "low", "none"].map(t =>
       `<option value="${t}" ${t === now ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select>`)}
+    ${now ? "" : `<p class="dim small">${esc(`Homestead couldn't read ${group}'s tier just now; choose the tier it should have.`)}</p>`}
     <p class="dim small" id="gt_effect" aria-live="polite">Reading the apps…</p>
-    ${UI.actions(UI.button("Save", "groupTierSave()", { kind: "pri", id: "gtGo", attrs: 'data-need="operator"' }), UI.cancel())}</div>`);
+    ${UI.actions(UI.button("Save", "groupTierSave()", { kind: "pri", id: "gtGo", attrs: 'data-need="operator"', disabled: !now }), UI.cancel())}</div>`);
   try { GROUP_TIER.plan = await api("/api/workloads/priority/plan"); } catch (e) { GROUP_TIER.plan = null; }
   groupTierEffect();
   window.applyRole?.();
 };
 window.groupTierEffect = () => {
-  const host = $("#gt_effect");
-  if (host) host.textContent = groupTierLine(GROUP_TIER.plan, GROUP_TIER.group, $("#gt_tier")?.value || "none");
+  const host = $("#gt_effect"), tier = $("#gt_tier")?.value, button = $("#gtGo");
+  if (button) button.disabled = !tier;
+  if (host) host.textContent = tier ? groupTierLine(GROUP_TIER.plan, GROUP_TIER.group, tier) : "Choose a tier to see what it would do.";
 };
 window.groupTierSave = async () => {
-  const { group } = GROUP_TIER, tier = $("#gt_tier")?.value || "none", button = $("#gtGo");
+  const { group } = GROUP_TIER, tier = $("#gt_tier")?.value, button = $("#gtGo");
+  if (!tier) return;      // nothing chosen yet: the tier couldn't be read
   if (button) button.disabled = true;
   try {
     const result = await api("/api/workloads/group-tier", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1400,7 +1405,7 @@ window.priorityStart = async () => {
   if (button) { button.disabled = true; button.textContent = "Starting…"; }
   try {
     await api("/api/workloads/priority", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier })), review_token: plan.review_token, restart: true }) });
+      body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier, follow: !!a.follow })), review_token: plan.review_token, restart: true }) });
     closeModal(); toast(`Setting the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
   } catch (e) {
     toast(e.message, "bad");
