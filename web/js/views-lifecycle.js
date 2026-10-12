@@ -227,6 +227,16 @@ window.failoverSelect = failoverSelect;
 /* Placement, at the three levels there are: the containers in one pod
    (always together - that is what a pod is), the copies of this workload,
    and other workloads. */
+/* Why an app's tier can't be chosen here (#429), or "" when it can. */
+function priorityFixed(w) {
+  if (w.priority === "self") return "Set by Homestead's own manifest, which every upgrade applies.";
+  if (w.priority_owner) return `Set priorityClassName where ${w.priority_owner} applies it.`;
+  if (w.priority === "system") return "Kubernetes' own class; it is left as it is.";
+  if (w.priority === "missing") return "This class isn't on the cluster: the app's new pods are refused until it is.";
+  if (w.priority === "unknown") return "Homestead couldn't read the cluster's classes just now; it is left as it is.";
+  return "";
+}
+
 function placementSection(p, w, nodes, containers) {
   const names = (containers || []).map(c => c.name);
   return `<section class="placement card flat" id="e_placement">
@@ -259,11 +269,10 @@ function placementSection(p, w, nodes, containers) {
           `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
         <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
     <div class="place-level"><div class="place-title">When the cluster is short of room</div>
-      <div class="place-grid failover"><div class="f">${w.priority === "other" || w.priority === "self"
+      <div class="place-grid failover"><div class="f">${priorityFixed(w)
           ? `<span class="mono">${esc(w.priority_class || "no class")}</span>`
           : prioritySelect("e_priority", w.priority || "normal", `aria-label="Tier when the cluster is short of room" aria-describedby="e_priority_help" onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}</div>
-        <div class="dim small" id="e_priority_help" aria-live="polite">${esc(w.priority === "self" ? "Set by Homestead's own manifest, which every upgrade applies."
-          : w.priority === "other" ? "A priority class Homestead does not keep; it is left as it is." : PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
+        <div class="dim small" id="e_priority_help" aria-live="polite">${esc(priorityFixed(w) || PRIORITY_HELP[w.priority || "normal"])}</div></div></div>
     <div class="note" id="e_place_note" hidden></div></section>`;
 }
 /* From a container's menu: the editor, opened at its placement. */

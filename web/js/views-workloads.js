@@ -1311,10 +1311,12 @@ function priorityHtml(plan) {
       : changes.length ? [restarting ? `Changes the tier of ${restarting} app${restarting === 1 ? "" : "s"}. Each restarts once, one at a time.` : "",
         vms ? `${vms} VM${vms === 1 ? " takes its" : "s take their"} new tier when ${vms === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
       : "Every app keeps its tier. Choose a tier to change one."),
+    // What the cluster's classes get wrong (#429), said once.
+    (plan.warnings || []).length ? UI.callout("warn", "Check first", `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`) : "",
     UI.section(`Apps and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
-    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is no tier at all, as every app has now. VMs take tiers too, from their next start. Homestead joins the critical tier once any app is in it, so none can evict it; it restarts once to do so.</p>
-      <p>Homestead makes the classes a tier needs first, if missing. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
+    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
+      <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
     changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting} apps now`) : "",
   ].join("");
 }

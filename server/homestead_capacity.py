@@ -56,12 +56,16 @@ def _daemon(pod):
     return any(o.get("kind") in ("DaemonSet", "Node") for o in (pod.get("metadata") or {}).get("ownerReferences") or [])
 
 
-def _need(pod):
+def _need(pod, lad=None):
+    """What a pod asks for, its tier (for the words), and its priority number
+    and whether it may preempt (for the ranking, as the scheduler ranks, #429)."""
     spec = pod.get("spec") or {}
-    tier = PRIORITY.tier_of(spec)[0]
-    # A class Homestead does not keep is placed with the normal tier.
+    lad = lad if lad is not None else PRIORITY.ladder()
+    number, preempts = PRIORITY.priority_of(spec, lad)
+    tier = PRIORITY.tier_of(spec, lad)[0]
     return {"cpu": RESOURCES.pod_request(spec, "cpu"), "mem": RESOURCES.pod_request(spec, "memory"),
-            "tier": tier if tier in ORDER else "normal"}
+            "tier": tier if tier in ORDER else "normal",
+            "prio": number if number is not None else lad["default"]["value"], "preempts": preempts}
 
 
 def _apps(rows):
@@ -74,6 +78,7 @@ def forecast(failed, nodes, pods, preview, owner):
     preview: homestead_impact.preview for that host; owner(pod) names the
     workload a pod runs for."""
     survivors, objects = {}, {}
+    lad = PRIORITY.ladder()
     for node in nodes:
         name = (node.get("metadata") or {}).get("name")
         if name == failed or not _takes_work(node):
@@ -96,7 +101,7 @@ def forecast(failed, nodes, pods, preview, owner):
             if (pod.get("status") or {}).get("phase") == "Pending":
                 pending.add(app_id)
             continue
-        need = {"id": app_id, **_need(pod)}
+        need = {"id": app_id, **_need(pod, lad)}
         if where in survivors:
             survivors[where]["pods"].append(need)
         elif where == failed and not _daemon(pod):
@@ -111,7 +116,7 @@ def forecast(failed, nodes, pods, preview, owner):
                 moving.append({**need, "to": [h for h in survivors if PLACE.may_run_on(again, objects[h])]})
             elif row.get("outcome") == "moves":
                 moving.append({**need, "to": row.get("to") or []})
-    moving.sort(key=lambda p: (ORDER[p["tier"]], -p["mem"], p["id"]))
+    moving.sort(key=lambda p: (-p["prio"], -p["mem"], p["id"]))
     before = {h["name"]: sum(p["mem"] for p in h["pods"]) for h in survivors.values()}
 
     def used(host, pods=None):
@@ -123,14 +128,14 @@ def forecast(failed, nodes, pods, preview, owner):
         return cpu + pod["cpu"] <= host["cpu_alloc"] and mem + pod["mem"] <= host["mem_alloc"]
 
     def preempt(host, pod):
-        """The pods pod would evict from host to fit, or None: those of a
-        lower tier, lowest first, keeping back any that still fit after."""
-        lower = [p for p in host["pods"] if ORDER[p["tier"]] > ORDER[pod["tier"]]]
-        kept = [p for p in host["pods"] if ORDER[p["tier"]] <= ORDER[pod["tier"]]]
+        """The pods pod would evict from host to fit, or None: those with a
+        lower priority number, lowest first, keeping back any that still fit after."""
+        lower = [p for p in host["pods"] if p["prio"] < pod["prio"]]
+        kept = [p for p in host["pods"] if p["prio"] >= pod["prio"]]
         if not fits(host, pod, kept):
             return None
         victims = []
-        for other in sorted(lower, key=lambda p: (ORDER[p["tier"]], -p["mem"])):
+        for other in sorted(lower, key=lambda p: (-p["prio"], -p["mem"])):
             if fits(host, pod, kept + [other]):
                 kept.append(other)
             else:
@@ -148,10 +153,10 @@ def forecast(failed, nodes, pods, preview, owner):
         if room:
             place(room[0], pod)
             continue
-        options = [] if pod["tier"] == "low" else [(h, v) for h in allowed for v in [preempt(h, pod)] if v is not None]
+        options = [] if not pod["preempts"] else [(h, v) for h in allowed for v in [preempt(h, pod)] if v is not None]
         if options:
             # The host where the fewest apps must go, then the least important of them.
-            host, victims = min(options, key=lambda o: (_apps(o[1]), -max(ORDER[v["tier"]] for v in o[1]) if o[1] else 0,
+            host, victims = min(options, key=lambda o: (_apps(o[1]), max(v["prio"] for v in o[1]) if o[1] else 0,
                                                         -(o[0]["mem_alloc"] - used(o[0])[1])))
             for victim in victims:
                 host["pods"].remove(victim)

@@ -727,19 +727,29 @@ VMs have tiers too, in the same **Priority tiers…** list. A VM takes its tier
 when it next starts, so setting one restarts nothing; until then it keeps the
 one it started with.
 
-Homestead is never evicted by a critical app: once anything runs in the
-critical tier, Homestead puts itself there too - pods of one priority never
-evict each other - and restarts once to do so, waiting until no job is
-running. It keeps that class through updates, and keeps any class you gave it
-yourself.
+Homestead is never evicted by an app: once anything ranks above the default,
+Homestead puts itself at least as high as the highest app - pods of one
+priority never evict each other - and restarts once to do so, waiting until
+no job is running. It moves itself up if an app later ranks higher, keeps
+its class through updates, and keeps any class you gave it yourself.
 
-Homestead makes the PriorityClasses `homestead-critical` (1000) and
-`homestead-low` (-1000, never preempts) the first time a tier needs one; it
-makes neither the cluster's default. An app's tier is read from its pod, so
-one set by hand or by Flux shows as it is. Apps Flux or Argo CD apply are
-shown but changed there, not here; a class Homestead does not keep is left
-alone; and Homestead's own tier is not offered, since it follows the
-apps' as above. A critical app's
+A tier is read from the number a class gives a pod, against the cluster's
+default class (or 0 without one): above it is critical, equal normal, below
+low. So a cluster's own classes - set by hand, by Flux or by a chart - show
+as the tier they really are. Homestead uses those classes where they fit:
+critical is the highest class above the default, low the highest below it
+(preferring one that never preempts).
+Only when none fits does it make `homestead-critical` or `homestead-low`,
+just above or below the default (with the value in the name, such as
+`homestead-critical-11000`, when the plain name is taken by an older class),
+the first time a tier needs one. It never changes or removes a class, and
+never makes one the cluster's default. Priority tiers says what is wrong, if
+anything: a class apps name that isn't on the cluster, or an older Homestead
+class apps still use.
+
+Apps Flux or Argo CD apply show their tier read-only: set it where they're
+applied. Kubernetes' own classes are left alone, and Homestead's own
+tier is not offered, since it follows the apps' as above. A critical app's
 suggested memory reservation has more headroom - 1.5 times its usual use -
 since a host short of memory evicts pods using more than they reserve before
 any within their reservation, whatever their tier; only among those does the

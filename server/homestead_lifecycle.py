@@ -545,18 +545,20 @@ def restarts(current, proposed):
 
 
 def _apply_priority(spec, tier):
-    """The tier chosen in Edit. Normal is no class at all; a class Homestead
-    does not keep is left as it is, since Edit does not offer to change it."""
+    """The tier chosen in Edit, written as the class the cluster's ladder uses
+    for it (#429). Normal is no class at all; Kubernetes' own class, or one
+    that isn't on the cluster, is left as it is, since Edit does not offer it."""
     if tier not in PRIORITY.TIERS:
         raise ValueError("the priority tier must be critical, normal or low")
-    current, _ = PRIORITY.tier_of(spec)
-    if current == "other" or current == tier:
+    lad = PRIORITY.ladder()
+    current, _ = PRIORITY.tier_of(spec, lad)
+    if current in ("system", "missing", "unknown") or current == tier:
         return
-    if tier == "normal":
+    cls = PRIORITY.class_for(tier, lad)
+    if cls is None:
         spec.pop("priorityClassName", None)
     else:
-        spec["priorityClassName"] = PRIORITY.TIERS[tier]["name"]
-    # Values copied in from a pod: admission refuses ones not the class's.
+        spec["priorityClassName"] = cls
     spec.pop("priority", None)
     spec.pop("preemptionPolicy", None)
 
