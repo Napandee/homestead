@@ -104,6 +104,23 @@ def _pod_status(namespace, pod):
         return None
 
 
+def _attached_node(namespace, pvc):
+    """The node a ReadWriteOnce claim is attached to, where the helper must
+    run to mount it beside its workload; "" when it can run anywhere, or
+    when that can't be read (the helper then starts as it always did)."""
+    try:
+        spec = (kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc}") or {}).get("spec") or {}
+        if "ReadWriteMany" in (spec.get("accessModes") or []) or not spec.get("volumeName"):
+            return ""
+        for attachment in kget("/apis/storage.k8s.io/v1/volumeattachments").get("items", []) or []:
+            source = (attachment.get("spec") or {}).get("source") or {}
+            if source.get("persistentVolumeName") == spec["volumeName"] and (attachment.get("status") or {}).get("attached"):
+                return attachment["spec"].get("nodeName", "")
+    except Exception:
+        return ""
+    return ""
+
+
 def open_session(namespace, pvc):
     """Start (or reuse) the helper pod that mounts this claim."""
     namespace, pvc = _name(namespace, "namespace"), _name(pvc, "volume name")
@@ -140,6 +157,10 @@ def open_session(namespace, pvc):
                                  "volumeMounts": [{"name": "data", "mountPath": MOUNT}]}],
                  "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": pvc}}]},
     }
+    node = _attached_node(namespace, pvc)
+    if node:
+        # Mounted where its workload has it, the claim opens while that runs.
+        body["spec"]["nodeSelector"] = {"kubernetes.io/hostname": node}
     ksend("POST", f"/api/v1/namespaces/{namespace}/pods", body)
     return _wait_ready(namespace, pod)
 
