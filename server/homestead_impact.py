@@ -9,6 +9,11 @@ Worked out from what Homestead already knows, read only:
   hosts as well keeps answering meanwhile.
 * a VM moves the same way, except one with a passthrough device, which stays
   with its device. On a drain, a migratable VM moves live instead.
+* a StatefulSet's pod is never started on another host while the old one
+  might still run: it stops where an app would, waits until its pod is
+  deleted - by hand, or by Longhorn's "Pods on a failed node" setting - and
+  moves once Longhorn deletes it. Where its volumes are stored, or that
+  setting, couldn't be read, it says so instead of guessing.
 * a Longhorn volume whose only healthy copy is on the host is unavailable, and
   lost if that disk is; one with copies elsewhere carries on with fewer.
 * an address the host answers for moves to another host within seconds.
@@ -24,6 +29,17 @@ FAILOVER_WORDS = {
     "wait": ("waits", "set to wait for its host to come back"),
     "default": ("moves", "after about 5 minutes, Kubernetes' default"),
 }
+
+# A StatefulSet's pod on a host that stops answering (#440): Kubernetes
+# never starts it elsewhere while the old one might still run, so it moves
+# only once something deletes it. Longhorn does, for pods holding its
+# volumes, when its node-down policy (homestead_lhcapacity.NODE_DOWN) says so.
+SET_DELETED_BY = ("delete-statefulset-pod", "delete-both-statefulset-and-deployment-pod")
+SET_WAITS = ("waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere "
+             "while the old one might still run.")
+SET_POINTER = " Longhorn can do this for you: Settings → Hardware and storage → Longhorn storage → Pods on a failed node."
+SET_MOVES = "moves once Longhorn deletes its pod, after about 5 minutes"
+ORDER = {"stops": 0, "waits": 1, "unknown": 2, "moves": 3}
 
 
 def required_hosts(podspec):
@@ -87,12 +103,61 @@ def _hardware_hosts(features, nodes, node, spec=None):
             and all((n.get("hardware") or {}).get(f) for f in features or []) and _tolerated(n, spec)]
 
 
-def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, nodes, placement=None, pvs=None):
+def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
+    """What becomes of a StatefulSet with a pod on node: the first rule that
+    matches - pinned here, its volume here, nowhere else to run, couldn't be
+    checked, waits for its pod to be deleted, or moves once Longhorn does."""
+    ns, name, spec = s["ns"], s["name"], s.get("spec") or {}
+    pods = s.get("pods") or []
+    here = [p for p in pods if p.get("node") == node]
+    claims = list(dict.fromkeys(c for p in here for c in p.get("claims") or []))
+    allowed = required_hosts(spec)
+    hosts = [h for h in _hardware_hosts([], nodes, node, spec) if h in others_ready]
+    if allowed is not None:
+        hosts = [h for h in hosts if h in allowed]
+    stop, notes = _storage_stops(volumes, ns, claims, node, hosts, pvs)
+    row = {"kind": "set", "ns": ns, "name": name, "icon": "", "notes": notes, "here": len(here),
+           "copies": s.get("replicas", len(pods)),
+           "keeps_answering": any(p.get("ready") for p in pods if p.get("node") != node)}
+    longhorn = [c for c in claims if _volume_for(volumes, ns, c) is not None]
+    # Longhorn deletes only pods that hold its volumes: one with none, or with
+    # any other, waits for a person whatever the policy says.
+    all_longhorn = bool(claims) and len(longhorn) == len(claims)
+    unread = []
+    if pvs is None and len(longhorn) < len(claims):
+        unread.append("where its volumes are stored")
+    if node_down is None and all_longhorn:
+        unread.append("Longhorn's Pods on a failed node setting")
+    if allowed is not None and not [h for h in allowed if h != node]:
+        row.update(outcome="stops", why=f"it may only run on {', '.join(sorted(allowed))}")
+    elif stop:
+        row.update(outcome="stops", why=stop)
+    elif not hosts:
+        reason = ("none is ready" if not others_ready
+                  else f"it may only run on {', '.join(sorted(allowed))}" if allowed is not None
+                  else "the others are cordoned, or have taints it doesn't tolerate")
+        row.update(outcome="stops", why="no other host can run it: " + reason)
+    elif unread:
+        row.update(outcome="unknown", why="couldn't be checked: " + " and ".join(unread))
+    elif not all_longhorn or node_down not in SET_DELETED_BY:
+        row.update(outcome="waits", why=SET_WAITS + (SET_POINTER if all_longhorn else ""))
+        if all_longhorn:
+            row["setting"] = "node_down"
+    else:
+        row.update(outcome="moves", why=SET_MOVES, to=hosts)
+    return row
+
+
+def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, nodes, placement=None,
+            sets=None, pvs=None, node_down=None):
     """Everything on node, and what becomes of it. placement: homestead_place's
     impact for node - its hardware, device and label checks decide where each
     app could go - when there is one; else the hardware features and placement
-    rules here do. pvs: where each claim's PersistentVolume is pinned
-    (_storage_stops)."""
+    rules here do.
+    sets: each StatefulSet with its pods (homestead_nodes._impact_sources),
+    None when they couldn't be read; pvs: where each claim's PersistentVolume
+    is pinned; node_down: Longhorn's policy for a host that is down, None when
+    it couldn't be read."""
     placed = {(w["ns"], w["name"]): w for w in (placement or {}).get("workloads") or []}
     specs = {(d["metadata"]["namespace"], d["metadata"]["name"]): d["spec"]["template"]["spec"] for d in deployments or []}
     raw = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in raw_vms or []}
@@ -159,6 +224,9 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
                        why="restarts on another host once this one is declared down" +
                            ("; on a drain it moves live, without stopping" if v.get("migratable") else ""))
         apps.append(row)
+    for s in sets or []:
+        if any(p.get("node") == node for p in s.get("pods") or []):
+            apps.append(_set_row(s, node, nodes, others_ready, volumes, pvs, node_down))
     at_risk, fewer = [], []
     for v in volumes or []:
         copies = v.get("copies") or []
@@ -170,11 +238,8 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
         (at_risk if not healthy_elsewhere else fewer).append(row)
     moved_addresses = [{"ip": a["ip"], "kind": a.get("kind", ""), "services": a.get("services") or []}
                        for a in addresses or [] if a.get("node") == node and a.get("kind") != "node"]
-    order = {"stops": 0, "waits": 1, "moves": 2}
-    apps.sort(key=lambda r: (order.get(r["outcome"], 3), r["kind"], r["name"]))
+    apps.sort(key=lambda r: (ORDER.get(r["outcome"], len(ORDER)), r["kind"], r["name"]))
     return {"node": node, "apps": apps, "at_risk": at_risk, "fewer_copies": fewer, "addresses": moved_addresses,
-            "others_ready": others_ready,
-            "counts": {"stops": sum(1 for r in apps if r["outcome"] == "stops"),
-                       "waits": sum(1 for r in apps if r["outcome"] == "waits"),
-                       "moves": sum(1 for r in apps if r["outcome"] == "moves"),
+            "others_ready": others_ready, "unread": [] if sets is not None else ["StatefulSets"],
+            "counts": {**{o: sum(1 for r in apps if r["outcome"] == o) for o in ORDER},
                        "at_risk": len(at_risk), "fewer_copies": len(fewer), "addresses": len(moved_addresses)}}

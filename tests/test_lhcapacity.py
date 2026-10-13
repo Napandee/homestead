@@ -118,5 +118,21 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(("PUT", LHCAP.HARVESTER_V2, "true"), (method, path, body["value"]))
 
 
+class NodeDownTests(unittest.TestCase):
+    """#440: the impact preview needs to know when the policy couldn't be
+    read, which _setting hides behind its default."""
+    PATH = f"{LHCAP.LH}/settings/{LHCAP.NODE_DOWN}"
+
+    def test_the_policy_is_read(self):
+        self.assertEqual("delete-statefulset-pod",
+                         LHCAP.node_down(lambda p: {"value": "delete-statefulset-pod"} if p == self.PATH else {}))
+        self.assertEqual("do-nothing", LHCAP.node_down(lambda p: {"value": "", "default": "do-nothing"}))
+
+    def test_a_failed_read_is_none_not_the_default(self):
+        def missing(path):
+            raise urllib.error.HTTPError(path, 404, "missing", None, None)
+        self.assertIsNone(LHCAP.node_down(missing))
+
+
 if __name__ == "__main__":
     unittest.main()

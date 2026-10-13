@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_place as place
+import homestead_lhcapacity as LHCAP
 
 
 def node(name, taints=None, cpu="4", memory="8Gi"):
@@ -94,6 +95,80 @@ class NodeImpactWiringTests(unittest.TestCase):
         result = IMPACT.preview("k3s-01", [], [], [], [], [], [{"ip": "192.0.2.50", "node": "k3s-01", "kind": "vip"}],
                                 [node("k3s-01"), node("k3s-02")])
         self.assertEqual(["192.0.2.50"], [a["ip"] for a in result["addresses"]])
+
+    def sources(self, fail=()):
+        """_impact_sources against a cluster with one StatefulSet in data and one
+        in kube-system; each path in fail is refused."""
+        import server
+
+        def pod(name, host, ready, ns="data", owner="postgres", kind="StatefulSet", phase="Running"):
+            return {"metadata": {"namespace": ns, "name": name,
+                                 "ownerReferences": [{"kind": kind, "name": owner, "controller": True}]},
+                    "spec": {"nodeName": host, "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": f"data-{name}"}},
+                                                           {"name": "tmp", "emptyDir": {}}]},
+                    "status": {"phase": phase, "conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+        pinned = {"nodeSelectorTerms": [{"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["k3s-01"]}]}]}
+        answers = {
+            "/apis/apps/v1/deployments": {"items": []},
+            "/apis/kubevirt.io/v1/virtualmachines": {"items": []},
+            "/apis/apps/v1/statefulsets": {"items": [
+                {"metadata": {"namespace": "data", "name": "postgres"},
+                 "spec": {"replicas": 3, "template": {"spec": {"nodeSelector": {"disk": "ssd"}}}}},
+                {"metadata": {"namespace": "kube-system", "name": "x-db"}, "spec": {"replicas": 1, "template": {"spec": {}}}}]},
+            "/api/v1/pods": {"items": [
+                pod("postgres-0", "k3s-01", True), pod("postgres-1", "k3s-02", False),
+                pod("postgres-2", "k3s-02", True, phase="Failed"),
+                pod("x-db-0", "k3s-01", True, ns="kube-system", owner="x-db"),
+                pod("web-abc-1", "k3s-01", True, owner="web-abc", kind="ReplicaSet")]},
+            "/api/v1/persistentvolumes": {"items": [
+                {"spec": {"claimRef": {"namespace": "data", "name": "data-postgres-0"}, "nodeAffinity": {"required": pinned}}},
+                {"spec": {"claimRef": {"namespace": "data", "name": "data-postgres-1"}}},
+                {"spec": {}}]},
+            f"{LHCAP.LH}/settings/{LHCAP.NODE_DOWN}": {"value": "delete-statefulset-pod"},
+        }
+
+        def kget(path, **kw):
+            if path in fail:
+                raise RuntimeError("forbidden")
+            return answers[path]
+        with mock.patch.object(server.NODES, "kget", side_effect=kget), \
+                mock.patch.object(server.NODES, "SYS_NS", {"kube-system"}):
+            return server.NODES._impact_sources()
+
+    def test_statefulsets_their_volumes_and_longhorns_policy_are_read_once(self):
+        found = self.sources()
+        self.assertEqual([{"ns": "data", "name": "postgres", "replicas": 3, "spec": {"nodeSelector": {"disk": "ssd"}},
+                           "pods": [{"name": "postgres-0", "node": "k3s-01", "ready": True, "claims": ["data-postgres-0"]},
+                                    {"name": "postgres-1", "node": "k3s-02", "ready": False, "claims": ["data-postgres-1"]}]}],
+                         found["sets"], "kube-system's is skipped, as is a finished pod and a Deployment's")
+        self.assertEqual({("data", "data-postgres-0"): ["k3s-01"], ("data", "data-postgres-1"): []}, found["pvs"])
+        self.assertEqual("delete-statefulset-pod", found["node_down"])
+        self.assertEqual(([], []), (found["deployments"], found["raw_vms"]))
+
+    def test_each_read_fails_on_its_own(self):
+        found = self.sources(fail={"/api/v1/persistentvolumes"})
+        self.assertIsNone(found["pvs"])
+        self.assertEqual(["postgres"], [s["name"] for s in found["sets"]])
+        self.assertIsNone(self.sources(fail={"/apis/apps/v1/statefulsets"})["sets"])
+        self.assertIsNone(self.sources(fail={"/api/v1/pods"})["sets"])
+        self.assertIsNone(self.sources(fail={f"{LHCAP.LH}/settings/{LHCAP.NODE_DOWN}"})["node_down"])
+
+    def test_the_preview_is_given_what_was_read(self):
+        import server
+        captured = {}
+        src = {"deployments": [], "raw_vms": [], "sets": [{"ns": "data", "name": "postgres", "replicas": 1, "spec": {}, "pods": []}],
+               "pvs": {("data", "data-postgres-0"): ["k3s-01"]}, "node_down": None}
+
+        def cached(key, ttl, fn):
+            return {"nodes": [node("k3s-01"), node("k3s-02")]}.get(key, [])
+
+        def preview(*args, **kw):
+            captured.update(kw)
+            return {}
+        with mock.patch.object(server, "cached", side_effect=cached), \
+                mock.patch.object(server.NODES.IMPACT, "preview", side_effect=preview):
+            server.NODES.node_impact("k3s-01", src)
+        self.assertEqual({"sets": src["sets"], "pvs": src["pvs"], "node_down": None}, captured)
 
 
 class DetachedCopiesTests(unittest.TestCase):
