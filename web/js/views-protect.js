@@ -22,17 +22,6 @@ const PROTECT_PLANS = [
       { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
-/* When a time on the cluster's clock is, for the person reading. */
-function localTime(date) {
-  return date.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
-}
-function nextRun(cron) {
-  const at = CRON.next(cron, new Date(), 1)[0];
-  if (!at) return '<span class="dim">never</span>';
-  const minutes = Math.max(1, Math.round((at - Date.now()) / 60000));
-  const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;
-  return `<span class="small" data-tip="${esc(localTime(at))}, your time">${soon}</span>`;
-}
 /* where: what says why a run failed - Longhorn's own jobs by default. */
 function lastRunText(j, where = "its pod's log in longhorn-system") {
   if (j.running) return '<span class="pill slim med">running</span>';
@@ -412,43 +401,6 @@ window.lhJobNewGroup = () => {
 /* Trims and cleanups keep nothing, so they have nothing to count. */
 const KEEPS = task => /^(snapshot|backup)(-force-create|-delete)?$/.test(task);
 window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").value); };
-/* ---------------- schedule builder ----------------
-   Shapes people use - every few minutes or hours, daily, some weekdays,
-   monthly - written to cron for Longhorn, with the next runs shown in the
-   reader's own time. Custom keeps the raw expression. */
-function scheduleBuilder(cron) {
-  const plan = CRON.toPlan(cron);
-  const time = (hour, minute) => `${String(hour ?? 2).padStart(2, "0")}:${String(minute ?? 0).padStart(2, "0")}`;
-  const kinds = [["minutes", "Every few minutes"], ["hours", "Every few hours"], ["daily", "Every day"], ["weekly", "On chosen days"], ["monthly", "Every month"], ["custom", "Custom cron"]];
-  return `<div class="f sched"><label>Schedule</label>
-    <div class="sched-row"><select id="ls_kind" onchange="scheduleChanged()">${kinds.map(([value, label]) =>
-      `<option value="${value}" ${plan.kind === value ? "selected" : ""}>${label}</option>`).join("")}</select>
-      <select id="ls_minutes" data-for="minutes">${CRON.MINUTE_STEPS.map(n => `<option value="${n}" ${plan.every === n ? "selected" : ""}>every ${n} min</option>`).join("")}</select>
-      <select id="ls_hours" data-for="hours">${CRON.HOUR_STEPS.map(n => `<option value="${n}" ${plan.kind === "hours" && plan.every === n ? "selected" : ""}>every ${n === 1 ? "hour" : `${n} hours`}</option>`).join("")}</select>
-      <label class="inline" data-for="hours">at minute <input id="ls_minute" type="number" min="0" max="59" value="${plan.kind === "hours" ? plan.minute : 0}"></label>
-      <select id="ls_day" data-for="monthly">${Array.from({ length: 28 }, (_, i) => i + 1).map(n => `<option value="${n}" ${plan.day === n ? "selected" : ""}>on day ${n}</option>`).join("")}</select>
-      <label class="inline" data-for="daily weekly monthly">at <input id="ls_time" type="time" value="${time(plan.hour, plan.minute)}"> UTC</label></div>
-    <div class="sched-days" data-for="weekly">${CRON.SHORT.map((day, i) => `<label class="daychip"><input type="checkbox" value="${i}" ${(plan.days || [0]).includes(i) ? "checked" : ""}><span>${day}</span></label>`).join("")}</div>
-    <input type="text" id="lj_cron" class="mono" data-for="custom" value="${esc(cron)}" placeholder="min hour day month weekday">
-    <div class="dim xs sched-next" id="ls_next"></div></div>`;
-}
-window.scheduleChanged = () => {
-  const kind = $("#ls_kind").value;
-  $$(".sched [data-for]").forEach(el => { el.hidden = !el.dataset.for.split(" ").includes(kind); });
-  if (kind !== "custom") {
-    const [hour, minute] = ($("#ls_time").value || "02:00").split(":").map(Number);
-    $("#lj_cron").value = CRON.fromPlan({ kind, hour, minute,
-      every: +(kind === "minutes" ? $("#ls_minutes").value : $("#ls_hours").value),
-      ...(kind === "hours" ? { minute: Math.max(0, Math.min(59, +$("#ls_minute").value || 0)) } : {}),
-      days: $$(".sched-days input:checked").map(box => +box.value), day: +$("#ls_day").value });
-  }
-  const cron = $("#lj_cron").value.trim(), runs = CRON.next(cron, new Date(), 3);
-  $("#ls_next").innerHTML = runs.length
-    ? `${esc(CRON.describe(cron))}. Next: ${runs.map(at => esc(localTime(at))).join(" · ")} <span class="dim">(your time)</span>`
-    : `<span class="bad-text">That cron expression never runs, or is not five fields.</span>`;
-};
-document.addEventListener("input", event => { if (event.target.closest(".sched")) scheduleChanged(); });
-document.addEventListener("change", event => { if (event.target.closest(".sched") && event.target.id !== "ls_kind") scheduleChanged(); });
 
 window.lhRun = async name => {
   try {
