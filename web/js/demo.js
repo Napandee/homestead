@@ -2035,18 +2035,18 @@ ssh_pwauth: true
     "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
     // Each host as if it failed; harvester-node2 is the issue's own example.
     "/api/capacity/forecast": { unreserved: 4, pending: 0, hosts: [
-      { node: "harvester-node1", verdict: "fits", moving: 5, unreserved: 1, waits: [], evicted: [],
+      { node: "harvester-node1", verdict: "fits", moving: 5, unreserved: 1, waiting_for_deletion: 0, waits: [], evicted: [],
         sentence: "If harvester-node1 fails, harvester-node3 would have 9.2 of 15 GiB of memory reserved. It fits.",
         hosts: [{ name: "harvester-node2", mem_gib: 8.1, mem_before_gib: 6.4, mem_alloc_gib: 15, cpu_m: 2100, cpu_alloc_m: 8000, full: 0.54, received: true },
           { name: "harvester-node3", mem_gib: 9.2, mem_before_gib: 5.9, mem_alloc_gib: 15, cpu_m: 2600, cpu_alloc_m: 8000, full: 0.613, received: true }] },
-      { node: "harvester-node2", verdict: "waits", moving: 9, unreserved: 2,
-        sentence: "If harvester-node2 fails, harvester-node1 would have 13.7 of 15 GiB of memory reserved; 3 low-tier apps would wait for room or be evicted.",
+      { node: "harvester-node2", verdict: "waits", moving: 9, unreserved: 2, waiting_for_deletion: 1,
+        sentence: "If harvester-node2 fails, harvester-node1 would have 13.7 of 15 GiB of memory reserved; 3 low-tier apps would wait for room or be evicted. 1 app waits until its pod is deleted; If this host goes down says why.",
         waits: [{ id: "ci/actions-runner", tier: "low", why: "low tier: it waits for room and evicts nothing", mem_gib: 2 },
           { id: "media/tdarr", tier: "low", why: "low tier: it waits for room and evicts nothing", mem_gib: 1.5 }],
         evicted: [{ id: "lab/paperless-consumer", tier: "low", why: "evicted from harvester-node1 to make room for lab/home-assistant", on: "harvester-node1", mem_gib: 0.75 }],
         hosts: [{ name: "harvester-node1", mem_gib: 13.7, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 5200, cpu_alloc_m: 8000, full: 0.913, received: true },
           { name: "harvester-node3", mem_gib: 12.9, mem_before_gib: 8.8, mem_alloc_gib: 15, cpu_m: 4100, cpu_alloc_m: 8000, full: 0.86, received: true }] },
-      { node: "harvester-node3", verdict: "tight", moving: 4, unreserved: 1, waits: [], evicted: [],
+      { node: "harvester-node3", verdict: "tight", moving: 4, unreserved: 1, waiting_for_deletion: 0, waits: [], evicted: [],
         sentence: "If harvester-node3 fails, harvester-node1 would have 13.6 of 15 GiB of memory reserved. Tight, but it fits.",
         hosts: [{ name: "harvester-node1", mem_gib: 13.6, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 4300, cpu_alloc_m: 8000, full: 0.907, received: true },
           { name: "harvester-node2", mem_gib: 11.2, mem_before_gib: 8.1, mem_alloc_gib: 15, cpu_m: 3800, cpu_alloc_m: 8000, full: 0.747, received: true }] }] },
@@ -2331,14 +2331,17 @@ ssh_pwauth: true
           { label: "Settings and other state", size: 150 * KB, files: 24, kept: "as long as it is needed" }] };
     },
     "/api/homestead/data/tidy": () => ({ ok: true, freed: 0, notes: [], detail: "Nothing to tidy", report: null }),
-    // If this host goes down (impact.js): one of each outcome.
+    // If this host goes down (impact.js): one of each outcome, and a StatefulSet that waits (#440).
     "/api/nodes/impact": url => {
       const node = url.searchParams.get("node") || "harvester-node2";
       return { node, others_ready: ["harvester-node1", "harvester-node3"].filter(n => n !== node),
-        counts: { stops: 1, waits: 1, moves: 2, at_risk: 1, fewer_copies: 1, addresses: 1 },
+        unread: [],
+        counts: { stops: 1, waits: 2, unknown: 0, moves: 2, at_risk: 1, fewer_copies: 1, addresses: 1 },
         apps: [
           { kind: "app", ns: "lab", name: "frigate", outcome: "stops", why: "no other host can run it: lacks the Google Coral USB", notes: [] },
           { kind: "app", ns: "lab", name: "paperless", outcome: "waits", why: "set to wait for its host to come back", notes: [] },
+          { kind: "set", ns: "data", name: "postgres", icon: "", here: 1, copies: 1, keeps_answering: false, outcome: "waits", setting: "node_down",
+            why: "waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere while the old one might still run. Longhorn can do this for you: Settings → Hardware and storage → Longhorn storage → Pods on a failed node.", notes: [] },
           { kind: "app", ns: "lab", name: "home-assistant", outcome: "moves", to: ["harvester-node1", "harvester-node3"], why: "about 15 seconds after the host stops answering", notes: [] },
           { kind: "vm", ns: "lab", name: "k3s-demo-server-1", os_logo: "ubuntu", outcome: "moves", to: ["harvester-node1"], migratable: true,
             why: "restarts on another host once this one is declared down; on a drain it moves live, without stopping", notes: [] }],
