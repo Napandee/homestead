@@ -144,5 +144,41 @@ class StorageAndAddressTests(AppTests):
         self.assertEqual({"stops": 1, "waits": 1, "moves": 1}, {k: res["counts"][k] for k in ("stops", "waits", "moves")})
 
 
+class HostLocalTests(unittest.TestCase):
+    """#440: a claim whose PersistentVolume is pinned to this host alone
+    (local-path) can never move with its app."""
+
+    def preview(self, workloads=(), vms=(), raw_vms=(), volumes=(), pvs=None):
+        return IMPACT.preview("node2", list(workloads), [], list(vms), list(raw_vms), list(volumes), [], NODES, pvs=pvs)
+
+    def row(self, result, name):
+        return next(r for r in result["apps"] if r["name"] == name)
+
+    def test_a_deployment_on_host_local_storage_stops(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], pvs={("lab", "web-data"): ["node2"]}), "web")
+        self.assertEqual(("stops", "its volume web-data is stored on node2", []), (r["outcome"], r["why"], r["notes"]))
+
+    def test_a_deployment_on_longhorn_is_unchanged(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], volumes=[vol("web-data", [("node2", True), ("node1", True)])],
+                                  pvs={("lab", "web-data"): []}), "web")
+        self.assertEqual(("moves", ["node1", "node3"], []), (r["outcome"], r["to"], r["notes"]))
+
+    def test_a_volume_pinned_to_several_hosts_is_not_host_local(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], pvs={("lab", "web-data"): ["node1", "node2"]}), "web")
+        self.assertEqual("moves", r["outcome"])
+        self.assertIn("not a Longhorn volume", r["notes"][0])
+
+    def test_unread_volumes_leave_todays_answer(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], pvs=None), "web")
+        self.assertEqual("moves", r["outcome"])
+        self.assertIn("whether other hosts can reach it is not known", r["notes"][0])
+
+    def test_a_vm_on_host_local_storage_stops(self):
+        vm = {"ns": "lab", "name": "x-db", "node": "node2", "running": True, "migratable": False, "disks": [{"claim": "x-db-disk"}]}
+        raw = {"metadata": {"namespace": "lab", "name": "x-db"}, "spec": {"template": {"spec": {"domain": {"devices": {}}}}}}
+        r = self.row(self.preview(vms=[vm], raw_vms=[raw], pvs={("lab", "x-db-disk"): ["node2"]}), "x-db")
+        self.assertEqual(("stops", "its volume x-db-disk is stored on node2"), (r["outcome"], r["why"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,8 +4,8 @@ Worked out from what Homestead already knows, read only:
 
 * an app on the host moves if another host can run it - one with the hardware
   it uses, that its placement allows, with a copy of each of its Longhorn
-  volumes - after its failover setting's delay; an app set to wait waits; one
-  with nowhere to go stops until the host is back. An app with copies on other
+  volumes, and none stored on the host itself (local-path) - after its failover setting's delay; an app set to wait
+  waits; one with nowhere to go stops until the host is back. An app with copies on other
   hosts as well keeps answering meanwhile.
 * a VM moves the same way, except one with a passthrough device, which stays
   with its device. On a drain, a migratable VM moves live instead.
@@ -46,8 +46,15 @@ def _volume_for(volumes, ns, claim):
     return next((v for v in volumes if v.get("namespace") == ns and v.get("pvc_name") == claim), None)
 
 
-def _storage_stops(volumes, ns, claims, node, others):
-    """Why the storage keeps it from moving to any of others, or ""; and notes."""
+def _storage_stops(volumes, ns, claims, node, others, pvs=None):
+    """Why the storage keeps it from moving to any of others, or ""; and notes.
+    pvs: (namespace, claim) -> the hosts its PersistentVolume is pinned to,
+    or None when they couldn't be read. A claim pinned to node alone is stored
+    on it (local-path) and never moves (#440)."""
+    if pvs is not None:
+        for claim in claims or []:
+            if pvs.get((ns, claim)) == [node]:
+                return f"its volume {claim} is stored on {node}", []
     notes = []
     for claim in claims or []:
         v = _volume_for(volumes, ns, claim)
@@ -80,11 +87,12 @@ def _hardware_hosts(features, nodes, node, spec=None):
             and all((n.get("hardware") or {}).get(f) for f in features or []) and _tolerated(n, spec)]
 
 
-def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, nodes, placement=None):
+def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, nodes, placement=None, pvs=None):
     """Everything on node, and what becomes of it. placement: homestead_place's
     impact for node - its hardware, device and label checks decide where each
     app could go - when there is one; else the hardware features and placement
-    rules here do."""
+    rules here do. pvs: where each claim's PersistentVolume is pinned
+    (_storage_stops)."""
     placed = {(w["ns"], w["name"]): w for w in (placement or {}).get("workloads") or []}
     specs = {(d["metadata"]["namespace"], d["metadata"]["name"]): d["spec"]["template"]["spec"] for d in deployments or []}
     raw = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in raw_vms or []}
@@ -106,7 +114,7 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
             allowed = required_hosts(spec)
             if allowed is not None:
                 hosts = [h for h in hosts if h in allowed]
-        stop, notes = _storage_stops(volumes, ns, w.get("claims"), node, hosts)
+        stop, notes = _storage_stops(volumes, ns, w.get("claims"), node, hosts, pvs)
         still = len([h for h in w.get("nodes") or [] if h != node])
         row = {"kind": "app", "ns": ns, "name": name, "icon": w.get("icon", ""), "notes": notes,
                "keeps_answering": still > 0, "self": bool(w.get("self"))}
@@ -137,7 +145,7 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
         allowed = required_hosts(tspec)
         if allowed is not None:
             hosts = [h for h in hosts if h in allowed]
-        stop, notes = _storage_stops(volumes, ns, claims, node, hosts)
+        stop, notes = _storage_stops(volumes, ns, claims, node, hosts, pvs)
         row = {"kind": "vm", "ns": ns, "name": name, "notes": notes, "os_logo": v.get("os_logo", ""), "icon": v.get("icon", ""),
                "migratable": bool(v.get("migratable"))}
         if passthrough:
