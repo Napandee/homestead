@@ -2298,7 +2298,7 @@ function generatedSecret() {
 }
 /* A new app's tier (#431), chosen as Edit chooses it. Normal writes no class. */
 function deployTierField(tier) {
-  tier = tier || "normal";
+  if (!["critical", "normal", "low"].includes(tier)) tier = "normal";
   return `<div class="f"><label>When the cluster is short of room</label>${prioritySelect("d_priority", tier,
     `aria-label="Tier when the cluster is short of room" aria-describedby="d_priority_help" onchange="$('#d_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}
     <div class="dim small" id="d_priority_help" aria-live="polite">${esc(PRIORITY_HELP[tier])}</div></div>`;

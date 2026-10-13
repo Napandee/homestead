@@ -1123,6 +1123,7 @@ def build_sidecar_deployment(cfg, current):
     service_cfg["volumes"] = []
     service_cfg["hardware"] = []
     service_cfg["gpu"] = False
+    service_cfg.pop("priority", None)   # a joined app keeps the tier it has
     _, service = build_deployment(service_cfg)
     if service:
         service["spec"]["selector"] = selector

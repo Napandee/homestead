@@ -34,3 +34,12 @@ test("collect sends the tier chosen, and normal when the field is missing", () =
   assert.equal(vm.runInContext("collect()", picked).priority, "low");
   assert.equal(vm.runInContext("collect()", load()).priority, "normal");
 });
+
+test("a tier the form does not know is shown as normal, never critical", () => {
+  for (const odd of ["group", "system", "bogus", "Critical", 5]) {
+    const html = load().deployTierField(odd);
+    assert.match(html, /<option value="normal" selected>/, String(odd));
+    assert.doesNotMatch(html, /<option value="critical" selected>/, String(odd));
+    assert.match(html, /Fits in turn, as every app does by default/, String(odd));
+  }
+});
