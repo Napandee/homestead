@@ -101,7 +101,7 @@ window.lhV2Reboot = async node => {
   lhV2ReturnToSetup();
 };
 window.lhV2Disable = async () => {
-  if(!(await ask('Disable Longhorn V2? This is refused while V2 volumes or block disks exist.'))) return;
+  if(!(await ask('Disable Longhorn V2? This is refused while V2 volumes or block disks exist.', { title: 'Disable Longhorn V2', ok: 'Disable V2', danger: true }))) return;
   try { await api('/api/longhorn/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({v2:false})}); await lhSettingsPaint(); }
   catch(e) { toast(e.message,'bad'); }
 };
