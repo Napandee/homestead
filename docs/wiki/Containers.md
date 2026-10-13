@@ -729,6 +729,16 @@ VMs have tiers too, in the same **Priority tiers…** list. A VM takes its tier
 when it next starts, so setting one restarts nothing; until then it keeps the
 one it started with.
 
+StatefulSets are in the list too, outside the system namespaces, as
+`ns/name` with a StatefulSet chip. A StatefulSet always has a tier of its own:
+groups don't apply, since it isn't a Containers app. One Flux or Argo CD
+applies reads "change in git" with the line; one Homestead may change, and
+whose tier differs, needs a restart. The job writes the class to its template
+and the StatefulSet restarts its pods one at a time; it waits up to ten
+minutes per pod. One that doesn't restart itself - `updateStrategy: OnDelete`,
+or a `partition` above 0, often a database operator's choice - takes its tier
+when its pods are next restarted. Homestead never deletes its pods.
+
 #### Group tiers
 
 A group can have a tier too: **Tier…** on its heading in Containers sets it to
@@ -784,6 +794,7 @@ change, so in every case the app's template changes and its pods are replaced.
 | Homestead | Edit, Priority tiers…, or its group's Tier… then Priority tiers… | Homestead changes the template; the app restarts once |
 | kubectl | `kubectl patch` of `spec.template.spec.priorityClassName` | A rollout; the app restarts |
 | A KubeVirt VM | `spec.template.spec.priorityClassName` on the VM | It takes effect at the VM's next start; nothing restarts now |
+| A StatefulSet, by Homestead | Priority tiers… | Its pods restart one at a time; with `OnDelete` or a partition, at their next restart |
 
 Homestead can't tell a plain Helm install from its own apps, so it treats them
 as its own. They get "needs a restart" and the reviewed job, and the next

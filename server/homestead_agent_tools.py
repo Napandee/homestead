@@ -740,13 +740,15 @@ TOOLS = [
     Tool("get_placement", "How hosts share the work", "read", READ,
          "The placement mode, each host's part, standby hosts, and how many apps reserve nothing.", run=_get("/api/placement")),
     Tool("preview_priority_tiers", "Preview priority tiers", "read", READ,
-         "Every app and VM with its tier, where it comes from (its own, its group's or the default), what it runs with "
-         "and its status (in_line, restart, git with the line to commit, outside, unknown_group), and each group's tier; "
-         "chosen as id=tier pairs (lab/web=critical,vm:lab/win=low).",
+         "Every app, StatefulSet and VM with its tier, where it comes from (its own, its group's or the default; a "
+         "StatefulSet's or VM's is always its own), what it runs with, its status (in_line, restart, git with the line "
+         "to commit, outside, unknown_group) and whether it restarts now, and each group's tier; "
+         "chosen as id=tier pairs (lab/web=critical,vm:lab/win=low,sts:lab/db=critical).",
          {"chosen": S}, run=_get("/api/workloads/priority/plan", {"chosen": "chosen"})),
     Tool("set_priority_tiers", "Set priority tiers", "containers:manage", CHANGE,
          "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current, "
-         "tier and follow), review_token, restart: true}. Each app restarts once, one at a time; VMs take theirs at next start.",
+         "tier and follow), review_token, restart: true}. Each app restarts once, one at a time, a StatefulSet one pod at a "
+         "time; VMs, and StatefulSets with OnDelete or a partition, take theirs when they next start.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/priority")),
     Tool("preview_reservations", "Preview reservations from use", "read", READ,
          "What each app used over the past week and the reservation suggested; chosen limits it to these app ids.",
