@@ -3005,6 +3005,7 @@ ssh_pwauth: true
     if (key === "/api/settings" && init?.method === "POST") {
       const sent = JSON.parse(init.body || "{}");
       if (sent.mcp) responses["/api/settings"].mcp = { enabled: !!sent.mcp.enabled };
+      if (sent.updates?.maintenance) responses["/api/settings"].updates.maintenance = sent.updates.maintenance;
       return new Response(JSON.stringify({ ok: true, ...responses["/api/settings"] }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];
