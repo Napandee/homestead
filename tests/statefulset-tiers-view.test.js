@@ -55,3 +55,18 @@ test("a StatefulSet's name is escaped", () => {
   assert.doesNotMatch(html, /<img src=x>/);
   assert.match(html, /lab\/&lt;img src=x&gt;/);
 });
+
+test("the toast names StatefulSets apart from apps", async () => {
+  const c = load(), toasts = [];
+  c.api = async () => ({ operation: { id: "op1" } });
+  c.toast = (m, tone) => toasts.push(m); c.closeModal = () => {};
+  c.$ = sel => sel === "#prioRestart" ? { checked: true } : null;
+  vm.runInContext("PRIORITY", c).plan = plan([row("lab/web", { tier: "low" }), row("lab/api", { tier: "low" }), row("sts:lab/postgres", { tier: "critical" })]);
+  await c.window.priorityStart();
+  assert.deepEqual(toasts, ["Setting the tier of 2 apps and 1 StatefulSet; follow it in Jobs"]);
+});
+
+test("What the tiers do says which partitions wait", () => {
+  const html = load().priorityHtml(plan([row("sts:lab/postgres")]));
+  assert.match(html, /OnDelete, or a partition at or above its replicas/);
+});

@@ -748,7 +748,8 @@ TOOLS = [
     Tool("set_priority_tiers", "Set priority tiers", "containers:manage", CHANGE,
          "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current, "
          "tier and follow), review_token, restart: true}. Each app restarts once, one at a time, a StatefulSet one pod at a "
-         "time; VMs, and StatefulSets with OnDelete or a partition, take theirs when they next start.",
+         "time; VMs, and StatefulSets with OnDelete or a partition at or above their replicas, take theirs when they "
+         "next start.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/priority")),
     Tool("preview_reservations", "Preview reservations from use", "read", READ,
          "What each app used over the past week and the reservation suggested; chosen limits it to these app ids.",

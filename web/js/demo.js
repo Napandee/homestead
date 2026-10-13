@@ -2068,7 +2068,7 @@ ssh_pwauth: true
         { ...own, id: "ci/actions-runner", current: "normal", wanted: "normal", suggested: "low", why: "looks like batch or CI work" },
         { ...own, id: "media/jellyfin", current: "normal", wanted: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
         { ...own, id: "vm:lab/windows-desktop", kind: "vm", current: "normal", wanted: "normal", suggested: "", why: "" },
-        { ...own, id: "sts:lab/postgres", kind: "sts", current: "normal", wanted: "critical", suggested: "critical", status: "restart",
+        { ...own, id: "sts:lab/postgres", kind: "sts", current: "normal", wanted: "normal", suggested: "critical",
           why: "looks like home automation, a password manager, a database, DNS or a tunnel" }];
       const order = ["critical", "normal", "low"];
       const apps = rows.map(r => {

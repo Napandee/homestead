@@ -367,7 +367,7 @@ class PriorityTests(unittest.TestCase):
         self.assertIn("10 minutes", message)
 
     def test_statefulsets_that_dont_restart_themselves_take_their_tier_at_their_next_restart(self):
-        for strategy in ({"type": "OnDelete"}, {"type": "RollingUpdate", "rollingUpdate": {"partition": 2}}):
+        for strategy in ({"type": "OnDelete"}, {"type": "RollingUpdate", "rollingUpdate": {"partition": 3}}):
             self.sent = []
             self.stss = {"lab/postgres": statefulset("postgres", replicas=3, strategy=strategy)}
             row = next(a for a in priority.plan()["apps"] if a["id"] == "sts:lab/postgres")
@@ -381,18 +381,71 @@ class PriorityTests(unittest.TestCase):
         self.stss = {"lab/postgres": statefulset("postgres", strategy={"type": "RollingUpdate", "rollingUpdate": {"partition": 0}})}
         self.assertTrue(next(a for a in priority.plan()["apps"] if a["id"] == "sts:lab/postgres")["restarts"], "partition 0 rolls")
 
-    def test_a_statefulset_flux_applies_reads_change_in_git_and_one_homestead_owns_needs_a_restart(self):
+    def test_a_statefulsets_status_is_as_an_own_tier_deployments(self):
+        # As own-tier Deployments: Flux's reads in line with the note, read-only;
+        # Homestead's reads in line with its suggestion ticked.
         flux = {"kustomize.toolkit.fluxcd.io/name": "apps"}
         self.stss = {"media/postgres": statefulset("postgres", ns="media", image="postgres:16", labels=flux),
                      "lab/postgres": statefulset("postgres", image="postgres:16")}
         rows = {a["id"]: a for a in priority.plan()["apps"]}
         git, ours = rows["sts:media/postgres"], rows["sts:lab/postgres"]
-        self.assertEqual(("git", "critical", "normal", "spec.template.spec.priorityClassName: homestead-critical"),
-                         (git["status"], git["wanted"], git["tier"], git["line"]))
-        self.assertEqual(("restart", "critical", "critical"), (ours["status"], ours["wanted"], ours["tier"]))
-        self.assertEqual("in_line", {a["id"]: a for a in priority.plan({"sts:lab/postgres": "normal"})["apps"]}["sts:lab/postgres"]["status"])
+        self.assertEqual(("in_line", "normal", "normal", "Flux"), (git["status"], git["wanted"], git["tier"], git["managed"]))
+        self.assertIn("set priorityClassName there", git["note"])
+        self.assertNotIn("line", git)
+        self.assertEqual(("in_line", "normal", "critical", "critical"), (ours["status"], ours["wanted"], ours["tier"], ours["suggested"]))
         with self.assertRaisesRegex(ValueError, "not one Homestead changes"):
             priority.check("media", "postgres", "normal", kind="sts")
+
+    def test_a_picked_tier_never_moves_a_statefulsets_row(self):
+        self.stss = {"lab/x-db": statefulset("x-db")}
+        before = [a["id"] for a in priority.plan()["apps"]]
+        picked = priority.plan({"sts:lab/x-db": "critical"})
+        self.assertEqual(before, [a["id"] for a in picked["apps"]])
+        self.assertEqual("in_line", next(a for a in picked["apps"] if a["id"] == "sts:lab/x-db")["status"])
+
+    def test_a_tier_picked_for_a_statefulset_flux_applies_is_refused(self):
+        self.stss = {"media/postgres": statefulset("postgres", ns="media", labels={"kustomize.toolkit.fluxcd.io/name": "apps"})}
+        row = next(a for a in priority.plan({"sts:media/postgres": "critical"})["apps"] if a["id"] == "sts:media/postgres")
+        self.assertEqual(("normal", "in_line"), (row["tier"], row["status"]), "a pick never reaches it")
+        change = [{"id": "sts:media/postgres", "current": "normal", "tier": "critical", "follow": False}]
+        with self.assertRaisesRegex(ValueError, "not one Homestead changes"):
+            priority.reviewed(change, priority.review_token(change))
+        self.assertFalse([s for s in self.sent if s[0] != "POST"])
+
+    def test_a_partition_below_the_replicas_restarts_those_pods_now_and_the_job_waits(self):
+        # Kubernetes updates every pod at or above the partition at once.
+        sts = statefulset("postgres", replicas=3, strategy={"type": "RollingUpdate", "rollingUpdate": {"partition": 1}})
+        self.stss = {"lab/postgres": sts}
+        self.assertTrue(next(a for a in priority.plan()["apps"] if a["id"] == "sts:lab/postgres")["restarts"])
+        item = self.sts_job("sts:lab/postgres", "low")
+        self.assertIn("it restarts", priority.status(item)[2])
+        self.assertEqual("rolling", item["ref"]["stage"])
+        sts = self.stss["lab/postgres"]
+        sts["status"].update(updateRevision="postgres-2", updatedReplicas=1, readyReplicas=2)
+        self.assertIn("Waiting for", priority.status(item)[2])
+        sts["status"].update(updatedReplicas=2, readyReplicas=2)
+        self.assertIn("Waiting for", priority.status(item)[2], "a pod is still starting")
+        sts["status"]["readyReplicas"] = 3
+        self.assertIn("runs as low", priority.status(item)[2], "pod 0 stays on the old revision while partitioned")
+        self.assertEqual(["PATCH"], [s[0] for s in self.sent if s[0] != "POST"], "no pod is ever deleted")
+
+    def test_the_job_and_its_summary_name_statefulsets(self):
+        self.stss = {"lab/x-db": statefulset("x-db")}
+        started, jobs = [], mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: [],
+                                      start=lambda *a: started.append(a) or {"id": "op1"})
+        plan = priority.plan({"sts:lab/x-db": "critical", "lab/home-assistant": "normal"})
+        body = {"changes": [a for a in plan["apps"] if a["tier"] != a["current"]], "review_token": plan["review_token"], "restart": True}
+        with mock.patch.object(priority, "operations", jobs):
+            priority.start(body, "operator")
+        self.assertEqual("Set the priority tier of 1 app and 1 StatefulSet", started[0][1])
+        ref = started[0][4]
+        item = {"ref": ref}
+        while True:
+            state, _, message = priority.status(item)
+            if state != "running":
+                break
+        self.assertEqual("Set the tier of 1 app and 1 StatefulSet", message)
+        self.assertEqual("Stopped after setting 1 app and 1 StatefulSet", priority.cancel_run(item, None))
 
     def test_a_cluster_without_statefulsets_is_unchanged(self):
         self.stss = {}

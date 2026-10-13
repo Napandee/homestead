@@ -1412,7 +1412,7 @@ function priorityHtml(plan) {
       `<li><b>${esc(g.name)}</b> ${esc(g.tier === null ? "tier unknown" : g.tier || "no tier")} · ${g.apps} app${g.apps === 1 ? "" : "s"}</li>`).join("")}</ul>`) : "",
     UI.section(`Apps, StatefulSets and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
-    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. StatefulSets take tiers of their own, never a group's; one that waits for its pods to be deleted (OnDelete, or a partition) takes its tier when they next restart, and Homestead never deletes them. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
+    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. StatefulSets take tiers of their own, never a group's; one that waits for its pods to be deleted (OnDelete, or a partition at or above its replicas) takes its tier when they next restart, and Homestead never deletes them. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
       <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again, and a StatefulSet one pod at a time. If one does not come back within ten minutes - for a StatefulSet, ten per pod - the job stops and the rest are not changed.</p>`, false, "prio-how"),
     changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting}${sets ? "" : " apps"} now`) : "",
   ].join("");
@@ -1432,7 +1432,9 @@ window.priorityStart = async () => {
   try {
     await api("/api/workloads/priority", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier, follow: !!a.follow })), review_token: plan.review_token, restart: true }) });
-    closeModal(); toast(`Setting the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+    const sets = changes.filter(a => a.kind === "sts").length, apps = changes.length - sets;
+    const named = [apps || !sets ? `${apps} app${apps === 1 ? "" : "s"}` : "", sets ? `${sets} StatefulSet${sets === 1 ? "" : "s"}` : ""];
+    closeModal(); toast(`Setting the tier of ${named.filter(Boolean).join(" and ")}; follow it in Jobs`, "ok");
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set tiers"; }

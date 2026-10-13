@@ -26,8 +26,8 @@ waits rather than guess.
 VMs have tiers too, set in their template: a VM takes its tier when it next
 starts, so setting one restarts nothing. StatefulSets have tiers of their own,
 never a group's: one rolls its pods one at a time, and one that doesn't restart
-itself (OnDelete, or a partition) takes its tier when its pods are next
-restarted - Homestead never deletes them.
+itself (OnDelete, or a partition at or above its replicas) takes its tier
+when its pods are next restarted - Homestead never deletes them.
 
 Changing a tier changes the pod template, so the app restarts once. Like the
 reservations (homestead_requests), the tiers are reviewed as a list and
@@ -351,13 +351,19 @@ def _path(kind, ns, name):
         kind, f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
 
 
-def _rolls(sts):
-    """Whether a StatefulSet restarts its pods itself when its template
-    changes: not with OnDelete, nor with a partition above 0 - someone (often
-    a database operator) restarts those, and Homestead leaves that to them."""
+def _partition(sts):
     strategy = (sts.get("spec") or {}).get("updateStrategy") or {}
-    return (strategy.get("type") != "OnDelete"
-            and int((strategy.get("rollingUpdate") or {}).get("partition") or 0) <= 0)
+    return int((strategy.get("rollingUpdate") or {}).get("partition") or 0)
+
+
+def _rolls(sts):
+    """Whether a StatefulSet restarts pods itself when its template changes.
+    Not with OnDelete, nor with a partition at or above its replicas: someone
+    (often a database operator) restarts those, and Homestead leaves that to
+    them. A lower partition restarts the pods at or above it at once."""
+    strategy = (sts.get("spec") or {}).get("updateStrategy") or {}
+    partition = _partition(sts)
+    return strategy.get("type") != "OnDelete" and not (partition > 0 and partition >= _replicas(sts))
 
 
 def _replicas(obj):
@@ -416,11 +422,9 @@ def plan(chosen=None, role=None):
             row["note"] = (f"{owner['by']} applies it{where}; set priorityClassName there" if owner.get("detected")
                            else f"marked as updated by {owner['by']}; set priorityClassName there")
         found = GROUPS.resolve(dep, tiers, lad, kind=kind, managed=bool(owner))
-        if kind == "sts":
-            found = _sts_wanted(app_id, found, suggested, (chosen or {}).get(app_id), lad)
         row.update(group=group, follows=kind == "app" and not owner and GROUPS.follows(dep),
                    wanted=found["tier"], source=found["source"],
-                   status=_sts_status(found, owner) if kind == "sts" else GROUPS.status(dep, found, owner),
+                   status=GROUPS.status(dep, found, owner),
                    restarts=kind == "app" or (kind == "sts" and _rolls(dep)))
         if row["status"] == "git":
             row["line"] = GROUPS.git_line(owner, found["class"])
@@ -469,29 +473,6 @@ def plan(chosen=None, role=None):
     groups = [{"name": g, "tier": None if tiers is None else tiers.get(g, ""), "apps": n} for g, n in sorted(members.items())]
     return {"apps": apps, "skipped": sorted(skipped, key=lambda s: s["id"]), "max": MAX_APPS,
             "changes": len(changes), "review_token": review_token(changes), "warnings": warnings, "groups": groups}
-
-
-def _sts_wanted(sts_id, found, suggested, picked, lad):
-    """A StatefulSet's tier is its own, never a group's: the one picked for
-    it, else its suggestion while it is at normal, else what it runs."""
-    if picked is not None and picked not in TIERS:
-        raise ValueError(f"{sts_id}: the tier must be critical, normal or low")
-    runs = found["runs"]
-    tier = picked or (suggested if suggested and runs == "normal" else runs)
-    if tier == runs:
-        return found
-    try:
-        cls = class_for(tier, lad)
-    except ValueError:
-        cls = None   # no class can rank there; the warnings say so
-    return {**found, "tier": tier, "class": cls}
-
-
-def _sts_status(found, owner):
-    """in_line, git (Flux or Argo CD applies it) or restart."""
-    if found["tier"] == found["runs"]:
-        return "in_line"
-    return "git" if owner else "restart"
 
 
 def review_token(changes):
@@ -600,11 +581,17 @@ def patch(app):
 # --------------------------------------------------------------- the job
 def _settled(ns, name, kind="app"):
     """Whether its restart is over: every replica updated and ready - for a
-    StatefulSet also on its new revision (replicas default to 1 there)."""
+    StatefulSet also on its new revision (replicas default to 1 there). A
+    partitioned one never fully is: the pods at or above its partition are
+    updated, and every pod is ready."""
     obj = kget(_path(kind, ns, name))
     status, spec, meta = obj.get("status") or {}, obj.get("spec") or {}, obj.get("metadata") or {}
     if int(status.get("observedGeneration") or 0) < int(meta.get("generation") or 0):
         return False
+    if kind == "sts" and _partition(obj) > 0:
+        want = _replicas(obj)
+        return (int(status.get("updatedReplicas") or 0) >= want - _partition(obj)
+                and int(status.get("readyReplicas") or 0) == int(status.get("replicas") or 0) == want)
     if kind == "sts" and status.get("currentRevision") != status.get("updateRevision"):
         return False
     want = _replicas(obj) if kind == "sts" else int(spec.get("replicas") or 0)
@@ -625,7 +612,7 @@ def status(item):
         return "running", 0, "Priority classes ready" + (f"; {'; '.join(ref['notes'])}" if ref["notes"] else "")
     if i >= len(apps):
         skipped = ref.get("skipped") or []
-        return "succeeded", 100, (f"Set the tier of {done} app{'' if done == 1 else 's'}"
+        return "succeeded", 100, (f"Set the tier of {_named(done - ref.get('done_sts', 0), ref.get('done_sts', 0))}"
                                   + (f"; left {len(skipped)}: " + "; ".join(skipped[:4]) if skipped else ""))
     app = apps[i]
     progress = int(100 * i / max(1, len(apps)))
@@ -652,7 +639,7 @@ def status(item):
             # As it is now: its pods are never deleted to apply a tier.
             sts = kget(_path(kind, app["ns"], app["name"]))
             if not _rolls(sts):
-                ref.update(index=i + 1, done=done + 1)
+                ref.update(index=i + 1, done=done + 1, done_sts=ref.get("done_sts", 0) + 1)
                 return ("running", int(100 * (i + 1) / len(apps)),
                         f"{app['name']} takes {app['tier']} when its pods are next restarted")
             limit = PER_POD * max(1, _replicas(sts))   # it restarts its pods in turn
@@ -661,6 +648,8 @@ def status(item):
     if stage == "rolling":
         if _settled(app["ns"], app["name"], app.get("kind", "app")):
             ref.update(index=i + 1, stage="apply", done=done + 1)
+            if app.get("kind") == "sts":
+                ref["done_sts"] = ref.get("done_sts", 0) + 1
             return "running", int(100 * (i + 1) / len(apps)), f"{app['id']} runs as {app['tier']}"
         limit = ref.get("limit", PER_POD)
         if now - ref.get("started", now) > limit:
@@ -678,8 +667,16 @@ def cancel_plan(item):
 
 
 def cancel_run(work, chosen):
-    done = (work.get("ref") or {}).get("done", 0)
-    return f"Stopped after setting {done} app{'' if done == 1 else 's'}"
+    ref = work.get("ref") or {}
+    done, sets = ref.get("done", 0), ref.get("done_sts", 0)
+    return f"Stopped after setting {_named(done - sets, sets)}"
+
+
+def _named(apps, sets):
+    """"2 apps and 1 StatefulSet"; apps alone (VMs among them) as before."""
+    words = [f"{apps} app{'' if apps == 1 else 's'}" if apps or not sets else "",
+             f"{sets} StatefulSet{'' if sets == 1 else 's'}" if sets else ""]
+    return " and ".join(w for w in words if w)
 
 
 def start(body, role=None):
@@ -700,7 +697,8 @@ def start(body, role=None):
     apps = [a for a in apps if not a.get("unreadable")]
     if not apps:
         raise ValueError("The group tiers couldn't be read just now, so no app was changed; try again shortly")
-    return {"operation": operations.start(KIND, f"Set the priority tier of {len(apps)} app{'' if len(apps) == 1 else 's'}",
+    sets = sum(1 for a in apps if a.get("kind") == "sts")
+    return {"operation": operations.start(KIND, f"Set the priority tier of {_named(len(apps) - sets, sets)}",
                                           {"kind": "Deployment", "name": "priority"}, "/containers",
                                           {"apps": apps, "index": 0, "done": 0, "stage": "apply", "role": role, "skipped": left},
                                           "Making the priority classes")}
