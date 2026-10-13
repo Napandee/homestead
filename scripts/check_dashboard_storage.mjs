@@ -8,6 +8,28 @@ try {
   const context=await browser.newContext({...devices["Pixel 7"]});
   const page=await context.newPage(),errors=[];
   page.on("pageerror",e=>errors.push(e.message));
+  const navigations=[];let loads=0;
+  page.on("framenavigated",frame=>{ if(frame===page.mainFrame()) navigations.push(frame.url()); });
+  page.on("load",()=>loads++);
+  // Open a Settings section and wait until it shows. The CI runner has
+  // replaced the page now and then around this step (#450): when that
+  // happens, say which navigations came before it and open it once more.
+  const openSettings=async(id,shown)=>{
+    for(let attempt=1;;attempt++) {
+      await page.locator(".settings-nav button").first().waitFor();
+      const before=loads;
+      try {
+        await page.evaluate(section=>settingsGo(section),id);
+        await shown.waitFor();
+        return;
+      } catch(error) {
+        const replaced=/Execution context was destroyed/.test(error.message) || loads>before;
+        if(attempt>1 || !replaced) throw error;
+        console.log(`Settings ${id}: the page was replaced after ${navigations.slice(-4).join(" -> ")}; opening it once more`);
+        await page.waitForLoadState("load");
+      }
+    }
+  };
   await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
   await page.locator(".node-compact-grid").waitFor();
   await page.evaluate(async()=>{
@@ -15,7 +37,11 @@ try {
     const items=Dashboard.defaults().map(item=>item.id==='nodes'?{...item,display:'detailed'}:item);
     await api('/api/auth/preferences/dashboard',{method:'POST',body:JSON.stringify({revision:prefs.revision,layout:{version:1,items}})});
   });
-  await page.evaluate(()=>{
+  // The overview is faked for every document the page loads, so a reload
+  // mid-run (#450) keeps the figures the checks below look for. It wraps the
+  // app's own fetch (the demo's, with ?demo=1), so it goes on once the page
+  // has loaded rather than before its scripts run.
+  const fakeOverview=()=>{
     const original=window.fetch;
     window.fetch=async(input,init)=>{
       const response=await original(input,init);
@@ -30,7 +56,9 @@ try {
       data.top_mem=data.top_cpu.map((w,i)=>({...w,mem_mb:2048-i*200}));
       return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}});
     };
-  });
+  };
+  await context.addInitScript(`addEventListener("load",${fakeOverview})`);
+  await page.evaluate(fakeOverview);
   for(const size of [{width:1440,height:1000},{width:412,height:839},{width:360,height:640}]) {
     await page.setViewportSize(size);
     await page.evaluate(()=>go("dash"));
@@ -67,9 +95,8 @@ try {
     if(size.width<900) {
       await page.evaluate(()=>go("settings"));
       await page.locator(".settings-layout").waitFor();
-      await page.evaluate(()=>settingsGo("you"));
       const back=page.getByRole("button",{name:"‹ All settings",exact:true});
-      await back.waitFor();
+      await openSettings("you",back);
       await page.screenshot({path:`release-assets/pages/dashboard-storage/settings-${size.width}.png`});
       await back.click();
       assert.equal(await page.locator(".settings-layout").getAttribute("data-open"),"0");
