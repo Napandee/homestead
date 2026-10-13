@@ -1140,7 +1140,8 @@ behavior deterministic.
 Data Protection drives Longhorn's own recurring jobs rather than a scheduler of
 Homestead's: a job has a task (snapshot, backup, trim, cleanup), a schedule, how
 many to keep, and the volume groups it covers, and Longhorn runs it. A volume
-joins a group, or a single job, by a label; every volume is in `default`.
+joins a group, or a single job, by a label; a volume is in `default` while it
+has no other group or job.
 
 Schedules are chosen as shapes - every few minutes or hours, every day, chosen
 weekdays, monthly - and written to cron for you; anything else stays editable
