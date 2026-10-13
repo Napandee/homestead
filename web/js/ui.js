@@ -578,9 +578,14 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
       if (!d.contains(event.target) && !d.shell?.contains(event.target) && !path.includes(d) && !path.includes(d.shell)) d.open = false;
     });
   });
+  // Escape closes an open menu, not the dialog around it.
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape") document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
-  });
+    if (event.key !== "Escape") return;
+    const open = document.querySelectorAll("details.actionmenu[open]");
+    if (!open.length) return;
+    event.stopPropagation();
+    open.forEach(d => { d.open = false; });
+  }, true); // before the page's own Escape, which closes the dialog
   window.addEventListener("scroll", event => {
     if (event.target?.closest?.(".actionmenu-portal")) return;
     document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
