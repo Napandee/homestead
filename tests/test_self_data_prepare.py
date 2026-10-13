@@ -118,6 +118,26 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(85, self.tick()[1])
         self.assertEqual("succeeded", self.tick()[0])
 
+    def test_binding_pod_hold_says_the_classes_couldnt_be_read(self):
+        # #466: the classes can't be read on a cluster whose admission adds a default class.
+        read = self.f.read
+        def refused(path, *args, **kwargs):
+            if path.split("?")[0] == "/apis/scheduling.k8s.io/v1/priorityclasses":
+                raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+            return read(path, *args, **kwargs)
+        self.f.read = refused
+        send = self.send
+        def admitting(method, path, body):
+            if method == "POST" and path.split("?")[0].endswith("/pods"):
+                body = copy.deepcopy(body)
+                body["spec"].update(priorityClassName="x-normal", priority=10000, preemptionPolicy="PreemptLowerPriority")
+            return send(method, path, body)
+        self.send = admitting
+        self.assertEqual(15, self.tick()[1])
+        with self.assertRaises(Held) as held:
+            self.tick()
+        self.assertIn("couldn't read the cluster's PriorityClasses", str(held.exception))
+
     def test_immediate_binding_needs_no_helper_pod(self):
         self.sc["volumeBindingMode"] = "Immediate"
         self.item["ref"] = {**self.review()[3], "storage_writes": []}

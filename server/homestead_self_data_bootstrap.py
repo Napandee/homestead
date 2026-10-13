@@ -88,12 +88,20 @@ def _subset(wanted, actual):
     return type(wanted) is type(actual) and wanted == actual
 
 
+class PriorityUnknown(Held):
+    """A helper's priority couldn't be checked: the classes couldn't be read (#466)."""
+
+
+UNREAD = {"unread": True}
+
+
 def default_priority(read):
-    """The class Kubernetes' Priority admission gives a pod that names none, or None.
+    """The class Kubernetes' Priority admission gives a pod that names none,
+    None when there is none, or UNREAD when the classes couldn't be read.
 
     A globalDefault PriorityClass makes admission add its name, value and
-    policy to every such pod (#437). Unreadable classes mean None: the helper
-    is then checked as before and held on such a cluster, never let through.
+    policy to every such pod (#437). Unread classes are checked as no default,
+    so such a helper is held, never let through, and the hold says why (#466).
     """
     try:
         found = [c for c in read("/apis/scheduling.k8s.io/v1/priorityclasses").get("items", []) if c.get("globalDefault") is True]
@@ -103,8 +111,11 @@ def default_priority(read):
         chosen = min(found, key=lambda c: c["value"])
         return {"name": chosen["metadata"]["name"], "value": chosen["value"],
                 "preemptionPolicy": chosen.get("preemptionPolicy", "PreemptLowerPriority")}
+    except urllib.error.HTTPError as error:
+        # No scheduling API at all: there can be no default class.
+        return None if error.code == 404 else dict(UNREAD)
     except Exception:
-        return None
+        return dict(UNREAD)
 
 
 def admitted(body, obj, target, *, dry_run=False, default=None):
@@ -135,16 +146,21 @@ def admitted(body, obj, target, *, dry_run=False, default=None):
             raise Held("Admission added unreviewed helper pod settings")
         # Only what admission gives every pod that names no class: the cluster's
         # default class, or none at priority 0. A raised class is still held.
-        given = default or {"name": None, "value": 0, "preemptionPolicy": "PreemptLowerPriority"}
+        unread = bool(default and default.get("unread"))
+        given = default if default and not unread else {"name": None, "value": 0, "preemptionPolicy": "PreemptLowerPriority"}
         host = wanted["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchFields"][0]["values"][0]
         if (spec.get("nodeName") not in (None, "", host) or spec.get("dnsPolicy", "ClusterFirst") != "ClusterFirst"
                 or spec.get("schedulerName", "default-scheduler") != "default-scheduler"
                 or spec.get("serviceAccount", wanted.get("serviceAccountName", "default")) != wanted.get("serviceAccountName", "default")
                 or spec.get("serviceAccountName", "default") != wanted.get("serviceAccountName", "default")
-                or spec.get("terminationGracePeriodSeconds", 30) != wanted.get("terminationGracePeriodSeconds", 30)
-                or spec.get("priorityClassName", given["name"]) != given["name"]
+                or spec.get("terminationGracePeriodSeconds", 30) != wanted.get("terminationGracePeriodSeconds", 30)):
+            raise Held("The helper placement changed after review")
+        if (spec.get("priorityClassName", given["name"]) != given["name"]
                 or spec.get("priority", given["value"]) != given["value"]
                 or spec.get("preemptionPolicy", given["preemptionPolicy"]) != given["preemptionPolicy"]):
+            if unread:
+                raise PriorityUnknown("Homestead couldn't read the cluster's PriorityClasses, so it can't confirm the helper's "
+                                      "priority. Check that it may list them, and try again")
             raise Held("The helper placement changed after review")
         for toleration in spec.get("tolerations", []):
             if (set(toleration) != {"key", "operator", "effect", "tolerationSeconds"}
