@@ -1426,37 +1426,59 @@ window.prepullStop = async name => {
 };
 
 /* ---------------- schedules ---------------- */
+/* A job runs in its own time zone or, with none (saved before Homestead set
+   one), on the clock of the host running the controller, which the page
+   cannot know. Only a UTC one gets a next run, since CRON works in UTC. */
+const jobUtc = j => UTC_ZONES.includes(j.time_zone) && !!CRON.parse(j.schedule);
+function jobWhen(j) {
+  if (!CRON.parse(j.schedule)) return `<span class="mono">${esc(j.schedule)}</span>${j.time_zone ? ` (${esc(j.time_zone)})` : ""}`;
+  const words = CRON.describe(j.schedule);
+  const text = jobUtc(j) ? words
+    : !j.time_zone ? `${words.replace(" UTC", "")} on the host's clock`
+    : `${words.replace(" UTC", "")} (${j.time_zone})`;
+  return `<span data-tip="${esc(j.schedule)}">${esc(text)}</span>`;
+}
+function jobNext(j) {
+  if (j.suspend) return '<span class="dim">—</span>';
+  if (jobUtc(j)) return nextRun(j.schedule);
+  return !j.time_zone
+    ? `<span class="dim" data-tip="It runs on the host's clock, which the page cannot know. Saving it here pins it to UTC.">—</span>`
+    : '<span class="dim">—</span>';
+}
 async function viewSchedules() {
   const js = await api("/api/schedules");
-  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · standard cron syntax`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
+  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · times in UTC, next runs in your time`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
-      <th>Name</th><th>Schedule</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
+      <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>
         <td><b>${esc(j.name)}</b></td>
-        <td class="mono">${esc(j.schedule)}</td>
+        <td class="small">${jobWhen(j)}</td>
+        <td class="small">${jobNext(j)}</td>
         <td class="mono small dim">${esc(j.image)}</td>
         <td class="small dim">${fmtWhen(j.last)}</td>
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill med">running</span>' : '<span class="pill ok">active</span>'}</td>
         <td>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
           { label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
-          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=6 class="empty">no schedules yet</td></tr>`}
+          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
 }
 window.jobEdit = (j) => {
   j = j || { name: "", schedule: "0 3 * * *", image: "alpine:3.20", command: "" };
   modal(j.name ? "Edit · " + j.name : "New schedule", `
     <div class="f"><label>Name</label><input type="text" id="j_name" value="${esc(j.name)}" ${j.name ? "readonly" : ""} placeholder="nightly-prune"></div>
-    <div class="f"><label>Cron schedule</label><input type="text" id="j_sched" value="${esc(j.schedule)}">
-      <div class="dim xs" style="margin-top:6px">min hour day month weekday · e.g. <span class="mono">0 3 * * *</span> = 03:00 daily</div></div>
+    ${scheduleBuilder(j.schedule, j.time_zone || "Etc/UTC")}
+    ${j.name && !j.time_zone ? `<div class="note" style="margin-bottom:14px">This schedule has no time zone, so it runs on the
+      host's clock: that of the host running the cluster's controller. Saving it here pins it to UTC, so check the time above.</div>` : ""}
     <div class="f"><label>Image</label><input type="text" id="j_image" value="${esc(j.image || "alpine:3.20")}"></div>
     <div class="f"><label>Command</label><textarea id="j_cmd" rows="4" placeholder="echo hello">${esc(j.command || "")}</textarea></div>
     <label class="switch"><input type="checkbox" id="j_susp" ${j.suspend ? "checked" : ""}> Paused</label>
     ${UI.actions(`<button class="btn pri" onclick="jobSave()">Save</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+  scheduleChanged();
 };
 window.jobSave = async () => {
-  const body = { name: $("#j_name").value.trim(), schedule: $("#j_sched").value.trim(),
+  const body = { name: $("#j_name").value.trim(), schedule: $("#lj_cron").value.trim(),
     image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked };
   if (!body.name || !body.command) return toast("name and command are required", "bad");
   try {

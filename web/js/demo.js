@@ -1057,7 +1057,7 @@
         `Deleted Longhorn's record of ${body.node}`] };
     },
     "/api/schedules": [
-      { name: "nightly-db-dump", namespace: "lab", schedule: "0 3 * * *", image: "docker.io/library/postgres:16",
+      { name: "nightly-db-dump", namespace: "lab", schedule: "0 3 * * *", time_zone: "Etc/UTC", image: "docker.io/library/postgres:16",
         command: "pg_dumpall -h db -U paperless > /backup/all.sql", last: "2026-09-22T03:00:04Z", suspend: false, active: 0 },
       { name: "prune-recordings-older-than-thirty-days", namespace: "lab", schedule: "*/30 * * * *",
         image: "ghcr.io/example/long-image-name-for-cleanup-tasks:2026.09.1", command: "find /media -mtime +30 -delete",
