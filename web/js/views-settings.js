@@ -164,7 +164,7 @@ async function viewSettings() {
         <div class="srows">
           ${settingRow("Password", "", '<button class="btn sm" onclick="pwChange()">Change</button>')}
           ${settingRow("Sign out everywhere", "Every session of yours, on every device", '<button class="btn sm" onclick="signOutEverywhere()">Sign out everywhere</button>')}
-          ${settingRow("Sign out", "This browser", '<button class="btn sm danger" onclick="doLogout()">Sign out</button>')}
+          ${settingRow("Sign out", "This browser", '<button class="btn sm" onclick="doLogout()">Sign out</button>')}
         </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div>`, {tab:`you`})}
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
