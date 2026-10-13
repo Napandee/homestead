@@ -8,8 +8,9 @@ Longhorn's own model, used as-is rather than reinvented:
 * A volume opts into a job by carrying a label:
       recurring-job.longhorn.io/<job>        = enabled
       recurring-job-group.longhorn.io/<grp>  = enabled
-* The group named `default` is special: Longhorn puts every new volume in it,
-  so a job in `default` protects everything without per-volume wiring.
+* The group named `default` is special: Longhorn puts a volume in it while
+  the volume has no other group or job, so a job in `default` protects the
+  volumes nobody has placed yet - not every volume.
 
 That label model is what makes "groups" cheap here — assigning a volume is one
 label patch, not a controller.

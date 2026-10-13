@@ -518,6 +518,8 @@ container in a group removes it. Changing a container's group never restarts it.
 - **To remove a group**, use **Ungroup all…** on its heading, or **Ungroup
   ticked** with its containers ticked. For one container, **Remove from
   <group>** in its **Group** dialog.
+- **To give a group a priority tier**, use **Tier…** on its heading: see
+  [Group tiers](#group-tiers).
 
 Which group's chip is chosen, and which groups are folded on the page, are kept
 in the browser, so each device remembers its own.
@@ -727,19 +729,89 @@ VMs have tiers too, in the same **Priority tiers…** list. A VM takes its tier
 when it next starts, so setting one restarts nothing; until then it keeps the
 one it started with.
 
-Homestead is never evicted by a critical app: once anything runs in the
-critical tier, Homestead puts itself there too - pods of one priority never
-evict each other - and restarts once to do so, waiting until no job is
-running. It keeps that class through updates, and keeps any class you gave it
-yourself.
+#### Group tiers
 
-Homestead makes the PriorityClasses `homestead-critical` (1000) and
-`homestead-low` (-1000, never preempts) the first time a tier needs one; it
-makes neither the cluster's default. An app's tier is read from its pod, so
-one set by hand or by Flux shows as it is. Apps Flux or Argo CD apply are
-shown but changed there, not here; a class Homestead does not keep is left
-alone; and Homestead's own tier is not offered, since it follows the
-apps' as above. A critical app's
+A group can have a tier too: **Tier…** on its heading in Containers sets it to
+critical, normal, low or none. It takes the same role as setting an app's tier
+(operator), and Homestead's own group isn't offered. Apps that follow the group
+take its tier. An app's tier is, in order:
+
+1. its own;
+2. its group's, if it follows the group and the group has a tier;
+3. the cluster default.
+
+An app follows its group when it carries the annotation `homestead.io/tier:
+group`. Putting an app in a group makes it follow, unless it already has a
+class of its own, Flux or Argo CD applies it, or it is Homestead itself
+(Homestead looks after its own tier). Moving it to another group
+keeps it following; ungrouping it stops it, and it keeps the class it runs
+with. Renaming a group moves its tier and its apps, and makes no app follow
+it. In Edit → Placement, **From its group** (shown as, say, "critical, from
+Home") follows the group, and a tier makes it the app's own. When this shipped,
+every app kept the tier it had as its own. An app that was in a group before
+group tiers came keeps its own tier: to make it follow, choose **From its
+group** in Edit, or move it out of the group and back in.
+
+Setting a group's tier restarts nothing. **Priority tiers…** then lists every
+app with its tier, where it comes from, what it runs with now, and one status:
+
+- **in line**: it runs with its tier;
+- **needs a restart**: ticked for the reviewed job, which writes the class and
+  records it in `homestead.io/tier-class`;
+- **change in git**: Flux or Argo CD applies it, with the line to commit;
+- **changed outside Homestead**: it follows its group, but its class isn't the
+  one Homestead wrote. It's shown, not ticked, so the job never quietly undoes
+  someone's change;
+- **can't set**: Kubernetes' own class, or one that isn't on the cluster;
+- **group tier unknown**: the group tiers couldn't be read just now. Such rows
+  are never acted on until they can be.
+
+Group tiers are kept in the ConfigMap `homestead-group-tiers` in Homestead's
+namespace. They aren't in git, so a cluster rebuilt from git keeps every app's
+class but loses its group tiers. A Homestead config backup brings them back.
+A renamed group keeps its tier; a group that ends (its last app leaves) loses
+it.
+
+How a tier changes, whoever deployed the app. A running pod's priority can't
+change, so in every case the app's template changes and its pods are replaced.
+
+| Deployed by | Where the tier is set | Then |
+|---|---|---|
+| Flux (Kustomization) | Git: `spec.template.spec.priorityClassName` in the manifest, or a kustomize patch | Flux applies it at its next sync; the app restarts |
+| Flux (HelmRelease) | Git: the chart's value (usually `priorityClassName`) in the HelmRelease's values | Flux upgrades the release; the app restarts |
+| Argo CD | Git, as for Flux | Argo syncs; the app restarts |
+| Helm | The chart's value, then `helm upgrade` | The app restarts |
+| Homestead | Edit, Priority tiers…, or its group's Tier… then Priority tiers… | Homestead changes the template; the app restarts once |
+| kubectl | `kubectl patch` of `spec.template.spec.priorityClassName` | A rollout; the app restarts |
+| A KubeVirt VM | `spec.template.spec.priorityClassName` on the VM | It takes effect at the VM's next start; nothing restarts now |
+
+Homestead can't tell a plain Helm install from its own apps, so it treats them
+as its own. They get "needs a restart" and the reviewed job, and the next
+`helm upgrade` puts back the chart's value.
+
+Homestead is never evicted by an app: once anything ranks above the default,
+Homestead puts itself at least as high as the highest app - pods of one
+priority never evict each other - and restarts once to do so, waiting until
+no job is running. It moves itself up if an app later ranks higher, keeps
+its class through updates, and keeps any class you gave it yourself.
+
+A tier is read from the number a class gives a pod, against the cluster's
+default class (or 0 without one): above it is critical, equal normal, below
+low. So a cluster's own classes - set by hand, by Flux or by a chart - show
+as the tier they really are. Homestead uses those classes where they fit:
+critical is the highest class above the default, low the highest below it
+(preferring one that never preempts).
+Only when none fits does it make `homestead-critical` or `homestead-low`,
+just above or below the default (with the value in the name, such as
+`homestead-critical-11000`, when the plain name is taken by an older class),
+the first time a tier needs one. It never changes or removes a class, and
+never makes one the cluster's default. Priority tiers says what is wrong, if
+anything: a class apps name that isn't on the cluster, or an older Homestead
+class apps still use.
+
+Apps Flux or Argo CD apply show their tier read-only: set it where they're
+applied. Kubernetes' own classes are left alone, and Homestead's own
+tier is not offered, since it follows the apps' as above. A critical app's
 suggested memory reservation has more headroom - 1.5 times its usual use -
 since a host short of memory evicts pods using more than they reserve before
 any within their reservation, whatever their tier; only among those does the

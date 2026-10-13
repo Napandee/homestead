@@ -121,7 +121,8 @@ window.objectStorePoint = async () => {
 
 window.objectStoreRemove = async () => {
   if (!(await ask("Remove the backup storage?" + String.fromCharCode(10, 10)
-      + "The volume holding the backups is kept, so this can be undone."))) return;
+      + "The volume holding the backups is kept, so this can be undone.",
+      { title: "Remove backup storage", ok: "Remove backup storage", danger: true }))) return;
   try {
     const result = await api("/api/objectstore/remove", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keep_data: true }) });
@@ -364,6 +365,12 @@ function groupCard(g) {
 }
 
 /* ---------------- job editor ---------------- */
+/* How many volumes a group holds now, with their names on hover. */
+function groupCount(name) {
+  const d = STATE.data.lh || {}, row = (d.group_rows || []).find(g => g.name === name) || { volumes: [] };
+  const names = row.volumes.map(n => ((d.volumes || []).find(v => v.name === n) || {}).pvc || n);
+  return `<span class="dim xs" data-tip="${esc(names.join(", "))}">· ${names.length ? `${names.length} volume${names.length === 1 ? "" : "s"}` : "no volumes"}</span>`;
+}
 window.lhJob = (j) => {
   const d = STATE.data.lh || { groups: ["default"], tasks: {} };
   j = j || { name: "", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 1, groups: ["default"] };
@@ -385,8 +392,9 @@ window.lhJob = (j) => {
     <div class="f"><label>Groups this job protects</label>
       <div id="lj_groups">${(d.groups || ["default"]).map(g => `<label class="switch" style="margin:0 0 8px">
         <input type="checkbox" class="gk" value="${esc(g)}" ${j.groups.includes(g) ? "checked" : ""}>
-        ${esc(g)}${g === "default" ? ' <span class="tag info">all volumes</span>' : ""}</label>`).join("")}</div>
-      <input type="text" id="lj_newgroup" placeholder="…or type a new group name">
+        ${esc(g)} ${groupCount(g)}${g === "default" ? ' <span class="tag info">no other group</span>' : ""}</label>`).join("")}</div>
+      <input type="text" id="lj_newgroup" placeholder="…or type a new group name" oninput="lhJobNewGroup()">
+      <div class="dim xs" id="lj_newgroup_note" style="margin-top:6px"></div>
     </div>
     ${UI.actions(`<button class="btn pri" onclick="lhJobSave()">Save job</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
@@ -395,6 +403,11 @@ window.lhJob = (j) => {
     backup job fails on every run.</div>`, true);
   scheduleChanged();
   lhTaskChanged();
+};
+/* A group typed in is made with the job, so nothing is in it yet. */
+window.lhJobNewGroup = () => {
+  const name = $("#lj_newgroup").value.trim();
+  $("#lj_newgroup_note").textContent = name && !((STATE.data.lh || {}).groups || []).includes(name) ? "new · no volumes yet" : "";
 };
 /* Trims and cleanups keep nothing, so they have nothing to count. */
 const KEEPS = task => /^(snapshot|backup)(-force-create|-delete)?$/.test(task);
@@ -558,7 +571,8 @@ window.lhGroupDel = async name => {
   const row = ((STATE.data.lh || {}).group_rows || []).find(g => g.name === name) || { volumes: [], jobs: [] };
   if (!(await ask(`Delete group "${name}"?` + String.fromCharCode(10, 10)
       + `${row.volumes.length} volume(s) leave it; any with no other group go back to default and its jobs.`
-      + ` ${row.jobs.length} job(s) stop covering it. Snapshots and backups already taken are kept.`))) return;
+      + ` ${row.jobs.length} job(s) stop covering it. Snapshots and backups already taken are kept.`,
+      { title: "Delete group", ok: "Delete group", danger: true }))) return;
   try {
     const result = await api("/api/lh/group/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -585,7 +599,8 @@ window.lhJobSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhJobDel = async name => {
-  if (!(await ask(`Delete recurring job "${name}"?\n\nExisting snapshots and backups are kept.`))) return;
+  if (!(await ask(`Delete recurring job "${name}"?\n\nExisting snapshots and backups are kept.`,
+      { title: "Delete recurring job", ok: "Delete job", danger: true }))) return;
   try {
     await api("/api/lh/job/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -770,7 +785,8 @@ window.lhBackupList = async (vol, label) => {
 };
 window.lhBackupDel = async (name, vol, label) => {
   if (!(await ask(`Delete backup "${name}"?` + String.fromCharCode(10, 10)
-      + "It is removed from the backup target too, and cannot be restored afterwards."))) return;
+      + "It is removed from the backup target too, and cannot be restored afterwards.",
+      { title: "Delete backup", ok: "Delete backup", danger: true }))) return;
   try {
     await api("/api/lh/backup/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });

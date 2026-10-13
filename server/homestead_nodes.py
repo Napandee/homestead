@@ -16,6 +16,7 @@ import homestead_disks as DISKS
 import homestead_hardware as HW
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
+import homestead_lhcapacity as LHCAP
 import homestead_lifecycle as LC
 import homestead_names as NAMES
 import homestead_networking as NETWORK
@@ -426,14 +427,73 @@ def get_nodes():
     return out
 
 
+def _statefulsets():
+    """Each StatefulSet outside the system namespaces, with its pods - their
+    host, whether ready, and the claims they mount - or None when either
+    couldn't be read (#440)."""
+    try:
+        sets = kget("/apis/apps/v1/statefulsets").get("items", [])
+        pods = kget("/api/v1/pods").get("items", [])
+    except Exception:
+        return None
+    mine = {}
+    for p in pods:
+        meta, spec, status = p.get("metadata") or {}, p.get("spec") or {}, p.get("status") or {}
+        owner = next((o for o in meta.get("ownerReferences") or [] if o.get("kind") == "StatefulSet"), None)
+        if not owner or status.get("phase") in ("Succeeded", "Failed"):
+            continue
+        ready = status.get("phase") == "Running" and any(
+            c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions") or [])
+        mine.setdefault((meta.get("namespace"), owner.get("name")), []).append({
+            "name": meta.get("name", ""), "node": spec.get("nodeName") or "", "ready": ready,
+            "claims": [v["persistentVolumeClaim"]["claimName"] for v in spec.get("volumes") or []
+                       if (v.get("persistentVolumeClaim") or {}).get("claimName")]})
+    out = []
+    for s in sets:
+        meta, spec = s.get("metadata") or {}, s.get("spec") or {}
+        ns, name = meta.get("namespace"), meta.get("name")
+        if ns in SYS_NS:
+            continue
+        out.append({"ns": ns, "name": name, "replicas": int(spec["replicas"]) if spec.get("replicas") is not None else 1,
+                    "spec": (spec.get("template") or {}).get("spec") or {}, "pods": mine.get((ns, name), [])})
+    return out
+
+
+def _pinned_volumes():
+    """(namespace, claim) -> the hosts its PersistentVolume's required node
+    affinity pins it to ([] when none), or None when they couldn't be read.
+    local-path pins each volume to the host that stores it (#440)."""
+    try:
+        items = kget("/api/v1/persistentvolumes").get("items", [])
+    except Exception:
+        return None
+    out = {}
+    for pv in items:
+        spec = pv.get("spec") or {}
+        ref = spec.get("claimRef") or {}
+        if not ref.get("name"):
+            continue
+        hosts = set()
+        for term in ((spec.get("nodeAffinity") or {}).get("required") or {}).get("nodeSelectorTerms") or []:
+            for expr in term.get("matchExpressions") or []:
+                if expr.get("key") == "kubernetes.io/hostname" and expr.get("operator") == "In":
+                    hosts |= set(expr.get("values") or [])
+        out[(ref.get("namespace"), ref["name"])] = sorted(hosts)
+    return out
+
+
 def _impact_sources():
-    """The Deployments and VMs every host's impact preview reads."""
+    """What every host's impact preview reads, once for all hosts: the
+    Deployments and VMs, the StatefulSets with their pods, where each claim's
+    PersistentVolume is pinned, and Longhorn's policy for a host that is down.
+    A read that fails is None, never empty or a default."""
     deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
     try:
         raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
     except Exception:
         raw_vms = []
-    return deployments, raw_vms
+    return {"deployments": deployments, "raw_vms": raw_vms, "sets": _statefulsets(), "pvs": _pinned_volumes(),
+            "node_down": LHCAP.node_down(kget)}
 
 
 def node_impact(node, sources=None):
@@ -443,7 +503,7 @@ def node_impact(node, sources=None):
     nodes = cached("nodes", 5, get_nodes)
     if not any(n["name"] == node for n in nodes):
         raise ValueError(f"there is no host {node}")
-    deployments, raw_vms = sources or _impact_sources()
+    src = sources or _impact_sources()
     try:
         # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
         places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
@@ -454,8 +514,9 @@ def node_impact(node, sources=None):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
-                          cached("vol", 8, get_volumes), addresses, nodes, placement)
+    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VMS.list_vms), src["raw_vms"],
+                          cached("vol", 8, get_volumes), addresses, nodes, placement,
+                          sets=src["sets"], pvs=src["pvs"], node_down=src["node_down"])
 
 
 def set_node_hardware(cfg):

@@ -948,37 +948,6 @@ def own_group(ns, name):
     return OWN_GROUP if (ns, name) in own or ns in PLATFORM_NS else ""
 
 
-def workload_group(value):
-    """A group's name as stored: its own words, trimmed, one line."""
-    group = " ".join(str(value or "").split())
-    if len(group) > 40:
-        raise ValueError("a group name is at most 40 characters")
-    return group
-
-
-def set_workload_groups(b):
-    """Puts workloads in a group, or out of every group with a blank name.
-
-    The group is an annotation on each Deployment, so it travels with the
-    workload and needs no list of its own: a group exists while something is
-    in it."""
-    group = workload_group(b.get("group"))
-    items = b.get("items") or []
-    if not items:
-        raise ValueError("choose at least one workload")
-    patch = {"metadata": {"annotations": {NAMES.key("group"): group or None}}}
-    targets = [(_dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name"))
-               for item in items]
-    for ns, name in targets:
-        guard_managed_smb(ns, name)
-        ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", patch,
-              ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
-    count = len(items)
-    return {"ok": True, "group": group,
-            "detail": f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")}
-
-
 def set_vm_logos(b):
     """Gives VMs a logo: an image (kept like a workload's), one of the OS
     logos, or neither - back to the OS the VM reports. Only the VM's own
@@ -2363,7 +2332,7 @@ RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
 LAN.bind(kget, ksend)
-PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS)
+PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS, DATA_DIR)
 
 
 def _pull_progress(node, image):
@@ -2549,6 +2518,8 @@ import homestead_usage as USAGE
 import homestead_requests as RESERVE
 import homestead_recovery as RECOVERY
 import homestead_priority as PRIORITY
+import homestead_group_tiers as GROUPS
+set_workload_groups = GROUPS.set_workload_groups   # server.py's name for it before #430
 import homestead_placement_mode as PLACEMODE
 import homestead_capacity as CAPACITY
 import homestead_mcp as MCP
@@ -2583,6 +2554,7 @@ def _late(*names):
 
 WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, default_ns=DEFAULT_NS,
                data_dir=DATA_DIR, system_namespaces=SYS_NS, platform_namespaces=PLATFORM_NS)
+GROUPS.bind(_late(*GROUPS.NEEDS), namespace=DEFAULT_NS, own_group=OWN_GROUP, managed=UPDATES.managed_by)
 DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION)
 UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS))
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
@@ -2992,7 +2964,7 @@ def _alert_sources():
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
-    take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
+    take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
     take("agents", MCP.alert_facts)
@@ -3748,6 +3720,8 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
      "objects": [("configmaps", DEFAULT_NS, MQTT._map()), ("secrets", DEFAULT_NS, MQTT._secret())]},
     {"id": "portal", "label": "Portal", "detail": "Its sections and tiles",
      "objects": [("configmaps", DEFAULT_NS, PORTAL._map())]},
+    {"id": "group-tiers", "label": "Group tiers", "detail": "The priority tier each Containers group gives the apps that follow it",
+     "objects": [("configmaps", DEFAULT_NS, GROUPS._map())]},
     {"id": "shares", "label": "Network shares", "detail": "Shares, their options, and SMB users",
      "caution": "Brings back share definitions and SMB users; the volumes they point at must still exist.",
      "objects": [("configmaps", SMB_NAMESPACE, SHARES.CONFIGMAP()), ("secrets", SMB_NAMESPACE, SHARES.SECRET())]},

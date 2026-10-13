@@ -63,16 +63,15 @@ rules:
   - apiGroups: ["apps"]
     resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Priority tiers (homestead_priority.py): Homestead makes its two classes
-  # when a tier is first used, and reads them back. Creating cannot be limited
-  # by name; reading can, and nothing is updated or deleted.
+  # Priority tiers (homestead_priority.py): Homestead makes a class for a tier
+  # when a tier first needs one, and reads every class, placing each by its
+  # value (#429). Nothing is updated or deleted.
   - apiGroups: ["scheduling.k8s.io"]
     resources: [priorityclasses]
     verbs: [create]
   - apiGroups: ["scheduling.k8s.io"]
     resources: [priorityclasses]
-    resourceNames: [homestead-critical, homestead-low]
-    verbs: [get]
+    verbs: [get, list]
   # Read autoscaler ownership before allowing a workload rename.
   - apiGroups: ["autoscaling"]
     resources: [horizontalpodautoscalers]
@@ -304,7 +303,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/homestead-lab/homestead:2.8.325"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/homestead-lab/homestead:2.8.326-dev.2"}'
 spec:
   replicas: 1
   strategy:
@@ -339,7 +338,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/homestead-lab/homestead:2.8.325
+          image: ghcr.io/homestead-lab/homestead:2.8.326-dev.2
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -356,7 +355,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/homestead-lab/homestead:2.8.325
+          image: ghcr.io/homestead-lab/homestead:2.8.326-dev.2
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

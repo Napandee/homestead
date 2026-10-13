@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.325";
+const HOMESTEAD_VERSION = "2.8.326-dev.2";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -649,6 +649,9 @@ function sortBody(body, heads, state) {
 function sortBar(table, heads, state) {
   if (!table.classList.contains("stack")) return;
   const wrap = table.closest(".card") || table.parentElement;
+  // A Settings card is a grid item its section shows or hides, so the menu
+  // goes inside the card, above the table, and is hidden with it.
+  const anchor = wrap.parentElement?.classList.contains("settings-grid") ? (table.closest(".tblwrap") || table) : wrap;
   const collection = table.closest("[data-collection]");
   const target = table.dataset.sortControls;
   const selector = target ? `[data-sort-controls="${CSS.escape(target)}"].sortbar` : "";
@@ -656,11 +659,11 @@ function sortBar(table, heads, state) {
   // menu. An open menu is portalled out of the collection into the page.
   let bar = target && (collection?.querySelector(selector) ||
     (collection?.isConnected && document.querySelector(`.actionmenu-portal ${selector}`)));
-  bar ||= wrap.previousElementSibling;
+  bar ||= anchor.previousElementSibling;
   if (!bar || !bar.classList.contains("sortbar")) {
     bar = document.createElement("div");
     bar.className = "sortbar";
-    wrap.before(bar);
+    anchor.before(bar);
   }
   const options = heads.map((th, index) => th.classList.contains("sortable")
     ? `<option value="${index}" ${state && state.col === index ? "selected" : ""}>${esc(th.textContent.replace(/[↑↓]/g, "").trim())}</option>` : "").join("");

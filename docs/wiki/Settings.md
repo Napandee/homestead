@@ -203,12 +203,18 @@ and after the move, and what would wait.
 
 The apps and VMs that would move are placed - not those that stop anyway
 (pinned, on host-local storage, or using hardware only that host has), nor
-those set to wait for their host to come back. Pods the preview does not list
-- a StatefulSet's, say - are counted as needing room on a host their own
-rules and its taints allow, should they be started elsewhere: on k3s a
-StatefulSet's pod on a host that is gone waits until it is deleted, by hand or
-by Longhorn's policy for a host that is down. A bare pod no controller owns
-does not move. They are placed the way the scheduler would: critical first,
+those set to wait for their host to come back. A StatefulSet's pod needs room
+only when the preview says it moves - when Longhorn's **Pods on a failed
+node** setting deletes it; one that waits until its pod is deleted, or
+couldn't be checked, needs none, and the sentence says how many wait and how many
+couldn't be checked: *1 app waits until its pod is deleted and 1 app couldn't
+be checked; If this host goes down says why.* When StatefulSets couldn't be
+read, the sentence ends *StatefulSets couldn't be read, so they aren't
+counted.* Pods the
+preview does not list - a platform app's - are counted as needing room on a
+host their own rules and its taints allow, should they be started elsewhere,
+except a StatefulSet's. A bare pod no controller owns does not move. They are
+placed the way the scheduler would: critical first,
 then normal, then low, largest first, each on an allowed host with room for it
 beside what is already there - the one with the most room left. Only when no
 host has room does an app evict lower tiers: a critical app may evict normal

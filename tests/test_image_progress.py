@@ -15,13 +15,23 @@ class WatchParseTests(unittest.TestCase):
     """A pull reported only Pulling, for minutes; containerd knows the bytes."""
 
     def test_layers_held_and_those_being_fetched_make_the_count(self):
+        # As containerd 2 (k3s v1.37) prints it: the layer, its bytes so far
+        # (decimal units), how long - tab-separated.
         log = "\n".join([
             "== 1700000000", f"HAVE sha256:{A}",
-            f"layer-sha256:{B}   25.00 MiB  50.00 MiB  1 second ago",
+            f"layer-sha256:{B}\t25MB\t7 seconds\t",
             "== 1700000002", f"HAVE sha256:{A}",                     # still being written
         ])
         done, total = PULL.parse(log, LAYERS)
-        self.assertEqual((125 * 1024 ** 2, 200 * 1024 ** 2), (done, total))
+        self.assertEqual((100 * 1024 ** 2 + 25 * 1000 ** 2, 200 * 1024 ** 2), (done, total))
+
+    def test_the_bytes_so_far_are_read_from_containerds_own_lines(self):
+        """Lines from a real pull on k3s v1.37 (containerd 2.3): one size, then an age."""
+        for line, expected in ((f"layer-sha256:{A}\t3.146MB\t1 second\t", 3146000),
+                               (f"layer-sha256:{A}\t74.45MB\t34 seconds\t", 74450000),
+                               (f"layer-sha256:{A}\t512kB\t2 seconds\t", 512000)):
+            log = "== 1\n" + line + "\n== 2\n"
+            self.assertEqual(expected, PULL.parse(log, LAYERS)[0], line)
 
     def test_a_finished_watch_is_everything(self):
         self.assertEqual((200 * 1024 ** 2,) * 2, PULL.parse("== 1\nHAVE x\n== done\n", LAYERS))
@@ -31,7 +41,8 @@ class WatchParseTests(unittest.TestCase):
 
     def test_the_watcher_asks_containerd_for_each_layer(self):
         script = PULL.script([f"sha256:{A}"])
-        self.assertIn(f"content info $d", script)
+        self.assertIn("content ls -q", script)
+        self.assertNotIn("content info", script, "containerd 2 has no content info")
         self.assertIn(f"for d in sha256:{A}", script)
         self.assertIn("content active", script)
 
@@ -42,7 +53,9 @@ class WatchParseTests(unittest.TestCase):
             if path == "/api/v1/nodes/node2":
                 return {"metadata": {"labels": {"kubernetes.io/arch": "amd64"}}}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        PULL.bind(kget, lambda m, p, b=None, **k: sent.append((m, p, b)), lambda p: "", lambda image, arch: LAYERS)
+        import tempfile
+        PULL.bind(kget, lambda m, p, b=None, **k: sent.append((m, p, b)), lambda p: "", lambda image, arch: LAYERS,
+                  data_dir=tempfile.mkdtemp())
         PULL._LAYERS.clear()
         with unittest.mock.patch("homestead_runtime.binaries", lambda: {"crictl": "/c", "ctr": "/t"}):
             result = PULL.progress("node2", "ghcr.io/blakeblackshear/frigate:stable")

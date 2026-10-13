@@ -115,10 +115,17 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(1, f["moving"])
         self.assertEqual(8.0, f["hosts"][0]["mem_gib"])
 
-    def test_pods_the_preview_does_not_list_still_take_room(self):
-        db = pod("postgres", "a", mem="6Gi", kind="StatefulSet")
-        f = run("a", [node("a"), node("b")], [db], preview())
+    def test_a_platform_app_the_preview_does_not_list_still_takes_room(self):
+        dns = pod("coredns", "a", mem="6Gi", ns="kube-system")
+        f = run("a", [node("a"), node("b")], [dns], preview())
         self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+
+    def test_a_statefulsets_pod_the_preview_does_not_list_needs_no_room(self):
+        # One in a system namespace, or every one when they couldn't be read:
+        # Kubernetes doesn't start it elsewhere while the old one might run.
+        db = pod("x-db", "a", mem="6Gi", ns="kube-system", kind="StatefulSet")
+        f = run("a", [node("a"), node("b")], [db], preview())
+        self.assertEqual((0, 0.0), (f["moving"], f["hosts"][0]["mem_gib"]))
 
     def test_an_app_goes_where_there_is_room_before_anything_is_evicted(self):
         # b is full of low apps, c is empty: the scheduler picks c and evicts nothing.
@@ -145,9 +152,69 @@ class ForecastTests(unittest.TestCase):
         pi = node("pi", mem="4Gi")
         pi["spec"]["taints"] = [{"key": "homestead.io/role", "value": "tiebreaker", "effect": "NoSchedule"}]
         nodes = [node("a"), node("b", mem="2Gi"), pi]
-        f = run("a", nodes, [pod("postgres", "a", mem="3Gi", kind="StatefulSet")], preview())
+        f = run("a", nodes, [pod("metrics", "a", mem="3Gi", ns="kube-system")], preview())
         self.assertEqual("waits", f["verdict"])
         self.assertEqual(0.0, {h["name"]: h for h in f["hosts"]}["pi"]["mem_gib"])
+
+    def sets(self, **outcomes):
+        """Preview rows for StatefulSets: name=outcome, moving ones to b."""
+        return {"apps": [{"kind": "set", "ns": "lab", "name": n.replace("_", "-"), "outcome": o, **({"to": ["b"]} if o == "moves" else {})}
+                         for n, o in outcomes.items()]}
+
+    def test_only_statefulsets_that_move_need_room(self):
+        pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("x-db", "a", mem="4Gi", kind="StatefulSet"),
+                pod("x-cache", "a", mem="2Gi", kind="StatefulSet"), pod("x-queue", "a", mem="3Gi", kind="StatefulSet")]
+        f = run("a", [node("a"), node("b")], pods, self.sets(postgres="moves", x_db="waits", x_cache="unknown", x_queue="stops"))
+        self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+        self.assertEqual(1, f["waiting_for_deletion"])
+
+    def test_the_sentence_names_those_waiting_for_their_pod_to_be_deleted(self):
+        pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("x-db", "a", mem="4Gi", kind="StatefulSet")]
+        f = run("a", [node("a"), node("b")], pods, self.sets(postgres="moves", x_db="waits"))
+        self.assertEqual("If a fails, b would have 6 of 15 GiB of memory reserved. It fits. "
+                         "1 app waits until its pod is deleted; If this host goes down says why.", f["sentence"])
+        two = run("a", [node("a"), node("b")], [], self.sets(postgres="waits", x_db="waits", x_cache="unknown"))
+        self.assertEqual("If a fails, nothing on it needs room on another host. 2 apps wait until their pod is deleted "
+                         "and 1 app couldn't be checked; If this host goes down says why.", two["sentence"])
+        self.assertEqual((2, "fits"), (two["waiting_for_deletion"], two["verdict"]))
+
+    def test_a_set_waiting_for_its_host_gets_no_room(self):
+        # The real preview, so a wait-mode StatefulSet's row decides: none of it moves.
+        import homestead_impact as IMPACT
+        nodes = [{"name": h, "status": "Ready", "schedulable": True, "hardware": {}} for h in ("a", "b")]
+        forever = {"tolerations": [{"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute"}]}
+        sets = [{"ns": "lab", "name": "postgres", "replicas": 1, "spec": forever,
+                 "pods": [{"name": "postgres-0", "node": "a", "ready": True, "claims": ["data-postgres-0"]}]}]
+        volumes = [{"name": "pvc-x", "pvc_name": "data-postgres-0", "namespace": "lab", "replicas": 2,
+                    "copies": [{"node": "a", "healthy": True}, {"node": "b", "healthy": True}]}]
+        p = IMPACT.preview("a", [], [], [], [], volumes, [], nodes, sets=sets, pvs={}, node_down="delete-statefulset-pod")
+        f = run("a", [node("a"), node("b")], [pod("postgres", "a", mem="6Gi", kind="StatefulSet")], p)
+        self.assertEqual((0, 0.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+        # It waits for its host, as a Deployment set to wait does, not for its pod to be deleted.
+        self.assertEqual((0, "If a fails, nothing on it needs room on another host."), (f["waiting_for_deletion"], f["sentence"]))
+
+    def test_a_deployment_and_a_statefulset_of_one_name_each_find_their_own_row(self):
+        pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("postgres", "a", mem="2Gi")]
+        rows = {"apps": [{"kind": "app", "ns": "lab", "name": "postgres", "outcome": "moves", "to": ["b"]},
+                         {"kind": "set", "ns": "lab", "name": "postgres", "outcome": "waits"}]}
+        f = run("a", [node("a"), node("b")], pods, rows)
+        self.assertEqual((1, 2.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+        flipped = {"apps": [{**rows["apps"][0], "outcome": "stops"}, {**rows["apps"][1], "outcome": "moves", "to": ["b"]}]}
+        f = run("a", [node("a"), node("b")], pods, flipped)
+        self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+
+    def test_unread_statefulsets_are_said_so_fits_never_hides_them(self):
+        f = run("a", [node("a"), node("b")], [pod("web", "a", mem="1Gi"), pod("postgres", "a", mem="6Gi", kind="StatefulSet")],
+                {**preview("web", to=("b",)), "unread": ["StatefulSets"]})
+        self.assertEqual("If a fails, b would have 1 of 15 GiB of memory reserved. It fits. "
+                         "StatefulSets couldn't be read, so they aren't counted.", f["sentence"])
+        f = run("a", [node("a"), node("b")], [], {"apps": [], "unread": ["StatefulSets"]})
+        self.assertEqual("If a fails, nothing on it needs room on another host. "
+                         "StatefulSets couldn't be read, so they aren't counted.", f["sentence"])
+
+    def test_with_no_statefulset_waiting_the_sentence_is_unchanged(self):
+        f = run("a", [node("a"), node("b")], [pod("web", "b")], preview())
+        self.assertEqual(("If a fails, nothing on it needs room on another host.", 0), (f["sentence"], f["waiting_for_deletion"]))
 
     def test_a_bare_pod_does_not_move(self):
         bare = pod("debug", "a", mem="2Gi")
@@ -185,6 +252,12 @@ class EveryHostTests(unittest.TestCase):
         capacity.bind(lambda p: {"items": nodes} if p == "/api/v1/nodes" else {"items": pods}, impact, self.sources,
                       server.FLOW._flow_owner, lambda pod: (pod["metadata"].get("labels") or {}).get("homestead.io/task"))
 
+    def test_a_host_that_failed_to_preview_has_no_one_waiting(self):
+        def impact(name, src):
+            raise RuntimeError("boom")
+        self.bind([node("a"), node("b")], [], impact)
+        self.assertEqual([0, 0], [h["waiting_for_deletion"] for h in capacity.every_host()["hosts"]])
+
     def test_each_ready_host_is_forecast_and_helper_pods_are_left_out(self):
         helper = pod("files", "a", mem="10Gi")
         helper["metadata"]["labels"]["homestead.io/task"] = "files"
@@ -216,3 +289,55 @@ class EveryHostTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NumberTests(unittest.TestCase):
+    """#429: the forecast ranks by each pod's priority number, as the scheduler does."""
+    def test_a_homestead_critical_pod_at_1000_does_not_evict_an_x_normal_one(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True},
+                        {"metadata": {"name": "homestead-critical"}, "value": 1000}])
+        moving = pod("ha", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="homestead-critical", priority=1000)
+        there = pod("web", "b", mem="3Gi")
+        there["spec"].update(priorityClassName="x-normal", priority=10000)
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("ha", to=("b",)))
+        self.assertEqual([], f["evicted"])
+        self.assertEqual(["lab/ha"], [w["id"] for w in f["waits"]])
+
+    def test_an_x_critical_pod_evicts_an_x_low_one(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-critical"}, "value": 100000},
+                        {"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True},
+                        {"metadata": {"name": "x-low"}, "value": 1000, "preemptionPolicy": "Never"}])
+        moving = pod("vault", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="x-critical", priority=100000)
+        there = pod("ci", "b", mem="3Gi")
+        there["spec"].update(priorityClassName="x-low", priority=1000, preemptionPolicy="Never")
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("vault", to=("b",)))
+        self.assertEqual([("lab/ci", "b")], [(e["id"], e["on"]) for e in f["evicted"]])
+
+    def test_within_critical_the_higher_number_evicts_the_lower(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-infra"}, "value": 500000},
+                        {"metadata": {"name": "x-critical"}, "value": 100000}])
+        moving = pod("dns", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="x-infra", priority=500000)
+        there = pod("vault", "b", mem="3Gi")
+        there["spec"].update(priorityClassName="x-critical", priority=100000)
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("dns", to=("b",)))
+        self.assertEqual([("lab/vault", "b")], [(e["id"], e["on"]) for e in f["evicted"]])
+
+    def test_a_class_above_the_default_that_never_preempts_waits(self):
+        import homestead_priority as P
+        lad = P.ladder([{"metadata": {"name": "x-patient"}, "value": 50000, "preemptionPolicy": "Never"}])
+        moving = pod("backup", "a", mem="3Gi")
+        moving["spec"].update(priorityClassName="x-patient", priority=50000, preemptionPolicy="Never")
+        there = pod("web", "b", mem="3Gi")
+        with mock.patch.object(P, "ladder", lambda *a, **k: lad):
+            f = run("a", [node("a"), node("b", mem="4Gi")], [moving, there], preview("backup", to=("b",)))
+        self.assertEqual([], f["evicted"])
+        self.assertEqual(["lab/backup"], [w["id"] for w in f["waits"]])

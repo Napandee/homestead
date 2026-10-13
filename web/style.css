@@ -27,7 +27,8 @@ html[data-theme="light"]{
 }
 /* Pills that are a tint, not a fill, take the deeper colours too. */
 html[data-theme="light"] .pill.neutral,html[data-theme="light"] .pill.low{background:rgba(0,0,0,.05);color:var(--mut)}
-html[data-theme="light"] .tag{background:rgba(0,0,0,.04);color:var(--mut)}html[data-theme="light"] .tag:hover{background:rgba(0,0,0,.07)}
+/* Only plain tags turn grey; a toned one keeps its state colour. */
+html[data-theme="light"] .tag:where(:not(.ok,.warn,.bad,.info,.capacity,.hw,.gpu)){background:rgba(0,0,0,.04);color:var(--mut)}html[data-theme="light"] .tag:hover{background:rgba(0,0,0,.07)}
 html[data-theme="light"] .card,html[data-theme="light"] .abox,html[data-theme="light"] .flowwrap,
 html[data-theme="light"] .side,html[data-theme="light"] .top,html[data-theme="light"] .fnode{
   background:linear-gradient(158deg,rgba(255,255,255,.82),rgba(255,255,255,.55));
@@ -51,13 +52,17 @@ html[data-theme="light"] #nav a.on,html[data-theme="light"] .btn.pri,html[data-t
   background:#16161a;color:#fff;border-color:#16161a}
 html[data-theme="light"] .spark .ln{stroke:#16161a;filter:none}
 html[data-theme="light"] .spark .fl{fill:rgba(0,0,0,.1)}
-html[data-theme="light"] .donut .arc,html[data-theme="light"] .meter>span{stroke:#16161a;background:#16161a;filter:none}
+html[data-theme="light"] .donut .arc,html[data-theme="light"] .meter:where(:not(.w,.b))>span{stroke:#16161a;background:#16161a;filter:none}
 html[data-theme="light"] .dcenter{fill:#16161a}
 html[data-theme="light"] .donut .trk{stroke:rgba(0,0,0,.08)}
 html[data-theme="light"] .podgrid i{background:rgba(0,0,0,.16)}
 html[data-theme="light"] .podgrid i.wl{background:#16161a;box-shadow:none}
 html[data-theme="light"] pre{background:rgba(0,0,0,.05);color:#2a2a30}
 html[data-theme="light"] .av{color:#fff}
+/* Error and info text tinted pale for a dark ground takes the deeper colours. */
+html[data-theme="light"] .ui-chip.bad,html[data-theme="light"] .note.bad,html[data-theme="light"] .updateerror,
+html[data-theme="light"] .imm-size.bad,html[data-theme="light"] .gateerr{color:var(--crit)}
+html[data-theme="light"] .ui-chip.info{color:var(--low)}
 /* The neutral avatars (.n1-.n3, a grey disc) keep the theme's text colour. */
 html[data-theme="light"] .av.n1,html[data-theme="light"] .av.n2,html[data-theme="light"] .av.n3{color:var(--tx)}
 
@@ -1743,9 +1748,14 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .wgroup-head b{font-size:13px;letter-spacing:.02em}
 .wgroup-chevron{display:inline-block;transition:transform .15s var(--e);transform:rotate(90deg);color:var(--mut)}
 .wgroup-head[aria-expanded="false"] .wgroup-chevron{transform:none}
-.wgroup.folded .wgroup-head{margin-bottom:4px}
+.wgroup-headrow{display:flex;align-items:center;gap:8px;margin:0 0 10px;border-bottom:1px solid var(--line)}
+.wgroup-headrow>.wgroup-head{flex:1 1 auto;width:auto;min-width:0;margin:0;border-bottom:0}
+.wgroup-headrow>.actionbar{flex:0 0 auto}
+.wgroup.folded .wgroup-headrow{margin-bottom:4px}
+.wltable tbody.grouphead .wgroup-headrow{margin:0;border-bottom:0}
 .wltable tbody.grouphead td{padding:0 12px;background:rgba(255,255,255,.02)}
 .wltable tbody.grouphead .wgroup-head{margin:0;border-bottom:0}
+.prio-line{overflow-wrap:anywhere}
 .wg-list{display:grid;gap:8px;max-height:48vh;overflow:auto;padding-right:4px}
 .wg-item{display:grid;grid-template-columns:auto auto 1fr auto;align-items:center;gap:10px;padding:7px 9px;border-radius:9px;cursor:pointer}
 .wg-item:hover{background:rgba(255,255,255,.04)}
@@ -2927,7 +2937,7 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .setup-mark.done{background:var(--ok);border-color:var(--ok);color:#06140c}
 .setup-mark.done.confirmed{background:var(--surf3);border-color:var(--mut);color:var(--tx)}
 .setup-mark.attention{border-color:var(--med);color:var(--med)}
-.setup-mark.skipped{border-style:dashed;opacity:.6}
+.setup-mark.skipped{background:var(--surf3);border-color:var(--mut);color:var(--mut)}
 .setup-card .ui-lead{max-width:72ch}
 .setup-layout .settings-main,.setup-card{min-width:0}
 .setup-card .stepper-chip{flex-shrink:0;white-space:nowrap}
@@ -2962,6 +2972,8 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .setup-return .btn{background:#0b3524;border-color:#0b3524;color:#fff}
 .setup-return .btn:hover{background:#104d35;border-color:#104d35}
 .setup-return .iconbtn{color:#062a1b;background:rgba(0,0,0,.06);border-color:rgba(0,0,0,.15)}
+/* The light theme's green is darker, so the bar's text turns white. */
+html[data-theme="light"] .setup-return,html[data-theme="light"] .setup-return .iconbtn{color:#fff}
 .setup-return-copy{min-width:0;font-size:13px}
 .setup-return .row{flex-shrink:0;gap:8px}
 .setup-return .iconbtn{width:32px;height:32px}

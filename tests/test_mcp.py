@@ -150,6 +150,14 @@ class CallTests(Base):
         self.assertFalse(result["isError"])
         self.assertEqual("ok", AUDIT.recent()[0]["outcome"])
 
+    def test_the_host_failure_preview_passes_statefulset_rows_through(self):
+        row = {"kind": "set", "ns": "data", "name": "postgres", "here": 1, "copies": 3, "outcome": "waits", "why": "waits until its pod is deleted"}
+        with mock.patch.object(TOOLS, "call", return_value={"node": "node2", "apps": [row]}) as call:
+            result = self.call("host_failure_preview", {"node": "node2"}, key())
+        self.assertEqual(("GET", "/api/nodes/impact", {"node": "node2"}), call.call_args.args)
+        self.assertFalse(result["isError"])
+        self.assertIn('"kind": "set"', result["content"][0]["text"])
+
     def test_volumes_come_a_line_each_and_one_in_full(self):
         row = {"namespace": "lab", "pvc_name": "data", "name": "pvc-1", "size_gb": 10, "conditions": ["x"] * 50,
                "engine": "v1", "used_by": [{"kind": "Deployment", "name": "web"}]}
@@ -277,6 +285,15 @@ class ApprovalTests(Base):
         self.assertEqual("approved", AUDIT.recent()[0]["outcome"])
         self.assertEqual("ada", AUDIT.recent()[0]["approved_by"])
         self.assertEqual([], MCP.alert_facts(), "answered: the bell clears")
+
+    def test_two_copies_of_homestead_cannot_both_run_a_request(self):
+        import os
+        rid = self.ask_delete()["request"]
+        # The other copy got there first: it holds the claim on the shared volume.
+        open(os.path.join(REQUESTS.DATA_DIR, f"agent-request-{rid}.decided"), "w").close()
+        with self.assertRaisesRegex(ValueError, "someone else is deciding it"):
+            REQUESTS.approve(rid, "ada", "admin")
+        self.assertEqual([], self.deleted)
 
     def test_a_plan_that_changed_since_it_was_asked_for_is_not_run(self):
         rid = self.ask_delete()["request"]

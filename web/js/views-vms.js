@@ -402,7 +402,7 @@ window.vmOpen = async (ns, name) => {
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
         <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="vm-pane" data-pane="network" hidden><div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
-      <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.namespace)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
+      <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.ns)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
         <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table></div>

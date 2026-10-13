@@ -8,11 +8,13 @@ scheduler would, by what they reserve:
 * Apps and VMs that would stop anyway (pinned, on host-local storage,
   hardware only that host has) or that wait for the host to come back are
   left to the impact preview; DaemonSet pods do not move, and nor does a bare
-  pod no controller owns. Pods the preview does not list - a StatefulSet, a
-  platform app - are counted as needing room on a host their own node name,
-  selectors, required affinity and its taints allow, should they be started
-  elsewhere: a StatefulSet's pod on a host that is gone waits until it is
-  deleted, by hand or by Longhorn's policy.
+  pod no controller owns. Kubernetes never starts a StatefulSet's pod
+  elsewhere while the old one might still run: the preview says whether each
+  moves (Longhorn deletes its pod), waits until its pod is deleted, or stops,
+  and only those that move need room. The sentence says how many wait (#440).
+  A pod the preview does not list - a platform app's - is counted as needing
+  room on a host its own node name, selectors, required affinity and its
+  taints allow, should it be started elsewhere; one a StatefulSet owns is not.
 * The rest are placed in tier order - critical, then normal, then low
   (homestead_priority) - largest first. Like the scheduler, each goes to an
   allowed host with room for it beside everything already there, the one with
@@ -29,6 +31,7 @@ it ignores affinity between apps and the order pods actually restart in.
 Pods already Pending, with no host, are counted apart: they wait whatever fails.
 Counts are of apps, not of their copies.
 """
+import homestead_impact as IMPACT
 import homestead_place as PLACE
 import homestead_pod_resources as RESOURCES
 import homestead_priority as PRIORITY
@@ -56,12 +59,16 @@ def _daemon(pod):
     return any(o.get("kind") in ("DaemonSet", "Node") for o in (pod.get("metadata") or {}).get("ownerReferences") or [])
 
 
-def _need(pod):
+def _need(pod, lad=None):
+    """What a pod asks for, its tier (for the words), and its priority number
+    and whether it may preempt (for the ranking, as the scheduler ranks, #429)."""
     spec = pod.get("spec") or {}
-    tier = PRIORITY.tier_of(spec)[0]
-    # A class Homestead does not keep is placed with the normal tier.
+    lad = lad if lad is not None else PRIORITY.ladder()
+    number, preempts = PRIORITY.priority_of(spec, lad)
+    tier = PRIORITY.tier_of(spec, lad)[0]
     return {"cpu": RESOURCES.pod_request(spec, "cpu"), "mem": RESOURCES.pod_request(spec, "memory"),
-            "tier": tier if tier in ORDER else "normal"}
+            "tier": tier if tier in ORDER else "normal",
+            "prio": number if number is not None else lad["default"]["value"], "preempts": preempts}
 
 
 def _apps(rows):
@@ -74,6 +81,7 @@ def forecast(failed, nodes, pods, preview, owner):
     preview: homestead_impact.preview for that host; owner(pod) names the
     workload a pod runs for."""
     survivors, objects = {}, {}
+    lad = PRIORITY.ladder()
     for node in nodes:
         name = (node.get("metadata") or {}).get("name")
         if name == failed or not _takes_work(node):
@@ -82,9 +90,13 @@ def forecast(failed, nodes, pods, preview, owner):
         objects[name] = node
         survivors[name] = {"name": name, "cpu_alloc": RESOURCES.quantity(alloc.get("cpu"), "cpu"),
                            "mem_alloc": RESOURCES.quantity(alloc.get("memory")), "pods": [], "got": False}
-    # Where each app and VM may go, from the impact preview. Rows that stop,
-    # or wait for this host to come back, need no room elsewhere.
-    listed = {(r.get("ns"), r.get("name")): r for r in preview.get("apps") or [] if r.get("kind") in ("app", "vm")}
+    # Where each app, VM and StatefulSet may go, from the impact preview. Rows
+    # that stop, wait (for this host, or for a StatefulSet's pod to be
+    # deleted) or couldn't be checked need no room elsewhere.
+    # Keyed by kind as well, so a Deployment and a StatefulSet of one name
+    # each find their own row.
+    listed = {(r.get("kind") == "set", r.get("ns"), r.get("name")): r for r in preview.get("apps") or []
+              if r.get("kind") in ("app", "vm", "set")}
     moving, pending = [], set()
     for pod in pods:
         if not _live(pod):
@@ -96,14 +108,18 @@ def forecast(failed, nodes, pods, preview, owner):
             if (pod.get("status") or {}).get("phase") == "Pending":
                 pending.add(app_id)
             continue
-        need = {"id": app_id, **_need(pod)}
+        need = {"id": app_id, **_need(pod, lad)}
         if where in survivors:
             survivors[where]["pods"].append(need)
         elif where == failed and not _daemon(pod):
-            row = listed.get((meta.get("namespace"), owner(pod) or meta.get("name")))
+            of_set = any(o.get("kind") == "StatefulSet" for o in meta.get("ownerReferences") or [])
+            row = listed.get((of_set, meta.get("namespace"), owner(pod) or meta.get("name")))
             if row is None:
                 # A bare pod is not started again anywhere.
                 if not meta.get("ownerReferences"):
+                    continue
+                # Nor is a StatefulSet's, while the old one might still run.
+                if of_set:
                     continue
                 # As its controller would start it again: the host it ran on is
                 # the scheduler's choice, not part of the pod it asks for.
@@ -111,7 +127,7 @@ def forecast(failed, nodes, pods, preview, owner):
                 moving.append({**need, "to": [h for h in survivors if PLACE.may_run_on(again, objects[h])]})
             elif row.get("outcome") == "moves":
                 moving.append({**need, "to": row.get("to") or []})
-    moving.sort(key=lambda p: (ORDER[p["tier"]], -p["mem"], p["id"]))
+    moving.sort(key=lambda p: (-p["prio"], -p["mem"], p["id"]))
     before = {h["name"]: sum(p["mem"] for p in h["pods"]) for h in survivors.values()}
 
     def used(host, pods=None):
@@ -123,14 +139,14 @@ def forecast(failed, nodes, pods, preview, owner):
         return cpu + pod["cpu"] <= host["cpu_alloc"] and mem + pod["mem"] <= host["mem_alloc"]
 
     def preempt(host, pod):
-        """The pods pod would evict from host to fit, or None: those of a
-        lower tier, lowest first, keeping back any that still fit after."""
-        lower = [p for p in host["pods"] if ORDER[p["tier"]] > ORDER[pod["tier"]]]
-        kept = [p for p in host["pods"] if ORDER[p["tier"]] <= ORDER[pod["tier"]]]
+        """The pods pod would evict from host to fit, or None: those with a
+        lower priority number, lowest first, keeping back any that still fit after."""
+        lower = [p for p in host["pods"] if p["prio"] < pod["prio"]]
+        kept = [p for p in host["pods"] if p["prio"] >= pod["prio"]]
         if not fits(host, pod, kept):
             return None
         victims = []
-        for other in sorted(lower, key=lambda p: (ORDER[p["tier"]], -p["mem"])):
+        for other in sorted(lower, key=lambda p: (-p["prio"], -p["mem"])):
             if fits(host, pod, kept + [other]):
                 kept.append(other)
             else:
@@ -148,10 +164,10 @@ def forecast(failed, nodes, pods, preview, owner):
         if room:
             place(room[0], pod)
             continue
-        options = [] if pod["tier"] == "low" else [(h, v) for h in allowed for v in [preempt(h, pod)] if v is not None]
+        options = [] if not pod["preempts"] else [(h, v) for h in allowed for v in [preempt(h, pod)] if v is not None]
         if options:
             # The host where the fewest apps must go, then the least important of them.
-            host, victims = min(options, key=lambda o: (_apps(o[1]), -max(ORDER[v["tier"]] for v in o[1]) if o[1] else 0,
+            host, victims = min(options, key=lambda o: (_apps(o[1]), max(v["prio"] for v in o[1]) if o[1] else 0,
                                                         -(o[0]["mem_alloc"] - used(o[0])[1])))
             for victim in victims:
                 host["pods"].remove(victim)
@@ -174,9 +190,14 @@ def forecast(failed, nodes, pods, preview, owner):
     # anything moved is not this failure's doing.
     verdict = ("fits" if not moving else "no-host" if not survivors else "waits" if stuck
                else "tight" if any(h["received"] and h["full"] >= TIGHT for h in hosts) else "fits")
+    sets = [r for r in preview.get("apps") or [] if r.get("kind") == "set"]
+    # One set to wait for its host waits as a Deployment does: not for deletion.
+    waiting = sum(1 for r in sets if r.get("outcome") == "waits" and r.get("why") != IMPACT.FAILOVER_WORDS["wait"][1])
+    unchecked = sum(1 for r in sets if r.get("outcome") == "unknown")
     return {"node": failed, "verdict": verdict, "moving": _apps(moving), "hosts": hosts, "pending": len(pending),
             "waits": _rows(waits), "evicted": _rows(evicted, "on"), "unreserved": unreserved,
-            "sentence": sentence(failed, verdict, hosts, stuck, len(moving))}
+            "waiting_for_deletion": waiting,
+            "sentence": sentence(failed, verdict, hosts, stuck, len(moving)) + _deletion_clause(waiting, unchecked, "StatefulSets" in (preview.get("unread") or []))}
 
 
 def _rows(pods, *extra):
@@ -215,6 +236,19 @@ def sentence(failed, verdict, hosts, stuck, moving=1):
             f"would {'wait for room or be evicted' if evicted else 'wait for room'}.")
 
 
+def _deletion_clause(waiting, unchecked, unread=False):
+    """What "fits" would otherwise hide: StatefulSets that stay down until
+    their pod is deleted, those that couldn't be checked, and all of them
+    when they couldn't be read (#440)."""
+    parts = []
+    if waiting:
+        parts.append("1 app waits until its pod is deleted" if waiting == 1
+                     else f"{waiting} apps wait until their pod is deleted")
+    if unchecked:
+        parts.append(f"{unchecked} app{'' if unchecked == 1 else 's'} couldn't be checked")
+    clause = f" {' and '.join(parts)}; If this host goes down says why." if parts else ""
+    return clause + (" StatefulSets couldn't be read, so they aren't counted." if unread else "")
+
 
 # What every_host reads, bound by server.py: the cluster, a host's impact
 # preview (homestead_impact, given the sources it shares), those sources, the
@@ -250,7 +284,7 @@ def every_host():
             out.append(forecast(name, nodes, pods, impact(name, shared), owner))
         except Exception as error:
             out.append({"node": name, "verdict": "unknown", "moving": 0, "hosts": [], "waits": [], "evicted": [],
-                        "unreserved": 0, "pending": 0,
+                        "unreserved": 0, "pending": 0, "waiting_for_deletion": 0,
                         "sentence": f"Could not work out what happens if {name} fails: {str(error)[:120]}"})
     # The cluster's own figures, not the largest of any one host's: every
     # app that reserves nothing, and every app with a pod waiting for a host.
