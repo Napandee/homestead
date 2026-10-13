@@ -322,7 +322,7 @@ function addVolumeRow(host, v = {}) {
       <div><label>${esc(ctx.pathLabel)}</label><input class="vp" type="text" value="${esc(v.path || "")}" placeholder="${esc(ctx.pathPlaceholder)}"></div>
       <div><label>Storage source</label><select class="vk">${kinds.map(k =>
         `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
-      <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
+      <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" aria-label="Volume" style="display:none"></select></div>
       <div class="vfolder"><label title="Mount one folder of the volume here, so several paths can share one volume">Folder in volume</label><input class="vsub" type="text" value="${esc(v.sub_path || "")}" placeholder="whole volume"></div>
       <div class="vnew"><div><label class="vsize-label">Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
         <div><label>Storage class</label><select class="vsc">${storageClassOptions(classes, v.storage_class || "longhorn-r2", ctx.classFacts())}</select></div></div>

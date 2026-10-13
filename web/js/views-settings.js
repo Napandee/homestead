@@ -287,7 +287,7 @@ async function viewSettings() {
       `, {tab:`connections`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into; Deploy offers each of them. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
+        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into; Deploy offers each of them. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" aria-label="New namespace" placeholder="new-namespace" maxlength="63" autocomplete="off"
             onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}`)}
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
       `, {tab:`namespaces`, id:`nsCard`})}
@@ -398,14 +398,14 @@ async function replicasPaint() {
   const note = r.desired > 1 && r.spread_nodes < Math.min(r.desired, ready)
     ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} node${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as nodes free up.</div>`
     : r.desired === 1 ? `<div class="note">One copy: if its node fails, Homestead is away until Kubernetes starts it elsewhere - about a minute. Two copies on different nodes keep it answering.</div>` : "";
-  STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
+  STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count" aria-label="Copies of Homestead">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
         `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
         <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}`)}
     ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every node can mount.</b> ${esc(r.data.reason)}.
       ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
     ${r.data?.pvc ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px"><span class="small">Its data: <span class="mono">${esc(r.data.pvc)}</span> on <b>${esc(r.data.storage_class || "?")}</b></span>
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
-        <select id="rep_class">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
+        <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.

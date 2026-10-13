@@ -591,7 +591,7 @@ window.lhAssign = (vol, label) => {
     <div id="pa_groups">${(d.groups || []).map(g => `<label class="switch" style="margin:0 0 8px">
       <input type="checkbox" class="pg" value="${esc(g)}" ${v.groups.includes(g) ? "checked" : ""}>
       ${esc(g)}</label>`).join("")}</div>
-    <input type="text" id="pa_newgroup" placeholder="…or a new group" autocomplete="off">
+    <input type="text" id="pa_newgroup" aria-label="New group" placeholder="…or a new group" autocomplete="off">
     <div class="dim xs" style="margin-top:6px">A volume in <span class="mono">default</span> and another group gets both groups' jobs.</div>
     <div class="sec">Individual jobs</div>
     <div id="pa_jobs">${(d.jobs || []).map(j => `<label class="switch" style="margin:0 0 8px">

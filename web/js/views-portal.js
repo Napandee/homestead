@@ -108,12 +108,12 @@ function portalEditRows() {
     ${PORTAL_EDIT.map((row, i) => `<div class="pe-row card flat" data-i="${i}">
       <div class="pe-icon">${portalIcon({ ...row, shown: portalPreview(row) }, "sm")}</div>
       <div class="pe-fields">
-        <div class="pe-line"><input class="pe-title" value="${esc(row.title)}" placeholder="Title" maxlength="60" data-k="title">
-          <input class="pe-url mono" value="${esc(row.url)}" placeholder="http://192.0.2.1" data-k="url"></div>
-        <div class="pe-line"><input class="pe-section" list="pe_sections" value="${esc(row.section || "")}" placeholder="Section, e.g. Network" maxlength="40" data-k="section">
-          <select class="pe-iconpick" data-k="icon">${portalIconOptions(row.icon || "")}</select>
+        <div class="pe-line"><input class="pe-title" aria-label="Title" value="${esc(row.title)}" placeholder="Title" maxlength="60" data-k="title">
+          <input class="pe-url mono" aria-label="Address" value="${esc(row.url)}" placeholder="http://192.0.2.1" data-k="url"></div>
+        <div class="pe-line"><input class="pe-section" aria-label="Section" list="pe_sections" value="${esc(row.section || "")}" placeholder="Section, e.g. Network" maxlength="40" data-k="section">
+          <select class="pe-iconpick" aria-label="Icon" data-k="icon">${portalIconOptions(row.icon || "")}</select>
           ${row.icon === "url" ? `<input class="pe-iconurl" value="${esc(row.icon_url || "")}" placeholder="https://…/logo.png" data-k="icon_url">` : ""}</div>
-        <input class="pe-note" value="${esc(row.note || "")}" placeholder="Note (optional): what or where it is" maxlength="120" data-k="note">
+        <input class="pe-note" aria-label="Note" value="${esc(row.note || "")}" placeholder="Note (optional): what or where it is" maxlength="120" data-k="note">
       </div>
       <div class="pe-move">
         <button class="iconbtn" type="button" title="Move up" onclick="portalMove(${i},-1)" ${i ? "" : "disabled"}>↑</button>

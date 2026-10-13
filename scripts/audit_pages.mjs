@@ -138,7 +138,14 @@ async function audit([label, width, height, mobile], items) {
           const lines = new Set([...range.getClientRects()].map((x) => Math.round(x.top))).size;
           return r.width < 90 && lines >= 3 && e.textContent.trim().length > 12;
         }).map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].slice(0, 2).join(".")} "${e.textContent.trim().slice(0, 30)}"`);
+        // A field with no name: a screen reader says "edit text" and nothing more.
+        const unnamed = [...root.querySelectorAll("input:not([type=hidden]), select, textarea")].filter((e) => e.checkVisibility()
+          && !(e.getAttribute("aria-label") || "").trim() && !(e.getAttribute("title") || "").trim()
+          && ![...(e.labels || [])].some((l) => l.textContent.trim())
+          && !(e.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => document.getElementById(id)?.textContent.trim()))
+          .map((e) => e.id ? `#${e.id}` : `${e.tagName.toLowerCase()}${e.name ? `[name=${e.name}]` : ""}.${[...e.classList].slice(0, 2).join(".")}`);
         return {
+          unnamed: [...new Set(unnamed)].slice(0, 8),
           title: document.querySelector("#views .phead h1, #views .phead h2, #views .phead")?.textContent.trim().split("\n")[0].slice(0, 40),
           height: document.documentElement.scrollHeight,
           sideways: document.documentElement.scrollWidth > vw + 1,
@@ -155,6 +162,7 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.overflow.length) failures.push(`${name} (${label}): runs off the screen: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
       if (metrics.squeezed.length) failures.push(`${name} (${label}): text squeezed into a narrow column: ${metrics.squeezed.join(", ")}`);
+      if (metrics.unnamed.length) failures.push(`${name} (${label}): fields with no name: ${metrics.unnamed.join(", ")}`);
     } catch (error) {
       failures.push(`${name} (${label}): could not open: ${error.message.split("\n")[0]}${errors.length ? ` - error: ${errors.at(-1)}` : ""}`);
     }

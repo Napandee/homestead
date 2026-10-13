@@ -210,7 +210,7 @@ window.imageUpdateCenter = async () => {
     ${affected.length ? [here, elsewhere].map((rows, i) => !rows.length ? "" : `${i ? UI.section(`Updated elsewhere · ${rows.length}`, "") : ""}<div class="settings-list">${rows.map(w => {
       const failures = (w.images || []).filter(image => image.error);
       const owner = updateOwner(w), pick = w.available && !owner;
-      return `<div class="settings-list-row update-center-row">${pick ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
+      return `<div class="settings-list-row update-center-row">${pick ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" aria-label="Select ${esc(w.name)}" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
         ${owner ? `<div class="dim xs">${esc(updateOwnerTip(owner))}</div>` : ""}
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
         <div class="row">${owner ? updateOwnerPill(w) : w.available ? '<span class="pill warn">update available</span>' : ""}
@@ -1457,7 +1457,7 @@ window.wlFailover = async () => {
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>
       ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
           ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
-        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`)}</td></tr>`).join("")}
+        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s node fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
@@ -2823,7 +2823,7 @@ function storeSection(mode, apps, total) {
 
 async function viewStore() {
   resetPaint();
-  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
+  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" aria-label="Search the App Store" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
       <button class="btn pri" onclick="storeSearch()">Search</button>`, {actionsClass:`store-search`})}
     <div class="store-browse-head"><div class="seg store-modes" id="s_modes">
       ${Object.entries(STORE_MODES).map(([mode, [label]]) => `<button data-mode="${mode}" class="${STORE_MODE === mode ? "on" : ""}" onclick="storeBrowse(${jsq(mode)})">${label}</button>`).join("")}

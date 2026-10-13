@@ -144,7 +144,7 @@ function renderIpam() {
     ${(subnet.pool_clash || []).length ? `<div class="note bad"><b>Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.</b> A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.</div>` : ""}
     ${u.configured && u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
     <div class="between ipam-tools"><div class="row">
-      <select onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
+      <select aria-label="Show" onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
         ["reserved", "Held"], ["infrastructure", "Network gear"], ["cluster", "Cluster"], ["undocumented", "Undocumented"], ["flagged", `Needs attention (${flagged})`]]
         .map(([v, l]) => `<option value="${v}" ${STATE.ipamFilter === v || (!STATE.ipamFilter && !v) ? "selected" : ""}>${esc(l)}</option>`).join("")}
         <optgroup label="Category">${Object.entries(IPAM_CATEGORIES).map(([k, [label]]) =>
@@ -152,8 +152,8 @@ function renderIpam() {
       <span class="dim xs">${rows.length} shown</span></div></div>
       <div class="row ipam-bulk" id="ipamBulk" ${ipamPicks().size ? "" : "hidden"}><b class="small" id="ipamBulkCount">${ipamPicks().size} selected</b>
         <button class="btn sm" type="button" onclick="ipamSelectAll(false)" title="Untick every address">Clear</button>
-        <select id="ipamBulkCategory">${ipamCategoryOptions("", "category…")}</select>
-        <select id="ipamBulkKind"><option value="">kind…</option>${Object.entries(IPAM_KIND_LABELS).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
+        <select id="ipamBulkCategory" aria-label="Category for the selected addresses">${ipamCategoryOptions("", "category…")}</select>
+        <select id="ipamBulkKind" aria-label="Kind for the selected addresses"><option value="">kind…</option>${Object.entries(IPAM_KIND_LABELS).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
         <input id="ipamBulkTag" placeholder="add tag" style="width:110px">
         <input id="ipamBulkOwner" placeholder="owner" style="width:110px">
         <button class="btn sm pri" onclick="ipamBulk()">Apply</button>
@@ -336,7 +336,7 @@ function ipamSubnetRow(s = {}) {
       <div class="f"><label>DHCP from</label><input class="is-d1 mono" value="${esc(s.dhcp_start || "")}"></div>
       <div class="f"><label>DHCP to</label><input class="is-d2 mono" value="${esc(s.dhcp_end || "")}"></div>
       <div class="f"><label>VLAN</label><input class="is-vlan" type="number" min="1" max="4094" value="${s.vlan || ""}"></div></div>
-    <div class="row"><input class="is-note" value="${esc(s.note || "")}" placeholder="Notes" style="flex:1">
+    <div class="row"><input class="is-note" aria-label="Notes" value="${esc(s.note || "")}" placeholder="Notes" style="flex:1">
       <button class="btn sm danger" type="button" onclick="this.closest('.ipam-subnet').remove()">Remove</button></div></div>`;
 }
 window.ipamSubnets = (add = "") => {
