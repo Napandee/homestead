@@ -1549,7 +1549,7 @@ async function viewImport() {
   if (nodes.length) STATE.data.nodes = nodes;
   const [srcs, jobs, namespaces, storageClasses] = await Promise.all([
     api("/api/sources"), api("/api/imports").catch(() => []),
-    api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
   ]);
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
@@ -1567,13 +1567,13 @@ async function viewImport() {
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="imports" class="tbl stack"><thead><tr>
       <th>App</th><th>Job</th><th>State</th><th>Progress</th><th data-nosort>Started</th><th></th></tr></thead><tbody>
-      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== "lab" ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
+      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== defaultNamespace() ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || "lab")},${jsq(j.name)})` },
-          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || "lab")})`, need: "admin", danger: j.state === "failed",
+        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
+          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || defaultNamespace())})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
@@ -1620,7 +1620,7 @@ function importSourceSteps() {
       <span class="dim small">Imported apps start stopped, and run once their data has been copied.</span></div>
   </div>`;
 }
-window.importRemove = async (name, state, namespace = "lab") => {
+window.importRemove = async (name, state, namespace = defaultNamespace()) => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, namespace }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
@@ -1660,7 +1660,7 @@ window.importRemove = async (name, state, namespace = "lab") => {
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep it</button>`)}`);
   if (window.applyRole) window.applyRole();
 };
-window.importRemoveNow = async (name, button, namespace = "lab") => {
+window.importRemoveNow = async (name, button, namespace = defaultNamespace()) => {
   const volumes = $$(".imr-volume").filter(box => box.checked).map(box => box.value);
   const body = { name, namespace, remove_workload: !!$("#imr_workload")?.checked,
     remove_volume: volumes.length > 0, remove_volumes: volumes };
@@ -1678,12 +1678,12 @@ window.importRemoveNow = async (name, button, namespace = "lab") => {
 };
 
 window.vmDiskImport = () => {
-  const namespaces = STATE.data.importNamespaces || ["lab"];
+  const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = STATE.data.importStorageClasses || ["longhorn-r2"];
   modal("Import VM disk", `
     <div class="note"><b>CDI handles the conversion.</b> Provide a directly downloadable HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image. The source is streamed into a new Longhorn PVC; an existing disk is never overwritten.</div>
     <div class="f2" style="margin-top:16px">
-      <div class="f"><label>Namespace ${tip("The imported DataVolume and its PVC are created here. A VM using the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+      <div class="f"><label>Namespace ${tip("The imported DataVolume and its PVC are created here. A VM using the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
       <div class="f"><label>Disk / PVC name ${tip("This becomes both the CDI DataVolume name and the resulting PVC name.")}</label><input id="vd_name" placeholder="ubuntu-server"></div>
     </div>
     <div class="f"><label>Image URL ${tip("HTTP and HTTPS only. URLs containing embedded usernames or passwords are rejected; use a Kubernetes Secret for authenticated endpoints.")}</label><input type="url" id="vd_url" placeholder="https://example.net/images/server.qcow2"></div>
@@ -2142,7 +2142,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
   const [storage, liveNodes] = await Promise.all([
-    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] })),
+    api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] })),
     api("/api/nodes").catch(() => [])]);
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
@@ -2153,8 +2153,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
   const appStep = `
     <div class="f2"><div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
       <div class="f"><label>Namespace ${tip("The app, its volumes and the copy are all created here. Existing volumes to merge into are offered from this namespace.")}</label>
-        <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set(["lab", ...(STATE.data.importNamespaces || [])])].map(n =>
-          `<option value="${esc(n)}" ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
+        <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set([defaultNamespace(), ...(STATE.data.importNamespaces || [])])].map(n =>
+          `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
@@ -2490,7 +2490,7 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
     : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
       storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
       until you remove it, so it can be put back at any point before then.`}</p>
-  <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="lab"></div>
+  <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="${esc(defaultNamespace())}"></div>
     ${kind !== "container" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
       <select id="mv_mode" onchange="moveAddressMode(this.value)">
         <option value="shared">This cluster's shared address</option>
@@ -2519,7 +2519,7 @@ window.moveAddressMode = value => {
 };
 
 const moveBody = (cluster, kind, name) => ({
-  cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
+  cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || defaultNamespace(),
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
   storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
   source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES });
@@ -2787,7 +2787,7 @@ window.doImport = async source => {
   if (!first && !keepsNothing) return toast("add at least one volume", "bad");
   const existing = !!first && !first.create;
   try { await logoReady("#im_icon"); } catch (e) { return toast(e.message, "bad"); }
-  const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || "lab", remote_path: $("#im_path").value.trim(),
+  const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || defaultNamespace(), remote_path: $("#im_path").value.trim(),
     source_consistency: $("#im_consistency")?.value || "", source_container_id: cfg.source_container_id || "",
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
     mappings, volumes: keepsNothing ? [] : volumes,

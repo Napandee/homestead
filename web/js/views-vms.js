@@ -849,7 +849,7 @@ async function viewVmImport() {
   if (platformLacks("kubevirt", "Virtual machines")) return;
   const [srcs, disks, namespaces, storageClasses] = await Promise.all([
     api("/api/sources").catch(() => []), api("/api/vm-disks").catch(() => []),
-    api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
   ]);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   STATE.data.uvms = STATE.data.uvms || {};
@@ -944,7 +944,7 @@ window.uvmImport = async (source, name) => {
   const opts = await api("/api/vm/create-options").catch(() => ({ cdi: true, storage_classes: [], network_details: [] }));
   if (opts.cdi === false) return modal(`Import ${name}`, UI.lead("VM disks arrive through CDI, KubeVirt's disk importer, and this cluster does not have it. Install CDI from kubevirt.io, then import again.") + UI.actions(UI.cancel("Close")));
   window.__uvm = { source, vm };
-  const namespaces = STATE.data.importNamespaces || ["lab"];
+  const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = opts.storage_classes?.length ? opts.storage_classes : (STATE.data.importStorageClasses || ["longhorn-r2"]);
   const facts = opts.storage_class_facts || {};
   const hw = [vm.firmware === "uefi" ? "UEFI" : "BIOS", vm.secure_boot ? "Secure Boot" : "", vm.tpm ? "TPM" : "", vm.hyperv ? "Hyper-V enlightenments" : ""].filter(Boolean).join(" · ");
