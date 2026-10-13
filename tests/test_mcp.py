@@ -464,6 +464,18 @@ class CatalogueTests(unittest.TestCase):
             self.assertRegex(tool.name, r"^[a-z][a-z0-9_]{2,63}$")
 
 
+class DeployTierToolTests(unittest.TestCase):
+    def test_the_deploy_tools_say_a_tier_can_be_chosen(self):
+        # The settings go through as they are (_clean keeps a tier); what an
+        # agent needs is to be told the field is there (#431).
+        # deploy_container takes exactly what preview_deploy reviewed.
+        tool = TOOLS.BY_NAME["preview_deploy"]
+        self.assertRegex(tool.description + json.dumps(tool.schema), r"priority \(critical, normal or low; normal if left out\)")
+
+    def test_a_deploy_tier_is_not_dropped_on_the_way(self):
+        self.assertEqual({"priority": "low"}, TOOLS._clean({"priority": "low"}))
+
+
 class ServerDoorTests(unittest.TestCase):
     def handler(self, path, method="POST", headers=None, body=b""):
         import server

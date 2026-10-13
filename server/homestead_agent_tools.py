@@ -541,7 +541,8 @@ TOOLS = [
          "deploy_options lists what can be chosen, and the namespace apps go in (default_namespace). Leave out "
          "ports for a container nothing connects to. Pass the answer's capacity_token to deploy_container.",
          {"settings": {**SETTINGS, "description": "The deploy settings: name, image, namespace, ports, env, volumes, "
-                                                   "cpu, memory, replicas, network_mode, node and the rest of Deploy's fields"}},
+                                                   "cpu, memory, replicas, network_mode, node, priority (critical, normal or low; normal if left out) "
+                                                   "and the rest of Deploy's fields"}},
          ["settings"], run=_preview("/api/preview")),
     Tool("deploy_container", "Deploy a container", "containers:manage", CHANGE,
          "Deploys a container. settings: exactly what preview_deploy reviewed, plus - inside settings - the "

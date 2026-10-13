@@ -475,3 +475,99 @@ class HomesteadManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeployTierTests(unittest.TestCase):
+    """The tier a new app is deployed at (#431): critical and low write the
+    ladder's class, normal and none write nothing."""
+    CLASSES = [{"metadata": {"name": "x-critical"}, "value": 100000},
+               {"metadata": {"name": "x-normal"}, "value": 10000, "globalDefault": True},
+               {"metadata": {"name": "x-low"}, "value": 1000, "preemptionPolicy": "Never"}]
+
+    def setUp(self):
+        self.LADDER = server.PRIORITY.ladder(self.CLASSES)
+        self.FALLBACK = server.PRIORITY._fallback(forbidden=False)
+        for patch in (mock.patch.object(server.HW, "features", return_value=[]),
+                      mock.patch.object(server.PRIORITY, "ladder", return_value=self.LADDER)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def cfg(self, **extra):
+        return {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [], "hardware": [], **extra}
+
+    def pod_spec(self, cfg):
+        deployment, _ = server.DEPLOY.build_deployment(cfg)
+        return deployment["spec"]["template"]["spec"]
+
+    def test_critical_and_low_write_the_ladders_class(self):
+        self.assertEqual("x-critical", self.pod_spec(self.cfg(priority="critical")).get("priorityClassName"))
+        self.assertEqual("x-low", self.pod_spec(self.cfg(priority="low")).get("priorityClassName"))
+
+    def test_normal_missing_and_empty_write_no_class(self):
+        for extra in ({"priority": "normal"}, {}, {"priority": ""}, {"priority": None}):
+            self.assertNotIn("priorityClassName", self.pod_spec(self.cfg(**extra)), extra)
+
+    def test_an_invalid_tier_is_refused(self):
+        for bad in ("group", "high", "Critical", 5):
+            with self.assertRaisesRegex(ValueError, "the tier must be critical, normal or low"):
+                server.DEPLOY.build_deployment(self.cfg(priority=bad))
+
+    def test_the_class_reaches_a_deploy_with_more_containers(self):
+        cfg = self.cfg(priority="critical", additional_containers=[
+            {"name": "side", "container_name": "side", "image": "side:1", "namespace": "lab"}])
+        self.assertEqual("x-critical", self.pod_spec(cfg).get("priorityClassName"))
+
+    def test_the_preview_shows_the_class(self):
+        with mock.patch.object(server.DEPLOY, "deploy_capacity_plan", return_value={}), \
+                mock.patch.object(server.DEPLOY.CAPACITY_REVIEW, "issue", return_value="token"):
+            shown = server.DEPLOY.preview(mock.Mock(body=self.cfg(priority="critical")))
+        self.assertEqual("x-critical", shown["deployment"]["spec"]["template"]["spec"]["priorityClassName"])
+
+    def test_a_config_with_no_priority_is_built_as_before(self):
+        # Share servers, imports and capacity_manifest carry no priority.
+        plain = self.pod_spec(self.cfg())
+        self.assertNotIn("priorityClassName", plain)
+        self.assertNotIn("priority", plain)
+
+    def test_the_class_is_ensured_before_the_deployment_is_created(self):
+        sent = []
+        patches = [mock.patch.object(server.DEPLOY, name, side_effect=lambda b, *a, **k: b) for name in (
+                       "analyze_deploy_intent", "ensure_profile_compatible", "prepare_deploy_network",
+                       "apply_deploy_bindings", "apply_generated_secrets", "prepare_lan")]
+        patches += [mock.patch.object(server.DEPLOY, "guard_managed_smb"), mock.patch.object(server.DEPLOY, "persist_icon_config"),
+                    mock.patch.object(server.DEPLOY.VOLOWNER, "prepare", side_effect=lambda b: b),
+                    mock.patch.object(server.DEPLOY, "new_claims", return_value=[]),
+                    mock.patch.object(server.DEPLOY, "deployment_volumes", return_value=[]),
+                    mock.patch.object(server.DEPLOY.ENVSEC, "externalize"),
+                    mock.patch.object(server.DEPLOY.OPS, "start", return_value={"id": "op"}),
+                    mock.patch.object(server.DEPLOY, "ksend", side_effect=lambda method, path, body=None: sent.append((method, path))),
+                    mock.patch.object(server.DEPLOY.PRIORITY, "ensure", side_effect=lambda tiers, lad=None: sent.append(("ensure", tuple(tiers))) or [])]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        server.DEPLOY.run_deploy(self.cfg(priority="critical"))
+        self.assertEqual(("ensure", ("critical",)), sent[0])
+        self.assertIn(("POST", "/apis/apps/v1/namespaces/lab/deployments"), sent)
+        sent.clear()
+        server.DEPLOY.run_deploy(self.cfg(priority="normal"))
+        server.DEPLOY.run_deploy(self.cfg())
+        self.assertFalse([s for s in sent if s[0] == "ensure"])
+
+    def test_an_app_store_install_with_a_tier_override_gets_the_class(self):
+        seen = {}
+        def review(cfg):
+            seen["spec"] = self.pod_spec(cfg)
+            return {"ok": True}
+        with mock.patch.object(server.DEPLOY, "reviewed_deploy", side_effect=review):
+            server.DEPLOY.appstore_install(mock.Mock(body={
+                "app": {"name": "Demo", "repo": "demo/app", "config": []}, "overrides": {"priority": "critical"}}))
+        self.assertEqual("x-critical", seen["spec"].get("priorityClassName"))
+
+    def test_classes_that_cannot_be_read_are_handled_as_edit_handles_them(self):
+        # As Edit does: the build names Homestead's own class by its name, and
+        # making the class refuses, with the ladder's message, rather than
+        # deploying an app that names a class nobody made.
+        with mock.patch.object(server.PRIORITY, "ladder", return_value=self.FALLBACK):
+            self.assertEqual("homestead-critical", self.pod_spec(self.cfg(priority="critical")).get("priorityClassName"))
+            with self.assertRaisesRegex(ValueError, "couldn't read the cluster's priority classes"):
+                server.DEPLOY.PRIORITY.ensure(["critical"])

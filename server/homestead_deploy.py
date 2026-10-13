@@ -27,6 +27,7 @@ import homestead_networking as NETWORK
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_platform as PLATFORM
+import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_routes as ROUTER
@@ -814,7 +815,26 @@ def _build_single_deployment(cfg):
     return dep, svc
 
 
+def deploy_tier(cfg):
+    """The tier a new app is deployed at (#431): "critical" or "low", or "" for
+    normal, which writes no class at all."""
+    tier = cfg.get("priority")
+    if tier in (None, "", "normal"):
+        return ""
+    if tier not in ("critical", "low"):
+        raise ValueError("the tier must be critical, normal or low")
+    return tier
+
+
 def build_deployment(cfg):
+    tier = deploy_tier(cfg)
+    dep, service = _build_deployment_with_extras(cfg)
+    if tier:
+        LC._apply_priority(dep["spec"]["template"]["spec"], tier)
+    return dep, service
+
+
+def _build_deployment_with_extras(cfg):
     extras = additional_container_configs(cfg)
     if not extras:
         return _build_single_deployment(cfg)
@@ -897,6 +917,9 @@ def run_deploy(b, *, reviewed_current=None):
     elif target_mode == "new":
         dep, svc = build_deployment(b)
         target = dep["metadata"]["name"]
+        # The class exists before the Deployment names it, as Edit does it.
+        if deploy_tier(b):
+            PRIORITY.ensure([deploy_tier(b)])
     else:
         raise ValueError("deployment target must be new or existing")
     reused = []
