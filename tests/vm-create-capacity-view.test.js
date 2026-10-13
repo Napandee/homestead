@@ -5,7 +5,7 @@ function setup({blocked=false,missing=false,fail=false,routine=false}={}) {
   const sent=[],exposed=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
     document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
-    toast(){},go(){},closeModal(){},modalBack(){},childModal:(_title,html)=>fields["#mbody"].innerHTML=html,
+    toast(){},go(){},closeModal(){},modalBack(){},defaultNamespace:()=>"lab",childModal:(_title,html)=>fields["#mbody"].innerHTML=html,
     deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,capacityNotes:p=>routine ? {concerns:[],caveats:p.warnings} : {concerns:p.warnings,caveats:[]},networkExpose:async(...args)=>exposed.push(args),
     api:async(path,options)=>{
       const body=JSON.parse(options.body);sent.push({path,body});
@@ -120,4 +120,41 @@ test("new VM isolation disables network controls and preserves existing restrict
   t.ctx.vmNetChanged();assert.equal(network.disabled,true);assert.equal(restricted.disabled,true);
   t.fields['#v_isolated'].checked=false;
   t.ctx.vmNetChanged();assert.equal(network.disabled,false);assert.equal(restricted.disabled,true);
+});
+function newVmForm(t,fields,{defaultNs="lab"}={}){
+  for(const [id,value] of Object.entries({v_boot:'',v_name:'guest',v_cores:'2',v_mem:'2Gi',v_disk:'20',v_pass:'long-test-password',v_net:'pod',...fields}))
+    t.fields[`#${id}`]=typeof value==="object" ? value : {value};
+  t.ctx.defaultNamespace=()=>defaultNs;t.ctx.vmPresetSettings=()=>null;
+  const reviews=[];t.ctx.vmCreateReview=async body=>reviews.push(body);
+  return reviews;
+}
+test("a new VM goes in the namespace chosen for it",async()=>{
+  const t=setup(),reviews=newVmForm(t,{v_ns:'home'});
+  await t.ctx.doVmCreate();
+  assert.equal(reviews[0].namespace,'home');
+});
+test("a new VM booting from an imported disk goes in that disk's namespace",async()=>{
+  const t=setup(),reviews=newVmForm(t,{v_ns:'home',v_boot:'disk:media/win-disk'});
+  await t.ctx.doVmCreate();
+  assert.equal(reviews[0].namespace,'media');assert.equal(reviews[0].disk_import,'win-disk');
+});
+test("without a namespace field a new VM goes in the install's default namespace, not lab",async()=>{
+  const t=setup(),reviews=newVmForm(t,{},{defaultNs:'home'});
+  await t.ctx.doVmCreate();
+  assert.equal(reviews[0].namespace,'home');
+});
+test("an ISO install outside the ISO library's namespace is stopped before review",async()=>{
+  const t=setup(),reviews=newVmForm(t,{v_ns:'media',v_boot:'iso:homestead-iso-debian'},{defaultNs:'home'});
+  const toasts=[];t.ctx.toast=m=>toasts.push(m);
+  await t.ctx.doVmCreate();
+  assert.equal(reviews.length,0);assert.match(toasts[0],/home/);
+});
+test("choosing an imported disk sets the namespace to the disk's own, and locks it",()=>{
+  const t=setup();newVmForm(t,{v_boot:'disk:media/win-disk',v_ns:{value:'home',disabled:false,dataset:{}},v_url_row:{},v_drivers_row:{},v_sc_row:{}});
+  t.fields['#v_boot'].selectedOptions=[{dataset:{}}];
+  t.ctx.vmBootChanged();
+  assert.equal(t.fields['#v_ns'].value,'media');assert.equal(t.fields['#v_ns'].disabled,true);
+  t.fields['#v_boot'].value='';t.ctx.vmBootChanged();
+  assert.equal(t.fields['#v_ns'].disabled,false);
+  assert.equal(t.fields['#v_ns'].value,'home',"going back to a new disk restores the namespace the person chose");
 });

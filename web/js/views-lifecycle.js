@@ -1082,21 +1082,27 @@ window.vmNetChanged = () => {
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   window.__vmNetworkReopen = "vm";
-  const [opts, disks, vipOptions, devices] = await Promise.all([
+  const [opts, disks, vipOptions, devices, namespaces] = await Promise.all([
     api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
     api("/api/vm-disks").catch(() => []),
     vipChoices(),
     api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
+    api("/api/namespaces").catch(() => [defaultNamespace()]),
   ]);
   // Imports are CDI DataVolumes, so without CDI there are none to attach.
   const readyDisks = opts.cdi ? disks.filter(d => d.phase === "Succeeded" && !d.in_use) : [];
-  const selected = selectedDisk ? `disk:${selectedNamespace || "lab"}/${selectedDisk}` : "";
+  const selected = selectedDisk ? `disk:${selectedNamespace || defaultNamespace()}/${selectedDisk}` : "";
   const images = (opts.images || []).filter(i => i.storage_class);
   const facts = opts.storage_class_facts || {};
   const classLabel = c => `${c}${facts[c]?.default ? " (default)" : ""}${facts[c]?.replicas ? ` · ${facts[c].replicas} copies` : ""}`;
   window.__vmCreateOptions = opts;
   const vmMachine = `
-    <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
+    <div class="f2">
+      <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
+      <div class="f"><label for="v_ns">Namespace ${tip("Where the VM, its disk and its cloud-init Secret are made. An imported disk sets it to its own; ISOs are in " + defaultNamespace() + ".")}</label>
+        <select id="v_ns" onchange="vmNamespaceChanged()">${[...new Set([defaultNamespace(), ...namespaces])].map(n => `<option ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        <div class="dim xs" id="v_ns_note" style="margin-top:4px" hidden></div></div>
+    </div>
     <div class="f2">
       <div class="f"><label>CPU cores</label><input type="number" id="v_cores" value="2" min="1" max="16"></div>
       <div class="f"><label>Memory</label><input type="text" id="v_mem" value="2Gi"></div>
@@ -1179,8 +1185,26 @@ window.vmBootChanged = () => {
   if ($("#v_drivers_row")) $("#v_drivers_row").hidden = !boot.startsWith("iso:");
   // An import brings its own disk; a Harvester image brings its own class.
   if ($("#v_sc_row")) $("#v_sc_row").hidden = boot.startsWith("disk:") || boot.startsWith("image:");
+  // An imported disk can only be attached in its own namespace.
+  const ns = $("#v_ns");
+  if (ns) {
+    // It comes back to the person's own choice when the disk is changed again.
+    if (boot.startsWith("disk:")) {
+      if (!ns.disabled) ns.dataset.chosen = ns.value;
+      ns.value = boot.slice(5).split("/")[0];
+    } else if (ns.disabled && ns.dataset.chosen) ns.value = ns.dataset.chosen;
+    ns.disabled = boot.startsWith("disk:");
+    if ($("#v_ns_note")) { $("#v_ns_note").hidden = !ns.disabled; $("#v_ns_note").textContent = "Set by the imported disk"; }
+  }
   const size = +($("#v_boot")?.selectedOptions[0]?.dataset.size || 0);
   if (size && +$("#v_disk").value < Math.ceil(size)) $("#v_disk").value = Math.ceil(size);
+};
+/* The ISO library is in the default namespace, and an ISO's volume can't be
+   mounted from another one: elsewhere the ISO choices are switched off. */
+window.vmNamespaceChanged = () => {
+  const outside = ($("#v_ns")?.value || defaultNamespace()) !== defaultNamespace();
+  $$("#v_boot option[value^='iso:']").forEach(option => { option.disabled = outside; });
+  if (outside && ($("#v_boot")?.value || "").startsWith("iso:")) { $("#v_boot").value = ""; vmBootChanged(); }
 };
 let VM_CREATE_REVIEW = null, VM_CREATE_BUSY = false, VM_CREATE_SEQUENCE = 0;
 window.doVmCreate = async () => {
@@ -1189,7 +1213,7 @@ window.doVmCreate = async () => {
   const imported = boot.startsWith("disk:") ? boot.slice(5).split("/") : [];
   const body = { name: $("#v_name").value.trim(), cores: +$("#v_cores").value,
     memory: $("#v_mem").value.trim(), disk_gb: +$("#v_disk").value, password: $("#v_pass").value,
-    namespace: imported[0] || "lab", disk_import: imported[1] || "",
+    namespace: imported[0] || $("#v_ns")?.value || defaultNamespace(), disk_import: imported[1] || "",
     image_id: boot.startsWith("image:") ? boot.slice(6) : "",
     image_url: boot === "url" ? $("#v_url").value.trim() : "",
     store_id: boot.startsWith("store:") ? boot.slice(6) : "",
@@ -1203,6 +1227,8 @@ window.doVmCreate = async () => {
     if (!body.static_ip.address) return toast("give the VM its address", "bad");
   }
   if (!body.name) return toast("name is required", "bad");
+  if (body.install_iso && body.namespace !== defaultNamespace())
+    return toast(`ISOs are in ${defaultNamespace()}: choose that namespace to install from one`, "bad");
   const serviceMode = body.network === "pod" ? $("#v_service")?.value || "" : "";
   const selectedVip = serviceMode === "manual" ? $("#vsvc_lb_ip").value.trim() : "";
   if (serviceMode === "manual" && !selectedVip) return toast("Choose the VM's Service VIP", "bad");
