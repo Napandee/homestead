@@ -450,8 +450,10 @@
     node_ips: ["192.0.2.207", "192.0.2.208", "192.0.2.210"], conflicts: [],
     pools: [{ name: "lab-pool", ready: true, total: 6, reported_available: 2,
       ranges: [{ start: "192.0.2.214", end: "192.0.2.219", candidate_count: 6 }] }],
-    workloads: workloads.map(row => ({ namespace: row.ns, name: row.name, replicas: row.desired,
+    workloads: [...workloads.map(row => ({ namespace: row.ns, name: row.name, replicas: row.desired,
       ports: row.ports.map(port => ({ name: "web", port: port.port, protocol: "TCP" })) })),
+      // A pod-network VM can be exposed like an app; the bridged ones use their LAN address.
+      { namespace: "lab", name: "ubuntu-test", kind: "VirtualMachine", replicas: 1, ports: [] }],
     vips: workloads.map(row => ({ ip: row.ports[0].ip, shared: false, services: 1,
       listeners: [{ namespace: row.ns, service: row.name, port: row.ports[0].port,
         protocol: "TCP", access: `http://${row.ports[0].ip}:${row.ports[0].port}`,
