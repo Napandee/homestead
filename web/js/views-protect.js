@@ -252,7 +252,7 @@ async function viewProtect() {
       <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ' <span class="tag warn" data-tip="The volume is gone; its backups are all that is left of it">volume deleted</span>'}
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
-      <td class="small dim">${b.last_backup_at ? esc(b.last_backup_at.replace("T", " ").replace("Z", "")) : "—"}</td>
+      <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
       <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
@@ -305,7 +305,7 @@ function protectVolumeRow(v) {
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
       || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
-    <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", ""))
+    <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
       : (v.protected_by || []).length ? '<span class="tag warn" data-tip="A job covers it, but no backup of it has been made yet">never</span>' : "never"}</td>
     <td>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
       { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`;
@@ -764,7 +764,7 @@ function backupTable(bks, vol, label) {
       <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
       <td class="mono">${b.size_mb} MB</td>
-      <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
+      <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
         b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
         { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")

@@ -1435,7 +1435,7 @@ async function viewSchedules() {
         <td><b>${esc(j.name)}</b></td>
         <td class="mono">${esc(j.schedule)}</td>
         <td class="mono small dim">${esc(j.image)}</td>
-        <td class="small dim">${esc((j.last || "—").replace("T", " ").replace("Z", ""))}</td>
+        <td class="small dim">${fmtWhen(j.last)}</td>
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill med">running</span>' : '<span class="pill ok">active</span>'}</td>
         <td>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
