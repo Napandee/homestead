@@ -22,17 +22,6 @@ const PROTECT_PLANS = [
       { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
-/* When a time on the cluster's clock is, for the person reading. */
-function localTime(date) {
-  return date.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
-}
-function nextRun(cron) {
-  const at = CRON.next(cron, new Date(), 1)[0];
-  if (!at) return '<span class="dim">never</span>';
-  const minutes = Math.max(1, Math.round((at - Date.now()) / 60000));
-  const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;
-  return `<span class="small" data-tip="${esc(localTime(at))}, your time">${soon}</span>`;
-}
 /* where: what says why a run failed - Longhorn's own jobs by default. */
 function lastRunText(j, where = "its pod's log in longhorn-system") {
   if (j.running) return '<span class="pill slim med">running</span>';
@@ -252,7 +241,7 @@ async function viewProtect() {
       <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ' <span class="tag warn" data-tip="The volume is gone; its backups are all that is left of it">volume deleted</span>'}
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
-      <td class="small dim">${b.last_backup_at ? esc(b.last_backup_at.replace("T", " ").replace("Z", "")) : "—"}</td>
+      <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
       <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
@@ -305,7 +294,7 @@ function protectVolumeRow(v) {
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
       || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
-    <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", ""))
+    <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
       : (v.protected_by || []).length ? '<span class="tag warn" data-tip="A job covers it, but no backup of it has been made yet">never</span>' : "never"}</td>
     <td>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
       { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`;
@@ -412,43 +401,6 @@ window.lhJobNewGroup = () => {
 /* Trims and cleanups keep nothing, so they have nothing to count. */
 const KEEPS = task => /^(snapshot|backup)(-force-create|-delete)?$/.test(task);
 window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").value); };
-/* ---------------- schedule builder ----------------
-   Shapes people use - every few minutes or hours, daily, some weekdays,
-   monthly - written to cron for Longhorn, with the next runs shown in the
-   reader's own time. Custom keeps the raw expression. */
-function scheduleBuilder(cron) {
-  const plan = CRON.toPlan(cron);
-  const time = (hour, minute) => `${String(hour ?? 2).padStart(2, "0")}:${String(minute ?? 0).padStart(2, "0")}`;
-  const kinds = [["minutes", "Every few minutes"], ["hours", "Every few hours"], ["daily", "Every day"], ["weekly", "On chosen days"], ["monthly", "Every month"], ["custom", "Custom cron"]];
-  return `<div class="f sched"><label>Schedule</label>
-    <div class="sched-row"><select id="ls_kind" onchange="scheduleChanged()">${kinds.map(([value, label]) =>
-      `<option value="${value}" ${plan.kind === value ? "selected" : ""}>${label}</option>`).join("")}</select>
-      <select id="ls_minutes" data-for="minutes">${CRON.MINUTE_STEPS.map(n => `<option value="${n}" ${plan.every === n ? "selected" : ""}>every ${n} min</option>`).join("")}</select>
-      <select id="ls_hours" data-for="hours">${CRON.HOUR_STEPS.map(n => `<option value="${n}" ${plan.kind === "hours" && plan.every === n ? "selected" : ""}>every ${n === 1 ? "hour" : `${n} hours`}</option>`).join("")}</select>
-      <label class="inline" data-for="hours">at minute <input id="ls_minute" type="number" min="0" max="59" value="${plan.kind === "hours" ? plan.minute : 0}"></label>
-      <select id="ls_day" data-for="monthly">${Array.from({ length: 28 }, (_, i) => i + 1).map(n => `<option value="${n}" ${plan.day === n ? "selected" : ""}>on day ${n}</option>`).join("")}</select>
-      <label class="inline" data-for="daily weekly monthly">at <input id="ls_time" type="time" value="${time(plan.hour, plan.minute)}"> UTC</label></div>
-    <div class="sched-days" data-for="weekly">${CRON.SHORT.map((day, i) => `<label class="daychip"><input type="checkbox" value="${i}" ${(plan.days || [0]).includes(i) ? "checked" : ""}><span>${day}</span></label>`).join("")}</div>
-    <input type="text" id="lj_cron" class="mono" data-for="custom" value="${esc(cron)}" placeholder="min hour day month weekday">
-    <div class="dim xs sched-next" id="ls_next"></div></div>`;
-}
-window.scheduleChanged = () => {
-  const kind = $("#ls_kind").value;
-  $$(".sched [data-for]").forEach(el => { el.hidden = !el.dataset.for.split(" ").includes(kind); });
-  if (kind !== "custom") {
-    const [hour, minute] = ($("#ls_time").value || "02:00").split(":").map(Number);
-    $("#lj_cron").value = CRON.fromPlan({ kind, hour, minute,
-      every: +(kind === "minutes" ? $("#ls_minutes").value : $("#ls_hours").value),
-      ...(kind === "hours" ? { minute: Math.max(0, Math.min(59, +$("#ls_minute").value || 0)) } : {}),
-      days: $$(".sched-days input:checked").map(box => +box.value), day: +$("#ls_day").value });
-  }
-  const cron = $("#lj_cron").value.trim(), runs = CRON.next(cron, new Date(), 3);
-  $("#ls_next").innerHTML = runs.length
-    ? `${esc(CRON.describe(cron))}. Next: ${runs.map(at => esc(localTime(at))).join(" · ")} <span class="dim">(your time)</span>`
-    : `<span class="bad-text">That cron expression never runs, or is not five fields.</span>`;
-};
-document.addEventListener("input", event => { if (event.target.closest(".sched")) scheduleChanged(); });
-document.addEventListener("change", event => { if (event.target.closest(".sched") && event.target.id !== "ls_kind") scheduleChanged(); });
 
 window.lhRun = async name => {
   try {
@@ -764,7 +716,7 @@ function backupTable(bks, vol, label) {
       <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
       <td class="mono">${b.size_mb} MB</td>
-      <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
+      <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
         b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
         { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")

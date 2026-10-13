@@ -142,6 +142,16 @@ const fmtUp = sec => {
 };
 const fmtAgo = sec => sec ? fmtUp(sec) + " ago" : "—";
 const ageSecs = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000)) : 0;
+/* An API timestamp, which is UTC, in the reader's own time and how long ago:
+   "22 Sep, 05:00 · 6h 2m ago". The UTC value goes in the tooltip. */
+const fmtWhen = iso => {
+  const at = iso ? new Date(iso) : null;
+  if (!at || isNaN(at)) return "—";
+  const text = at.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+    ...(at.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) });
+  const ago = ageSecs(iso) >= 60 ? ` · ${fmtAgo(ageSecs(iso))}` : "";
+  return `<span data-tip="${esc(at.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC"))}">${esc(text + ago)}</span>`;
+};
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
