@@ -93,10 +93,9 @@ function setupIntroHtml(ids, status) {
     ${UI.steps([
       { title: "Review the checks", detailHtml: "Automatic checks use cluster reports. Each step explains what is checked; some choices need your confirmation." },
       { title: "Configure your cluster", detailHtml: "Use Return to setup after visiting a configuration page. Next moves to the following step without marking the current one complete." },
-      { title: "Return when needed", detailHtml: "This guide opens each time an administrator signs in, until it is finished or you choose Don’t show again. The book icon in the top bar always opens it." },
+      { title: "Return when needed", detailHtml: "This guide opens each time an administrator signs in, until it is finished. The book icon in the top bar always opens it." },
     ])}
-    ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }),
-      UI.button("Don’t show this again", "setupReminders(true)"))}
+    ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }))}
   </section>`;
 }
 
@@ -293,7 +292,7 @@ const SETUP_STEPS = {
   people: {
     title: "Users", lead: s => s.done ? "At least two administrator accounts exist." :
       "Add a second administrator to reduce the risk of losing access. Give other users their own operator or viewer accounts with the permissions they need.",
-    actions: () => [{ label: "Manage users", run: "manageUsers()", pri: true }],
+    actions: () => [{ label: "Manage users", run: "settingsTab('access');go('settings')", pri: true }],
   },
   unifi: {
     title: "UniFi", lead: s => s.done ? "A UniFi Network address is configured. Check the connection in Settings." :
@@ -480,8 +479,14 @@ function setupStepHtml(id, state, status, ids) {
   const step = SETUP_STEPS[id], s = state.steps[id] || {}, st = status[id];
   const next = ids[ids.indexOf(id) + 1];
   const actions = (step.actions(s) || []).filter(Boolean);
-  const main = actions.filter(a => a.pri).map(a => UI.button(a.label, a.run, { kind: "pri" })).join("");
-  const rest = actions.filter(a => !a.pri).map(a => UI.button(a.label, a.run)).join("");
+  // One primary, last on the right: the step's main action, or else Next.
+  // Its other actions wait in a menu, so the row fits a phone.
+  const mainAction = actions.find(a => a.pri);
+  const main = mainAction ? UI.button(mainAction.label, mainAction.run, { kind: "pri" }) : "";
+  const others = actions.filter(a => a !== mainAction).map(a => ({ label: a.label, run: a.run }));
+  const rest = others.length ? actionBar(others, { shown: 0, label: `More for ${step.title}` }) : "";
+  const onward = next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsArg(next)})`, { kind: main ? "" : "pri" })
+    : UI.button("Finish guide", "setupFinish()", { kind: main ? "" : "pri" });
   const skip = st === "done" ? "" : st === "skipped"
     ? UI.button("Undo skip", `setupSkip(${jsArg(id)}, false)`) : UI.button("Skip this step", `setupSkip(${jsArg(id)}, true)`);
   return `<section class="card flat setup-card" data-step="${id}">
@@ -493,7 +498,7 @@ function setupStepHtml(id, state, status, ids) {
       ${step.more ? UI.more("How this works", step.more) : ""}
       <p class="small dim">Next does not mark this step complete.</p>
       ${!next ? '<p class="small dim">Finish guide stops the reminder. It does not mark unfinished checks as passed.</p>' : ""}
-      ${UI.actions(rest + main + (next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsArg(next)})`) : UI.button("Finish guide", "setupFinish()", { kind: "pri" })), skip)}
+      ${UI.actions(rest + onward + main, skip)}
     </section>`;
 }
 
@@ -509,7 +514,10 @@ window.setupOpen = id => {
   const status = Object.fromEntries(ids.map(x => [x, setupStatus(x, state.steps, state.skips)]));
   $("#setupStep").innerHTML = setupStepHtml(id, state, status, ids);
   if ($("#setupSelect")) $("#setupSelect").value = id;
-  $$("#setupPage .setup-step").forEach(b => b.classList.toggle("on", b.dataset.step === id));
+  $$("#setupPage .setup-step").forEach(b => {
+    b.classList.toggle("on", b.dataset.step === id);
+    if (b.dataset.step === id) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current");
+  });
   if (matchMedia("(max-width: 900px)").matches) $("#setupStep").scrollIntoView({ block: "start" });
   $("#setupStep .stepper-chip.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (window.applyRole) applyRole();

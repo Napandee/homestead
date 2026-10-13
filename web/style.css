@@ -3171,6 +3171,8 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .ui-actions-start,.ui-actions-end{flex-direction:row;align-items:center;flex-wrap:nowrap;width:auto;min-width:0}
 .ui-actions-start{margin-right:auto}
 .ui-actions-end{margin-left:auto}
+/* On a phone a long row wraps rather than run off the left edge. */
+@media (max-width:640px){.ui-actions-end{flex-wrap:wrap;justify-content:flex-end}}
 .ui-actions-end:has(>[data-dialog-dismiss]){display:contents}
 .ui-actions [data-dialog-dismiss]{margin-right:auto}
 .ui-actions .btn{width:auto;min-width:0;justify-content:center;white-space:normal}

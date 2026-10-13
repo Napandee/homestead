@@ -13,6 +13,14 @@ try {
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
+    // A step's other actions wait in its ⋯ menu; open it when the button isn't in the row.
+    const stepAction = async name => {
+      const button = page.locator("#setupStep").getByRole("button", { name, exact: true });
+      if (await button.isVisible()) return button.click();
+      // Its menu may open in place or be lifted out of the card into the page.
+      await page.locator("#setupStep details.actionmenu > summary").click();
+      await page.getByRole("button", { name, exact: true }).locator("visible=true").first().click();
+    };
     await page.goto(`${base}/?demo=1&demo-scenario=incidents`, { waitUntil: "networkidle" });
     await page.locator("#views .phead").waitFor({state:"attached"});
     await page.getByRole("button", { name: "Open the setup guide", exact: true }).click();
@@ -26,7 +34,7 @@ try {
     // Use the mobile picker or the desktop navigation to reach disk setup.
     if (width < 900) await page.locator("#setupSelect").selectOption("disks");
     else await page.locator('button.setup-step[data-step="disks"]').click();
-    await page.getByRole("button", { name: "Set up", exact: true }).click();
+    await stepAction("Set up");
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
     await page.locator("#nodePage").waitFor();
     await page.reload({ waitUntil: "networkidle" });
@@ -40,7 +48,7 @@ try {
     await page.evaluate(() => setupOpen("lan"));
     await page.getByText("Configuration found", { exact: true }).waitFor();
     assert.match(await page.locator("#setupStep").innerText(), /does not test host interfaces/);
-    await page.getByRole("button", { name: "Configure LAN networks", exact: true }).click();
+    await stepAction("Configure LAN networks");
     await page.locator("#netVmNets .vip-own").waitFor();
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
     assert.match(await page.locator("#setupReturn").innerText(), /LAN networks/);
@@ -53,10 +61,10 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/setup/lan-${width}.png`, fullPage: true });
     await page.evaluate(() => setupOpen("appearance"));
-    await page.getByRole("button", { name: "Mark as done on this device", exact: true }).click();
+    await stepAction("Mark as done on this device");
     await page.getByText("Confirmed by you", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Undo my confirmation", exact: true }).click();
-    await page.getByRole("button", { name: "Mark as done on this device", exact: true }).waitFor();
+    await stepAction("Undo my confirmation");
+    await page.locator("#setupStep button", { hasText: "Mark as done on this device" }).waitFor({ state: "attached" });
     await page.getByRole("button", { name: "Skip this step", exact: true }).click();
     await page.getByText("Skipped by choice", { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => STATE.data.setup.steps.appearance.done), false);
