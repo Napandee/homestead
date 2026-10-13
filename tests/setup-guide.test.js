@@ -181,3 +181,48 @@ test("SSD and HDD presets adapt to eligible V1 hosts and retain missing selector
   assert.equal(storageRecipes(ctx, { target: 3 })[3].hosts, null);
   assert.equal(storageRecipes(ctx, { target: 3 })[3].replicas, 3);
 });
+
+/* The guide as it renders: the real shared components and welcome.js. */
+function rendered() {
+  const ctx = { URLSearchParams, location: { search: "", protocol: "https:", hostname: "cluster.example.com", host: "cluster.example.com" },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    STATE: { data: {}, platform: {} }, $: () => null, $$: () => [], go: () => {}, matchMedia: () => ({ matches: false }), navigator: {},
+    document: { addEventListener() {}, querySelectorAll: () => [] }, icon: () => "", HomesteadRouter: { urlFor: () => "/setup" } };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  require("./helpers/load-ui")(ctx);
+  ctx.esc = s => String(s ?? "").replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+  ctx.jsArg = s => JSON.stringify(String(s ?? ""));
+  vm.runInContext(fs.readFileSync("web/js/welcome.js", "utf8"), ctx);
+  const state = { steps: {}, skips: {}, admin: true };
+  const ids = vm.runInContext("setupVisible", ctx)(state).flatMap(([, list]) => list);
+  const status = Object.fromEntries(ids.map(id => [id, "todo"]));
+  return { ctx, ids, html: id => vm.runInContext("setupStepHtml", ctx)(id, state, status, ids) };
+}
+/* The buttons of a step's own row, left to right, as their class lists. */
+const rowButtons = html => {
+  const row = html.slice(html.lastIndexOf('<div class="ui-actions'));
+  return [...row.matchAll(/<button\b[^>]*class="([^"]*)"/g)].map(m => m[1]);
+};
+
+test("every setup step ends its row with its main action, and has one primary at most", () => {
+  const { ids, html } = rendered();
+  for (const id of ids) {
+    const buttons = rowButtons(html(id)).filter(c => /\bbtn\b/.test(c));
+    const primaries = buttons.filter(c => /\bpri\b/.test(c));
+    assert.ok(primaries.length <= 1, `${id} has ${primaries.length} primary buttons`);
+    if (primaries.length) assert.match(buttons.at(-1), /\bpri\b/, `${id}: the primary is last`);
+  }
+});
+
+test("the intro offers Don't show again only in the page header", () => {
+  const { html } = rendered();
+  assert.doesNotMatch(html("intro"), /Don.t show/);
+});
+
+test("the Users step opens Settings, Users and access", () => {
+  const { ctx } = rendered();
+  const run = vm.runInContext("SETUP_STEPS", ctx).people.actions({})[0].run;
+  assert.match(run, /settingsTab\('access'\)/);
+  assert.match(run, /go\('settings'\)/);
+});
