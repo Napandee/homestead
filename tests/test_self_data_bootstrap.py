@@ -278,6 +278,43 @@ class BootstrapTests(unittest.TestCase):
         with self.assertRaises(Held):
             self.all_created()
 
+    # #466: classes Homestead couldn't read are told apart from no default class.
+    UNREAD = "couldn't read the cluster's PriorityClasses"
+
+    @staticmethod
+    def refusing(code):
+        def read(path):
+            raise urllib.error.HTTPError(path, code, "refused", {}, None)
+        return read
+
+    def test_a_failed_read_of_the_classes_is_not_taken_for_no_default(self):
+        self.assertTrue(B.default_priority(self.refusing(403)).get("unread"))
+        self.assertTrue(B.default_priority(self.refusing(500)).get("unread"))
+        # No scheduling API at all: there can be no default class.
+        self.assertIsNone(B.default_priority(self.refusing(404)))
+
+    def test_unread_classes_hold_a_helper_with_a_class_and_say_why(self):
+        unread = B.default_priority(self.refusing(403))
+        with self.assertRaises(Held) as held:
+            self.admitted_with(unread, priorityClassName="x-normal", priority=10000, preemptionPolicy="PreemptLowerPriority")
+        self.assertIn(self.UNREAD, str(held.exception))
+
+    def test_unread_classes_still_pass_a_helper_admission_left_alone(self):
+        self.admitted_with(B.default_priority(self.refusing(403)))
+
+    def test_setup_says_the_classes_couldnt_be_read(self):
+        read, classes = self.c.read, "/apis/scheduling.k8s.io/v1/priorityclasses"
+        def refused(path, *args, **kwargs):
+            if path.split("?")[0] == classes:
+                raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+            return read(path, *args, **kwargs)
+        self.c.read = refused
+        self.default_admission()
+        self.setup = self.fresh()
+        with self.assertRaises(Held) as held:
+            self.all_created()
+        self.assertIn(self.UNREAD, str(held.exception))
+
     def test_pending_unready_or_restarted_worker_cannot_be_pinned(self):
         self.all_created()
         with self.assertRaisesRegex(Held, "Waiting"): self.setup.worker_fact()

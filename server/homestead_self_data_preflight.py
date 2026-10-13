@@ -67,6 +67,8 @@ class Preflight:
         target = {"apiVersion": "v1", "kind": "Pod", "namespace": self.scope.namespace, "name": body["metadata"]["name"]}
         try:
             B.admitted(body, result, target, dry_run=True, default=self.default)
+        except B.PriorityUnknown:
+            raise
         except Exception:
             raise Held("Pod admission changed a reviewed setting or returned an unverifiable result. Nothing was created") from None
         # No UID/resourceVersion/timestamp from the simulated API object.
