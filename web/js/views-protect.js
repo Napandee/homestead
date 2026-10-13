@@ -507,7 +507,7 @@ window.lhGroupSave = async original => {
     jobs: $$("#lg_jobs input:checked").map(box => box.value),
     leave_default: $("#lg_leave") ? $("#lg_leave").checked : false };
   const plan = PROTECT_PLANS.find(p => p.id === $("#lg_plan").value);
-  if (!name) return toast("give the group a name", "bad");
+  if (!name) return toast("Give the group a name", "bad");
   try {
     if (plan) body.jobs.push(...await planApply(plan, name));
     const result = await api("/api/lh/group", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -522,8 +522,8 @@ window.lhGroupSave = async original => {
 window.lhGroupDel = async name => {
   const row = ((STATE.data.lh || {}).group_rows || []).find(g => g.name === name) || { volumes: [], jobs: [] };
   if (!(await ask(`Delete group "${name}"?` + String.fromCharCode(10, 10)
-      + `${row.volumes.length} volume(s) leave it; any with no other group go back to default and its jobs.`
-      + ` ${row.jobs.length} job(s) stop covering it. Snapshots and backups already taken are kept.`,
+      + `${plural(row.volumes.length, "volume")} leave it; any with no other group go back to default and its jobs.`
+      + ` ${plural(row.jobs.length, "job")} stop covering it. Snapshots and backups already taken are kept.`,
       { title: "Delete group", ok: "Delete group", danger: true }))) return;
   try {
     const result = await api("/api/lh/group/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -542,12 +542,12 @@ window.lhJobSave = async () => {
   const body = { name: $("#lj_name").value.trim(), task,
     cron: $("#lj_cron").value.trim(), retain: KEEPS(task) ? +$("#lj_retain").value : 0,
     concurrency: +$("#lj_conc").value, groups };
-  if (!body.name) return toast("name is required", "bad");
-  if (!groups.length) return toast("pick at least one group, or the job protects nothing", "bad");
+  if (!body.name) return toast("Name is required", "bad");
+  if (!groups.length) return toast("Pick at least one group, or the job protects nothing", "bad");
   try {
     await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    toast(`job "${body.name}" saved`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`Job "${body.name}" saved`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhJobDel = async name => {
@@ -556,7 +556,7 @@ window.lhJobDel = async name => {
   try {
     await api("/api/lh/job/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast("deleted", "ok"); resetPaint(); viewProtect();
+    toast("Deleted", "ok"); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhQuickStart = async () => {
@@ -564,14 +564,14 @@ window.lhQuickStart = async () => {
     await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *",
         retain: 7, concurrency: 2, groups: ["default"] }) });
-    toast("daily snapshot of every volume, keeping 7", "ok"); resetPaint(); viewProtect();
+    toast("Daily snapshot of every volume, keeping 7", "ok"); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhCovered = name => {
   const j = (STATE.data.lh.jobs || []).find(x => x.name === name);
   const vols = STATE.data.lh.volumes || [];
   modal("Covered by · " + name, j && j.volumes.length
-    ? `<p class="muted small">${j.volumes.length} volume(s), via group${j.groups.length === 1 ? "" : "s"}
+    ? `<p class="muted small">${plural(j.volumes.length, "volume")}, via group${j.groups.length === 1 ? "" : "s"}
        ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")} or a direct label.</p>
        <div style="margin-top:14px">${j.volumes.map(v => {
          const vv = vols.find(x => x.name === v) || {};
@@ -617,13 +617,13 @@ window.lhAssignSave = async vol => {
   });
   const extra = ($("#pa_newgroup").value || "").trim().toLowerCase();
   if (extra && !(d.groups || []).includes(extra)) calls.push({ volumes: [vol], name: extra, kind: "group", enabled: true });
-  if (!calls.length) { closeModal(); return toast("nothing changed"); }
+  if (!calls.length) { closeModal(); return toast("Nothing changed"); }
   try {
     for (const c of calls) {
       await api("/api/lh/assign", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(c) });
     }
-    toast(`${calls.length} change(s) applied`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`${plural(calls.length, "change")} applied`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -742,7 +742,7 @@ window.lhBackupDel = async (name, vol, label) => {
   try {
     await api("/api/lh/backup/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast("backup deleted", "ok");
+    toast("Backup deleted", "ok");
     if ($("#mbody")) lhBackupList(vol, label);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -750,7 +750,7 @@ window.lhSnapNow = async (vol, label) => {
   try {
     await api("/api/lh/snapshot", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }) });
-    toast("snapshot taken", "ok"); lhSnaps(vol, label);
+    toast("Snapshot taken", "ok"); lhSnaps(vol, label);
   } catch (e) { toast(e.message, "bad"); }
 };
 /* Trim one volume now; the weekly job trims every volume. Longhorn trims
@@ -766,7 +766,7 @@ window.lhBackupNow = async (vol, label) => {
   try {
     await api("/api/lh/backup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }) });
-    toast("backup started", "ok"); setTimeout(() => lhSnaps(vol, label), 1500);
+    toast("Backup started", "ok"); setTimeout(() => lhSnaps(vol, label), 1500);
   } catch (e) { toast(e.message, "bad"); }
 };
 let restoreCheckTimer = 0;
@@ -948,7 +948,7 @@ window.lhTargetSave = async () => {
     await api("/api/lh/target", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: $("#bt_url").value.trim(), secret: $("#bt_secret").value.trim(),
         poll: $("#bt_poll").value.trim() || "5m", ...(keys.access_key || keys.secret_key ? { keys } : {}) }) });
-    toast("backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
+    toast("Backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 

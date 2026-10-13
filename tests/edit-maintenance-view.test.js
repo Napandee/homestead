@@ -16,7 +16,7 @@ function setup(review) {
       if (fail) throw new Error("Review expired");
       return { ok: true, name: "demo", operation: {id:'power-job'}, steps:['cordoned'] };
     } };
-  vm.createContext(c);
+  vm.createContext(c); require("./helpers/core-text")(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
@@ -96,7 +96,7 @@ test("Host review names budgets and local data with escaped content", async () =
       local_storage: [{ pod: "lab/app", kind: "host-local path", source: "/<files>" }] } });
   await t.c.window.nodePowerReview("host1", "reboot");
   assert.match(t.html(), /Disruption budgets/);
-  assert.match(t.html(), /0 disruption\(s\) allowed/);
+  assert.match(t.html(), /0 disruptions allowed/);
   assert.match(t.html(), /Drain deletes emptyDir data/);
   assert.match(t.html(), /&lt;files&gt;/);
   assert.doesNotMatch(t.html(), /id="pw_execute"/);
@@ -107,7 +107,7 @@ test('Longhorn protection explains the bounded drain wait and allows reviewed ma
   const t = setup({...hostReview, warnings: ['Wait up to 2 minutes; power will not be sent if Longhorn keeps it protected'],
     maintenance: {budgets: [{pod: 'longhorn-system/<manager>', budget: 'longhorn-system/manager', allowed: 0, wait_for_drain: true}]}});
   await t.c.window.nodePowerReview('host1', 'reboot');
-  assert.match(t.html(), /0 disruption\(s\) allowed · waits for Longhorn during drain/);
+  assert.match(t.html(), /0 disruptions allowed · waits for Longhorn during drain/);
   assert.match(t.html(), /Wait up to 2 minutes/);
   assert.match(t.html(), /power will not be sent/);
   assert.match(t.html(), /&lt;manager&gt;/);

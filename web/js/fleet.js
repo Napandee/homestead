@@ -471,7 +471,7 @@ window.fleetLinkSave = async () => {
   try {
     const result = await api("/api/fleet/join", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    toast(`${result.member?.name || "The cluster"} is linked${result.missed?.length ? `; ${result.missed.length} other cluster(s) will catch up when they answer` : ""}`, "ok");
+    toast(`${result.member?.name || "The cluster"} is linked${result.missed?.length ? `; ${plural(result.missed.length, "other cluster")} will catch up when they answer` : ""}`, "ok");
     closeModal();
     await fleetRefreshAfter();
   } catch (e) {
@@ -504,7 +504,7 @@ window.fleetSaveAddress = async () => {
   try {
     const result = await api("/api/fleet/address", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: $("#fleetAddress").value.trim() }) });
-    toast(result.missed?.length ? `Saved; ${result.missed.length} cluster(s) will hear when they answer` : "Saved", "ok");
+    toast(result.missed?.length ? `Saved; ${plural(result.missed.length, "cluster")} will hear when they answer` : "Saved", "ok");
   } catch (e) { toast(e.message, "bad"); }
 };
 

@@ -145,7 +145,7 @@ function dashboardNodes(nodes, display="compact") {
     const issues=[...(n.disk_issues || []).map(i=>`${i.disk}: ${i.reason}`),...(n.temps?.disks || []).filter(d=>["critical","attention","degraded"].includes(d.health?.state)).map(d=>`${d.name}: ${d.health.summary || "Drive needs attention"}`)];
     const critical=n.status!=="Ready" || (n.disk_issues || []).some(i=>i.severity==="critical") || (n.temps?.disks || []).some(d=>d.health?.state==="critical");
     const tone=critical?"bad":issues.length || n.schedulable===false || ["warn","bad"].includes(n.host_os?.tone)?"warn":"ok";
-    const status=n.status!=="Ready"?n.status || "Not ready":issues.length?"Drive warning":n.schedulable===false?"Cordoned":["warn","bad"].includes(n.host_os?.tone)?"Host OS warning":"Ready";
+    const status=n.status!=="Ready"?stateWords(n.status) || "Not ready":issues.length?"Drive warning":n.schedulable===false?"Cordoned":["warn","bad"].includes(n.host_os?.tone)?"Host OS warning":"Ready";
     const cpuTemp=n.temps?.cpu_c, maxTemp=n.temps?.max_c;
     const temperature=known(maxTemp)?maxTemp:cpuTemp;
     const network=known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
@@ -334,9 +334,10 @@ function nodeComparison(nodes, context, { singleCard = true } = {}) {
 function comparisonDisk(n, d) {
   if (!d) return '<span class="dim">—</span>';
   const usage = diskUsage(n, d), lh = d.lh_size_gb > 0;
-  const label = d.name || (d.device === "longhorn" ? "Longhorn folder" : (d.device || "").toUpperCase()) || (lh ? "Longhorn filesystem" : "Unnamed drive");
+  const label = d.name || (d.device === "longhorn" ? "Longhorn folder" : (d.device || "")) || (lh ? "Longhorn filesystem" : "Unnamed drive");
+  const asReported = !d.name && label === d.device;  // a device name is case-sensitive: shown as the system gives it
   return `<div class="comparison-disk">
-    <b class="comparison-disk-name" title="${esc([label,d.device,d.model,...(d.lh_paths || [])].filter(Boolean).join(" · "))}">${esc(label)}</b>
+    <b class="comparison-disk-name${asReported ? " mono" : ""}" title="${esc([label,d.device,d.model,...(d.lh_paths || [])].filter(Boolean).join(" · "))}">${esc(label)}</b>
     <div class="comparison-disk-tags">${d.system ? '<span class="tag">system</span>' : ""}${lh ? '<span class="tag ok">Longhorn</span>' : !d.system ? `<span class="tag">${esc(d.role || "unassigned")}</span>` : ""}</div>
     <div class="comparison-disk-capacity mono small">${usage.capacity ? `<b>${usage.pct}%</b><span class="dim">${sizePair(usage.used,usage.capacity)}</span>` : `<span class="dim">${sizeText(d.size_gb)}</span>`}</div>
     ${usage.capacity ? `${driveBar(usage)}<span class="dim xs">Filesystem use${usage.physical ? ` · ${sizeText(usage.physical)} disk` : ""}</span>` : '<span class="dim xs">Usage unavailable</span>'}
@@ -360,7 +361,7 @@ function nodeComparisonMarkup(id) {
   const metric = (label, value, phone = true) => ({ label, values: nodes.map(value), phone });
   const percent = (value, kind) => value == null ? '<span class="dim">—</span>' : `<b class="mono">${esc(value)}%</b>${meter(value, "", kind)}`;
   const rows = [
-    metric("Status", n => `<span class="tag ${n.status === "Ready" ? "ok" : "bad"}">${esc(n.status)}</span>${n.schedulable === false ? '<span class="tag warn">cordoned</span>' : ""}
+    metric("Status", n => `<span class="tag ${n.status === "Ready" ? "ok" : "bad"}" data-tip="${esc(n.status)}">${esc(stateWords(n.status))}</span>${n.schedulable === false ? '<span class="tag warn">cordoned</span>' : ""}
       ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="tag ${n.host_os.tone}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}`),
     metric("CPU", n => percent(n.cpu_pct, "cpu")),
     metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>${n.temps?.cpu_model ? `<span class="comparison-note">${esc(n.temps.cpu_model)}</span>` : ""}`),
@@ -454,12 +455,12 @@ function nodeDiskLines(n) {
     const usage = diskUsage(n, d);
     const used = usage.capacity ? sizePair(usage.used, usage.capacity) : sizeText(d.size_gb);
     const folder = d.device === "longhorn";
-    const label = d.name || (folder ? "Longhorn folder" : d.device.toUpperCase());
+    const label = d.name || (folder ? "Longhorn folder" : d.device), asReported = !d.name && !folder;
     const where = [d.name && !folder ? d.device : "", d.model, ...(d.lh_paths || [])].filter(Boolean).join(" · ");
     const tags = [d.system ? '<span class="tag slimtag">system</span>' : "",
       lh ? '<span class="tag ok slimtag">Longhorn</span>' : "",
       !lh && !d.system ? `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>` : ""].join("");
-    return `<div><div class="between diskline-head"><span class="dim xs disklabel-row"><span title="${esc(where || d.device)}">${esc(label)}</span>${tags}</span>
+    return `<div><div class="between diskline-head"><span class="dim xs disklabel-row"><span${asReported ? ' class="mono"' : ""} title="${esc(where || d.device)}">${esc(label)}</span>${tags}</span>
       <span class="small mono">${usage.capacity ? `<b>${usage.pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
       ${usage.capacity ? `${driveBar(usage)}<div class="dim xs disk-usage-caption">Filesystem use${usage.physical ? ` · ${sizeText(usage.physical)} disk` : ""}</div>`
         : lh || system ? '<div class="dim xs disk-usage-caption">Usage unavailable</div>' : ""}
@@ -629,7 +630,7 @@ async function nodePage(name) {
   if (window.nodePortsPaint) nodePortsPaint(n);
 }
 function nodePageSummary(n) {
-  return `<span class="sumitem"><span class="pill ${n.status === "Ready" ? "ok" : "crit"}">${esc(n.status)}</span></span>
+  return `<span class="sumitem"><span class="pill ${n.status === "Ready" ? "ok" : "crit"}" data-tip="${esc(n.status)}">${esc(stateWords(n.status))}</span></span>
     <span class="sumitem">CPU <b>${n.cpu_pct}%</b> of ${n.cpu_cap}</span>
     <span class="sumitem">RAM <b>${n.mem_used_gb}/${n.mem_cap_gb} GB</b></span>
     <span class="sumitem">Disk <b>${n.fs_used_gb}/${n.fs_cap_gb} GB</b></span>
@@ -836,7 +837,7 @@ window.hardwareEdit = n => modal("Hardware · " + n.name, `
 window.hardwareSave = async node => {
   const body = { node, features: selectedHardware("hw_node") };
   try { await api("/api/node/hardware", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`hardware updated on ${node}`, "ok"); closeModal(); setTimeout(() => { resetPaint(); viewNodes(); }, 600); } catch (e) { toast(e.message, "bad"); }
+    toast(`Hardware updated on ${node}`, "ok"); closeModal(); setTimeout(() => { resetPaint(); viewNodes(); }, 600); } catch (e) { toast(e.message, "bad"); }
 };
 
 window.hardwareFeatureSettings = async () => {
@@ -918,7 +919,7 @@ window.hardwareUsePath = i => {
   } else {
     $("#hf_host").value = x.path; $("#hf_container").value = x.path; $("#hf_type").value = x.type;
   }
-  toast(`mapped ${x.kind === "usb" ? x.name : x.path}`, "ok");
+  toast(`Mapped ${x.kind === "usb" ? x.name : x.path}`, "ok");
 };
 window.hardwareFeatureSave = async oldId => {
   const feature = { id: $("#hf_id").value.trim(), name: $("#hf_name").value.trim(), description: $("#hf_desc").value.trim(),

@@ -7,7 +7,7 @@ function context() {
     appAvatar:()=>"", clusterAttr:r=>r.site?` data-cluster=\"${r.site.id}\"`:"", clusterTag:()=>"",remoteRow:r=>!!r.site&&!r.site.self,
     platformTag:()=>"",hardwareTags:()=>"",imageLabel:String, fmtUp:String, svcUrl:()=>"",fmtAgo:String,
     ratePair:()=>["0","Mb/s"],sizePair:()=>"0/10 GB",sizeText:()=>"10 GB",meter:()=>"",sev:()=>""};
-  c.window=c;vm.createContext(c);
+  c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
   vm.runInContext(core.slice(0,core.indexOf("/* Put text on the clipboard.")),c);
   for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
@@ -51,7 +51,7 @@ test("node comparison keeps one scrollable matrix and selection across refresh",
   assert.doesNotMatch(c.nodeComparison(nodes.slice(0,2),"test"),/aria-label="Select compute-host-4"/);
 });
 test("sorting keeps detail rows next to their parents, including empty values and stable ties",()=>{
-  const c={};vm.createContext(c);
+  const c={};vm.createContext(c);require("./helpers/core-text")(c);
   vm.runInContext(core.slice(core.indexOf('const SORT_UNITS'),core.indexOf('function sortRows(')),c);
   vm.runInContext(core.slice(core.indexOf('function sortBody('),core.indexOf('/* On a phone a stacked table')),c);
   const row=(key,value)=>({dataset:{rowKey:key},cells:[{dataset:{sort:value},textContent:value}]});

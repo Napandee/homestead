@@ -252,8 +252,8 @@ window.composeCreate = async () => {
 
 function composeCapacityHtml(plan) {
   return `<div class="note ${plan.blocked ? "bad" : "warn"}"><b>${plan.status === "fits" ? "A joint placement example fits" : plan.status === "unknown" ? "Complete placement could not be verified" : "Batch cannot fit the checked constraints"}</b>
-    <p>${plan.pods} planned pod(s). This is not a scheduler reservation or an OOM guarantee.</p></div>
-    <div class="dependency-list">${(plan.services || []).map(s => `<div class="drow"><div class="dl mono">${esc(s.name)} · ${s.replicas} pod(s)</div><div class="dv">Each pod: ${s.pod_request_gb} GiB requested / ${s.pod_memory_gb} GiB estimated · ${s.pod_cpu_request_percent}% CPU</div></div>`).join("")}</div>
+    <p>${plural(plan.pods, "planned pod")}. This is not a scheduler reservation or an OOM guarantee.</p></div>
+    <div class="dependency-list">${(plan.services || []).map(s => `<div class="drow"><div class="dl mono">${esc(s.name)} · ${plural(s.replicas, "pod")}</div><div class="dv">Each pod: ${s.pod_request_gb} GiB requested / ${s.pod_memory_gb} GiB estimated · ${s.pod_cpu_request_percent}% CPU</div></div>`).join("")}</div>
     <div class="sec">Conservative RAM upper estimates</div><p class="dim small">Each host's upper estimate includes every batch pod that could individually fit there. The estimates can exceed a possible joint placement; they are not assigned memory.</p>
     <div class="dependency-list">${(plan.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${n.baseline_gb} → up to ${n.upper_gb} GiB (${n.upper_percent}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
     ${(plan.warnings || []).map(w => `<div class="note warn">${esc(w)}</div>`).join("")}

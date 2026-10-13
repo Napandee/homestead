@@ -760,7 +760,7 @@ window.saveHealthSettings = async () => {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || {}) } };
     STATE.data.appSettings = null;
-    toast("health thresholds saved", "ok");
+    toast("Health thresholds saved", "ok");
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -1022,7 +1022,7 @@ window.saveUpdateSettings = async () => {
   try {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     STATE.data.appSettings = saved;
-    toast("image update policy saved", "ok");
+    toast("Image update policy saved", "ok");
     await loadImageUpdates(false, true);
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
@@ -1124,7 +1124,7 @@ window.sambaToggle = async box => {
 
 window.sambaInstallGo = async (selectedAddress = null) => {
   const address = selectedAddress === null ? ($("#smb_lb_ip")?.value || "").trim() : selectedAddress;
-  if (!address && !nodeAddressesOnly()) return toast("choose an address - add VIPs under Networking if the list is empty", "bad");
+  if (!address && !nodeAddressesOnly()) return toast("Choose an address - add VIPs under Networking if the list is empty", "bad");
   try {
     const r = await api("/api/self/samba", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true, address }) });
     toast(r.detail, "ok"); closeModal(); setTimeout(() => { addonsPaint(); selfHealthPaint(); }, 1500);
@@ -1139,7 +1139,7 @@ window.sambaRemove = () => {
 };
 window.sambaRemoveGo = async () => {
   const confirm = $("#smb_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-smb") return toast("type homestead-smb to confirm", "bad");
+  if (confirm !== "homestead-smb") return toast("Type homestead-smb to confirm", "bad");
   try {
     const r = await api("/api/addons/smb/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm }) });
@@ -1160,7 +1160,7 @@ window.nfsToggle = async box => {
     choices.used = [];
     choices.own = (choices.own || []).filter(v => v.free);
     const own = (choices.own || []).find(v => v.free);
-    return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${(nfs.exports || []).length} selected RWX share(s) on TCP port 2049. File access pauses if its host fails, until the replacement server and storage are available.</p>
+    return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${plural((nfs.exports || []).length, "selected RWX share")} on TCP port 2049. File access pauses if its host fails, until the replacement server and storage are available.</p>
       ${nfsRecovery(nfs, true)}
       <div class="note warn">Only the client networks configured for each share can mount it. Removing this server later leaves every share definition and PVC in place.</div>
       <p class="small">SMB and NFS use different ports, but their separately placed servers need separate VIPs to keep client IP restrictions and routing correct after a host failure. Sharing one VIP would require a combined file-server pod.</p>
@@ -1178,7 +1178,7 @@ window.nfsToggle = async box => {
 };
 window.nfsInstallGo = async () => {
   const address = ($("#nfs_lb_ip")?.value || "").trim();
-  if (!address) return toast("choose a dedicated VIP for NFS", "bad");
+  if (!address) return toast("Choose a dedicated VIP for NFS", "bad");
   try {
     const result = await api("/api/self/nfs", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true, address }) });
@@ -1191,7 +1191,7 @@ window.nfsRemove = () => modal("Remove NFS server", `<p>The NFS container and it
   ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="nfsRemoveGo()">Remove server</button>`)}`);
 window.nfsRemoveGo = async () => {
   const confirm = $("#nfs_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-nfs") return toast("type homestead-nfs to confirm", "bad");
+  if (confirm !== "homestead-nfs") return toast("Type homestead-nfs to confirm", "bad");
   try {
     const result = await api("/api/addons/nfs/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm }) });
     closeModal(); toast(result.detail, "ok"); addonsPaint();

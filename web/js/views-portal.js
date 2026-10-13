@@ -80,7 +80,7 @@ function portalDots() {
 }
 
 window.portalRecheck = async () => {
-  try { STATE.data.portalStatus = await api("/api/portal/status?force=1"); portalDots(); toast("links checked", "ok"); }
+  try { STATE.data.portalStatus = await api("/api/portal/status?force=1"); portalDots(); toast("Links checked", "ok"); }
   catch (e) { toast(e.message, "bad"); }
 };
 
@@ -212,7 +212,7 @@ window.portalSave = async () => {
     section: String(row.section || "").trim(), note: String(row.note || "").trim(),
     icon: row.icon === "url" ? String(row.icon_url || "").trim() : row.icon || "" }));
   const blank = links.findIndex(link => !link.title || !link.url);
-  if (blank >= 0) return toast(`link ${blank + 1} needs a title and an address`, "bad");
+  if (blank >= 0) return toast(`Link ${blank + 1} needs a title and an address`, "bad");
   const button = $("#pe_save");
   button.disabled = true; button.textContent = "Saving…";
   try {

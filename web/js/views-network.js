@@ -154,7 +154,6 @@ const networkSectionLabel = key => key === "ports" && STATE.platform?.harvester 
 function networkSectionLine(key) {
   const data = STATE.data.network, ports = window.PORTS_VIEW?.report;
   const due = networkAttentionAll().filter(item => key === "overview" || item.section === key).length;
-  const plural = (n, word, many = word + "s") => `${n} ${n === 1 ? word : many}`;
   const said = {
     overview: () => networkAttentionAll().length ? "" : data ? "Nothing needs attention" : "Status and attention",
     services: () => data && plural(data.summary.app_services, "app Service"),
@@ -466,7 +465,7 @@ function networkVipCards(current, choices) {
   return `<input id="net_lb_ip" type="hidden" value="${esc(current)}"><div class="net-address-list" role="group" aria-label="Available VIPs">${addresses.map(ip => {
     const used = choices.used.find(v => v.ip === ip);
     const label = choices.labels[ip] || choices.own.find(v => v.ip === ip)?.label || "";
-    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${used.services} service(s) · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
+    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${plural(used.services, "service")} · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
   }).join("") || '<p class="small">No saved VIPs yet. Add reserved addresses in Networking → Workload VIPs.</p>'}</div>
   <details class="net-custom-address" ${typed ? "open" : ""}><summary>Use another reserved address</summary><p class="small">Only use an unused LAN address reserved outside DHCP. Node and cluster-management addresses are not VIP choices.</p><label for="net_custom_ip">Reserved IPv4 address</label><input id="net_custom_ip" value="${typed ? esc(current) : ""}" placeholder="e.g. 192.0.2.230" oninput="networkAddressPicked(this.value,true)" data-ipam></details>`;
 }
