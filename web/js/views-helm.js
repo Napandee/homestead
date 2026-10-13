@@ -84,7 +84,7 @@ window.helmRelease = async (ns, name) => {
       <div class="helm-pane" data-pane="notes" hidden><pre class="helm-values">${esc(r.notes || "The chart left no notes.")}</pre></div>
       <div class="helm-pane" data-pane="history" hidden><table class="tbl dense stack"><thead><tr><th>Revision</th><th>Status</th><th>Chart</th><th>Updated</th><th>Description</th></tr></thead><tbody>
         ${r.history.map(h => `<tr><td class="mono">${h.revision}</td><td>${helmStatus(h.status)}</td><td class="mono small">${esc(h.chart_version)}</td>
-          <td class="small dim">${esc((h.updated || "").replace("T", " ").slice(0, 16))}</td><td class="small">${esc(h.description)}</td></tr>`).join("")}</tbody></table></div>
+          <td class="small dim">${fmtWhen(h.updated)}</td><td class="small">${esc(h.description)}</td></tr>`).join("")}</tbody></table></div>
       <div class="helm-pane" data-pane="objects" hidden><table class="tbl dense stack"><thead><tr><th>Kind</th><th>Name</th><th>Namespace</th></tr></thead><tbody>
         ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table></div>`;
     if (window.applyRole) applyRole();
