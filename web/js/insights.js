@@ -148,7 +148,7 @@ const HealthInsights = (() => {
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
   }
   function body(id, settings={}) {
-    if (!needs[id].every(key=>key in data))return '<div class="empty small">Loading checks…</div>';
+    if (!needs[id].every(key=>key in data))return '<div class="empty small"><span class="spin2"></span>Loading checks…</div>';
     if(id==="health")return healthBody(true);
     if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
     if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"],settings);

@@ -326,7 +326,7 @@ window.manageUsers = async () => {
       <b>operator</b> can deploy, edit, move, start and stop workloads and VMs.
       <b>admin</b> adds user management, host cordon/drain/power, shares, and import —
       which stores credentials for other machines.</div>`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: "manageUsers()", dialog: true }); }
 };
 window.addUser = async () => {
   try {

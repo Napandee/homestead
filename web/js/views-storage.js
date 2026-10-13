@@ -511,7 +511,7 @@ async function viewStorage() {
          <button class="danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='this.closest("details").open=false;volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
        </div></details>
      </div></td>
-      </tr>`).join("") || `<tr><td colspan=7 class="empty">none</td></tr>`}
+      </tr>`).join("") || `<tr><td colspan=7 class="empty">No volumes to show.</td></tr>`}
    </tbody></table></div></div>
   ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume moved to another storage class, kept in case the new copy disappoints. Remove each once its app works on the new one.")}</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
@@ -1147,7 +1147,7 @@ function fileBrowserMarkup(listing) {
           : FILEVIEW.snapshotSession
           ? `<a class="filerow" href="${esc(snapshotFileUrl(full))}" download><span class="fileicon">↓</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)} · Download</span></a>`
           : `<button class="filerow" ${entry.editable ? `onclick="fileOpen(${jsq(full)})"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
-      }).join("") || '<div class="empty small">this folder is empty</div>'}
+      }).join("") || '<div class="empty small">This folder is empty.</div>'}
     </div>
     ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}
@@ -1749,7 +1749,7 @@ async function lhSettingsPaint() {
   }
   let cap, offline = null;
   try { [cap, offline] = await Promise.all([api("/api/longhorn/capacity"), api("/api/longhorn/offline-rebuilding").catch(() => null)]); }
-  catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">${esc(e.message)}</div>`; return; }
+  catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div>${UI.error(e, { retry: "lhSettingsPaint()" })}`; return; }
   STATE.data.lhcap = cap;
   STATE.data.lhOffline = offline;
   const admin = can("admin"), v2 = cap.v2 || {};
@@ -1942,7 +1942,7 @@ window.lhDisks = async () => {
         || '<div class="empty small">No node has reported its disks yet.</div>'}`;
     window.__disksModal = true;
     if (window.applyRole) applyRole();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: "lhDisks()", dialog: true }); }
 };
 
 function disksRepaint(node) {

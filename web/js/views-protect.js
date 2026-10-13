@@ -507,7 +507,7 @@ window.lhGroupSave = async original => {
     jobs: $$("#lg_jobs input:checked").map(box => box.value),
     leave_default: $("#lg_leave") ? $("#lg_leave").checked : false };
   const plan = PROTECT_PLANS.find(p => p.id === $("#lg_plan").value);
-  if (!name) return toast("give the group a name", "bad");
+  if (!name) return fieldError("#lg_name", "Give the group a name.");
   try {
     if (plan) body.jobs.push(...await planApply(plan, name));
     const result = await api("/api/lh/group", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -542,8 +542,8 @@ window.lhJobSave = async () => {
   const body = { name: $("#lj_name").value.trim(), task,
     cron: $("#lj_cron").value.trim(), retain: KEEPS(task) ? +$("#lj_retain").value : 0,
     concurrency: +$("#lj_conc").value, groups };
-  if (!body.name) return toast("name is required", "bad");
-  if (!groups.length) return toast("pick at least one group, or the job protects nothing", "bad");
+  if (!body.name) return fieldError("#lj_name", "Give the job a name.");
+  if (!groups.length) return fieldError("#lj_newgroup", "Pick at least one group, or type a new one: without a group the job protects nothing.");
   try {
     await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
@@ -650,7 +650,7 @@ function snapshotTimeline(snaps, vol, label) {
         {label:s.deleting ? 'Track cleanup' : source === 'system' ? 'Clean up' : 'Delete', icon:'trash', need:'admin', danger:true, disabled:source === 'unknown', run:`lhSnapDel(${jsq(s.name)},${jsq(vol)},${jsq(label)})`}
       ], {shown:1, label:'More snapshot actions'})}</div>
       </div></article>`;
-  }).join("") || '<div class="empty small">No snapshots yet</div>'}
+  }).join("") || '<div class="empty small">No snapshots yet.</div>'}
     <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
 }
 
@@ -707,7 +707,7 @@ window.lhSnaps = async (vol, label) => {
       ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
     refreshSnapshotDialog(token, vol, label);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnaps(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 function backupTable(bks, vol, label) {
   return `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backups" class="tbl stack">
@@ -733,7 +733,7 @@ window.lhBackupList = async (vol, label) => {
       one of these; point the app at it, or restore it under the old claim's name.</div>`}
       ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhBackupList(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhBackupDel = async (name, vol, label) => {
   if (!(await ask(`Delete backup "${name}"?` + String.fromCharCode(10, 10)
@@ -808,7 +808,7 @@ window.lhRestore = async backup => {
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (window.applyRole) window.applyRole();
     lhRestoreCheck();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRestore(${jsArg(backup)})`, dialog: true }); }
 };
 window.lhRestoreCheck = () => {
   clearTimeout(restoreCheckTimer);
@@ -858,7 +858,7 @@ window.lhRevert = async (vol, snap, label) => {
       ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
         <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button>`)}`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRevert(${jsArg(vol)},${jsArg(snap)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhRevertGo = async (vol, snap) => {
   try {

@@ -143,6 +143,16 @@ const UI = (() => {
     return `<div class="ui-actions${className ? ` ${text(className)}` : ""}" ${attrs}>
       ${start ? `<div class="ui-actions-start">${start}</div>` : ""}<div class="ui-actions-end">${endHtml}</div></div>`;
   };
+  /* A failed load: what went wrong and Try again, never an empty list. In a
+     dialog it brings its footer, so Close still works (#507). */
+  const error = (err, { retry = "", title = "Couldn't load this", dialog = false } = {}) => {
+    const again = retry ? button("Try again", retry, { icon: "refresh", kind: dialog ? "pri" : "" }) : "";
+    const box = callout("bad", title, `<p>${text(err?.message || err || "Something went wrong.")}</p>`);
+    if (dialog) return box + actions(cancel("Close") + again);
+    return `<div class="ui-error">${box}${again ? `<div class="ui-error-actions">${again}</div>` : ""}</div>`;
+  };
+  /* Nothing here: one sentence, and the next step when there is one. */
+  const empty = (sentence, { action = "" } = {}) => `<div class="ui-empty">${text(sentence)}${action ? `<div class="ui-empty-action">${action}</div>` : ""}</div>`;
   const cancel = (label = "Cancel") => button(label, "closeModal()", { attrs: 'data-dialog-dismiss="true"' });
 
   /* [{ title, value, unit, sub, tone, wide, tipHtml }]: tone ok | warn | bad | info
@@ -296,7 +306,7 @@ const UI = (() => {
   }
 
   return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
-    fields, field, chip, button, actions, cancel, stats, guide,
+    fields, field, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
@@ -628,6 +638,24 @@ function restoreDialogDisclosures(body) {
     if (dialogDisclosureState.has(key)) detail.open = dialogDisclosureState.get(key);
   });
 }
+/* A field that needs fixing: the reason under it, the field marked invalid,
+   shown and focused. The note goes once the field changes. */
+window.fieldError = (field, message) => {
+  if (typeof field === "string") field = document.querySelector(field);
+  if (!field) return toast(message, "bad");
+  const id = `${field.id || "field"}-error`;
+  let note = document.getElementById(id);
+  if (!note) {
+    note = document.createElement("div");
+    note.id = id; note.className = "ui-field-error"; note.setAttribute("role", "alert");
+    (field.closest(".f, .ui-field") || field.parentElement).appendChild(note);
+  }
+  note.textContent = message;
+  field.setAttribute("aria-invalid", "true");
+  field.setAttribute("aria-describedby", id);
+  field.addEventListener("input", () => { note.remove(); field.removeAttribute("aria-invalid"); field.removeAttribute("aria-describedby"); }, { once: true });
+  window.revealDialogField(field);
+};
 window.revealDialogField = field => {
   if (typeof field === "string") field = document.querySelector(field);
   if (!field) return;

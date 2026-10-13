@@ -220,7 +220,7 @@ function go(v, options = {}) {
   // A new page starts at its top, not wherever the last one was scrolled to.
   window.scrollPageTop();
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
-    .catch(e => { resetPaint(); V().innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    .catch(e => { resetPaint(); V().innerHTML = UI.error(e, { retry: `go(${jsArg(v)})` }); });
 }
 window.go = go;
 

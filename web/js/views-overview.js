@@ -105,7 +105,7 @@ async function viewDash() {
         ${tight.length ? `<a class="tag ${tight.some(n => n.level === "crit") ? "bad" : "warn"} lh-tight" onclick="go('storage')"
           data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GB allocated, room for a ${n.room_gb} GB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
       </div></div>`
-      : '<div class="empty">storage data unavailable</div>'}
+      : '<div class="empty">Storage figures aren\'t available yet.</div>'}
     </div>`,
     cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
     memory: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top memory</div></div>${consumerTable(o.top_mem, "memory")}</div>`,
@@ -718,7 +718,7 @@ window.smartDisk = async (node, disk) => {
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
       </div></div>
       <div class="note"><b>USB and NVMe caveat.</b> Some USB bridges hide SMART commands; NVMe exposes different counters from ATA/SATA. Homestead shows unsupported values explicitly instead of treating them as zero.</div>`;
-  } catch (e) { target.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { target.innerHTML = UI.error(e, { retry: `smartDisk(${jsArg(node)},${jsArg(disk)})`, dialog: target.id === "mbody" }); }
 };
 
 /* The probe is two containers. One reads sensors with nothing special

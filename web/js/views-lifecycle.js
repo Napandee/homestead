@@ -400,7 +400,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     containerRemoveButtons();
     placementChanged();
     editAddressChanged();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `wlEdit(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
 };
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => {
@@ -1364,7 +1364,7 @@ async function viewImages() {
         <td>${missing.length ? "" : '<span class="dim xs">everywhere</span> '}${actionBar([
           missing.length ? { label: "Pre-pull", run: `prepull(${jsq(i.name)})` } : null,
           !i.protected && !i.system && i.digest ? { label: "Clean up", run: `imageCleanupReview(${jsq(i.digest)})`, need: "admin", danger: true } : null])}</td></tr>`;
-      }).join("") || `<tr><td colspan=5 class="empty">none</td></tr>`}
+      }).join("") || `<tr><td colspan=5 class="empty">No cached images to show.</td></tr>`}
     </tbody></table></div></div>
     ${vmImagesSection(vm, d.node_names)}`);
 }
@@ -1817,7 +1817,7 @@ window.srcBrowse = async name => {
          <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`)
       + (dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
          appdata folders are offered. Check that Docker is running there and the SSH user may use it.</div>`);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `srcBrowse(${jsArg(name)})`, dialog: true }); }
 };
 
 window.imageCleanupReview = digest => {

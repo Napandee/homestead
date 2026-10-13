@@ -678,7 +678,7 @@ async function namespacesPaint() {
   if (!host) return;
   let inv;
   try { inv = await api("/api/namespaces/manage", { keep: true }); }
-  catch (e) { host.innerHTML = `<div class="empty small">${esc(e.message)}</div>`; return; }
+  catch (e) { host.innerHTML = UI.error(e, { retry: "namespacesPaint()" }); return; }
   const what = r => [r.deployments && `${r.deployments} app${r.deployments === 1 ? "" : "s"}`,
     r.statefulsets && `${r.statefulsets} stateful set${r.statefulsets === 1 ? "" : "s"}`,
     r.volumes && `${r.volumes} volume${r.volumes === 1 ? "" : "s"}`,

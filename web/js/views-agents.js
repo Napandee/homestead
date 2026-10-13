@@ -67,7 +67,7 @@ function agentCard(r, target) {
 async function viewAgents() {
   let found;
   try { found = await api("/api/agents/requests"); }
-  catch (e) { paint(`<div class="empty">${esc(e.message)}</div>`); return; }
+  catch (e) { paint(UI.error(e, { retry: "viewAgents()" })); return; }
   STATE.data.agentRequests = found;
   const rows = found.requests || [];
   const wanted = new URLSearchParams(location.search).get("request") || "";
