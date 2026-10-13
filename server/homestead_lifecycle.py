@@ -22,6 +22,7 @@ import homestead_memory as MEMORY
 import homestead_maintenance as MAINTENANCE
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
+import homestead_group_tiers as GROUPS
 
 # Rebooting a host needs a privileged pod that enters the host namespaces.
 # Enabled by default, but still admin-only and guarded by impact review,
@@ -563,6 +564,36 @@ def _apply_priority(spec, tier):
     spec.pop("preemptionPolicy", None)
 
 
+def _apply_tier(dep, choice):
+    """Edit's tier (#430). "group": the app follows its group - the marker,
+    and the class its group's tier gives, recorded as the one Homestead
+    wrote. A tier: the app's own, so the marker goes. Kubernetes' own class,
+    or one that isn't on the cluster, is left as it is, marker and all."""
+    spec = dep["spec"]["template"]["spec"]
+    annotations = dep["metadata"].setdefault("annotations", {})
+    if choice != "group":
+        _apply_priority(spec, choice)
+        annotations.pop(GROUPS.FOLLOW, None)
+        annotations.pop(GROUPS.WROTE, None)
+        return
+    try:
+        tier = GROUPS.edit_tier(dep, choice, kget)
+    except ValueError:
+        # An app already following keeps doing so while the tiers can't be
+        # read: its other changes still save, and nothing about its tier moves.
+        if GROUPS.follows(dep) and GROUPS.group_of(dep) not in ("", GROUPS.OWN_GROUP) and GROUPS.stored(kget) is None:
+            return
+        raise
+    if PRIORITY.tier_of(spec, PRIORITY.ladder())[0] in ("system", "missing", "unknown"):
+        return
+    _apply_priority(spec, tier)
+    annotations[GROUPS.FOLLOW] = "group"
+    if spec.get("priorityClassName"):
+        annotations[GROUPS.WROTE] = spec["priorityClassName"]
+    else:
+        annotations.pop(GROUPS.WROTE, None)
+
+
 def prepare_edit(cfg, current=None):
     """Read-only edit construction; all validation precedes side effects."""
     ns, name = cfg["ns"], cfg["name"]
@@ -576,7 +607,7 @@ def prepare_edit(cfg, current=None):
         raise ValueError(f"{name} has no editable containers")
 
     if "priority" in cfg:
-        _apply_priority(spec, cfg["priority"])
+        _apply_tier(dep, cfg["priority"])
     removed = cfg.get("remove_containers") or []
     if not isinstance(removed, list) or any(not isinstance(item, str) for item in removed):
         raise ValueError("removed containers must be a list of names")

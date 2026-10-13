@@ -18,6 +18,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_copy_job as COPY_JOB
 import homestead_env_secrets as ENVSEC
 import homestead_failover as FAILOVER
+import homestead_group_tiers as GROUPS
 import homestead_hardware as HW
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
@@ -41,7 +42,7 @@ import homestead_updates as UPDATES
 import homestead_usage as USAGE
 
 # server.py's helpers this module calls, bound by name at start.
-NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload", "set_workload_groups",
+NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload",
          "guard_managed_smb", "guard_self", "_dns_name", "get_app_settings", "apply_reviewed_edit",
          "logsearch_read", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
          "is_managed_nfs", "homestead_part", "own_group", "pod_container_rows", "parse_cpu", "parse_mem",
@@ -200,10 +201,17 @@ def edit(request):
     # every save sends the tier, and most keep it. A class someone made with
     # other values is kept, and the save says so.
     notes = []
-    if b.get("priority") in ("critical", "low") and context.get("action") != RENAME.KIND and PRIORITY.tier_of(
-            (kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}").get("spec") or {})
-            .get("template", {}).get("spec") or {})[0] != b["priority"]:
-        notes = PRIORITY.ensure((b["priority"],), PRIORITY.ladder())
+    if b.get("priority") in ("critical", "low", "group") and context.get("action") != RENAME.KIND:
+        dep_now = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
+        try:
+            wanted = GROUPS.edit_tier(dep_now, b["priority"], kget)
+        except ValueError:
+            if b["priority"] != "group" or not GROUPS.follows(dep_now):
+                raise
+            wanted = None   # an app already following keeps its class while the tiers can't be read
+        if wanted in ("critical", "low") and PRIORITY.tier_of(
+                ((dep_now.get("spec") or {}).get("template") or {}).get("spec") or {})[0] != wanted:
+            notes = PRIORITY.ensure((wanted,), PRIORITY.ladder())
     if context.get("action") == RENAME.KIND:
         def admission(dep):
             return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
@@ -249,6 +257,7 @@ def get_workloads():
         svcs = kget("/api/v1/services").get("items", [])
     except Exception:
         svcs = []
+    tiers = GROUPS.stored(kget)    # each group's tier (#430); None when it can't be read
 
     out = []
     for d in deps:
@@ -405,6 +414,7 @@ def get_workloads():
             "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
             "restore_tested": RESTORE_TEST.last_result(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
+            "group_tier": None if tiers is None else tiers.get(NAMES.read(annotations, "group"), ""),
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
             "managed_nfs": is_managed_nfs(ns, name),
@@ -755,6 +765,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "priority": "self" if is_self(ns, name) else PRIORITY.tier_of(pspec)[0], "priority_class": PRIORITY.tier_of(pspec)[1],
         # Flux or Argo CD when they apply it: Edit then shows its tier read-only (#429).
         "priority_owner": "" if is_self(ns, name) else (UPDATES.managed_by(deployment) or {}).get("by", ""),
+        # #430: "group" for an app that follows its group, its group, and that group's tier.
+        **({} if is_self(ns, name) else GROUPS.edit_fields(deployment, PRIORITY.tier_of(pspec)[0], kget)),
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
         "has_service": bool(listeners),
@@ -774,7 +786,6 @@ ROUTES = {
     ("GET", "/api/workload"): ("viewer", edit_form),
     ("GET", "/api/logs"): ("viewer", logs),
     ("GET", "/api/logs/search"): ("viewer", search_logs),
-    ("POST", "/api/workloads/group"): ("operator", lambda request: set_workload_groups(request.body)),
     ("POST", "/api/workloads/logo"): ("operator", lambda request: set_workload_logos(request.body)),
     ("POST", "/api/workloads/failover"): ("operator", set_failover),
     ("POST", "/api/workload/primary-port"): ("operator", set_primary_port),

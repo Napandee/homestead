@@ -265,9 +265,10 @@ def _appstore(args, ctx):
 def _clean(settings):
     """Settings as an agent sends them back: get_container_settings says
     "self", "system" or "missing" for a class it does not set, which a save
-    takes as a tier to set - so such a priority is left out."""
+    takes as a tier to set - so such a priority is left out. "group" (the app
+    follows its group's tier, #430) is kept."""
     settings = dict(settings or {})
-    if settings.get("priority") not in (None, "critical", "normal", "low"):
+    if settings.get("priority") not in (None, "critical", "normal", "low", "group"):
         settings.pop("priority")
     return settings
 
@@ -515,7 +516,7 @@ TOOLS = [
     Tool("get_container_settings", "Container settings", "read", READ,
          "A container's settings as Edit shows them. To change it, send them back to preview_edit_container "
          "with ns and name kept and what you need changed: containers (each one's image, env, ports, volumes, "
-         "cpu, memory), replicas, placement, node, failover, priority (critical, normal or low), monitoring.",
+         "cpu, memory), replicas, placement, node, failover, priority (critical, normal or low, or group to follow its group's tier), monitoring.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_settings),
     Tool("list_events", "Events", "read", READ, "Kubernetes' recent events for a container or VM, newest first.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_events),
@@ -726,19 +727,26 @@ TOOLS = [
          "For many apps: items, each {ns, name, mode} with mode move, wait or default.",
          {"items": {"type": "array", "items": SETTINGS}}, ["items"], run=_guarded(_post("/api/workloads/failover", {"items": "items"}))),
     Tool("set_container_groups", "Group apps", "containers:manage", CHANGE,
-         "The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group).",
+         "The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group; "
+         "renamed_from, the old name, when renaming a group so its tier moves).",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/group")),
+    Tool("set_group_tier", "Set a group's priority tier", "containers:manage", CHANGE,
+         "The tier the apps that follow a group take: group, and tier critical, normal, low or none. Only the "
+         "tier is saved and nothing restarts; preview_priority_tiers then lists the apps that need a restart.",
+         {"group": S, "tier": S}, ["group", "tier"], run=_post("/api/workloads/group-tier", {"group": "group", "tier": "tier"})),
     Tool("set_container_logos", "Set apps' logos", "containers:manage", CHANGE,
          "Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo.",
          {"items": {"type": "array", "items": SETTINGS}}, ["items"], run=_post("/api/workloads/logo", {"items": "items"})),
     Tool("get_placement", "How hosts share the work", "read", READ,
          "The placement mode, each host's part, standby hosts, and how many apps reserve nothing.", run=_get("/api/placement")),
     Tool("preview_priority_tiers", "Preview priority tiers", "read", READ,
-         "Every app and VM with its tier and a suggestion; chosen as id=tier pairs (lab/web=critical,vm:lab/win=low).",
+         "Every app and VM with its tier, where it comes from (its own, its group's or the default), what it runs with "
+         "and its status (in_line, restart, git with the line to commit, outside, unknown_group), and each group's tier; "
+         "chosen as id=tier pairs (lab/web=critical,vm:lab/win=low).",
          {"chosen": S}, run=_get("/api/workloads/priority/plan", {"chosen": "chosen"})),
     Tool("set_priority_tiers", "Set priority tiers", "containers:manage", CHANGE,
-         "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current "
-         "and tier), review_token, restart: true}. Each app restarts once, one at a time; VMs take theirs at next start.",
+         "Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current, "
+         "tier and follow), review_token, restart: true}. Each app restarts once, one at a time; VMs take theirs at next start.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/workloads/priority")),
     Tool("preview_reservations", "Preview reservations from use", "read", READ,
          "What each app used over the past week and the reservation suggested; chosen limits it to these app ids.",

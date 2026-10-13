@@ -38,6 +38,10 @@ import re
 import time
 import urllib.error
 
+# homestead_group_tiers imports this module too; each reads the other's names
+# only when called, so either may be imported first.
+import homestead_group_tiers as GROUPS
+
 KIND = "set-priority"
 MAX_APPS = 50
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
@@ -337,16 +341,23 @@ def _pod_spec(dep):
 
 
 def plan(chosen=None, role=None):
-    """Every app with its tier now, the tier suggested, and the tier it is
-    set to in the review: by default the suggestion for an app still at
-    normal, else what it has. chosen maps an app id to a tier. role: who
-    asks; apps they may not change are left out, saying why."""
-    apps, skipped, own_seen, values = [], [], None, []
+    """Every app with its tier now ("current"), the tier it should have
+    ("wanted") and where that comes from ("source": its own, its group's or
+    the default, #430), its status, and the tier it is set to in the review:
+    for an app that needs a restart, the tier it should have; for one still at
+    normal with a tier of its own, the suggestion; else what it has. chosen
+    maps an app id to a tier. role: who asks; apps they may not change are
+    left out, saying why. groups: each group's tier and how many apps it has."""
+    apps, skipped, own_seen, values, members = [], [], None, [], {}
     lad = ladder()
+    tiers = GROUPS.stored(kget)
     for kind, dep in _workloads():
         meta = dep.get("metadata") or {}
         ns, name = meta.get("namespace", ""), meta.get("name", "")
         app_id = _row_id(kind, ns, name)
+        group = GROUPS.group_of(dep) if kind == "app" else ""
+        if group and group != GROUPS.OWN_GROUP and (ns, name) != own:
+            members[group] = members.get(group, 0) + 1
         current, cls = tier_of(_pod_spec(dep), lad)
         suggested, why = suggestion(dep)
         if not (kind == "app" and (ns, name) == own):
@@ -375,13 +386,27 @@ def plan(chosen=None, role=None):
             where = f" ({owner['source']})" if owner.get("source") else ""
             row["note"] = (f"{owner['by']} applies it{where}; set priorityClassName there" if owner.get("detected")
                            else f"marked as updated by {owner['by']}; set priorityClassName there")
-        default = suggested if suggested and current == "normal" and not owner else current
-        row["tier"] = (chosen or {}).get(app_id, default) if not owner else current
+        found = GROUPS.resolve(dep, tiers, lad, kind=kind, managed=bool(owner))
+        row.update(group=group, follows=kind == "app" and not owner and GROUPS.follows(dep),
+                   wanted=found["tier"], source=found["source"], status=GROUPS.status(dep, found, owner))
+        if row["status"] == "git":
+            row["line"] = GROUPS.git_line(owner, found["class"])
+        if row["status"] == "restart":
+            default = found["tier"]
+        elif suggested and current == "normal" and found["source"] == "own" and not owner:
+            default = suggested
+        else:
+            default = current     # in line, outside or unknown: never ticked unseen
+        row["tier"] = (chosen or {}).get(app_id, default) if not owner and row["status"] != "unknown_group" else current
         if row["tier"] not in TIERS:
             raise ValueError(f"{app_id}: the tier must be critical, normal or low")
+        # Whether the job keeps it following its group (else the tier set
+        # becomes its own); the review token binds it.
+        row["follow"] = row["follows"] and found["tier"] == row["tier"]
         apps.append(row)
-    # By the tier each has now, so a row stays where it is as a tier is picked.
-    apps.sort(key=lambda a: ({"critical": 0, "normal": 1, "low": 2}[a["current"]], a["id"]))
+    # What isn't in line first; then by the tier each has now, so a row stays
+    # where it is as a tier is picked.
+    apps.sort(key=lambda a: (a["status"] == "in_line", {"critical": 0, "normal": 1, "low": 2}[a["current"]], a["id"]))
     changes = [a for a in apps if a["tier"] != a["current"]]
     # The suggestions never start more than one run may change.
     if chosen is None and len(changes) > MAX_APPS:
@@ -408,12 +433,13 @@ def plan(chosen=None, role=None):
         if above:
             warnings.append(f"Homestead ({own_seen[0]}, {own_seen[2]}) ranks below {above[-1][1]} ({above[-1][0]}), which can "
                             "evict it: give it a class at least as high, or remove its class so Homestead sets its own")
+    groups = [{"name": g, "tier": None if tiers is None else tiers.get(g, ""), "apps": n} for g, n in sorted(members.items())]
     return {"apps": apps, "skipped": sorted(skipped, key=lambda s: s["id"]), "max": MAX_APPS,
-            "changes": len(changes), "review_token": review_token(changes), "warnings": warnings}
+            "changes": len(changes), "review_token": review_token(changes), "warnings": warnings, "groups": groups}
 
 
 def review_token(changes):
-    rows = sorted([c["id"], c["current"], c["tier"]] for c in changes)
+    rows = sorted([c["id"], c["current"], c["tier"], bool(c.get("follow"))] for c in changes)
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()[:20]
 
 
@@ -428,19 +454,50 @@ def reviewed(changes, token, role=None):
         raise ValueError("Review the tiers again")
     if review_token(changes) != token:
         raise ValueError("The tiers differ from the review; review again")
+    tiers = GROUPS.stored(kget)
     out = []
     for c in changes:
         kind, ns, name = _split(c["id"])
         check(ns, name, c["current"], role, kind=kind)
-        out.append({"id": c["id"], "kind": kind, "ns": ns, "name": name, "current": c["current"], "tier": c["tier"]})
+        following = _following(kind, ns, name, c["tier"], tiers)
+        # Whether it keeps following its group is part of what was reviewed.
+        if not following.get("unreadable") and bool(following.get("follow")) != bool(c.get("follow")):
+            raise ValueError(f"{c['id']}'s group tier changed since the review; review again")
+        out.append({"id": c["id"], "kind": kind, "ns": ns, "name": name, "current": c["current"], "tier": c["tier"],
+                    **following})
     return out
 
 
-def check(ns, name, current, role=None, tier=None, kind="app"):
+def _following(kind, ns, name, tier, tiers):
+    """For an app that follows its group (#430): follow when the tier set is
+    its group's - the job writes the marker with the class - else the tier
+    becomes the app's own and the marker goes (marked). While the group tiers
+    can't be read it is marked unreadable, and start() leaves it out of the
+    job, saying so, whatever was reviewed (the plan shows it as unknown_group
+    and never ticks it). {} for a VM; an app's group and marker as they are
+    now go in seen, which check() compares at the app's turn in the job."""
+    if kind == "vm":
+        return {}
+    dep = kget(_path(kind, ns, name))
+    seen = {"seen": _membership(dep)}
+    if not GROUPS.follows(dep):
+        return seen
+    wanted = GROUPS.resolve(dep, tiers, ladder())["tier"]
+    if wanted is None:
+        return {"unreadable": True, **seen}
+    return {"marked": True, "follow": wanted == tier, **seen}
+
+
+def _membership(dep):
+    return {"group": GROUPS.group_of(dep), "marker": GROUPS.follows(dep)}
+
+
+def check(ns, name, current, role=None, tier=None, kind="app", seen=None):
     """One app as it is now: still one Homestead - and the person who asked -
     may change, and still in the tier it was reviewed in. Returns "applied"
     when it already has the new tier: a change whose answer was lost is waited
-    for, not counted as skipped."""
+    for, not counted as skipped. seen: its group and marker as reviewed
+    (#430); one that has changed since is left alone."""
     app_id = _row_id(kind, ns, name)
     try:
         dep = kget(_path(kind, ns, name))
@@ -454,6 +511,8 @@ def check(ns, name, current, role=None, tier=None, kind="app"):
     now = tier_of(_pod_spec(dep), ladder())[0]
     if tier and now == tier:
         return "applied"
+    if seen is not None and kind == "app" and _membership(dep) != seen:
+        raise ValueError("it changed since the review, so it was left alone")
     if now != current:
         raise ValueError(f"{app_id}'s tier changed since the review")
     return "ready"
@@ -469,10 +528,14 @@ def patch(app):
         ksend("PATCH", _path("vm", app["ns"], app["name"]), {"spec": {"template": {"spec": {"priorityClassName": cls}}}},
               ctype="application/merge-patch+json")
         return
-    # preemptionPolicy too: admission refuses one that is not the class's,
-    # and a low app's is Never.
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{app['ns']}/deployments/{app['name']}",
-          {"spec": {"template": {"spec": {"priorityClassName": cls, "priority": None, "preemptionPolicy": None}}}},
+    body = {"spec": {"template": {"spec": {"priorityClassName": cls, "priority": None, "preemptionPolicy": None}}}}
+    # #430: an app that follows its group keeps the marker, with the class
+    # Homestead wrote; one given a tier of its own loses both.
+    if app.get("follow"):
+        body["metadata"] = {"annotations": {GROUPS.FOLLOW: "group", GROUPS.WROTE: cls}}
+    elif app.get("marked"):
+        body["metadata"] = {"annotations": {GROUPS.FOLLOW: None, GROUPS.WROTE: None}}
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{app['ns']}/deployments/{app['name']}", body,
           ctype="application/strategic-merge-patch+json")
 
 
@@ -508,7 +571,8 @@ def status(item):
     stage, now = ref.get("stage", "apply"), time.time()
     if stage == "apply":
         try:
-            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"], app.get("kind", "app")) == "ready":
+            if check(app["ns"], app["name"], app["current"], ref.get("role"), app["tier"], app.get("kind", "app"),
+                     app.get("seen")) == "ready":
                 patch(app)
         except (ValueError, PermissionError, urllib.error.HTTPError) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 404, 409, 422):
@@ -557,9 +621,15 @@ def start(body, role=None):
     if (body or {}).get("restart") is not True:
         raise ValueError("A new tier restarts each app; confirm the restarts")
     apps = reviewed(body.get("changes"), body.get("review_token"), role)
+    # An app whose group's tier can't be read is never acted on: it is left
+    # out and said so, and the rest of the run goes ahead.
+    left = [f"{a['id']}: its group's tier couldn't be read, so it was left alone" for a in apps if a.get("unreadable")]
+    apps = [a for a in apps if not a.get("unreadable")]
+    if not apps:
+        raise ValueError("The group tiers couldn't be read just now, so no app was changed; try again shortly")
     return {"operation": operations.start(KIND, f"Set the priority tier of {len(apps)} app{'' if len(apps) == 1 else 's'}",
                                           {"kind": "Deployment", "name": "priority"}, "/containers",
-                                          {"apps": apps, "index": 0, "done": 0, "stage": "apply", "role": role},
+                                          {"apps": apps, "index": 0, "done": 0, "stage": "apply", "role": role, "skipped": left},
                                           "Making the priority classes")}
 
 

@@ -262,11 +262,11 @@
     { name: w.name.replace(/(^|-)([a-z])/g, (_, dash, c) => (dash ? " " : "") + c.toUpperCase()), icon: demoLogo(w.name[0].toUpperCase(), (i * 47) % 360), repo: w.images[0], key: `${w.name}|${w.images[0]}` },
     { name: `${w.name}-alt`, icon: demoLogo(w.name[0].toUpperCase(), (i * 47 + 180) % 360), repo: `example/${w.name}-alt`, key: `${w.name}-alt|example` }]);
   const workloads = [
-    { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", failover: "wait", desired: 1, ready: 1, uptime: 472221,
+    { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
       images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214", name: "web", primary: true }, { port: 8554, ip: "192.0.2.214", name: "rtsp" }], claims: ["frigate-config"],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },
-    { name: "home-assistant", ns: "lab", kind: "Deployment", failover: "move", group: "Home", desired: 1, ready: 1, uptime: 912400,
+    { name: "home-assistant", ns: "lab", kind: "Deployment", failover: "move", group: "Home", group_tier: "critical", desired: 1, ready: 1, uptime: 912400,
       cpu: 0.31, mem_mb: 738, nodes: ["harvester-node1"], hardware: [],
       images: ["ghcr.io/home-assistant/home-assistant:stable"], ports: [{ port: 8123, ip: "192.0.2.215" }],
       pod_count: 1, container_count: 1, pods: [pod("home-assistant", "harvester-node1", "ghcr.io/home-assistant/home-assistant:stable")] },
@@ -1749,7 +1749,8 @@ ssh_pwauth: true
         pod_volumes: [{ name: "config", kind: "pvc", source: `${found.name}-config` }], has_service: true,
         pod_hostname: found.name === "frigate" ? "frigate-core" : "", image: found.images[0], replicas: found.desired,
         cpu: "50m", memory: "128Mi", env: {}, ports: [], hardware: found.hardware || [], icon: "", node: found.nodes[0] || "",
-        priority: found.name === "home-assistant" ? "critical" : "normal", priority_class: found.name === "home-assistant" ? "homestead-critical" : "",
+        priority: found.group === "Home" ? "group" : "normal", priority_group: found.group && found.group !== "Homestead" ? found.group : "",
+        priority_group_tier: found.group_tier ?? "", priority_class: found.name === "home-assistant" ? "homestead-critical" : "",
         seed_configs: [], volumes: containers[0].volumes, containers };
     },
     "/api/portal": (url, init) => {
@@ -2055,21 +2056,26 @@ ssh_pwauth: true
     "/api/placement": { mode: "standby", unreserved: 4, notes: [], applies: true, hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: true, tainted: true, takes_work: true }] },
     "/api/workloads/priority/plan": url => {
       const picks = Object.fromEntries((url.searchParams.get("chosen") || "").split(",").filter(x => x.includes("=")).map(x => x.split("=")));
+      const own = { group: "", follows: false, source: "own", status: "in_line" };
       const rows = [
-        { id: "lab/home-assistant", current: "normal", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
-        { id: "lab/vaultwarden", current: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
-        { id: "lab/frigate", current: "normal", suggested: "", why: "" },
-        { id: "lab/paperless", current: "normal", suggested: "", why: "" },
-        { id: "ci/actions-runner", current: "normal", suggested: "low", why: "looks like batch or CI work" },
-        { id: "media/jellyfin", current: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
-        { id: "vm:lab/windows-desktop", kind: "vm", current: "normal", suggested: "", why: "" }];
+        { ...own, id: "lab/home-assistant", current: "critical", wanted: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel",
+          group: "Home", follows: true, source: "group" },
+        { ...own, id: "lab/frigate", current: "normal", wanted: "critical", suggested: "", why: "", group: "Home", follows: true, source: "group", status: "restart" },
+        { ...own, id: "lab/vaultwarden", current: "critical", wanted: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
+        { ...own, id: "lab/paperless", current: "normal", wanted: "normal", suggested: "", why: "" },
+        { ...own, id: "ci/actions-runner", current: "normal", wanted: "normal", suggested: "low", why: "looks like batch or CI work" },
+        { ...own, id: "media/jellyfin", current: "normal", wanted: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
+        { ...own, id: "vm:lab/windows-desktop", kind: "vm", current: "normal", wanted: "normal", suggested: "", why: "" }];
+      const order = ["critical", "normal", "low"];
       const apps = rows.map(r => {
         const [ns, name] = r.id.replace(/^vm:/, "").split("/");
-        const fallback = r.suggested && r.current === "normal" && !r.managed ? r.suggested : r.current;
-        return { ns, name, kind: "app", managed: "", ...r, tier: r.managed ? r.current : (picks[r.id] || fallback) };
-      }).sort((a, b) => ["critical", "normal", "low"].indexOf(a.tier) - ["critical", "normal", "low"].indexOf(b.tier) || a.id.localeCompare(b.id));
+        const fallback = r.status === "restart" ? r.wanted : r.suggested && r.current === "normal" && !r.managed && r.source === "own" ? r.suggested : r.current;
+        const tier = r.managed ? r.current : (picks[r.id] || fallback);
+        return { ns, name, kind: "app", managed: "", ...r, tier, follow: r.follows && tier === r.wanted };
+      }).sort((a, b) => (a.status === "in_line") - (b.status === "in_line") || order.indexOf(a.current) - order.indexOf(b.current) || a.id.localeCompare(b.id));
       const changes = apps.filter(a => a.tier !== a.current);
-      return { apps, changes: changes.length, max: 50, review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."),
+      return { apps, groups: [{ name: "Home", tier: "critical", apps: 2 }], changes: changes.length, max: 50,
+        review_token: "demo-priority-" + changes.map(a => a.id + a.tier).join("."), warnings: [],
         skipped: [{ id: "lab/unifi", why: "it uses the class unifi-high, which Homestead does not keep; it is left alone" }] };
     },
     "/api/workloads/priority": { operation: { id: "demo-priority", kind: "set-priority", title: "Set the priority tier of 2 apps", status: "running", progress: 0, message: "Making the priority classes", cancellable: true } },
@@ -2448,6 +2454,12 @@ ssh_pwauth: true
     "/api/workloads/group": (url, init) => {
       const body = JSON.parse(init?.body || "{}"), group = String(body.group || "").trim();
       return { ok: true, group, detail: `${(body.items || []).length} moved` };
+    },
+    "/api/workloads/group-tier": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), group = String(body.group || "").trim(), tier = body.tier === "none" ? "" : String(body.tier || "");
+      workloads.filter(w => w.group === group).forEach(w => { w.group_tier = tier; });
+      return { ok: true, group, tier, follow: 2, restart: 1, git: 0,
+        detail: `${group} ${tier ? `is ${tier}` : "has no tier"} now: 2 apps follow it; 1 needs a restart. Nothing restarts now: start it from Priority tiers…` };
     },
     "/api/move/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");

@@ -124,7 +124,7 @@ Tools come in three classes:
 |---|---|---|---|
 | `list_containers` | Every container (app) with its state | `read` | read |
 | `get_container` | One container's state | `read` | read |
-| `get_container_settings` | A container's settings as Edit shows them | `read` | read |
+| `get_container_settings` | A container's settings as Edit shows them; priority may be group, for an app that follows its group's tier | `read` | read |
 | `list_events` | Kubernetes' recent events for a container or VM, newest first | `read` | read |
 | `get_container_logs` | A container's last lines of output (at most 500) | `logs:read` | read |
 | `deploy_options` | What a new container can use: storage classes, networks, hosts, hardware, addresses | `read` | read |
@@ -154,9 +154,10 @@ Tools come in three classes:
 | `set_managed_by` | Marks an app as updated by something else (Flux, Argo CD, a person) so Homestead offers no updates, or clears it with an empty by | `containers:manage` | change |
 | `set_primary_port` | The port the app's link opens; 0 to let Homestead choose | `containers:manage` | change |
 | `set_failover` | For many apps: items, each {ns, name, mode} with mode move, wait or default | `containers:manage` | change |
-| `set_container_groups` | The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group) | `containers:manage` | change |
+| `set_container_groups` | The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group; renamed_from, the old name, when renaming a group so its tier moves) | `containers:manage` | change |
+| `set_group_tier` | The tier the apps that follow a group take: group, and tier critical, normal, low or none. Only the tier is saved and nothing restarts; preview_priority_tiers then lists the apps that need a restart | `containers:manage` | change |
 | `set_container_logos` | Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo | `containers:manage` | change |
-| `preview_priority_tiers` | Every app and VM with its tier and a suggestion; chosen as id=tier pairs (lab/web=critical,vm:lab/win=low) | `read` | read |
+| `preview_priority_tiers` | Every app and VM with its tier, where it comes from (its own, its group's or the default), what it runs with and its status (in_line, restart, git with the line to commit, outside, unknown_group), and each group's tier; chosen as id=tier pairs (lab/web=critical,vm:lab/win=low) | `read` | read |
 | `set_priority_tiers` | Sets tiers as preview_priority_tiers reviewed them: settings {changes (its apps that change, with id, current and tier), review_token, restart: true} | `containers:manage` | change |
 | `preview_reservations` | What each app used over the past week and the reservation suggested; chosen limits it to these app ids | `read` | read |
 | `set_reservations` | Applies reservations as preview_reservations reviewed them: settings {apps, review_token, restart: true} | `containers:manage` | change |
