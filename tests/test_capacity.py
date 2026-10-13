@@ -115,10 +115,17 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(1, f["moving"])
         self.assertEqual(8.0, f["hosts"][0]["mem_gib"])
 
-    def test_pods_the_preview_does_not_list_still_take_room(self):
-        db = pod("postgres", "a", mem="6Gi", kind="StatefulSet")
-        f = run("a", [node("a"), node("b")], [db], preview())
+    def test_a_platform_app_the_preview_does_not_list_still_takes_room(self):
+        dns = pod("coredns", "a", mem="6Gi", ns="kube-system")
+        f = run("a", [node("a"), node("b")], [dns], preview())
         self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+
+    def test_a_statefulsets_pod_the_preview_does_not_list_needs_no_room(self):
+        # One in a system namespace, or every one when they couldn't be read:
+        # Kubernetes doesn't start it elsewhere while the old one might run.
+        db = pod("x-db", "a", mem="6Gi", ns="kube-system", kind="StatefulSet")
+        f = run("a", [node("a"), node("b")], [db], preview())
+        self.assertEqual((0, 0.0), (f["moving"], f["hosts"][0]["mem_gib"]))
 
     def test_an_app_goes_where_there_is_room_before_anything_is_evicted(self):
         # b is full of low apps, c is empty: the scheduler picks c and evicts nothing.
@@ -145,9 +152,35 @@ class ForecastTests(unittest.TestCase):
         pi = node("pi", mem="4Gi")
         pi["spec"]["taints"] = [{"key": "homestead.io/role", "value": "tiebreaker", "effect": "NoSchedule"}]
         nodes = [node("a"), node("b", mem="2Gi"), pi]
-        f = run("a", nodes, [pod("postgres", "a", mem="3Gi", kind="StatefulSet")], preview())
+        f = run("a", nodes, [pod("metrics", "a", mem="3Gi", ns="kube-system")], preview())
         self.assertEqual("waits", f["verdict"])
         self.assertEqual(0.0, {h["name"]: h for h in f["hosts"]}["pi"]["mem_gib"])
+
+    def sets(self, **outcomes):
+        """Preview rows for StatefulSets: name=outcome, moving ones to b."""
+        return {"apps": [{"kind": "set", "ns": "lab", "name": n.replace("_", "-"), "outcome": o, **({"to": ["b"]} if o == "moves" else {})}
+                         for n, o in outcomes.items()]}
+
+    def test_only_statefulsets_that_move_need_room(self):
+        pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("x-db", "a", mem="4Gi", kind="StatefulSet"),
+                pod("x-cache", "a", mem="2Gi", kind="StatefulSet"), pod("x-queue", "a", mem="3Gi", kind="StatefulSet")]
+        f = run("a", [node("a"), node("b")], pods, self.sets(postgres="moves", x_db="waits", x_cache="unknown", x_queue="stops"))
+        self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+        self.assertEqual(1, f["waiting_for_deletion"])
+
+    def test_the_sentence_names_those_waiting_for_their_pod_to_be_deleted(self):
+        pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("x-db", "a", mem="4Gi", kind="StatefulSet")]
+        f = run("a", [node("a"), node("b")], pods, self.sets(postgres="moves", x_db="waits"))
+        self.assertEqual("If a fails, b would have 6 of 15 GiB of memory reserved. It fits. "
+                         "1 app waits until its pod is deleted; If this host goes down says why.", f["sentence"])
+        two = run("a", [node("a"), node("b")], [], self.sets(postgres="waits", x_db="waits", x_cache="unknown"))
+        self.assertEqual("If a fails, nothing on it needs room on another host. 2 apps wait until their pod is deleted "
+                         "and 1 app couldn't be checked; If this host goes down says why.", two["sentence"])
+        self.assertEqual((2, "fits"), (two["waiting_for_deletion"], two["verdict"]))
+
+    def test_with_no_statefulset_waiting_the_sentence_is_unchanged(self):
+        f = run("a", [node("a"), node("b")], [pod("web", "b")], preview())
+        self.assertEqual(("If a fails, nothing on it needs room on another host.", 0), (f["sentence"], f["waiting_for_deletion"]))
 
     def test_a_bare_pod_does_not_move(self):
         bare = pod("debug", "a", mem="2Gi")
@@ -184,6 +217,12 @@ class EveryHostTests(unittest.TestCase):
         self.sources = mock.Mock(return_value=([], []))
         capacity.bind(lambda p: {"items": nodes} if p == "/api/v1/nodes" else {"items": pods}, impact, self.sources,
                       server.FLOW._flow_owner, lambda pod: (pod["metadata"].get("labels") or {}).get("homestead.io/task"))
+
+    def test_a_host_that_failed_to_preview_has_no_one_waiting(self):
+        def impact(name, src):
+            raise RuntimeError("boom")
+        self.bind([node("a"), node("b")], [], impact)
+        self.assertEqual([0, 0], [h["waiting_for_deletion"] for h in capacity.every_host()["hosts"]])
 
     def test_each_ready_host_is_forecast_and_helper_pods_are_left_out(self):
         helper = pod("files", "a", mem="10Gi")
