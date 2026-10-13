@@ -947,7 +947,7 @@ window.storageClassDefault = async name => {
 window.storageClassDelete = async name => {
   if (!(await ask(`Delete storage class "${name}"?
 
-Volumes already built from it keep working and keep their data. New volumes can no longer use it.`))) return;
+Volumes already built from it keep working and keep their data. New volumes can no longer use it.`, { title: "Delete storage class", ok: "Delete storage class", danger: true }))) return;
   try {
     const result = await api("/api/storage/classes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -1568,7 +1568,7 @@ window.saveShareEdit = async (name, button) => {
   } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };
 window.rmShare = async name => {
-  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`))) return;
+  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`, { title: "Remove share", ok: "Remove share", danger: true }))) return;
   try {
     const result = await api("/api/shares/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -1951,7 +1951,7 @@ function disksRepaint(node) {
 }
 
 window.diskAction = async (action, node, disk, value) => {
-  if (action === "remove" && !(await ask(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`))) return;
+  if (action === "remove" && !(await ask(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`, { title: "Remove disk", ok: "Remove disk", danger: true }))) return;
   if (action === "evict" && value && !(await ask(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`))) return;
   const body = { node, disk };
   if (action === "scheduling") body.allow = value;
@@ -2193,7 +2193,7 @@ window.diskAddGo = async (node, blockdevice) => {
   const body = { node, engine: $("#da_engine").value };
   if (blockdevice) {
     body.blockdevice = blockdevice; body.wipe = !!$("#da_wipe")?.checked;
-    if (body.wipe && !(await ask("Erase everything on this disk? This cannot be undone."))) return;
+    if (body.wipe && !(await ask("Erase everything on this disk? This cannot be undone.", { title: "Erase disk", ok: "Erase disk", danger: true }))) return;
   } else body.path = $("#da_path").value.trim();
   try {
     const r = await api("/api/disks/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -2309,7 +2309,7 @@ window.reclassWatch = async id => {
 };
 
 window.reclassRemoveOld = async pv => {
-  if (!(await ask(`Remove the old copy ${pv}? Its data is deleted.`))) return;
+  if (!(await ask(`Remove the old copy ${pv}? Its data is deleted.`, { title: "Remove old copy", ok: "Remove old copy", danger: true }))) return;
   try {
     const r = await api("/api/volumes/old-copies/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pv }) });
