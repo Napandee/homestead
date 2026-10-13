@@ -10,9 +10,12 @@ function impactApp(r) {
   // A StatefulSet says how many of its copies are here (#440).
   const kind = r.kind === "vm" ? " · VM" : r.kind === "set" ? ` · ${r.here} of ${r.copies} cop${r.copies === 1 ? "y" : "ies"} here` : "";
   const setting = r.setting === "node_down" ? ' <button class="linkish xs" onclick="ifDownSetting()">Open the setting</button>' : "";
+  // A StatefulSet Longhorn's setting can help says so in one line; why it
+  // waits, and where the setting is, sit behind a disclosure (word budget).
+  const why = r.setting === "node_down" ? "waits until its pod is deleted." : r.why;
   return `<div class="impact-row">${avatar}<div class="impact-text"><b>${esc(r.name)}</b>${r.kind === "set" ? ' <span class="tag">StatefulSet</span>' : ""}
       <span class="dim xs">${esc(r.ns + kind)}${r.keeps_answering ? " · keeps answering from its other copies" : ""}</span>
-      <span class="small">${esc(where + r.why)}${setting}</span>
+      <span class="small">${esc(where + why)}${setting}</span>${why !== r.why ? UI.more("Why it waits", `<p>${esc(r.why)}</p>`, false, `why:${r.ns}/${r.name}`) : ""}
       ${(r.notes || []).map(n => `<span class="dim xs">${esc(n)}</span>`).join("")}</div>
     <span class="pill slim ${tone}">${esc(r.outcome)}</span></div>`;
 }
@@ -34,7 +37,7 @@ window.nodeIfDown = async (node, back = null) => {
     ${chips.length ? `<div class="row impact-chips">${chips.join("")}</div>` : '<div class="ui-empty">Nothing of yours runs here, and no volume keeps a copy here.</div>'}
     ${(p.unread || []).length ? `<div class="dim xs">Couldn't read ${esc(p.unread.join(", "))}, so none of them is listed.</div>` : ""}
     ${section("Stops until it is back", by("stops"), by("stops").map(impactApp).join(""))}
-    ${section("Waits for it", by("waits"), by("waits").map(impactApp).join(""))}
+    ${section("Waits", by("waits"), by("waits").map(impactApp).join(""))}
     ${section("Couldn't be checked", by("unknown"), by("unknown").map(impactApp).join(""))}
     ${section("Moves to another host", by("moves"), by("moves").map(impactApp).join(""))}
     ${section("Volumes", [...p.at_risk, ...p.fewer_copies],

@@ -178,6 +178,40 @@ class ForecastTests(unittest.TestCase):
                          "and 1 app couldn't be checked; If this host goes down says why.", two["sentence"])
         self.assertEqual((2, "fits"), (two["waiting_for_deletion"], two["verdict"]))
 
+    def test_a_set_waiting_for_its_host_gets_no_room(self):
+        # The real preview, so a wait-mode StatefulSet's row decides: none of it moves.
+        import homestead_impact as IMPACT
+        nodes = [{"name": h, "status": "Ready", "schedulable": True, "hardware": {}} for h in ("a", "b")]
+        forever = {"tolerations": [{"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute"}]}
+        sets = [{"ns": "lab", "name": "postgres", "replicas": 1, "spec": forever,
+                 "pods": [{"name": "postgres-0", "node": "a", "ready": True, "claims": ["data-postgres-0"]}]}]
+        volumes = [{"name": "pvc-x", "pvc_name": "data-postgres-0", "namespace": "lab", "replicas": 2,
+                    "copies": [{"node": "a", "healthy": True}, {"node": "b", "healthy": True}]}]
+        p = IMPACT.preview("a", [], [], [], [], volumes, [], nodes, sets=sets, pvs={}, node_down="delete-statefulset-pod")
+        f = run("a", [node("a"), node("b")], [pod("postgres", "a", mem="6Gi", kind="StatefulSet")], p)
+        self.assertEqual((0, 0.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+        # It waits for its host, as a Deployment set to wait does, not for its pod to be deleted.
+        self.assertEqual((0, "If a fails, nothing on it needs room on another host."), (f["waiting_for_deletion"], f["sentence"]))
+
+    def test_a_deployment_and_a_statefulset_of_one_name_each_find_their_own_row(self):
+        pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("postgres", "a", mem="2Gi")]
+        rows = {"apps": [{"kind": "app", "ns": "lab", "name": "postgres", "outcome": "moves", "to": ["b"]},
+                         {"kind": "set", "ns": "lab", "name": "postgres", "outcome": "waits"}]}
+        f = run("a", [node("a"), node("b")], pods, rows)
+        self.assertEqual((1, 2.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+        flipped = {"apps": [{**rows["apps"][0], "outcome": "stops"}, {**rows["apps"][1], "outcome": "moves", "to": ["b"]}]}
+        f = run("a", [node("a"), node("b")], pods, flipped)
+        self.assertEqual((1, 6.0), (f["moving"], f["hosts"][0]["mem_gib"]))
+
+    def test_unread_statefulsets_are_said_so_fits_never_hides_them(self):
+        f = run("a", [node("a"), node("b")], [pod("web", "a", mem="1Gi"), pod("postgres", "a", mem="6Gi", kind="StatefulSet")],
+                {**preview("web", to=("b",)), "unread": ["StatefulSets"]})
+        self.assertEqual("If a fails, b would have 1 of 15 GiB of memory reserved. It fits. "
+                         "StatefulSets couldn't be read, so they aren't counted.", f["sentence"])
+        f = run("a", [node("a"), node("b")], [], {"apps": [], "unread": ["StatefulSets"]})
+        self.assertEqual("If a fails, nothing on it needs room on another host. "
+                         "StatefulSets couldn't be read, so they aren't counted.", f["sentence"])
+
     def test_with_no_statefulset_waiting_the_sentence_is_unchanged(self):
         f = run("a", [node("a"), node("b")], [pod("web", "b")], preview())
         self.assertEqual(("If a fails, nothing on it needs room on another host.", 0), (f["sentence"], f["waiting_for_deletion"]))

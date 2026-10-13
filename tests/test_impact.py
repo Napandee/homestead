@@ -215,9 +215,25 @@ class StatefulSetTests(unittest.TestCase):
         for policy in ("delete-statefulset-pod", "delete-both-statefulset-and-deployment-pod"):
             r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down=policy))
             self.assertEqual(("moves", ["node1", "node3"]), (r["outcome"], r["to"]), policy)
-            self.assertEqual("moves once Longhorn deletes its pod, after about 5 minutes", r["why"])
+            self.assertEqual("moves once Longhorn deletes its pod, after about 5 minutes, Kubernetes' default", r["why"])
         r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down="delete-deployment-pod"))
         self.assertEqual("waits", r["outcome"], "deleting Deployments' pods leaves StatefulSets' alone")
+
+    UNREACHABLE = "node.kubernetes.io/unreachable"
+
+    def test_a_set_whose_pod_tolerates_the_host_being_down_for_ever_waits(self):
+        # Never evicted, so never terminating: Longhorn has no pod to delete.
+        forever = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute"}]}
+        r = self.row(self.preview([sts(spec=forever)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
+        self.assertEqual(("waits", "set to wait for its host to come back"), (r["outcome"], r["why"]))
+        self.assertNotIn("setting", r)
+        self.assertNotIn("to", r)
+
+    def test_a_set_set_to_move_moves_after_its_own_delay(self):
+        fast = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15}]}
+        r = self.row(self.preview([sts(spec=fast)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
+        self.assertEqual(("moves", "moves once Longhorn deletes its pod, about 15 seconds after the host stops answering"),
+                         (r["outcome"], r["why"]))
 
     def test_its_only_healthy_copy_here_stops_it(self):
         r = self.row(self.preview([sts()], volumes=[vol("data-postgres-0", [("node2", True), ("node1", False)])],

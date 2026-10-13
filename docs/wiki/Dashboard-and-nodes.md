@@ -149,13 +149,15 @@ pod on another host while the old one might still run, so it:
 - **stops** when it may only run on that host, its volume is stored there
   (`local-path`), its only healthy Longhorn copy is there, or no other host
   can run it;
+- **waits** for the host to come back when its failover setting is to wait,
+  as an app's does: its pod never leaves the host, so nothing deletes it;
 - **waits until its pod is deleted** - by hand - when Longhorn's **Pods on a
   failed node** setting does not cover StatefulSets, or a volume it uses is
   not on Longhorn. When Longhorn is installed and every volume is on
   Longhorn, the line links to the setting (**Settings → Hardware and
   storage → Longhorn storage**);
-- **moves** about 5 minutes after the host stops answering, when that
-  setting does delete them and every volume it uses is on Longhorn, with a
+- **moves** after its failover setting's delay - about 15 seconds, or
+  Kubernetes' default of about 5 minutes - when that setting does delete them and every volume it uses is on Longhorn, with a
   healthy copy elsewhere.
 
 A line that **couldn't be checked** means Homestead couldn't read where its

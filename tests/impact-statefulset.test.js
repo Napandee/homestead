@@ -29,6 +29,14 @@ test("a StatefulSet's row has its chip, its copies here and a link to Longhorn's
   assert.match(html, /pill slim warn">waits</);
 });
 
+test("a row Longhorn's setting can help says it in one line, with the why behind a disclosure", () => {
+  const html = setup().impactApp(waits);
+  const visible = html.replace(/<details[^]*?<\/details>/g, "");
+  assert.match(visible, /<span class="small">waits until its pod is deleted\. <button/);
+  assert.doesNotMatch(visible, /Kubernetes doesn|Longhorn can do this/);
+  assert.match(html, /<details class="ui-more"[^>]*>\s*<summary>Why it waits<\/summary>[^]*Kubernetes doesn&#39;t start[^]*Pods on a failed node\./);
+});
+
 test("one copy reads copy, and a row the setting can't help has no link", () => {
   const html = setup().impactApp({ ...waits, copies: 1, keeps_answering: false, setting: undefined, outcome: "stops",
     why: "its volume data-postgres-0 is stored on node2" });
@@ -61,4 +69,14 @@ test("rows that couldn't be checked have their own chip and section; unread Stat
   assert.match(html, /Couldn(?:'|&#39;)t be checked<\/h4>[^]*couldn&#39;t be checked: where its volumes are stored/);
   assert.match(html, /pill slim neutral">unknown</);
   assert.match(html, /Couldn't read StatefulSets, so none of them is listed\./);
+});
+
+test("one heading fits apps waiting for their host and StatefulSets waiting for their pod to be deleted", async () => {
+  const t = setup({ node: "node2", others_ready: ["node1"], at_risk: [], fewer_copies: [], addresses: [], unread: [],
+    counts: { stops: 0, waits: 2, unknown: 0, moves: 0, at_risk: 0, fewer_copies: 0, addresses: 0 },
+    apps: [waits, { kind: "app", ns: "lab", name: "zigbee", icon: "", outcome: "waits", why: "set to wait for its host to come back", notes: [] }] });
+  await t.ctx.nodeIfDown("node2");
+  const html = t.fields["#mbody"].innerHTML;
+  assert.doesNotMatch(html, /Waits for it/);
+  assert.match(html, />Waits<\/h4>[^]*postgres[^]*zigbee/);
 });

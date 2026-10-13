@@ -31,6 +31,7 @@ it ignores affinity between apps and the order pods actually restart in.
 Pods already Pending, with no host, are counted apart: they wait whatever fails.
 Counts are of apps, not of their copies.
 """
+import homestead_impact as IMPACT
 import homestead_place as PLACE
 import homestead_pod_resources as RESOURCES
 import homestead_priority as PRIORITY
@@ -92,7 +93,10 @@ def forecast(failed, nodes, pods, preview, owner):
     # Where each app, VM and StatefulSet may go, from the impact preview. Rows
     # that stop, wait (for this host, or for a StatefulSet's pod to be
     # deleted) or couldn't be checked need no room elsewhere.
-    listed = {(r.get("ns"), r.get("name")): r for r in preview.get("apps") or [] if r.get("kind") in ("app", "vm", "set")}
+    # Keyed by kind as well, so a Deployment and a StatefulSet of one name
+    # each find their own row.
+    listed = {(r.get("kind") == "set", r.get("ns"), r.get("name")): r for r in preview.get("apps") or []
+              if r.get("kind") in ("app", "vm", "set")}
     moving, pending = [], set()
     for pod in pods:
         if not _live(pod):
@@ -108,13 +112,14 @@ def forecast(failed, nodes, pods, preview, owner):
         if where in survivors:
             survivors[where]["pods"].append(need)
         elif where == failed and not _daemon(pod):
-            row = listed.get((meta.get("namespace"), owner(pod) or meta.get("name")))
+            of_set = any(o.get("kind") == "StatefulSet" for o in meta.get("ownerReferences") or [])
+            row = listed.get((of_set, meta.get("namespace"), owner(pod) or meta.get("name")))
             if row is None:
                 # A bare pod is not started again anywhere.
                 if not meta.get("ownerReferences"):
                     continue
                 # Nor is a StatefulSet's, while the old one might still run.
-                if any(o.get("kind") == "StatefulSet" for o in meta.get("ownerReferences") or []):
+                if of_set:
                     continue
                 # As its controller would start it again: the host it ran on is
                 # the scheduler's choice, not part of the pod it asks for.
@@ -186,12 +191,13 @@ def forecast(failed, nodes, pods, preview, owner):
     verdict = ("fits" if not moving else "no-host" if not survivors else "waits" if stuck
                else "tight" if any(h["received"] and h["full"] >= TIGHT for h in hosts) else "fits")
     sets = [r for r in preview.get("apps") or [] if r.get("kind") == "set"]
-    waiting = sum(1 for r in sets if r.get("outcome") == "waits")
+    # One set to wait for its host waits as a Deployment does: not for deletion.
+    waiting = sum(1 for r in sets if r.get("outcome") == "waits" and r.get("why") != IMPACT.FAILOVER_WORDS["wait"][1])
     unchecked = sum(1 for r in sets if r.get("outcome") == "unknown")
     return {"node": failed, "verdict": verdict, "moving": _apps(moving), "hosts": hosts, "pending": len(pending),
             "waits": _rows(waits), "evicted": _rows(evicted, "on"), "unreserved": unreserved,
             "waiting_for_deletion": waiting,
-            "sentence": sentence(failed, verdict, hosts, stuck, len(moving)) + _deletion_clause(waiting, unchecked)}
+            "sentence": sentence(failed, verdict, hosts, stuck, len(moving)) + _deletion_clause(waiting, unchecked, "StatefulSets" in (preview.get("unread") or []))}
 
 
 def _rows(pods, *extra):
@@ -230,16 +236,18 @@ def sentence(failed, verdict, hosts, stuck, moving=1):
             f"would {'wait for room or be evicted' if evicted else 'wait for room'}.")
 
 
-def _deletion_clause(waiting, unchecked):
+def _deletion_clause(waiting, unchecked, unread=False):
     """What "fits" would otherwise hide: StatefulSets that stay down until
-    their pod is deleted, and those that couldn't be checked (#440)."""
+    their pod is deleted, those that couldn't be checked, and all of them
+    when they couldn't be read (#440)."""
     parts = []
     if waiting:
         parts.append("1 app waits until its pod is deleted" if waiting == 1
                      else f"{waiting} apps wait until their pod is deleted")
     if unchecked:
         parts.append(f"{unchecked} app{'' if unchecked == 1 else 's'} couldn't be checked")
-    return f" {' and '.join(parts)}; If this host goes down says why." if parts else ""
+    clause = f" {' and '.join(parts)}; If this host goes down says why." if parts else ""
+    return clause + (" StatefulSets couldn't be read, so they aren't counted." if unread else "")
 
 
 # What every_host reads, bound by server.py: the cluster, a host's impact

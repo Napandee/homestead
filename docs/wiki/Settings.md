@@ -208,7 +208,9 @@ only when the preview says it moves - when Longhorn's **Pods on a failed
 node** setting deletes it; one that waits until its pod is deleted, or
 couldn't be checked, needs none, and the sentence says how many wait and how many
 couldn't be checked: *1 app waits until its pod is deleted and 1 app couldn't
-be checked; If this host goes down says why.* Pods the
+be checked; If this host goes down says why.* When StatefulSets couldn't be
+read, the sentence ends *StatefulSets couldn't be read, so they aren't
+counted.* Pods the
 preview does not list - a platform app's - are counted as needing room on a
 host their own rules and its taints allow, should they be started elsewhere,
 except a StatefulSet's. A bare pod no controller owns does not move. They are

@@ -12,7 +12,8 @@ Worked out from what Homestead already knows, read only:
 * a StatefulSet's pod is never started on another host while the old one
   might still run: it stops where an app would, waits until its pod is
   deleted - by hand, or by Longhorn's "Pods on a failed node" setting - and
-  moves once Longhorn deletes it. Where its volumes are stored, or that
+  moves once Longhorn deletes it, after its failover setting's delay; one set
+  to wait waits for its host, as an app does. Where its volumes are stored, or that
   setting, couldn't be read, it says so instead of guessing.
 * a Longhorn volume whose only healthy copy is on the host is unavailable, and
   lost if that disk is; one with copies elsewhere carries on with fewer.
@@ -21,6 +22,7 @@ Worked out from what Homestead already knows, read only:
 It is a forecast, not a promise: Kubernetes decides at the time, with what is
 free then. Each line says why.
 """
+import homestead_failover as FAILOVER
 import homestead_roles as ROLES
 
 
@@ -38,7 +40,9 @@ SET_DELETED_BY = ("delete-statefulset-pod", "delete-both-statefulset-and-deploym
 SET_WAITS = ("waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere "
              "while the old one might still run.")
 SET_POINTER = " Longhorn can do this for you: Settings → Hardware and storage → Longhorn storage → Pods on a failed node."
-SET_MOVES = "moves once Longhorn deletes its pod, after about 5 minutes"
+# Longhorn deletes only a pod already leaving the down host, so it moves after
+# its failover delay; one set to wait never leaves, and waits for the host.
+SET_MOVES = "moves once Longhorn deletes its pod, "
 ORDER = {"stops": 0, "waits": 1, "unknown": 2, "moves": 3}
 
 
@@ -106,7 +110,8 @@ def _hardware_hosts(features, nodes, node, spec=None):
 def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
     """What becomes of a StatefulSet with a pod on node: the first rule that
     matches - pinned here, its volume here, nowhere else to run, couldn't be
-    checked, waits for its pod to be deleted, or moves once Longhorn does."""
+    checked, set to wait for its host, waits for its pod to be deleted, or
+    moves once Longhorn does, after its failover delay."""
     ns, name, spec = s["ns"], s["name"], s.get("spec") or {}
     pods = s.get("pods") or []
     here = [p for p in pods if p.get("node") == node]
@@ -123,6 +128,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
     # Longhorn deletes only pods that hold its volumes: one with none, or with
     # any other, waits for a person whatever the policy says.
     all_longhorn = bool(claims) and len(longhorn) == len(claims)
+    mode = FAILOVER.mode_of(spec)
     unread = []
     if pvs is None and len(longhorn) < len(claims):
         unread.append("where its volumes are stored")
@@ -137,6 +143,8 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
                   else f"it may only run on {', '.join(sorted(allowed))}" if allowed is not None
                   else "the others are cordoned, or have taints it doesn't tolerate")
         row.update(outcome="stops", why="no other host can run it: " + reason)
+    elif mode == "wait":
+        row.update(outcome="waits", why=FAILOVER_WORDS["wait"][1])
     elif unread:
         row.update(outcome="unknown", why="couldn't be checked: " + " and ".join(unread))
     elif not all_longhorn or node_down not in SET_DELETED_BY:
@@ -144,7 +152,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
         if all_longhorn:
             row["setting"] = "node_down"
     else:
-        row.update(outcome="moves", why=SET_MOVES, to=hosts)
+        row.update(outcome="moves", why=SET_MOVES + FAILOVER_WORDS[mode][1], to=hosts)
     return row
 
 
