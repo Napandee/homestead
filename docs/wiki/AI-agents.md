@@ -107,7 +107,8 @@ Tools come in three classes:
 | `list_nodes` | Every host with its health and use | `read` | read |
 | `list_alerts` | What is wrong right now, as the app's bell shows it | `read` | read |
 | `get_job` | A background job by the id an action answered with | `read` | read |
-| `host_failure_forecast` | For every host: if it failed, whether the others would have room for what it runs, tier by tier | `read` | read |
+| `host_failure_forecast` | For every host: if it failed, whether the others would have room for what it runs, tier by tier, and how many StatefulSets would wait until their pod is deleted | `read` | read |
+| `host_failure_preview` | One host: if it went down, what stops, waits or moves and where, and why - apps, StatefulSets, VMs, volumes at risk and addresses | `read` | read |
 | `list_jobs` | Background jobs, newest first: what runs, what finished and what failed | `read` | read |
 | `get_job_log` | What a job wrote as it ran: its pod's log, or its steps | `read` | read |
 | `preview_cancel_job` | What cancelling a job would undo and keep, and the options and confirmation it needs | `containers:control` | change |

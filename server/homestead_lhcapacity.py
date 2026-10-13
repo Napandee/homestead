@@ -56,6 +56,19 @@ def _setting(name, default):
         return str(default)
 
 
+def node_down(read=None):
+    """Longhorn's policy for the pods of a node that is down, or None when it
+    couldn't be read - Longhorn not installed, say. Unlike _setting, a failed
+    read is not taken for the default: the impact preview says "couldn't be
+    checked" rather than guess (#440)."""
+    try:
+        item = (read or kget)(f"{LH}/settings/{NODE_DOWN}") or {}
+    except Exception:
+        return None
+    value = item.get("value") if item.get("value") not in (None, "") else item.get("default")
+    return str(value) if value not in (None, "") else "do-nothing"
+
+
 def _int(text, default):
     try:
         return int(str(text).strip())

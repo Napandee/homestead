@@ -26,6 +26,14 @@ def vol(claim, copies):
             "copies": [{"node": n, "healthy": h} for n, h in copies]}
 
 
+def sts(name="postgres", pods=(("node2", True),), replicas=None, spec=None, claims=True):
+    """A StatefulSet as homestead_nodes._impact_sources gives it: pod i on
+    host, ready or not, with its own claim data-<name>-<i>."""
+    rows = [{"name": f"{name}-{i}", "node": host, "ready": ready, "claims": [f"data-{name}-{i}"] if claims else []}
+            for i, (host, ready) in enumerate(pods)]
+    return {"ns": "lab", "name": name, "replicas": len(rows) if replicas is None else replicas, "spec": spec or {}, "pods": rows}
+
+
 class AppTests(unittest.TestCase):
     def run_preview(self, workloads, deployments=(), volumes=(), vms=(), raw_vms=(), addresses=()):
         return IMPACT.preview("node2", list(workloads), list(deployments), list(vms), list(raw_vms), list(volumes), list(addresses), NODES)
@@ -142,6 +150,160 @@ class StorageAndAddressTests(AppTests):
         res = self.run_preview([app("moves"), app("stops", hardware=["coral_usb"]), app("waits", failover="wait")])
         self.assertEqual(["stops", "waits", "moves"], [r["name"] for r in res["apps"]])
         self.assertEqual({"stops": 1, "waits": 1, "moves": 1}, {k: res["counts"][k] for k in ("stops", "waits", "moves")})
+
+
+class HostLocalTests(unittest.TestCase):
+    """#440: a claim whose PersistentVolume is pinned to this host alone
+    (local-path) can never move with its app."""
+
+    def preview(self, workloads=(), vms=(), raw_vms=(), volumes=(), pvs=None):
+        return IMPACT.preview("node2", list(workloads), [], list(vms), list(raw_vms), list(volumes), [], NODES, pvs=pvs)
+
+    def row(self, result, name):
+        return next(r for r in result["apps"] if r["name"] == name)
+
+    def test_a_deployment_on_host_local_storage_stops(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], pvs={("lab", "web-data"): ["node2"]}), "web")
+        self.assertEqual(("stops", "its volume web-data is stored on node2", []), (r["outcome"], r["why"], r["notes"]))
+
+    def test_a_deployment_on_longhorn_is_unchanged(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], volumes=[vol("web-data", [("node2", True), ("node1", True)])],
+                                  pvs={("lab", "web-data"): []}), "web")
+        self.assertEqual(("moves", ["node1", "node3"], []), (r["outcome"], r["to"], r["notes"]))
+
+    def test_a_volume_pinned_to_several_hosts_is_not_host_local(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], pvs={("lab", "web-data"): ["node1", "node2"]}), "web")
+        self.assertEqual("moves", r["outcome"])
+        self.assertIn("not a Longhorn volume", r["notes"][0])
+
+    def test_unread_volumes_leave_todays_answer(self):
+        r = self.row(self.preview([app("web", claims=["web-data"])], pvs=None), "web")
+        self.assertEqual("moves", r["outcome"])
+        self.assertIn("whether other hosts can reach it is not known", r["notes"][0])
+
+    def test_a_vm_on_host_local_storage_stops(self):
+        vm = {"ns": "lab", "name": "x-db", "node": "node2", "running": True, "migratable": False, "disks": [{"claim": "x-db-disk"}]}
+        raw = {"metadata": {"namespace": "lab", "name": "x-db"}, "spec": {"template": {"spec": {"domain": {"devices": {}}}}}}
+        r = self.row(self.preview(vms=[vm], raw_vms=[raw], pvs={("lab", "x-db-disk"): ["node2"]}), "x-db")
+        self.assertEqual(("stops", "its volume x-db-disk is stored on node2"), (r["outcome"], r["why"]))
+
+
+class StatefulSetTests(unittest.TestCase):
+    """#440: Kubernetes never starts a StatefulSet's pod elsewhere while the
+    old one might still run, so it moves only once something deletes it."""
+    LONGHORN_TWO = [vol("data-postgres-0", [("node2", True), ("node1", True)])]
+
+    def preview(self, sets, volumes=(), node_down="do-nothing", nodes=NODES, **kw):
+        kw.setdefault("pvs", {})
+        return IMPACT.preview("node2", [], [], [], [], list(volumes), [], nodes, sets=list(sets), node_down=node_down, **kw)
+
+    def row(self, result, name="postgres"):
+        return next(r for r in result["apps"] if r["name"] == name)
+
+    def test_on_host_local_storage_it_stops(self):
+        r = self.row(self.preview([sts()], pvs={("lab", "data-postgres-0"): ["node2"]}))
+        self.assertEqual(("set", "stops", "its volume data-postgres-0 is stored on node2"), (r["kind"], r["outcome"], r["why"]))
+
+    def test_on_longhorn_left_at_do_nothing_it_waits_with_the_pointer(self):
+        r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO))
+        self.assertEqual("waits", r["outcome"])
+        self.assertTrue(r["why"].startswith("waits until its pod is deleted: Kubernetes doesn't start"), r["why"])
+        self.assertIn("Longhorn can do this for you", r["why"])
+        self.assertEqual("node_down", r["setting"])
+
+    def test_with_longhorns_deletion_policy_and_a_copy_elsewhere_it_moves(self):
+        for policy in ("delete-statefulset-pod", "delete-both-statefulset-and-deployment-pod"):
+            r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down=policy))
+            self.assertEqual(("moves", ["node1", "node3"]), (r["outcome"], r["to"]), policy)
+            self.assertEqual("moves once Longhorn deletes its pod, after about 5 minutes, Kubernetes' default", r["why"])
+        r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down="delete-deployment-pod"))
+        self.assertEqual("waits", r["outcome"], "deleting Deployments' pods leaves StatefulSets' alone")
+
+    UNREACHABLE = "node.kubernetes.io/unreachable"
+
+    def test_a_set_whose_pod_tolerates_the_host_being_down_for_ever_waits(self):
+        # Never evicted, so never terminating: Longhorn has no pod to delete.
+        forever = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute"}]}
+        r = self.row(self.preview([sts(spec=forever)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
+        self.assertEqual(("waits", "set to wait for its host to come back"), (r["outcome"], r["why"]))
+        self.assertNotIn("setting", r)
+        self.assertNotIn("to", r)
+
+    def test_a_set_set_to_move_moves_after_its_own_delay(self):
+        fast = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15}]}
+        r = self.row(self.preview([sts(spec=fast)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
+        self.assertEqual(("moves", "moves once Longhorn deletes its pod, about 15 seconds after the host stops answering"),
+                         (r["outcome"], r["why"]))
+
+    def test_its_only_healthy_copy_here_stops_it(self):
+        r = self.row(self.preview([sts()], volumes=[vol("data-postgres-0", [("node2", True), ("node1", False)])],
+                                  node_down="delete-statefulset-pod"))
+        self.assertEqual(("stops", "its volume data-postgres-0 has its only healthy copy on node2"), (r["outcome"], r["why"]))
+
+    def test_pinned_by_node_selector_it_stops(self):
+        r = self.row(self.preview([sts(spec={"nodeSelector": {"kubernetes.io/hostname": "node2"}})], volumes=self.LONGHORN_TWO,
+                                  node_down="delete-statefulset-pod"))
+        self.assertEqual(("stops", "it may only run on node2"), (r["outcome"], r["why"]))
+
+    def test_with_no_other_ready_host_it_stops(self):
+        alone = [NODES[0] | {"status": "NotReady"}, NODES[1], NODES[2] | {"schedulable": False}]
+        r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod", nodes=alone))
+        self.assertEqual("stops", r["outcome"])
+        self.assertTrue(r["why"].startswith("no other host can run it: "), r["why"])
+
+    def test_on_nfs_it_waits_with_the_note_and_no_pointer(self):
+        r = self.row(self.preview([sts()], pvs={("lab", "data-postgres-0"): []}, node_down="delete-statefulset-pod"))
+        self.assertEqual("waits", r["outcome"])
+        self.assertNotIn("Longhorn can do this", r["why"])
+        self.assertNotIn("setting", r)
+        self.assertIn("data-postgres-0 is not a Longhorn volume", r["notes"][0])
+
+    def test_without_longhorn_a_set_on_nfs_waits_not_unknown(self):
+        r = self.row(self.preview([sts()], pvs={("lab", "data-postgres-0"): []}, node_down=None))
+        self.assertEqual("waits", r["outcome"])
+
+    def test_a_set_with_no_volumes_waits_without_the_pointer(self):
+        r = self.row(self.preview([sts(claims=False)], node_down="delete-statefulset-pod"))
+        self.assertEqual("waits", r["outcome"])
+        self.assertNotIn("setting", r)
+
+    def test_one_of_three_copies_here_keeps_answering(self):
+        r = self.row(self.preview([sts(pods=(("node1", True), ("node2", True), ("node3", False)))]))
+        self.assertEqual((1, 3, True), (r["here"], r["copies"], r["keeps_answering"]))
+        r = self.row(self.preview([sts(pods=(("node1", False), ("node2", True)))]))
+        self.assertFalse(r["keeps_answering"], "its other copy isn't ready")
+
+    def test_unread_volumes_make_it_unknown(self):
+        res = self.preview([sts()], pvs=None, node_down="delete-statefulset-pod")
+        r = self.row(res)
+        self.assertEqual(("unknown", "couldn't be checked: where its volumes are stored"), (r["outcome"], r["why"]))
+        self.assertEqual(1, res["counts"]["unknown"])
+
+    def test_an_unread_policy_makes_it_unknown(self):
+        r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down=None))
+        self.assertEqual(("unknown", "couldn't be checked: Longhorn's Pods on a failed node setting"), (r["outcome"], r["why"]))
+
+    def test_a_set_with_no_pod_here_is_not_listed(self):
+        self.assertEqual([], self.preview([sts(pods=(("node1", True),))])["apps"])
+
+    def test_unread_statefulsets_are_said_not_left_empty(self):
+        res = IMPACT.preview("node2", [], [], [], [], [], [], NODES, sets=None, pvs={}, node_down="do-nothing")
+        self.assertEqual((["StatefulSets"], []), (res["unread"], res["apps"]))
+        self.assertEqual([], self.preview([])["unread"])
+
+    def test_the_order_is_stops_waits_unknown_moves(self):
+        # One preview with all four: PVs unread, the policy set.
+        # a-moves: its only claim is on Longhorn with a copy on node1, so the unread PVs don't matter;
+        # b-unknown: its claim isn't Longhorn and the PVs are unread;
+        # c-waits: no volumes at all; d-stops: pinned here.
+        sets = [sts("a-moves"), sts("b-unknown"), sts("c-waits", claims=False),
+                sts("d-stops", spec={"nodeSelector": {"kubernetes.io/hostname": "node2"}})]
+        volumes = [vol("data-a-moves-0", [("node2", True), ("node1", True)])]
+        res = IMPACT.preview("node2", [], [], [], [], volumes, [], NODES, sets=sets, pvs=None, node_down="delete-statefulset-pod")
+        self.assertEqual([("d-stops", "stops"), ("c-waits", "waits"), ("b-unknown", "unknown"), ("a-moves", "moves")],
+                         [(r["name"], r["outcome"]) for r in res["apps"]])
+        self.assertEqual({"stops": 1, "waits": 1, "unknown": 1, "moves": 1},
+                         {k: res["counts"][k] for k in ("stops", "waits", "unknown", "moves")})
 
 
 if __name__ == "__main__":
