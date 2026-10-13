@@ -42,16 +42,16 @@ function fmWhen(seconds) {
    stopped first. */
 function filesInUseQuestion(pvc, attached, modes = []) {
   if (!attached || modes.includes("ReadWriteMany")) return null;
-  if (modes.includes("ReadWriteOncePod")) return [`${pvc} can be mounted by one pod only, and an app has it.\n\nStop the app first, or the file browser will not start.`,
-    { title: "Browse files in use", ok: "Try anyway" }];
-  return [`An app is using ${pvc}. You can browse it while the app runs; edits change its live files.`,
-    { title: "Browse files in use", ok: "Open files" }];
+  if (modes.includes("ReadWriteOncePod")) return { title: "Browse files in use", ok: "Try anyway",
+    message: `${pvc} can be mounted by one pod only, and an app has it.\n\nStop the app first, or the file browser will not start.` };
+  return { title: "Browse files in use", ok: "Open files",
+    message: `An app is using ${pvc}. You can browse it while the app runs; edits change its live files.` };
 }
 window.fileManager = async (namespace, pvc, attached, modes = []) => {
   if (window.filesDismiss) await window.filesDismiss();
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>opening ${esc(pvc)}</div>`, true, "volume-files");
   const question = filesInUseQuestion(pvc, attached, modes);
-  if (question && !(await ask(...question))) {
+  if (question && !(await ask(question.message, { title: question.title, ok: question.ok }))) {
     closeModal();
     return;
   }
@@ -407,12 +407,12 @@ window.fmSave = async (ignoreSyntax = false) => {
     const state = $("#fm_editstate"); if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
-    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`))) return fmSave(true);
+    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) return fmSave(true);
     toast(e.message, "bad");
   }
 };
 window.fmEditDone = async () => {
-  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   try { FM.editing?.editor?.getModel()?.dispose(); FM.editing?.editor?.dispose(); } catch (_) { /* already gone */ }
   const index = FM.editing?.index ?? 0;
   FM.editing = null;
@@ -459,7 +459,7 @@ async function fmRelease(keepalive = false) {
   }
 }
 window.fmClose = async () => {
-  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   const closing = fmRelease();
   closeModal();
   await closing;

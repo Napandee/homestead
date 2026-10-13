@@ -924,7 +924,7 @@ window.settingsDiscard = () => { STATE.settingsDirty = new Set(); resetPaint(); 
 /* Changing section, or leaving Settings, with changes not saved asks first. */
 window.settingsLeave = async () => {
   if (!STATE.settingsDirty?.size) return true;
-  if (!(await ask("Leave without saving? The changes on this section are discarded."))) return false;
+  if (!(await ask("Leave without saving? The changes on this section are discarded.", { title: "Leave without saving?", ok: "Discard changes", danger: true }))) return false;
   STATE.settingsDirty = new Set();
   return true;
 };
@@ -1111,7 +1111,7 @@ window.sambaToggle = async box => {
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="sambaInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept."))) {
+  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.", { title: "Stop Samba", ok: "Stop Samba", danger: true }))) {
     box.checked = true; return;
   }
   box.disabled = true;
@@ -1167,7 +1167,7 @@ window.nfsToggle = async box => {
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept."))) {
+  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.", { title: "Stop NFS", ok: "Stop NFS", danger: true }))) {
     box.checked = true; return;
   }
   box.disabled = true;

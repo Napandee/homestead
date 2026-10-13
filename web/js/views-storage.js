@@ -1057,7 +1057,7 @@ window.volumeFiles = async (namespace, pvc, attached) => {
   if (cluster) headers["X-Homestead-Cluster"] = cluster;
   const session = FILEVIEW.liveSession = { namespace, pvc, headers };
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`))) {
+  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
     if (FILEVIEW.liveSession === session) closeModal();
     return;
   }
@@ -1105,7 +1105,7 @@ function filesReleaseLate(session) {
 window.fileBrowse = async (path) => {
   const { namespace, pvc } = FILEVIEW;
   const session = FILEVIEW.liveSession;
-  if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   disposeEditor();
   try {
     const snapshot = FILEVIEW.snapshotSession;
@@ -1234,7 +1234,7 @@ window.fileSave = async (ignoreSyntax = false) => {
   } catch (e) {
     if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     // A syntax complaint is a warning, not a refusal: it is your file.
-    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`))) {
+    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) {
       return fileSave(true);
     }
     toast(e.message, "bad");
@@ -1246,7 +1246,7 @@ window.fileSave = async (ignoreSyntax = false) => {
 window.closeFiles = async () => {
   if (FILEVIEW.snapshotSession) return snapshotFilesClose();
   const { dirty } = FILEVIEW;
-  if (dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   const closing = filesDismiss();
   closeModal();
   await closing;
@@ -1952,7 +1952,7 @@ function disksRepaint(node) {
 
 window.diskAction = async (action, node, disk, value) => {
   if (action === "remove" && !(await ask(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`, { title: "Remove disk", ok: "Remove disk", danger: true }))) return;
-  if (action === "evict" && value && !(await ask(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`))) return;
+  if (action === "evict" && value && !(await ask(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`, { title: "Move every replica", ok: "Move replicas" }))) return;
   const body = { node, disk };
   if (action === "scheduling") body.allow = value;
   if (action === "evict") body.on = value;

@@ -160,7 +160,7 @@ window.sessionSummary = (state = {}) => {
 
 window.signOutEverywhere = async () => {
   if (!(await ask("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
-      + "Every session for your account stops working immediately."))) return;
+      + "Every session for your account stops working immediately.", { title: "Sign out everywhere", ok: "Sign out everywhere" }))) return;
   try {
     await _fetch("/api/auth/signout-everywhere", { method: "POST",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" } });
@@ -599,7 +599,7 @@ window.apiKeyMake = async button => {
 };
 
 window.apiKeyRevoke = async (id, name) => {
-  if (!(await ask(`Revoke ${name}? Anything using it is refused from now on.`, { danger: true, ok: "Revoke" }))) return;
+  if (!(await ask(`Revoke ${name}? Anything using it is refused from now on.`, { title: "Revoke key", danger: true, ok: "Revoke" }))) return;
   try {
     await api("/api/auth/keys/revoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(`${name} revoked`, "ok");
