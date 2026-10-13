@@ -950,7 +950,7 @@ window.uvmImport = async (source, name) => {
   const hw = [vm.firmware === "uefi" ? "UEFI" : "BIOS", vm.secure_boot ? "Secure Boot" : "", vm.tpm ? "TPM" : "", vm.hyperv ? "Hyper-V enlightenments" : ""].filter(Boolean).join(" · ");
   const settings = `
     ${UI.fields(UI.field("Name", `<input id="uvm_name" value="${esc(vm.slug)}" oninput="uvmPicture()">`, { tipHtml: tip("The VM's name here: lowercase letters, numbers and dashes. Its disks are named after it.") }),
-      UI.field("Namespace", `<select id="uvm_ns">${namespaces.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`),
+      UI.field("Namespace", `<select id="uvm_ns">${namespaces.map(n => `<option ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`),
       UI.field("Cores", `<input id="uvm_cores" type="number" min="1" max="128" value="${vm.cores}" oninput="uvmPicture()">`),
       UI.field("Memory", `<input id="uvm_mem" value="${esc(vm.memory)}" oninput="uvmPicture()">`))}
     ${settingRow("Firmware", "As on Unraid; change it later under the VM's Hardware.", `<span class="mono small">${esc(hw)}</span>`)}`;
