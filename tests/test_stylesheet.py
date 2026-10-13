@@ -116,6 +116,22 @@ class StylesheetTests(unittest.TestCase):
             ratio = contrast(over(rgba(color), ground), ground)
             self.assertGreaterEqual(ratio, 4.5, f"{selector} is {ratio:.2f}:1 in the light theme")
 
+    def test_faint_text_reads_on_every_surface_and_stays_below_muted(self):
+        """`.dim` carries namespaces, sizes and hints: 4.5:1 on each surface, in both themes,
+        and still quieter than `--mut`, so the three levels of text stay apart."""
+        themes = {":root": {}, 'html[data-theme="light"]': {}}
+        for selectors, declarations in rules():
+            for name in themes:
+                if selectors == [name]:
+                    themes[name].update((k, v) for k, v in declarations.items() if k.startswith("--"))
+        for name, tokens in themes.items():
+            tokens = {**themes[":root"], **tokens}
+            for surface in ("--bg", "--surf", "--surf2", "--surf3"):
+                ground = rgba(tokens[surface])
+                dim = contrast(rgba(tokens["--dim"]), ground)
+                self.assertGreaterEqual(dim, 4.5, f"{name} --dim on {surface} is {dim:.2f}:1")
+                self.assertLess(dim, contrast(rgba(tokens["--mut"]), ground), f"{name} --dim is not quieter than --mut on {surface}")
+
 
 if __name__ == "__main__":
     unittest.main()
