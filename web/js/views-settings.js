@@ -203,7 +203,7 @@ async function viewSettings() {
             </select>`)}
           ${settingRow("Tell me about new images", "", `<label class="toggle"><input id="set_notify_available" type="checkbox" ${updates.notify_available !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
           ${settingRow("Tell me when a registry check fails", "", `<label class="toggle"><input id="set_notify_failures" type="checkbox" ${updates.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
-          ${settingRow("Update window", esc(updateWindowText(maintenance)) + (updates.policy === "maintenance_window" ? ""
+          ${settingRow("Update window", `<span id="set_update_window">${esc(updateWindowText(maintenance))}</span>` + (updates.policy === "maintenance_window" ? ""
             : `<div class="dim xs">${updates.policy === "notify_only" ? "No image is installed while the policy is notify only, not even by apps set to update themselves. Moving containers back after a host returns still uses this window, if set to."
               : "Rollouts you approve start straight away under this policy; only apps set to update themselves wait for this window."}</div>`),
             can("admin") ? '<button class="btn sm" onclick="updateWindowEdit()">Change</button>' : "")}
@@ -976,10 +976,23 @@ window.updateWindowEdit = () => {
       `<label class="daypick"><input type="checkbox" class="set_update_day" value="${index}" ${(m.days || []).includes(index) ? "checked" : ""}><span>${day}</span></label>`).join("")}</div>`) +
     UI.actions(UI.cancel() + UI.button("Save window", "updateWindowSave(this)", { kind: "pri" })));
 };
+/* The window saves on its own: the stored settings with only the window
+   changed, so a change still waiting on the save bar stays there, unsaved. */
 window.updateWindowSave = async button => {
   if (button) button.disabled = true;
-  try { await settingsAppSave(); closeModal(); toast("Update window saved", "ok"); STATE.settingsDirty = new Set(); resetPaint(); viewSettings(); }
-  catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
+  const stored = STATE.data.appSettings || {}, body = { ...stored };
+  delete body.info;
+  body.updates = { ...(stored.updates || {}), maintenance: { start: $("#set_update_start").value,
+    duration_minutes: +$("#set_update_duration").value, days: $$(".set_update_day:checked").map(input => +input.value) } };
+  try {
+    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    STATE.data.appSettings = { ...saved, info: stored.info };
+    // The row changes in place: re-rendering would put the unsaved fields back.
+    const row = $("#set_update_window");
+    if (row) row.textContent = updateWindowText((saved.updates || body.updates).maintenance);
+    closeModal(); toast("Update window saved", "ok");
+    loadImageUpdates(false, true);
+  } catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
 };
 window.catalogEdit = () => modal("App Store catalogue", UI.lead("Any feed in the Community Applications format: the public one, a mirror, or your own list of templates.") +
   UI.field("Feed URL",
