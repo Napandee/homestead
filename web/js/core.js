@@ -267,6 +267,7 @@ function modal(t, h, wide, contextClass = "") {
   if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
   window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
+  MODAL_EDITS = new Map();
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
@@ -279,6 +280,27 @@ function modal(t, h, wide, contextClass = "") {
   paintModalBack();
   modalHeadHeight();
 }
+
+/* What a person has changed in the open dialog (#459). A field's value is
+   noted when a person first reaches for it - after any code has filled it
+   in - so only their own edits count, and a field put back as it was is not
+   a change. A change with nothing noted before it (autofill) counts. */
+let MODAL_EDITS = new Map();
+const MODAL_UNKNOWN = Symbol("unknown");
+function fieldValue(field) {
+  if (field.type === "checkbox" || field.type === "radio") return field.checked;
+  if (field.multiple) return [...field.selectedOptions].map(option => option.value).join("\n");
+  return field.value;
+}
+function noteModalField(event) {
+  const field = event.target;
+  if (!event.isTrusted || !field?.matches?.("input, textarea, select") || MODAL_EDITS.has(field)) return;
+  const changed = event.type === "input" || event.type === "change";
+  const toggle = field.type === "checkbox" || field.type === "radio";
+  MODAL_EDITS.set(field, !changed ? fieldValue(field) : toggle ? !field.checked : MODAL_UNKNOWN);
+}
+const modalChanged = () => [...MODAL_EDITS].some(([field, start]) => fieldValue(field) !== start);
+if ($("#mbody")) for (const type of ["focusin", "pointerdown", "keydown", "input", "change"]) $("#mbody").addEventListener(type, noteModalField, true);
 
 /* A dialog's section rail sticks below its header, not under it (#374): the
    header's height, which a long title can change, is kept as --modalhead-h. */
@@ -303,7 +325,7 @@ function pushModal(onReturn) {
   while (body.firstChild) fragment.appendChild(body.firstChild);
   MODAL_STACK.push({ title: $("#mtitle").textContent, fragment, scroll,
     wide: $(".modalbox").classList.contains("wide"), context: $(".modalbox").dataset.context || "",
-    guard: window.__modalGuard, url: window.location.pathname + window.location.search,
+    guard: window.__modalGuard, edits: MODAL_EDITS, url: window.location.pathname + window.location.search,
     route: STATE.modalRoute, detail: STATE.modalDetail, onReturn });
   return true;
 }
@@ -326,6 +348,7 @@ function modalBack() {
   $("#mbody").replaceChildren(back.fragment);
   $(".modalbox").scrollTop = back.scroll;
   window.__modalGuard = back.guard;
+  MODAL_EDITS = back.edits;
   if (back.url !== window.location.pathname + window.location.search) {
     window.history.replaceState(window.history.state, "", back.url);
   }
@@ -383,7 +406,7 @@ window.pushModal = pushModal;
    ask() to true or false, askText() to the text or null. Escape cancels,
    Enter answers. */
 const ASK_DANGER = /^(delete|remove|erase|force|stop|uninstall|disable|forget|unlink|disconnect|discard|cancel|clear|turning)/i;
-function askDialog(message, { title = "", ok = "", danger = null, input = null } = {}) {
+function askDialog(message, { title = "", ok = "", cancel = "", danger = null, input = null } = {}) {
   return new Promise(resolve => {
     const layer = document.createElement("div");
     layer.className = "askdlg";
@@ -392,7 +415,7 @@ function askDialog(message, { title = "", ok = "", danger = null, input = null }
     const risky = danger === null ? ASK_DANGER.test(String(message).trim()) : danger;
     layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">Cancel</button>
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">${esc(cancel || "Cancel")}</button>
         <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button>`, "", {className:'askbtns'})}</div>`;
     layer.querySelector(".askmsg").textContent = String(message);
     const field = layer.querySelector(".askin");
@@ -423,13 +446,18 @@ window.ask = (message, options = {}) => askDialog(message, options);
 window.askText = (message, value = "", options = {}) => askDialog(message, { ...options, input: { value, placeholder: options.placeholder } });
 
 /* The X and Escape are the only ways a person dismisses a modal, and either can
-   land on unsaved work, so both ask a modal that has something at stake first.
+   land on unsaved work, so both ask a modal that has something at stake first:
+   one whose own guard says so, or, without one, one with changes typed in it.
    Code that closes a modal after finishing its job calls closeModal directly. */
 async function dismissModal() {
   const guard = window.__modalGuard;
   if (typeof guard === "function") {
     const question = guard();
     if (question && !(await ask(question))) return;
+  } else if (modalIsOpen() && modalChanged()) {
+    const discard = await ask(`Discard your changes to ${$("#mtitle").textContent}?`,
+      { title: "Unsaved changes", ok: "Discard", cancel: "Keep editing" });
+    if (!discard) return;
   }
   if (MODAL_STACK.length) return modalBack();
   closeModal();
@@ -439,6 +467,7 @@ function closeModal(updateRoute = true) {
   if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;
+  MODAL_EDITS = new Map();
   MODAL_STACK.length = 0;
   paintModalBack();
   $("#modal").classList.add("hidden");
