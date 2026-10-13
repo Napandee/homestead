@@ -36,10 +36,22 @@ function fmWhen(seconds) {
     + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-window.fileManager = async (namespace, pvc, attached) => {
+/* The helper opens a volume on the node it is attached to, beside the app
+   using it; a shared (ReadWriteMany) one opens anywhere. Only a
+   ReadWriteOncePod claim, which one pod alone may mount, needs the app
+   stopped first. */
+function filesInUseQuestion(pvc, attached, modes = []) {
+  if (!attached || modes.includes("ReadWriteMany")) return null;
+  if (modes.includes("ReadWriteOncePod")) return [`${pvc} can be mounted by one pod only, and an app has it.\n\nStop the app first, or the file browser will not start.`,
+    { title: "Browse files in use", ok: "Try anyway" }];
+  return [`An app is using ${pvc}. You can browse it while the app runs; edits change its live files.`,
+    { title: "Browse files in use", ok: "Open files" }];
+}
+window.fileManager = async (namespace, pvc, attached, modes = []) => {
   if (window.filesDismiss) await window.filesDismiss();
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>opening ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume mounts in one place, so its files can only be opened once the workload is stopped. Continue anyway?`))) {
+  const question = filesInUseQuestion(pvc, attached, modes);
+  if (question && !(await ask(...question))) {
     closeModal();
     return;
   }

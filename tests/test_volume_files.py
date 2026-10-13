@@ -103,6 +103,41 @@ class SessionPodTests(unittest.TestCase):
 
         self.assertEqual([], self.sent, "the pod already mounts the volume")
 
+    def claim(self, modes, attached_to=""):
+        """A claim on volume pvc-1, attached to a node or not."""
+        self.pods["frigate-config"] = {"spec": {"accessModes": modes, "volumeName": "pvc-1"}}
+        self.pods["volumeattachments"] = {"items": [
+            {"spec": {"nodeName": attached_to, "source": {"persistentVolumeName": "pvc-1"}},
+             "status": {"attached": True}}] if attached_to else []}
+
+    def test_a_helper_for_an_attached_readwriteonce_volume_runs_on_its_node(self):
+        self.claim(["ReadWriteOnce"], attached_to="node2")
+
+        files.open_session("lab", "frigate-config")
+
+        spec = self.sent[-1][2]["spec"]
+        self.assertEqual({"kubernetes.io/hostname": "node2"}, spec.get("nodeSelector"),
+                         "a ReadWriteOnce volume mounts on one node: the helper goes there")
+
+    def test_a_helper_for_a_readwritemany_volume_runs_anywhere(self):
+        self.claim(["ReadWriteMany"], attached_to="node2")
+
+        files.open_session("lab", "frigate-config")
+
+        self.assertNotIn("nodeSelector", self.sent[-1][2]["spec"])
+
+    def test_a_helper_for_a_detached_volume_runs_anywhere(self):
+        self.claim(["ReadWriteOnce"])
+
+        files.open_session("lab", "frigate-config")
+
+        self.assertNotIn("nodeSelector", self.sent[-1][2]["spec"])
+
+    def test_a_helper_still_starts_when_the_claim_cannot_be_read(self):
+        files.open_session("lab", "frigate-config")
+
+        self.assertNotIn("nodeSelector", self.sent[-1][2]["spec"])
+
     def test_system_namespaces_are_refused(self):
         with self.assertRaises(PermissionError):
             files.open_session("kube-system", "anything")
