@@ -24,7 +24,10 @@ When the classes can't be read it does as it did before #429, and protect()
 waits rather than guess.
 
 VMs have tiers too, set in their template: a VM takes its tier when it next
-starts, so setting one restarts nothing.
+starts, so setting one restarts nothing. StatefulSets have tiers of their own,
+never a group's: one rolls its pods one at a time, and one that doesn't restart
+itself (OnDelete, or a partition) takes its tier when its pods are next
+restarted - Homestead never deletes them.
 
 Changing a tier changes the pod template, so the app restarts once. Like the
 reservations (homestead_requests), the tiers are reviewed as a list and
@@ -46,6 +49,8 @@ KIND = "set-priority"
 MAX_APPS = 50
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
 VMS = "/apis/kubevirt.io/v1/virtualmachines"
+STATEFULSETS = "/apis/apps/v1/statefulsets"
+PER_POD = 600                    # seconds a restart may take: per pod for a StatefulSet
 TIERS = {
     "critical": {"name": "homestead-critical", "value": 1000, "preemptionPolicy": "PreemptLowerPriority",
                  "description": "Homestead: fits first, and may evict lower-priority pods to fit."},
@@ -305,35 +310,59 @@ def ensure(tiers=("critical", "low"), lad=None):
     return notes
 
 
-def _workloads():
-    """("app", Deployment) and ("vm", VirtualMachine) outside the platform's
-    namespaces; no VMs where KubeVirt is not installed."""
+def _items(path):
+    """A list's items; none where the API isn't there (404)."""
     try:
-        vms = kget(VMS).get("items", [])
+        return kget(path).get("items", [])
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        vms = []
-    for kind, obj in [("app", d) for d in kget("/apis/apps/v1/deployments").get("items", [])] + [("vm", v) for v in vms]:
+        return []
+
+
+def _workloads():
+    """("app", Deployment), ("vm", VirtualMachine) and ("sts", StatefulSet)
+    outside the platform's namespaces; no VMs where KubeVirt is not installed."""
+    vms, stss = _items(VMS), _items(STATEFULSETS)
+    for kind, obj in ([("app", d) for d in kget("/apis/apps/v1/deployments").get("items", [])] + [("vm", v) for v in vms]
+                      + [("sts", s) for s in stss]):
         ns = (obj.get("metadata") or {}).get("namespace", "")
         if ns not in system_ns and not ns.startswith(SYSTEM):
             yield kind, obj
 
 
+PREFIX = {"vm": "vm:", "sts": "sts:"}     # an app's id has none
+
+
 def _row_id(kind, ns, name):
-    return f"vm:{ns}/{name}" if kind == "vm" else f"{ns}/{name}"
+    return f"{PREFIX.get(kind, '')}{ns}/{name}"
 
 
 def _split(row_id):
-    """(kind, ns, name) from a row's id: a VM's starts vm:."""
-    kind = "vm" if row_id.startswith("vm:") else "app"
-    ns, name = row_id[3:].split("/", 1) if kind == "vm" else row_id.split("/", 1)
+    """(kind, ns, name) from a row's id: a VM's starts vm:, a StatefulSet's sts:."""
+    kind = next((k for k, prefix in PREFIX.items() if row_id.startswith(prefix)), "app")
+    ns, name = row_id[len(PREFIX.get(kind, "")):].split("/", 1)
     return kind, ns, name
 
 
 def _path(kind, ns, name):
-    return (f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}" if kind == "vm"
-            else f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    return {"vm": f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
+            "sts": f"/apis/apps/v1/namespaces/{ns}/statefulsets/{name}"}.get(
+        kind, f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+
+
+def _rolls(sts):
+    """Whether a StatefulSet restarts its pods itself when its template
+    changes: not with OnDelete, nor with a partition above 0 - someone (often
+    a database operator) restarts those, and Homestead leaves that to them."""
+    strategy = (sts.get("spec") or {}).get("updateStrategy") or {}
+    return (strategy.get("type") != "OnDelete"
+            and int((strategy.get("rollingUpdate") or {}).get("partition") or 0) <= 0)
+
+
+def _replicas(obj):
+    replicas = (obj.get("spec") or {}).get("replicas")
+    return 1 if replicas is None else int(replicas)
 
 
 def _pod_spec(dep):
@@ -387,8 +416,12 @@ def plan(chosen=None, role=None):
             row["note"] = (f"{owner['by']} applies it{where}; set priorityClassName there" if owner.get("detected")
                            else f"marked as updated by {owner['by']}; set priorityClassName there")
         found = GROUPS.resolve(dep, tiers, lad, kind=kind, managed=bool(owner))
+        if kind == "sts":
+            found = _sts_wanted(app_id, found, suggested, (chosen or {}).get(app_id), lad)
         row.update(group=group, follows=kind == "app" and not owner and GROUPS.follows(dep),
-                   wanted=found["tier"], source=found["source"], status=GROUPS.status(dep, found, owner))
+                   wanted=found["tier"], source=found["source"],
+                   status=_sts_status(found, owner) if kind == "sts" else GROUPS.status(dep, found, owner),
+                   restarts=kind == "app" or (kind == "sts" and _rolls(dep)))
         if row["status"] == "git":
             row["line"] = GROUPS.git_line(owner, found["class"])
         if row["status"] == "restart":
@@ -438,6 +471,29 @@ def plan(chosen=None, role=None):
             "changes": len(changes), "review_token": review_token(changes), "warnings": warnings, "groups": groups}
 
 
+def _sts_wanted(sts_id, found, suggested, picked, lad):
+    """A StatefulSet's tier is its own, never a group's: the one picked for
+    it, else its suggestion while it is at normal, else what it runs."""
+    if picked is not None and picked not in TIERS:
+        raise ValueError(f"{sts_id}: the tier must be critical, normal or low")
+    runs = found["runs"]
+    tier = picked or (suggested if suggested and runs == "normal" else runs)
+    if tier == runs:
+        return found
+    try:
+        cls = class_for(tier, lad)
+    except ValueError:
+        cls = None   # no class can rank there; the warnings say so
+    return {**found, "tier": tier, "class": cls}
+
+
+def _sts_status(found, owner):
+    """in_line, git (Flux or Argo CD applies it) or restart."""
+    if found["tier"] == found["runs"]:
+        return "in_line"
+    return "git" if owner else "restart"
+
+
 def review_token(changes):
     rows = sorted([c["id"], c["current"], c["tier"], bool(c.get("follow"))] for c in changes)
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()[:20]
@@ -474,9 +530,10 @@ def _following(kind, ns, name, tier, tiers):
     becomes the app's own and the marker goes (marked). While the group tiers
     can't be read it is marked unreadable, and start() leaves it out of the
     job, saying so, whatever was reviewed (the plan shows it as unknown_group
-    and never ticks it). {} for a VM; an app's group and marker as they are
-    now go in seen, which check() compares at the app's turn in the job."""
-    if kind == "vm":
+    and never ticks it). {} for a VM or a StatefulSet; an app's group and marker
+    as they are now go in seen, which check() compares at the app's turn in
+    the job."""
+    if kind != "app":
         return {}
     dep = kget(_path(kind, ns, name))
     seen = {"seen": _membership(dep)}
@@ -528,24 +585,30 @@ def patch(app):
         ksend("PATCH", _path("vm", app["ns"], app["name"]), {"spec": {"template": {"spec": {"priorityClassName": cls}}}},
               ctype="application/merge-patch+json")
         return
+    kind = app.get("kind", "app")
     body = {"spec": {"template": {"spec": {"priorityClassName": cls, "priority": None, "preemptionPolicy": None}}}}
     # #430: an app that follows its group keeps the marker, with the class
-    # Homestead wrote; one given a tier of its own loses both.
-    if app.get("follow"):
+    # Homestead wrote; one given a tier of its own loses both. Never a
+    # StatefulSet's: it has no group.
+    if kind == "app" and app.get("follow"):
         body["metadata"] = {"annotations": {GROUPS.FOLLOW: "group", GROUPS.WROTE: cls}}
-    elif app.get("marked"):
+    elif kind == "app" and app.get("marked"):
         body["metadata"] = {"annotations": {GROUPS.FOLLOW: None, GROUPS.WROTE: None}}
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{app['ns']}/deployments/{app['name']}", body,
-          ctype="application/strategic-merge-patch+json")
+    ksend("PATCH", _path(kind, app["ns"], app["name"]), body, ctype="application/strategic-merge-patch+json")
 
 
 # --------------------------------------------------------------- the job
-def _settled(ns, name):
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    status, spec, meta = dep.get("status") or {}, dep.get("spec") or {}, dep.get("metadata") or {}
-    want = int(spec.get("replicas") or 0)
-    return (int(status.get("observedGeneration") or 0) >= int(meta.get("generation") or 0)
-            and int(status.get("updatedReplicas") or 0) == int(status.get("readyReplicas") or 0) == int(status.get("replicas") or 0) == want)
+def _settled(ns, name, kind="app"):
+    """Whether its restart is over: every replica updated and ready - for a
+    StatefulSet also on its new revision (replicas default to 1 there)."""
+    obj = kget(_path(kind, ns, name))
+    status, spec, meta = obj.get("status") or {}, obj.get("spec") or {}, obj.get("metadata") or {}
+    if int(status.get("observedGeneration") or 0) < int(meta.get("generation") or 0):
+        return False
+    if kind == "sts" and status.get("currentRevision") != status.get("updateRevision"):
+        return False
+    want = _replicas(obj) if kind == "sts" else int(spec.get("replicas") or 0)
+    return int(status.get("updatedReplicas") or 0) == int(status.get("readyReplicas") or 0) == int(status.get("replicas") or 0) == want
 
 
 def status(item):
@@ -581,17 +644,27 @@ def status(item):
             ref.setdefault("skipped", []).append(f"{app['id']}: {why[:160]}")
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {app['id']}: {why[:160]}"
-        if app.get("kind") == "vm":
+        kind, limit = app.get("kind", "app"), PER_POD
+        if kind == "vm":
             ref.update(index=i + 1, done=done + 1)
             return "running", int(100 * (i + 1) / len(apps)), f"{app['name']} takes {app['tier']} when it next starts"
-        ref.update(stage="rolling", started=now)
+        if kind == "sts":
+            # As it is now: its pods are never deleted to apply a tier.
+            sts = kget(_path(kind, app["ns"], app["name"]))
+            if not _rolls(sts):
+                ref.update(index=i + 1, done=done + 1)
+                return ("running", int(100 * (i + 1) / len(apps)),
+                        f"{app['name']} takes {app['tier']} when its pods are next restarted")
+            limit = PER_POD * max(1, _replicas(sts))   # it restarts its pods in turn
+        ref.update(stage="rolling", started=now, limit=limit)
         return "running", progress, f"Setting {app['id']} to {app['tier']} ({i + 1} of {len(apps)}); it restarts"
     if stage == "rolling":
-        if _settled(app["ns"], app["name"]):
+        if _settled(app["ns"], app["name"], app.get("kind", "app")):
             ref.update(index=i + 1, stage="apply", done=done + 1)
             return "running", int(100 * (i + 1) / len(apps)), f"{app['id']} runs as {app['tier']}"
-        if now - ref.get("started", now) > 600:
-            return "failed", progress, (f"{app['id']} did not come back within 10 minutes; the rest were not changed. "
+        limit = ref.get("limit", PER_POD)
+        if now - ref.get("started", now) > limit:
+            return "failed", progress, (f"{app['id']} did not come back within {limit // 60} minutes; the rest were not changed. "
                                         f"Set {done} before it. Check its events in Containers")
         return "running", progress, f"Waiting for {app['id']} to restart ({i + 1} of {len(apps)})"
     return "failed", progress, "Unknown step; the rest were not changed"

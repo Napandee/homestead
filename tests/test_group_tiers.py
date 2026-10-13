@@ -66,6 +66,7 @@ class Cluster:
     def __init__(self, deps, tiers=None, raw=None):
         self.deps = {f"{d['metadata']['namespace']}/{d['metadata']['name']}": d for d in deps}
         self.vms, self.sent, self.unreadable, self.race, self.other = {}, [], None, False, None
+        self.stss = {}
         self.cm = None
         if tiers is not None or raw is not None:
             self.cm = {"metadata": {"name": "homestead-group-tiers", "namespace": NS, "resourceVersion": "1"},
@@ -78,6 +79,8 @@ class Cluster:
             return {"items": [copy.deepcopy(d) for d in self.deps.values()]}
         if path == P.VMS:
             return {"items": [copy.deepcopy(v) for v in self.vms.values()]}
+        if path == "/apis/apps/v1/statefulsets":
+            return {"items": [copy.deepcopy(s) for s in self.stss.values()]}
         if path == MAP:
             if self.unreadable:
                 raise self.unreadable
@@ -225,6 +228,11 @@ class ResolveTests(unittest.TestCase):
     def test_vms_are_always_their_own(self):
         vm = app("win", group="Home", follows=True)   # annotations a person put on a VM by hand
         self.assertEqual("own", GROUPS.resolve(vm, {"Home": "critical"}, LAD, kind="vm")["source"])
+
+    def test_statefulsets_are_always_their_own(self):
+        sts = app("postgres", group="Home", follows=True)   # annotations a person put on a StatefulSet by hand
+        self.assertEqual({"tier": "normal", "class": None, "source": "own", "runs": "normal"},
+                         GROUPS.resolve(sts, {"Home": "critical"}, LAD, kind="sts"))
 
     def test_an_app_flux_applies_is_compared_with_its_groups_tier(self):
         dep = app("web", group="Home", labels=FLUX)
@@ -466,6 +474,15 @@ class PlanTests(unittest.TestCase):
         out = self.plan([], {"Home": "critical"}, vms={"lab/win": win})
         row = self.row(out, "vm:lab/win")
         self.assertEqual(("own", "in_line", "", False), (row["source"], row["status"], row["group"], row["follows"]))
+
+    def test_a_statefulset_never_follows_a_group(self):
+        self.cluster = Cluster([], {"Home": "critical"})
+        self.cluster.stss = {"lab/x-db": app("x-db", group="Home", follows=True)}
+        use(self, self.cluster)
+        out = P.plan()
+        row = self.row(out, "sts:lab/x-db")
+        self.assertEqual(("own", "in_line", "", False, False), (row["source"], row["status"], row["group"], row["follows"], row["follow"]))
+        self.assertEqual([], out["groups"], "a StatefulSet is counted in no group")
 
     def test_groups_are_listed_with_their_tier(self):
         out = self.plan([app("ha", group="Home", follows=True), app("frigate", group="Home"), app("plex", group="Media"),
