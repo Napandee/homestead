@@ -96,7 +96,13 @@ function portsAcrossHostsBody(report) {
     const ports = h.ports || [];
     let uplink = ports.find(p => p.name === h.uplink);
     if (uplink?.kind === "bridge") uplink = ports.find(p => p.master === uplink.name && p.kind === "bond") || ports.find(p => p.master === uplink.name) || uplink;
-    const lights = nics.map(p => `<span class="port-led ${p.link === "up" ? ((h.conditions || []).some(c => c.iface === p.name) ? "warn" : "up") : p.link}" data-tip="${esc(`${p.name} · ${p.link === "up" ? portSpeed(p.speed_mbps) || "up" : p.link}`)}"></span>`).join("");
+    // Each light names its port and state, and a count says it in words too.
+    const lights = nics.map(p => {
+      const trouble = p.link === "up" && (h.conditions || []).some(c => c.iface === p.name);
+      const state = p.link === "up" ? ["up", portSpeed(p.speed_mbps), trouble ? "needs attention" : ""].filter(Boolean).join(", ") : p.link;
+      return `<span class="port-led ${p.link === "up" ? (trouble ? "warn" : "up") : p.link}" role="img" aria-label="${esc(`${p.name}: ${state}`)}" data-tip="${esc(`${p.name} · ${p.link === "up" ? portSpeed(p.speed_mbps) || "up" : p.link}`)}"></span>`;
+    }).join("") + (nics.length ? ` <span class="dim xs port-tally">${[[nics.filter(p => p.link === "up").length, "up"], [nics.filter(p => p.link !== "up").length, "down"]]
+      .filter(([n], i) => n || !i).map(([n, word]) => `${n} ${word}`).join(" · ")}</span>` : "");
     const worst = (h.conditions || []).slice(0, 2).map(c => UI.chip(c.title.replace(` on ${h.node}`, ""), c.severity === "critical" ? "bad" : "warn")).join(" ");
     return [`<a class="linkish" onclick="portsHostGo(${jsq(h.node)})">${esc(h.node)}</a>`,
       `<span class="mono">${esc(h.uplink || "—")}</span>${uplink && uplink.name !== h.uplink ? ` <span class="dim xs">on</span> <span class="mono">${esc(uplink.name)}</span>` : ""}`
@@ -148,7 +154,9 @@ const UPLINKS = { inv: null };
 function uplinkHostChips(config) {
   return config.nodes.map(n => {
     const s = config.status[n] || {};
-    return `<span class="ui-chip ${s.ready ? "ok" : s.ready === false ? "bad" : "warn"}" data-tip="${esc(s.message || (s.ready ? "ready" : "not reported yet"))}">${esc(n)}</span>`;
+    const words = s.ready ? "" : s.ready === false ? "not ready" : "not reported yet";
+    const message = s.message || (s.ready ? "ready" : "not reported yet");
+    return `<span class="ui-chip ${s.ready ? "ok" : s.ready === false ? "bad" : "warn"}" tabindex="0" aria-label="${esc(`${n}: ${message}`)}" data-tip="${esc(message)}">${esc(n)}${words ? ` · ${words}` : ""}</span>`;
   }).join(" ");
 }
 
