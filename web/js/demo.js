@@ -568,6 +568,8 @@
       "longhorn-r2": { replicas: "2", migratable: true, encrypted: false, expandable: true, reclaim: "Retain", default: false },
     },
   };
+  // The server's default feed, so the App Store's notice reads as it does on a cluster.
+  const demoStoreSource = { url: "https://raw.githubusercontent.com/Squidly271/AppFeed/master/applicationFeed.json", default: true };
   const demoApp = { name: "Frigate", repo: "ghcr.io/blakeblackshear/frigate:stable", icon: "", cat: "HomeAutomation",
     desc: "Network video recorder with local AI object detection.", downloads: 24800000, stars: 42000,
     trending: 7.8, top_trending: 5.4, top_performing: 7.8, first_seen: 1640995200,
@@ -749,8 +751,8 @@
       { name: "monitoring", created: "2026-03-11T08:00:00Z", homestead: true, protected: "", deployments: 0, statefulsets: 0, volumes: 0, vms: 0, empty: true }] },
     "/api/deploy/options": deployOptions,
     "/api/appstore": url => (url.searchParams.get("q") || !["", "home"].includes(url.searchParams.get("sort") || "")
-      ? { total: 1, apps: [demoApp], sort: url.searchParams.get("sort") || "search", spotlight: null }
-      : { total: 1, sort: "home", sections: { spotlight: [demoApp], recent: [demoApp], trending: [demoApp], popular: [demoApp] } }),
+      ? { total: 1, apps: [demoApp], sort: url.searchParams.get("sort") || "search", spotlight: null, source: demoStoreSource }
+      : { total: 1, sort: "home", sections: { spotlight: [demoApp], recent: [demoApp], trending: [demoApp], popular: [demoApp] }, source: demoStoreSource }),
     "/api/appstore/app": () => Object.assign({}, demoApp, {
       overview: ["Frigate is a complete, local network video recorder with realtime AI object detection for IP cameras.", "",
         "Uses OpenCV and TensorFlow to detect people, cars and more, locally.", "Integrates with Home Assistant."].join("\n"),

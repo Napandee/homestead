@@ -2800,13 +2800,16 @@ function storeCard(app, mode) {
       <button class="btn pri sm" onclick="event.stopPropagation();storeInstall(${key})">Configure &amp; deploy</button></div></div>`;
 }
 
-/* Say where the listings come from: the public feed, or one set in Settings. */
+/* Say where the listings come from, once the server has said: the public feed,
+   or one set in Settings. The trademark line shows whatever the feed. */
 function storeSource(source) {
   const host = $("#s_source");
-  if (!host || !source) return;
-  host.innerHTML = source.default
-    ? `Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours; another feed can be set in Settings. Homestead is independent and is not endorsed by the catalogue maintainers. Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.`
-    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed; review what each one asks for before deploying it.`;
+  if (!host) return;
+  const feed = !source ? ""
+    : source.default
+    ? `Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours; another feed can be set in Settings. Homestead is independent and is not endorsed by the catalogue maintainers. `
+    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed; review what each one asks for before deploying it. `;
+  host.innerHTML = `${feed}Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.`;
 }
 
 function storeSection(mode, apps, total) {
@@ -2828,6 +2831,7 @@ async function viewStore() {
     <div id="s_res"><div class="empty"><span class="spin2"></span>loading catalogue…</div></div>
     <div class="note catalogue-notice" id="s_source"></div>`);
   $("#s_q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); storeSearch(); } });
+  storeSource(null);
   if (STATE.q) storeSearch(); else storeBrowse(STORE_MODE);
 }
 window.storeSearch = async () => {
@@ -2837,6 +2841,7 @@ window.storeSearch = async () => {
   $("#s_res").innerHTML = `<div class="empty"><span class="spin2"></span>searching catalogue…</div>`;
   try {
     const r = await api("/api/appstore?q=" + encodeURIComponent(q));
+    storeSource(r.source);
     $("#s_res").innerHTML = r.apps.length
       ? `<div class="dim small" style="margin-bottom:12px">${r.total} match${r.total === 1 ? "" : "es"} · showing ${r.apps.length}</div>
         <div class="apps stagger">${r.apps.map(a => storeCard(a, "search")).join("")}</div>`
