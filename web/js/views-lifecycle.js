@@ -1934,7 +1934,8 @@ window.imAddScratch = () => {
 /* A volume row is just a claim: a name, whether it is new, and how big.
    The mapping rows above pick from these by name. */
 function importVolumeRow(volume = {}, index = 0) {
-  const classes = (STATE.data.importStorage?.storage_classes || ["longhorn-r2"]);
+  const classes = STATE.data.importStorage?.storage_classes || [];
+  const facts = STATE.data.importStorage?.storage_class_facts || STATE.data.classFacts || {};
   const claims = (STATE.data.importStorage?.pvcs || []);
   return `<div class="f4 im-volume">
     <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" list="im_pvc_list" oninput="imSyncVolumes()">
@@ -1944,7 +1945,7 @@ function importVolumeRow(volume = {}, index = 0) {
       <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
       <option value="existing" ${volume.create === false ? "selected" : ""}>Existing PVC · merge data</option></select></div>
     <div><label>Size GiB</label><input class="imv-size" type="number" min="1" max="16384" value="${esc(volume.size_gb || 10)}"></div>
-    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, volume.storage_class || "longhorn-r2", STATE.data.classFacts)}</select></div>
+    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, defaultStorageClass(classes, volume.storage_class, facts), facts)}</select></div>
     ${index === 0 ? "" : '<button class="iconbtn row-remove" type="button" title="Remove volume" onclick="this.closest(\'.im-volume\').remove();imSyncVolumes()">×</button>'}
   </div>`;
 }
@@ -2142,11 +2143,10 @@ window.importSetup = async (source, dir, cfg = {}) => {
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
   const [storage, liveNodes] = await Promise.all([
-    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] })),
+    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: [] })),
     api("/api/nodes").catch(() => [])]);
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
-  const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
   // A container that mounts nothing needs no storage: the folders and volumes
   // stay out of the way, offered only if someone wants to add some anyway.
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
