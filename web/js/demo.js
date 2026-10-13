@@ -2067,13 +2067,15 @@ ssh_pwauth: true
         { ...own, id: "lab/paperless", current: "normal", wanted: "normal", suggested: "", why: "" },
         { ...own, id: "ci/actions-runner", current: "normal", wanted: "normal", suggested: "low", why: "looks like batch or CI work" },
         { ...own, id: "media/jellyfin", current: "normal", wanted: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
-        { ...own, id: "vm:lab/windows-desktop", kind: "vm", current: "normal", wanted: "normal", suggested: "", why: "" }];
+        { ...own, id: "vm:lab/windows-desktop", kind: "vm", current: "normal", wanted: "normal", suggested: "", why: "" },
+        { ...own, id: "sts:lab/postgres", kind: "sts", current: "normal", wanted: "critical", suggested: "critical", status: "restart",
+          why: "looks like home automation, a password manager, a database, DNS or a tunnel" }];
       const order = ["critical", "normal", "low"];
       const apps = rows.map(r => {
-        const [ns, name] = r.id.replace(/^vm:/, "").split("/");
+        const [ns, name] = r.id.replace(/^(vm|sts):/, "").split("/");
         const fallback = r.status === "restart" ? r.wanted : r.suggested && r.current === "normal" && !r.managed && r.source === "own" ? r.suggested : r.current;
         const tier = r.managed ? r.current : (picks[r.id] || fallback);
-        return { ns, name, kind: "app", managed: "", ...r, tier, follow: r.follows && tier === r.wanted };
+        return { ns, name, kind: "app", managed: "", restarts: r.kind !== "vm", ...r, tier, follow: r.follows && tier === r.wanted };
       }).sort((a, b) => (a.status === "in_line") - (b.status === "in_line") || order.indexOf(a.current) - order.indexOf(b.current) || a.id.localeCompare(b.id));
       const changes = apps.filter(a => a.tier !== a.current);
       return { apps, groups: [{ name: "Home", tier: "critical", apps: 2 }], changes: changes.length, max: 50,
