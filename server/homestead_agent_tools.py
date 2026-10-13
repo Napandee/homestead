@@ -499,8 +499,14 @@ TOOLS = [
     Tool("storage_forecast", "Storage forecast", "read", READ, "When each volume, disk and the pool is expected to fill.",
          run=lambda args, ctx: call("GET", "/api/storage/forecast", **_as(ctx))),
     Tool("host_failure_forecast", "If a host fails", "read", READ,
-         "For every host: if it failed, whether the others would have room for what it runs, tier by tier.",
+         "For every host: if it failed, whether the others would have room for what it runs, tier by tier, "
+         "and how many StatefulSets would wait until their pod is deleted (waiting_for_deletion).",
          run=lambda args, ctx: call("GET", "/api/capacity/forecast", **_as(ctx))),
+    Tool("host_failure_preview", "If this host goes down", "read", READ,
+         "One host: if it went down, what stops, waits or moves and where, and why - apps, StatefulSets (whose pod "
+         "waits until it is deleted unless Longhorn deletes it), VMs, volumes at risk and addresses.",
+         {"node": {"type": "string", "description": "The host, as list_nodes shows it"}}, ["node"],
+         run=_get("/api/nodes/impact", {"node": "node"})),
     # ---- containers
     Tool("list_containers", "List containers", "read", READ, "Every container (app) with its state.",
          {"namespace": NS}, run=_v1("/api/v1/containers")),
