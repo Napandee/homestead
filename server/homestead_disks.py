@@ -847,7 +847,7 @@ def use_os_space(cfg):
     source = str(cfg.get("source") or "lvm")
     if source == "lvm":
         done, tags = setup_module.use_os_space(node, cfg.get("size_gb"), engine), kind_tags(_system_row(node))
-        where = f"{done['size_gb']} GB volume in {done['vg']}"
+        where = f"{done['size_gb']} GiB volume in {done['vg']}"
     else:
         kind, _, rest = source.partition(":")
         disk, _, start = rest.partition(":")
@@ -855,7 +855,7 @@ def use_os_space(cfg):
             raise ValueError("choose where the space comes from")
         done = setup_module.use_region(node, disk, int(start), cfg.get("size_gb"), engine, str(cfg.get("confirm") or ""))
         tags = kind_tags(_row(node, f"/dev/{disk}"))
-        where = f"{done['size_gb']} GB partition {done['device']}"
+        where = f"{done['size_gb']} GiB partition {done['device']}"
     path = done["path"]
     added = _give_longhorn(node, path, engine, tags, done["device"])
     if added:

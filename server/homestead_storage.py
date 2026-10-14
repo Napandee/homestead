@@ -422,7 +422,7 @@ def create_volume(cfg):
         raise ValueError("volume name must be lowercase letters, numbers and dashes")
     size = int(cfg.get("size_gb", 10))
     if size < 1:
-        raise ValueError("volume size must be at least 1 GB")
+        raise ValueError("volume size must be at least 1 GiB")
     mode = cfg.get("access_mode", "ReadWriteOnce")
     if mode not in ("ReadWriteOnce", "ReadWriteMany"):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
@@ -479,7 +479,7 @@ def edit_volume(cfg):
                                     .get("requests", {}).get("storage", "0"))
         now_gb = -(-requested_mb // 1024) if requested_mb else 0
         if now_gb and wanted < now_gb:
-            raise ValueError(f"{name} is {now_gb} GB; volumes can grow but not shrink")
+            raise ValueError(f"{name} is {now_gb} GiB; volumes can grow but not shrink")
         if wanted != now_gb:
             options = volume_edit_options(ns, name, pvc)
             if not options["can_expand"]:
@@ -488,7 +488,7 @@ def edit_volume(cfg):
             ksend("PATCH", pvc_path,
                   {"spec": {"resources": {"requests": {"storage": f"{wanted}Gi"}}}},
                   ctype="application/merge-patch+json")
-            done.append(f"growing to {wanted} GB")
+            done.append(f"growing to {wanted} GiB")
     vol_name = pvc.get("spec", {}).get("volumeName")
     if reps is not None and vol_name:
         path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{vol_name}"

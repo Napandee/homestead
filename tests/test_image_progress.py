@@ -84,7 +84,7 @@ class TrayMessageTests(unittest.TestCase):
             "pull": {"state": "pulling", "node": "node2", "seconds": 75, "percent": 42, "total_bytes": 300 * 1024 ** 2}}
         status, progress, message = OPS._deployment({"ref": {"namespace": "lab", "name": "frigate"}})
         self.assertEqual("running", status)
-        self.assertIn("42% of 300 MB", message)
+        self.assertIn("42% of 300 MiB", message)
         self.assertGreater(progress, 30)
 
 

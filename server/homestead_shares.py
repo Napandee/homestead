@@ -95,7 +95,7 @@ def _size(value):
     except (TypeError, ValueError):
         raise ValueError("share size must be a whole number of GB")
     if value < 1 or value > 65536:
-        raise ValueError("share size must be between 1 and 65536 GB")
+        raise ValueError("share size must be between 1 and 65536 GiB")
     return value
 
 
@@ -853,7 +853,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
     else:
         size_gb = _size(size_gb)
         if old_size and size_gb < old_size:
-            raise ValueError(f"Longhorn volumes cannot shrink; choose at least {old_size} GB")
+            raise ValueError(f"Longhorn volumes cannot shrink; choose at least {old_size} GiB")
         if not old_size or size_gb > old_size:
             RESIZE.require(pvc, kget)
     previous = (bool(row.get("public")), str(row.get("user") or "lab"),

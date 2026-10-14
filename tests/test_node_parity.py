@@ -84,7 +84,7 @@ class NodeParityTests(unittest.TestCase):
         Path(self.data, "node-parity.json").write_text(json.dumps({"hosts": {"node-1": {"at": 1, "multipath": "set"}}}))
         cluster = Cluster([node("node-1")], host_out="JOURNAL capped\nMULTIPATH kept\nISCSI kept\nEND\n")
         self.bind(cluster, longhorn=False)
-        self.assertIn(("node-1", "journal capped at 1 GB"), PARITY.tick())
+        self.assertIn(("node-1", "journal capped at 1 GiB"), PARITY.tick())
         self.assertEqual([], PARITY.tick(), "then done")
         self.assertIn("grep -qs '^SystemMaxUse='", PARITY.HOST_SCRIPT, "a cap someone set is kept")
         self.assertIn('[ "$LONGHORN" = 1 ] || { echo END; exit 0; }', PARITY.HOST_SCRIPT,

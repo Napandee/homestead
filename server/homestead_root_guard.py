@@ -93,12 +93,12 @@ def tick():
                 _schedule(node, disk_id, False)
                 stopped[key] = {"at": int(time.time()), "free_gb": round(free / GB, 1), "total_gb": round(total / GB, 1)}
                 changes.append((node, f"Longhorn stopped placing copies on {disk.get('path')}: the root filesystem "
-                                      f"has {round(free / GB, 1)} GB free of {round(total / GB, 1)} GB"))
+                                      f"has {round(free / GB, 1)} GiB free of {round(total / GB, 1)} GiB"))
             elif key in stopped and not allowed and free > floor(total, START):
                 _schedule(node, disk_id, True)
                 stopped.pop(key)
                 changes.append((node, f"Longhorn may place copies on {disk.get('path')} again: "
-                                      f"{round(free / GB, 1)} GB free"))
+                                      f"{round(free / GB, 1)} GiB free"))
             elif key in stopped:
                 stopped[key]["free_gb"] = round(free / GB, 1)
     SHARED.write_json(_path(), state, indent=1, sort_keys=True)
@@ -117,7 +117,7 @@ def alert_facts():
         facts.append({"key": f"rootguard:{key}", "category": "degraded", "severity": "degraded",
                       "title": f"{node}'s root filesystem is low: Longhorn stopped placing copies there",
                       "resolved": f"Root filesystem protection cleared on {node}",
-                      "body": (f"{row.get('free_gb')} GB free of {row.get('total_gb')} GB. Copies already there stay; "
+                      "body": (f"{row.get('free_gb')} GiB free of {row.get('total_gb')} GiB. Copies already there stay; "
                                "Review disk usage and move replicas or expand storage to free space."),
                       "href": f"/nodes?node={node}&section=storage"})
     return facts

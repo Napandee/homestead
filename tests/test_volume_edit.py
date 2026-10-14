@@ -61,7 +61,7 @@ class VolumeEditTests(unittest.TestCase):
         result = STORAGE.edit_volume({"namespace": "lab", "name": "example-data", "size_gb": 10, "replicas": 1})
 
         self.assertEqual([("PATCH", PVC, {"spec": {"resources": {"requests": {"storage": "10Gi"}}}})], self.sent)
-        self.assertIn("growing to 10 GB", result["detail"])
+        self.assertIn("growing to 10 GiB", result["detail"])
 
     def test_the_replica_count_goes_to_longhorns_namespace(self):
         STORAGE.edit_volume({"namespace": "lab", "name": "example-data", "size_gb": 5, "replicas": 3})

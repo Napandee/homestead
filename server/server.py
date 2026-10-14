@@ -1525,7 +1525,7 @@ def compose_report(b):
     _dns_name(ns, "namespace")
     text = str(b.get("text") or "")
     if len(text) > 256 * 1024:
-        raise ValueError("a Compose file over 256 KB is more than Homestead will read")
+        raise ValueError("a Compose file over 256 KiB is more than Homestead will read")
     workloads = {d["metadata"]["name"] for d in
                  ROLLOUT_CAPACITY.items(kget, f"/apis/apps/v1/namespaces/{ns}/deployments")}
     claims = {c["metadata"]["name"] for c in

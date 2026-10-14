@@ -609,7 +609,7 @@ def _disk_volume(vm, ns, claim, size, klass, source, to_create, effects):
             template["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{item['namespace']}/{item['name']}"
             template["spec"]["storageClassName"] = item["storage_class"]
             if item.get("size_gb") and _bytes(size) < item["size_gb"] * 2**30:
-                raise ValueError(f"the disk must be at least as big as the image ({item['size_gb']} GB)")
+                raise ValueError(f"the disk must be at least as big as the image ({item['size_gb']} GiB)")
         elif klass:
             template["spec"]["storageClassName"] = klass
         _set_claim_templates(vm, _claim_templates(vm) + [template])
