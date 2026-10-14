@@ -1,8 +1,8 @@
 /* Virtual machines: each one's real state and the actions that fit it, a
    page per VM (disks, network, guest, events), editing and deleting. */
 
-const VM_TONE = { Running: "ok", Stopped: "low", Paused: "info", Migrating: "info", Starting: "med", Stopping: "med", Deleting: "med",
-  Provisioning: "med", WaitingForVolumeBinding: "med" };
+const VM_TONE = { Running: "ok", Stopped: "low", Paused: "low", Migrating: "low", Starting: "low", Stopping: "low", Deleting: "low",
+  Provisioning: "low", WaitingForVolumeBinding: "low" };
 const VM_ACTIONS = {
   // Shut down asks the guest to power off, as its own power button would;
   // Force off cuts it at once, like pulling the plug. Each has an icon of
@@ -191,7 +191,7 @@ function vmUsage(v) {
     ${cell("RAM", u.mem_pct, u.mem != null ? vmBytes(u.mem) : "—", "memory")}
     <div><span>DISK</span>${vmIo(u)}</div></div>`;
 }
-const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
+const vmClusterTag = v => v.cluster ? `<span class="tag cluster-tag" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
 
 function vmActions(v, compact = false) {
   // One power action beside Console, as a container card has Logs; the rest
@@ -831,7 +831,7 @@ window.k3sReview = async () => {
         ...warnings.map(w => ["warn", w])], stopped ? "Can't create" : "Check first"),
       UI.table([{ label: "VM" }, { label: "Role" }, { label: "Address" }], plan.nodes.map(n => [
         `<b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div>`,
-        n.role === "server" ? UI.chip("server", "info") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
+        n.role === "server" ? UI.chip("server") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
       UI.facts([["Each VM", `${esc(plan.config.cores || 2)} vCPUs · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
       (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
       UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and Jobs follows the VMs coming up.
@@ -949,7 +949,7 @@ window.uvmLoad = async name => {
       : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.name)})`, need: "admin", pri: true }
         : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.name)},this)`, need: "admin", tip: "Shut it down on Unraid, so its disk is copied as it was left" }]);
     return `<tr><td><b>${esc(vm.name)}</b>${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
-      <td data-label="State"><span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
+      <td data-label="State"><span class="pill ${off ? "low" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
       <td data-label="Machine" class="small">${machine}</td>
       <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GiB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
       <td>${action}</td></tr>`;
