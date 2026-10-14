@@ -32,8 +32,9 @@ test("Data Protection explains restore tests in a guide and says when testing is
 });
 
 test("the NFS server's recovery detail is in UI.more, like the SMB card", () => {
-  const src = read("web/js/platform.js"), from = src.indexOf("function nfsRecovery");
-  const body = src.slice(from, src.indexOf("\n}\n", from));
+  const src = read("web/js/platform.js"), from = src.indexOf("window.nfsRecovery =");
+  assert.ok(from >= 0);
+  const body = src.slice(from, src.indexOf("\n};\n", from));
   assert.match(body, /UI\.more\(/);
   assert.doesNotMatch(body, /<details/);
   assert.doesNotMatch(read("web/js/views-storage.js"), /<div class="dim xs"[^>]*>NFS is a separate opt-in container/);

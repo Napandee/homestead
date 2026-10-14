@@ -125,13 +125,16 @@ window.baselineInstallGo = async () => {
   }
 };
 
-window.nfsRecovery = (state, expanded = false) => {
+// The recovery state in one line, and how the server works in UI.more, as the
+// SMB card does. `lead` opens the explanation, where a page has more to say.
+// The chip says lock recovery is off when the state line doesn't already.
+window.nfsRecovery = (state, expanded = false, lead = "") => {
   const recovery = state?.recovery;
-  if (!recovery) return '<div class="dim xs">Node-failure recovery has not been checked.</div>';
+  if (!recovery) return `<div class="dim xs" style="margin-top:8px">Node-failure recovery has not been checked.</div>${lead ? UI.more("How the NFS server works", lead) : ""}`;
   const issues = [...(recovery.blockers || []), ...(recovery.warnings || [])];
-  return `<details class="small" ${expanded ? "open" : ""} style="margin-top:8px"><summary>Recovery: ${esc(recovery.detail || "not checked")}</summary>
-    <div class="dim xs" style="margin-top:6px">${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : " · enable NFS server support on the hosts and update the node probe"}. Access pauses while the server, VIP and storage recover.</div>
-    ${issues.length ? `<ul>${issues.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}</details>`;
+  return `<div class="row small" style="margin-top:8px;gap:6px;flex-wrap:wrap"><span>Recovery: ${esc(recovery.detail || "not checked")}</span>${recovery.lock_recovery === false && !/lock recovery/i.test(recovery.detail || "") ? UI.chip("No lock recovery", "warn") : ""}</div>
+    ${UI.more("How the NFS server works", `${lead}<p>${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : " · enable NFS server support on the hosts and update the node probe"}. Access pauses while the server, VIP and storage recover.</p>
+    ${issues.length ? `<ul>${issues.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}`, expanded)}`;
 };
 
 window.addonsPaint = async () => {
