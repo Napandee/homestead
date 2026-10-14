@@ -114,17 +114,17 @@ class PreparationArchiveTests(unittest.TestCase):
     def test_settings_labels_historical_and_current_volume_preparations_and_hides_archived(self):
         info = {"pvc": "destination", "classes": []}
         with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "homestead_data_volume", return_value=info), mock.patch.object(server, "kget", return_value={"items": []}):
-            state = server.self_data_preparation_state()
+            state = server.SELF_DATA_ROUTES.self_data_preparation_state()
             item = state["preparations"][0]
             self.assertFalse(item["prepared"])
             self.assertTrue(item["archivable"])
             self.assertIn("currently uses", item["message"])
             info["pvc"] = "new-source"
-            self.assertIn("earlier source", server.self_data_preparation_state()["preparations"][0]["message"])
+            self.assertIn("earlier source", server.SELF_DATA_ROUTES.self_data_preparation_state()["preparations"][0]["message"])
             info["pvc"] = "source"
-            self.assertTrue(server.self_data_preparation_state()["preparations"][0]["prepared"])
+            self.assertTrue(server.SELF_DATA_ROUTES.self_data_preparation_state()["preparations"][0]["prepared"])
             self.archive(self.confirmed(self.archive()), start=True)
-            self.assertEqual([], server.self_data_preparation_state()["preparations"])
+            self.assertEqual([], server.SELF_DATA_ROUTES.self_data_preparation_state()["preparations"])
 
 
 if __name__ == "__main__": unittest.main()
