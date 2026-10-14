@@ -539,6 +539,7 @@ window.vmEdit = async (ns, name) => {
   if (v.hardware) vmHardwareChanged();
   if (window.applyRole) applyRole();
   vmIsolationChanged();
+  window.__vmEdit.initial = JSON.stringify(vmEditBody());
 };
 window.vmIsolationChanged = () => {
   const isolated = !!$("#ve_isolated")?.checked;
@@ -573,11 +574,11 @@ window.vmAddNic = () => {
     <td><select class="vn_net">${vmJoinable(o).map(x => vmOpt(x, vmNetLabel(o, x), vmJoinable(o)[1] || "pod")).join("")}</select></td>
     <td class="dim xs">automatic</td><td><button class="btn sm" data-form-row aria-label="Remove this row" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
 };
-window.vmEditSave = async () => {
+/* What the edit form would send, without passthrough and hardware, which
+   report their own changes: compared with the form as it opened, it says
+   whether anything changed. */
+function vmEditBody() {
   const { ns, name, v } = window.__vmEdit;
-  const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
-    && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
-  if (badUrl) return toast("A disk's URL must start with http:// or https://", "bad");
   const sourceOf = (select, url) => select.value === "url" ? { url: url.value.trim() }
     : select.value.startsWith("image:") ? { image: select.value.slice(6) }
     : select.value.startsWith("iso:") ? { iso: select.value.slice(4) } : {};
@@ -608,11 +609,20 @@ window.vmEditSave = async () => {
   if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
   if ($("#ve_mem") && $("#ve_mem").value.trim() !== v.memory) body.memory = $("#ve_mem").value.trim();
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
+  return body;
+}
+window.vmEditSave = async () => {
+  const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
+    && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
+  if (badUrl) return toast("A disk's URL must start with http:// or https://", "bad");
+  const body = vmEditBody(), v = window.__vmEdit.v;
+  let devices = null;
   try {
-    const devices = window.vmDevicesChanges ? await window.vmDevicesChanges() : null;
+    devices = window.vmDevicesChanges ? await window.vmDevicesChanges() : null;
     if (devices) body.host_devices = devices;
   } catch (e) { return toast(`The ROM file could not be read: ${e.message}`, "bad"); }
   const hardware = v.hardware ? vmHardwareChanges(v.hardware) : null;
+  if (!devices && !hardware && JSON.stringify(vmEditBody()) === window.__vmEdit.initial) return toast("No changes to save.", "ok");
   if (hardware) {
     body.hardware = hardware;
     // The topology sets the count: the General tab's figure is not sent too.
@@ -626,7 +636,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
   if (VM_EDIT_BUSY) return;
   VM_EDIT_REVIEW = null;
   const sequence = ++VM_EDIT_SEQUENCE, frozen = JSON.parse(JSON.stringify(config));
-  childModal(`Review changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
+  childModal(`Save changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
   try {
     const review = await api("/api/vm/edit/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;

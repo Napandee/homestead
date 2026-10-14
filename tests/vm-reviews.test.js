@@ -102,3 +102,10 @@ test("Edit VM's review names its result and asks for nothing when nothing is ris
   assert.equal((warned.body.innerHTML.match(/class="ui-callout /g) || []).length, 1);
   assert.match(warned.body.innerHTML, /Save it anyway/);
 });
+
+test("a warning that is also a capacity concern is listed once", () => {
+  const c = context();
+  const html = c.startReview(plan({ unbounded: [], warnings: ["Partial saves keep disks"] }),
+    { what: "Saves", name: "vm", warnings: ["Partial saves keep disks"], ackId: "ok" });
+  assert.equal((html.match(/Partial saves keep disks/g) || []).length, 1);
+});

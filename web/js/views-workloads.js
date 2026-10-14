@@ -1062,9 +1062,9 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
     : ok.length ? ` on one of ${ok.length} hosts` : "";
   const topology = plan.topology_status === "blocked" ? "Its affinity and spread rules cannot fit all requested replicas."
     : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its affinity and spread placement remains unverified." : "";
-  const problems = [...(plan.blockers || []), ...concerns,
+  const problems = [...new Set([...(plan.blockers || []), ...concerns,
     ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
-    ...(topology ? [topology] : []), ...warnings];
+    ...(topology ? [topology] : []), ...warnings])];
   const verb = reviewAck(what).split(" ")[0].toLowerCase();
   const list = problems.length ? `<ul class="ui-list">${problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
   const rows = hosts.length;
