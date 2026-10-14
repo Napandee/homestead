@@ -106,6 +106,24 @@ HEART = {}
 _heart_lock = threading.Lock()
 
 
+def _late(*names):
+    """server.py's helpers by name, each looked up when called, so a module's
+    routes reach the same function server.py's own code does - and a test
+    that replaces one here replaces it there."""
+    return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
+
+
+# Feature code moved out of server.py (track 1). Each module reaches the
+# helpers server.py still owns through _late, so a test that patches one on
+# server patches it there too; server.py imports back the names it still uses.
+import homestead_overview_server as OVERVIEW_ROUTES
+from homestead_overview_server import (
+    _alerts_loop, _diagnostic_read, _sampler, _schedules_loop, _uptime_loop,
+    change_undo_plan, set_uptime_setting, set_vm_monitoring,
+)
+OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in OVERVIEW_ROUTES.VALUES})
+
+
 def _heartbeats():
     """Each background task's last beat, copied under the lock."""
     with _heart_lock:
@@ -122,24 +140,6 @@ def beat(name, every, error=None, leader_only=False):
             row["error"] = ""
         else:
             row["error"], row["error_at"] = str(error)[:200], now
-
-
-def _sampler():
-    while True:
-        started = time.monotonic()
-        try:
-            o = get_overview()
-            if LEADER.is_leader():
-                HISTORY.record_live(o)
-            # Each VM's disk traffic is a count, and a rate needs two readings.
-            try:
-                VMUSAGE.sample()
-            except Exception:
-                pass
-            beat("sampler", 30, leader_only=True)
-        except Exception as error:
-            beat("sampler", 30, error, leader_only=True)
-        time.sleep(max(1, 30 - (time.monotonic() - started)))
 
 
 # A dot segment, plain or percent-encoded, anywhere in a path.
@@ -504,24 +504,6 @@ def _hardware_loop():
         time.sleep(30)
 
 
-def _uptime_loop():
-    """Every minute on the leader: does each running app answer at its address."""
-    while True:
-        started = time.time()
-        if LEADER.is_leader():
-            try:
-                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=cached("vms", 5, VMS.list_vms))
-                try:
-                    outage_tick()
-                except Exception as error:
-                    print(f"outage actions: {str(error)[:160]}", flush=True)
-                beat("uptime", UPTIME.CHECK_EVERY, leader_only=True)
-            except Exception as error:
-                beat("uptime", UPTIME.CHECK_EVERY, error, leader_only=True)
-                print(f"uptime: {str(error)[:160]}", flush=True)
-        time.sleep(max(5, UPTIME.CHECK_EVERY - (time.time() - started)))
-
-
 def _unifi_loop():
     """Hourly on the leader, while UniFi is connected: its clients and names
     as they are now, rather than as they were when someone last pressed Sync."""
@@ -537,37 +519,6 @@ def _unifi_loop():
                 beat("unifi", 600, leader_only=True)
                 print(f"unifi: {str(error)[:160]}", flush=True)
         time.sleep(600)
-
-
-def change_undo_plan(body):
-    """Undo one change: the app's settings from before it, reviewed like any rollout."""
-    ns, name = _dns_name(body.get("ns"), "namespace"), _dns_name(body.get("name"), "workload name")
-    guard_managed_smb(ns, name)
-    if is_self(ns, name):
-        raise ValueError("Homestead's own settings are changed from Settings, not undone here")
-    entry = CHANGES.kept_before(ns, name, str(body.get("id") or ""))
-    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    proposed, rows = CHANGES.undo_plan(current, entry)
-    missing = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
-                      for v in proposed["spec"]["template"]["spec"].get("volumes") or []
-                      if (v.get("persistentVolumeClaim") or {}).get("claimName")}
-                     - {p["metadata"]["name"] for p in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])})
-    if missing:
-        raise ValueError(f"those settings used {', '.join(missing)}, which no longer exist{'s' if len(missing) == 1 else ''}")
-    context = {"action": "change-undo", **rollout_review_context(current), "proposed_spec": proposed["spec"], "entry": entry["id"]}
-    cache = {f"/apis/apps/v1/namespaces/{ns}/deployments/{name}": current}
-
-    def read(path):
-        if path not in cache:
-            cache[path] = kget(path)
-        return copy.deepcopy(cache[path])
-
-    def planner(*args, **kwargs):
-        return PLACE.manifest_plan(*args, **kwargs, read=read)
-    capacity = ROLLOUT_CAPACITY.plan(current, proposed, ns, read, PLACE.get_nodes, planner,
-                                     get_app_settings()["thresholds"]["memory"]["critical"])
-    capacity["requires_confirmation"] = True
-    return current, proposed, rows, capacity, context
 
 
 def logsearch_read(ns, pod, container, since, limit):
@@ -592,22 +543,6 @@ def _housekeeping_loop():
                 beat("housekeeping", 86400, error, leader_only=True)
                 print(f"housekeeping: {str(error)[:160]}", flush=True)
         time.sleep(86400)
-
-
-def set_vm_monitoring(b):
-    """How a VM is monitored: automatic, a port, a web page on a port, or off.
-    An annotation on the VM, so it does not restart."""
-    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "VM name")
-    mode = b.get("mode")
-    # Automatic on a VM tries the usual ports; a port belongs to the other two.
-    value = UPTIME.check_setting(mode, b.get("path"), b.get("port") if mode in ("tcp", "http") else None)
-    if value in ("tcp",) or (value and value.startswith("/")):
-        raise ValueError("choose the port to ask on this VM")
-    ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
-          {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
-    _cache.pop("vms", None)
-    words = {"": "checked automatically", "off": "not monitored"}
-    return {"ok": True, "detail": f"{name} is {words.get(value, f'checked at {value}')}"}
 
 
 def set_schedule(b):
@@ -696,42 +631,6 @@ def schedule_act(item, action):
     except API_V1.ApiError as error:
         raise ValueError(error.message) from None
     return f"starting {name}"
-
-
-def _schedules_loop():
-    """Every minute on the leader: any scheduled stop or start that is due.
-    Its writes are noted as the schedule's, so change history leaves them out."""
-    CHANGES.REQUEST.user = CHANGES.BY_SCHEDULE
-    while True:
-        started = time.time()
-        if LEADER.is_leader():
-            try:
-                if SCHEDULES.tick(scheduled_items(), schedule_act):
-                    _cache.pop("wl", None)
-                    _cache.pop("vms", None)
-                beat("schedules", 60, leader_only=True)
-            except Exception as error:
-                beat("schedules", 60, error, leader_only=True)
-                print(f"schedules: {str(error)[:160]}", flush=True)
-        time.sleep(max(5, 60 - (time.time() - started)))
-
-
-def set_uptime_setting(b):
-    """An app's own check: auto, an HTTP path, TCP only, or off - on any of its
-    published ports, or one chosen. An annotation, so nothing restarts."""
-    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-    port = b.get("port") if b.get("mode") != "off" else None
-    if port not in (None, ""):
-        w = next((w for w in cached("wl", 5, WORKLOADS.get_workloads) if w["ns"] == ns and w["name"] == name), None)
-        published = {int(p["port"]) for p in (w or {}).get("ports") or [] if p.get("port")}
-        if w is not None and str(port).isdigit() and int(port) not in published:
-            raise ValueError(f"{name} does not publish port {port}; choose one of "
-                             + (", ".join(str(p) for p in sorted(published)) or "its ports"))
-    value = UPTIME.check_setting(b.get("mode"), b.get("path"), port)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-          {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
-    return {"ok": True, "value": value, "detail": f"{name} is {UPTIME.describe_setting(value)}"}
 
 
 def pod_container_rows(pod):
@@ -982,28 +881,6 @@ def set_vm_logos(b):
     detail = (f"{done} logo{'s' if done != 1 else ''} saved" if any(s or o for *_, s, o in plans)
               else "back to its OS's logo") + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")
     return {"ok": not failed, "done": done, "failed": failed, "detail": detail}
-
-
-def portal_status(force=False):
-    """Each portal link's dot. A link to an app takes the app's own Monitoring
-    state - asked every minute, over HTTP, down only after three misses - so
-    the portal and Containers agree; any other link is a TCP connection."""
-    status = dict(PORTAL.status(force=force))
-    try:
-        answers, links = UPTIME.report(), PORTAL.stored()
-    except Exception:
-        return status
-    for link in links:
-        icon = str(link.get("icon") or "")
-        if not icon.startswith("workload:"):
-            continue
-        a = answers.get(icon.split(":", 1)[1])
-        if not a or a.get("state") not in ("up", "slow", "down"):
-            continue
-        last = a.get("last") or {}
-        status[link["id"]] = {"up": a["state"] != "down", "ms": last.get("ms"), "state": a["state"], "source": "monitoring",
-                              "since": a.get("since"), "error": last.get("error") or "", "code": last.get("code")}
-    return status
 
 
 def helm_chart_logos():
@@ -2545,13 +2422,6 @@ MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: guard_managed_smb(ns, name))
 
 
-def _late(*names):
-    """server.py's helpers by name, each looked up when called, so a module's
-    routes reach the same function server.py's own code does - and a test
-    that replaces one here replaces it there."""
-    return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
-
-
 WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, default_ns=DEFAULT_NS,
                data_dir=DATA_DIR, system_namespaces=SYS_NS, platform_namespaces=PLATFORM_NS)
 GROUPS.bind(_late(*GROUPS.NEEDS), namespace=DEFAULT_NS, own_group=OWN_GROUP, managed=UPDATES.managed_by)
@@ -2578,15 +2448,6 @@ def _own_namespace():
 
 
 SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
-
-
-def _diagnostic_read(path, timeout=5):
-    req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as response:
-        raw = response.read(DIAGNOSTICS.MAX_SOURCE_BYTES + 1)
-    if "/log?" in path:
-        return raw.decode("utf-8", "replace")
-    return json.loads(raw)
 
 
 DIAGNOSTICS.bind(DATA_DIR, _diagnostic_read, OPS, HOMESTEAD_VERSION, _own_namespace(), os.environ.get("HOSTNAME", ""))
@@ -2935,79 +2796,6 @@ JOBLOGS.bind(kget, raw_get)
 JOBLOGS.register(OPS)
 NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
-
-
-# ------------------------------------------------------------- alerts
-UPDATE_SCAN_EVERY = UPDATES.FRESH_FOR
-_last_update_scan = [0.0]
-
-
-def _alert_sources():
-    """What each source sees now; None where it could not look."""
-    results = {}
-
-    def take(name, fn):
-        try:
-            results[name] = fn()
-        except Exception:
-            results[name] = None
-
-    take("health", lambda: ALERTS.health_facts(cached("ov", 10, get_overview)))
-    take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
-    take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
-    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
-    take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
-    take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
-    take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
-    take("hostos", HOST_OS.alert_facts)
-    take("ports", lambda: PORTS.alert_facts(cached("ports", 20, NODES.ports_report)))
-    take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
-    take("schedules", lambda: SCHEDULES.alert_facts())
-    take("outage", lambda: OUTAGE.alert_facts())
-    take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
-    take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
-    take("recovery", RECOVERY.alert_facts)
-    take("agents", MCP.alert_facts)
-    take("rootguard", ROOT_GUARD.alert_facts)
-    take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
-        ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
-    # Twice a day whether or not anyone is looking - the Containers header and
-    # the update notifications both read the result.
-    if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
-        _last_update_scan[0] = time.time()
-        try:
-            UPDATES.report()
-        except Exception:
-            pass
-    latest = UPDATES._LATEST.get("report")
-    results["updates"] = ALERTS.update_facts(latest) if latest else None
-    return results
-
-
-def push_alerts(fresh):
-    """Wakes every device that wants one of these alerts, and belongs to a user still here."""
-    if not fresh:
-        return None
-    users = {u["name"] for u in AUTH.list_users()}
-    urgent = any(e["severity"] == "critical" and e["phase"] in ("raised", "worsened") for e in fresh)
-    visible = {user: ALERTS.for_user(fresh, user) for user in users}
-    return PUSH.send(lambda row: row["user"] in users and any(
-                         e["category"] in row["categories"] for e in visible[row["user"]]),
-                     urgency="high" if urgent else "normal")
-
-
-def _alerts_loop():
-    while True:
-        # One replica raises alerts, or every notification arrives twice.
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    push_alerts(ALERTS.observe(_alert_sources()))
-                beat("alerts", 20, leader_only=True)
-            except Exception as error:
-                beat("alerts", 20, error, leader_only=True)
-                print(f"alerts: {str(error)[:160]}", flush=True)
-        time.sleep(20)
 
 
 VIP_QUICK = 5          # a look for a missing address
@@ -4667,8 +4455,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, rows)
             if p == "/api/auth/preferences/dashboard":
                 return self._send(200, AUTH.dashboard_preferences(self.user))
-            if p == "/api/portal/status":
-                return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/self/data/prepare":
                 try:
                     return self._send(200, self_data_preparation_state())
@@ -4681,12 +4467,6 @@ class H(HTTP.LimitedHandler):
                 if status is None:
                     return self._send(404, {"error": "No recorded data move with this identity"})
                 return self._send(503 if status["status"] == "unknown" else 200, status)
-            if p in ("/api/resources/list", "/api/resources/object", "/api/resources/reveal"):
-                arg = lambda key: (q.get(key) or [""])[0]
-                if p == "/api/resources/list":
-                    return self._send(200, RESOURCES.list_objects(arg("group"), arg("version"), arg("resource"), arg("ns")))
-                return self._send(200, RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"),
-                                                            arg("name"), reveal=p.endswith("reveal")))
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()
                 return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
@@ -4809,33 +4589,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/auth/logout":
                 self._signin("signout", self.user)
                 self._set_cookie("", clear=True)
-                return self._send(200, {"ok": True})
-            if p == "/api/push/test":
-                endpoint = str(b.get("endpoint") or "")
-                if not PUSH.mine(self.user, endpoint):
-                    return self._send(404, {"error": "this device is not set up for notifications"})
-                ALERTS.note({"key": f"test:{int(time.time())}", "category": "test", "severity": "info",
-                             "title": "Homestead test notification",
-                             "body": "Notifications are enabled for this device. Choose categories in Settings › This device.",
-                             "href": "/settings", "to": PUSH.tag(endpoint)})
-                result = PUSH.send(lambda row: row["endpoint"] == endpoint, urgency="high")
-                status = (result["statuses"] or [0])[0]
-                if not result["sent"]:
-                    return self._send(502, {"error": f"the push service refused the push (HTTP {status})"
-                                            if status else "the push service could not be reached"})
-                return self._send(200, {"ok": True})
-            if p == "/api/alerts/acknowledge":
-                try:
-                    return self._send(200, ALERTS.acknowledge(self.user, b.get("key"), b.get("version"), b.get("undo") is True))
-                except ALERTS.AlertChanged as error:
-                    return self._send(409, {"error": str(error)})
-            if p == "/api/alerts/delivered":
-                endpoint, cursor = str(b.get("endpoint") or ""), b.get("latest")
-                if not PUSH.mine(self.user, endpoint):
-                    return self._send(404, {"error": "This notification device is not registered to your account."})
-                if type(cursor) is not int or cursor < 0 or cursor > ALERTS.log(limit=0)["latest"]:
-                    return self._send(400, {"error": "Invalid notification cursor."})
-                PUSH.advance(self.user, endpoint, cursor)
                 return self._send(200, {"ok": True})
             if p == "/api/auth/preferences/dashboard":
                 try:

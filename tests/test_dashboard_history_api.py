@@ -49,7 +49,7 @@ class DashboardHistoryApiTests(unittest.TestCase):
                     mock.patch.object(server, "beat"), \
                     mock.patch.object(server.time, "sleep", side_effect=StopLoop) as sleep:
                 with self.assertRaises(StopLoop):
-                    server._sampler()
+                    server.OVERVIEW_ROUTES._sampler()
                 self.assertEqual(int(leading), record.call_count)
                 vm_sample.assert_called_once()
                 self.assertGreaterEqual(sleep.call_args.args[0], 1)

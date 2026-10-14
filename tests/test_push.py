@@ -270,7 +270,7 @@ class DeliveryTests(unittest.TestCase):
         posted = []
         with mock.patch.object(server.AUTH, "list_users", return_value=[{"name": "here"}]), \
                 mock.patch.object(push, "_post", side_effect=lambda e, u: posted.append((e, u)) or 201):
-            server.push_alerts([{"category": "outage", "severity": "critical", "phase": "raised"}])
+            server.OVERVIEW_ROUTES.push_alerts([{"category": "outage", "severity": "critical", "phase": "raised"}])
 
         self.assertEqual([("https://fcm.googleapis.com/h", "high")], posted)
 
