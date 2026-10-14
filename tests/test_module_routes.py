@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 4620
+MAX_LINES = 4433
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -40,7 +40,6 @@ INLINE_ROUTES = (
     ("GET", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
     ("GET", "/api/self/data/prepare", "to move in Part 7"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
-    ("GET", "/api/mqtt/preview", "to move in Part 3"),
     ("GET", "/api/snapshot-files/plan", "to move in Part 4"),
     ("GET", "/api/snapshot-files/status", "to move in Part 4"),
     ("GET", "/api/snapshot-files/list", "to move in Part 4"),

@@ -19,7 +19,6 @@ POLICY = {
     ('GET', '/api/fleet'): 'viewer',
     ('GET', '/api/fleet/home'): 'viewer',
     ('GET', '/api/fleet/state'): 'viewer',
-    ('GET', '/api/mqtt/preview'): 'viewer',
     ('GET', '/api/node/shell'): 'admin',
     ('GET', '/api/self/data/prepare'): 'viewer',
     ('GET', '/api/vm/console'): 'operator',
