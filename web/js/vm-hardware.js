@@ -255,7 +255,7 @@ window.vmIsoLibrary = async () => {
     return;
   }
   STATE.data.isoLibrary = lib;
-  const size = bytes => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+  const size = bytes => bytesText(bytes);
   const state = f => f.volume
     ? (f.state === "ready" ? `<span class="pill ok">ready</span>` : f.state === "copying" ? '<span class="pill med">copying</span>' : '<span class="pill crit">failed</span>')
     : `<button class="btn sm" data-need="operator" onclick="vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})">Make ready</button>`;

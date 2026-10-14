@@ -980,8 +980,7 @@ function disposeEditor() {
   }
 }
 
-const fileSize = bytes => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+const fileSize = bytes => bytesText(bytes);
 
 /* Monaco is several megabytes, so it is fetched the first time a file is
    opened rather than on page load, and never at all for the rest of the app.

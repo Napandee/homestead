@@ -44,7 +44,7 @@ test('whole-percentage progress cannot imply measured zero speed or an accurate 
   const progress={percent:36,bytes:360000000,total_bytes:1000000000,coarse:true,bytes_per_second:0,eta_seconds:80};
   const html=ctx.operationCopyProgress(progress,true);
   assert.match(html,/~36\.0%/);
-  assert.match(html,/~0\.4 \/ 1\.0 GB/);
+  assert.match(html,/~0\.3 \/ 0\.9 GiB/, "360 of 1000 million bytes is 0.3 of 0.9 GiB");
   assert.match(html,/Speed \/ ETA unavailable \(1% progress\)/);
   assert.doesNotMatch(html,/MB\/s|ETA 1m/);
   assert.match(ctx.operationCopyProgress({...progress,percent:100},true),/waiting for CDI/);

@@ -175,7 +175,7 @@ function vmAddress(v, withNetwork = true) {
    the metrics API; disk traffic is KubeVirt's own count, as a rate over the
    last half minute. Anything not measured is left out, not guessed. */
 const vmBytes = b => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GiB` : b >= 1024 ** 2 ? `${Math.round(b / 1024 ** 2)} MiB` : `${Math.round(b / 1024)} KiB`;
-const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MB/s` : b >= 1024 ? `${Math.round(b / 1024)} KB/s` : `${Math.round(b || 0)} B/s`;
+const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MiB/s` : b >= 1024 ? `${Math.round(b / 1024)} KiB/s` : `${Math.round(b || 0)} B/s`;
 function vmIo(u) {
   if (!u || u.read_bps == null) return `<span class="dim" data-tip="${esc(u?.io_note || "Measured from the second reading, half a minute after Homestead starts")}">—</span>`;
   return `<span class="vm-io"><span class="mono" title="Read from its disks">↓ ${vmRate(u.read_bps)}</span><span class="mono" title="Written to its disks">↑ ${vmRate(u.write_bps)}</span></span>`;
@@ -859,7 +859,7 @@ window.k3sCreate = async () => {
    same verified SSH login, the container import uses. Disk images from a web
    address live here too. A VM running on Unraid is shut down first (its power
    button), so its disk is copied as it was left. */
-const uvmSize = bytes => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(bytes >= 1e11 ? 0 : 1)} GB` : `${Math.max(1, Math.round((bytes || 0) / 1e6))} MB`;
+const uvmSize = bytes => bytesText(bytes);
 const uvmId = name => "uvm-" + String(name).replace(/[^a-z0-9-]/gi, "-");
 const uvmPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 

@@ -356,7 +356,7 @@ async function viewSettings() {
    the leader lease (alerts, moves) moves within seconds. */
 /* Homestead's own data (homestead_housekeeping.py): its volume, what each
    store holds and for how long, and Clean up now. */
-const hdSize = bytes => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : bytes >= 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+const hdSize = bytes => bytesText(bytes);
 
 function homesteadDataHtml(d) {
   const v = d.volume || {}, last = d.last;

@@ -559,8 +559,8 @@ function operationCopyProgress(progress, active) {
   const percent = Math.max(0, Math.min(100, progress.percent));
   const approximate = progress.coarse && percent < 100 ? "~" : "";
   const size = Number.isFinite(progress.bytes) && progress.total_bytes > 0
-    ? `${approximate}${(progress.bytes / 1e9).toFixed(1)} / ${(progress.total_bytes / 1e9).toFixed(1)} GB` : "";
-  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1e6).toFixed(1)} MB/s` : "";
+    ? `${approximate}${(progress.bytes / 1024 ** 3).toFixed(1)} / ${(progress.total_bytes / 1024 ** 3).toFixed(1)} GiB` : "";
+  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1024 ** 2).toFixed(1)} MiB/s` : "";
   const remaining = progress.eta_seconds;
   const seconds = Math.ceil(remaining || 0), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
   const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");

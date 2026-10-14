@@ -1359,7 +1359,7 @@ async function viewImages() {
           ? `<button class="btn sm" data-need="admin" data-tip="Stop keeping this image for ${esc(r.workload)}'s Roll back, so it can be cleaned up" onclick="forgetRollback(${jsq(r.namespace)},${jsq(r.workload)})">Forget</button>` : ""}`).join("") +
           (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>
-        <td class="mono">${i.size_mb >= 1024 ? (i.size_mb / 1024).toFixed(1) + " GB" : i.size_mb + " MB"}</td>
+        <td class="mono">${bytesText(i.size_mb * 1024 ** 2)}</td>
         <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
         <td><div class="row" style="gap:5px">${retention}</div></td>
@@ -1378,7 +1378,7 @@ async function viewImages() {
 function vmImagesSection(vm, nodeNames) {
   if (!vm) return "";
   if (!vm.harvester) return `<div class="ctitle" style="margin-top:24px">VM images</div><div class="note">${esc(vm.note)}</div>`;
-  const size = mb => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
+  const size = mb => bytesText(mb * 1024 ** 2);
   const q = STATE.q.toLowerCase();
   const rows = vm.images.filter(i => !q || i.display.toLowerCase().includes(q));
   const total = vm.images.reduce((sum, i) => sum + i.size_mb * Math.max(1, i.copies), 0);
@@ -1826,7 +1826,7 @@ window.imageCleanupReview = digest => {
   const image = (STATE.data.imageCache?.images || []).find(row => row.digest === digest);
   if (!image) return toast("Refresh Image Cache before cleaning this image", "bad");
   if (image.protected || image.system) return toast("This image is protected and cannot be cleaned", "bad");
-  const perNode = image.size_mb >= 1024 ? `${(image.size_mb / 1024).toFixed(1)} GB` : `${image.size_mb} MB`;
+  const perNode = bytesText(image.size_mb * 1024 ** 2);
   modal("Clean cached image", `<div class="update-review">
     <div class="note dependency-danger"><b>This deletes only the cached image layers, not a workload.</b>
       A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.</div>
@@ -2036,14 +2036,7 @@ window.imSyncMaps = () => {
       : `${importBytes(sizes[path])} to copy`) + (sizes[path] === "missing" ? "" : skips);
   });
 };
-const importBytes = value => {
-  const size = Number(value || 0);
-  if (!size) return "";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let index = 0, amount = size;
-  while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index++; }
-  return `${amount >= 10 || index === 0 ? Math.round(amount) : amount.toFixed(1)} ${units[index]}`;
-};
+const importBytes = value => Number(value) ? bytesText(value) : "";
 
 /* du walks every inode, so a deep appdata tree can take a while. Each folder
    is measured under its own timeout on the host: a slow one costs its own

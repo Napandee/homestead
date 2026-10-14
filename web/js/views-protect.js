@@ -242,7 +242,7 @@ async function viewProtect() {
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
       <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
-      <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
+      <td class="mono">${b.size_mb ? bytesText(b.size_mb * 1024 ** 2) : "—"}</td>
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);

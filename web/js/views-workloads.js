@@ -2061,7 +2061,7 @@ function pullDetail(s) {
   return `${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created`;
 }
 
-function pullSize(b) { return b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`; }
+function pullSize(b) { return bytesText(b); }
 
 function rolloutProgress(s) {
   const ready=s.phase === "ready", failed=s.phase === "failed", pull=s.pull || {};
