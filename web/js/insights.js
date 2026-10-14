@@ -50,7 +50,7 @@ const HealthInsights = (() => {
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
       const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster";
-      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
+      const finding=item(id,severity,`${({Node:"Host",Workload:"App"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
     }

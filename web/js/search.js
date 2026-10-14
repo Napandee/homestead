@@ -3,7 +3,7 @@
    app.js fetches the lists, draws the results and opens the one picked. */
 const HomesteadSearch = (() => {
   // Ties keep this order: what people run first, places to go last.
-  const KINDS = ["Container", "VM", "Node", "Volume", "Share", "App Store", "Page", "Settings"];
+  const KINDS = ["Container", "VM", "Host", "Volume", "Share", "App Store", "Page", "Settings"];
 
   // 0 the name is the search, 1 it starts with it, 2 it contains it, 3 only another field does.
   const rank = (name, s) => {
@@ -26,7 +26,7 @@ const HomesteadSearch = (() => {
       add("VM", x.name, [x.ns, x.os, x.ip, x.node, x.description],
         { sub: [x.ns, x.status, x.node].filter(Boolean).join(" · "), open: { type: "vm", ns: x.ns, name: x.name } });
     for (const x of data.nodes || [])
-      add("Node", x.name, [x.os, ...(x.roles || []), ...(x.workloads || [])],
+      add("Host", x.name, [x.os, ...(x.roles || []), ...(x.workloads || [])],
         { sub: `${x.status} · ${x.pods_wl || 0} of your pods`, open: { type: "node", name: x.name } });
     for (const x of data.volumes || [])
       add("Volume", x.pvc_name || x.name, [x.name, x.namespace, x.attached_to],

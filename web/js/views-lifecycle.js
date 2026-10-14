@@ -799,7 +799,7 @@ window.nodePowerReview = async (node, action, force = false) => {
               <option value="wait" ${h.default === "wait" ? "selected" : ""}>Stop and wait for this host</option></select>`]))
       : `<div class="ui-empty">No apps or VMs run on this host.</div>`)
     : workloads.length
-      ? UI.table([{ label: "Workload" }, { label: "During the outage" }], workloads.map(w => [`<span class="mono">${esc(w.ns)}/${esc(w.name)}</span>`,
+      ? UI.table([{ label: "App or VM" }, { label: "During the outage" }], workloads.map(w => [`<span class="mono">${esc(w.ns)}/${esc(w.name)}</span>`,
         w.stranded ? UI.chip("no other eligible host", "bad") : `${UI.chip("may move", "ok")} <span class="sub">to ${esc((w.eligible || []).join(", "))}</span>`]))
       : `<div class="ui-empty">No user Deployments are mapped to this host.</div>`;
   const copies = volumes.length

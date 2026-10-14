@@ -49,3 +49,11 @@ test("small drifts: Jobs, Ports and uplinks, and a DHCP reservation said one way
     .filter(l => /f?"[^"]*job tray[^"]*"/.test(l) && !/^\s*("""|#)/.test(l) && !/"""|print\(/.test(l)).map(l => `${f}: ${l.trim().slice(0, 60)}`));
   assert.deepEqual(server, [], "the server's messages say Jobs too");
 });
+
+test("a one-word label says App, Apps or Host too", () => {
+  const strings = require("./helpers/js-strings");
+  // insights.js compares Kubernetes' own kinds, which stay as the API sends them.
+  const left = files.filter(f => !KEPT_FILES.has(f) && f !== "insights.js").flatMap(f => strings(fs.readFileSync(`web/js/${f}`, "utf8"))
+    .filter(p => /^(Workloads?|Nodes?)$/.test(p.text.trim()) && !/===\s*$/.test(p.before)).map(p => `${f}: ${p.text}`));
+  assert.deepEqual(left, []);
+});

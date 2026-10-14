@@ -418,7 +418,7 @@ function nodeComparisonRows(nodes) {
     metric("Addresses", n => nodeAddressTags(n) || '<span class="dim">—</span>', false),
     metric("Duties", n => nodeDutyTags(n) || '<span class="dim">—</span>', false),
     metric("Hardware", n => hardwareTags(nodeHardwareIds(n)) || '<span class="dim">None defined</span>', false),
-    metric("Workloads", n => `<span class="small">${esc((n.workloads || []).join(", ") || "None")}</span>`, false),
+    metric("Apps", n => `<span class="small">${esc((n.workloads || []).join(", ") || "None")}</span>`, false),
     metric("Details", n => actionBar([{label:"Open host",run:`nodeDetail(${jsq(n.name)})`,icon:"node"}]), false)
   ];
 }
@@ -620,7 +620,7 @@ async function nodePage(name) {
         ${fact("Serves", nodeDutyTags(n) || "—")}
         ${fact("Takes new work", n.schedulable ? "yes" : '<span class="tag warn">cordoned</span>')}
       </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
-    ["workloads", "Workloads", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
+    ["workloads", "Apps and VMs", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
       <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
         <div id="nodeChipsCard">${(nodeRemember(n), nodeWorkloadChips(n))}</div></div>`],
     ["storage", "Storage", nodeStorageLine(n, drives, unused), `
@@ -1004,7 +1004,7 @@ async function viewNodes() {
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;
   const layout = viewLayout("nodes");
-  paint(`${UI.pageHeader(`Nodes`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
+  paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}

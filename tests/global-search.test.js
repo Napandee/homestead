@@ -50,8 +50,8 @@ test("shares and App Store apps are found", () => {
 test("an exact name comes first, then a name that starts with it, then other matches", () => {
   const found = names("home-assistant");
   assert.equal(found[0], "Container:home-assistant");
-  assert.ok(found.indexOf("Node:node-a") > found.indexOf("Container:home-assistant"), "a host that runs it comes after the app");
-  assert.deepEqual(names("home").slice(0, 2), ["Container:home-assistant", "Node:homelab-gpu"]);
+  assert.ok(found.indexOf("Host:node-a") > found.indexOf("Container:home-assistant"), "a host that runs it comes after the app");
+  assert.deepEqual(names("home").slice(0, 2), ["Container:home-assistant", "Host:homelab-gpu"]);
 });
 
 test("each result opens its own item", () => {
