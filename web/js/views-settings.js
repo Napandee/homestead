@@ -187,7 +187,8 @@ async function viewSettings() {
               <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
             </div></div>
         </div>
-        <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
+        <div class="srows" style="margin-top:14px">${settingRow("Include SMART failures and threshold breaches in cluster health notifications", "",
+          `<label class="toggle"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
