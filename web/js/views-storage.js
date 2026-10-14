@@ -1656,7 +1656,7 @@ function eventRowHtml(x) {
   return `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
     <td data-status><span class="pill slim ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
     <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
-    <td class="dim xs mono nowrap" data-sm-hide title="${esc((x.time || "").replace("T", " ").replace("Z", ""))}">${esc(ago)}</td></tr>`;
+    <td class="dim xs mono nowrap" data-sm-hide title="${esc(x.time ? new Date(x.time).toLocaleString() : "")}">${esc(ago)}</td></tr>`;
 }
 
 /* The table and the count, from the rows already read. */

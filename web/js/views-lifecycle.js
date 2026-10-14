@@ -1571,7 +1571,7 @@ async function viewImport() {
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
-        <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
+        <td class="small dim">${fmtWhen(j.start)}</td>
         <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || "lab")},${jsq(j.name)})` },
           { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || "lab")})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
