@@ -473,10 +473,10 @@ async function viewStorage() {
       `${st.attached} of ${st.volumes} attached`],
     `<div class="grid g4 statgrid">
     <div class="card flat"><div class="ctitle">Free space</div>
-      <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GB</span></div>
+      <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GiB</span></div>
       <div class="csub">of ${st.cap_gb} GiB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
     <div class="card flat"><div class="ctitle">Provisioned</div>
-      <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GB</span></div>
+      <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GiB</span></div>
       <div class="csub" data-tip="Sum of Longhorn volume block footprints, including snapshots; not filesystem usage or total storage across all replica copies.">${st.actual_gb} GiB Longhorn footprint</div></div>
     <div class="card flat statwide"><div class="ctitle">Replica health</div>${(st.reasons || []).length
       ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
