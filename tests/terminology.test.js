@@ -30,3 +30,11 @@ test("a machine in the cluster is a host on screen; node only for Kubernetes' an
   const left = pieces.filter(p => NODE.test(hold(p.text, [NODE_TERMS]).text)).map(where);
   assert.deepEqual(left, [], "say host");
 });
+
+test("a VM's power and moves are Shut down, Force off and Move to another host; its CPUs are vCPUs", () => {
+  const vm = ["views-vms.js", "vm-hardware.js", "views-lifecycle.js"].map(f => [f, fs.readFileSync(`web/js/${f}`, "utf8")]);
+  const said = (re, files = vm) => files.flatMap(([f, src]) => prose(src).filter(p => re.test(p.text)).map(p => `${f}: ${p.text.trim().slice(0, 60)}`));
+  assert.deepEqual(said(/Force stop|Move host\b|^Migrate\b|>Migrate</), []);
+  assert.deepEqual(said(/CPU cores|virtual CPUs/), []);
+  assert.deepEqual(said(/\} cores?\b|\} core\$\{/, vm.filter(([f]) => f === "views-vms.js")), [], "a VM's CPUs are vCPUs");
+});

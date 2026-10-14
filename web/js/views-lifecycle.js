@@ -925,13 +925,13 @@ window.nodePowerFollow = async (id, intro = "") => {
 /* ---------------- VMs: the page is views-vms.js; moving and creating stay here ---------------- */
 window.vmMove = (ns, name) => {
   const nodes = STATE.data.nodes || [];
-  modal("Migrate · " + name, `
+  modal("Move to another host · " + name, `
     <p class="muted small">KubeVirt live-migrates the VM — memory is copied while it keeps running,
     so there is no downtime.</p>
     <div class="f" style="margin-top:14px"><label>Target host</label><select id="vm_target">
       <option value="">let KubeVirt choose</option>
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></div>
-    ${UI.actions(`<button class="btn pri" onclick="doVmMove(${jsq(ns)},${jsq(name)})">Migrate</button>
+    ${UI.actions(`<button class="btn pri" onclick="doVmMove(${jsq(ns)},${jsq(name)})">Move to another host</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.doVmMove = async (ns, name) => {
@@ -1104,7 +1104,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         <div class="dim xs" id="v_ns_note" style="margin-top:4px" hidden></div></div>
     </div>
     <div class="f2">
-      <div class="f"><label>CPU cores</label><input type="number" id="v_cores" value="2" min="1" max="16"></div>
+      <div class="f"><label>vCPUs</label><input type="number" id="v_cores" value="2" min="1" max="16"></div>
       <div class="f"><label>Memory</label><input type="text" id="v_mem" value="2Gi"></div>
     </div>
     <div class="f2">
@@ -1265,7 +1265,7 @@ window.vmCreateReview = async (body, network = {}) => {
     const cfg = review.config;
     const ip = cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : "";
     const objects = UI.facts([
-      ["VM", `${esc(cfg.cores || 2)} virtual CPUs · ${esc(cfg.memory || "2Gi")} memory · ${cfg.start === false ? "created stopped" : "starts once its disks are ready"}`],
+      ["VM", `${esc(cfg.cores || 2)} vCPUs · ${esc(cfg.memory || "2Gi")} memory · ${cfg.start === false ? "created stopped" : "starts once its disks are ready"}`],
       ["Network", cfg.isolated ? "Isolated: no virtual network cards" : `${esc(cfg.network || "pod")} · MAC <span class="mono">${esc(cfg.mac)}</span>${ip}`],
       ["Disks", review.volumes?.length ? review.volumes.map(v => `<span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)}`).join("<br>") : "none"],
       cfg.host_devices?.add?.length ? ["Passthrough", cfg.host_devices.add.map(d => `${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}`).join("<br>")] : null]);
@@ -2422,7 +2422,7 @@ window.clusterInventory = report => {
       <td><b>${esc(w.name)}</b> ${w.kind === "vm" ? '<span class="tag">VM</span>' : ""}
         <div class="dim xs mono">${esc(w.namespace)}</div></td>
       <td class="mono small" style="word-break:break-all">${w.kind === "vm"
-        ? `${esc(w.cores || "?")} cores · ${esc(w.memory || "?")}` : esc(w.image)}</td>
+        ? `${esc(w.cores || "?")} vCPUs · ${esc(w.memory || "?")}` : esc(w.image)}</td>
       <td class="small">${w.volumes.length
         ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GiB${v.path ? ` → ${esc(v.path)}` : ""}</div>`).join("")
         : '<span class="dim">none</span>'}</td>

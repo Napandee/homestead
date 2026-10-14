@@ -158,7 +158,7 @@ window.vmStoreNew = value => {
 function vmSpecs(v) {
   const disks = v.disks.filter(d => d.kind === "disk");
   const size = disks.map(d => d.size).filter(Boolean).join(" + ");
-  return [`${v.cores} core${v.cores === 1 ? "" : "s"}`, v.memory || "",
+  return [`${v.cores} vCPU${v.cores === 1 ? "" : "s"}`, v.memory || "",
     disks.length ? (size ? `${size} disk${disks.length > 1 ? "s" : ""}` : `${disks.length} disk${disks.length > 1 ? "s" : ""}`) : "no disk"]
     .filter(Boolean);
 }
@@ -210,7 +210,7 @@ function vmActions(v, compact = false) {
         <button onclick="this.closest('details').open=false;vmMonitoring(${jsq(v.ns)},${jsq(v.name)})">${icon("pulse")}Monitoring</button>
         <button data-need="operator" onclick="this.closest('details').open=false;vmSchedule(${jsq(v.ns)},${jsq(v.name)})">${icon("clock")}Schedule</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
-        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
+        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move to another host</button>` : ""}
         ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
         ${FLEET.view?.linked ? `<button data-need="admin" title="Keep the source VM and create a stopped copy on another linked cluster" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'copy',${jsq(v.ns)})">${icon("copy")}Copy to cluster</button>` : ""}
         ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
@@ -237,7 +237,7 @@ function vmTable(rows) {
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
       <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
         ${v.network ? `<div class="dim xs">${esc(v.network)}</div>` : ""}</td>
-      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} core${v.cores === 1 ? "" : "s"}</span>`}</td>
+      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} vCPU${v.cores === 1 ? "" : "s"}</span>`}</td>
       <td data-label="RAM" class="nowrap vm-cell-use" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
       <td data-label="Disk IO" data-sm-hide class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
       <td class="nowrap" data-actions><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
@@ -366,7 +366,7 @@ window.vmPowerReviewedApply = async () => {
     // lost. Inspect the current VM state before initiating a fresh review.
     if ($("#vmPowerApply") === button) {
       button.textContent = "Inspect VM before retrying";
-      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Stop and Force stop remain available.</div>`);
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>`);
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
     }
     toast(error.message, "bad");
@@ -388,7 +388,7 @@ window.vmOpen = async (ns, name) => {
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
     <div class="vm-pane" data-pane="overview">
       <div class="vm-facts wide">
-        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} cores`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
+        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} vCPUs`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
         <div><span>Guest OS</span><b>${esc(v.guest?.prettyName || v.os || "unknown")}</b></div>
         <div><span>Kernel</span><b class="mono xs">${esc(v.guest?.kernelRelease || "—")}</b></div>
         <div><span>Live migration</span><b>${v.migratable ? "possible" : "not possible"}</b></div>
@@ -475,7 +475,7 @@ function vmEditResourceFields(v) {
     ? `CPU and memory are managed by instance type ${profile.name}. This form keeps that profile; it does not replace it with manual values.`
     : v.preference_profile?.name ? `Defaults come from preference ${v.preference_profile.name}. Unchanged CPU and memory are left as they are.` : "");
   return `${explanation ? `<div class="note ${v.profile_error ? "warn" : "small"}">${esc(explanation)}</div>` : ""}
-    <div class="f2"><div class="f"><label>CPU cores</label>${locked
+    <div class="f2"><div class="f"><label>vCPUs</label>${locked
       ? `<div class="mono">${esc(v.cores ?? "Unavailable")}</div>`
       : `<input id="ve_cores" type="number" min="1" max="128" value="${esc(v.cores)}">`}</div>
       <div class="f"><label>Memory</label>${locked
@@ -645,7 +645,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
     VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
     const plan = review.capacity, facts = plan.vm || {};
     const changes = UI.facts([
-      frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}`] : null,
+      frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} vCPUs · ${esc(frozen.memory || "unchanged memory")}`] : null,
       frozen.isolated ? ["Network", "Isolated: all virtual network cards are removed at the next start"]
         : frozen.isolated === false ? ["Network", "Virtual network cards are allowed"] : null,
       facts.policy_after && facts.policy_after !== facts.policy_before ? ["Restart policy", `${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after)}`] : null,
@@ -745,7 +745,7 @@ window.k3sCluster = async () => {
     <div class="f2"><div class="f"><label>Servers ${tip("One is enough to try things. Three keep the cluster running if one fails.")}</label>
         <select id="k_servers" onchange="k3sCountChanged()"><option value="1">1</option><option value="3">3</option></select></div>
       <div class="f"><label>Workers ${tip("VMs that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
-    <div class="f2"><div class="f"><label>Cores each ${tip("CPU cores for every VM. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
+    <div class="f2"><div class="f"><label>vCPUs each ${tip("vCPUs for every VM. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
       <div class="f"><label>Memory each ${tip("Memory for every VM, like 4Gi. Longhorn and Homestead inside want at least 4Gi on the server.")}</label><input id="k_mem" value="4Gi"></div></div>
     <div class="f2"><div class="f"><label>Disk each (GiB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
       <div class="f"><label>Login password ${tip("For the ubuntu user on every VM, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
@@ -817,7 +817,7 @@ window.k3sReview = async () => {
       UI.table([{ label: "VM" }, { label: "Role" }, { label: "Address" }], plan.nodes.map(n => [
         `<b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div>`,
         n.role === "server" ? UI.chip("server", "info") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
-      UI.facts([["Each VM", `${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
+      UI.facts([["Each VM", `${esc(plan.config.cores || 2)} vCPUs · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
       (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
       UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and the job tray follows the VMs coming up.
         All the VMs share one capacity budget, new VMs waiting for launcher pods included; the placement below is an example, not a reservation.</p>
@@ -929,7 +929,7 @@ window.uvmLoad = async name => {
   host.innerHTML = found.vms.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
       <th>VM</th><th>State</th><th>Machine</th><th>Disk</th><th></th></tr></thead><tbody>${found.vms.map(vm => {
     const off = vm.shut_off, disk = vm.disks[0];
-    const machine = [`${vm.cores} cores`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
+    const machine = [`${vm.cores} vCPUs`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
     const action = !vm.ready ? `<span class="dim small">${esc(vm.problem)}</span>`
       : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.name)})`, need: "admin", pri: true }
         : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.name)},this)`, need: "admin", tip: "Shut it down on Unraid, so its disk is copied as it was left" }]);
@@ -1010,7 +1010,7 @@ window.uvmPicture = () => {
     return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GiB`, to: `${dv} · ${d.size_gb} GiB` };
   };
   const rows = [
-    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} cores` },
+    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} vCPUs` },
     { what: "Memory", from: vm.memory, to: $("#uvm_mem")?.value || vm.memory },
     { what: "Firmware", from: vm.firmware === "uefi" ? `OVMF${vm.tpm ? " · TPM" : ""}` : "SeaBIOS", to: vm.firmware === "uefi" ? `EFI · q35${vm.tpm ? " · TPM" : ""}` : "BIOS · q35" },
     ...vm.disks.map(diskRow),
