@@ -4,7 +4,7 @@
 // quoted code left out. hold() swaps those parts for markers and back.
 const strings = require("./js-strings");
 const DATA = /(startsWith|endsWith|includes|indexOf|===|!==|==|case|go|navigate|view)\s*\(?\s*$/;
-const NOT_TEXT = /\b(?!title=|aria-label=|data-tip=|placeholder=|alt=)[\w-]+="[^"]*"|\b(?!title=|aria-label=|data-tip=|placeholder=|alt=)[\w-]+='[^']*'/g;
+const NOT_TEXT = /(?<![\w-])(?!title=|aria-label=|data-tip=|placeholder=|alt=)[\w-]+="[^"]*"|(?<![\w-])(?!title=|aria-label=|data-tip=|placeholder=|alt=)[\w-]+='[^']*'/g;
 function hold(text, extra = []) {
   const held = [];
   const keep = s => { held.push(s); return `\u0000${held.length - 1}\u0000`; };

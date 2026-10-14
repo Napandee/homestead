@@ -277,8 +277,8 @@ window.nodeUptimePaint = async n => {
 function nodeDutyTags(n) {
   const d = n.duties || {};
   const tags = [];
-  if ((d.management_vip || []).length) tags.push(`<span class="tag duty info" data-tip="This node answers for the cluster's management address - the dashboard and hosts joining. If it fails, another node takes the address within seconds.">management VIP ${esc(d.management_vip.join(", "))}</span>`);
-  if (d.control_plane_vip) tags.push('<span class="tag duty info" data-tip="This node holds the control-plane address the Kubernetes API answers on">API VIP</span>');
+  if ((d.management_vip || []).length) tags.push(`<span class="tag duty info" data-tip="This host answers for the cluster's management address - the dashboard and hosts joining. If it fails, another host takes the address within seconds.">management VIP ${esc(d.management_vip.join(", "))}</span>`);
+  if (d.control_plane_vip) tags.push('<span class="tag duty info" data-tip="This host holds the control-plane address the Kubernetes API answers on">API VIP</span>');
   if ((d.rwx || []).length) tags.push(`<span class="tag duty" data-tip="Longhorn serves these shared (RWX) volumes from this host: ${esc(d.rwx.join(", "))}. If it fails they pause until their share manager starts elsewhere">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
   return tags.join("");
 }

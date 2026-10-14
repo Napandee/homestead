@@ -76,7 +76,7 @@ try {
     }
     assert.equal(await page.locator('#e_rep').inputValue(), copies, 'adding containers does not add pod replicas');
     await page.locator('#e_save').click();
-    await page.waitForFunction(() => document.querySelector('#mtitle').textContent === 'Review workload changes');
+    await page.waitForFunction(() => document.querySelector('#mtitle').textContent === 'Review app changes');
     assert.match(await page.locator('#mbody').innerText(), /Containers added: metrics/);
     assert.match(await page.locator('#mbody').innerText(), /persistent volumes and data are kept/);
     const edited = await page.evaluate(() => containerRequests.find(r => r.url === '/api/edit/preview').body);
