@@ -177,7 +177,7 @@ async function pwaPaint() {
     PWA.subscription = await (PWA.registration || await pwaRegister())?.pushManager.getSubscription() || null;
     if (PWA.subscription) status = await pwaPost("/api/push/status", { endpoint: PWA.subscription.endpoint });
   } catch (e) {
-    card.innerHTML = `<div class="empty small">${esc(e.message)}</div>`;
+    card.innerHTML = UI.error(e, { retry: "pwaPaint()" });
     return;
   }
   const permission = Notification.permission;

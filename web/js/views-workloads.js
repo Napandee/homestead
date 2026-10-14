@@ -2866,7 +2866,7 @@ window.storeSearch = async () => {
       ? `<div class="dim small" style="margin-bottom:12px">${r.total} match${r.total === 1 ? "" : "es"} · showing ${r.apps.length}</div>
         <div class="apps stagger">${r.apps.map(a => storeCard(a, "search")).join("")}</div>`
       : `<div class="empty">nothing matched “${esc(q)}”</div>`;
-  } catch (e) { $("#s_res").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#s_res").innerHTML = UI.error(e, { retry: "storeSearch()" }); }
 };
 window.storeBrowse = async mode => {
   STORE_MODE = STORE_MODES[mode] ? mode : "home";
@@ -2885,7 +2885,7 @@ window.storeBrowse = async mode => {
     const [title, detail] = STORE_MODES[STORE_MODE];
     $("#s_res").innerHTML = `<div class="store-section-head"><div><h3>${title}</h3><span>${detail}</span></div><b>${r.apps.length}</b></div>
       ${r.apps.length ? `<div class="apps stagger">${r.apps.map(a => storeCard(a, STORE_MODE)).join("")}</div>` : `<div class="empty">No apps to show.</div>`}`;
-  } catch (e) { $("#s_res").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#s_res").innerHTML = UI.error(e, { retry: `storeBrowse(${jsArg(mode)})` }); }
 };
 
 window.storeInstall = key => {

@@ -2169,6 +2169,8 @@ div.ipam-line.dim{display:block}
 .ui-table .grow{width:40%}
 .ui-table .sub{display:block;font-size:12px;color:var(--mut);margin-top:3px;font-weight:400}
 .ui-empty{padding:18px;text-align:center;color:var(--mut);font-size:13px;border:1px dashed var(--line2);border-radius:13px}
+.ui-empty-action{margin-top:10px}.ui-error-actions{margin-top:10px;display:flex;justify-content:flex-end}
+.ui-field-error{color:var(--crit);font-size:12px;margin-top:6px}
 
 .ui-more{border-top:1px solid var(--line);padding-top:4px}
 .ui-more summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;padding:6px 0;font-size:13px;font-weight:600;color:var(--mut)}

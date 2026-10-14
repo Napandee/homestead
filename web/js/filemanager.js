@@ -137,7 +137,7 @@ function fmPaintPane(index) {
           <span class="fm-size dim xs">${e.kind === "dir" ? "folder" : fileSize(e.size)}</span>
           <span class="fm-perm mono xs" title="${esc(e.mode)}">${fmMode(e.mode)}</span>
           <span class="fm-own xs">${esc(e.user)}:${esc(e.group)}</span>
-          <span class="fm-when dim xs">${fmWhen(e.modified)}</span></div>`).join("") || '<div class="fm-empty dim">this folder is empty</div>'}
+          <span class="fm-when dim xs">${fmWhen(e.modified)}</span></div>`).join("") || '<div class="fm-empty dim">This folder is empty.</div>'}
       </div>${pane.listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}`;
   host.innerHTML = `<div class="fm-panehead">
       <select aria-label="Volume in this pane" onchange="fmVolume(${index}, this.value)">${fmVolumeOptions(pane)}</select>

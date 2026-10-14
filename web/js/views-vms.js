@@ -65,7 +65,7 @@ window.vmListLayout = select => {
 window.vmStore = async (check = false) => {
   if (!$("#mbody") || $("#modal").classList.contains("hidden")) modal("Image store", '<div class="empty"><span class="spin2"></span>asking the publishers</div>', true);
   let s;
-  try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); return; }
   STATE.data.vmStore = s;
   const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`) : "—";
   const day = t => t ? new Date(t * 1000).toLocaleDateString() : "";
@@ -376,7 +376,7 @@ window.vmOpen = async (ns, name) => {
   modal(`VM · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   let v;
   try { v = await api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`); }
-  catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmOpen(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,${jsq(id)})">${label}</button>`;
   $("#mbody").innerHTML = `<div class="between"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
       <span class="dim xs"> run strategy ${esc(v.run_strategy)}${v.node ? ` · on ${esc(v.node)}` : ""}</span></div>
@@ -489,7 +489,7 @@ window.vmEdit = async (ns, name) => {
     [v, o, res] = await Promise.all([api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] })),
       api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message }))]);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmEdit(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   window.__vmEdit = { ns, name, v, o };
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};

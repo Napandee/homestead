@@ -88,7 +88,7 @@ window.helmRelease = async (ns, name) => {
       <div class="helm-pane" data-pane="objects" hidden><table class="tbl dense stack"><thead><tr><th>Kind</th><th>Name</th><th>Namespace</th></tr></thead><tbody>
         ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table></div>`;
     if (window.applyRole) applyRole();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `helmRelease(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
 };
 window.helmTab = (button, pane) => {
   $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));

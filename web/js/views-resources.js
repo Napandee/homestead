@@ -66,7 +66,7 @@ window.resOpen = async (ns, name, reveal = false) => {
   modal(`${resLabel(k)} · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   let o;
   try { o = await api(`/api/resources/${reveal ? "reveal" : "object"}?${resParams(ns, name)}`); }
-  catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `resOpen(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   const pod = k.group === "" && k.resource === "pods";
   $("#mbody").innerHTML = `<div class="between"><div class="dim xs mono">${esc(k.group || "core")}/${esc(k.version)} · ${esc(k.kind)}${ns ? ` · ${esc(ns)}` : ""}</div>
       <div class="row">${pod ? `<button class="btn sm" onclick="resLogs(${jsq(ns)},${jsq(name)})">${icon("log")}Logs</button>` : ""}

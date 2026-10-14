@@ -153,7 +153,7 @@ window.portalEdit = async (pick = false) => {
       ${UI.actions(`<button class="btn pri" id="pe_save" onclick="portalSave()">Save links</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (pick) portalPick();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `portalEdit(${pick ? "true" : "false"})`, dialog: true }); }
 };
 
 document.addEventListener("input", event => {

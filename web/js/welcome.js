@@ -450,7 +450,7 @@ window.setupStorageDefault = async (i, button) => {
 async function viewSetup() {
   let state;
   try { state = await api("/api/setup"); }
-  catch (e) { paint(`<div class="empty">${esc(e.message)}</div>`); return; }
+  catch (e) { paint(UI.error(e, { retry: "viewSetup()" })); return; }
   state.steps = setupFacts(state);
   STATE.data.setup = state;
   setupOffer(state);
