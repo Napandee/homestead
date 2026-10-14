@@ -112,7 +112,7 @@ async function viewDash() {
   };
 
   paint(`
-  ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
+  ${UI.pageHeader(`Cluster overview`, dashboardScope(o), `
       <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
@@ -135,6 +135,15 @@ async function viewDash() {
 }
 
 /* Dense host summaries respond to widget width, rather than viewport width. */
+/* The dashboard reads this cluster only. With All clusters picked it says so,
+   and points to Nodes, which combines them. */
+function dashboardScope(o) {
+  const count = `${o.nodes_total} node${o.nodes_total === 1 ? "" : "s"}`;
+  if (!fleetAll()) return `Live health, capacity and placement across ${count}`;
+  const me = (FLEET.view?.members || []).find(m => m.self);
+  return `${esc(me?.name || "This cluster")} only · ${count} · the Dashboard doesn't combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's nodes</button>`;
+}
+
 function dashboardNodes(nodes, display="compact") {
   const header=UI.moduleHeader("Node health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
   if(display==="detailed")return `<div class="card flat dashboard-nodes">${header}${nodeComparison(nodes,"dashboard")}</div>`;
