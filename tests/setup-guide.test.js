@@ -193,6 +193,7 @@ function rendered() {
   require("./helpers/load-ui")(ctx);
   ctx.esc = s => String(s ?? "").replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
   ctx.jsArg = s => JSON.stringify(String(s ?? ""));
+  ctx.tip = text => `<span class="tip" tabindex="0" data-tip="${ctx.esc(text)}">?</span>`;
   vm.runInContext(fs.readFileSync("web/js/welcome.js", "utf8"), ctx);
   const state = { steps: {}, skips: {}, admin: true };
   const ids = vm.runInContext("setupVisible", ctx)(state).flatMap(([, list]) => list);
@@ -213,6 +214,12 @@ test("every setup step ends its row with its main action, and has one primary at
     assert.ok(primaries.length <= 1, `${id} has ${primaries.length} primary buttons`);
     if (primaries.length) assert.match(buttons.at(-1), /\bpri\b/, `${id}: the primary is last`);
   }
+});
+
+test("a step doesn't repeat that Next leaves it unchecked; the intro says it", () => {
+  const { ids, html } = rendered();
+  for (const id of ids.filter(id => id !== "intro")) assert.doesNotMatch(html(id), /Next does not mark/, id);
+  assert.match(html("intro"), /without marking the current one complete/);
 });
 
 test("the intro offers Don't show again only in the page header", () => {
