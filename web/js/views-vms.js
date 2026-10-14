@@ -194,28 +194,29 @@ function vmUsage(v) {
 const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
 
 function vmActions(v, compact = false) {
+  // One power action beside Console, as a container card has Logs; the rest
+  // are in ⋯, the shared action bar, named for this VM (#487).
+  const ns = jsq(v.ns), name = jsq(v.name), run = a => `vmPower(${ns},${name},${jsq(a)})`;
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
-  // One power action beside Console, as a container card has Logs; the
-  // others are the first entries of ⋯.
-  const shown = main.slice(0, 1);
-  const later = [];
-  return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact, i > 0 ? "sm-more" : "")).join("")}
-      ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole(${jsq(v.ns)},${jsq(v.name)})">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
-      <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
-        ${later.map(a => `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button onclick="this.closest('details').open=false;vmOpen(${jsq(v.ns)},${jsq(v.name)})">${icon("list")}Details</button>
-        ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
-        <button data-need="operator" onclick="this.closest('details').open=false;vmLogo(${jsq(v.ns)},${jsq(v.name)})">${icon("logo")}Logo</button>
-        <button onclick="this.closest('details').open=false;vmMonitoring(${jsq(v.ns)},${jsq(v.name)})">${icon("pulse")}Monitoring</button>
-        <button data-need="operator" onclick="this.closest('details').open=false;vmSchedule(${jsq(v.ns)},${jsq(v.name)})">${icon("clock")}Schedule</button>
-        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
-        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move to another host</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Keep the source VM and create a stopped copy on another linked cluster" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'copy',${jsq(v.ns)})">${icon("copy")}Copy to cluster</button>` : ""}
-        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
-        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete(${jsq(v.ns)},${jsq(v.name)})">${icon("trash")}Delete</button>
-      </div></details>`;
+  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"] : VM_ACTIONS[a];
+  const power = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start" });
+  const console = v.actions.includes("console");
+  return actionBar([
+    main[0] && power(main[0]),
+    console && { label: "Console", icon: "console", run: `vmConsole(${ns},${name})`, need: "operator", tip: "Console" },
+    { label: "Details", icon: "list", run: `vmOpen(${ns},${name})` },
+    ...main.slice(1).map(power),
+    { label: "Edit", icon: "edit", run: `vmEdit(${ns},${name})`, need: "operator" },
+    { label: "Logo", icon: "logo", run: `vmLogo(${ns},${name})`, need: "operator" },
+    { label: "Monitoring", icon: "pulse", run: `vmMonitoring(${ns},${name})` },
+    { label: "Schedule", icon: "clock", run: `vmSchedule(${ns},${name})`, need: "operator" },
+    v.actions.includes("pause") && { label: "Pause", icon: "pause", run: run("pause"), need: "operator" },
+    v.actions.includes("migrate") && { label: "Move to another host", icon: "move", run: `vmMove(${ns},${name})`, need: "operator" },
+    FLEET.view?.linked && { label: "Move to cluster", icon: "move", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'move',${ns})`, need: "admin", tip: "Move it to another linked cluster, disks and all" },
+    FLEET.view?.linked && { label: "Copy to cluster", icon: "copy", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'copy',${ns})`, need: "admin", tip: "Keep the source VM and create a stopped copy on another linked cluster" },
+    v.actions.includes("force-stop") && { label: "Force off", icon: "plug", run: run("force-stop"), need: "operator", danger: true, tip: VM_ACTIONS["force-stop"][2] },
+    { label: "Delete", icon: "trash", run: `vmDelete(${ns},${name})`, need: "admin", danger: true },
+  ], { shown: (main.length ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}`, iconOnly: compact });
 }
 
 /* The same VMs as rows: everything a card says, one VM a line. */
