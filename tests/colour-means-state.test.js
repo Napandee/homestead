@@ -71,3 +71,16 @@ test("AI agent requests: pending waits for a person, so amber; running and denie
   assert.equal(outcome.denied, "");
   assert.equal(outcome.refused, "warn");
 });
+
+test("other progress states are neutral too: installing, starting, rebuilding, copying, a container starting", () => {
+  const platform = read("web/js/platform.js");
+  assert.doesNotMatch(platform, /pill med">installing</);
+  assert.doesNotMatch(platform, /pill med">starting</);
+  assert.doesNotMatch(platform, /pill med">\$\{probe\.ready/);
+  assert.doesNotMatch(platform, /pill med">removing ·/);
+  assert.doesNotMatch(platform, /pill med">\$\{c\.current\} of/);
+  assert.match(platform, /pill med">partial service</, "a partly served share still needs a person");
+  assert.doesNotMatch(read("web/js/views-storage.js"), /pill med" data-tip="Longhorn is copying a replica/);
+  assert.doesNotMatch(read("web/js/vm-hardware.js"), /pill med">copying</);
+  assert.doesNotMatch(read("web/js/views-workloads.js"), /c\.state === "running" \? "med"/);
+});

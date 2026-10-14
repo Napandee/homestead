@@ -322,7 +322,7 @@ function volumeHealthCell(x) {
     ${volumeProgressBar(rebuild.pct)}`;
   if (x.rebalancing && x.state === "attached") return `<span class="pill ok" data-tip="${esc(x.health_reason)}">healthy</span> <span class="tag info">moving a copy</span>
     ${volumeShortCell(x)}`;
-  if (rebuild) return `<span class="pill med" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
+  if (rebuild) return `<span class="pill low" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
     ${volumeProgressBar(rebuild.pct)}
     <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 replica" : `${rebuild.replicas} replicas`} catching up</span>`;
   return `${x.state === "attached"

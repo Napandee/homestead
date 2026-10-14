@@ -156,7 +156,7 @@ window.addonsPaint = async () => {
     const a = ADDONS[key];
     const runtime = key === "multus" && state.state;
     const pill = runtime ? `<span class="pill ${state.ready ? "ok" : "med"}">${esc(state.state)}</span>` : state.installed ? '<span class="pill ok">installed</span>'
-      : state.installing ? '<span class="pill med">installing</span>' : '<span class="pill">not installed</span>';
+      : state.installing ? '<span class="pill low">installing</span>' : '<span class="pill">not installed</span>';
     const button = state.repairable ? '<button class="btn sm pri" data-need="admin" onclick="multusRepair()">Repair configuration</button>' : state.installed || state.installing ? ""
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
@@ -177,7 +177,7 @@ window.addonsPaint = async () => {
       <div class="row">${button}${emulationButton}</div></div>`;
   };
   const probePill = !probe.installed ? '<span class="pill">not installed</span>'
-    : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill med">${probe.ready || 0}/${probe.desired || 0} ready</span>`
+    : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill low">${probe.ready || 0}/${probe.desired || 0} ready</span>`
     : '<span class="pill ok">installed</span>';
   const probeButton = !can("admin") ? "" : !probe.installed
     ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
@@ -188,7 +188,7 @@ window.addonsPaint = async () => {
     <div class="row">${probeButton}</div></div>`;
   const smbPill = !smb.installed ? '<span class="pill">not installed</span>'
     : !smb.enabled ? '<span class="pill med">off</span>'
-    : smb.ready < smb.desired ? '<span class="pill med">starting</span>'
+    : smb.ready < smb.desired ? '<span class="pill low">starting</span>'
     : smb.partial ? '<span class="pill med">partial service</span>' : '<span class="pill ok">serving</span>';
   const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
       <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
@@ -199,7 +199,7 @@ window.addonsPaint = async () => {
   STATE.data.nfs = nfs;
   const nfsPill = nfs.error ? '<span class="pill crit">status unavailable</span>' : !nfs.installed ? '<span class="pill">not installed</span>'
     : !nfs.enabled ? '<span class="pill med">off</span>'
-    : nfs.ready < nfs.desired ? '<span class="pill med">starting</span>' : '<span class="pill ok">serving</span>';
+    : nfs.ready < nfs.desired ? '<span class="pill low">starting</span>' : '<span class="pill ok">serving</span>';
   const nfsRow = `<div class="addon-row"><div><b>NFSv4 network shares</b> ${nfsPill}
       <div class="dim small">A separate, opt-in NFS container serving selected RWX shares to allowed client networks</div>
       <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div>${nfsRecovery(nfs)}</div>
@@ -221,9 +221,9 @@ function hostConsoleRow(c) {
   if (!c || c.harvester) return "";
   const hosts = c.nodes.filter(n => !n.native);
   const pill = c.enabled === null ? '<span class="pill">not checked yet</span>'
-    : !c.enabled ? (c.installed ? `<span class="pill med">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
+    : !c.enabled ? (c.installed ? `<span class="pill low">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
     : c.settled ? '<span class="pill ok">installed</span>'
-    : `<span class="pill med">${c.current} of ${c.hosts} up to date</span>`;
+    : `<span class="pill low">${c.current} of ${c.hosts} up to date</span>`;
   // A host behind this release, or one that failed, can be done now rather
   // than on the next pass (failed hosts wait an hour between tries).
   const behind = n => c.enabled && n.ready && (!n.enabled || n.current === false || /failed/.test(n.detail || ""));
