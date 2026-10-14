@@ -118,6 +118,7 @@ MODULES = (
     "homestead_self_address",
     "homestead_self_data_server",
     "homestead_self_health",
+    "homestead_settings_helpers",
     "homestead_setup",
     "homestead_share_servers",
     "homestead_shares",

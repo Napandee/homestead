@@ -165,7 +165,7 @@ class ServerTests(unittest.TestCase):
              mock.patch.object(server.UPTIME, "report", return_value=down(0)), \
              mock.patch.object(server, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
              mock.patch.object(O, "_send_later"):
-            server.outage_tick()
+            server.OVERVIEW_ROUTES.outage_tick()
         self.assertEqual([], restarted)
 
 

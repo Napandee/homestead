@@ -265,7 +265,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         cfg = {"env": {"WEBPASSWORD": ""}, "env_meta": [
             {"key": "WEBPASSWORD", "masked": True, "generate": True},
         ]}
-        generated = server.apply_generated_secrets(cfg)
+        generated = server.DEPLOY_ROUTES.apply_generated_secrets(cfg)
         self.assertGreaterEqual(len(generated["env"]["WEBPASSWORD"]), 20)
         self.assertEqual("", cfg["env"]["WEBPASSWORD"])
         dep = {"spec": {"template": {"spec": {"containers": [{"env": [
@@ -296,7 +296,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertTrue(cfg["app_profile"]["blocked"])
         self.assertEqual("host", cfg["volumes"][0]["type"])
         with self.assertRaisesRegex(ValueError, "Needs Kubernetes design"):
-            server.ensure_profile_compatible(cfg)
+            server.DEPLOY_ROUTES.ensure_profile_compatible(cfg)
 
 
 class SidecarDeploymentTests(unittest.TestCase):

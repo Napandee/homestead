@@ -10,6 +10,7 @@ own value (the same object, for _cache and _lock)."""
 import json
 import time
 import urllib.request, urllib.parse, urllib.error
+import homestead_fleet as FLEET
 import homestead_ipam as IPAM
 import homestead_lan as LAN
 import homestead_leader as LEADER
@@ -19,7 +20,7 @@ import homestead_platform as PLATFORM
 import homestead_self_address as SELF_ADDRESS
 import homestead_vips as VIPS
 
-ROUTE_NEEDS = ("_follow_fleet_address", "beat", "cached", "get_overview", "kget", "ksend", "vm_address_problem")
+ROUTE_NEEDS = ("beat", "cached", "get_overview", "kget", "ksend", "vm_address_problem")
 VALUES = ("SYS_NS", "_cache", "_lock")
 
 
@@ -221,6 +222,15 @@ def mqtt_snapshot():
                         "health": health, "wl_summary": " ".join(f"{ns}:{n}" for ns, n in sorted(namespaces.items())),
                         "cpu_pct": o.get("cpu_pct", 0), "mem_pct": o.get("mem_pct", 0)},
             "nodes": nodes}
+
+
+def _follow_fleet_address():
+    """Linked clusters reach this one on its VIP once it is there."""
+    try:
+        return FLEET.follow_address()
+    except Exception as error:
+        print(f"linked clusters: were not told the new address: {str(error)[:160]}", flush=True)
+        return ""
 
 
 # The routes server.py's handler answered for this code.
