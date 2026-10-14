@@ -1,0 +1,52 @@
+"use strict";
+// The dialog shell is announced as a dialog, its ✕ is a button, and toasts
+// are announced - errors assertively, and they stay until dismissed (#486).
+const test = require("node:test"), assert = require("node:assert/strict");
+const fs = require("node:fs"), vm = require("node:vm");
+const html = fs.readFileSync("web/index.html", "utf8"), core = fs.readFileSync("web/js/core.js", "utf8");
+
+test("the dialog shell is a labelled modal dialog with a Close button", () => {
+  assert.match(html, /<div class="modalbox" role="dialog" aria-modal="true" aria-labelledby="mtitle">/);
+  assert.match(html, /<button type="button" class="iconbtn" id="mclose" aria-label="Close">/);
+  assert.doesNotMatch(html, /<div class="iconbtn" id="mclose">/);
+});
+
+test("the toast area is announced", () => {
+  assert.match(html, /<div id="toast" role="status" aria-live="polite"><\/div>/);
+});
+
+function toasts() {
+  const timers = [], box = { children: [], appendChild(node) { this.children.push(node); node.parent = this; } };
+  const c = { setTimeout: (fn, ms) => timers.push({ fn, ms }), $: id => id === "#toast" ? box : null,
+    document: { createElement: tag => ({ tag, className: "", textContent: "", attrs: {}, dataset: {}, children: [], listeners: {},
+      setAttribute(k, v) { this.attrs[k] = v; }, appendChild(n) { this.children.push(n); }, addEventListener(t, fn) { this.listeners[t] = fn; },
+      remove() { box.children = box.children.filter(n => n !== this); } }), documentElement: { style: { setProperty() {} } } } };
+  c.window = c; vm.createContext(c);
+  vm.runInContext(core.slice(core.indexOf("function toast("), core.indexOf("if (window.ResizeObserver && $(\"#jobTray\"))")), c);
+  return { c, box, timers };
+}
+
+test("a success toast is polite and goes on its own; an error is an alert that stays until dismissed", () => {
+  const { c, box, timers } = toasts();
+  c.toast("Saved", "ok");
+  assert.equal(box.children[0].attrs.role, "status");
+  assert.equal(timers.length, 1);
+  c.toast("Could not save: timed out", "bad");
+  const error = box.children.at(-1);
+  assert.equal(error.attrs.role, "alert");
+  assert.equal(timers.length, 1, "no timer removes an error");
+  const close = error.children.find(n => n.tag === "button");
+  assert.equal(close.attrs["aria-label"], "Dismiss");
+  close.listeners.click();
+  assert.ok(!box.children.includes(error));
+});
+
+test("a newer error replaces an older one, and other toasts leave it showing", () => {
+  const { c, box } = toasts();
+  const shown = () => box.children.map(n => n.textContent || n.children.find(x => x.tag === "span")?.textContent);
+  c.toast("Could not save", "bad");
+  c.toast("3 container image updates available");
+  assert.deepEqual(shown(), ["Could not save", "3 container image updates available"]);
+  c.toast("Could not delete", "bad");
+  assert.deepEqual(shown(), ["3 container image updates available", "Could not delete"]);
+});

@@ -223,10 +223,10 @@
   <div id="jobPanel" class="jobpanel"><div class="jobpanelhead"><div><b>Activity</b><span>Running and recent cluster jobs</span></div><button id="jobClear" class="btn sm" type="button" data-need="operator" hidden onclick="dismissFinishedOperations()">Clear finished</button></div><div id="jobList" class="joblist"></div></div>
   <button id="jobSummary" class="jobsummary" type="button" aria-expanded="false" aria-controls="jobPanel"></button>
 </section>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <div id="modal" class="modal hidden">
-  <div class="modalbox">
-    <div class="modalhead"><div class="modaltitle"><button class="modalback" id="mback" type="button" hidden onclick="modalBack()">‹ <span></span></button><b id="mtitle"></b></div><div class="iconbtn" id="mclose"><svg><use href="#i-x"/></svg></div></div>
+  <div class="modalbox" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+    <div class="modalhead"><div class="modaltitle"><button class="modalback" id="mback" type="button" hidden onclick="modalBack()">‹ <span></span></button><b id="mtitle" tabindex="-1"></b></div><button type="button" class="iconbtn" id="mclose" aria-label="Close"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div id="mbody"></div>
   </div>
 </div>

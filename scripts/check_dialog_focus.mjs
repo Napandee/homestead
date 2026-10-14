@@ -1,0 +1,44 @@
+// Demo-only browser check (#486): a dialog takes focus when it opens, keeps
+// Tab inside it, gives focus back when it closes, and its ✕ is a named button.
+import assert from "node:assert/strict";
+import { chromium } from "playwright";
+const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
+
+const browser = await chromium.launch({ headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(`${base}/networking?demo=1&tab=vips`, { waitUntil: "networkidle" });
+  const inDialog = () => page.evaluate(() => !!document.activeElement?.closest(".modalbox"));
+
+  // Open a dialog from a button the keyboard reached.
+  const opener = page.getByRole("button", { name: /Add VIP/ }).first();
+  await opener.focus();
+  const openerId = await opener.evaluate(el => { el.dataset.focusCheck = "opener"; return el.outerHTML.slice(0, 60); });
+  await opener.press("Enter");
+  await page.locator('#modal:not(.hidden) [role="dialog"][aria-modal="true"][aria-labelledby="mtitle"]').waitFor();
+  assert.equal(await inDialog(), true, `focus moves into the dialog opened by ${openerId}`);
+
+  // Tab and Shift+Tab stay inside.
+  for (let i = 0; i < 25; i++) { await page.keyboard.press("Tab"); assert.equal(await inDialog(), true, `Tab ${i + 1} stays in the dialog`); }
+  for (let i = 0; i < 25; i++) { await page.keyboard.press("Shift+Tab"); assert.equal(await inDialog(), true, `Shift+Tab ${i + 1} stays in the dialog`); }
+
+  // The ✕ is a button named Close, and closing gives focus back.
+  const close = page.getByRole("button", { name: "Close", exact: true }).first();
+  assert.equal(await close.evaluate(el => el.tagName), "BUTTON");
+  await page.keyboard.press("Escape");
+  await page.locator("#modal.hidden").waitFor({ state: "attached" });
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.focusCheck), "opener", "focus returns to the opener");
+
+  // Toasts are announced; an error stays until it is dismissed.
+  assert.equal(await page.locator("#toast").getAttribute("aria-live"), "polite");
+  await page.evaluate(() => toast("Could not save: timed out", "bad"));
+  await page.waitForTimeout(4600);
+  const error = page.locator('#toast [role="alert"]');
+  assert.equal(await error.count(), 1, "the error is still there after the usual 4.2 s");
+  await error.getByRole("button", { name: "Dismiss" }).click();
+  assert.equal(await error.count(), 0);
+  assert.deepEqual(errors, []);
+  console.log("Dialog focus: moves in, Tab stays inside, returns to the opener; Close is a button; error toasts stay until dismissed");
+} finally { await browser.close(); }
