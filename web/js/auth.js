@@ -129,8 +129,8 @@ function dataHandoffStarting(state = {}) {
       <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been authorized.</p>
       <p class="dim small">Review the preparation or keep using the original volume. Both volumes will be retained.</p>
       ${state.signed_in === false ? `<p class="small">Sign in as an administrator to review it.</p>
-        <input id="rg_user" autocomplete="username" placeholder="Username">
-        <input id="rg_pass" type="password" autocomplete="current-password" placeholder="Password" style="margin-top:8px"
+        <input id="rg_user" autocomplete="username" aria-label="Username" placeholder="Username">
+        <input id="rg_pass" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" style="margin-top:8px"
           onkeydown="if (event.key === 'Enter') recoverySignIn()">
         <div class="gateerr" id="rg_err" hidden></div>
         <button class="btn wide" style="margin-top:10px" onclick="recoverySignIn()">Sign in and review</button>`
@@ -195,11 +195,11 @@ function loginForm(err, setup) {
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
-    <div class="f"><label>Username</label>
+    <div class="f"><label for="lg_user">Username</label>
       <input type="text" id="lg_user" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
-    <div class="f"><label>Password</label>
+    <div class="f"><label for="lg_pass">Password</label>
       <input type="password" id="lg_pass" autocomplete="${setup ? "new-password" : "current-password"}"></div>
-    ${setup ? `<div class="f"><label>Confirm password</label>
+    ${setup ? `<div class="f"><label for="lg_pass2">Confirm password</label>
       <input type="password" id="lg_pass2" autocomplete="new-password"></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
       ${localStorage.getItem("homestead.remember") === "0" ? "" : "checked"}>Keep me signed in on this device</label>
@@ -263,9 +263,9 @@ window.doLogout = async () => {
 };
 
 window.pwChange = () => modal("Change password", `
-  <div class="f"><label>Current password</label><input type="password" id="pw_old" autocomplete="current-password"></div>
-  <div class="f"><label>New password</label><input type="password" id="pw_new" autocomplete="new-password"></div>
-  <div class="f"><label>Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
+  <div class="f"><label for="pw_old">Current password</label><input type="password" id="pw_old" autocomplete="current-password"></div>
+  <div class="f"><label for="pw_new">New password</label><input type="password" id="pw_new" autocomplete="new-password"></div>
+  <div class="f"><label for="pw_new2">Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
   ${UI.actions(`<button class="btn pri" onclick="doPwChange()">Change password</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
   <div class="note" style="margin-top:14px">Changing your password signs out every other

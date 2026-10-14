@@ -101,7 +101,7 @@ window.vmStore = async (check = false) => {
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
-      <input id="vmStoreFilter" type="search" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
+      <input id="vmStoreFilter" type="search" aria-label="Filter images" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
         oninput="STATE.vmStoreFilter=this.value; clearTimeout(window.__vsf); window.__vsf=setTimeout(() => vmStore(), 250)" style="max-width:260px"></div>
     <div class="card flat pad0" style="margin-top:8px"><div class="tblwrap"><table class="tbl stack dense vmstore"><thead><tr>
       <th>Image</th><th>Variant</th><th>Download</th><th>Sign in as</th>${s.harvester ? "<th>Here</th>" : ""}<th></th></tr></thead>

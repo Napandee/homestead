@@ -34,6 +34,19 @@
 
    Each returns HTML, escaped where it takes plain text: arguments named
    *Html are inserted as they are. */
+/* The first visible control in some HTML, given an id when it has none, so a
+   label can name it: returns [html, id], or [html, ""] with no control. */
+let CONTROL_IDS = 0;
+function withControlId(html) {
+  const s = String(html ?? "");
+  const tag = [...s.matchAll(/<(input|select|textarea)\b[^>]*>/g)].map(m => m[0]).find(t => !/\stype="?hidden/.test(t));
+  if (!tag) return [s, ""];
+  const has = tag.match(/\sid="([^"]+)"/);
+  if (has) return [s, has[1]];
+  const id = `field-c${++CONTROL_IDS}`;
+  return [s.replace(tag, tag.replace(/^<(input|select|textarea)\b/, `<$1 id="${id}"`)), id];
+}
+
 const UI = (() => {
   const text = value => esc(value ?? "");
   const TONES = new Set(["info", "ok", "warn", "bad"]);
@@ -119,8 +132,11 @@ const UI = (() => {
     <input type="checkbox" id="${text(id)}"${onchange ? ` onchange="${text(onchange)}"` : ""}><span>${text(sentence)}</span></label>`;
 
   const fields = (...html) => `<div class="ui-fields">${html.join("")}</div>`;
-  const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => `<div class="ui-field${wide ? " wide" : ""}">
-    <label>${text(label)}${tipHtml}</label>${controlHtml}${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
+  const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => {
+    const [html, id] = withControlId(controlHtml);
+    return `<div class="ui-field${wide ? " wide" : ""}">
+    <label${id ? ` for="${text(id)}"` : ""}>${text(label)}${tipHtml}</label>${html}${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
+  };
 
   const statusDot = kind => `<i class="ui-status-dot ${["ok","bad","warn","info","neutral"].includes(kind)?kind:"neutral"}" aria-hidden="true"></i>`;
   const insightList = rows => `<div class="ui-insight-list">${rows.map(r=>`<div class="ui-insight-row">${statusDot(r.tone)}<div><b>${text(r.title)}</b><small>${text(r.detail)}</small></div><div class="ui-insight-action">${chip(r.label,r.tone)}${r.actionsHtml || (r.onclick?button(r.action || "Review",r.onclick):"")}</div></div>`).join("")}</div>`;
@@ -415,7 +431,10 @@ if (typeof window !== "undefined") window.actionBar = actionBar;
 /* A setting: its label and one line of help on the left, its control on
    the right - a switch, a number and its unit, a choice, a short text. */
 function settingRow(label, help, control) {
-  return `<div class="srow"><div class="srow-l"><b>${label}</b>${help ? `<small>${help}</small>` : ""}</div><div class="srow-c">${control}</div></div>`;
+  // The control is named by the setting's label, which stays a <b> so it looks the same.
+  const [html, id] = withControlId(control);
+  const named = id ? html.replace(/<(input|select|textarea)\b/, `<$1 aria-labelledby="${id}-label"`) : html;
+  return `<div class="srow"><div class="srow-l"><b${id ? ` id="${id}-label"` : ""}>${label}</b>${help ? `<small>${help}</small>` : ""}</div><div class="srow-c">${named}</div></div>`;
 }
 /* Something Homestead runs or talks to: its name and state, what it is doing,
    and its buttons (an actionBar) - its settings open in a dialog. */
@@ -791,6 +810,31 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   }, true); // before the page's own Escape, which closes the dialog
   window.addEventListener("resize", place);
   window.addEventListener("scroll", event => { if (event.target !== pop) place(); }, { passive: true, capture: true });
+}
+
+/* Labels name their fields (#505). A hand-written field block - a <label>
+   and then its control, as in <div class="f"> - is linked as it is drawn:
+   the control gets an id when it has none and the label a for, so a screen
+   reader reads the label and clicking it focuses the field. */
+function linkFieldLabels(root) {
+  for (const label of root.querySelectorAll?.("label:not([for]):not([data-wraps])") || []) {
+    if (label.querySelector("input, select, textarea")) { label.dataset.wraps = "1"; continue; }
+    const control = [...(label.parentElement?.querySelectorAll("input:not([type=hidden]), select, textarea") || [])]
+      .find(e => !e.labels?.length && !e.getAttribute("aria-label") && (label.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+    if (!control) continue;
+    if (!control.id) control.id = `field-${++linkFieldLabels.next}`;
+    label.htmlFor = control.id;
+  }
+}
+linkFieldLabels.next = 0;
+if (typeof window !== "undefined") window.linkFieldLabels = linkFieldLabels;
+if (typeof document !== "undefined" && typeof MutationObserver === "function" && document.documentElement) {
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; linkFieldLabels(document); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
 }
 
 /* Back to top (#292): on any page, once it is scrolled more than a screen

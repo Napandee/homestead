@@ -206,8 +206,8 @@ const FAILOVER_HELP = {
   wait: "It stays with its node and starts again when that node is back - for apps tied to that host's hardware, or better restarted where they were.",
   default: "Kubernetes moves it after five minutes, the default for anything Homestead did not deploy.",
 };
-function failoverSelect(id, current, extra = "") {
-  return `<select id="${id}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
+function failoverSelect(id, current, extra = "", label = "If its node fails") {
+  return `<select id="${id}" aria-label="${esc(label)}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
 }
 window.FAILOVER_WORDS = FAILOVER_WORDS;
@@ -1693,7 +1693,7 @@ window.vmDiskImport = () => {
     </div>
     <div class="f2">
       <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several nodes to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>
-      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" placeholder="hex digest"></div></div>
+      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" aria-label="Checksum type" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" aria-label="Checksum" placeholder="hex digest"></div></div>
     </div>
     <details><summary class="small">Authenticated or private CA source</summary><div class="f2" style="margin-top:12px">
       <div class="f"><label>Credential Secret ${tip("Optional Secret in the destination namespace containing CDI-compatible accessKeyId and secretKey fields.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
@@ -2590,7 +2590,7 @@ function moveVolumesTable(plan, cluster, kind, name) {
       <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value)">
         ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${value === "move" && MOVE_TRANSFER_MODE === "copy" ? "Copy its data" : label}</option>`).join("")}</select></td>
       <td>${c.action === "skip" ? '<span class="dim xs">the one here keeps its own</span>'
-        : `<select id="mv_volsc_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
+        : `<select id="mv_volsc_${esc(c.claim)}" aria-label="${esc(`Storage class for ${c.claim}`)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
           ${classes.map(k => `<option value="${esc(k)}" ${k === pick ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
       <td>${c.action === "blank"
         ? `<input id="mv_volsize_${esc(c.claim)}" type="number" min="1" max="16384" style="width:90px" value="${esc((MOVE_VOLUMES[c.claim] || {}).size_gb || c.target_size_gb || c.size_gb)}"
