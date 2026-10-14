@@ -1527,7 +1527,7 @@ ssh_pwauth: true
           : op.kind === "reclass" ? [{ title: "Copy and check", text: "==> copying 20.0 GiB\n  10,737,418,240  52%   96.40MB/s    0:01:50", note: "" }]
           : op.kind === "unraid-vm-import" ? [{ title: "Disk 1 · copy", kind:"disk-copy",
             progress:{percent:0,bytes:0,total_bytes:20000000000,bytes_per_second:null,eta_seconds:null},
-            text: "curl: (22) The requested URL returned error: 413\n0.0% · 0.0 / 20.0 GB · ETA estimating\nHSVM-FAILED Disk stream or CDI upload exited with status 22", note: "Saved before cleanup" },
+            text: "curl: (22) The requested URL returned error: 413\n0.0% · 0.0 / 20.0 GiB · ETA estimating\nHSVM-FAILED Disk stream or CDI upload exited with status 22", note: "Saved before cleanup" },
             { title: "Disk 1 · CDI upload", text: "Upload rejected: No space left on device", note: "Saved before cleanup" }] : [] };
     },
     "/api/operations/cancel": (url, init) => {
@@ -2132,7 +2132,7 @@ ssh_pwauth: true
       reserve_gb: 24, usable_gb: 111, exists: false, taken: { v1: false, v2: false }, mount_point: "/mnt/longhorn-os",
       regions: [{ disk: "sdb", start: 419432448, sectors: 1534019584, sector: 512, size_gb: 731 }],
       lvm_problems: { v1: "", v2: "" }, problem: "" },
-    "/api/disks/os-space/use": { ok: true, path: "/mnt/longhorn-os", tags: ["os"], detail: "A 111 GB volume in ubuntu-vg is mounted at /mnt/longhorn-os; Longhorn is adding it on node-1, tagged os" },
+    "/api/disks/os-space/use": { ok: true, path: "/mnt/longhorn-os", tags: ["os"], detail: "A 111 GiB volume in ubuntu-vg is mounted at /mnt/longhorn-os; Longhorn is adding it on node-1, tagged os" },
     "/api/disks/add": { ok: true, detail: "Harvester is wiping and adding /dev/sdb on harvester-node1 to Longhorn" },
     "/api/disks/scheduling": { ok: true, detail: "done" }, "/api/disks/evict": { ok: true, detail: "moving replicas off" },
     "/api/disks/remove": { ok: true, detail: "released" },
