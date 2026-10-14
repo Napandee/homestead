@@ -99,7 +99,7 @@ function nodeDevicesRender(node, f, error = "", key = ptKey(node)) {
     UI.button(u.permitted ? "Stop offering" : "Offer to VMs",
       `ptUsb(${jsArg(node)},${jsArg(u.vendor)},${jsArg(u.product)},${!u.permitted},${jsArg(u.harvester_name || "")})`, { attrs: 'data-need="admin"' })]);
   body.innerHTML = `
-    <div class="between"><span class="dim xs">${f.inspected_at ? `Last inspected ${esc(new Date(f.inspected_at * 1000).toLocaleString())}` : "Last inspected devices"} · handoffs check the host again</span>
+    <div class="between"><span class="dim xs">${f.inspected_at ? `Last inspected ${esc(fmtAt(f.inspected_at))}` : "Last inspected devices"} · handoffs check the host again</span>
       ${UI.button("Refresh devices", `nodeDevicesLook(${jsArg(node)})`, { attrs: 'data-need="admin"' })}</div>
     ${UI.notices([["bad", error && `Refresh failed, so this is the last inspection: ${error}`],
       ["warn", f.inventory_error && `This inspection could not be kept after a reload: ${f.inventory_error}`]])}

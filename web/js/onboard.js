@@ -113,7 +113,7 @@ window.removalLeftovers = removalLeftovers;
 function cleanupRows(report, withDead = true) {
   return [
     ...(withDead ? report.dead_nodes : []).map(n => `<div class="cleanup-row bad"><div><b>${esc(n.name)} is not ready</b>
-      <span>${esc((n.roles || []).join(" · ") || "worker")}${n.since ? ` · since ${esc(new Date(n.since).toLocaleString())}` : ""}</span></div>
+      <span>${esc((n.roles || []).join(" · ") || "worker")}${n.since ? ` · since ${esc(fmtAt(n.since))}` : ""}</span></div>
       <button class="btn sm danger" data-need="admin" onclick="nodeRemoval(${jsq(n.name)})">Remove…</button></div>`),
     ...report.stale_machines.map(m => `<div class="cleanup-row"><div><b>Leftover machine ${esc(m.name)}</b>
       <span>${m.stuck ? `Being deleted, but waiting on ${esc(m.node || "its host")}, which will not answer`

@@ -31,9 +31,7 @@ function fmMode(octal) {
 }
 function fmWhen(seconds) {
   if (!seconds) return "";
-  const d = new Date(seconds * 1000);
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" })
-    + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return fmtAt(seconds);
 }
 
 /* The helper opens a volume on the node it is attached to, beside the app
@@ -404,7 +402,7 @@ window.fmSave = async (ignoreSyntax = false) => {
   try {
     const result = await fmPost("/api/files/write", { namespace: pane.namespace, pvc: pane.pvc, path: editing.path, content, revision: editing.revision, ignore_syntax: ignoreSyntax });
     Object.assign(editing, { revision: result.revision, dirty: false });
-    const state = $("#fm_editstate"); if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
+    const state = $("#fm_editstate"); if (state) state.textContent = `saved ${fmtClock(Date.now())}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
     if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) return fmSave(true);

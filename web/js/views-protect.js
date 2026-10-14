@@ -639,7 +639,7 @@ function snapshotTimeline(snaps, vol, label) {
     return `<article class="snapshot-point ${source === "system" ? "system" : ""}">
       <div class="snapshot-marker">${icon("snapshot")}</div><div class="snapshot-content">
       <div class="between"><b class="mono small">${esc(s.name)}</b><span class="tag ${source === "system" ? "info" : ""}">${title}</span></div>
-      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(date.toLocaleString(undefined, {day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"}))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
+      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(fmtAt(date))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
       <div class="row small"><span class="dim">${esc(s.size_mb)} MiB</span>${s.deleting || s.removed ? '<span class="tag warn">cleanup pending</span>' : !s.ready ? '<span class="tag warn">not ready</span>' : ""}
       ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
       ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
@@ -956,7 +956,7 @@ window.lhTargetSave = async () => {
 /* ---------------- restore tests (homestead_restore_test.py) ----------------
    Each app with Longhorn volumes: what a test restores, its last result, and
    Test now. Switched on, Homestead tests each app with backups monthly. */
-const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : new Date(at * 1000).toLocaleString()) : "";
+const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : fmtAt(at)) : "";
 
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");

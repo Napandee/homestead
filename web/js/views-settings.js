@@ -367,7 +367,7 @@ function homesteadDataHtml(d) {
     <table class="tbl dense stack hd-table"><thead><tr><th>Store</th><th>Size</th><th>Kept</th></tr></thead><tbody>
       ${(d.stores || []).map(s => `<tr><td><b>${esc(s.label)}</b>${s.files > 1 ? `<span class="dim xs"> · ${s.files} files</span>` : ""}</td>
         <td data-label="Size" class="mono small">${s.files ? hdSize(s.size) : '<span class="dim">—</span>'}</td><td data-label="Kept" class="small dim">${esc(s.kept)}</td></tr>`).join("")}</tbody></table>
-    ${last ? `<div class="dim xs" style="margin-top:8px">Last tidied ${esc(new Date(d.last_at * 1000).toLocaleString())}: ${last.notes?.length ? esc(last.notes.join("; ")) + ` (${hdSize(last.freed)} freed)` : "nothing needed doing"}.</div>` : ""}`;
+    ${last ? `<div class="dim xs" style="margin-top:8px">Last tidied ${esc(fmtAt(d.last_at))}: ${last.notes?.length ? esc(last.notes.join("; ")) + ` (${hdSize(last.freed)} freed)` : "nothing needed doing"}.</div>` : ""}`;
 }
 
 async function homesteadDataPaint() {
@@ -686,7 +686,7 @@ async function namespacesPaint() {
     ${inv.namespaces.map(r => `<tr><td data-sort="${esc(r.name)}"><b class="mono">${esc(r.name)}</b>
         ${r.name === inv.default ? '<span class="tag ok">default for new apps</span>' : ""}${r.homestead ? '<span class="tag">made here</span>' : ""}</td>
       <td class="small">${esc(what(r))}</td>
-      <td class="dim xs">${r.created ? esc(new Date(r.created).toLocaleDateString()) : ""}</td>
+      <td class="dim xs">${r.created ? esc(fmtDay(r.created)) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs ns-kept">Kept: ${esc(r.protected)}</span>`
         : actionBar([{ label: "Delete", run: `namespaceDelete(${jsq(r.name)})`, danger: true, disabled: !r.empty,
             tip: r.empty ? "" : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>

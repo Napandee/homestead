@@ -106,7 +106,7 @@ async function historyLoad(host, range, request, abort) {
     if (historyAbort === abort) { historyAbort = null; historyPending = null; }
   }
   if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
-  const since = h.since ? new Date(h.since * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "";
+  const since = h.since ? fmtDay(h.since) : "";
   STATE.data.historyHtml = `<div class="between"><div><div class="ctitle">Over time</div>
       <div class="csub">${h.samples ? `Recorded every ${h.step === 300 ? "5 minutes" : "hour"} by Homestead, open or not${since ? ` · since ${esc(since)}` : ""}` : "Homestead records a sample every 5 minutes; the first appears shortly."}</div></div>
       <div class="seg">${["24h", "7d", "30d", "90d"].map(r => `<button class="${r === range ? "on" : ""}" onclick="historyRange(${jsq(r)})">${r}</button>`).join("")}</div></div>

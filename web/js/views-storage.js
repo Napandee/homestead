@@ -1229,7 +1229,7 @@ window.fileSave = async (ignoreSyntax = false) => {
     FILEVIEW.revision = result.revision;
     FILEVIEW.dirty = false;
     const state = $("#file_state");
-    if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
+    if (state) state.textContent = `saved ${fmtClock(Date.now())}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
     if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
@@ -1651,12 +1651,12 @@ function eventRowHtml(x) {
     return `<tr><td><b>${esc(x.user || "—")}</b><div class="dim xs">${x.detail ? `${esc(x.detail)}` : ""}<span class="ev-when-sm">${x.detail ? " · " : ""}${esc(ago)}</span></div></td>
       <td data-status><span class="pill slim ${tone}">${esc(word)}</span></td>
       <td class="small ev-from"><span class="mono">${esc(x.ip || "—")}</span>${x.device || x.via ? ` <span class="dim xs">${esc([x.device, x.via && `via ${x.via}`].filter(Boolean).join(" · "))}</span>` : ""}</td>
-      <td class="dim xs mono nowrap" data-sm-hide title="${esc(when.toLocaleString())}">${esc(ago)}</td></tr>`;
+      <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(when))}">${esc(ago)}</td></tr>`;
   }
   return `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
     <td data-status><span class="pill slim ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
     <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
-    <td class="dim xs mono nowrap" data-sm-hide title="${esc(x.time ? new Date(x.time).toLocaleString() : "")}">${esc(ago)}</td></tr>`;
+    <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(x.time))}">${esc(ago)}</td></tr>`;
 }
 
 /* The table and the count, from the rows already read. */
