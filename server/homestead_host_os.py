@@ -539,7 +539,7 @@ def check_now(body):
 def upgrade_now(body):
     node = _host(body)
     return {"ok": True, "operation": upgrade_start(node, OPS),
-            "detail": f"Installing updates on {node}; follow it in the job tray"}
+            "detail": f"Installing updates on {node}; follow it under Jobs"}
 
 
 # Its routes and who may use them (homestead_routes.py).

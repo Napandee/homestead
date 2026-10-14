@@ -143,11 +143,11 @@ const NETWORK_SECTIONS = [
   ["addresses", "Address map", "Addresses", "addrmap", "Each host's own address and the VIPs it holds now, with what listens on each"],
   ["ip", "IP addresses", "Addresses", "ipam", "Every address on your subnets: static, reserved, DHCP, and what the cluster uses"],
   ["lan", "LAN networks", "Network", "network", "Networks that put a VM or container on your LAN like any other machine"],
-  ["ports", "Host ports", "Network", "port", "Each host's network ports, bonds and uplinks: link, speed and errors"],
+  ["ports", "Ports and uplinks", "Network", "port", "Each host's network ports, bonds and uplinks: link, speed and errors"],
   ["firewall", "Firewall", "Protection", "shield", "Policies for workloads' pod-network traffic"],
 ];
 const networkSectionRow = key => NETWORK_SECTIONS.find(row => row[0] === key) || NETWORK_SECTIONS[0];
-const networkSectionLabel = key => key === "ports" && STATE.platform?.harvester ? "Ports and uplinks" : networkSectionRow(key)[1];
+const networkSectionLabel = key => networkSectionRow(key)[1];
 
 /* What each section's line in the list says: a count that is true now, from
    whatever this page last read, and in amber what needs attention there. */
@@ -245,7 +245,7 @@ function networkOverviewHtml(data, baseline) {
         <div><b>${esc(item.what)}</b>${item.why ? `<div class="dim xs">${esc(item.why)}</div>` : ""}</div>
         <button class="btn sm" onclick="networkShow(${jsq(item.section)},${jsq(item.where || "")})">${esc(networkSectionLabel(item.section))} ›</button></li>`).join("")}</ul>` : ""}</div>
     <div class="card flat">${UI.moduleHeader("How a connection reaches your apps", "From your LAN to each app; each step opens its section")}
-      <div class="net-path">${go("ports", `<b>Host ports</b><small>${ports ? `${ports.counts?.ports || 0} ports` : "links and bonds"}</small>`)}<i aria-hidden="true">→</i>
+      <div class="net-path">${go("ports", `<b>Ports and uplinks</b><small>${ports ? `${ports.counts?.ports || 0} ports` : "links and bonds"}</small>`)}<i aria-hidden="true">→</i>
         ${go("vips", `<b>Workload VIPs</b><small>${data.summary.vips} VIPs</small>`)}<i aria-hidden="true">→</i>
         ${go("addresses", `<b>Address map</b><small>${data.summary.listeners} listening</small>`)}<i aria-hidden="true">→</i>
         ${go("services", `<b>Services</b><small>${data.summary.app_services} on the LAN</small>`)}</div></div>

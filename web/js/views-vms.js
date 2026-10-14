@@ -844,11 +844,11 @@ window.k3sCreate = async () => {
   try {
     await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
-    toast("Cluster VMs created - the job tray follows them coming up", "ok");
+    toast("Cluster VMs created - follow them coming up under Jobs", "ok");
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
   } catch (e) {
     toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
+    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check the job tray and Virtual Machines before a new review.</div>`);
     if (window.refreshOperations) refreshOperations(true);
   } finally { K3S_CREATE_BUSY = false; }
 };

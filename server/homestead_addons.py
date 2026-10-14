@@ -257,7 +257,7 @@ def _post_chart(name, spec):
             "metadata": {"name": name, "namespace": CONTROLLER_NS, "labels": {NAMES.key("managed"): "true"}},
             "spec": spec}
     if name in _helmcharts():
-        raise ValueError(f"{name} is already being installed; follow it in the job tray or on the Helm page")
+        raise ValueError(f"{name} is already being installed; follow it under Jobs or on the Helm page")
     preemption_hold(name)
     ksend("POST", f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts", body)
 

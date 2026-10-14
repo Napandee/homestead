@@ -302,7 +302,7 @@ def convert(body):
         raise ValueError(f"type the host's name, {node}, to confirm")
     op = start(node, OPS)
     ROUTER.forget("network")
-    return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it in the job tray"}
+    return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it under Jobs"}
 
 
 # Its routes and who may use them (homestead_routes.py).

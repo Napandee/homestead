@@ -76,7 +76,7 @@ window.viewIpam = viewIpam;
 function ipamSeen(row) {
   const bits = [];
   if (row.scan && row.scan.up) bits.push(`<span class="pill slim ok" data-tip="Answered the last scan${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}">up</span>`);
-  if (row.unifi?.reserved) bits.push('<span class="pill slim info" data-tip="UniFi holds this address for this device">reserved</span>');
+  if (row.unifi?.reserved) bits.push('<span class="pill slim info" data-tip="UniFi holds this address for this device">DHCP reservation</span>');
   if (row.unifi) bits.push(`<span class="pill slim ${row.unifi.online === false ? "neutral" : "info"}" data-tip="${esc(row.unifi.type === "device" ? `UniFi device${row.unifi.model ? ` · ${row.unifi.model}` : ""}` : row.unifi.online === false ? "UniFi reservation; the client is offline" : `UniFi ${row.unifi.type || "client"}`)}">UniFi</span>`);
   return bits.join(" ") || '<span class="dim">—</span>';
 }

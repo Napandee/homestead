@@ -630,7 +630,7 @@ def change(body):
         raise ValueError(f"type the host's name, {node}, to confirm")
     op = start(node, body, OPS, busy, servers)
     ROUTER.forget("ports", "network")
-    return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing; follow it in the job tray"}
+    return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing; follow it under Jobs"}
 
 
 ROUTES = {

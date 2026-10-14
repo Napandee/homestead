@@ -2181,7 +2181,7 @@ window.diskRetireGo = async (node, disk) => {
   try {
     await api("/api/disks/retire", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, disk, force, confirm: force ? $("#dr_confirm").value.trim() : "" }) });
-    toast("Replacing the failed disk - follow it in the job tray", "ok");
+    toast("Replacing the failed disk - follow it under Jobs", "ok");
     STATE.data.disks = null; modalBack(); if (window.refreshOperations) refreshOperations(true);
     setTimeout(() => disksRepaint(node), 1500);
   } catch (e) { toast(e.message, "bad"); }

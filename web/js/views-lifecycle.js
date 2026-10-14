@@ -602,7 +602,7 @@ window.confirmEdit = async () => {
     const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const activeName = result.name || workloadName || name;
     if (result.operation) window.noteOperation?.(result.operation);
-    toast(renaming ? `${name} renamed to ${activeName}` : result.operation ? `${activeName} saved; copying its data in the job tray` :
+    toast(renaming ? `${name} renamed to ${activeName}` : result.operation ? `${activeName} saved; copying its data under Jobs` :
       result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
     EDIT_REVIEW = null;
     closeModal(); setTimeout(() => refresh(true), 1200);
@@ -1701,7 +1701,7 @@ window.vmDiskImport = () => {
       <div class="f"><label>Credential Secret ${tip("Optional Secret in the destination namespace containing CDI-compatible accessKeyId and secretKey fields.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
       <div class="f"><label>CA ConfigMap ${tip("Optional ConfigMap in the destination namespace containing the endpoint's CA certificate.")}</label><input id="vd_ca" placeholder="private-ca"></div></div></details>
     ${UI.actions(`<button class="btn pri" onclick="doVmDiskImport()">Start import</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="dim xs" style="margin-top:12px">Progress continues in the active-jobs tray after this dialog closes. Source URLs are not copied into Homestead's operation history.</div>`, true);
+    <div class="dim xs" style="margin-top:12px">Progress continues under Jobs after this dialog closes. Source URLs are not copied into Homestead's operation history.</div>`, true);
 };
 window.doVmDiskImport = async () => {
   const digest = $("#vd_checksum").value.trim();

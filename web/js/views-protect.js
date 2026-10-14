@@ -405,7 +405,7 @@ window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").v
 window.lhRun = async name => {
   try {
     await api("/api/lh/job/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast(`${name} started; follow it in the job tray`, "ok");
+    toast(`${name} started; follow it under Jobs`, "ok");
     setTimeout(() => { resetPaint(); viewProtect(); }, 1500);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -781,7 +781,7 @@ window.lhRestore = async backup => {
     const defaultNs = namespaces.includes(preferred) ? preferred : (namespaces[0] || "default");
     $("#mbody").innerHTML = `
       <div class="note"><b>This creates a new PVC.</b> The backup and its source volume stay unchanged.
-        Restore progress remains in the active-jobs tray if this dialog is closed or Homestead is refreshed.</div>
+        Restore progress stays under Jobs if this dialog is closed or Homestead is refreshed.</div>
       <div class="drow"><div class="dl">Backup</div><div class="dv mono small">${esc(plan.backup)}</div></div>
       <div class="drow"><div class="dl">Source volume</div><div class="dv mono small">${esc(plan.source_volume)}</div></div>
       <div class="drow"><div class="dl">Original capacity</div><div class="dv">${plan.minimum_size_gb} GiB</div></div>

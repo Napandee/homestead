@@ -38,3 +38,14 @@ test("a VM's power and moves are Shut down, Force off and Move to another host; 
   assert.deepEqual(said(/CPU cores|virtual CPUs/), []);
   assert.deepEqual(said(/\} cores?\b|\} core\$\{/, vm.filter(([f]) => f === "views-vms.js")), [], "a VM's CPUs are vCPUs");
 });
+
+test("small drifts: Jobs, Ports and uplinks, and a DHCP reservation said one way", () => {
+  const all = files.map(f => [f, fs.readFileSync(`web/js/${f}`, "utf8")]).concat([["demo.js", fs.readFileSync("web/js/demo.js", "utf8")]]);
+  const said = re => all.flatMap(([f, src]) => prose(src).filter(p => re.test(p.text)).map(p => `${f}: ${p.text.trim().slice(0, 60)}`));
+  assert.deepEqual(said(/job tray|active-jobs tray/), [], "say Jobs");
+  assert.deepEqual(said(/Host ports/), [], "say Ports and uplinks");
+  assert.deepEqual(said(/^reserved$/), [], "UniFi's reservation is a DHCP reservation");
+  const server = fs.readdirSync("server").filter(f => f.endsWith(".py")).flatMap(f => fs.readFileSync(`server/${f}`, "utf8").split("\n")
+    .filter(l => /f?"[^"]*job tray[^"]*"/.test(l) && !/^\s*("""|#)/.test(l) && !/"""|print\(/.test(l)).map(l => `${f}: ${l.trim().slice(0, 60)}`));
+  assert.deepEqual(server, [], "the server's messages say Jobs too");
+});

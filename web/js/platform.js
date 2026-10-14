@@ -102,7 +102,7 @@ window.baselineInstall = async () => {
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
     <ul class="ui-list">${missing.map(p => `<li><b>${esc(p.name)}</b> - ${esc(BASELINE_WORDS[p.id] || p.why)}</li>`).join("")}</ul>
-    <p class="dim xs">Installed through the Helm controller at the versions Homestead has tested; follow each in the job tray.</p>
+    <p class="dim xs">Installed through the Helm controller at the versions Homestead has tested; follow each under Jobs.</p>
     <div id="bl_result"></div>
     ${UI.actions(UI.cancel() + UI.button("Install", "baselineInstallGo()", { kind: "pri", id: "bl_go", attrs: 'data-need="admin"' }))}</div>`;
   window.__baselineMissing = missing.map(p => p.id);

@@ -640,7 +640,7 @@
         shape: { iface: "enp1s0", shape: "nic", bridge: "", carrier_nic: "enp1s0" },
         warnings: ["the host's address moves to bond0: kube-vip restarts there, and on a cluster of several hosts k3s restarts so flannel follows. Containers keep running"] };
     },
-    "/api/node/bond": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node}'s network is changing; follow it in the job tray` }),
+    "/api/node/bond": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node}'s network is changing; follow it under Jobs` }),
     "/api/network/uplinks": () => demoUplinks(),
     "/api/network/uplinks/preview": (url, init) => {
       const req = JSON.parse(init.body), inv = demoUplinks();
@@ -657,7 +657,7 @@
         warnings: config && config.nodes.length > 1 && req.action === "change" ? [`${config.name} is the uplink of ${config.nodes.length} hosts (${config.nodes.join(", ")}): they all change`] : [],
         digest: "demo" };
     },
-    "/api/network/uplinks/apply": () => ({ ok: true, detail: "Sent to Harvester; follow each host in the job tray" }),
+    "/api/network/uplinks/apply": () => ({ ok: true, detail: "Sent to Harvester; follow each host under Jobs" }),
     "/api/nodes/ports": url => {
       const report = demoPorts();
       const node = url.searchParams.get("node");
@@ -868,7 +868,7 @@
     "/api/node/bridge/inspect": (url, init) => ({ node: JSON.parse(init.body).node, interface: "eth0", mac: "18:60:24:f5:e5:09",
       address: "192.0.2.109/24", dhcp: true, gateway: "192.0.2.1", file: "/etc/netplan/00-installer-config.yaml", netplan_id: "eth0",
       services: ["k3s"], bridge: "br0", problem: "", rollback_seconds: 240 }),
-    "/api/node/bridge": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node} is moving to br0; follow it in the job tray` }),
+    "/api/node/bridge": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node} is moving to br0; follow it under Jobs` }),
     "/api/images/scan": { ok: true, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], detail: "asking containerd on 3 nodes for every image" },
     "/api/images/forget-rollback": { ok: true, detail: "home-assistant no longer keeps its previous image; it can be cleaned up now" },
     // Two linked clusters (branch answers, dr-site is off) and staging, added for
@@ -1639,7 +1639,7 @@ ssh_pwauth: true
         host_settings: ["--node-ip", "192.0.2.14"], members: ["harvester-node1", "harvester-node2", "harvester-node3"], replicas: 3 },
       review_token: "demo-promote" }),
     "/api/node/promote": () => ({ ok: true, operation: { id: "demo-promote", kind: "host-promote", status: "running", progress: 10,
-      title: "Make a host a server", message: "Moving apps off" }, detail: "Making the host a server; follow it in the job tray" }),
+      title: "Make a host a server", message: "Moving apps off" }, detail: "Making the host a server; follow it under Jobs" }),
     "/api/quorum": { members: ["harvester-node1", "harvester-node2", "harvester-node3"], ready: ["harvester-node1", "harvester-node2", "harvester-node3"],
       total: 3, quorum_needs: 2, can_lose: 1, power_enabled: true },
     "/api/node/impact": url => ({ node: url.searchParams.get("node"),
