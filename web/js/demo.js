@@ -2719,7 +2719,7 @@ ssh_pwauth: true
   const firewallConfig = {namespace:firewallTargets[0].namespace, name:`homestead-fw-${firewallTargets[0].name}`,
     target:Object.fromEntries(["namespace","name","kind","uid"].map(k => [k,firewallTargets[0][k]])),
     ingress:"restricted", egress:"unchanged", ingress_rules:[{peer:"any",value:"",protocol:"TCP",ports:"80,443"}],egress_rules:[],allow_dns:false};
-  const firewall = {provider:{name:"K3s",detail:"Demo cluster: network-policy enforcement is not tested."},targets:firewallTargets,
+  const firewall = {provider:{name:"K3s",found:true,detail:"Demo cluster: network-policy enforcement is not tested."},targets:firewallTargets,
     namespaces:["lab","default","kube-system"],policies:[{namespace:firewallConfig.namespace,name:firewallConfig.name,
       uid:"demo-firewall",resource_version:"1",managed:true,config:firewallConfig,spec:firewallSpec(firewallConfig)}]};
   responses["/api/firewall"] = () => firewall;
