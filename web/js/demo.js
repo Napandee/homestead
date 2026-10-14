@@ -2957,6 +2957,13 @@ ssh_pwauth: true
       health_issues: [...demoSetup.steps.health.issues, { kind: "Volume", name: "lab/arr-dashboard-data", severity: "degraded", reason: storage.reasons[0].reason }] });
     if (scenario === "critical") {
       nodes[2].status = "NotReady";
+      // A real cluster loses a node's live readings with it (metrics-server and
+      // the kubelet summary stop answering), and its uptime shows it down now.
+      Object.assign(nodes[2], { cpu_pct: 0, mem_pct: 0, mem_used_gb: 0, fs_pct: undefined, fs_used_gb: undefined, fs_cap_gb: undefined,
+        rx_mbps: undefined, tx_mbps: undefined, temps: { disks: [] } });
+      const down = demoUptime.nodes[nodes[2].name], since = Math.floor(Date.now() / 1000) - 1800;
+      down.outages.push({ start: since, end: since + 1800, down_s: 1800, exact: true, ongoing: true });
+      down.windows["24h"] = Math.round(1e5 * (1 - 1800 / 86400)) / 1e3;
       Object.assign(overview, { health: "critical", health_state: "critical", nodes_ready: 2, health_summary: "One node is unavailable" });
       overview.health_issues.unshift({ kind: "Node", name: nodes[2].name, severity: "critical", reason: "Node is not ready" });
       Object.assign(responses["/api/cluster"], { state: "critical", summary: overview.health_summary });

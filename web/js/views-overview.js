@@ -144,6 +144,34 @@ function dashboardScope(o) {
   return `${esc(me?.name || "This cluster")} only · ${count} · the Dashboard doesn't combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's nodes</button>`;
 }
 
+/* A host's state, worked out once for the dashboard, Nodes and its own page
+   (#484): not ready, a drive warning, cordoned or a host OS warning. A drive
+   warning shows even when Kubernetes says Ready. */
+function nodeHealth(n) {
+  const drives = n.temps?.disks || [];
+  const issues = [...new Set([...(n.disk_issues || []).map(i => `${i.disk}: ${i.reason}`),
+    ...drives.filter(d => ["critical", "attention", "degraded"].includes(d.health?.state)).map(d => `${d.name}: ${d.health.summary || "Drive needs attention"}`)])];
+  const ready = n.status === "Ready";
+  const critical = !ready || (n.disk_issues || []).some(i => i.severity === "critical") || drives.some(d => d.health?.state === "critical");
+  const hostOs = ["warn", "bad"].includes(n.host_os?.tone);
+  const tone = critical ? "bad" : issues.length || n.schedulable === false || hostOs ? "warn" : "ok";
+  const status = !ready ? stateWords(n.status) || "Not ready" : issues.length ? "Drive warning"
+    : n.schedulable === false ? "Cordoned" : hostOs ? "Host OS warning" : "Ready";
+  return { tone, status, issues, ready };
+}
+/* The node page's Storage line: its drives, any with a warning, any unused. */
+function nodeStorageLine(n, drives, unused) {
+  const warned = nodeHealth(n).issues.length;
+  return [plural(drives, "drive"), warned ? plural(warned, "warning") : "", unused ? `${unused} unused` : ""].filter(Boolean).join(" · ");
+}
+/* One callout on a node's Overview when it needs doing something about. */
+function nodeAttention(n) {
+  const h = nodeHealth(n);
+  if (h.tone === "ok" || (h.ready && !h.issues.length)) return "";
+  const lines = [!h.ready ? `${n.name} is not answering, so its readings are not current.` : "", ...h.issues];
+  return UI.callout(h.tone === "bad" ? "bad" : "warn", h.status, `<ul class="ui-list">${lines.filter(Boolean).map(l => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${UI.actions(UI.button("Review in Health", "HealthInsights.open('health')"))}`);
+}
 function dashboardNodes(nodes, display="compact") {
   const header=UI.moduleHeader("Node health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
   if(display==="detailed")return `<div class="card flat dashboard-nodes">${header}${nodeComparison(nodes,"dashboard")}</div>`;
@@ -151,20 +179,19 @@ function dashboardNodes(nodes, display="compact") {
   const percent=(label,value,kind)=>`<div class="node-compact-metric"><span>${label}</span><b class="mono">${known(value)?esc(Math.round(value*10)/10)+"%":"—"}</b>${known(value)?meter(value,"",kind):'<span class="node-compact-no-data" title="Not reported">—</span>'}</div>`;
   const line=(label,value,tip="")=>`<div class="node-compact-line"><span>${label}</span><b class="mono" title="${esc(tip)}">${esc(value)}</b></div>`;
   return `<div class="card flat dashboard-nodes">${header}<div class="node-compact-grid">${nodes.map(n=>{
-    const issues=[...(n.disk_issues || []).map(i=>`${i.disk}: ${i.reason}`),...(n.temps?.disks || []).filter(d=>["critical","attention","degraded"].includes(d.health?.state)).map(d=>`${d.name}: ${d.health.summary || "Drive needs attention"}`)];
-    const critical=n.status!=="Ready" || (n.disk_issues || []).some(i=>i.severity==="critical") || (n.temps?.disks || []).some(d=>d.health?.state==="critical");
-    const tone=critical?"bad":issues.length || n.schedulable===false || ["warn","bad"].includes(n.host_os?.tone)?"warn":"ok";
-    const status=n.status!=="Ready"?stateWords(n.status) || "Not ready":issues.length?"Drive warning":n.schedulable===false?"Cordoned":["warn","bad"].includes(n.host_os?.tone)?"Host OS warning":"Ready";
-    const cpuTemp=n.temps?.cpu_c, maxTemp=n.temps?.max_c;
+    const {issues,tone,status,ready}=nodeHealth(n);
+    // A host that isn't answering has no current readings: dashes, not zeros.
+    const live=value=>ready?value:null;
+    const cpuTemp=live(n.temps?.cpu_c), maxTemp=live(n.temps?.max_c);
     const temperature=known(maxTemp)?maxTemp:cpuTemp;
-    const network=known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
+    const network=ready&&known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
     return `<article class="node-compact-host"${clusterAttr(n)}>
       <div class="node-compact-heading">${UI.statusDot(tone,status)}<button class="linkish" onclick="nodeDetail(${jsq(n.name)})" title="${esc(n.name)}">${esc(n.name)}</button></div>
       <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${esc(status)}</div>
-      ${percent("CPU",n.cpu_pct,"cpu")}${percent("Memory",n.mem_pct,"memory")}${percent("Disk",n.fs_pct,"disk")}
+      ${percent("CPU",live(n.cpu_pct),"cpu")}${percent("Memory",live(n.mem_pct),"memory")}${percent("Disk",live(n.fs_pct),"disk")}
       ${line("Network",network,"Receive / transmit")}${line("Max temp",known(temperature)?temperature+"°C"+(known(maxTemp)?tempSource(n.temps):""):"—","Maximum observed host temperature, and the sensor it came from; CPU temperature when no maximum is reported")}
       ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
-      ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc([...new Set(issues)].join("; "))}">${esc([...new Set(issues)].join("; "))}</button>`:""}
+      ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc(issues.join("; "))}">${esc(issues.join("; "))}</button>`:""}
     </article>`;
   }).join("") || '<div class="empty small">No nodes reported.</div>'}</div></div>`;
 }
@@ -358,27 +385,22 @@ function nodePodDots(n) {
     ${'<i></i>'.repeat(Math.min(sys,80))}${'<i class="wl"></i>'.repeat(Math.min(wl,40))}</div>`;
 }
 
-function nodeComparisonMarkup(id) {
-  const { nodes } = nodeComparisons.get(id);
-  const choices = STATE.nodeCompareSelections ||= {};
-  const selected = nodes.find(n => nodeComparisonKey(n) === choices[id]) || nodes[0];
-  choices[id] = nodeComparisonKey(selected);
-  const columns = nodes.map(n => ({ selected: n === selected, attrs: clusterAttr(n), html:
-    `<button type="button" class="comparison-select" aria-pressed="${n === selected}" aria-controls="node-comparison-detail-${id}"
-      aria-label="Select ${esc(n.name)}" onclick="nodeCompareSelect(${jsq(id)},${jsq(nodeComparisonKey(n))})">
-      <span class="comparison-full-name">${esc(n.name)}</span><span class="comparison-short-name">${esc(nodeComparisonLabel(nodes, n.name))}</span></button>${clusterTag(n)}` }));
+/* The rows Nodes compares hosts by. A host that isn't Ready shows dashes
+   for its readings, which would otherwise look current. */
+function nodeComparisonRows(nodes) {
   const metric = (label, value, phone = true) => ({ label, values: nodes.map(value), phone });
   const percent = (value, kind) => value == null ? '<span class="dim">—</span>' : `<b class="mono">${esc(value)}%</b>${meter(value, "", kind)}`;
-  const rows = [
-    metric("Status", n => `<span class="tag ${n.status === "Ready" ? "ok" : "bad"}" data-tip="${esc(n.status)}">${esc(stateWords(n.status))}</span>${n.schedulable === false ? '<span class="tag warn">cordoned</span>' : ""}
-      ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="tag ${n.host_os.tone}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}`),
-    metric("CPU", n => percent(n.cpu_pct, "cpu")),
+  const live = (n, value) => n.status === "Ready" ? value : null;
+  return [
+    metric("Status", n => { const h = nodeHealth(n);
+      return `<span class="tag ${h.tone}" data-tip="${esc([n.status, ...h.issues, n.host_os && h.tone !== "ok" ? n.host_os.text : ""].filter(Boolean).join(" · "))}">${esc(h.status)}</span>`; }),
+    metric("CPU", n => percent(live(n, n.cpu_pct), "cpu")),
     metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>${n.temps?.cpu_model ? `<span class="comparison-note">${esc(n.temps.cpu_model)}</span>` : ""}`),
-    metric("Memory", n => `${percent(n.mem_pct, "memory")}<span class="comparison-note">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span>`),
+    metric("Memory", n => n.status === "Ready" ? `${percent(n.mem_pct, "memory")}<span class="comparison-note">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span>` : percent(null)),
     ...Array.from({length:Math.max(1,...nodes.map(n => (n.disks || []).length))}, (_, i) =>
       metric(`Storage ${i + 1}`, n => n.disks?.length ? comparisonDisk(n,n.disks[i]) : i ? '<span class="dim">—</span>' : comparisonDisk(n,{device:"filesystem",name:"Node filesystem",root_fs:true,system:true,size_gb:n.fs_cap_gb}), false)),
-    metric("Network", n => `<span class="mono small">${ratePair(n.rx_mbps, n.tx_mbps).join(" ")}</span>`, false),
-    metric("Temp", n => n.temps?.cpu_c == null ? '<span class="dim">—</span>' : `<span class="mono ${tempCls(n.temps.cpu_c)}">${esc(n.temps.cpu_c)}°C</span>`),
+    metric("Network", n => n.status === "Ready" ? `<span class="mono small">${ratePair(n.rx_mbps, n.tx_mbps).join(" ")}</span>` : '<span class="dim">—</span>', false),
+    metric("Temp", n => n.status !== "Ready" || n.temps?.cpu_c == null ? '<span class="dim">—</span>' : `<span class="mono ${tempCls(n.temps.cpu_c)}">${esc(n.temps.cpu_c)}°C</span>`),
     metric("Pods", n => `<b class="mono">${esc(n.pods ?? "—")}</b>${nodePodDots(n)}`),
     metric("VMs", n => `<span class="mono">${esc(n.vms ?? 0)}</span>`),
     metric("Uptime", n => `${nodeUptimeStrip(n)}<span class="comparison-note">${esc(nodeUpFor(n) || "—")}</span>`),
@@ -388,6 +410,18 @@ function nodeComparisonMarkup(id) {
     metric("Workloads", n => `<span class="small">${esc((n.workloads || []).join(", ") || "None")}</span>`, false),
     metric("Details", n => actionBar([{label:"Open node",run:`nodeDetail(${jsq(n.name)})`,icon:"node"}]), false)
   ];
+}
+
+function nodeComparisonMarkup(id) {
+  const { nodes } = nodeComparisons.get(id);
+  const choices = STATE.nodeCompareSelections ||= {};
+  const selected = nodes.find(n => nodeComparisonKey(n) === choices[id]) || nodes[0];
+  choices[id] = nodeComparisonKey(selected);
+  const columns = nodes.map(n => ({ selected: n === selected, attrs: clusterAttr(n), html:
+    `<button type="button" class="comparison-select" aria-pressed="${n === selected}" aria-controls="node-comparison-detail-${id}"
+      aria-label="Select ${esc(n.name)}" onclick="nodeCompareSelect(${jsq(id)},${jsq(nodeComparisonKey(n))})">
+      <span class="comparison-full-name">${esc(n.name)}</span><span class="comparison-short-name">${esc(nodeComparisonLabel(nodes, n.name))}</span></button>${clusterTag(n)}` }));
+  const rows = nodeComparisonRows(nodes);
   return `<section class="card flat pad0 node-comparison" id="node-comparison-${id}">
     ${nodes.length > 4 ? `<div class="cardhd comparison-scroll-hint"><span class="dim small">${nodes.length} nodes · scroll to compare →</span></div>` : ""}
     ${comparisonTable(columns, rows, "Node health and capacity")}
@@ -564,7 +598,8 @@ async function nodePage(name) {
   const fact = (label, value) => `<div><span>${label}</span><b>${value}</b></div>`;
   // Sorted by what you came to find out, as Settings is.
   const sections = [
-    ["overview", "Overview", n.status === "Ready" ? esc(nodeUpFor(n)) : esc(n.status), `
+    ["overview", "Overview", n.status === "Ready" ? esc(nodeUpFor(n)) : esc(stateWords(n.status)), `
+      ${nodeAttention(n)}
       <div class="card flat node-picture">${window.Diagram ? Diagram.node(n) : ""}</div>
       <div class="card flat"><div id="nodeUptime"><div class="dim small"><span class="spin2"></span></div></div></div>
       <div class="card flat"><div class="about-grid node-facts">
@@ -577,7 +612,7 @@ async function nodePage(name) {
     ["workloads", "Workloads", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
       <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
         <div id="nodeChipsCard">${(nodeRemember(n), nodeWorkloadChips(n))}</div></div>`],
-    ["storage", "Storage", `${drives} drive${drives === 1 ? "" : "s"}${unused ? ` · ${unused} unused` : ""}`, `
+    ["storage", "Storage", nodeStorageLine(n, drives, unused), `
       <div class="card flat" id="nodeDrive" hidden></div>
       <div id="nodeDrives" class="node-drives">
       <div class="card flat"><div class="ctitle">Drives</div><div class="csub">Every drive on this host, and Longhorn's storage on it</div>
@@ -639,11 +674,13 @@ async function nodePage(name) {
   if (window.nodePortsPaint) nodePortsPaint(n);
 }
 function nodePageSummary(n) {
-  return `<span class="sumitem"><span class="pill ${n.status === "Ready" ? "ok" : "crit"}" data-tip="${esc(n.status)}">${esc(stateWords(n.status))}</span></span>
-    <span class="sumitem">CPU <b>${n.cpu_pct}%</b> of ${n.cpu_cap}</span>
-    <span class="sumitem">RAM <b>${n.mem_used_gb}/${n.mem_cap_gb} GB</b></span>
-    <span class="sumitem">Disk <b>${n.fs_used_gb}/${n.fs_cap_gb} GB</b></span>
-    ${n.temps?.cpu_c != null ? `<span class="sumitem">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c}°C</b></span>` : ""}
+  const h = nodeHealth(n), known = value => h.ready && value != null && value !== "";
+  const pair = (used, cap) => known(used) && known(cap) ? `${esc(used)}/${esc(cap)} GB` : "—";
+  return `<span class="sumitem"><span class="pill ${h.tone === "bad" ? "crit" : h.tone}" data-tip="${esc([n.status, ...h.issues].join(" · "))}">${esc(h.status)}</span></span>
+    <span class="sumitem">CPU <b>${known(n.cpu_pct) ? `${esc(n.cpu_pct)}%` : "—"}</b> of ${esc(n.cpu_cap ?? "—")}</span>
+    <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
+    <span class="sumitem">Disk <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
+    ${known(n.temps?.cpu_c) ? `<span class="sumitem">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c}°C</b></span>` : ""}
     ${n.schedulable ? "" : '<span class="sumitem"><span class="tag warn">cordoned</span></span>'}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */
