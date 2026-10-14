@@ -279,7 +279,7 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
   box-shadow:0 24px 70px rgba(0,0,0,.75);backdrop-filter:blur(24px);z-index:60}
 .searchresults.hidden{display:none}.searchloading{padding:15px;color:var(--dim);font-size:12px}
 .sresult{width:100%;display:flex;align-items:center;gap:11px;text-align:left;border:0;border-radius:11px;
-  padding:10px;background:transparent;color:var(--tx);cursor:pointer}.sresult:hover{background:rgba(255,255,255,.08)}
+  padding:10px;background:transparent;color:var(--tx);cursor:pointer}.sresult:hover,.sresult[aria-selected="true"]{background:rgba(255,255,255,.08)}
 .sresult img,.smark{width:28px;height:28px;border-radius:8px;object-fit:contain;background:rgba(255,255,255,.07);display:grid;place-items:center}
 .sresult span{min-width:0}.sresult b{display:block;font-size:12.5px}.sresult small{display:block;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .iconbtn{

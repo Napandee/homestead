@@ -44,6 +44,7 @@ case "${1:-}" in
     ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
     node scripts/check_dashboard_storage.mjs
     node scripts/check_collection_layouts.mjs
+    SEARCH_SCREENSHOTS=release-assets/pages/global-search node scripts/check_global_search.mjs
     ;;
   pages-setup)
     node scripts/check_setup_guide.mjs
