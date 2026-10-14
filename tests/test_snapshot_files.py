@@ -238,7 +238,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_all_routes_require_admin(self):
         for method, action in [('GET', a) for a in ('plan','status','list','download')] + [('POST', a) for a in ('start','close')]:
-            self.assertEqual('admin', POLICY.POLICY[method, '/api/snapshot-files/' + action])
+            self.assertEqual('admin', POLICY.role('/api/snapshot-files/' + action, method))
 
 
 class DownloadTests(unittest.TestCase):

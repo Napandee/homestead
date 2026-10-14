@@ -111,12 +111,12 @@ class StorageGuardTests(unittest.TestCase):
             self.assertIn("protected", str(handler._send.call_args.args[1]))
 
     def test_dispatcher_preserves_legacy_engine_and_never_downgrades_unknown_protocol(self):
-        self.assertIs(server.storage_move_progress, ops.RESOLVERS["reclass"])
+        self.assertIs(server.STORAGE_ROUTES.storage_move_progress, ops.RESOLVERS["reclass"])
         with mock.patch.object(server.RECLASS, "resolve", return_value=("running", 1, "legacy")) as legacy:
-            self.assertEqual("legacy", server.storage_move_progress(self.item)[2])
+            self.assertEqual("legacy", server.STORAGE_ROUTES.storage_move_progress(self.item)[2])
             legacy.assert_called_once_with(self.item)
             self.item["ref"].update(storage_protocol=999, handoff_phase="copy")
-            self.assertEqual("failed", server.storage_move_progress(self.item)[0])
+            self.assertEqual("failed", server.STORAGE_ROUTES.storage_move_progress(self.item)[0])
             self.assertEqual(1, legacy.call_count)
             self.assertTrue(self.item["ref"]["retain_resources"])
 
@@ -158,7 +158,7 @@ class StorageGuardTests(unittest.TestCase):
             revert.assert_not_called(); cancel.assert_not_called(); delete.assert_not_called()
             # Read-only previews remain available, and unrelated backing data
             # does not become globally unavailable just because a move exists.
-            server.storage_volume_action("unrelated", self.dispatch)
+            server.STORAGE_ROUTES.storage_volume_action("unrelated", self.dispatch)
             self.dispatch.assert_called_once()
 
     def test_failed_and_cancelled_records_keep_protection_even_if_tracking_hidden(self):

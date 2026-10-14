@@ -25,7 +25,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         resolver = Mock()
         with patch.object(server.LH, "_get_or_none", return_value=None), \
              patch.object(server.LH, "restore_backup", return_value={"created": False, "message": "Installing CSI snapshots"}) as restore:
-            self.assertEqual(("running", 2, "Installing CSI snapshots"), server._restore_then_tidy(self.item, resolver))
+            self.assertEqual(("running", 2, "Installing CSI snapshots"), server.STORAGE_ROUTES._restore_then_tidy(self.item, resolver))
         restore.assert_called_once_with(self.cfg)
         resolver.assert_not_called()
         self.assertFalse(self.item["ref"]["restore_started"])
@@ -34,7 +34,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
              patch.object(server.LH, "restore_backup") as restore, \
              patch.object(server.LH, "restore_problem", return_value=""):
-            result = server._restore_then_tidy(self.item, lambda item: ("running", 30, "Restoring data"))
+            result = server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("running", 30, "Restoring data"))
         self.assertEqual("running", result[0])
         self.assertTrue(self.item["ref"]["restore_started"])
         restore.assert_not_called()
@@ -44,13 +44,13 @@ class RestoreRecoveryTests(unittest.TestCase):
         with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
              patch.object(server.LH, "restore_backup") as restore:
             with self.assertRaisesRegex(ValueError, "another operation"):
-                server._restore_then_tidy(self.item, Mock())
+                server.STORAGE_ROUTES._restore_then_tidy(self.item, Mock())
             restore.assert_not_called()
         self.item["ref"]["restore_started"] = True
         with patch.object(server.LH, "_get_or_none", return_value=None), \
              patch.object(server.LH, "restore_backup") as restore, \
              patch.object(server, "cleanup_restores"):
-            result = server._restore_then_tidy(self.item, lambda item: ("failed", 0, "Destination deleted"))
+            result = server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("failed", 0, "Destination deleted"))
         self.assertEqual("failed", result[0])
         restore.assert_not_called()
 
@@ -60,7 +60,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         resolver = Mock()
         with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
              patch.object(server.LH, "restore_problem", return_value="backup is unavailable"):
-            result = server._restore_then_tidy(self.item, resolver)
+            result = server.STORAGE_ROUTES._restore_then_tidy(self.item, resolver)
         self.assertEqual("failed", result[0])
         self.assertIn("backup is unavailable", result[2])
         resolver.assert_not_called()
@@ -70,7 +70,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.item["status"] = "queued"
         with patch.object(server.LH, "_get_or_none", return_value=None), \
              patch.object(server.LH, "restore_backup", return_value={"created": False, "message": "Waiting"}):
-            self.assertEqual("running", server._restore_then_tidy(self.item, Mock())[0])
+            self.assertEqual("running", server.STORAGE_ROUTES._restore_then_tidy(self.item, Mock())[0])
         self.assertGreater(self.cfg["snapshot_wait_started"], 1)
 
     def test_growth_waits_for_data_restore_then_checks_class_fresh(self):
@@ -78,7 +78,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
              patch.object(server.LH, "restore_problem", return_value=""), \
              patch.object(server.LH, "finish_restore_resize") as grow:
-            server._restore_then_tidy(self.item, lambda item: ("running", 50, "Restoring"))
+            server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("running", 50, "Restoring"))
             grow.assert_not_called()
         with patch.object(CSI, "kget", return_value={"allowVolumeExpansion": True}), \
              patch.object(CSI, "ksend") as send:
