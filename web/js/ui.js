@@ -67,6 +67,16 @@ const UI = (() => {
     </div>`;
   };
 
+  /* Several concerns as one notice (design.md: one per dialog): the worst
+     tone, a line each. items: [[tone, text], ...]; "" when there are none. */
+  const notices = (items, title = "") => {
+    const rows = (items || []).filter(([, text]) => text);
+    if (!rows.length) return "";
+    const worst = ["bad", "warn", "info"].find(t => rows.some(([tone]) => tone === t)) || "info";
+    if (rows.length === 1) return callout(worst, title, `<p>${text(rows[0][1])}</p>`);
+    return callout(worst, title, `<ul class="ui-list">${rows.map(([, t]) => `<li>${text(t)}</li>`).join("")}</ul>`);
+  };
+
   const section = (title, bodyHtml, asideHtml = "") => `<section class="ui-section">
     ${title || asideHtml ? `<header><h4>${text(title)}</h4>${asideHtml ? `<div class="ui-section-aside">${asideHtml}</div>` : ""}</header>` : ""}
     ${bodyHtml}</section>`;
@@ -321,7 +331,7 @@ const UI = (() => {
     document.addEventListener("focusout", event => { const box = event.target.closest?.(".qty"); if (box) quantityUpdate(box); });
   }
 
-  return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
+  return { lead, callout, notices, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

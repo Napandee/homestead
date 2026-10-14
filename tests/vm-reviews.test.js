@@ -39,3 +39,24 @@ test("a schedule set in another time zone says so in its time line, not as a sec
   assert.doesNotMatch(html, /ui-callout/);
   assert.ok(html.includes(`Times in ${zone}. These times were set in Pacific/Chatham; saving sets them in ${zone}.`), html);
 });
+
+test("several concerns make one notice, in the worst tone, with a line each", () => {
+  const c = context();
+  assert.equal(c.UI.notices([]), "");
+  const html = c.UI.notices([["warn", "Hugepages need a reboot"], ["bad", "GPU output needs UEFI"], ["info", "Serial is on"]], "Check before saving");
+  assert.equal((html.match(/class="ui-callout /g) || []).length, 1);
+  assert.match(html, /ui-callout bad/);
+  assert.equal((html.match(/<li>/g) || []).length, 3);
+  assert.match(c.UI.notices([["warn", "Only one"]]), /ui-callout warn[\s\S]*Only one/);
+});
+
+test("the VM hardware pane shows its concerns as one notice", () => {
+  const c = context();
+  vm.runInContext(fs.readFileSync("web/js/vm-hardware.js", "utf8"), c);
+  const box = { innerHTML: "" };
+  c.document.querySelector = id => id === "#vh_notes" ? box : id === "#vh" ? {} : null;
+  vm.runInContext(`vmHardwareValues = () => ({ cpu: {} }); vmHardwareNotes = () => [["warn", "one"], ["bad", "two"], ["warn", "three"]];`, c);
+  c.vmHardwareChanged();
+  assert.equal((box.innerHTML.match(/class="ui-callout /g) || []).length, 1);
+  assert.doesNotMatch(box.innerHTML, /class="note/);
+});

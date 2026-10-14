@@ -16,7 +16,7 @@ function setup() {
     ask: async text => { questions.push(text); return false; },
     $: key => fields[key], $$: selector => selector === "#mbody .pd-add" || selector === "#pd_adds .pd-add" ? rows.added : rows.all,
     esc: value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;"),
-    UI: {lead: String, actions: String, chip: String, section: (label, html) => `${label}${html}`, table: (_, rows) => rows.flat().join(""), button: (label, handler) => `${label} ${handler}`, more: (label, html) => `${label}${html}`, callout: (_, label, detail) => `${label}${detail}`}};
+    UI: {notices: items => (items || []).filter(([, text]) => text).map(([, text]) => String(text).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;")).join(" "), lead: String, actions: String, chip: String, section: (label, html) => `${label}${html}`, table: (_, rows) => rows.flat().join(""), button: (label, handler) => `${label} ${handler}`, more: (label, html) => `${label}${html}`, callout: (_, label, detail) => `${label}${detail}`}};
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(fs.readFileSync("web/js/passthrough.js", "utf8"), ctx);
   return {ctx, fields, rows, body, requests, answers, questions};
@@ -95,7 +95,7 @@ test("overlapping configurations stay selectable and escaped holder names explai
   inventory.resources[0].configured_vms = ["lab/<holder>", "lab/stopped"];
   const html = t.ctx.vmDevicesPane({}, inventory);
   assert.match(html, /in use by lab\/&lt;holder>/);
-  assert.match(html, /Shared configurations/);
+  assert.match(html, /GPU is set up on lab\/&lt;holder>, lab\/stopped/);
   assert.match(html, /Configurations may overlap; Start checks/);
   assert.ok(!html.includes("<holder>"));
   t.ctx.vmAddHostDevice();
@@ -147,7 +147,7 @@ test("failed refresh retains the inventory and offers retry", async () => {
   await t.ctx.nodeDevicesPaint("node1");
   t.answers["/api/passthrough/inspect"] = () => { throw new Error("host unavailable"); };
   await t.ctx.nodeDevicesLook("node1");
-  assert.match(t.body.innerHTML, /Refresh failed; showing the last inspection/);
+  assert.match(t.body.innerHTML, /Refresh failed, so this is the last inspection/);
   assert.match(t.body.innerHTML, /Named GPU/);
   assert.match(t.body.innerHTML, /Refresh devices/);
 });
