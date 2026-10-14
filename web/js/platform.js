@@ -244,7 +244,7 @@ window.hostConsoleNow = async (node, button) => {
 
 window.hostConsoleSet = async input => {
   const on = input.checked;
-  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts."))) {
+  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts.", { title: "Remove the host console", ok: "Remove", danger: true }))) {
     input.checked = true; return;
   }
   try {
@@ -255,7 +255,7 @@ window.hostConsoleSet = async input => {
 };
 
 window.kubevirtEmulation = async enabled => {
-  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted."))) return;
+  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted.", { title: "Allow software emulation", ok: "Allow" }))) return;
   try {
     const result = await api("/api/addons/kubevirt/emulation", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }) });
@@ -265,7 +265,7 @@ window.kubevirtEmulation = async enabled => {
 };
 
 window.multusRepair = async () => {
-  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout."))) return;
+  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
   try {
     const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     toast(r.detail, "ok");
@@ -278,14 +278,14 @@ window.addonInstall = async key => {
   let body = {};
   if (key === "kubevirt") {
     const s = await api("/api/addons").catch(() => ({}));
-    if (s.kvm_nowhere && !(await ask("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?"))) return;
+    if (s.kvm_nowhere && !(await ask("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
     body = {};
   } else if (key === "kube-vip") {
     const s = await api("/api/addons").catch(() => ({}));
     const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each node's default route uses.`
       : "The nodes did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
-    if (!(await ask(`Install kube-vip? ${a.needs} ${where}`))) return;
-  } else if (!(await ask(`Install ${a.name}? ${a.needs}`))) return;
+    if (!(await ask(`Install kube-vip? ${a.needs} ${where}`, { title: "Install kube-vip", ok: "Install" }))) return;
+  } else if (!(await ask(`Install ${a.name}? ${a.needs}`, { title: `Install ${a.name}`, ok: "Install" }))) return;
   try {
     const r = await api(`/api/addons/${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail || `${a.name} is being installed`, "ok");

@@ -3,7 +3,7 @@
   --hdr:74px; --blur:26px;
   --bg:#070708; --surf:#111113; --surf2:#161618; --surf3:#1d1d20;
   --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.13);
-  --tx:#f3f3f5; --mut:#8d8d95; --dim:#5b5b63;
+  --tx:#f3f3f5; --mut:#8d8d95; --dim:#84848d;
   --crit:#ff4d4f; --high:#ff7a45; --med:#ffb020; --low:#4a9eff; --ok:#3ddc91; --vio:#a78bfa;
   --r:20px; --r2:14px;
   --e:cubic-bezier(.22,.61,.36,1);
@@ -20,7 +20,7 @@ html[data-theme="light"] .modalbox[data-context="longhorn-v2"] .ui-steps .curren
 html[data-theme="light"]{
   --bg:#ececed; --surf:#ffffff; --surf2:#f6f6f7; --surf3:#ebebee;
   --line:rgba(0,0,0,.09); --line2:rgba(0,0,0,.16);
-  --tx:#16161a; --mut:#5c5c66; --dim:#74747f;
+  --tx:#16161a; --mut:#5c5c66; --dim:#686872;
   /* Status colours deep enough to read as text on white (4.5:1 or near):
      the dark theme's are made for a black ground and vanish on this one. */
   --crit:#c8232c; --high:#b8460b; --med:#9a5b00; --low:#1a64c2; --ok:#0b7a48; --vio:#6a4bd1;
@@ -279,7 +279,7 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
   box-shadow:0 24px 70px rgba(0,0,0,.75);backdrop-filter:blur(24px);z-index:60}
 .searchresults.hidden{display:none}.searchloading{padding:15px;color:var(--dim);font-size:12px}
 .sresult{width:100%;display:flex;align-items:center;gap:11px;text-align:left;border:0;border-radius:11px;
-  padding:10px;background:transparent;color:var(--tx);cursor:pointer}.sresult:hover{background:rgba(255,255,255,.08)}
+  padding:10px;background:transparent;color:var(--tx);cursor:pointer}.sresult:hover,.sresult[aria-selected="true"]{background:rgba(255,255,255,.08)}
 .sresult img,.smark{width:28px;height:28px;border-radius:8px;object-fit:contain;background:rgba(255,255,255,.07);display:grid;place-items:center}
 .sresult span{min-width:0}.sresult b{display:block;font-size:12.5px}.sresult small{display:block;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .iconbtn{
@@ -1009,10 +1009,8 @@ html[data-theme="light"] .modalbox:has(#net_editor){background:var(--surf);color
 html[data-theme="light"] .modalbox:has(.update-review),html[data-theme="light"] .modalbox:has(#imageQueue){background:var(--surf);color:var(--tx)}
 html[data-theme="light"] .modalbox[data-context="operation-review"]{background:var(--surf);color:var(--tx)}
 html[data-theme="light"] .modalbox[data-context="vm-config"]{background:var(--surf);color:var(--tx)}
-.modalbox[data-context="vm-config"] .dim{color:var(--mut)}
 html[data-theme="light"] .modalbox[data-context="operation-review"] .note.warn{color:#824600}
 .modalbox[data-context="operation-review"] .modalhead{background:var(--surf)}
-.modalbox:has(#allocationProbeDirectory) .dim{color:var(--mut)}
 .vm-placement-advanced{margin:16px 0}.vm-placement-advanced summary{cursor:pointer;color:var(--mut);padding:8px 0}.vm-placement-advanced[open] summary{margin-bottom:8px}.vm-placement-advanced p,#allocationProbeDiagnostics p{overflow-wrap:anywhere}
 html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[data-theme="light"] #net_editor .net-address-choice:has(input:checked){background:#edf5ff}
 .net-current-access{display:flex;flex-direction:column;gap:7px;background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 20px;overflow-wrap:anywhere}
@@ -1089,7 +1087,6 @@ html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-callout.wa
 html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-bar{background:var(--line2)}
 html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-bar i{background:var(--tx)}
 html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-steps .current .ui-step-num{background:var(--tx);color:var(--surf);border-color:var(--tx)}
-.modalbox[data-context="snapshot-files"] .dim{color:var(--mut)}
 .snapshot-content{flex:1;min-width:0;padding:12px 16px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(135deg,rgba(100,140,240,.08),transparent)}
 .snapshot-content .between{gap:8px;flex-wrap:wrap}.snapshot-content b{overflow-wrap:anywhere;min-width:0}
 .snapshot-date{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:7px 0;font-size:12px}

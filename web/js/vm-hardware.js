@@ -306,7 +306,7 @@ window.vmIsoPrepare = async (share, path) => {
 };
 
 window.vmIsoDelete = async name => {
-  if (!(await ask("Delete this ISO's volume? The file on the share is kept, and it can be made ready again."))) return;
+  if (!(await ask("Delete this ISO's volume? The file on the share is kept, and it can be made ready again.", { title: "Delete ISO volume", ok: "Delete", danger: true }))) return;
   try {
     const r = await api("/api/vm/isos/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast(r.detail, "ok");

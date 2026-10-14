@@ -108,7 +108,7 @@ For manual removal, delete only
 ## First sign-in
 
 Open `http://<address>:8088`. The first visit asks for an administrator's name
-and password, and that account can then add others under **Settings → Access → Manage users**:
+and password, and that account can then add others under **Settings → Users and access → Add user**:
 
 | Role | Can |
 |---|---|
