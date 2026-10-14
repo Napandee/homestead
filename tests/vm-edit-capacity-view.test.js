@@ -15,7 +15,7 @@ function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
       if(fail)throw new Error("connection lost");
       return {ok:true,detail:"saved"};
     }};
-  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   ctx.vmPowerReview=async config=>restarts.push(config);
   return {ctx,fields,sent,restarts};
 }
@@ -132,7 +132,7 @@ test("isolation guards Add interface and save discards stale NIC rows",async()=>
 
 test("isolation change is explicit in the edit review",async()=>{
   const t=setup();await t.ctx.vmEditReview({name:'guest',ns:'lab',isolated:true});
-  assert.match(t.fields['#mbody'].innerHTML,/Isolated VM/);
-  assert.match(t.fields['#mbody'].innerHTML,/removes all virtual network cards/);
-  assert.match(t.fields['#mbody'].innerHTML,/at next start/);
+  assert.match(t.fields['#mbody'].innerHTML,/Isolated:/);
+  assert.match(t.fields['#mbody'].innerHTML,/all virtual network cards are removed/);
+  assert.match(t.fields['#mbody'].innerHTML,/at the next start/);
 });

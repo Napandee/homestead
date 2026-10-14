@@ -60,3 +60,45 @@ test("the VM hardware pane shows its concerns as one notice", () => {
   assert.equal((box.innerHTML.match(/class="ui-callout /g) || []).length, 1);
   assert.doesNotMatch(box.innerHTML, /class="note/);
 });
+
+function vmContext(review) {
+  const c = context(), shown = {}, body = { innerHTML: "" };
+  for (const file of ["views-lifecycle.js", "views-vms.js"]) vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
+  c.api = async () => review;
+  c.childModal = (title, html) => { shown.title = title; shown.html = html; body.innerHTML = html; };
+  c.document.querySelector = id => id === "#mbody" ? body : id === "#vmEditLoading" ? {} : null;
+  c.toast = (text) => { shown.toast = text; };
+  return { c, shown, body };
+}
+const vmPlan = extra => ({ blocked: false, pod_request_gb: 2.3, pod_cpu_request_percent: 20, additional: 1, candidates: [],
+  placement: {}, blockers: [], concerns: [], unbounded: [], vm: { policy_before: "Always", policy_after: "Always" }, ...extra });
+const created = { config: { namespace: "default", name: "win11", cores: 4, memory: "8Gi", mac: "02:00:00:00:00:01", network: "pod" },
+  capacity_token: "t", volumes: [{ name: "win11-disk", size: "64Gi", access_mode: "RWO", volume_mode: "Block", storage_class: "longhorn-r2" }] };
+
+test("New VM's review reads like a container start", async () => {
+  const { c, shown } = vmContext({ ...created, capacity: vmPlan() });
+  await c.vmCreateReview({ name: "win11" });
+  assert.match(shown.title, /win11/);
+  assert.doesNotMatch(shown.html, /reviewbox/);
+  assert.match(shown.html, /class="ui-lead"[^>]*>Creates <b>win11<\/b>/);
+  assert.match(shown.html, /win11-disk/);
+  assert.doesNotMatch(shown.html, /vmCreateApprove/, "nothing to accept, no tickbox");
+  assert.match(shown.html, />Create VM</);
+  const warned = vmContext({ ...created, capacity: vmPlan({ unbounded: ["win11"] }) });
+  await warned.c.vmCreateReview({ name: "win11" });
+  assert.equal((warned.shown.html.match(/class="ui-callout /g) || []).length, 1);
+  assert.match(warned.shown.html, /Create it anyway/);
+});
+
+test("Edit VM's review names its result and asks for nothing when nothing is risky", async () => {
+  const { c, body } = vmContext({ capacity_token: "t", capacity: vmPlan({ warnings: [] }), volumes: [] });
+  await c.vmEditReview({ ns: "default", name: "win11", cores: 4 });
+  assert.doesNotMatch(body.innerHTML, /reviewbox|class="note warn"><\/div>/);
+  assert.doesNotMatch(body.innerHTML, /vmEditApprove/);
+  assert.match(body.innerHTML, />Save changes</);
+  assert.doesNotMatch(body.innerHTML, /Save reviewed changes/);
+  const warned = vmContext({ capacity_token: "t", capacity: vmPlan({ warnings: ["Memory changes need a restart to apply"] }), volumes: [] });
+  await warned.c.vmEditReview({ ns: "default", name: "win11", memory: "16Gi" });
+  assert.equal((warned.body.innerHTML.match(/class="ui-callout /g) || []).length, 1);
+  assert.match(warned.body.innerHTML, /Save it anyway/);
+});

@@ -634,18 +634,24 @@ window.vmEditReview = async (config, restartAfter = false) => {
       throw new Error("VM edit review unavailable. Nothing was saved; go back and review again.");
     VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
     const plan = review.capacity, facts = plan.vm || {};
-    $("#mbody").innerHTML = `<div class="update-review">
-      <div class="reviewbox"><b>Save ${esc(frozen.name)}</b><p class="small">${esc(frozen.cores ?? "Unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}</p>
-        ${frozen.isolated ? '<p class="small"><b>Isolated VM</b> - removes all virtual network cards and disables automatic attachment at next start.</p>' : frozen.isolated === false ? '<p class="small">Virtual network cards are allowed. No automatic card is added when the last interface is removed.</p>' : ""}
-        <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after || "unknown")}</p>
-        <p class="small muted">${facts.admission_needed ? "Resource and policy changes may take effect immediately through KubeVirt. Host RAM estimates include launcher overhead but are not a configured memory limit." : "No new launcher capacity is needed for this metadata or stop/manual-policy edit."}</p></div>
-      ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
-      ${facts.admission_needed ? deployCapacityHtml(plan) : `<div class="note warn">${(plan.warnings || []).map(esc).join(" ")}</div>`}
-      ${vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady")}
-      ${review.volumes?.length ? `<div class="reviewbox"><b>New disks</b>${review.volumes.map(v => `<p class="small"><span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)} · ${esc(v.access_mode)}</p>`).join("")}</div>` : ""}
-      <p class="small muted">${restartAfter ? "After saving, a separate restart review checks the saved VM and current host capacity. Saving does not automatically send Restart." : "Save sends no Restart request. If needed, restart the VM through its power controls afterward."}</p>
-      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmEditApprove" onchange="vmEditReviewReady()"> Save these exact changes and accept the displayed memory, policy and partial-save risks</label>' : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save reviewed changes</button>`)}</div>`;
+    const changes = UI.facts([
+      frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}`] : null,
+      frozen.isolated ? ["Network", "Isolated: all virtual network cards are removed at the next start"]
+        : frozen.isolated === false ? ["Network", "Virtual network cards are allowed"] : null,
+      facts.policy_after && facts.policy_after !== facts.policy_before ? ["Restart policy", `${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after)}`] : null,
+      review.volumes?.length ? ["New disks", review.volumes.map(v => `<span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)}`).join("<br>")] : null]);
+    const after = `<p class="ui-help">${restartAfter ? "After saving, a separate restart review checks the saved VM and host capacity; saving sends no restart." : "Saving sends no restart. Restart the VM from its power controls if a change needs it."}</p>`;
+    const warnings = plan.warnings || [];
+    $("#mbody").innerHTML = (facts.admission_needed
+      ? startReview(plan, { what: "Saves", name: frozen.name, objects: changes + vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), warnings,
+          ackId: "vmEditApprove", onAck: "vmEditReviewReady()",
+          details: `${after}<p class="ui-help">Resource and policy changes can take effect at once through KubeVirt. Host RAM estimates include launcher overhead; they are not a memory limit.</p>` })
+      : [UI.lead(`Saves <b>${esc(frozen.name)}</b>. It needs no new room on a host.`),
+        UI.notices([...(plan.blockers || []).map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], plan.blockers?.length ? "Can't save" : "Check first"),
+        changes, vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), UI.more("Details", after),
+        !plan.blocked && warnings.length ? UI.ack("vmEditApprove", reviewAck("Saves"), { onchange: "vmEditReviewReady()" }) : ""].join(""))
+      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save changes</button>`);
+    vmEditReviewReady();
   } catch (error) {
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
     VM_EDIT_REVIEW = null;
@@ -654,12 +660,13 @@ window.vmEditReview = async (config, restartAfter = false) => {
 };
 window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
 window.vmEditReviewReady = () => {
-  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && $("#vmEditApprove")?.checked && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
+  // The tickbox is there only when there is something to accept.
+  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && (!$("#vmEditApprove") || $("#vmEditApprove").checked) && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
   if ($("#vmEditApply")) $("#vmEditApply").disabled = !ready;
   return ready;
 };
 window.vmEditReviewedApply = async () => {
-  if (!vmEditReviewReady()) return toast("Review and acknowledge these VM changes first", "bad");
+  if (!vmEditReviewReady()) return toast(`Tick ${reviewAck("Saves")} to accept the warnings first`, "bad");
   const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
   VM_EDIT_REVIEW = null;
   VM_EDIT_BUSY = true;
