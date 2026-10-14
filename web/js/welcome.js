@@ -52,7 +52,7 @@ window.setupNavigation = view => {
   if (!host) return;
   host.classList.toggle("hidden", !SETUP_STEPS[step]);
   host.innerHTML = SETUP_STEPS[step] ? `<div class="setup-return-copy"><b>Setup in progress</b><div>${esc(SETUP_STEPS[step].title)}</div></div>
-    <div class="row">${UI.button("Return to setup", `setupOpen(${jsArg(step)})`)}<button class="iconbtn" type="button" onclick="setupDismissVisit()" aria-label="Dismiss setup return bar" title="Dismiss"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>` : "";
+    <div class="row">${UI.button("Return to setup", `setupOpen(${jsArg(step)})`, { kind: "pri" })}<button class="iconbtn" type="button" onclick="setupDismissVisit()" aria-label="Dismiss setup return bar" title="Dismiss"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>` : "";
 };
 window.setupDismissVisit = () => { setupVisit(""); $("#setupReturn")?.classList.add("hidden"); };
 

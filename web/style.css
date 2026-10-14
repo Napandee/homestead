@@ -2974,12 +2974,8 @@ html[data-theme="light"] .setup-meter{background:rgba(0,0,0,.08)}
 @keyframes setuppulse{0%,100%{opacity:1;color:var(--tx)}50%{opacity:.4;color:var(--mut)}}
 @media(prefers-reduced-motion:reduce){.iconbtn.setupbtn.pulse svg{animation:none}}
 html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
-.setup-return{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 26px;border-bottom:1px solid #1f8758;background:var(--ok);color:#062a1b;position:sticky;top:var(--hdr);z-index:20}
-.setup-return .btn{background:#0b3524;border-color:#0b3524;color:#fff}
-.setup-return .btn:hover{background:#104d35;border-color:#104d35}
-.setup-return .iconbtn{color:#062a1b;background:rgba(0,0,0,.06);border-color:rgba(0,0,0,.15)}
-/* The light theme's green is darker, so the bar's text turns white. */
-html[data-theme="light"] .setup-return,html[data-theme="light"] .setup-return .iconbtn{color:#fff}
+/* The setup bar is not a state, so it is neutral; Return to setup is its primary. */
+.setup-return{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 26px;border-bottom:1px solid var(--line2);background:var(--surf2);color:var(--tx);position:sticky;top:var(--hdr);z-index:20}
 .setup-return-copy{min-width:0;font-size:13px}
 .setup-return .row{flex-shrink:0;gap:8px}
 .setup-return .iconbtn{width:32px;height:32px}
