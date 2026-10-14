@@ -273,11 +273,11 @@ window.pwChange = () => modal("Change password", `
 
 window.doPwChange = async () => {
   const a = $("#pw_new").value, b = $("#pw_new2").value;
-  if (a !== b) return toast("new passwords do not match", "bad");
+  if (a !== b) return toast("New passwords do not match", "bad");
   try {
     await api("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ old: $("#pw_old").value, new: a }) });
-    toast("password changed — other sessions signed out", "ok"); closeModal();
+    toast("Password changed — other sessions signed out", "ok"); closeModal();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -495,8 +495,8 @@ window.apiKeySave = async (button, id) => {
   const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
     mcp: $("#ak_mcp").checked, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
   if ($("#ak_ttl").value) body.ttl_seconds = +$("#ak_ttl").value;
-  if (!body.name) return toast("give the key a name", "bad");
-  if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
+  if (!body.name) return toast("Give the key a name", "bad");
+  if (!body.scopes.length) return toast("Choose at least one thing it may do", "bad");
   button.disabled = true;
   try {
     const done = await api("/api/auth/keys/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -518,8 +518,8 @@ window.apiKeyNew = () => {
 window.apiKeyMake = async button => {
   const body = { name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
     mcp: $("#ak_mcp").checked, ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
-  if (!body.name) return toast("give the key a name", "bad");
-  if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
+  if (!body.name) return toast("Give the key a name", "bad");
+  if (!body.scopes.length) return toast("Choose at least one thing it may do", "bad");
   button.disabled = true;
   let made;
   try {

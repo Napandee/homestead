@@ -353,7 +353,7 @@ window.ipamSubnetsSave = async () => {
   const subnets = $$("#is_rows .ipam-subnet").map(el => ({ cidr: $(".is-cidr", el).value.trim(), name: $(".is-name", el).value,
     gateway: $(".is-gw", el).value.trim(), dhcp_start: $(".is-d1", el).value.trim(), dhcp_end: $(".is-d2", el).value.trim(),
     vlan: $(".is-vlan", el).value, note: $(".is-note", el).value })).filter(s => s.cidr);
-  try { await ipamPost("/api/ipam/subnets", { subnets }); toast("subnets saved", "ok"); closeModal(); viewIpam(); }
+  try { await ipamPost("/api/ipam/subnets", { subnets }); toast("Subnets saved", "ok"); closeModal(); viewIpam(); }
   catch (e) { toast(e.message, "bad"); }
 };
 

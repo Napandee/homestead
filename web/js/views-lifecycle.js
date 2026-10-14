@@ -80,8 +80,8 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <div class="e-vols" id="e_vols_${index}"></div>
       <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>`,
   };
-  const count = section === "environment" ? `${env.length + refs.length} vars`
-    : section === "storage" ? `${mounts.length} mounts` : section === "address" ? `${ports.length} ports` : "";
+  const count = section === "environment" ? plural(env.length + refs.length, "variable")
+    : section === "storage" ? plural(mounts.length, "mount") : section === "address" ? plural(ports.length, "port") : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
@@ -581,7 +581,7 @@ window.editReview = async body => {
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
-        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
+        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${plural((review.capacity.warnings || []).length, "warning")}</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : concerns.length ? "I accept the restart and warnings above" : "I accept the restart"}</label>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button>`)}`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
@@ -810,7 +810,7 @@ window.nodePowerReview = async (node, action, force = false) => {
     { key: "apps", title: `${plan.hold ? "Apps and VMs" : "What goes down"} · ${plan.hold ? hold.length : workloads.length}`, html: apps },
     { key: "volumes", title: `Volume copies · ${volumes.length}`, html: copies },
     budgets.length ? { key: "budgets", title: `Disruption budgets · ${budgets.length}`, html: UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
-      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`])) } : null,
+      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${plural(b.allowed, "disruption")} allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`])) } : null,
     local.length ? { key: "local", title: `Local and external storage · ${local.length}`, html: `<p class="ui-help">${outage ? "Temporary pod data may be lost during restart. Host-local and external storage may be unavailable while this host is down." : "Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding."}</p>`
       + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`])) } : null,
   ];
@@ -829,16 +829,16 @@ window.nodePowerReview = async (node, action, force = false) => {
 };
 window.nodePower = async (node, action) => {
   const plan = window.__nodePowerPlan;
-  if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("review the host impact again", "bad");
+  if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("Review the host impact again", "bad");
   const c = $("#pw_confirm")?.value.trim();
-  if (c !== node) return toast("type the host name exactly to confirm", "bad");
+  if (c !== node) return toast("Type the host name exactly to confirm", "bad");
   if (plan.planned_outage && !$("#pw_outage")?.checked)
-    return toast("acknowledge the whole-cluster outage", "bad");
+    return toast("Acknowledge the whole-cluster outage", "bad");
   const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
   if (!plan.planned_outage && $("#pw_allow") && !$("#pw_allow").checked)
-    return toast("confirm the workloads that will remain down", "bad");
+    return toast("Confirm the workloads that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
-    return toast("confirm the volume risk", "bad");
+    return toast("Confirm the volume risk", "bad");
   // Consume approval before sending, including double clicks and lost replies.
   window.__nodePowerPlan = null;
   const button = $("#pw_execute");
@@ -938,7 +938,7 @@ window.doVmMove = async (ns, name) => {
   try {
     const r = await api("/api/vm/migrate", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, target: $("#vm_target").value || null }) });
-    toast(`migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
+    toast(`Migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
   } catch (e) { toast(e.message, "bad"); }
 };
 /* ---------------- a VM's own address ----------------
@@ -1224,9 +1224,9 @@ window.doVmCreate = async () => {
   if (body.isolated) { delete body.network; delete body.nic_model; }
   if (!body.isolated && body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
-    if (!body.static_ip.address) return toast("give the VM its address", "bad");
+    if (!body.static_ip.address) return toast("Give the VM its address", "bad");
   }
-  if (!body.name) return toast("name is required", "bad");
+  if (!body.name) return toast("Name is required", "bad");
   if (body.install_iso && body.namespace !== defaultNamespace())
     return toast(`ISOs are in ${defaultNamespace()}: choose that namespace to install from one`, "bad");
   const serviceMode = body.network === "pod" ? $("#v_service")?.value || "" : "";
@@ -1241,8 +1241,8 @@ window.doVmCreate = async () => {
     if (devices) body.host_devices = devices;
   } catch (error) { return toast(error.message, "bad"); }
   if (body.install_iso) body.password = "";
-  if (!body.disk_import && !body.install_iso && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
-  if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
+  if (!body.disk_import && !body.install_iso && body.password.length < 10) return toast("Root password must be at least 10 characters", "bad");
+  if (boot === "url" && !body.image_url) return toast("Image URL is required", "bad");
   if (boot === "url" && !/^https?:\/\/[^/\s]+/i.test(body.image_url)) {
     // A file name here is usually a Harvester image, which is picked from the list instead.
     const image = (window.__vmCreateOptions?.images || []).find(i => i.display === body.image_url || i.name === body.image_url);
@@ -1506,10 +1506,10 @@ window.jobEdit = (j) => {
 window.jobSave = async () => {
   const body = { name: $("#j_name").value.trim(), schedule: $("#lj_cron").value.trim(),
     image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked };
-  if (!body.name || !body.command) return toast("name and command are required", "bad");
+  if (!body.name || !body.command) return toast("Name and command are required", "bad");
   try {
     await api("/api/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast("schedule saved", "ok"); closeModal(); resetPaint(); viewSchedules();
+    toast("Schedule saved", "ok"); closeModal(); resetPaint(); viewSchedules();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.jobRun = async name => {
@@ -1519,7 +1519,7 @@ window.jobRun = async name => {
 window.jobDel = async name => {
   if (!(await ask(`Delete schedule "${name}"?`, { title: "Delete schedule", ok: "Delete schedule", danger: true }))) return;
   try { await api("/api/schedules/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast("deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
+    toast("Deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
 };
 
 /* ---------------- import ---------------- */
@@ -1708,7 +1708,7 @@ window.doVmDiskImport = async () => {
     storage_class: $("#vd_sc").value, access_mode: $("#vd_mode").value,
     checksum: digest ? `${$("#vd_algo").value}:${digest}` : "",
     secret_ref: $("#vd_secret").value.trim(), cert_config_map: $("#vd_ca").value.trim() };
-  if (!body.name || !body.source_url) return toast("disk name and image URL are required", "bad");
+  if (!body.name || !body.source_url) return toast("Disk name and image URL are required", "bad");
   try {
     const plan = await api(`/api/vm-disks/import-plan?ns=${encodeURIComponent(body.namespace)}&name=${encodeURIComponent(body.name)}`);
     if (!plan.ready) return toast(plan.message, "bad");
@@ -1730,7 +1730,7 @@ window.doSrcAdd = async () => {
   const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
     user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
     kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim(), port: +$("#sc_port").value };
-  if (!body.name || !body.host) return toast("name and host are required", "bad");
+  if (!body.name || !body.host) return toast("Name and host are required", "bad");
   try {
     save.disabled = true;
     const result = await api("/api/sources", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -1788,7 +1788,7 @@ window.sourceKeyTrust = async () => {
 window.srcDel = async name => {
   if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`, { title: "Remove import source", ok: "Remove", danger: true }))) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast("removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
+    toast("Removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
 };
 window.srcBrowse = async name => {
   modal("Import from · " + name, `<div class="empty"><span class="spin2"></span>connecting to ${esc(name)} and listing its containers - this runs a
@@ -1822,8 +1822,8 @@ window.srcBrowse = async name => {
 
 window.imageCleanupReview = digest => {
   const image = (STATE.data.imageCache?.images || []).find(row => row.digest === digest);
-  if (!image) return toast("refresh Image Cache before cleaning this image", "bad");
-  if (image.protected || image.system) return toast("this image is protected and cannot be cleaned", "bad");
+  if (!image) return toast("Refresh Image Cache before cleaning this image", "bad");
+  if (image.protected || image.system) return toast("This image is protected and cannot be cleaned", "bad");
   const perNode = image.size_mb >= 1024 ? `${(image.size_mb / 1024).toFixed(1)} GB` : `${image.size_mb} MB`;
   modal("Clean cached image", `<div class="update-review">
     <div class="note dependency-danger"><b>This deletes only the cached image layers, not a workload.</b>
@@ -1846,7 +1846,7 @@ window.imageCleanupApply = async digest => {
   try {
     const result = await api("/api/images/cleanup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ digest, nodes }) });
-    toast(`cleanup started on ${result.nodes.length} node${result.nodes.length === 1 ? "" : "s"}`, "ok");
+    toast(`Cleanup started on ${result.nodes.length} node${result.nodes.length === 1 ? "" : "s"}`, "ok");
     closeModal();
   } catch (error) { toast(error.message, "bad"); }
 };
@@ -2050,7 +2050,7 @@ window.imMeasure = async source => {
   const rows = $$("#im_maps .im-map");
   const paths = rows.filter(row => row.dataset.medium !== "memory")
     .map(row => $(".imm-remote", row).value.trim()).filter(path => path.startsWith("/"));
-  if (!paths.length) return toast("add a source folder first", "bad");
+  if (!paths.length) return toast("Add a source folder first", "bad");
   const button = $("#im_measure");
   if (button) { button.disabled = true; button.textContent = "Measuring…"; }
   try {
@@ -2379,7 +2379,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
 window.clusterStorageGo = async name => {
   const pick = $("#cs_pick")?.value || "__shared";
   const address = pick === "__typed" ? $("#cs_ip").value.trim() : pick === "__shared" ? "" : pick;
-  if (pick === "__typed" && !address) return toast("type the address this cluster should reach it at", "bad");
+  if (pick === "__typed" && !address) return toast("Type the address this cluster should reach it at", "bad");
   const button = $("#cs_go");
   if (button) { button.disabled = true; button.textContent = "Working…"; }
   try {
@@ -2784,7 +2784,7 @@ window.doImport = async source => {
   // A container that keeps nothing imports as just the workload. Demanding a
   // volume for it would mean creating storage nobody asked for.
   const keepsNothing = !mappings.some(row => !row.medium && (row.remote_path || row.copy === false));
-  if (!first && !keepsNothing) return toast("add at least one volume", "bad");
+  if (!first && !keepsNothing) return toast("Add at least one volume", "bad");
   const existing = !!first && !first.create;
   try { await logoReady("#im_icon"); } catch (e) { return toast(e.message, "bad"); }
   const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || "lab", remote_path: $("#im_path").value.trim(),
@@ -2797,7 +2797,7 @@ window.doImport = async source => {
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), ...(readPrivileges("im_pv") || {}), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
-  if (!body.name || !body.image) return toast("workload name and image are required", "bad");
+  if (!body.name || !body.image) return toast("Workload name and image are required", "bad");
   for (const volume of volumes) {
     const measured = body.mappings.filter(row => row.pvc === volume.name)
       .reduce((sum, row) => sum + (row.bytes || 0), 0);

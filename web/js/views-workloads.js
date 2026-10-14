@@ -2563,7 +2563,7 @@ function capacityNoteWords(text) {
   if (text.startsWith("live RAM still includes old pods")) return "Live memory usage still includes the old pods, so the estimate keeps that usage until they stop.";
   if (text.startsWith("intermediate rolling-update placement")) return "The check covers starting the rollout. Later placement and readiness can still delay completion.";
   const rolling = text.match(/^RollingUpdate permits (\d+) extra pod\(s\) and (\d+) unavailable replica\(s\);/);
-  if (rolling) return `The rollout allows ${rolling[1]} extra pod(s) and ${rolling[2]} unavailable replica(s). Pods still stopping can temporarily increase the total.`;
+  if (rolling) return `The rollout allows ${plural(rolling[1], "extra pod")} and ${plural(rolling[2], "unavailable replica")}. Pods still stopping can temporarily increase the total.`;
   return text;
 }
 function capacityNotes(plan) {
@@ -2589,11 +2589,11 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
     : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.";
   const shown = needs;
   const concerns = shown.length ? `<ul class="ui-list">${shown.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
-  const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known
-      ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
+  const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plural(plan.rollout.replicas, "desired replica"))} · ${plan.rollout.ownership_known
+      ? `${esc(plural(plan.rollout.owned_pods.length, "existing pod"))} identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
       : "Pod ownership is unverified; released capacity is unknown."}</p>
-    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plan.rollout.max_surge)} extra pod(s), ${esc(plan.rollout.max_unavailable)} unavailable replica(s). Intermediate rollout steps remain unverified.</p>` : ""}` : "";
-  const requests = `${esc(plan.additional)} ${plan.vm ? "VM launcher" : "pod(s)"}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
+    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plural(plan.rollout.max_surge, "extra pod"))}, ${esc(plural(plan.rollout.max_unavailable, "unavailable replica"))}. Intermediate rollout steps remain unverified.</p>` : ""}` : "";
+  const requests = `${esc(plural(plan.additional, plan.vm ? "VM launcher" : "pod"))}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
   return `<div class="deploy-capacity ui-stack">
     ${overlap ? "" : capacityPlacementHtml(plan)}
     ${UI.section(title, [

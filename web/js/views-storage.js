@@ -679,8 +679,8 @@ window.volumeDeleteGate = () => {
 window.volumeDeleteNow = async (namespace, name, uid) => {
   const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
   const confirmation = $("#vd_confirm").value.trim();
-  if (!volumeDeleteConfirmationValid(name, confirmation)) return toast("type the volume name exactly to confirm", "bad");
-  if (!action) return toast("choose whether to retain or permanently delete the backing data", "bad");
+  if (!volumeDeleteConfirmationValid(name, confirmation)) return toast("Type the volume name exactly to confirm", "bad");
+  if (!action) return toast("Choose whether to retain or permanently delete the backing data", "bad");
   const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
   try {
     const result = await api("/api/volumes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -923,7 +923,7 @@ window.storageClassHint = () => {
 };
 window.storageClassSave = async button => {
   const name = $("#sc_name").value.trim();
-  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) return toast("lowercase letters, numbers and dashes only", "bad");
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) return toast("Lowercase letters, numbers and dashes only", "bad");
   if (button) { button.disabled = true; button.textContent = "Creating…"; }
   try {
     const result = await api("/api/storage/classes", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1274,7 +1274,7 @@ window.volumeChown = async (namespace, name) => {
 };
 window.volumeChownNow = async (namespace, name, button) => {
   const uid = $("#vc_uid").value.trim();
-  if (!uid) return toast("a user id is required", "bad");
+  if (!uid) return toast("A user id is required", "bad");
   if (button) { button.disabled = true; button.textContent = "Starting…"; }
   try {
     const result = await api("/api/volumes/chown", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1313,7 +1313,7 @@ async function viewShares() {
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
     ${can("admin") && !smb.error ? `<div class="row">${smb.installed && (!smb.in_sync || Object.keys(smb.recovery_failures || {}).length) ? '<button class="btn sm" onclick="repairSamba(this)">Repair / retry recovery</button>' : ""}${smbUserList ? `<button class="btn sm" onclick="smbUsers()">SMB users · ${smbUserList.length}</button>` : ""}<button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
-    ${smb.partial ? `<div class="note warn"><b>Partial service · ${smb.offline_shares.length} share(s) offline</b><br>Unavailable storage is temporarily excluded so other shares can start. No volumes, credentials or share definitions were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>After storage is confirmed recoverable for two minutes, Homestead re-adds the shares. This restarts SMB and briefly interrupts connections.</div>` : ""}
+    ${smb.partial ? `<div class="note warn"><b>Partial service · ${plural(smb.offline_shares.length, "share")} offline</b><br>Unavailable storage is temporarily excluded so other shares can start. No volumes, credentials or share definitions were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>After storage is confirmed recoverable for two minutes, Homestead re-adds the shares. This restarts SMB and briefly interrupts connections.</div>` : ""}
     ${smbUserList && !smbUserList.length ? `<div class="dim small" style="margin-top:8px">No SMB users yet. Private shares need one; guest shares don't. <a class="linkish" onclick="smbUserEdit('')">Add a user</a></div>` : ""}
     ${smb.recovery_warning ? `<div class="note warn">${esc(smb.recovery_warning)}</div>` : ""}
     ${Object.keys(smb.recovery_failures || {}).length ? `<div class="note bad">Automatic restore paused: ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The working subset was restored; use Repair / retry recovery after resolving the problem.</div>` : ""}
@@ -1343,7 +1343,7 @@ async function viewShares() {
 }
 window.nfsExport = name => {
   const share = (STATE.data.shares || []).find(row => row.name === name);
-  if (!share) return toast("share details are no longer available; refresh and try again", "bad");
+  if (!share) return toast("Share details are no longer available; refresh and try again", "bad");
   const rwx = (share.access_modes || []).includes("ReadWriteMany");
   modal(`NFS export · ${esc(name)}`, `<p>Export this share from the optional NFSv4 container to a specific client address or network. Leave the field blank to remove its NFS export. SMB access is unchanged.</p>
     ${rwx ? "" : `<div class="note warn">This share may not be RWX. NFS requires a Bound ReadWriteMany volume so its separate container can mount the data; the server checks this before saving.</div>`}
@@ -1486,25 +1486,25 @@ window.shareAccountHint = () => {
 };
 window.mkShare = async button => {
   const name = $("#sh_name").value.trim();
-  if (!/^[a-z0-9-]{2,30}$/.test(name)) return toast("lowercase letters, numbers and dashes only", "bad");
+  if (!/^[a-z0-9-]{2,30}$/.test(name)) return toast("Lowercase letters, numbers and dashes only", "bad");
   const selected = $("#sh_identity").value;
   const account = selected || $("#sh_user").value.trim();
   const known = (STATE.data.smbUsers || []).some(row => row.user === selected && row.has_password);
   if (!$("#sh_pub").checked && !$("#sh_pass").value && !known) {
-    return toast("a password is required for a private share", "bad");
+    return toast("A password is required for a private share", "bad");
   }
   const storage = readVolumeRows($("#sh_storage"))[0] || {};
   const folder = String(storage.path || "").trim().replace(/^\/+|\/+$/g, "");
   if (folder && !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(folder)) {
-    return toast("the folder must be a path inside the volume, such as media/photos", "bad");
+    return toast("The folder must be a path inside the volume, such as media/photos", "bad");
   }
   const reusing = storage.kind === "existing";
-  if (reusing && !storage.source) return toast("choose the volume this share should use", "bad");
+  if (reusing && !storage.source) return toast("Choose the volume this share should use", "bad");
   const body = { name, user: account, password: selected || $("#sh_pub").checked ? "" : $("#sh_pass").value,
     account_mode: selected ? "existing" : "new",
     public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder,
     samba_ip: ($("#sh_smb_lb_ip")?.value || "").trim() };
-  if ($("#sh_smb") && !body.samba_ip) return toast("choose the address Samba should answer on - add VIPs under Networking if the list is empty", "bad");
+  if ($("#sh_smb") && !body.samba_ip) return toast("Choose the address Samba should answer on - add VIPs under Networking if the list is empty", "bad");
   if (reusing) body.pvc = storage.source;
   // A new volume's name is the one to create, not one to look up.
   else Object.assign(body, { new_name: storage.source || "", size_gb: storage.size_gb,
@@ -1514,7 +1514,7 @@ window.mkShare = async button => {
     const result = await api("/api/shares", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
     (result.warnings || []).forEach(warning => toast(warning, "warn"));
-    toast(`share "${name}" created`, "ok"); closeModal(); resetPaint(); viewShares();
+    toast(`Share "${name}" created`, "ok"); closeModal(); resetPaint(); viewShares();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create share"; } toast(e.message, "bad"); }
 };
 const shareAccountSiblings = share => (STATE.data.shares || [])
@@ -1528,7 +1528,7 @@ window.shareAccessToggle = () => {
 };
 window.editShare = name => {
   const s = (STATE.data.shares || []).find(row => row.name === name);
-  if (!s) return toast("share details are no longer available; refresh and try again", "bad");
+  if (!s) return toast("Share details are no longer available; refresh and try again", "bad");
   modal(`Edit share · ${s.name}`, `
     <div class="callout"><b>\\\\${esc(STATE.data.samba?.address || "address pending")}\\${esc(s.name)}</b><br>
       ${s.owned === false ? `Files come from <span class="mono">${esc(s.pvc || "")}${s.sub_path ? "/" + esc(s.sub_path) : ""}</span>, a volume this share only mounts.` : "The claim can grow but cannot shrink."}
@@ -1551,14 +1551,14 @@ window.editShare = name => {
 };
 window.saveShareEdit = async (name, button) => {
   const original = (STATE.data.shares || []).find(row => row.name === name);
-  if (!original) return toast("share details are no longer available", "bad");
+  if (!original) return toast("Share details are no longer available", "bad");
   const size = +$("#she_size").value || +(original.size_gb || 1);
   const publicAccess = $("#she_access").value === "guest";
   const password = $("#she_pass")?.value || "";
   if (original.owned !== false && (!Number.isInteger(size) || size < +(original.size_gb || 1))) {
-    return toast(`size must be at least ${original.size_gb || 1} GB`, "bad");
+    return toast(`Size must be at least ${original.size_gb || 1} GB`, "bad");
   }
-  if (!publicAccess && !original.has_password && !password) return toast("set a password before enabling private access", "bad");
+  if (!publicAccess && !original.has_password && !password) return toast("Set a password before enabling private access", "bad");
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
   try {
     const result = await api("/api/shares/edit", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -2209,7 +2209,7 @@ window.volumeReclass = async x => {
   if (RECLASS_BUSY) return;
   RECLASS_REVIEW = null;
   const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
-  if (!classes.length) return toast("there is no other storage class to move it to", "warn");
+  if (!classes.length) return toast("There is no other storage class to move it to", "warn");
   const pick = classes.find(c => c.default) || classes[0];
   modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Workloads using it stop during the move; the original data is kept afterward.") +
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),

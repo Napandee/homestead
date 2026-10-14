@@ -155,6 +155,14 @@ const fmtWhen = iso => {
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
+/* A count in words: plural(1, "pod") is "1 pod", plural(3, "pod") "3 pods". */
+const plural = (n, word, many = word + "s") => `${n} ${Number(n) === 1 ? word : many}`;
+/* A Kubernetes state as people write it: "NotReady" is "Not ready". Callers
+   keep the raw state in a tooltip. */
+const STATE_WORDS = { ErrorUnschedulable: "Can't be scheduled", ErrImagePull: "Image can't be pulled",
+  ImagePullBackOff: "Image can't be pulled" };
+const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/([a-z])([A-Z])/g, "$1 $2")
+  .replace(/ (.*)$/, (all, rest) => " " + rest.toLowerCase());
 
 /* ---------------- settings ---------------- */
 const SET = Object.assign(
