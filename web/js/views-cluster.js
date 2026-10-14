@@ -263,8 +263,7 @@ window.clusterUpgradesPaint = clusterUpgradesPaint;
 
 function releaseDate(value) {
   if (!value) return "";
-  const date = new Date(value);
-  return isNaN(date) ? "" : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return fmtDay(value);
 }
 
 function releaseRow(label, row, kind) {

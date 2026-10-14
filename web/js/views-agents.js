@@ -14,7 +14,7 @@ function agentLeft(expires, now = Date.now() / 1000) {
 }
 window.agentLeft = agentLeft;
 
-const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : new Date(at * 1000).toLocaleString()) : "";
+const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : fmtAt(at)) : "";
 /* A request's field names as people write them; the rest lose their
    underscores. Ids, images and addresses are shown in mono. */
 const AGENT_LABELS = { uid: "UID", ip: "IP", vip: "VIP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",

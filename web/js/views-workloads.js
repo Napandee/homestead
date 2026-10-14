@@ -2806,8 +2806,7 @@ function storeCount(value) {
 }
 
 const storeKey = app => `${app.name}|${app.repo}`;
-const storeDate = seconds => seconds ? new Date(seconds * 1000).toLocaleDateString(undefined,
-  { month: "short", day: "numeric", year: "numeric" }) : "";
+const storeDate = seconds => seconds ? fmtDay(seconds) : "";
 
 function storeMetric(app, mode) {
   if (mode === "spotlight" && app.spotlight) return `${icon("clock")} Spotlight · ${esc(app.spotlight.month)}`;

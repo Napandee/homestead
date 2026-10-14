@@ -8,6 +8,7 @@ function context() {
     platformTag:()=>"",hardwareTags:()=>"",imageLabel:String, fmtUp:String, svcUrl:()=>"",fmtAgo:String,
     ratePair:()=>["0","Mb/s"],sizePair:()=>"0/10 GB",sizeText:()=>"10 GB",meter:()=>"",sev:()=>""};
   c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
+  require("./helpers/load-time")(c);
   vm.runInContext(core.slice(0,core.indexOf("/* Put text on the clipboard.")),c);
   for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);

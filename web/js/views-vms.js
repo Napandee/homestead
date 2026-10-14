@@ -68,7 +68,7 @@ window.vmStore = async (check = false) => {
   try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); return; }
   STATE.data.vmStore = s;
   const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`) : "—";
-  const day = t => t ? new Date(t * 1000).toLocaleDateString() : "";
+  const day = t => t ? fmtDay(t) : "";
   const state = r => {
     if (!s.harvester) return "";
     if (!r.kept) return '<span class="dim xs">not here</span>';

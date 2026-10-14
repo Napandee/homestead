@@ -7,6 +7,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const ctx = { console, esc, jsq: s => esc(JSON.stringify(String(s))), window: {}, STATE: { data: {} }, Date };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
+require("./helpers/load-time")(ctx);
 vm.runInContext(fs.readFileSync("web/js/uptime.js", "utf8"), ctx);
 const run = code => vm.runInContext(code, ctx);
 

@@ -18,6 +18,7 @@ function setup() {
     esc: value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;"),
     UI: {notices: items => (items || []).filter(([, text]) => text).map(([, text]) => String(text).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;")).join(" "), lead: String, actions: String, chip: String, section: (label, html) => `${label}${html}`, table: (_, rows) => rows.flat().join(""), button: (label, handler) => `${label} ${handler}`, more: (label, html) => `${label}${html}`, callout: (_, label, detail) => `${label}${detail}`}};
   ctx.window = ctx; vm.createContext(ctx);
+  require("./helpers/load-time")(ctx);
   vm.runInContext(fs.readFileSync("web/js/passthrough.js", "utf8"), ctx);
   return {ctx, fields, rows, body, requests, answers, questions};
 }

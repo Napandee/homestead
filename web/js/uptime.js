@@ -14,11 +14,7 @@ const monitorOpen = (w, vm = false) => `${vm ? "vmMonitoring" : "wlMonitoring"}(
 
 const answerShare = value => value === null || value === undefined ? "—" : `${value >= 99.995 ? "100" : value.toFixed(value >= 99 ? 2 : 1)}%`;
 
-function answerSince(at) {
-  if (!at) return "";
-  const d = new Date(at * 1000), today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
+const answerSince = at => fmtAt(at);
 
 function answerDetail(a) {
   const last = a.last || {};

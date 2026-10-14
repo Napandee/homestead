@@ -403,7 +403,7 @@ function ipamUnifiCard(now = Date.now() / 1000) {
   const stale = u.configured && (age === null || age > UNIFI_STALE);
   const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">sync failing</span>'
     : stale ? '<span class="pill warn">out of date</span>' : '<span class="pill ok">connected</span>';
-  const when = t => new Date(t * 1000).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const when = t => fmtAt(t, { weekday: true });
   const facts = u.configured ? UI.facts([
     ["Controller", `<span class="mono">${esc(u.url)}</span>${u.site_name ? ` <span class="dim xs">· ${esc(u.site_name)}</span>` : ""}`],
     ["Last sync", u.last_sync ? `<span data-tip="${esc(when(u.last_sync))}">${esc(fmtAgo(age))}</span> <span class="dim xs">· every hour while connected</span>` : "not yet"],
