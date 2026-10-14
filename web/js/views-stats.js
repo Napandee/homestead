@@ -113,7 +113,7 @@ async function historyLoad(host, range, request, abort) {
     ${h.samples > 0 ? `<div class="hist-grid">
       ${historyStat("Cluster CPU", h.cpu, "%", h.cpu_max, h.t, range)}
       ${historyStat("Cluster RAM", h.mem, "%", h.mem_max, h.t, range)}
-      <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mbit/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56, times: h.t, key: range })}</div>
+      <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mb/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56, times: h.t, key: range })}</div>
       ${historyStat("Workload pods", h.pods, "", undefined, h.t, range)}</div>
       <div class="hist-nodes">${h.nodes.map(n => `<div class="hist-node"><b>${esc(n.name)}</b>
         <span class="pill slim ${n.availability >= 99.9 ? "ok" : n.availability >= 99 ? "med" : "crit"}" data-tip="Share of samples in which the node was Ready">${n.availability.toFixed(n.availability >= 99.95 ? 0 : 2)}% up</span>

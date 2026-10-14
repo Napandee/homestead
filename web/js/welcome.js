@@ -228,7 +228,7 @@ const SETUP_STEPS = {
       : `${(s.unused || []).length} unused non-system disk${(s.unused || []).length === 1 ? " is" : "s are"} reported. Review each disk before assigning it to Longhorn. Disk tags let storage classes select HDD, SSD or NVMe storage.`,
     body: s => (s.unused || []).length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Disk</th><th>Node</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.unused.map(d => `<tr><td><b class="mono">${esc(d.device)}</b> ${d.kind ? `<span class="tag">${esc(d.kind)}</span>` : ""}</td><td data-label="Node">${esc(d.node)}</td>
-        <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GB</td>
+        <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GiB</td>
         <td>${actionBar([{ label: "Set up", run: `nodeDetail(${jsq(d.node)});setTimeout(() => window.nodeSectionGo && nodeSectionGo('storage'), 900)`, need: "admin" }])}</td></tr>`).join("")}</tbody></table></div>` : "",
     actions: () => [],
   },

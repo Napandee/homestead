@@ -49,14 +49,14 @@ async function viewFlow() {
   const disconnectedVolumes = f.volumes.filter(v => !mountedVolumes.has(v.id));
   const workloadCard = w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"} ${w.kind === "vm" && !w.running ? "a2stopped" : ""}"
           id="${esc(w.id)}"${clusterAttr(w)} data-kind="workload" data-id="${esc(w.id)}"
-          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB` : ""}">
+          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MiB` : ""}">
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
           ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
             onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove(${jsq(w.ns || "lab")},${jsq(w.name)})` : `moveWorkload(${jsq(w.name)},${jsq(w.ns || "lab")})`}">⇄</button>`}
         </div>`;
   const volumeCard = (v, disconnected = false) => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"} ${disconnected ? "a2disconnected" : ""}" id="${esc(v.id)}"${clusterAttr(v)} data-kind="volume" data-id="${esc(v.id)}"
-          title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
+          title="${esc(v.name)} · ${v.size_gb} GiB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
           <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
           <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
@@ -361,7 +361,7 @@ function forecastCard(f) {
   const collecting = !rows.some(r => r.days >= (f.min_days || 7));
   const line = r => `<div class="forecast-row">
       <span class="tag ${forecastTone(r.days_left, f.warn_days)}">Full ${esc(forecastWhen(r.days_left))}</span>
-      <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
+      <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GiB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
   return `<div class="card flat forecast-card"><div class="between"><div><div class="ctitle">Filling up</div>
       <div class="csub">From how each volume, disk and the pool has grown over the last 30 days</div></div></div>
     ${collecting ? `<div class="dim small forecast-empty">Collecting daily usage: forecasts start after ${f.min_days || 7} days of samples.</div>`
@@ -378,7 +378,7 @@ function volumeUsageCell(x) {
   return `<div class="volusage-body">${known
     ? `<div class="volusage-line" data-tip="Filesystem usage reported by kubelet; filesystem capacity can be slightly smaller than the provisioned block device.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
     : `<span class="dim xs" data-tip="No fresh filesystem measurement is available. Detached volumes and some shared/raw-block mounts do not report filesystem usage.">Filesystem usage unavailable</span>`}
-    ${soon ? `<span class="tag ${forecastTone(soon.days_left)} forecast-tag" data-tip="${esc(`Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate`)}">Full ${esc(forecastWhen(soon.days_left))}</span>` : ""}
+    ${soon ? `<span class="tag ${forecastTone(soon.days_left)} forecast-tag" data-tip="${esc(`Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GiB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate`)}">Full ${esc(forecastWhen(soon.days_left))}</span>` : ""}
     <span class="dim xs mono volsizes"><span data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
 }
 
@@ -468,13 +468,13 @@ async function viewStorage() {
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${st ? summaryLine("volumes", [
-      `<b>${st.avail_gb} GB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GB</b> provisioned`,
+      `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
       `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
       `${st.attached} of ${st.volumes} attached`],
     `<div class="grid g4 statgrid">
     <div class="card flat"><div class="ctitle">Free space</div>
       <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GB</span></div>
-      <div class="csub">of ${st.cap_gb} GB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
+      <div class="csub">of ${st.cap_gb} GiB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
     <div class="card flat"><div class="ctitle">Provisioned</div>
       <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GB</span></div>
       <div class="csub" data-tip="Sum of Longhorn volume block footprints, including snapshots; not filesystem usage or total storage across all replica copies.">${st.actual_gb} GiB Longhorn footprint</div></div>
@@ -1329,7 +1329,7 @@ async function viewShares() {
       <div><b>${esc(s.name)}</b>${(smb.offline_shares || []).some(row => row.name === s.name) ? ' <span class="pill crit">SMB offline · storage unavailable</span>' : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
       <td class="small mono" data-label="Storage"><span class="sharevol">${esc(s.pvc || "—")}${s.sub_path ? `<span class="dim">/${esc(s.sub_path)}</span>` : ""}</span>
         ${s.owned === false ? '<span class="tag">shared volume</span>' : ""}</td>
-      <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GB" : "—"}</td>
+      <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GiB" : "—"}</td>
       <td data-label="Access"><span>${s.public ? `<span class="pill med" data-tip="No sign-in. Windows 11 refuses guest shares until two of its own settings are changed - see Allow guest access when making or editing a share">guest</span>` : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private: signs in as ${esc(s.user)}. SMB users" onclick="smbUsers()">${esc(s.user)}</button>` : `<span class="pill low">${esc(s.user)}</span>`)}
         ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
         ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
@@ -1555,7 +1555,7 @@ window.saveShareEdit = async (name, button) => {
   const publicAccess = $("#she_access").value === "guest";
   const password = $("#she_pass")?.value || "";
   if (original.owned !== false && (!Number.isInteger(size) || size < +(original.size_gb || 1))) {
-    return toast(`Size must be at least ${original.size_gb || 1} GB`, "bad");
+    return toast(`Size must be at least ${original.size_gb || 1} GiB`, "bad");
   }
   if (!publicAccess && !original.has_password && !password) return toast("Set a password before enabling private access", "bad");
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
@@ -1714,7 +1714,7 @@ function lhNodeRows(cap) {
   return (cap.nodes || []).map(n => `<div class="lh-node">
     <div class="between"><b>${esc(lhShort(n.name))}</b>
       <span class="mono xs ${n.level === "ok" ? "dim" : n.level === "warn" ? "warntext" : "badtext"}">${esc(sizePair(n.allocated_gb, n.limit_gb))} allocated</span></div>
-    <div class="meter ${lhLevel(n.level)}" data-tip="${esc(`${n.pct}% of what Longhorn may place here (${n.size_gb} GB × ${cap.over_provisioning}%)`)}"><span style="width:${Math.min(100, n.pct)}%"></span></div>
+    <div class="meter ${lhLevel(n.level)}" data-tip="${esc(`${n.pct}% of what Longhorn may place here (${n.size_gb} GiB × ${cap.over_provisioning}%)`)}"><span style="width:${Math.min(100, n.pct)}%"></span></div>
     <div class="dim xs">${n.blocked ? `<span class="badtext">${esc(n.blocked)}</span>` : `${esc(sizeText(n.room_gb))} allocation headroom`} · ${esc(sizeText(n.used_gb))} physically used</div>
     <div class="dim xs" data-tip="Free bytes above Longhorn's minimum-free-space reserve on the best eligible disk. A rebuild must fit its block/snapshot footprint below this budget as well as its logical allocation; tags, anti-affinity and other placement rules still apply.">Physical rebuild budget: ${Number.isFinite(n.physical_room_gb) ? `${esc(n.physical_room_gb)} GiB` : "unknown"}</div></div>`).join("");
 }
@@ -2008,7 +2008,7 @@ window.diskSetup = async (node, device) => {
     <span><b>${label}</b><small>${detail}</small></span></label>`;
   const modes = f.choices || [];
   $("#mbody").innerHTML = `<div class="ui-stack">
-    <div class="note ${["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
+    <div class="note ${["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GiB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
     ${modes.length ? `
       ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 - formatted and mounted</option><option value="v2">V2 (SPDK) - the raw device</option></select></div>` : ""}
       <div class="disk-choices" id="ds_modes">
@@ -2043,8 +2043,8 @@ window.diskOsSpace = async node => {
   const lvmFree = f.vg && !f.error && f.usable_gb >= 5;
   const sources = [
     ...(lvmFree && (!f.taken?.v1 || (v2 && !f.taken?.v2))
-      ? [["lvm", `${f.vg} · ${f.usable_gb} GB free, ${f.reserve_gb} GB kept for the system`, f.usable_gb]] : []),
-    ...(f.regions || []).map(r => [`part:${r.disk}:${r.start}`, `/dev/${r.disk} · ${r.size_gb} GB unallocated - a new partition`, r.size_gb]),
+      ? [["lvm", `${f.vg} · ${f.usable_gb} GiB free, ${f.reserve_gb} GiB kept for the system`, f.usable_gb]] : []),
+    ...(f.regions || []).map(r => [`part:${r.disk}:${r.start}`, `/dev/${r.disk} · ${r.size_gb} GiB unallocated - a new partition`, r.size_gb]),
   ];
   if (f.problem || !sources.length) {
     $("#mbody").innerHTML = `<div class="ui-stack">${UI.callout("warn", "Nothing to use",
@@ -2056,7 +2056,7 @@ window.diskOsSpace = async node => {
     return;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.facts([["Root filesystem free", `${f.root_free_gb} GB`], f.vg ? ["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GB`] : null])}
+    ${UI.facts([["Root filesystem free", `${f.root_free_gb} GiB`], f.vg ? ["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GiB`] : null])}
     <div class="f"><label>Space</label><select id="os_source" onchange="diskOsSpaceChanged(true)">${sources.map(([value, label]) =>
       `<option value="${esc(value)}">${esc(label)}</option>`).join("")}</select></div>
     ${v2 ? `<div class="f"><label>Engine</label><select id="os_engine" onchange="diskOsSpaceChanged()">

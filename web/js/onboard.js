@@ -23,7 +23,7 @@ function guideScreens(g) {
     ["Installation mode", "<b>Join an existing Harvester cluster</b>"],
     ["Node role", role],
     ["Password", "Set the <span class=\"mono\">rancher</span> password for SSH and console access."],
-    ["Installation disk", "The disk Harvester goes on. <b>Everything on it is erased.</b> An SSD of 250 GB or more."],
+    ["Installation disk", "The disk Harvester goes on. <b>Everything on it is erased.</b> An SSD of 240 GiB or more."],
     ["Data disk", "A second disk for VM and volume data, if the machine has one. On a single-disk machine, leave it as the installation disk."],
     ["Persistent size", "Leave the default (150 GiB)."],
     ["Hostname", g.hostname ? `${guideCopy(g.hostname)} <span class="dim xs">- the next free name here; any unique lowercase name works</span>`

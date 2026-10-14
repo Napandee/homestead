@@ -262,7 +262,7 @@ window.fleetMigration = async id => {
       retryTarget]);
     body = `${lead}
       ${UI.facts([["Migration", "On"], ["Backup storage", `<span class="mono">${esc((state.endpoint || "—").replace(/^https?:\/\//, ""))}</span>`],
-        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GB` : "—"]])}
+        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
       ${problems.map(([tone, title, detail, fix]) => UI.callout(tone, title, `${detail ? `<p>${esc(detail)}</p>` : ""}${fix}`)).join("")}
       ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn backs up here too.`, "Disabling migration pauses those backups until it is enabled again.") : ""}
       ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { kind: "danger", id: "fm_go", attrs: 'data-need="admin"' }))}`;

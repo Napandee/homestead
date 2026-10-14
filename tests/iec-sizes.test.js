@@ -10,7 +10,7 @@ const lines = files.flatMap(f => fs.readFileSync(`web/js/${f}`, "utf8").split("\
 
 test("no view labels a size in decimal units", () => {
   // A unit word after a number, a ${…} or a quote: " GB", "(GB)", "GB/s".
-  const decimal = /(\d|\}|["'`(]|\s)(KB|MB|GB|TB)(?![a-zA-Z])/;
+  const decimal = /(\d|\}|["'`(]|\s)(KB|MB|GB|TB)(?![a-zA-Z_])/;
   const left = lines.filter(([, line]) => decimal.test(line.replace(/\/\/.*$/, ""))).map(([at]) => at);
   assert.deepEqual(left, [], "use KiB, MiB, GiB or TiB, or bytesText()/sizeText()");
 });

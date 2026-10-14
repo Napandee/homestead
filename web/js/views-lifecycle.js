@@ -1396,7 +1396,7 @@ function vmImagesSection(vm, nodeNames) {
           : i.disks.length ? `<span class="tag" data-tip="${esc(i.disks.join(", "))}">${i.disks.length} disk${i.disks.length === 1 ? "" : "s"}, no VM</span>`
           : '<span class="tag">unused</span>';
         return `<tr><td class="imgname"><b>${esc(i.display)}</b> ${state}
-            <div class="dim xs mono">${esc(i.namespace)}${i.source ? ` · from ${esc(i.source)}` : ""}${i.virtual_size_gb ? ` · ${i.virtual_size_gb} GB disk` : ""}</div></td>
+            <div class="dim xs mono">${esc(i.namespace)}${i.source ? ` · from ${esc(i.source)}` : ""}${i.virtual_size_gb ? ` · ${i.virtual_size_gb} GiB disk` : ""}</div></td>
           <td class="mono nowrap" data-sort="${i.size_mb}">${i.size_mb ? size(i.size_mb) : '<span class="dim">—</span>'}</td>
           <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
@@ -2424,7 +2424,7 @@ window.clusterInventory = report => {
       <td class="mono small" style="word-break:break-all">${w.kind === "vm"
         ? `${esc(w.cores || "?")} cores · ${esc(w.memory || "?")}` : esc(w.image)}</td>
       <td class="small">${w.volumes.length
-        ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GB${v.path ? ` → ${esc(v.path)}` : ""}</div>`).join("")
+        ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GiB${v.path ? ` → ${esc(v.path)}` : ""}</div>`).join("")
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
       <td>${w.movable
@@ -2450,7 +2450,7 @@ function clusterVolumesHtml(report) {
     ${volumes.map(v => `<tr>
       <td><b class="mono">${esc(v.name)}</b>${v.volume_mode === "Block" ? ' <span class="tag">disk</span>' : ""}
         <div class="dim xs mono">${esc(v.namespace)}${v.storage_class ? ` · ${esc(v.storage_class)}` : ""}</div></td>
-      <td class="mono small">${v.size_gb} GB</td>
+      <td class="mono small">${v.size_gb} GiB</td>
       <td class="small">${v.used_by.length ? v.used_by.map(esc).join(", ") : '<span class="dim">nothing</span>'}</td>
       <td>${v.movable
         ? actionBar([{ label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},'volume',${jsq(v.name)})`, need: "admin" }])
@@ -2575,13 +2575,13 @@ function moveVolumesTable(plan, cluster, kind, name) {
   if (!volumes.length) return "";
   if (kind === "volume") {
     return `<div class="drow"><div class="dl">Volume</div><div class="dv mono xs">${volumes.map(c =>
-      `${esc(c.claim)} · ${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}<br>Storage class: ${esc(plan.storage_class || "cluster default")}</div></div>`;
+      `${esc(c.claim)} · ${c.size_gb} GiB${c.volume_mode === "Block" ? " · disk" : ""}`).join("<br>")}<br>Storage class: ${esc(plan.storage_class || "cluster default")}</div></div>`;
   }
   const arg = v => esc(JSON.stringify(v));
   const rows = volumes.map(c => {
     const classes = c.action === "move" ? plan.storage_classes || [] : plan.all_storage_classes || [];
     const pick = (MOVE_VOLUMES[c.claim] || {}).storage_class || c.storage_class || plan.storage_class || "";
-    return `<tr><td><b class="mono">${esc(c.claim)}</b><div class="dim xs">${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}${c.source_class ? ` · ${esc(c.source_class)} on ${esc(cluster)}` : ""}</div></td>
+    return `<tr><td><b class="mono">${esc(c.claim)}</b><div class="dim xs">${c.size_gb} GiB${c.volume_mode === "Block" ? " · disk" : ""}${c.source_class ? ` · ${esc(c.source_class)} on ${esc(cluster)}` : ""}</div></td>
       <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value)">
         ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${value === "move" && MOVE_TRANSFER_MODE === "copy" ? "Copy its data" : label}</option>`).join("")}</select></td>
       <td>${c.action === "skip" ? '<span class="dim xs">the one here keeps its own</span>'
@@ -2589,8 +2589,8 @@ function moveVolumesTable(plan, cluster, kind, name) {
           ${classes.map(k => `<option value="${esc(k)}" ${k === pick ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
       <td>${c.action === "blank"
         ? `<input id="mv_volsize_${esc(c.claim)}" type="number" min="1" max="16384" style="width:90px" value="${esc((MOVE_VOLUMES[c.claim] || {}).size_gb || c.target_size_gb || c.size_gb)}"
-            onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'size_gb',+this.value)"> GB`
-        : `<span class="dim xs">${c.action === "move" ? `${c.size_gb} GB, as it is` : "as it is here"}</span>`}</td></tr>`;
+            onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'size_gb',+this.value)"> GiB`
+        : `<span class="dim xs">${c.action === "move" ? `${c.size_gb} GiB, as it is` : "as it is here"}</span>`}</td></tr>`;
   }).join("");
   return `<div class="f"><label>Volumes ${tip("Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.")}</label>
     <div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -2630,9 +2630,9 @@ window.movePlan = async (cluster, kind, name) => {
           ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : ""}</div>` : ""}
       ${plan.warnings?.length ? `<div class="note warn"><b>Before you start</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${plan.ok ? `<div class="note good"><b>Ready to ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"}.</b>
-        ${kind === "volume" ? `${esc(name)} (${plan.total_gb} GB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
+        ${kind === "volume" ? `${esc(name)} (${plan.total_gb} GiB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
           : volumes.some(c => c.action === "move") ? (() => { const moving = volumes.filter(c => c.action === "move");
-            return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GB) ${moving.length === 1 ? "goes" : "go"}
+            return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GiB) ${moving.length === 1 ? "goes" : "go"}
           through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`; })()
           : volumes.length ? "No volume's data is moved, so only its definition travels."
           : "It has no volumes, so only its definition travels."}

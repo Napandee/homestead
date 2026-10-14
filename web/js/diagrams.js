@@ -56,12 +56,12 @@
       const usage = root.diskUsage(n, d), size = usage.physical, w = 180;
       const sys = usage.host, lh = usage.longhorn, room = usage.room;
       const px = gb => usage.capacity ? gb / usage.capacity * w : 0;
-      b += text(236, dy + 12, `${clip(d.name || d.device, 16)} · ${size >= 1000 ? (size / 1000).toFixed(1) + " TB" : Math.round(size) + " GB"}`, "dg-s dg-mono");
+      b += text(236, dy + 12, `${clip(d.name || d.device, 16)} · ${root.sizeText(size)}`, "dg-s dg-mono");
       if (d.role === "unused") b += box(236, dy + 18, w, 9, "dg-empty dg-dash", 3) + text(236, dy + 40, "unused", "dg-xs dg-dim");
       else if (usage.capacity) {
         b += box(236, dy + 18, w, 9, "dg-track", 3) + (sys ? box(236, dy + 18, px(sys), 9, "dg-sys", 0) : "")
           + (lh ? box(236 + px(sys), dy + 18, px(lh), 9, "dg-vol", 0) : "") + (room ? box(236 + px(sys) + px(lh), dy + 18, px(room), 9, "dg-vol-room", 0) : "");
-        b += text(236, dy + 40, `Filesystem ${Math.round(usage.used)}/${Math.round(usage.capacity)} GB · ${usage.pct}%`, "dg-xs dg-dim");
+        b += text(236, dy + 40, `Filesystem ${Math.round(usage.used)}/${Math.round(usage.capacity)} GiB · ${usage.pct}%`, "dg-xs dg-dim");
       } else b += text(236, dy + 40, "usage unavailable", "dg-xs dg-dim");
       dy += 52;
     });

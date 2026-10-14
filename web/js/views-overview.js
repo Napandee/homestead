@@ -113,7 +113,7 @@ async function viewDash() {
         <div class="csub" style="margin-top:6px">${st.used_pct}% of raw capacity used
           ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div>
         ${tight.length ? `<a class="tag ${tight.some(n => n.level === "crit") ? "bad" : "warn"} lh-tight" onclick="go('storage')"
-          data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GB allocated, room for a ${n.room_gb} GB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
+          data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GiB allocated, room for a ${n.room_gb} GiB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
       </div></div>`
       : '<div class="empty">Storage figures aren\'t available yet.</div>'}
     </div>`,
@@ -525,7 +525,7 @@ function nodeDiskLines(n) {
 /* A drive's name, shown on the node card instead of its device. Kept by its
    serial, so it follows the drive to another port. */
 window.diskRename = async (node, device, current) => {
-  const name = await askText(`Name ${device} on ${node}`, current, { placeholder: "Media 3TB, System NVMe…" });
+  const name = await askText(`Name ${device} on ${node}`, current, { placeholder: "Media, System NVMe…" });
   if (name === null) return;
   try {
     const r = await api("/api/disks/name", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -591,12 +591,12 @@ async function nodePage(name) {
   const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${d.health?.state === "critical" ? "smart-failed" : ""}">
     <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span>
       ${can("admin") ? `<button class="btn sm" data-tip="Name this drive" onclick="diskRename(${jsq(n.name)},${jsq(d.name)},${jsq(given[d.name] || "")})">${given[d.name] ? "Rename" : "Name"}</button>` : ""}</b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
-    <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GB</b></div>
+    <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GiB</b></div>
     <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}" data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b></div>
     <div><span class="disklabel">LIFE</span><b class="mono ${lifeTone(d.health?.life_pct)}">${d.health?.life_pct == null ? "—" : esc(d.health.life_pct) + "%"}</b></div>
     <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
-    <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MB/s</b></div>
-    <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MB/s</b></div>
+    <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MiB/s</b></div>
+    <div><span class="disklabel">WRITE</span><b class="mono diskrate write">↑ ${Number(d.write_mbps || 0).toFixed(2)} MiB/s</b></div>
     <button class="btn sm" ${s ? "" : "disabled"} onclick="smartDisk(${jsq(n.name)},${jsq(d.name)})" title="${s ? "Drive health, history, and self-tests" : "SMART helper is not available on this host"}">Details</button>
   </div>`; }).join("");
   const hw = nodeHardwareIds(n);
@@ -645,7 +645,7 @@ async function nodePage(name) {
         ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
         ${fact("Interface", `<span class="mono">${esc(n.net_iface || "—")}</span>`)}
         ${fact("In / out now", `<span class="mono">${(n.rx_mbps || 0).toFixed(2)} / ${(n.tx_mbps || 0).toFixed(2)} Mb/s</span>`)}
-        ${fact("In / out since boot", `<span class="mono">${n.rx_total_gb || 0} / ${n.tx_total_gb || 0} GB</span>`)}
+        ${fact("In / out since boot", `<span class="mono">${n.rx_total_gb || 0} / ${n.tx_total_gb || 0} GiB</span>`)}
       </div></div>
       <div class="card flat"><div class="ctitle">Addresses it answers for</div><div class="csub">Its own, and the VIPs that move to another host if it goes down</div>
         <div style="margin-top:10px">${nodeAddressTags(n) || "—"}</div></div>
@@ -658,7 +658,7 @@ async function nodePage(name) {
         ${fact("Kernel", `<span class="mono">${esc(n.kernel || "—")}</span>`)}
         ${fact("Container runtime", `<span class="mono">${esc(i.containerRuntimeVersion || "—")}</span>`)}
         ${fact("Kubelet", `<span class="mono">${esc(i.kubeletVersion || "—")}</span>`)}
-        ${fact("Image storage", `<span class="mono">${n.img_used_gb || 0} GB</span>`)}
+        ${fact("Image storage", `<span class="mono">${n.img_used_gb || 0} GiB</span>`)}
       </div>
       <div style="margin-top:10px">${(n.conditions || []).map(c => `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div></div>`],
   ];
@@ -686,7 +686,7 @@ async function nodePage(name) {
 }
 function nodePageSummary(n) {
   const h = nodeHealth(n), known = value => h.ready && value != null && value !== "";
-  const pair = (used, cap) => known(used) && known(cap) ? `${esc(used)}/${esc(cap)} GB` : "—";
+  const pair = (used, cap) => known(used) && known(cap) ? `${esc(used)}/${esc(cap)} GiB` : "—";
   return `<span class="sumitem"><span class="pill ${h.tone === "bad" ? "crit" : h.tone}" data-tip="${esc([n.status, ...h.issues].join(" · "))}">${esc(h.status)}</span></span>
     <span class="sumitem">CPU <b>${known(n.cpu_pct) ? `${esc(n.cpu_pct)}%` : "—"}</b> of ${esc(n.cpu_cap ?? "—")}</span>
     <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
@@ -758,7 +758,7 @@ window.smartDisk = async (node, disk) => {
              ${stat("Media errors", s.media_errors, +(s.media_errors || 0) ? "bad" : "")}
              ${stat("Unsafe shutdowns", nvme.unsafe_shutdowns)}
              ${stat("Data written", nvme.data_units_written == null ? null
-               : (nvme.data_units_written * 512000 / 1024 ** 4).toFixed(2) + " TB")}`
+               : (nvme.data_units_written * 512000 / 1024 ** 4).toFixed(2) + " TiB")}`
           : `${stat("Reallocated", s.reallocated, +(s.reallocated || 0) ? "warn" : "")}
              ${stat("Pending", s.pending, +(s.pending || 0) ? "bad" : "")}
              ${stat("Uncorrectable", s.uncorrectable, +(s.uncorrectable || 0) ? "bad" : "")}

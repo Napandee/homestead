@@ -64,9 +64,9 @@ try {
     await page.evaluate(()=>go("dash"));
     await page.locator(".consumer-row").first().waitFor();
     const card=size.width>560 ? page.locator(".comparison-disk").first() : page.locator(".node-comparison-detail").first();
-    assert.match(await card.innerText(),/40%\s+40\/100 GB/);
-    assert.match(await card.innerText(),/Filesystem use · 500 GB disk/);
-    assert.match(await card.locator(".meter.split").getAttribute("data-tip"),/Longhorn allowance left 30 GB/);
+    assert.match(await card.innerText(),/40%\s+40\/100 GiB/);
+    assert.match(await card.innerText(),/Filesystem use · 500 GiB disk/);
+    assert.match(await card.locator(".meter.split").getAttribute("data-tip"),/Longhorn allowance left 30 GiB/);
     const widths=await card.locator(".meter.split>span").evaluateAll(spans=>spans.map(s=>Number.parseFloat(s.style.width)));
     assert.deepEqual(widths,[30,10,30]);
     for(const group of await page.locator(".node-comparison-detail .about-grid>div").all()) {

@@ -55,7 +55,7 @@ function objectStoreCard(store, target) {
     <div class="about-grid" style="margin-top:12px">
       <div><span>Endpoint</span><b class="mono">${esc(store.endpoint || "—")}</b></div>
       <div><span>Bucket</span><b class="mono">${esc(store.bucket)}</b></div>
-      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GB" : "—"}</b></div>
+      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GiB" : "—"}</b></div>
       <div><span>Longhorn target</span><b>${pointed ? "pointed here" : switching ? "switching" : "not pointed here"}</b></div>
     </div>
     ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
@@ -289,7 +289,7 @@ function protectFilterWrite() {
 function protectVolumeRow(v) {
   return `<tr>
     <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
-    <td class="mono">${v.size_gb} GB</td>
+    <td class="mono">${v.size_gb} GiB</td>
     <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
@@ -472,7 +472,7 @@ window.lhGroup = (name = "") => {
       <input type="text" id="lg_filter" placeholder="Filter by name or namespace" oninput="lhGroupFilter()" autocomplete="off">
       <div class="lg-list" id="lg_vols">${(d.volumes || []).map(v => `<label class="lg-row" data-q="${esc(`${v.pvc} ${v.namespace} ${v.name}`.toLowerCase())}">
         <input type="checkbox" value="${esc(v.name)}" ${row.volumes.includes(v.name) ? "checked" : ""}>
-        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GB</span></span>
+        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GiB</span></span>
         <span class="lg-tags">${v.groups.filter(g => g !== name).map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("")}</span></label>`).join("")
         || '<div class="dim xs">No volumes.</div>'}</div>
       <div class="row" style="gap:10px;margin-top:6px"><button class="linkish xs" onclick="lhGroupAll(true)">Tick all shown</button>
@@ -715,7 +715,7 @@ function backupTable(bks, vol, label) {
     ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
       <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
-      <td class="mono">${b.size_mb} MB</td>
+      <td class="mono">${b.size_mb} MiB</td>
       <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
         b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,

@@ -1168,7 +1168,7 @@ function balanceContainersHtml(b) {
   const rows = (plan.apps || []).map((id, i) => {
     const m = moves.find(x => x.id === id), off = b.exclude.has(id);
     return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">stays where it is</span>'
-      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GB${m.near ? " · its volumes have a copy there" : ""}</span>`];
+      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}</span>`];
   });
   return [
     balanceSwitch("containers", b, "Balance containers"),
@@ -1186,7 +1186,7 @@ function balanceContainersHtml(b) {
 }
 
 function balanceVolumesHtml(b) {
-  const plan = b.plan, moves = plan.moves || [], gb = n => `${n} GB`;
+  const plan = b.plan, moves = plan.moves || [], gb = n => `${n} GiB`;
   const hosts = UI.table([{ label: "Host" }, { label: "Copies held", className: "grow" }], (plan.hosts || []).map(h => {
     const after = b.on ? h.after_gb : h.before_gb;
     return [`<span class="mono">${esc(h.name)}</span>${h.takes ? "" : ` ${UI.chip("takes no new copies", "warn")}`}`,

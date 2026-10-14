@@ -67,7 +67,7 @@ window.vmStore = async (check = false) => {
   let s;
   try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); return; }
   STATE.data.vmStore = s;
-  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`) : "—";
+  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB`) : "—";
   const day = t => t ? fmtDay(t) : "";
   const state = r => {
     if (!s.harvester) return "";
@@ -96,7 +96,7 @@ window.vmStore = async (check = false) => {
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
-        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
+        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
         <td>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
@@ -936,7 +936,7 @@ window.uvmLoad = async name => {
     return `<tr><td><b>${esc(vm.name)}</b>${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
       <td data-label="State"><span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
       <td data-label="Machine" class="small">${machine}</td>
-      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
+      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GiB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
       <td>${action}</td></tr>`;
   }).join("")}</tbody></table></div>` : '<div class="dim small">No VMs on this server.</div>';
   if (window.applyRole) applyRole();
@@ -976,9 +976,9 @@ window.uvmImport = async (source, name) => {
     ${UI.field("Storage class", `<select id="uvm_sc">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
       { tipHtml: tip("The storage class for the disks. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
     ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
-      `${esc(d.size_gb)} GB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
+      `${esc(d.size_gb)} GiB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
       i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
-    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 100 MB/s on gigabit.</p>`;
+    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 110 MiB/s on gigabit.</p>`;
   const lan = (opts.network_details || []).filter(n => n.vms !== false);
   const network = `
     ${UI.field("Network", `<select id="uvm_net" onchange="uvmPicture()">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? " · LAN" : ""}</option>`).join("")}<option value="pod">Pod network - reached through a Service</option></select>`,
@@ -1007,7 +1007,7 @@ window.uvmPicture = () => {
     if (!kept.has(d.index)) return { what: "Disk", from: d.path.split("/").pop(), drop: true };
     const dv = n ? `${name}-disk-${n + 1}` : `${name}-disk`;
     n += 1;
-    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GB`, to: `${dv} · ${d.size_gb} GiB` };
+    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GiB`, to: `${dv} · ${d.size_gb} GiB` };
   };
   const rows = [
     { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} cores` },

@@ -241,7 +241,7 @@ const UI = (() => {
 
   /* A CPU or memory amount, in the units the rest of Homestead shows (#311):
      memory as a number with MiB or GiB, CPU as a percentage of one core or
-     cores. Typed amounts are understood ("390 MB", "1.5 GB", "1Gi", "50m"),
+     cores. Typed amounts are understood ("390M", "1.5G", "1Gi", "50m"),
      and the line under the field says what was understood, or why not. The
      Kubernetes quantity the form sends is kept in a hidden input with the
      id the form reads, so nothing that reads it changes. */
