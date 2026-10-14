@@ -904,6 +904,43 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   document.addEventListener("keydown", typedConfirmKey, true);
 }
 
+/* Keyboard reach (#487). Older markup opens things from a tr, span, div or
+   a link without an href, which Tab skips: each gets a tab stop (and a
+   button role, except a table row, which stays a row) and Enter or Space
+   clicks it. An icon-only button takes its name from its tooltip. New
+   markup uses <button>; tests/keyboard-reach.test.js keeps the old kind
+   from growing. */
+const REACH_TAGS = new Set(["TR", "SPAN", "DIV", "LI", "TD", "B", "SECTION", "ARTICLE"]);
+function keyboardReach(el) {
+  const tag = el.tagName;
+  const clickOnly = el.hasAttribute("onclick") && (REACH_TAGS.has(tag) || (tag === "A" && !el.hasAttribute("href")));
+  if (clickOnly && !el.hasAttribute("tabindex")) {
+    el.setAttribute("tabindex", "0");
+    if (tag !== "TR" && !el.hasAttribute("role")) el.setAttribute("role", "button");
+  }
+  if ((tag === "BUTTON" || el.getAttribute("role") === "button") && !String(el.textContent || "").trim() && !el.hasAttribute("aria-label")) {
+    const name = el.getAttribute("data-tip") || el.getAttribute("title");
+    if (name) el.setAttribute("aria-label", name);
+  }
+}
+if (typeof window !== "undefined") window.keyboardReach = keyboardReach;
+if (typeof document !== "undefined" && typeof MutationObserver === "function" && document.documentElement) {
+  const reachAll = () => document.querySelectorAll("[onclick], button:not([aria-label])").forEach(keyboardReach);
+  let reachQueued = false;
+  new MutationObserver(() => {
+    if (reachQueued) return;
+    reachQueued = true;
+    queueMicrotask(() => { reachQueued = false; reachAll(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener("keydown", event => {
+    const el = event.target;
+    if ((event.key !== "Enter" && event.key !== " ") || !el?.hasAttribute?.("onclick")) return;
+    if (!REACH_TAGS.has(el.tagName) && !(el.tagName === "A" && !el.hasAttribute("href"))) return;
+    event.preventDefault();   // Space would scroll the page
+    el.click();
+  });
+}
+
 /* Back to top (#292): on any page, once it is scrolled more than a screen
    and a half down, a small button bottom-right takes it back to the top -
    smoothly, or at once where motion is reduced. The page scrolls the
