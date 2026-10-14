@@ -3598,7 +3598,6 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .vm-name-text>b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* An OS logo is a tile of its own: it fills the avatar rather than sitting in a circle. */
 .av.appav.os-logo{border-radius:9px;background:none;box-shadow:none}.av.appav.os-logo img{padding:0}
-.vm-edit-logo{gap:10px;align-items:center;flex-wrap:wrap}
 
 /* The Monitoring page (uptime.js). */
 .answer-strip i.dip{background:color-mix(in srgb,var(--crit) 55%,var(--ok))}
