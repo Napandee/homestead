@@ -136,22 +136,33 @@ function loadAppIcons(root = document) {
 const fmtUp = sec => {
   if (!sec || sec < 0) return "—";
   const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
-  if (d) return `${d}d ${h}h`;
-  if (h) return `${h}h ${m}m`;
+  if (d) return h ? `${d}d ${h}h` : `${d}d`;
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
   return `${m}m`;
 };
 const fmtAgo = sec => sec ? fmtUp(sec) + " ago" : "—";
-const ageSecs = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000)) : 0;
-/* An API timestamp, which is UTC, in the reader's own time and how long ago:
-   "22 Sep, 05:00 · 6h 2m ago". The UTC value goes in the tooltip. */
-const fmtWhen = iso => {
-  const at = iso ? new Date(iso) : null;
-  if (!at || isNaN(at)) return "—";
-  const text = at.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
-    ...(at.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) });
-  const ago = ageSecs(iso) >= 60 ? ` · ${fmtAgo(ageSecs(iso))}` : "";
-  return `<span data-tip="${esc(at.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC"))}">${esc(text + ago)}</span>`;
+/* One way to write a time (#503). An API time is ISO text, epoch seconds or
+   milliseconds. It is shown in the reader's own time, without seconds, with
+   the year only when it isn't this year, and its UTC value on hover. */
+const asDate = v => { const at = v instanceof Date ? v : typeof v === "number" ? new Date(v < 1e12 ? v * 1000 : v) : v ? new Date(v) : null; return at && !isNaN(at) ? at : null; };
+const ageSecs = v => { const at = asDate(v); return at ? Math.max(0, Math.floor((Date.now() - at.getTime()) / 1000)) : 0; };
+const thisYear = at => at.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" };
+const fmtAt = (v, { weekday = false } = {}) => { const at = asDate(v);
+  return at ? at.toLocaleString(undefined, { ...(weekday ? { weekday: "short" } : {}), day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", ...thisYear(at) }) : ""; };
+const fmtDay = v => { const at = asDate(v); return at ? at.toLocaleDateString(undefined, { day: "numeric", month: "short", ...thisYear(at) }) : ""; };
+const fmtClock = v => { const at = asDate(v); return at ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""; };
+const utcTip = at => at.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+/* A past time and how long ago: "22 Sep, 05:00 · 6h 2m ago". */
+const fmtWhen = v => {
+  const at = asDate(v);
+  if (!at) return "—";
+  const ago = ageSecs(at) >= 60 ? ` · ${fmtAgo(ageSecs(at))}` : "";
+  return `<span data-tip="${esc(utcTip(at))}">${esc(fmtAt(at) + ago)}</span>`;
 };
+/* A time to come, such as a next run: "Tue 22 Sep, 05:00". */
+const fmtNext = v => { const at = asDate(v); return at ? `<span data-tip="${esc(utcTip(at))}">${esc(fmtAt(at, { weekday: true }))}</span>` : "—"; };
+/* Said once on a page or dialog that shows times to come in local time. */
+const zoneLine = () => { let zone = ""; try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* no Intl zone */ } return `Times are in your time zone (${zone || "UTC"})`; };
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
