@@ -118,7 +118,7 @@ window.pickMove = node => {
 window.doMoveNow = async (ns, name) => {
   const unpin = $("#mv_unpin").checked;
   const node = unpin ? null : window.__moveTarget;
-  if (!unpin && !node) return toast("pick a host first", "bad");
+  if (!unpin && !node) return toast("Pick a host first", "bad");
   await window.hostMoveReview({ ns, name, node, pin: !unpin && $("#mv_pin").checked });
 };
 
@@ -225,7 +225,7 @@ window.evacuateNode = async node => {
       : '<div class="empty">Nothing of yours is running here.</div>'}
     ${impact.stranded.length ? `<div class="note dependency-danger" style="margin-top:14px"><b>${impact.stranded.length} workload${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.</b> Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.</div>
       <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> I understand ${impact.stranded.map(w => esc(w.name)).join(", ")} will not come back up now</label>` : ""}
-    ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${wls.length} workload(s)</button>
+    ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${plural(wls.length, "workload")}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
     <div class="note" style="margin-top:14px">Each workload restarts on another host. With
     ReadWriteOnce volumes they restart one at a time, so this is not instant.</div>` : ""}`);
@@ -237,7 +237,7 @@ window.doEvacuate = async node => {
       body: JSON.stringify({ node, cordon: true }) });
     const r = await api("/api/node/drain", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, allow_stranded: allow }) });
-    toast(`cordoned and evicted ${r.evicted.length} pod(s)`, "ok");
+    toast(`Cordoned and evicted ${plural(r.evicted.length, "pod")}`, "ok");
     closeModal(); setTimeout(() => refresh(true), 1800);
   } catch (e) { toast(e.message, "bad"); }
 };

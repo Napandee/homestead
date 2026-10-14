@@ -1508,12 +1508,13 @@ elsewhere cannot attach twice, and a claim from a migratable class answers a
 second node by starting a live migration rather than attaching, which the CSI
 driver will not filesystem-mount while it is in flight.
 
-One parameter decides whether a class can back container storage at all.
-A class with `migratable: true` hands out two-controller volumes so a VM disk
-can live-migrate between hosts, and Longhorn's CSI driver refuses to
-filesystem-mount those into a pod: a ReadWriteMany claim created on such a
-class binds happily and then strands whatever tries to use it in
-`ContainerCreating`. Homestead therefore refuses ReadWriteMany claims on a
+One parameter decides whether a class can back a volume several hosts
+mount. A class with `migratable: true` is made so a VM disk can live-migrate
+between hosts: its volume attaches to one host at a time, which is fine for
+one pod there. A pod on a second host makes Longhorn start a live migration
+instead of attaching, and the CSI driver refuses that filesystem mount, so a
+ReadWriteMany claim created on such a class binds happily and then strands
+the second host's pod in `ContainerCreating`. Homestead therefore refuses ReadWriteMany claims on a
 migratable class, naming the classes that would work, and the storage picker
 narrows its class list as soon as RWX is chosen. Harvester's reserved internal
 classes are never offered.

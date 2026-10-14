@@ -15,7 +15,13 @@ function agentLeft(expires, now = Date.now() / 1000) {
 window.agentLeft = agentLeft;
 
 const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : new Date(at * 1000).toLocaleString()) : "";
-const agentLabel = key => String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+/* A request's field names as people write them; the rest lose their
+   underscores. Ids, images and addresses are shown in mono. */
+const AGENT_LABELS = { uid: "UID", ip: "IP", vip: "VIP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",
+  pvc: "PVC", url: "URL", mac: "MAC" };
+const AGENT_MONO = /(^|_)(uid|id|ip|vip|image|mac|url|pvc|digest|address)$/;
+const agentLabel = key => AGENT_LABELS[key] || String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase())
+  .replace(/\b(ip|vip|uid|url|mac|pvc)\b/g, word => word.toUpperCase());
 
 const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", "info"], done: ["done", "ok"],
   denied: ["denied", "warn"], expired: ["expired", ""], failed: ["failed", "bad"] };
@@ -23,10 +29,11 @@ const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, "
 
 /* One value of a plan, as a person reads it. Lists of plain values are
    joined; anything nested is shown as compact text rather than guessed at. */
-function agentValue(value) {
+function agentValue(value, key = "") {
   if (value === null || value === undefined || value === "") return '<span class="dim">none</span>';
   if (typeof value === "boolean") return value ? "yes" : "no";
-  if (typeof value === "number" || typeof value === "string") return esc(String(value));
+  if (typeof value === "number" || typeof value === "string")
+    return AGENT_MONO.test(key) ? `<span class="mono">${esc(String(value))}</span>` : esc(String(value));
   if (Array.isArray(value)) {
     if (!value.length) return '<span class="dim">none</span>';
     return value.every(v => v === null || typeof v !== "object") ? esc(value.join(", "))
@@ -38,7 +45,7 @@ function agentValue(value) {
 /* The plan to review: everything in the summary except its headline. */
 function agentPlanHtml(summary) {
   const rows = Object.entries(summary || {}).filter(([key]) => key !== "action")
-    .map(([key, value]) => [agentLabel(key), agentValue(value)]);
+    .map(([key, value]) => [agentLabel(key), agentValue(value, key)]);
   return rows.length ? UI.facts(rows) : "";
 }
 

@@ -155,6 +155,14 @@ const fmtWhen = iso => {
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
+/* A count in words: plural(1, "pod") is "1 pod", plural(3, "pod") "3 pods". */
+const plural = (n, word, many = word + "s") => `${n} ${Number(n) === 1 ? word : many}`;
+/* A Kubernetes state as people write it: "NotReady" is "Not ready". Callers
+   keep the raw state in a tooltip. */
+const STATE_WORDS = { ErrorUnschedulable: "Can't be scheduled", ErrImagePull: "Image can't be pulled",
+  ImagePullBackOff: "Image can't be pulled" };
+const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/([a-z])([A-Z])/g, "$1 $2")
+  .replace(/ (.*)$/, (all, rest) => " " + rest.toLowerCase());
 
 /* ---------------- settings ---------------- */
 const SET = Object.assign(
@@ -415,14 +423,13 @@ window.pushModal = pushModal;
    any dialog already open, leave it as it is, and resolve to the answer:
    ask() to true or false, askText() to the text or null. Escape cancels,
    Enter answers. */
-const ASK_DANGER = /^(delete|remove|erase|force|stop|uninstall|disable|forget|unlink|disconnect|discard|cancel|clear|turning)/i;
-function askDialog(message, { title = "", ok = "", cancel = "", danger = null, input = null } = {}) {
+function askDialog(message, { title = "", ok = "", cancel = "", danger = false, input = null } = {}) {
   return new Promise(resolve => {
     const layer = document.createElement("div");
     layer.className = "askdlg";
     layer.setAttribute("role", "dialog");
     layer.setAttribute("aria-modal", "true");
-    const risky = danger === null ? ASK_DANGER.test(String(message).trim()) : danger;
+    const risky = !!danger;
     layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">${esc(cancel || "Cancel")}</button>
@@ -463,10 +470,10 @@ async function dismissModal() {
   const guard = window.__modalGuard;
   if (typeof guard === "function") {
     const question = guard();
-    if (question && !(await ask(question))) return;
+    if (question && !(await ask(question, { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   } else if (modalIsOpen() && modalChanged()) {
     const discard = await ask(`Discard your changes to ${$("#mtitle").textContent}?`,
-      { title: "Unsaved changes", ok: "Discard", cancel: "Keep editing" });
+      { title: "Unsaved changes", ok: "Discard changes", cancel: "Keep editing", danger: true });
     if (!discard) return;
   }
   if (MODAL_STACK.length) return modalBack();

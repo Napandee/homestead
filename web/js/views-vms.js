@@ -101,7 +101,7 @@ window.vmStore = async (check = false) => {
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
-      <input id="vmStoreFilter" type="search" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
+      <input id="vmStoreFilter" type="search" aria-label="Filter images" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
         oninput="STATE.vmStoreFilter=this.value; clearTimeout(window.__vsf); window.__vsf=setTimeout(() => vmStore(), 250)" style="max-width:260px"></div>
     <div class="card flat pad0" style="margin-top:8px"><div class="tblwrap"><table class="tbl stack dense vmstore"><thead><tr>
       <th>Image</th><th>Variant</th><th>Download</th><th>Sign in as</th>${s.harvester ? "<th>Here</th>" : ""}<th></th></tr></thead>
@@ -137,7 +137,7 @@ window.vmStoreAuto = async (id, auto) => {
 };
 window.vmStoreForget = async id => {
   const row = (STATE.data.vmStore?.images || []).find(r => r.id === id);
-  if (!(await ask(`Stop keeping ${row?.name || id}?\n\nIts builds no disk was made from are deleted; the ones a disk came from stay until that disk is gone.`))) return;
+  if (!(await ask(`Stop keeping ${row?.name || id}?\n\nIts builds no disk was made from are deleted; the ones a disk came from stay until that disk is gone.`, { title: "Stop keeping the image", ok: "Stop keeping it", danger: true }))) return;
   try { toast((await vmStorePost("/api/vm/store/forget", { id })).detail, "ok"); vmStore(); }
   catch (e) { toast(e.message, "bad"); }
 };
@@ -299,7 +299,7 @@ let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
   if (VM_POWER_BUSY && ["start", "restart", "unpause"].includes(action)) return toast("A VM power request is being sent; wait for its result", "bad");
   if (["start", "restart", "unpause"].includes(action)) return vmPowerReview({ ns, name, action });
-  if (action === "force-stop" && !(await ask(`Force off ${name}? The power is cut at once - the guest is not asked to shut down, so unsaved work in it is lost. Shut down asks it first.`))) return;
+  if (action === "force-stop" && !(await ask(`Force off ${name}? The power is cut at once - the guest is not asked to shut down, so unsaved work in it is lost. Shut down asks it first.`, { title: "Force off", ok: "Force off", danger: true }))) return;
   try {
     const r = await api("/api/vm/power", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name, action }) });
     toast(r.detail, "ok"); setTimeout(() => refresh(true), 1200);
@@ -408,7 +408,7 @@ window.vmOpen = async (ns, name) => {
         <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table></div>
     <div class="vm-pane" data-pane="events" hidden>${v.events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Last</th></tr></thead><tbody>
       ${v.events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
-        <td class="small">${esc(e.message)}</td><td class="small dim">${esc((e.last || "").replace("T", " ").slice(0, 16))}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>'}</div>`;
+        <td class="small">${esc(e.message)}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>'}</div>`;
   if (window.applyRole) applyRole();
 };
 window.vmTab = (button, pane) => {
@@ -576,7 +576,7 @@ window.vmEditSave = async () => {
   const { ns, name, v } = window.__vmEdit;
   const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
     && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
-  if (badUrl) return toast("a disk's URL must start with http:// or https://", "bad");
+  if (badUrl) return toast("A disk's URL must start with http:// or https://", "bad");
   const sourceOf = (select, url) => select.value === "url" ? { url: url.value.trim() }
     : select.value.startsWith("image:") ? { image: select.value.slice(6) }
     : select.value.startsWith("iso:") ? { iso: select.value.slice(4) } : {};
@@ -610,7 +610,7 @@ window.vmEditSave = async () => {
   try {
     const devices = window.vmDevicesChanges ? await window.vmDevicesChanges() : null;
     if (devices) body.host_devices = devices;
-  } catch (e) { return toast(`the ROM file could not be read: ${e.message}`, "bad"); }
+  } catch (e) { return toast(`The ROM file could not be read: ${e.message}`, "bad"); }
   const hardware = v.hardware ? vmHardwareChanges(v.hardware) : null;
   if (hardware) {
     body.hardware = hardware;
@@ -693,7 +693,7 @@ window.vmDelete = (ns, name) => {
     ${UI.actions(`<button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.vmDeleteGo = async (ns, name) => {
-  if ($("#vd_confirm").value.trim() !== name) return toast("type the VM's name exactly", "bad");
+  if ($("#vd_confirm").value.trim() !== name) return toast("Type the VM's name exactly", "bad");
   try { const r = await api("/api/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, disks: !!$("#vd_disks")?.checked }) });
     toast(r.detail, "ok"); closeModal(); refresh(true); } catch (e) { toast(e.message, "bad"); }
@@ -849,7 +849,7 @@ async function viewVmImport() {
   if (platformLacks("kubevirt", "Virtual machines")) return;
   const [srcs, disks, namespaces, storageClasses] = await Promise.all([
     api("/api/sources").catch(() => []), api("/api/vm-disks").catch(() => []),
-    api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
   ]);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   STATE.data.uvms = STATE.data.uvms || {};
@@ -944,7 +944,7 @@ window.uvmImport = async (source, name) => {
   const opts = await api("/api/vm/create-options").catch(() => ({ cdi: true, storage_classes: [], network_details: [] }));
   if (opts.cdi === false) return modal(`Import ${name}`, UI.lead("VM disks arrive through CDI, KubeVirt's disk importer, and this cluster does not have it. Install CDI from kubevirt.io, then import again.") + UI.actions(UI.cancel("Close")));
   window.__uvm = { source, vm };
-  const namespaces = STATE.data.importNamespaces || ["lab"];
+  const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = opts.storage_classes?.length ? opts.storage_classes : (STATE.data.importStorageClasses || ["longhorn-r2"]);
   const facts = opts.storage_class_facts || {};
   const hw = [vm.firmware === "uefi" ? "UEFI" : "BIOS", vm.secure_boot ? "Secure Boot" : "", vm.tpm ? "TPM" : "", vm.hyperv ? "Hyper-V enlightenments" : ""].filter(Boolean).join(" · ");

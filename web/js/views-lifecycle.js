@@ -80,8 +80,8 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <div class="e-vols" id="e_vols_${index}"></div>
       <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>`,
   };
-  const count = section === "environment" ? `${env.length + refs.length} vars`
-    : section === "storage" ? `${mounts.length} mounts` : section === "address" ? `${ports.length} ports` : "";
+  const count = section === "environment" ? plural(env.length + refs.length, "variable")
+    : section === "storage" ? plural(mounts.length, "mount") : section === "address" ? plural(ports.length, "port") : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
@@ -206,8 +206,8 @@ const FAILOVER_HELP = {
   wait: "It stays with its node and starts again when that node is back - for apps tied to that host's hardware, or better restarted where they were.",
   default: "Kubernetes moves it after five minutes, the default for anything Homestead did not deploy.",
 };
-function failoverSelect(id, current, extra = "") {
-  return `<select id="${id}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
+function failoverSelect(id, current, extra = "", label = "If its node fails") {
+  return `<select id="${id}" aria-label="${esc(label)}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
 }
 window.FAILOVER_WORDS = FAILOVER_WORDS;
@@ -538,7 +538,7 @@ window.editSave = async (ns, name) => {
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
-    if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`))) return;
+    if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`, { title: "Turn autostart off", ok: "Stop Homestead", danger: true }))) return;
     body.confirm_self = true;
   }
   await window.editReview(body);
@@ -581,7 +581,7 @@ window.editReview = async body => {
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
-        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
+        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${plural((review.capacity.warnings || []).length, "warning")}</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : concerns.length ? "I accept the restart and warnings above" : "I accept the restart"}</label>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button>`)}`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
@@ -810,7 +810,7 @@ window.nodePowerReview = async (node, action, force = false) => {
     { key: "apps", title: `${plan.hold ? "Apps and VMs" : "What goes down"} · ${plan.hold ? hold.length : workloads.length}`, html: apps },
     { key: "volumes", title: `Volume copies · ${volumes.length}`, html: copies },
     budgets.length ? { key: "budgets", title: `Disruption budgets · ${budgets.length}`, html: UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
-      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`])) } : null,
+      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${plural(b.allowed, "disruption")} allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`])) } : null,
     local.length ? { key: "local", title: `Local and external storage · ${local.length}`, html: `<p class="ui-help">${outage ? "Temporary pod data may be lost during restart. Host-local and external storage may be unavailable while this host is down." : "Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding."}</p>`
       + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`])) } : null,
   ];
@@ -829,16 +829,16 @@ window.nodePowerReview = async (node, action, force = false) => {
 };
 window.nodePower = async (node, action) => {
   const plan = window.__nodePowerPlan;
-  if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("review the host impact again", "bad");
+  if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("Review the host impact again", "bad");
   const c = $("#pw_confirm")?.value.trim();
-  if (c !== node) return toast("type the host name exactly to confirm", "bad");
+  if (c !== node) return toast("Type the host name exactly to confirm", "bad");
   if (plan.planned_outage && !$("#pw_outage")?.checked)
-    return toast("acknowledge the whole-cluster outage", "bad");
+    return toast("Acknowledge the whole-cluster outage", "bad");
   const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
   if (!plan.planned_outage && $("#pw_allow") && !$("#pw_allow").checked)
-    return toast("confirm the workloads that will remain down", "bad");
+    return toast("Confirm the workloads that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
-    return toast("confirm the volume risk", "bad");
+    return toast("Confirm the volume risk", "bad");
   // Consume approval before sending, including double clicks and lost replies.
   window.__nodePowerPlan = null;
   const button = $("#pw_execute");
@@ -938,7 +938,7 @@ window.doVmMove = async (ns, name) => {
   try {
     const r = await api("/api/vm/migrate", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, target: $("#vm_target").value || null }) });
-    toast(`migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
+    toast(`Migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
   } catch (e) { toast(e.message, "bad"); }
 };
 /* ---------------- a VM's own address ----------------
@@ -1224,9 +1224,9 @@ window.doVmCreate = async () => {
   if (body.isolated) { delete body.network; delete body.nic_model; }
   if (!body.isolated && body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
-    if (!body.static_ip.address) return toast("give the VM its address", "bad");
+    if (!body.static_ip.address) return toast("Give the VM its address", "bad");
   }
-  if (!body.name) return toast("name is required", "bad");
+  if (!body.name) return toast("Name is required", "bad");
   if (body.install_iso && body.namespace !== defaultNamespace())
     return toast(`ISOs are in ${defaultNamespace()}: choose that namespace to install from one`, "bad");
   const serviceMode = body.network === "pod" ? $("#v_service")?.value || "" : "";
@@ -1241,8 +1241,8 @@ window.doVmCreate = async () => {
     if (devices) body.host_devices = devices;
   } catch (error) { return toast(error.message, "bad"); }
   if (body.install_iso) body.password = "";
-  if (!body.disk_import && !body.install_iso && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
-  if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
+  if (!body.disk_import && !body.install_iso && body.password.length < 10) return toast("Root password must be at least 10 characters", "bad");
+  if (boot === "url" && !body.image_url) return toast("Image URL is required", "bad");
   if (boot === "url" && !/^https?:\/\/[^/\s]+/i.test(body.image_url)) {
     // A file name here is usually a Harvester image, which is picked from the list instead.
     const image = (window.__vmCreateOptions?.images || []).find(i => i.display === body.image_url || i.name === body.image_url);
@@ -1426,7 +1426,7 @@ window.imageScan = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.forgetRollback = async (namespace, name) => {
-  if (!(await ask(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`))) return;
+  if (!(await ask(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`, { title: "Forget the previous image", ok: "Forget it", danger: true }))) return;
   try {
     const r = await api("/api/images/forget-rollback", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name }) });
@@ -1506,10 +1506,10 @@ window.jobEdit = (j) => {
 window.jobSave = async () => {
   const body = { name: $("#j_name").value.trim(), schedule: $("#lj_cron").value.trim(),
     image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked };
-  if (!body.name || !body.command) return toast("name and command are required", "bad");
+  if (!body.name || !body.command) return toast("Name and command are required", "bad");
   try {
     await api("/api/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast("schedule saved", "ok"); closeModal(); resetPaint(); viewSchedules();
+    toast("Schedule saved", "ok"); closeModal(); resetPaint(); viewSchedules();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.jobRun = async name => {
@@ -1517,9 +1517,9 @@ window.jobRun = async name => {
     toast(`${name} started`, "ok"); } catch (e) { toast(e.message, "bad"); }
 };
 window.jobDel = async name => {
-  if (!(await ask(`Delete schedule "${name}"?`))) return;
+  if (!(await ask(`Delete schedule "${name}"?`, { title: "Delete schedule", ok: "Delete schedule", danger: true }))) return;
   try { await api("/api/schedules/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast("deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
+    toast("Deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
 };
 
 /* ---------------- import ---------------- */
@@ -1549,7 +1549,7 @@ async function viewImport() {
   if (nodes.length) STATE.data.nodes = nodes;
   const [srcs, jobs, namespaces, storageClasses] = await Promise.all([
     api("/api/sources"), api("/api/imports").catch(() => []),
-    api("/api/namespaces").catch(() => ["lab"]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
   ]);
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
@@ -1567,13 +1567,13 @@ async function viewImport() {
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="imports" class="tbl stack"><thead><tr>
       <th>App</th><th>Job</th><th>State</th><th>Progress</th><th data-nosort>Started</th><th></th></tr></thead><tbody>
-      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== "lab" ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
+      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== defaultNamespace() ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
-        <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || "lab")},${jsq(j.name)})` },
-          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || "lab")})`, need: "admin", danger: j.state === "failed",
+        <td class="small dim">${fmtWhen(j.start)}</td>
+        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
+          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || defaultNamespace())})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
@@ -1620,7 +1620,7 @@ function importSourceSteps() {
       <span class="dim small">Imported apps start stopped, and run once their data has been copied.</span></div>
   </div>`;
 }
-window.importRemove = async (name, state, namespace = "lab") => {
+window.importRemove = async (name, state, namespace = defaultNamespace()) => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, namespace }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
@@ -1660,12 +1660,12 @@ window.importRemove = async (name, state, namespace = "lab") => {
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep it</button>`)}`);
   if (window.applyRole) window.applyRole();
 };
-window.importRemoveNow = async (name, button, namespace = "lab") => {
+window.importRemoveNow = async (name, button, namespace = defaultNamespace()) => {
   const volumes = $$(".imr-volume").filter(box => box.checked).map(box => box.value);
   const body = { name, namespace, remove_workload: !!$("#imr_workload")?.checked,
     remove_volume: volumes.length > 0, remove_volumes: volumes };
   if (volumes.length && !(await ask(`Delete ${volumes.length === 1 ? volumes[0] : volumes.join(" and ")} `
-      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone."))) return;
+      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone.", { title: volumes.length === 1 ? "Delete volume" : "Delete volumes", ok: "Delete", danger: true }))) return;
   if (button) { button.disabled = true; button.textContent = "Removing…"; }
   try {
     const result = await api("/api/imports/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1678,12 +1678,12 @@ window.importRemoveNow = async (name, button, namespace = "lab") => {
 };
 
 window.vmDiskImport = () => {
-  const namespaces = STATE.data.importNamespaces || ["lab"];
+  const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = STATE.data.importStorageClasses || ["longhorn-r2"];
   modal("Import VM disk", `
     <div class="note"><b>CDI handles the conversion.</b> Provide a directly downloadable HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image. The source is streamed into a new Longhorn PVC; an existing disk is never overwritten.</div>
     <div class="f2" style="margin-top:16px">
-      <div class="f"><label>Namespace ${tip("The imported DataVolume and its PVC are created here. A VM using the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+      <div class="f"><label>Namespace ${tip("The imported DataVolume and its PVC are created here. A VM using the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
       <div class="f"><label>Disk / PVC name ${tip("This becomes both the CDI DataVolume name and the resulting PVC name.")}</label><input id="vd_name" placeholder="ubuntu-server"></div>
     </div>
     <div class="f"><label>Image URL ${tip("HTTP and HTTPS only. URLs containing embedded usernames or passwords are rejected; use a Kubernetes Secret for authenticated endpoints.")}</label><input type="url" id="vd_url" placeholder="https://example.net/images/server.qcow2"></div>
@@ -1693,7 +1693,7 @@ window.vmDiskImport = () => {
     </div>
     <div class="f2">
       <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several nodes to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>
-      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" placeholder="hex digest"></div></div>
+      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" aria-label="Checksum type" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" aria-label="Checksum" placeholder="hex digest"></div></div>
     </div>
     <details><summary class="small">Authenticated or private CA source</summary><div class="f2" style="margin-top:12px">
       <div class="f"><label>Credential Secret ${tip("Optional Secret in the destination namespace containing CDI-compatible accessKeyId and secretKey fields.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
@@ -1708,7 +1708,7 @@ window.doVmDiskImport = async () => {
     storage_class: $("#vd_sc").value, access_mode: $("#vd_mode").value,
     checksum: digest ? `${$("#vd_algo").value}:${digest}` : "",
     secret_ref: $("#vd_secret").value.trim(), cert_config_map: $("#vd_ca").value.trim() };
-  if (!body.name || !body.source_url) return toast("disk name and image URL are required", "bad");
+  if (!body.name || !body.source_url) return toast("Disk name and image URL are required", "bad");
   try {
     const plan = await api(`/api/vm-disks/import-plan?ns=${encodeURIComponent(body.namespace)}&name=${encodeURIComponent(body.name)}`);
     if (!plan.ready) return toast(plan.message, "bad");
@@ -1730,7 +1730,7 @@ window.doSrcAdd = async () => {
   const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
     user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
     kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim(), port: +$("#sc_port").value };
-  if (!body.name || !body.host) return toast("name and host are required", "bad");
+  if (!body.name || !body.host) return toast("Name and host are required", "bad");
   try {
     save.disabled = true;
     const result = await api("/api/sources", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -1786,9 +1786,9 @@ window.sourceKeyTrust = async () => {
   } finally { SOURCE_KEY_BUSY = false; }
 };
 window.srcDel = async name => {
-  if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`))) return;
+  if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`, { title: "Remove import source", ok: "Remove", danger: true }))) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast("removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
+    toast("Removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
 };
 window.srcBrowse = async name => {
   modal("Import from · " + name, `<div class="empty"><span class="spin2"></span>connecting to ${esc(name)} and listing its containers - this runs a
@@ -1822,8 +1822,8 @@ window.srcBrowse = async name => {
 
 window.imageCleanupReview = digest => {
   const image = (STATE.data.imageCache?.images || []).find(row => row.digest === digest);
-  if (!image) return toast("refresh Image Cache before cleaning this image", "bad");
-  if (image.protected || image.system) return toast("this image is protected and cannot be cleaned", "bad");
+  if (!image) return toast("Refresh Image Cache before cleaning this image", "bad");
+  if (image.protected || image.system) return toast("This image is protected and cannot be cleaned", "bad");
   const perNode = image.size_mb >= 1024 ? `${(image.size_mb / 1024).toFixed(1)} GB` : `${image.size_mb} MB`;
   modal("Clean cached image", `<div class="update-review">
     <div class="note dependency-danger"><b>This deletes only the cached image layers, not a workload.</b>
@@ -1846,7 +1846,7 @@ window.imageCleanupApply = async digest => {
   try {
     const result = await api("/api/images/cleanup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ digest, nodes }) });
-    toast(`cleanup started on ${result.nodes.length} node${result.nodes.length === 1 ? "" : "s"}`, "ok");
+    toast(`Cleanup started on ${result.nodes.length} node${result.nodes.length === 1 ? "" : "s"}`, "ok");
     closeModal();
   } catch (error) { toast(error.message, "bad"); }
 };
@@ -1934,7 +1934,8 @@ window.imAddScratch = () => {
 /* A volume row is just a claim: a name, whether it is new, and how big.
    The mapping rows above pick from these by name. */
 function importVolumeRow(volume = {}, index = 0) {
-  const classes = (STATE.data.importStorage?.storage_classes || ["longhorn-r2"]);
+  const classes = STATE.data.importStorage?.storage_classes || [];
+  const facts = STATE.data.importStorage?.storage_class_facts || STATE.data.classFacts || {};
   const claims = (STATE.data.importStorage?.pvcs || []);
   return `<div class="f4 im-volume">
     <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" list="im_pvc_list" oninput="imSyncVolumes()">
@@ -1944,7 +1945,7 @@ function importVolumeRow(volume = {}, index = 0) {
       <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
       <option value="existing" ${volume.create === false ? "selected" : ""}>Existing PVC · merge data</option></select></div>
     <div><label>Size GiB</label><input class="imv-size" type="number" min="1" max="16384" value="${esc(volume.size_gb || 10)}"></div>
-    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, volume.storage_class || "longhorn-r2", STATE.data.classFacts)}</select></div>
+    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, defaultStorageClass(classes, volume.storage_class, facts), facts)}</select></div>
     ${index === 0 ? "" : '<button class="iconbtn row-remove" type="button" title="Remove volume" onclick="this.closest(\'.im-volume\').remove();imSyncVolumes()">×</button>'}
   </div>`;
 }
@@ -2049,7 +2050,7 @@ window.imMeasure = async source => {
   const rows = $$("#im_maps .im-map");
   const paths = rows.filter(row => row.dataset.medium !== "memory")
     .map(row => $(".imm-remote", row).value.trim()).filter(path => path.startsWith("/"));
-  if (!paths.length) return toast("add a source folder first", "bad");
+  if (!paths.length) return toast("Add a source folder first", "bad");
   const button = $("#im_measure");
   if (button) { button.disabled = true; button.textContent = "Measuring…"; }
   try {
@@ -2142,19 +2143,18 @@ window.importSetup = async (source, dir, cfg = {}) => {
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
   const [storage, liveNodes] = await Promise.all([
-    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] })),
+    api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(() => ({ pvcs: [], storage_classes: [] })),
     api("/api/nodes").catch(() => [])]);
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
-  const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
   // A container that mounts nothing needs no storage: the folders and volumes
   // stay out of the way, offered only if someone wants to add some anyway.
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
   const appStep = `
     <div class="f2"><div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
       <div class="f"><label>Namespace ${tip("The app, its volumes and the copy are all created here. Existing volumes to merge into are offered from this namespace.")}</label>
-        <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set(["lab", ...(STATE.data.importNamespaces || [])])].map(n =>
-          `<option value="${esc(n)}" ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
+        <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set([defaultNamespace(), ...(STATE.data.importNamespaces || [])])].map(n =>
+          `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
@@ -2379,7 +2379,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
 window.clusterStorageGo = async name => {
   const pick = $("#cs_pick")?.value || "__shared";
   const address = pick === "__typed" ? $("#cs_ip").value.trim() : pick === "__shared" ? "" : pick;
-  if (pick === "__typed" && !address) return toast("type the address this cluster should reach it at", "bad");
+  if (pick === "__typed" && !address) return toast("Type the address this cluster should reach it at", "bad");
   const button = $("#cs_go");
   if (button) { button.disabled = true; button.textContent = "Working…"; }
   try {
@@ -2490,7 +2490,7 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
     : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
       storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
       until you remove it, so it can be put back at any point before then.`}</p>
-  <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="lab"></div>
+  <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="${esc(defaultNamespace())}"></div>
     ${kind !== "container" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
       <select id="mv_mode" onchange="moveAddressMode(this.value)">
         <option value="shared">This cluster's shared address</option>
@@ -2519,7 +2519,7 @@ window.moveAddressMode = value => {
 };
 
 const moveBody = (cluster, kind, name) => ({
-  cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
+  cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || defaultNamespace(),
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
   storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
   source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES });
@@ -2590,7 +2590,7 @@ function moveVolumesTable(plan, cluster, kind, name) {
       <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value)">
         ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${value === "move" && MOVE_TRANSFER_MODE === "copy" ? "Copy its data" : label}</option>`).join("")}</select></td>
       <td>${c.action === "skip" ? '<span class="dim xs">the one here keeps its own</span>'
-        : `<select id="mv_volsc_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
+        : `<select id="mv_volsc_${esc(c.claim)}" aria-label="${esc(`Storage class for ${c.claim}`)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
           ${classes.map(k => `<option value="${esc(k)}" ${k === pick ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
       <td>${c.action === "blank"
         ? `<input id="mv_volsize_${esc(c.claim)}" type="number" min="1" max="16384" style="width:90px" value="${esc((MOVE_VOLUMES[c.claim] || {}).size_gb || c.target_size_gb || c.size_gb)}"
@@ -2661,7 +2661,7 @@ window.moveStart = async (cluster, kind, name) => {
       + `Nothing on ${cluster} can use it until the move finishes or is put back.`
     : `Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
       + "It is unavailable from the moment it stops there until it starts here.";
-  if (!(await ask(question))) return;
+  if (!(await ask(question, { title: copy ? "Copy here" : "Move here", ok: copy ? "Copy" : kind === "volume" ? "Move" : "Stop and move", danger: !copy && kind !== "volume" }))) return;
   if (sequence !== MOVE_PLAN_SEQUENCE) return toast("The transfer settings changed; review them again", "bad");
   try {
     await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -2734,19 +2734,19 @@ window.moveAct = async (action, id) => {
 window.moveBack = async (id, name, cluster, status, stopped = true, transferMode = "move") => {
   if (transferMode === "copy") {
     if (!(await ask(`${status === "succeeded" ? "Remove the copy of" : "Cancel copying"} ${name}?` + String.fromCharCode(10, 10)
-      + `Removes the objects this copy created here, including their volume data. The original on ${cluster} is kept${stopped ? " and its previous running state is restored" : " as it is"}.`))) return;
+      + `Removes the objects this copy created here, including their volume data. The original on ${cluster} is kept${stopped ? " and its previous running state is restored" : " as it is"}.`, { title: status === "succeeded" ? "Remove copy" : "Cancel copying", ok: status === "succeeded" ? "Remove copy" : "Cancel copying", danger: true }))) return;
     return moveAct("abandon", id);
   }
   // Nothing has stopped on the source yet: undoing it only cancels the move.
   if (!stopped) {
     if (!(await ask(`Cancel moving ${name}?` + String.fromCharCode(10, 10)
-        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`))) return;
+        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`, { title: "Cancel move", ok: "Cancel move", danger: true }))) return;
     return moveAct("abandon", id);
   }
   const landed = status === "succeeded";
   if (!(await ask(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
       + "It starts again there, as it was, and what this move created here is removed"
-      + (landed ? ", including anything written to it here since it arrived." : ".")))) return;
+      + (landed ? ", including anything written to it here since it arrived." : "."), { title: "Put it back", ok: "Put back" }))) return;
   moveAct("abandon", id);
 };
 
@@ -2784,10 +2784,10 @@ window.doImport = async source => {
   // A container that keeps nothing imports as just the workload. Demanding a
   // volume for it would mean creating storage nobody asked for.
   const keepsNothing = !mappings.some(row => !row.medium && (row.remote_path || row.copy === false));
-  if (!first && !keepsNothing) return toast("add at least one volume", "bad");
+  if (!first && !keepsNothing) return toast("Add at least one volume", "bad");
   const existing = !!first && !first.create;
   try { await logoReady("#im_icon"); } catch (e) { return toast(e.message, "bad"); }
-  const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || "lab", remote_path: $("#im_path").value.trim(),
+  const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || defaultNamespace(), remote_path: $("#im_path").value.trim(),
     source_consistency: $("#im_consistency")?.value || "", source_container_id: cfg.source_container_id || "",
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
     mappings, volumes: keepsNothing ? [] : volumes,
@@ -2797,7 +2797,7 @@ window.doImport = async source => {
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), ...(readPrivileges("im_pv") || {}), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
-  if (!body.name || !body.image) return toast("workload name and image are required", "bad");
+  if (!body.name || !body.image) return toast("Workload name and image are required", "bad");
   for (const volume of volumes) {
     const measured = body.mappings.filter(row => row.pvc === volume.name)
       .reduce((sum, row) => sum + (row.bytes || 0), 0);
@@ -2832,7 +2832,7 @@ window.doImport = async source => {
   body.remote_path = copied[0]?.remote_path || "";
   body.mount_path = copied[0]?.mount_path || "/config";
   if (reused.length && !(await ask(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
-      "\n\nThe current data is kept, but imported files with the same names may be replaced."))) return;
+      "\n\nThe current data is kept, but imported files with the same names may be replaced.", { title: "Import into existing volumes", ok: "Import" }))) return;
   await importReview(body);
 };
 
@@ -2900,10 +2900,10 @@ window.moveDismiss = async (id = "") => {
   if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
       + "Nothing is changed on either cluster. "
       + (failed.source_stopped !== false ? `${failed.name} stays stopped on ${failed.cluster}: start it there from its page if you still want it running. ` : "")
-      + "Anything the move made here stays too; remove it here if you do not want it. Retry and Put back are no longer offered."))) return;
+      + "Anything the move made here stays too; remove it here if you do not want it. Retry and Put back are no longer offered.", { title: "Clear failed move", ok: "Clear" }))) return;
   if (!failed && rows.length && !(await ask(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
       + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")} - `
-      + "nothing is removed there, and Put back is no longer offered here."))) return;
+      + "nothing is removed there, and Put back is no longer offered here.", { title: "Clear finished moves", ok: "Clear" }))) return;
   try {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");

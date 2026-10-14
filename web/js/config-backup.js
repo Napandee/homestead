@@ -130,7 +130,7 @@ window.configRestoreGo = async () => {
   const parts = configChosen(), state = window.__configRestore;
   if (!parts.length || !state?.doc) return;
   if (parts.includes("users") && !(await ask("Restore users and roles?" + String.fromCharCode(10, 10)
-      + "Every account and password becomes the backup's, and everyone - you too - signs in again with those."))) return;
+      + "Every account and password becomes the backup's, and everyone - you too - signs in again with those.", { title: "Restore users and roles", ok: "Restore users", danger: true }))) return;
   const go = $("#cfgGo");
   go.disabled = true; go.textContent = "Restoring…";
   try {

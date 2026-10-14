@@ -66,7 +66,6 @@ function paintBell() {
   if (!bell) return;
   const { waiting, release } = homesteadUpdates();
   const images = window.BELL?.images || 0, errors = window.BELL?.errors || 0;
-  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const row = (run, iconName, text, cls = "") => `<button class="${cls}" onclick="closeNotifications();${run}">${icon(iconName)}${esc(text)}</button>`;
   // Background jobs: running ones at the top, with their progress; a failed
   // one stays under Needs you until it is dismissed.
@@ -233,7 +232,7 @@ function homesteadUpdateBody(inCard = false) {
     <div class="hs-clusters" role="group" aria-label="${picking ? "Clusters to update" : "This cluster"}">${rows}</div>
     ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes; this page reconnects. "}Nothing changes until you review it.</p>` : ""}
     <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : ""}
-      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : "↻ Check now"}</button></div>
+      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button></div>
     <div class="hs-channel">${picker}</div>`;
 }
 
@@ -272,7 +271,7 @@ window.homesteadUpdateCheck = async button => {
   if (report) {
     const { release, waiting } = homesteadUpdates();
     toast(release ? `Homestead ${release} is available` : waiting.length ? "A Homestead helper has an update" : "Homestead is up to date", "ok");
-  } else if (button) { button.disabled = false; button.textContent = "↻ Check now"; }
+  } else if (button) { button.disabled = false; button.innerHTML = `${icon("refresh")}Check now`; }
   if (linkedMembers().length) await fleetUpdatesLoad(true);
   homesteadUpdateRepaint();
 };

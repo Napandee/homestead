@@ -207,7 +207,7 @@ window.osUpdatesCardPaint = async () => {
     clearTimeout(window._osuCheckTimer);
     if (check.running) window._osuCheckTimer = setTimeout(() => osUpdatesCardPaint(), 4000);
     card.innerHTML = header(`${can("admin")
-      ? UI.button(check.running ? "Checking hosts…" : "Check every host now", "osUpdatesCheckAll()", { id: "osuCheckAll", attrs: `data-need="admin"${check.running ? " disabled" : ""}` })
+      ? UI.button(check.running ? "Checking hosts…" : "Check now", "osUpdatesCheckAll()", { icon: check.running ? "" : "refresh", id: "osuCheckAll", attrs: `data-need="admin"${check.running ? " disabled" : ""}` })
       : UI.button("Reload", "osUpdatesCardPaint()")}${can("admin")
       ? UI.button("Manage host updates", "osUpdates()", { attrs: 'data-need="admin"' }) : UI.chip("admin managed")}`) +
       `<div class="ui-stack">
