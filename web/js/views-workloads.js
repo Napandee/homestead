@@ -964,7 +964,7 @@ function accessPorts(ports) {
   const more = (from, kind) => rows.length > from
     ? `<span class="tag more ${kind}" data-tip="Also listening on ${esc(rows.slice(from).map(p => p.port).join(", "))}">+${rows.length - from}</span>` : "";
   return shown.map((p, i) => (p.ip
-    ? `<span class="plink${i ? " second" : ""}" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc(${jsq(p.ip)},${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
+    ? `<button type="button" class="plink${i ? " second" : ""}" title="Open ${esc(svcUrl(p.ip, p.port))}" aria-label="Open port ${p.port}" onclick="openSvc(${jsq(p.ip)},${p.port})">${p.port}<svg class="ext" width="9" height="9" aria-hidden="true"><use href="#i-ext"/></svg></button>`
     : `<span class="tag${i ? " second" : ""}">${p.port}</span>`)).join("") +
     more(1, "more-narrow") + more(2, "more-wide");
 }

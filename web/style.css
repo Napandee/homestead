@@ -3819,3 +3819,6 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .vm-head{flex-wrap:wrap;gap:10px}
 /* Remove container sits clear of the first field (#495). */
 .edit-container-remove{display:flex;justify-content:flex-end;margin-bottom:12px}
+/* Port links and movable tags are buttons (#487); they keep the text they sit in. */
+button.plink,button.tag.movable{font-family:inherit;line-height:inherit}
+button.a2port{font-family:inherit;line-height:inherit}

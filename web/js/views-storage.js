@@ -72,9 +72,9 @@ async function viewFlow() {
           <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
             <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
           ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no host answers")}</div>` : ""}
-          <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
-            data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
-            onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
+          <div class="a2ports">${v.ports.map(p => `<button type="button" class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
+            data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}" aria-label="Open ${esc(p.app)} on port ${p.port}"
+            onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</button>`).join("")}</div></div>`).join("")
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
@@ -104,7 +104,7 @@ async function viewFlow() {
     </div></div>`;
   };
   const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips","jobs"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
-  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container, VM or scheduled job is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
@@ -165,13 +165,20 @@ function archAddressWords(v) {
    live refresh that adds a row does not leave it unwired. */
 function archWatch() {
   $$(".arch2wrap").forEach(wrap=>{
+  // Every traced item takes focus, so the keyboard can trace too (#487).
+  $$("[data-id]:not(button):not([tabindex])", wrap).forEach(item => item.setAttribute("tabindex", "0"));
   if (wrap.dataset.watched) return;
   wrap.dataset.watched = "1";
-  wrap.addEventListener("mouseover", event => {
+  const trace = event => {
     const item = event.target.closest("[data-id]");
     if (item && item.dataset.id !== STATE.data.archHover) archHighlight(item.dataset.id);
-  });
+  };
+  // Hover with a mouse, focus with the keyboard, a tap on a touch screen.
+  wrap.addEventListener("mouseover", trace);
+  wrap.addEventListener("focusin", trace);
+  wrap.addEventListener("click", trace);
   wrap.addEventListener("mouseleave", () => archHighlight(null));
+  wrap.addEventListener("focusout", event => { if (!wrap.contains(event.relatedTarget)) archHighlight(null); });
   if (window.ResizeObserver) new ResizeObserver(() => drawArch(STATE.data.archKeep)).observe(wrap);
   });
 }
