@@ -14,7 +14,7 @@ try{for(const width of [1440,390,320])for(const theme of ["dark","light"]){
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await page.locator('.modalbox').screenshot({path:`${out}/acknowledged-${theme}-${width}.png`});
  await page.getByRole('button',{name:'Undo',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('#pwaAlertsDialog > .ui-insight-list .ui-insight-row').length===2);
- await page.getByRole('button',{name:'Close',exact:true}).click();await page.evaluate(()=>{settingsTab('device');go('settings');});
+ await page.locator('.ui-actions').getByRole('button',{name:'Close',exact:true}).click();await page.evaluate(()=>{settingsTab('device');go('settings');});
  await page.getByRole('button',{name:'Review alerts',exact:true}).waitFor();await page.getByRole('button',{name:'Review alerts',exact:true}).click();
  await page.waitForSelector('#pwaAlertsDialog .ui-insight-row');await page.evaluate(()=>{stopAuthenticatedWork();});
  assert.equal(await page.evaluate(()=>PWA_ALERTS.report),null,'signout clears account alerts');
