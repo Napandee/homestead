@@ -137,7 +137,7 @@ window.vmStoreAuto = async (id, auto) => {
 };
 window.vmStoreForget = async id => {
   const row = (STATE.data.vmStore?.images || []).find(r => r.id === id);
-  if (!(await ask(`Stop keeping ${row?.name || id}?\n\nIts builds no disk was made from are deleted; the ones a disk came from stay until that disk is gone.`))) return;
+  if (!(await ask(`Stop keeping ${row?.name || id}?\n\nIts builds no disk was made from are deleted; the ones a disk came from stay until that disk is gone.`, { title: "Stop keeping the image", ok: "Stop keeping it", danger: true }))) return;
   try { toast((await vmStorePost("/api/vm/store/forget", { id })).detail, "ok"); vmStore(); }
   catch (e) { toast(e.message, "bad"); }
 };
@@ -299,7 +299,7 @@ let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
   if (VM_POWER_BUSY && ["start", "restart", "unpause"].includes(action)) return toast("A VM power request is being sent; wait for its result", "bad");
   if (["start", "restart", "unpause"].includes(action)) return vmPowerReview({ ns, name, action });
-  if (action === "force-stop" && !(await ask(`Force off ${name}? The power is cut at once - the guest is not asked to shut down, so unsaved work in it is lost. Shut down asks it first.`))) return;
+  if (action === "force-stop" && !(await ask(`Force off ${name}? The power is cut at once - the guest is not asked to shut down, so unsaved work in it is lost. Shut down asks it first.`, { title: "Force off", ok: "Force off", danger: true }))) return;
   try {
     const r = await api("/api/vm/power", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name, action }) });
     toast(r.detail, "ok"); setTimeout(() => refresh(true), 1200);
@@ -408,7 +408,7 @@ window.vmOpen = async (ns, name) => {
         <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table></div>
     <div class="vm-pane" data-pane="events" hidden>${v.events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Last</th></tr></thead><tbody>
       ${v.events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
-        <td class="small">${esc(e.message)}</td><td class="small dim">${esc((e.last || "").replace("T", " ").slice(0, 16))}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>'}</div>`;
+        <td class="small">${esc(e.message)}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>'}</div>`;
   if (window.applyRole) applyRole();
 };
 window.vmTab = (button, pane) => {

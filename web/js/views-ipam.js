@@ -264,7 +264,7 @@ const ipamRemoveQuestion = count => `Remove ${count === 1 ? "this address" : `${
   `Its name, notes and tags are deleted. A device still using ${count === 1 ? "it" : "one"} shows up again after the next scan${ipamUnifiOn() ? " or UniFi sync" : ""}.`;
 window.ipamBulk = async (forget = false) => {
   const ips = [...ipamPicks()];
-  if (forget && !(await ask(ipamRemoveQuestion(ips.length)))) return;
+  if (forget && !(await ask(ipamRemoveQuestion(ips.length), { title: "Remove addresses", ok: "Remove", danger: true }))) return;
   const changes = forget ? { forget: true } : {};
   if (!forget) {
     if ($("#ipamBulkKind").value) changes.kind = $("#ipamBulkKind").value;
@@ -306,7 +306,7 @@ window.ipamEdit = (ip = "") => {
       ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}`)}`);
 };
 window.ipamRemove = async ip => {
-  if (!(await ask(ipamRemoveQuestion(1)))) return;
+  if (!(await ask(ipamRemoveQuestion(1), { title: "Remove address", ok: "Remove", danger: true }))) return;
   try { const r = await ipamPost("/api/ipam/bulk", { ips: [ip], changes: { forget: true } }); toast(r.detail, "ok"); ipamPicks().delete(ip); closeModal(); viewIpam(); }
   catch (e) { toast(e.message, "bad"); }
 };
@@ -382,7 +382,7 @@ window.ipamUnifiSave = async sync => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.ipamUnifiForget = async () => {
-  if (!(await ask("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing what UniFi knows. Nothing on the controller changes."))) return;
+  if (!(await ask("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing what UniFi knows. Nothing on the controller changes.", { title: "Disconnect UniFi", ok: "Disconnect", danger: true }))) return;
   try { await ipamPost("/api/ipam/unifi", { forget: true }); toast("UniFi disconnected", "ok"); closeModal(); ipamAfterUnifi(); }
   catch (e) { toast(e.message, "bad"); }
 };

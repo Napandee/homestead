@@ -263,7 +263,7 @@ const Dashboard = (() => {
   }
   async function leave() {
     if(saving){toast("Wait for the layout to finish saving.","warn");return false;}
-    if(dirty() && !(await ask("Discard dashboard changes?")))return false;
+    if(dirty() && !(await ask("Discard dashboard changes?", { title: "Discard dashboard changes", ok: "Discard changes", danger: true })))return false;
     clearGesture();draft=null;return true;
   }
   async function cancel(){if(await leave()){resetPaint();await viewDash();document.querySelector('[onclick="Dashboard.start()"]')?.focus();}}

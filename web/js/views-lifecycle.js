@@ -538,7 +538,7 @@ window.editSave = async (ns, name) => {
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
-    if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`))) return;
+    if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`, { title: "Turn autostart off", ok: "Stop Homestead", danger: true }))) return;
     body.confirm_self = true;
   }
   await window.editReview(body);
@@ -1426,7 +1426,7 @@ window.imageScan = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.forgetRollback = async (namespace, name) => {
-  if (!(await ask(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`))) return;
+  if (!(await ask(`Stop keeping ${name}'s previous image? Roll back for its last update goes, and the image can be cleaned up.`, { title: "Forget the previous image", ok: "Forget it", danger: true }))) return;
   try {
     const r = await api("/api/images/forget-rollback", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name }) });
@@ -1517,7 +1517,7 @@ window.jobRun = async name => {
     toast(`${name} started`, "ok"); } catch (e) { toast(e.message, "bad"); }
 };
 window.jobDel = async name => {
-  if (!(await ask(`Delete schedule "${name}"?`))) return;
+  if (!(await ask(`Delete schedule "${name}"?`, { title: "Delete schedule", ok: "Delete schedule", danger: true }))) return;
   try { await api("/api/schedules/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast("deleted", "ok"); resetPaint(); viewSchedules(); } catch (e) { toast(e.message, "bad"); }
 };
@@ -1571,7 +1571,7 @@ async function viewImport() {
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
-        <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
+        <td class="small dim">${fmtWhen(j.start)}</td>
         <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || "lab")},${jsq(j.name)})` },
           { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || "lab")})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
@@ -1665,7 +1665,7 @@ window.importRemoveNow = async (name, button, namespace = "lab") => {
   const body = { name, namespace, remove_workload: !!$("#imr_workload")?.checked,
     remove_volume: volumes.length > 0, remove_volumes: volumes };
   if (volumes.length && !(await ask(`Delete ${volumes.length === 1 ? volumes[0] : volumes.join(" and ")} `
-      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone."))) return;
+      + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone.", { title: volumes.length === 1 ? "Delete volume" : "Delete volumes", ok: "Delete", danger: true }))) return;
   if (button) { button.disabled = true; button.textContent = "Removing…"; }
   try {
     const result = await api("/api/imports/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1786,7 +1786,7 @@ window.sourceKeyTrust = async () => {
   } finally { SOURCE_KEY_BUSY = false; }
 };
 window.srcDel = async name => {
-  if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`))) return;
+  if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`, { title: "Remove import source", ok: "Remove", danger: true }))) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast("removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
 };
@@ -1934,7 +1934,8 @@ window.imAddScratch = () => {
 /* A volume row is just a claim: a name, whether it is new, and how big.
    The mapping rows above pick from these by name. */
 function importVolumeRow(volume = {}, index = 0) {
-  const classes = (STATE.data.importStorage?.storage_classes || ["longhorn-r2"]);
+  const classes = STATE.data.importStorage?.storage_classes || [];
+  const facts = STATE.data.importStorage?.storage_class_facts || STATE.data.classFacts || {};
   const claims = (STATE.data.importStorage?.pvcs || []);
   return `<div class="f4 im-volume">
     <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" list="im_pvc_list" oninput="imSyncVolumes()">
@@ -1944,7 +1945,7 @@ function importVolumeRow(volume = {}, index = 0) {
       <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
       <option value="existing" ${volume.create === false ? "selected" : ""}>Existing PVC · merge data</option></select></div>
     <div><label>Size GiB</label><input class="imv-size" type="number" min="1" max="16384" value="${esc(volume.size_gb || 10)}"></div>
-    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, volume.storage_class || "longhorn-r2", STATE.data.classFacts)}</select></div>
+    <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, defaultStorageClass(classes, volume.storage_class, facts), facts)}</select></div>
     ${index === 0 ? "" : '<button class="iconbtn row-remove" type="button" title="Remove volume" onclick="this.closest(\'.im-volume\').remove();imSyncVolumes()">×</button>'}
   </div>`;
 }
@@ -2142,11 +2143,10 @@ window.importSetup = async (source, dir, cfg = {}) => {
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
   const [storage, liveNodes] = await Promise.all([
-    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: ["longhorn-r2"] })),
+    api("/api/deploy/options?ns=lab").catch(() => ({ pvcs: [], storage_classes: [] })),
     api("/api/nodes").catch(() => [])]);
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
-  const classes = storage.storage_classes?.length ? storage.storage_classes : ["longhorn-r2"];
   // A container that mounts nothing needs no storage: the folders and volumes
   // stay out of the way, offered only if someone wants to add some anyway.
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
@@ -2661,7 +2661,7 @@ window.moveStart = async (cluster, kind, name) => {
       + `Nothing on ${cluster} can use it until the move finishes or is put back.`
     : `Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
       + "It is unavailable from the moment it stops there until it starts here.";
-  if (!(await ask(question))) return;
+  if (!(await ask(question, { title: copy ? "Copy here" : "Move here", ok: copy ? "Copy" : kind === "volume" ? "Move" : "Stop and move", danger: !copy && kind !== "volume" }))) return;
   if (sequence !== MOVE_PLAN_SEQUENCE) return toast("The transfer settings changed; review them again", "bad");
   try {
     await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -2734,19 +2734,19 @@ window.moveAct = async (action, id) => {
 window.moveBack = async (id, name, cluster, status, stopped = true, transferMode = "move") => {
   if (transferMode === "copy") {
     if (!(await ask(`${status === "succeeded" ? "Remove the copy of" : "Cancel copying"} ${name}?` + String.fromCharCode(10, 10)
-      + `Removes the objects this copy created here, including their volume data. The original on ${cluster} is kept${stopped ? " and its previous running state is restored" : " as it is"}.`))) return;
+      + `Removes the objects this copy created here, including their volume data. The original on ${cluster} is kept${stopped ? " and its previous running state is restored" : " as it is"}.`, { title: status === "succeeded" ? "Remove copy" : "Cancel copying", ok: status === "succeeded" ? "Remove copy" : "Cancel copying", danger: true }))) return;
     return moveAct("abandon", id);
   }
   // Nothing has stopped on the source yet: undoing it only cancels the move.
   if (!stopped) {
     if (!(await ask(`Cancel moving ${name}?` + String.fromCharCode(10, 10)
-        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`))) return;
+        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`, { title: "Cancel move", ok: "Cancel move", danger: true }))) return;
     return moveAct("abandon", id);
   }
   const landed = status === "succeeded";
   if (!(await ask(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
       + "It starts again there, as it was, and what this move created here is removed"
-      + (landed ? ", including anything written to it here since it arrived." : ".")))) return;
+      + (landed ? ", including anything written to it here since it arrived." : "."), { title: "Put it back", ok: "Put back" }))) return;
   moveAct("abandon", id);
 };
 
@@ -2832,7 +2832,7 @@ window.doImport = async source => {
   body.remote_path = copied[0]?.remote_path || "";
   body.mount_path = copied[0]?.mount_path || "/config";
   if (reused.length && !(await ask(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
-      "\n\nThe current data is kept, but imported files with the same names may be replaced."))) return;
+      "\n\nThe current data is kept, but imported files with the same names may be replaced.", { title: "Import into existing volumes", ok: "Import" }))) return;
   await importReview(body);
 };
 
@@ -2900,10 +2900,10 @@ window.moveDismiss = async (id = "") => {
   if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
       + "Nothing is changed on either cluster. "
       + (failed.source_stopped !== false ? `${failed.name} stays stopped on ${failed.cluster}: start it there from its page if you still want it running. ` : "")
-      + "Anything the move made here stays too; remove it here if you do not want it. Retry and Put back are no longer offered."))) return;
+      + "Anything the move made here stays too; remove it here if you do not want it. Retry and Put back are no longer offered.", { title: "Clear failed move", ok: "Clear" }))) return;
   if (!failed && rows.length && !(await ask(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
       + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")} - `
-      + "nothing is removed there, and Put back is no longer offered here."))) return;
+      + "nothing is removed there, and Put back is no longer offered here.", { title: "Clear finished moves", ok: "Clear" }))) return;
   try {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");

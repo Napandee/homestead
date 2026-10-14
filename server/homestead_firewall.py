@@ -137,10 +137,10 @@ def provider():
     found = [label for marker, label in (("cilium", "Cilium"), ("calico-node", "Calico"),
              ("rke2-canal", "Canal"), ("kube-router", "kube-router")) if marker in names]
     if found:
-        return {"name": ", ".join(found), "detail": "Policy-capable network provider detected. Packet enforcement has not been tested."}
+        return {"name": ", ".join(found), "found": True, "detail": "Policy-capable network provider detected. Packet enforcement has not been tested."}
     if platform().get("distribution") == "k3s":
-        return {"name": "K3s", "detail": "K3s includes a network-policy controller by default. Verify it has not been disabled; packet enforcement has not been tested."}
-    return {"name": "Unverified", "detail": "No known policy controller detected. Policies only filter traffic when your network provider enforces Kubernetes NetworkPolicy."}
+        return {"name": "K3s", "found": True, "detail": "K3s includes a network-policy controller by default. Verify it has not been disabled; packet enforcement has not been tested."}
+    return {"name": "Unverified", "found": False, "detail": "No known policy controller detected. Policies only filter traffic when your network provider enforces Kubernetes NetworkPolicy."}
 
 
 def _rules(rows, direction):

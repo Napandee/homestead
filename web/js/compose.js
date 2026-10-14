@@ -233,7 +233,7 @@ window.composeToForm = name => {
 };
 
 window.composeClear = async () => {
-  if (COMPOSE.text && !(await ask("Clear the Compose file and variables?"))) return;
+  if (COMPOSE.text && !(await ask("Clear the Compose file and variables?", { title: "Clear the Compose file", ok: "Clear", danger: true }))) return;
   ++COMPOSE.asked;
   ++COMPOSE.reviewSequence;
   Object.assign(COMPOSE, { text: "", variables: "", report: null, review: null });

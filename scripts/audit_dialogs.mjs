@@ -78,7 +78,6 @@ const DIALOGS = [
   ["storage-recovery-ready", "storage", "window.__demoStorageState='ready';storageRecoveryReview('op4')"],
   ["storage-recovery-running", "storage", "window.__demoStorageState='running';storageRecoveryReview('op4')"],
   ["storage-recovery-uncertain", "storage", "window.__demoStorageState='uncertain';storageRecoveryReview('op4')"],
-  ["users", "settings", "manageUsers()"],
   ["compose-import", "workloads", "composeImport()"],
   ["move-workload", "workloads", "moveWorkload('frigate','lab')"],
   ["add-harvester-host", "cluster", "clusterOnboarding()"],
