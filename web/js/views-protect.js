@@ -935,7 +935,7 @@ window.lhTarget = () => {
     </div>
     ${UI.actions(`<button class="btn pri" onclick="lhTargetSave()">Save target</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">For NFS the export must be reachable from every node
+    <div class="note" style="margin-top:14px">For NFS the export must be reachable from every host
     and allow root writes, otherwise backups fail with a permission error that only shows up on the
     first scheduled run.</div>`);
   const s3 = () => { $("#bt_s3").hidden = !$("#bt_url").value.trim().startsWith("s3://"); };

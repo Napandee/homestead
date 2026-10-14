@@ -377,7 +377,7 @@ window.fleetSettingsPaint = async () => {
     ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
         ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
       <p class="ui-help">${all
-        ? "Containers, Virtual Machines, Nodes and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
+        ? "Containers, Virtual Machines, Hosts and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
         : "The switch at the start of the top bar opens any cluster here, with your sign-in and role. Its All clusters shows them together."}</p>`) : ""}
     ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on Import for moves, with an account kept here.
       Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>

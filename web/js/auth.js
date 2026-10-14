@@ -444,7 +444,7 @@ window.apiKeysPaint = async () => {
       <td><b>${esc(k.name)}</b> ${k.expired ? '<span class="tag bad">expired</span>' : ""}${k.mcp ? ' <span class="tag">MCP</span>' : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
       <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
-      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ' <span class="tag" title="A node\'s address inside the cluster, not the client\'s">node</span>' : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
+      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ' <span class="tag" title="A host\'s address inside the cluster, not the client\'s">host</span>' : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
       <td>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
         { label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 2 })}</td></tr>`).join("");
   card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
@@ -477,7 +477,7 @@ window.apiKeyPreset = list => {
 function apiKeyNetworksHelp() {
   const you = STATE.data.apiKeys?.you;
   return you?.node_address
-    ? `Leave this empty here: Homestead sees your request as coming from ${esc(you.address)}, a node's address inside the cluster, so it cannot tell clients apart and a limit would refuse them all.`
+    ? `Leave this empty here: Homestead sees your request as coming from ${esc(you.address)}, a host's address inside the cluster, so it cannot tell clients apart and a limit would refuse them all.`
     : "Addresses or networks it may be used from; anywhere if empty.";
 }
 

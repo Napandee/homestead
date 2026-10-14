@@ -174,13 +174,13 @@
     let b = "";
     for (let i = 0; i < cols; i++) {
       const x = 6 + i * (w + gap), has = i < names.length, held = has && i < want;
-      b += box(x, 8, w, 64, has ? "dg-node" : "dg-node dg-dash", 8) + text(x + 10, 26, has ? clip(names[i], 15) : "no node", has ? "dg-b" : "dg-dim");
+      b += box(x, 8, w, 64, has ? "dg-node" : "dg-node dg-dash", 8) + text(x + 10, 26, has ? clip(names[i], 15) : "no host", has ? "dg-b" : "dg-dim");
       if (i < want) b += box(x + 10, 38, w - 20, 22, held ? "dg-vol-box" : "dg-vol-box dg-dash", 5)
         + text(x + 18, 53, `copy ${i + 1}`, held ? "dg-xs" : "dg-xs dg-dim");
     }
     const placed = Math.min(want, names.length);
-    const said = placed < want ? `${want} copies wanted, ${names.length} node${names.length === 1 ? "" : "s"} to hold them: ${want - placed} never placed`
-      : `${want} cop${want === 1 ? "y" : "ies"} of each volume, each on a node of its own`;
+    const said = placed < want ? `${want} copies wanted, ${names.length} host${names.length === 1 ? "" : "s"} to hold them: ${want - placed} never placed`
+      : `${want} cop${want === 1 ? "y" : "ies"} of each volume, each on a host of its own`;
     return figure(svg(Math.max(320, cols * (w + gap) + 8), 96, b + text(6, 90, said, "dg-s"), said));
   }
 

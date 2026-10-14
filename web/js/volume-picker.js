@@ -165,7 +165,7 @@ function storageClassBadges(facts) {
   const badges = [];
   if (facts.replicas) badges.push(`<span class="tag">${esc(facts.replicas)} replica${facts.replicas === "1" ? "" : "s"}</span>`);
   if (facts.engine) badges.push(`<span class="tag ${facts.engine === "v2" ? "info" : ""}" data-tip="${facts.engine === "v2"
-    ? "Longhorn's V2 data engine (SPDK): faster, and needs hugepages and a V2 disk on each node." : "Longhorn's V1 data engine, the default."}">Longhorn ${esc(facts.engine.toUpperCase())}</span>`);
+    ? "Longhorn's V2 data engine (SPDK): faster, and needs hugepages and a V2 disk on each host." : "Longhorn's V1 data engine, the default."}">Longhorn ${esc(facts.engine.toUpperCase())}</span>`);
   badges.push(facts.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="tag">not encrypted</span>');
   badges.push(facts.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>');
   if (facts.reclaim === "Retain") badges.push('<span class="tag info">keeps data on delete</span>');
@@ -306,8 +306,8 @@ function syncVolumeRow(row) {
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
-    : shm ? "Kubernetes gives every pod 64 MiB of /dev/shm and no way to ask for more, so this mounts a RAM disk over it. Apps that pass frames or buffers between processes - Frigate, Chromium, Postgres - need far more than the default. It counts against the node's memory."
-    : ram ? "Creates a RAM disk of this size inside the pod. It starts empty every time and counts against the node's memory; this is what a tmpfs mount becomes."
+    : shm ? "Kubernetes gives every pod 64 MiB of /dev/shm and no way to ask for more, so this mounts a RAM disk over it. Apps that pass frames or buffers between processes - Frigate, Chromium, Postgres - need far more than the default. It counts against the host's memory."
+    : ram ? "Creates a RAM disk of this size inside the pod. It starts empty every time and counts against the host's memory; this is what a tmpfs mount becomes."
     : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
     : "Mounts this exact host path; the container can only run where that path exists.";
 }

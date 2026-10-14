@@ -5,7 +5,7 @@ const Dashboard = (() => {
     compute: {title:"Compute", description:"Live CPU and memory", width:4, widths:[4,6,8,12]},
     throughput: {title:"Throughput", description:"Network traffic and local disk", width:4, widths:[4,6,8,12]},
     storage: {title:"Storage", description:"Capacity and replica health", width:4, widths:[4,6,8,12]},
-    nodes: {title:"Node health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
+    nodes: {title:"Host health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
     cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12]},
     memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12]},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
@@ -230,7 +230,7 @@ const Dashboard = (() => {
     const current=draft.find(item=>item.id===selected);
     for(const field of ["width","height"]){const input=document.querySelector(`[aria-label="Widget ${field}"]`);if(input && current)input.value=String(current[field]);}
     if(current){
-      for(const [label,value] of [["Widget start column",current.column || 0],["App status",current.status || "all"],["Portal display",current.display || "compact"],["Node health display",current.display || "compact"]]){
+      for(const [label,value] of [["Widget start column",current.column || 0],["App status",current.status || "all"],["Portal display",current.display || "compact"],["Host health display",current.display || "compact"]]){
         const field=document.querySelector(`[aria-label="${label}"]`);if(field)field.value=String(value);
       }
       const row=document.querySelector('[data-option="newRow"]');if(row)row.checked=!!current.newRow;
@@ -298,7 +298,7 @@ const Dashboard = (() => {
     option(key,value){if(!["column","newRow","status","display"].includes(key))return;change(()=>{const item=draft.find(row=>row.id===selected);if(item)item[key]=value;},"Widget settings updated.");},
     allGroups(all){change(()=>{const item=settings(selected);if(all)delete item.groups;else item.groups=[];},"Widget filter updated.");},
     group(value,checked){change(()=>{const item=settings(selected), available=item.id==="portal"?(STATE.data.portal?.links || []).map(l=>l.section || ""):HealthInsights.groups() || [];const groups=new Set(item.groups || available);if(checked)groups.add(value);else groups.delete(value);item.groups=[...groups];},"Widget filter updated.");},
-    nodeDisplay(value){if(!["compact","detailed"].includes(value))return;change(()=>{const item=draft.find(row=>row.id==="nodes");if(item)item.display=value;},"Node display updated.");},
+    nodeDisplay(value){if(!["compact","detailed"].includes(value))return;change(()=>{const item=draft.find(row=>row.id==="nodes");if(item)item.display=value;},"Host display updated.");},
     history(direction){const from=direction<0?undo:redo,to=direction<0?redo:undo;if(!from.length || draft===null || saving)return;to.push(clone(draft));draft=from.pop();if(!draft.some(item=>item.id===selected))selected=draft[0]?.id || "";editor(direction<0?"Change undone.":"Change restored.");},
     reset(){change(()=>{draft=defaults();selected=draft[0].id;},"Default layout restored. Save to keep it, or Undo to go back.");},
     preview(){phone=!phone;editor();},

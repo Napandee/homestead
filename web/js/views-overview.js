@@ -97,7 +97,7 @@ async function viewDash() {
         <div><div class="bignum">${rateParts(netNow)[0]}<span class="unit">${rateParts(netNow)[1]}</span></div>
           <div class="csub"><span class="kdot s1"></span>in · ${rateParts(txNow).join(" ")} out</div></div>
         <div><div class="midnum">${sizeParts(diskUsed)[0]}<span class="unit">${sizeParts(diskUsed)[1]}</span></div>
-          <div class="csub">node disk of ${sizeText(diskCap)}</div>
+          <div class="csub">host disk of ${sizeText(diskCap)}</div>
           ${meter(diskCap ? diskUsed / diskCap * 100 : 0, "", "disk")}</div>
       </div>
     </div>`,
@@ -148,10 +148,10 @@ async function viewDash() {
 /* The dashboard reads this cluster only. With All clusters picked it says so,
    and points to Nodes, which combines them. */
 function dashboardScope(o) {
-  const count = `${o.nodes_total} node${o.nodes_total === 1 ? "" : "s"}`;
+  const count = `${o.nodes_total} host${o.nodes_total === 1 ? "" : "s"}`;
   if (!fleetAll()) return `Live health, capacity and placement across ${count}`;
   const me = (FLEET.view?.members || []).find(m => m.self);
-  return `${esc(me?.name || "This cluster")} only · ${count} · the Dashboard doesn't combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's nodes</button>`;
+  return `${esc(me?.name || "This cluster")} only · ${count} · the Dashboard doesn't combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's hosts</button>`;
 }
 
 /* A host's state, worked out once for the dashboard, Nodes and its own page
@@ -183,7 +183,7 @@ function nodeAttention(n) {
     ${UI.actions(UI.button("Review in Health", "HealthInsights.open('health')"))}`);
 }
 function dashboardNodes(nodes, display="compact") {
-  const header=UI.moduleHeader("Node health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
+  const header=UI.moduleHeader("Host health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
   if(display==="detailed")return `<div class="card flat dashboard-nodes">${header}${nodeComparison(nodes,"dashboard")}</div>`;
   const known=value=>typeof value==="number" && Number.isFinite(value);
   const percent=(label,value,kind)=>`<div class="node-compact-metric"><span>${label}</span><b class="mono">${known(value)?esc(Math.round(value*10)/10)+"%":"—"}</b>${known(value)?meter(value,"",kind):'<span class="node-compact-no-data" title="Not reported">—</span>'}</div>`;
@@ -202,7 +202,7 @@ function dashboardNodes(nodes, display="compact") {
       ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
       ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc(issues.join("; "))}">${esc(issues.join("; "))}</button>`:""}
     </article>`;
-  }).join("") || '<div class="empty small">No nodes reported.</div>'}</div></div>`;
+  }).join("") || '<div class="empty small">No hosts reported.</div>'}</div></div>`;
 }
 
 function consumerTable(workloads, metric) {
@@ -279,7 +279,7 @@ function nodeDutyTags(n) {
   const tags = [];
   if ((d.management_vip || []).length) tags.push(`<span class="tag duty info" data-tip="This node answers for the cluster's management address - the dashboard and hosts joining. If it fails, another node takes the address within seconds.">management VIP ${esc(d.management_vip.join(", "))}</span>`);
   if (d.control_plane_vip) tags.push('<span class="tag duty info" data-tip="This node holds the control-plane address the Kubernetes API answers on">API VIP</span>');
-  if ((d.rwx || []).length) tags.push(`<span class="tag duty" data-tip="Longhorn serves these shared (RWX) volumes from this node: ${esc(d.rwx.join(", "))}. If it fails they pause until their share manager starts elsewhere">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
+  if ((d.rwx || []).length) tags.push(`<span class="tag duty" data-tip="Longhorn serves these shared (RWX) volumes from this host: ${esc(d.rwx.join(", "))}. If it fails they pause until their share manager starts elsewhere">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
   return tags.join("");
 }
 window.nodeDutyTags = nodeDutyTags;
@@ -291,7 +291,7 @@ function nodeAddressTags(n) {
   const d = n.duties || {};
   const vips = (d.vips || []).filter(ip => !(d.management_vip || []).includes(ip));
   return own.map(ip => `<span class="tag mono" data-tip="${esc(n.name)}'s own address. Services k3s's ServiceLB publishes answer here too">${esc(ip)}</span>`).join("")
-    + vips.map(ip => `<span class="tag info mono" data-tip="${esc(n.name)} answers for VIP ${esc(ip)} now. If it goes down another node takes the address over">VIP ${esc(ip)}</span>`).join("");
+    + vips.map(ip => `<span class="tag info mono" data-tip="${esc(n.name)} answers for VIP ${esc(ip)} now. If it goes down another host takes the address over">VIP ${esc(ip)}</span>`).join("");
 }
 
 /* A node at a glance. The head is the same shape on every card - name, roles
@@ -368,7 +368,7 @@ function nodeComparisonLabel(nodes, name) {
 // One node is a card in a dashboard widget; the Nodes page shows it as a
 // one-column table when rows were chosen there.
 function nodeComparison(nodes, context, { singleCard = true } = {}) {
-  if (!nodes.length) return '<div class="empty">No nodes reported.</div>';
+  if (!nodes.length) return '<div class="empty">No hosts reported.</div>';
   if (nodes.length === 1 && singleCard) return `<div class="single-node-summary">${nodeCard(nodes[0])}</div>`;
   const id = `${context}-0`;
   nodeComparisons.set(id, { nodes });
@@ -419,7 +419,7 @@ function nodeComparisonRows(nodes) {
     metric("Duties", n => nodeDutyTags(n) || '<span class="dim">—</span>', false),
     metric("Hardware", n => hardwareTags(nodeHardwareIds(n)) || '<span class="dim">None defined</span>', false),
     metric("Workloads", n => `<span class="small">${esc((n.workloads || []).join(", ") || "None")}</span>`, false),
-    metric("Details", n => actionBar([{label:"Open node",run:`nodeDetail(${jsq(n.name)})`,icon:"node"}]), false)
+    metric("Details", n => actionBar([{label:"Open host",run:`nodeDetail(${jsq(n.name)})`,icon:"node"}]), false)
   ];
 }
 
@@ -434,11 +434,11 @@ function nodeComparisonMarkup(id) {
       <span class="comparison-full-name">${esc(n.name)}</span><span class="comparison-short-name">${esc(nodeComparisonLabel(nodes, n.name))}</span></button>${clusterTag(n)}` }));
   const rows = nodeComparisonRows(nodes);
   return `<section class="card flat pad0 node-comparison" id="node-comparison-${id}">
-    ${nodes.length > 4 ? `<div class="cardhd comparison-scroll-hint"><span class="dim small">${nodes.length} nodes · scroll to compare →</span></div>` : ""}
-    ${comparisonTable(columns, rows, "Node health and capacity")}
+    ${nodes.length > 4 ? `<div class="cardhd comparison-scroll-hint"><span class="dim small">${nodes.length} hosts · scroll to compare →</span></div>` : ""}
+    ${comparisonTable(columns, rows, "Host health and capacity")}
     <div class="node-comparison-detail" id="node-comparison-detail-${id}"${clusterAttr(selected)}>
       <div class="node-comparison-head"><div><b>${esc(selected.name)}</b> ${clusterTag(selected)}<div class="dim small">${esc(nodeUpFor(selected) || selected.status)}</div></div>
-        ${actionBar([{label:"Open node",run:`nodeDetail(${jsq(selected.name)})`,icon:"node"}])}</div>
+        ${actionBar([{label:"Open host",run:`nodeDetail(${jsq(selected.name)})`,icon:"node"}])}</div>
       <div class="comparison-detail-disks">${nodeDiskLines(selected)}</div>
       <div class="about-grid">
         <div><span>Memory</span><b>${sizePair(selected.mem_used_gb, selected.mem_cap_gb)}</b></div>
@@ -475,7 +475,7 @@ function nodeUptimeStrip(n) {
   const u = remote ? null : STATE.data.uptime?.nodes?.[n.name];
   const days = (u?.days || []).slice(-30);
   const month = u?.windows?.["30d"], outs = (u?.outages || []).length;
-  const tip = remote ? "Open this node to view its cluster’s uptime history" : u ? (outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the node for when` : "No outage recorded")
+  const tip = remote ? "Open this host to view its cluster’s uptime history" : u ? (outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the host for when` : "No outage recorded")
     : "No samples yet: Homestead records one every five minutes";
   return `<div class="node-upstrip" data-tip="${esc(tip)}">
     <span class="dim xs">UPTIME</span>
@@ -669,7 +669,7 @@ async function nodePage(name) {
   paint(`${UI.pageHeader(`${esc(n.name)}`, `${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span>`, `<button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
         <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button>`,
       // One tap up, as each section has (#382): the menu was the only way back on a phone.
-      { extraHtml: `<button type="button" class="page-back" onclick="go('nodes')">‹ Nodes</button>` })}
+      { extraHtml: `<button type="button" class="page-back" onclick="go('nodes')">‹ Hosts</button>` })}
     <div id="nodePage" data-node="${esc(n.name)}">
       <div class="sumline" id="nodeSummary">${summary}</div>
       ${UI.workspace(UI.workspaceNav(sections.map(([key,label,descriptionHtml]) => ({key,label,descriptionHtml})),
@@ -783,7 +783,7 @@ window.smartDisk = async (node, disk) => {
    granted to it; the other must be privileged to reach the drives at all, so
    installing it is stated plainly and asked for rather than assumed. */
 window.probeInstallConfirm = () => childModal("Install the node probe?", `
-  <p>The probe runs one pod on every node and reports what Kubernetes does not:
+  <p>The probe runs one pod on every host and reports what Kubernetes does not:
     temperatures, host devices, per-disk throughput, and SMART drive health.</p>
   <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
     <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
@@ -802,7 +802,7 @@ window.probeInstall = async () => {
 };
 
 window.probeRemove = async () => {
-  if (!(await ask("Remove the node probe from every node?" + String.fromCharCode(10, 10)
+  if (!(await ask("Remove the node probe from every host?" + String.fromCharCode(10, 10)
       + "Temperatures, drive health and disk throughput stop being reported.", { title: "Remove the node probe", ok: "Remove", danger: true }))) return;
   try {
     const result = await api("/api/node/probe/remove", { method: "POST",
@@ -821,14 +821,14 @@ window.allocationProbeSettings = async () => {
       <p>Checks whether dedicated CPUs and memory are available together before starting a NUMA VM.</p>
       <div class="note">${esc(current.detail || "Status unavailable")}</div>
       ${!current.installed ? '<p>Install the node probe first in Cluster → Add-ons.</p>' : `
-      <p>Uses an extra 32–96 MiB RAM per node. Saving briefly restarts host monitoring. Apps and VMs are not restarted.</p>
+      <p>Uses an extra 32–96 MiB RAM per host. Saving briefly restarts host monitoring. Apps and VMs are not restarted.</p>
       ${capacity.blockers.map(text=>`<div class="note warn">${esc(text)}</div>`).join("")}
       ${capacity.warnings.length ? `<div class="note warn">${capacity.warnings.map(esc).join("<br>")}</div><label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these capacity warnings.</span></label>` : ""}
       <details class="vm-placement-advanced"><summary>Advanced · host access and socket location</summary>
       <p class="dim small">The helper runs as root with no Linux capabilities and a read-only filesystem. It reads kubelet allocations through a dedicated host socket, authenticated with a separate key. The socket mount is read-only, but permits RPC calls; this helper only implements read operations. It receives no Kubernetes API token.</p>
-      <label class="f">Kubelet socket directory ${tip("Use the kubelet root directory’s pod-resources subdirectory. It must already exist on every selected probe node and contain kubelet.sock. Custom k3s/RKE2 installations may use a different root; do not enter the whole kubelet directory.")}
+      <label class="f">Kubelet socket directory ${tip("Use the kubelet root directory’s pod-resources subdirectory. It must already exist on every selected probe host and contain kubelet.sock. Custom k3s/RKE2 installations may use a different root; do not enter the whole kubelet directory.")}
         <input id="allocationProbeDirectory" class="input mono" value="${esc(current.directory || "/var/lib/kubelet/pod-resources")}" autocomplete="off" spellcheck="false"></label>
-      <p class="dim small">This directory must exist on every probe node. Missing or unsupported data blocks new NUMA starts; it is never treated as free capacity. Multi-NUMA hosts need Static CPU/memory management and pod-scoped single-numa-node topology policy. Checks do not reserve resources.</p>
+      <p class="dim small">This directory must exist on every probe host. Missing or unsupported data blocks new NUMA starts; it is never treated as free capacity. Multi-NUMA hosts need Static CPU/memory management and pod-scoped single-numa-node topology policy. Checks do not reserve resources.</p>
       </details>
       <label class="vip-check"><input id="allocationProbeConsent" type="checkbox"><span>Allow read-only host allocation checks and restart monitoring.</span></label>
       ${current.enabled ? '<button class="btn sm" onclick="allocationProbeCheck(this)">Check hosts</button><div id="allocationProbeDiagnostics" role="status" aria-live="polite"></div>' : ""}
@@ -844,7 +844,7 @@ window.allocationProbeCheck = async button => {
   target.textContent = "Checking hosts…";
   try {
     const nodes = STATE.data?.nodes || [];
-    if (!nodes.length) { target.textContent = "Open Nodes to refresh the host list, then check again."; return; }
+    if (!nodes.length) { target.textContent = "Open Hosts to refresh the host list, then check again."; return; }
     target.innerHTML = "";
     for (const node of nodes) {
       const result = await api("/api/node/probe/allocation/check?node=" + encodeURIComponent(node.name));
@@ -887,7 +887,7 @@ window.smartStart = async (node, disk, type) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareEdit = n => modal("Hardware · " + n.name, `
-  <p class="muted small">Choose which configured features apps and VMs may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
+  <p class="muted small">Choose which configured features apps and VMs may use on this host. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
   <div class="hwchoices">${hardwareChoices("hw_node", nodeHardwareIds(n))}</div>
   <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported hardware inventory yet."}</div>
   ${UI.actions(`<button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -908,7 +908,7 @@ window.hardwareFeatureSettings = async () => {
       <div class="small" style="margin-top:9px"><span class="tag hw">${esc(f.host_path)} → ${esc(f.container_path)}</span> <span class="tag">${esc(f.path_type)}</span></div>
       ${f.usb_ids?.length ? `<div class="dim xs" style="margin-top:7px">USB IDs: ${esc(f.usb_ids.join(", "))}</div>` : ""}
       ${f.description ? `<div class="dim small" style="margin-top:7px">${esc(f.description)}</div>` : ""}</div>`).join("")}</div>
-    <div class="note" style="margin-top:14px">A feature adds a node selector and mounts its host path into the container. USB IDs control node detection; the configured path controls passthrough.</div>`, true);
+    <div class="note" style="margin-top:14px">A feature adds a node selector and mounts its host path into the container. USB IDs control host detection; the configured path controls passthrough.</div>`, true);
 };
 /* After a save or delete in the feature editor, the list it opened from is
    shown again, redrawn with the change. */
@@ -930,9 +930,9 @@ window.hardwareFeatureEdit = async id => {
     <div class="f2"><div class="f"><label>Host device path ${tip("Path present on the Harvester node. It is also used for automatic detection when USB IDs are blank.")}</label><input id="hf_host" value="${esc(old.host_path)}" placeholder="/dev/hailo0"></div>
       <div class="f"><label>Path inside container</label><input id="hf_container" value="${esc(old.container_path)}" placeholder="/dev/hailo0"></div></div>
     <div class="f2"><div class="f"><label>Path type</label><select id="hf_type">${["CharDevice","Directory","BlockDevice","Socket","File"].map(x => `<option ${x === old.path_type ? "selected" : ""}>${x}</option>`).join("")}</select></div>
-      <div class="f"><label>USB vendor:product IDs ${tip("Optional comma-separated VID:PID pairs, for example 18d1:9302. A matching device marks the feature present on that node.")}</label><input id="hf_usb" value="${esc((old.usb_ids || []).join(", "))}" placeholder="18d1:9302"></div></div>
+      <div class="f"><label>USB vendor:product IDs ${tip("Optional comma-separated VID:PID pairs, for example 18d1:9302. A matching device marks the feature present on that host.")}</label><input id="hf_usb" value="${esc((old.usb_ids || []).join(", "))}" placeholder="18d1:9302"></div></div>
     <div class="device-browser">
-      <div class="between"><div><b>Browse a host</b><div class="dim xs">Choose the node whose <span class="mono">/dev</span> tree you want to map.</div></div>
+      <div class="between"><div><b>Browse a host</b><div class="dim xs">Choose the host whose <span class="mono">/dev</span> tree you want to map.</div></div>
         <span class="tag">read only</span></div>
       <div class="f2" style="margin-top:10px"><div class="f"><label>Host</label><select id="hf_browse_node" onchange="hardwareBrowseRender()">
         ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.status !== "Ready" ? " · " + esc(n.status) : ""}</option>`).join("")}</select></div>
@@ -1004,7 +1004,7 @@ async function viewNodes() {
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;
   const layout = viewLayout("nodes");
-  paint(`${UI.pageHeader(`Nodes`, `${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
+  paint(`${UI.pageHeader(`Nodes`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}

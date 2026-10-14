@@ -49,7 +49,7 @@ window.moveWorkload = async (name, ns) => {
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);
   window.__moveStranded = !viable.length;
   $("#mbody").innerHTML = `
-    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
+    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no host")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
       ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove(${jsq(plan.recommended)})">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
     ${(req.devices || []).length || (req.features || []).length || Object.keys(req.labels || {}).length ? `<div class="constraintbar"><b>Required</b>
       ${(req.devices || []).map(d => `<span class="tag hw">${esc(d.label)}</span>`).join("")}
@@ -91,7 +91,7 @@ window.moveWorkload = async (name, ns) => {
 
     <div class="row" style="margin-top:16px"><label class="switch"><input type="checkbox" id="mv_unpin">
       Clear preference — let the scheduler choose${!viable.length ? " (no failover host currently exists)" : ""}</label>
-      <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the node fails.")}</label></div>
+      <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the host fails.")}</label></div>
 
     ${UI.actions(`<button class="btn pri" id="mv_go" onclick="doMoveNow(${jsq(wl.ns)},${jsq(name)})" disabled>Review move</button>
       <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}

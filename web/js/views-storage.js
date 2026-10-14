@@ -71,7 +71,7 @@ async function viewFlow() {
           data-node="${esc(v.node || "")}" title="${esc(archAddressWords(v))}">
           <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
             <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
-          ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no node answers")}</div>` : ""}
+          ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no host answers")}</div>` : ""}
           <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
             data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
             onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
@@ -93,7 +93,7 @@ async function viewFlow() {
           ${disconnectedVolumes.map(v => volumeCard(v, true)).join("")}</div>` : ""}
       </section>
 
-      <section class="a2col"><h4>Nodes &amp; replica copies</h4>
+      <section class="a2col"><h4>Hosts &amp; replica copies</h4>
       ${f.nodes.map(n => `<div class="a2item a2node"${clusterAttr(n)} data-kind="node" data-id="${esc(n.id)}">
           <div class="a2nodehead"><b>${esc(n.name)}</b><span class="dim xs">${n.copies.length} cop${n.copies.length === 1 ? "y" : "ies"}</span></div>
           ${(n.ips || []).length || (n.vips || []).length ? `<div class="a2addrs">${(n.ips || []).map(ip => `<span class="a2addr mono" title="${esc(n.name)}'s own address">${esc(ip)}</span>`).join("")}${(n.vips || []).map(ip => `<span class="a2addr vip mono" title="${esc(n.name)} answers for VIP ${esc(ip)}">VIP ${esc(ip)}</span>`).join("")}</div>` : ""}
@@ -156,8 +156,8 @@ function scheduledJobs(jobs) {
 
 /* What an address is, where it lives, and why it is not reachable if not. */
 function archAddressWords(v) {
-  const what = v.kind === "node" ? `${v.ip} is ${v.node || "a node"}'s own address`
-    : v.node ? `VIP ${v.ip} · ${v.node} answers for it` : `VIP ${v.ip} · no node answers for it`;
+  const what = v.kind === "node" ? `${v.ip} is ${v.node || "a host"}'s own address`
+    : v.node ? `VIP ${v.ip} · ${v.node} answers for it` : `VIP ${v.ip} · no host answers for it`;
   return v.reason ? `${what} · ${v.reason}` : what;
 }
 
@@ -430,7 +430,7 @@ function otherVolumesHtml(rows) {
   return `<div class="between" style="margin-top:22px"><div class="sec">Other volumes <span class="dim">${rows.length}</span>
       ${tip("Volumes on storage classes other than Longhorn, such as k3s's local-path. They have no replicas, snapshots or backups here; their data lives where that class keeps it.")}</div></div>
     ${stuck.length ? `<div class="note warn small" style="margin-bottom:10px"><b>${stuck.length} volume${stuck.length === 1 ? " is" : "s are"} not made.</b>
-      Usually a shared (ReadWriteMany) volume asked of a class that serves one node - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
+      Usually a shared (ReadWriteMany) volume asked of a class that serves one host - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.namespace)}</div></td>
       <td data-label="Class" class="mono">${esc(r.storage_class)}</td><td data-label="Size" class="mono">${esc(r.size || "—")}</td>
@@ -487,7 +487,7 @@ async function viewStorage() {
         ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
-  </div>`, "Per node") : ""}
+  </div>`, "Per host") : ""}
   ${forecastCard(forecast)}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
@@ -699,8 +699,8 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
 function v2Summary(v2, rows) {
   if (!v2 || (!v2.enabled && !rows.some(row => row.engine === "v2"))) return "";
   const text = !v2.enabled ? "switched off, yet a class uses it: its volumes will not schedule"
-    : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} node${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
-    : "on, but no node has a V2 disk and hugepages yet";
+    : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} host${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
+    : "on, but no host has a V2 disk and hugepages yet";
   return `<div class="dim xs v2line"><span class="tag ${v2.enabled && v2.ready_nodes ? "info" : "warn"}">Longhorn V2</span> ${esc(text)}
     <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">details</a></div>`;
 }
@@ -717,10 +717,10 @@ const V2_HOW = {
     : "On the host: sudo modprobe vfio_pci uio_pci_generic nvme_tcp - and to keep them after a reboot: printf 'vfio_pci\\nuio_pci_generic\\nnvme_tcp\\n' | sudo tee /etc/modules-load.d/longhorn-v2.conf",
   hugepages: (h, d) => h ? "Harvester reserves them once longhorn-v2-data-engine-enabled is on; the host restarts to take them."
     : `On the host: echo 'vm.nr_hugepages=1024' | sudo tee /etc/sysctl.d/90-longhorn-v2.conf && sudo sysctl --system - then restart ${d === "rke2" ? "rke2-server (or rke2-agent)" : "k3s (sudo systemctl restart k3s, or k3s-agent)"} so Kubernetes counts them. 1024 pages of 2 MiB is 2 GiB, taken from the host's memory.`,
-  disk: h => h ? "Hosts → Edit Config → Storage → Add Disk, provisioner Longhorn V2, on a disk holding nothing you need - or Homestead's Nodes → the host → Disks."
-    : "Nodes → the host → Disks → an unused disk → Give to Longhorn → V2. It takes the whole disk as a raw block device, so it must hold nothing you need.",
+  disk: h => h ? "Hosts → Edit Config → Storage → Add Disk, provisioner Longhorn V2, on a disk holding nothing you need - or Homestead's Hosts → the host → Disks."
+    : "Hosts → the host → Disks → an unused disk → Give to Longhorn → V2. It takes the whole disk as a raw block device, so it must hold nothing you need.",
   nvme: h => h ? "Harvester's OS includes it." : "On each host: sudo apt-get install -y nvme-cli (or sudo dnf install -y nvme-cli). Homestead cannot see the host's packages, so this one is yours to check: nvme version.",
-  cpu_core: () => "Longhorn's V2 engine polls rather than waiting: on every node running it, one CPU core stays busy. Longhorn's v2-data-engine-cpu-mask setting chooses which.",
+  cpu_core: () => "Longhorn's V2 engine polls rather than waiting: on every host running it, one CPU core stays busy. Longhorn's v2-data-engine-cpu-mask setting chooses which.",
 };
 const v2Mark = ok => ok === true ? '<span class="v2mark ok" aria-label="done">✓</span>'
   : ok === false ? '<span class="v2mark bad" aria-label="missing">✗</span>' : '<span class="v2mark unknown" aria-label="not known">?</span>';
@@ -754,7 +754,7 @@ window.v2Details = async (fresh = false) => {
         ${cell(n, "modules", "Kernel modules", n.missing_modules?.length ? `needs ${n.missing_modules.join(", ")}` : n.checks?.modules == null ? "probe has not said" : "")}
         ${cell(n, "hugepages", "Hugepages", `${n.hugepages_mb} MiB`)}${cell(n, "disk", "V2 disk", n.block_disks ? `${n.block_disks}` : "")}
         <td data-label="Ready">${n.ready ? '<span class="pill ok">ready</span>' : '<span class="pill">not yet</span>'}</td></tr>`).join("")
-        || '<tr><td colspan="6" class="empty">Longhorn reported no nodes</td></tr>'}</tbody></table></div></div>
+        || '<tr><td colspan="6" class="empty">Longhorn reported no hosts</td></tr>'}</tbody></table></div></div>
     <div class="row" style="margin-top:12px"><button class="btn sm" onclick="v2Details(true)">${icon("refresh")}Check again</button>
       <span class="dim xs">${v2.ready_nodes ?? 0} of ${v2.total_nodes ?? 0} host${v2.total_nodes === 1 ? "" : "s"} ready. A volume keeping 2 copies needs 2 ready hosts.</span></div>`, true);
   if (window.applyRole) applyRole();
@@ -806,7 +806,7 @@ function storageClassCard(classes, v2 = null) {
         <div class="dim xs mono">${esc(row.provisioner || "")}</div>
         ${(row.disk_tags || []).length || (row.node_tags || []).length ? `<div class="row" style="gap:4px;margin-top:4px">
           ${(row.disk_tags || []).map(t => `<span class="tag info" data-tip="Only on disks tagged ${esc(t)}">disk: ${esc(t)}</span>`).join("")}
-          ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">node: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
+          ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">host: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
       <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
       <td class="mono" data-label="Copies">${esc(row.replicas || "—")}</td>
       <td data-label="Its volumes">${features(row)}</td>
@@ -834,10 +834,10 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
     <div class="f2">
       <div class="f"><label>Reclaim policy ${tip("Retain keeps a volume's data when its claim is deleted - with an app, say - and lists it on Volumes as having no claim, to reuse or delete there. Delete removes the data with the claim.")}</label>
         <select id="sc_reclaim"><option>Retain</option><option>Delete</option></select></div>
-    <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the nodes.")}</label>
+    <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the hosts.")}</label>
       <select id="sc_engine" onchange="storageClassEngine()"><option value="v1">V1 · the default</option><option value="v2">V2 · SPDK</option></select></div></div>
     <div class="note" id="sc_engine_note" hidden></div>
-    <div class="f"><label>Only on disks tagged ${tip("Longhorn puts this class's replicas only on disks with every tag chosen - tag your SSDs ssd and pick it here. Tag disks under Nodes, or Volumes → Disks.")}</label>
+    <div class="f"><label>Only on disks tagged ${tip("Longhorn puts this class's replicas only on disks with every tag chosen - tag your SSDs ssd and pick it here. Tag disks under Hosts, or Volumes → Disks.")}</label>
       <div class="row sc-tags" id="sc_disktags"><span class="dim xs">loading tags…</span></div></div>
     <div class="f"><label>Only on nodes tagged ${tip("And only on nodes with every tag chosen here.")}</label>
       <div class="row sc-tags" id="sc_nodetags"></div>
@@ -875,7 +875,7 @@ async function storageClassTags(prefill = {}, button = $("#sc_go")) {
       : `<span class="dim xs">${empty}</span>`;
   };
   STATE.data.scInv = inv;
-  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
+  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Hosts, or Volumes → Disks.");
   box("#sc_nodetags", inv?.all_node_tags || [], prefill.node_tags || [], "No node has a tag yet.");
   // One host: only "different disks" can place a second copy.
   if (inv && prefill.copies === undefined && Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
@@ -904,15 +904,15 @@ window.storageClassEngine = async () => {
   const note = $("#sc_engine_note");
   if ($("#sc_engine").value !== "v2") { note.hidden = true; return; }
   note.hidden = false;
-  note.textContent = "Checking the nodes…";
+  note.textContent = "Checking the hosts…";
   const v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => STATE.data.v2);
   if (!v2) { note.textContent = "Could not read Longhorn's V2 status."; return; }
   note.classList.toggle("bad", !v2.enabled || !v2.ready_nodes);
   note.innerHTML = !v2.enabled
     ? "<b>V2 is switched off in Longhorn.</b> A class can be made now, but its volumes will not schedule until it is on. <a onclick=\"v2Details()\" style=\"cursor:pointer;text-decoration:underline\">How to turn it on</a>"
     : v2.ready_nodes < +($("#sc_reps").value || 1)
-      ? `<b>${v2.ready_nodes} node${v2.ready_nodes === 1 ? " is" : "s are"} ready for V2</b>, fewer than the replicas asked for, so volumes will run degraded or not schedule. <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">What each node needs</a>`
-      : `${v2.ready_nodes} of ${v2.total_nodes} nodes are ready for V2 volumes.`;
+      ? `<b>${v2.ready_nodes} host${v2.ready_nodes === 1 ? " is" : "s are"} ready for V2</b>, fewer than the replicas asked for, so volumes will run degraded or not schedule. <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">What each host needs</a>`
+      : `${v2.ready_nodes} of ${v2.total_nodes} hosts are ready for V2 volumes.`;
 };
 window.storageClassHint = () => {
   const on = $("#sc_migratable").checked, hint = $("#sc_hint");
@@ -1722,7 +1722,7 @@ function lhNodeRows(cap) {
 function lhLargest(cap) {
   const count = (cap.nodes || []).length;
   return [1, 2, 3].filter(c => c <= count).map(c => `<span class="tag ${cap.largest[c] < 10 ? "bad" : cap.largest[c] < 50 ? "warn" : ""}"
-    data-tip="Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different nodes. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
+    data-tip="Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different hosts. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
 }
 
 /* The Volumes page's per-node card. */
@@ -1730,8 +1730,8 @@ function lhCapacityCard(cap, st) {
   if (!cap) return `<div class="card flat statwide"><div class="ctitle">Per-node disks</div><div class="csub">free of total</div>
       ${(st?.disks || []).map(d => `<div class="drow"><div class="dl">${esc(lhShort(d.node))}</div>
         <div class="dv mono nowrap">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("") || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}</div>`;
-  return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per node</div>
-      <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every node; add one to Longhorn">Disks</a>
+  return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per host</div>
+      <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every host; add one to Longhorn">Disks</a>
         <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></span></div>
     ${lhNodeRows(cap) || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}
     <div class="dim xs" style="margin-top:8px">Empty-volume allocation limit</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
@@ -1759,20 +1759,20 @@ async function lhSettingsPaint() {
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
       <div class="f"><label>Minimal free space ${tip("A disk with less than this share physically free takes no new replica, whatever is allocated. Longhorn's default is 25%.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
-    <div class="f" style="margin-top:10px"><label>Replicas rebuilt at once, per node ${tip("When a node or disk comes back, or a volume is a copy short, Longhorn rebuilds replicas by copying them from a healthy one. More at once makes volumes whole sooner; fewer keeps the disks and network free for everything else while it runs. Longhorn's default is 5.")}</label>
+    <div class="f" style="margin-top:10px"><label>Replicas rebuilt at once, per host ${tip("When a host or disk comes back, or a volume is a copy short, Longhorn rebuilds replicas by copying them from a healthy one. More at once makes volumes whole sooner; fewer keeps the disks and network free for everything else while it runs. Longhorn's default is 5.")}</label>
       <input id="lh_rebuild" type="number" min="1" max="10" value="${cap.rebuild_limit ?? 5}" ${admin ? "" : "disabled"}></div>
     ${offline ? `<label class="switch" style="margin-top:10px"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}>
       Rebuild copies of detached volumes ${tip(offline.supported
         ? "Longhorn rebuilds a missing copy only while its volume is attached. With this on, it also attaches a detached volume by itself - nothing can mount it meanwhile - until its copies are whole, so a volume nothing uses is not left with one copy."
         : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot do it offline. With this on, Homestead attaches a detached volume short of copies itself - nothing can mount it meanwhile - one at a time, until its copies are whole, and lets go as soon as anything else asks for it.")}</label>
       ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}` : ""}
-    <div class="f" style="margin-top:10px"><label>Pods on a failed node ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead node, so a container moving to another node cannot mount it there until the node is back. Containers > If a node fails chooses which containers move.")}</label>
-      <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the node"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
+    <div class="f" style="margin-top:10px"><label>Pods on a failed host ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead host, so a container moving to another host cannot mount it there until the host is back. Containers > If a host fails chooses which containers move.")}</label>
+      <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the host"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
         ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
         .map(([v, l]) => `<option value="${v}" ${v === cap.node_down ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
-    <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
-    <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
+    <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a host's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
+    <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all hosts now.</div>
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
@@ -1930,14 +1930,14 @@ window.nodeDisksPaint = async node => {
 
 /* Every node's disks in one place, from Volumes or Settings. */
 window.lhDisks = async () => {
-  modal("Disks", '<div class="empty"><span class="spin2"></span>reading every node</div>', true);
+  modal("Disks", '<div class="empty"><span class="spin2"></span>reading every host</div>', true);
   try {
     const inv = await loadDisks(true);
     $("#mbody").innerHTML = `<p class="dim small" style="margin-top:0">${inv.harvester
       ? "Harvester lists each host's disks. Adding one lets Harvester format it and hand it to Longhorn, as its own UI does."
       : "Longhorn stores data in folders where a disk is mounted, or - for the V2 engine - on a raw device."}</p>
       ${Object.entries(inv.nodes).map(([node, disks]) => `<div class="sec">${esc(node)}</div>${nodeTagsLine(node, inv)}${diskRowsHtml(node, disks, inv.harvester)}`).join("")
-        || '<div class="empty small">No node has reported its disks yet.</div>'}`;
+        || '<div class="empty small">No host has reported its disks yet.</div>'}`;
     window.__disksModal = true;
     if (window.applyRole) applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: "lhDisks()", dialog: true }); }

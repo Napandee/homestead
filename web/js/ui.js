@@ -637,7 +637,7 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
    Like UI.table, headings are text and values are already escaped HTML. */
 function comparisonTable(columns, rows, caption) {
   return `<div class="tblwrap comparison-scroll" role="region" aria-label="${esc(caption)}"${columns.length > 4 ? ' tabindex="0"' : ""}><table class="tbl stack comparison-table" style="--comparison-columns:${columns.length}">
-    <caption class="sr-only">${esc(caption)}</caption><thead><tr><th scope="col">Node</th>
+    <caption class="sr-only">${esc(caption)}</caption><thead><tr><th scope="col">Host</th>
     ${columns.map(c => `<th scope="col"${c.selected ? ' class="selected"' : ''}${c.attrs || ""}>${c.html}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(r => `<tr${r.phone === false ? ' class="comparison-extra"' : ''}><th scope="row">${esc(r.label)}</th>
       ${r.values.map((v, i) => `<td${columns[i].selected ? ' class="selected"' : ''}${columns[i].attrs || ""}>${v}</td>`).join("")}</tr>`).join("")}</tbody>

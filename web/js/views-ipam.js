@@ -82,7 +82,7 @@ function ipamSeen(row) {
 }
 
 function ipamKind(row) {
-  if (row.cluster === "node") return '<span class="tag info">cluster node</span>';
+  if (row.cluster === "node") return '<span class="tag info">cluster host</span>';
   if (row.cluster === "vip") return `<span class="tag info" data-tip="${esc((row.services || []).join(", "))}">cluster VIP</span>`;
   if (row.gateway) return '<span class="tag">gateway</span>';
   if (!row.kind) return row.pool ? `<span class="tag" data-tip="Inside Harvester's ${esc(row.pool)} VIP pool">VIP pool</span>` : '<span class="dim">undocumented</span>';
@@ -287,7 +287,7 @@ window.ipamEdit = (ip = "") => {
   const data = STATE.data.ipam, subnet = ipamSubnetPick(data.subnets);
   const row = ipamRows(subnet).find(r => r.ip === ip) || { ip: ip || subnet.next_free[0] || "", tags: [] };
   if (row.cluster) {
-    return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster node's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
+    return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster host's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
   }
   modal(ip ? `Address · ${ip}` : "Document an address", `
     <div class="f2"><div class="f"><label>Address</label><input id="ia_ip" class="mono" value="${esc(row.ip)}" ${ip ? "readonly" : "data-ipam"}></div>
@@ -344,7 +344,7 @@ window.ipamSubnets = (add = "") => {
   modal("Subnets", `<p class="muted small">Track subnets up to /22. Add DHCP ranges to flag address conflicts and suggest free addresses outside those ranges.</p>
     <div id="is_rows">${data.subnets.map(ipamSubnetRow).join("")}${add ? ipamSubnetRow({ cidr: add, name: "LAN", gateway: add.replace(/\.0\/24$/, ".1") }) : ""}</div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow())">＋ Subnet</button>
-      ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
+      ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster hosts)</span></button>`).join("")}
       ${(ipamUnifiOn() ? data.unifi_networks || [] : []).map((n, i) => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow(STATE.data.ipam.unifi_networks[${i}]))">＋ ${esc(n.name || n.cidr)} <span class="dim">(UniFi${n.vlan ? ` · VLAN ${n.vlan}` : ""})</span></button>`).join("")}</div>
     ${UI.actions(`<button class="btn pri" onclick="ipamSubnetsSave()">Save subnets</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };

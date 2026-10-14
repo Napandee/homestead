@@ -200,13 +200,13 @@ window.editLanToggle = async () => {
 };
 
 /* What a container does when the node it runs on stops answering. */
-const FAILOVER_WORDS = { move: "Move to another node", wait: "Wait for its node", default: "Kubernetes default (5 min)" };
+const FAILOVER_WORDS = { move: "Move to another host", wait: "Wait for its host", default: "Kubernetes default (5 min)" };
 const FAILOVER_HELP = {
-  move: "About 15 seconds after its node stops answering, it starts on another node - for apps that should come back quickly wherever there is room.",
-  wait: "It stays with its node and starts again when that node is back - for apps tied to that host's hardware, or better restarted where they were.",
+  move: "About 15 seconds after its host stops answering, it starts on another host - for apps that should come back quickly wherever there is room.",
+  wait: "It stays with its host and starts again when that host is back - for apps tied to that host's hardware, or better restarted where they were.",
   default: "Kubernetes moves it after five minutes, the default for anything Homestead did not deploy.",
 };
-function failoverSelect(id, current, extra = "", label = "If its node fails") {
+function failoverSelect(id, current, extra = "", label = "If its host fails") {
   return `<select id="${id}" aria-label="${esc(label)}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
 }
@@ -256,23 +256,23 @@ function placementSection(p, w, nodes, containers) {
     <div class="place-level"><div class="place-title">Copies of this app</div>
       <div class="place-grid">
         <div class="f"><label>Copies ${tip("How many copies of this app run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
-        <div class="f"><label>Spread copies ${tip("Puts this app's copies on different nodes, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
+        <div class="f"><label>Spread copies ${tip("Puts this app's copies on different hosts, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
           <select id="e_spread" onchange="placementChanged()"><option value="">no preference</option>
-            <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different nodes</option>
-            <option value="require" ${p.spread === "require" ? "selected" : ""}>require different nodes</option></select></div>
-        <div class="f"><label>Preferred node ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
-          <option value="">any node</option>
+            <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different hosts</option>
+            <option value="require" ${p.spread === "require" ? "selected" : ""}>require different hosts</option></select></div>
+        <div class="f"><label>Preferred host ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
+          <option value="">any host</option>
           ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div></div></div>
     <div class="place-level"><div class="place-title">Other apps</div>
       <div class="place-grid two">
-        <div class="f"><label>Run on the same node as ${tip("For apps that talk constantly or share a device. Required: this does not start until that app is running, and only on its node.")}</label>
+        <div class="f"><label>Run on the same host as ${tip("For apps that talk constantly or share a device. Required: this does not start until that app is running, and only on its host.")}</label>
           <div id="e_with">${(p.with || []).map(row => placementRow("with", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('with')">＋ Add</button></div>
-        <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
+        <div class="f"><label>Keep off the host of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
-    <div class="place-level"><div class="place-title">If its node fails</div>
+    <div class="place-level"><div class="place-title">If its host fails</div>
       <div class="place-grid failover"><div class="f">${failoverSelect("e_failover", w.failover || "default",
           `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
         <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
@@ -306,11 +306,11 @@ window.placementChanged = () => {
   if (!note) return;
   const p = readPlacement(), replicas = +$("#e_rep")?.value || 1, warnings = [];
   if (p.spread === "require" && replicas > EDIT_PLACEMENT.nodes)
-    warnings.push(`${replicas} instances but ${EDIT_PLACEMENT.nodes} schedulable node${EDIT_PLACEMENT.nodes === 1 ? "" : "s"}: the extra instances stay pending.`);
+    warnings.push(`${replicas} instances but ${EDIT_PLACEMENT.nodes} schedulable host${EDIT_PLACEMENT.nodes === 1 ? "" : "s"}: the extra instances stay pending.`);
   const singleNode = readVolumeRows($("#e_containers")).some(v => v.kind === "new-rwo" || (v.kind === "existing" &&
     ((EDIT_STORAGE.pvcs || []).find(c => c.name === v.source)?.access_modes || []).includes("ReadWriteOnce")));
   if (p.spread && replicas > 1 && singleNode)
-    warnings.push("A single-node (RWO) volume attaches to one node at a time, so instances spread across nodes cannot all mount it.");
+    warnings.push("A single-node (RWO) volume attaches to one node at a time, so instances spread across hosts cannot all mount it.");
   const names = [...p.with, ...p.apart].map(row => `${row.ns}/${row.name}`);
   if (names.length !== new Set(names).size) warnings.push("An app is named twice; each can be kept either with this one or apart from it.");
   if (p.with.some(row => row.mode === "require")) warnings.push("Required: this app waits for the one it runs with, and stops being schedulable if that one stops.");
@@ -357,7 +357,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><div class="row logo-field"><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/logo.png or https://example.com">
         <button class="btn" type="button" onclick="logoFindInline(${jsq(ns)},${jsq(name)},'e_icon')">${icon("search")}Find</button></div><div id="e_icon_find"></div></div>`)}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
-        Autostart ${tip("On keeps the app running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
+        Autostart ${tip("On keeps the app running: Kubernetes restarts it after a crash, a host reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       <div class="between"><div class="sec">Containers in each pod</div>
         <button class="btn" type="button" onclick="containerAdd('edit')">＋ Add container</button></div>
@@ -629,7 +629,7 @@ window.wlMoveLegacy = async (ns, name) => {
     <p class="muted small">Pick the host this app should run on. Homestead pins it with a
     node selector and rolls the pod.</p>
     <div class="f" style="margin-top:14px"><label>Target host</label><select id="mv_node">
-      <option value="">any node (unpin)</option>
+      <option value="">any host (unpin)</option>
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)} · ${n.cpu_pct}% cpu, ${n.mem_pct}% ram${n.igpu ? " · iGPU" : ""}</option>`).join("")}
     </select></div>
     ${UI.actions(`<button class="btn pri" onclick="doMove(${jsq(ns)},${jsq(name)})">Move</button>
@@ -725,7 +725,7 @@ window.nodePromoteReview = async node => {
     ["This host's", `<span class="mono">${esc((f.host_settings || []).join(" ") || "none")}</span>`]]));
   const stages = UI.steps([
     { title: "Drain", detailHtml: `Cordon ${esc(node)} and move its apps off` },
-    { title: "Reinstall", detailHtml: "Remove the k3s agent and install a server, keeping the node's identity" },
+    { title: "Reinstall", detailHtml: "Remove the k3s agent and install a server, keeping the host's identity" },
     { title: "Join etcd", detailHtml: `Wait for ${esc(node)} to come back as a member, then uncordon it` }]);
   childModal(`Make a server · ${node}`, UI.lead(`Makes ${esc(node)} a server: the cluster gains an etcd vote, and the host keeps its storage.`)
     + notice + facts + stages + settings
@@ -1044,7 +1044,7 @@ function vmAddressFields(p, opts, count = 1) {
       <div class="f"><label>Subnet ${tip("From Networking › IP addresses: the addresses offered are free there, outside the DHCP range and the VIP pools.")}</label>
         <select id="${p}_subnet" onchange="vmSubnetPicked(${jsq(p)}, ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
           <option value="">another - type it in</option></select></div>
-      <div class="f"><label>${count > 1 ? "Addresses, one per node" : "Address"}</label>
+      <div class="f"><label>${count > 1 ? "Addresses, one per host" : "Address"}</label>
         <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free" data-ipam="${count > 1 ? "multi" : ""}">
         <datalist id="${p}_free"></datalist></div></div>
     <div class="f2">
@@ -1148,7 +1148,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     <div class="f"><label>Network card ${tip("The virtual card the guest sees. VirtIO is fastest but needs its driver: Linux has it, Windows needs the guest tools from virtio-win.iso. An Intel e1000e works in Windows with no extra drivers, which is what the Windows guest types choose.")}</label>
       <select id="v_nic_model"><option value="virtio">VirtIO</option><option value="e1000e">Intel e1000e</option><option value="e1000">Intel e1000</option><option value="rtl8139">Realtek RTL8139</option></select></div>
     <div id="v_service_wrap"><div class="f"><label>Service VIP</label><select id="v_service" onchange="vmNetChanged()"><option value="">Cluster only / configure later</option>${nodeAddressesOnly() ? "" : `${vipOptions.shared ? `<option value="shared">Default workload VIP · ${esc(vipOptions.shared)}</option>` : ""}<option value="manual">Selected VIP</option>`}</select></div>
-      ${nodeAddressesOnly() ? '<p class="note small">ServiceLB uses node addresses, not movable VIPs. Install kube-vip or MetalLB before choosing a Service VIP.</p>' : ""}
+      ${nodeAddressesOnly() ? '<p class="note small">ServiceLB uses host addresses, not movable VIPs. Install kube-vip or MetalLB before choosing a Service VIP.</p>' : ""}
       <div id="v_service_pick" class="f" hidden><label>Selected VIP</label>${vipPicker("vsvc", "", vipOptions)}</div>
       <p class="dim small">Two steps: create the VM, then review its VIP and port mappings before publishing them. If VIP setup is cancelled or fails, the VM remains created and can be configured from Edit → Network.</p></div>
     <div id="v_addr_wrap" hidden>
@@ -1331,8 +1331,8 @@ async function viewImages() {
   const all = d.images.filter(i => !q || i.name.toLowerCase().includes(q));
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
-  paint(`${UI.pageHeader(`Image cache`, `${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each node's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}`, `<label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label>`)}
-    ${UI.guide("How images are kept", `<p><b>Clean up</b> removes an image nothing uses from the nodes that hold it.
+  paint(`${UI.pageHeader(`Image cache`, `${imgs.length} app images across ${d.nodes.length} hosts · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each host's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}`, `<label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label>`)}
+    ${UI.guide("How images are kept", `<p><b>Clean up</b> removes an image nothing uses from the hosts that hold it.
       <b>active</b> images are what running containers use, and <b>stopped</b> ones what a container scaled to zero starts from; both stay.
       <b>rollback</b> copies are the image a container had before its last update, kept so <b>Roll back</b> can return to it. <b>Forget</b> one and it becomes unused, to clean up like the rest.</p>`)}
     <div class="grid g3 statgrid" style="margin-bottom:18px">
@@ -1340,12 +1340,12 @@ async function viewImages() {
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GiB</span></div>
         <div class="csub">${n.count} images cached${n.scanned_at ? ` · scanned ${esc(fmtAgo(Date.now() / 1000 - n.scanned_at))}` : " · not scanned yet"}</div></div>`).join("")}
     </div>
-    ${(d.scanning || []).length ? `<div class="note" style="margin-bottom:12px"><span class="spin2"></span> Asking containerd on ${d.scanning.length} node${d.scanning.length === 1 ? "" : "s"} for every image it holds…</div>`
-      : !d.complete ? `<div class="note warn between" style="margin-bottom:12px"><span>Kubernetes reports only each node's largest images, so some - running ones included - are missing here.
-          A scan asks each node's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every node</button></div>` : ""}
+    ${(d.scanning || []).length ? `<div class="note" style="margin-bottom:12px"><span class="spin2"></span> Asking containerd on ${d.scanning.length} host${d.scanning.length === 1 ? "" : "s"} for every image it holds…</div>`
+      : !d.complete ? `<div class="note warn between" style="margin-bottom:12px"><span>Kubernetes reports only each host's largest images, so some - running ones included - are missing here.
+          A scan asks each host's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every host</button></div>` : ""}
     ${(d.pulls || []).map(pull => `<div class="note warn between prepull-note" style="margin-bottom:12px">
-      <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} node${pull.desired === 1 ? "" : "s"} done.
-        It runs until every node has the image; its pods come straight back if you delete them.</span>
+      <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} host${pull.desired === 1 ? "" : "s"} done.
+        It runs until every host has the image; its pods come straight back if you delete them.</span>
       <button class="btn sm danger" data-need="admin" onclick="prepullStop(${jsq(pull.name)})">Stop</button></div>`).join("")}
     ${(d.pulls_finished || []).length ? `<div class="note good" style="margin-bottom:12px">Finished pre-pulling
       ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.</div>` : ""}
@@ -1383,7 +1383,7 @@ function vmImagesSection(vm, nodeNames) {
   const rows = vm.images.filter(i => !q || i.display.toLowerCase().includes(q));
   const total = vm.images.reduce((sum, i) => sum + i.size_mb * Math.max(1, i.copies), 0);
   return `<div class="between" style="margin:24px 0 10px"><div><div class="ctitle" style="margin:0">VM images</div>
-      <p class="dim small" style="margin:4px 0 0">${vm.images.length} image${vm.images.length === 1 ? "" : "s"} · ${size(Math.round(total))} across their copies on nodes ·
+      <p class="dim small" style="margin:4px 0 0">${vm.images.length} image${vm.images.length === 1 ? "" : "s"} · ${size(Math.round(total))} across their copies on hosts ·
         a disk made from one keeps reading from it, so an image a disk came from stays</p></div></div>
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="vmimages" class="tbl stack imgtable"><thead><tr>
       <th>Image</th><th>Size</th><th>Copies on</th><th>Disks made from it</th><th></th></tr></thead><tbody>
@@ -1408,7 +1408,7 @@ function vmImagesSection(vm, nodeNames) {
 window.vmImageDelete = (namespace, name) => {
   const i = (STATE.data.vmImages?.images || []).find(x => x.namespace === namespace && x.name === name);
   if (!i) return;
-  modal(`Delete · ${i.display}`, `<p>The image is deleted, with its copies on ${i.nodes.length} node${i.nodes.length === 1 ? "" : "s"}
+  modal(`Delete · ${i.display}`, `<p>The image is deleted, with its copies on ${i.nodes.length} host${i.nodes.length === 1 ? "" : "s"}
       (${esc(i.nodes.join(", ") || "none")}). No disk was made from it. A VM made from the same download address later downloads it again.</p>
     <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(i.display)}</b> to confirm</label><input id="vmi_confirm" autocomplete="off"></div>
     ${UI.actions(`<button class="btn danger" onclick="vmImageDeleteGo(${jsq(namespace)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -1694,7 +1694,7 @@ window.vmDiskImport = () => {
       <div class="f"><label>Storage class</label><select id="vd_sc">${classes.map(s => `<option value="${esc(s)}" ${s === "longhorn-r2" ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
     </div>
     <div class="f2">
-      <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several nodes to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>
+      <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several hosts to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>
       <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" aria-label="Checksum type" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" aria-label="Checksum" placeholder="hex digest"></div></div>
     </div>
     <details><summary class="small">Authenticated or private CA source</summary><div class="f2" style="margin-top:12px">
@@ -1831,8 +1831,8 @@ window.imageCleanupReview = digest => {
     <div class="note dependency-danger"><b>This deletes only the cached image layers, not an app.</b>
       A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.</div>
     <div class="update-image"><div><span>Image</span><code>${esc(image.name)}</code></div>
-      <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per node</span><code>${esc(perNode)}</code></div></div>
-    <div class="f"><label>Remove from nodes</label><div class="cleanup-nodes">${image.nodes.map(node =>
+      <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per host</span><code>${esc(perNode)}</code></div></div>
+    <div class="f"><label>Remove from hosts</label><div class="cleanup-nodes">${image.nodes.map(node =>
       `<label class="switch"><input class="cleanup-node" type="checkbox" value="${esc(node)}" checked onchange="imageCleanupGate()"> ${esc(node)}</label>`).join("")}</div></div>
     <div class="f"><label>Type CLEAN to confirm</label><input id="cleanupConfirm" autocomplete="off" oninput="imageCleanupGate()" placeholder="CLEAN"></div>
     ${UI.actions(`<button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply(${jsq(digest)})">Remove cached image</button>
@@ -1848,7 +1848,7 @@ window.imageCleanupApply = async digest => {
   try {
     const result = await api("/api/images/cleanup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ digest, nodes }) });
-    toast(`Cleanup started on ${result.nodes.length} node${result.nodes.length === 1 ? "" : "s"}`, "ok");
+    toast(`Cleanup started on ${result.nodes.length} host${result.nodes.length === 1 ? "" : "s"}`, "ok");
     closeModal();
   } catch (error) { toast(error.message, "bad"); }
 };
@@ -1911,7 +1911,7 @@ function importMappingRow(row = {}) {
       <button class="iconbtn row-remove" type="button" title="Remove scratch volume" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
       <div class="dim xs" style="grid-column:1/-1;margin-top:-4px">${row.mount_path === "/dev/shm"
         ? "Shared memory, as <code>--shm-size</code> gave it on the source. A pod gets 64 MiB otherwise, which is not enough for apps that pass frames or buffers between processes."
-        : "This was tmpfs on the source: a RAM disk that starts empty every time. Kubernetes gives it the same thing, capped at this size and counted against the node's memory."}</div></div>`;
+        : "This was tmpfs on the source: a RAM disk that starts empty every time. Kubernetes gives it the same thing, capped at this size and counted against the host's memory."}</div></div>`;
   }
   return `<div class="im-map" data-pvc="${esc(row.pvc || "")}">
     <div><label>Source folder on the host</label><input class="imm-remote" type="text" value="${esc(row.remote_path || "")}" placeholder="/mnt/user/appdata/app/config" oninput="imSyncMaps()"></div>
@@ -2155,7 +2155,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
       <input type="text" id="im_image" value="${esc(cfg.image || "")}" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
     <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>
-    <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to nodes that provide every selected feature.")}</div>
+    <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to hosts that provide every selected feature.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="sec">Privileges ${tip("Read from Docker on the source: privileged mode, added capabilities, and the /dev/net/tun device a VPN needs.")}</div>
     ${privilegeFields("im_pv", cfg)}`;
@@ -2357,14 +2357,14 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
     ${UI.fields(
       addressOnly ? "" : UI.field("Size (GiB)", '<input id="cs_size" type="number" min="5" value="100">'),
       UI.field("Address", `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'">
-          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}` : "Its nodes' own addresses"}</option>
+          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}` : "Its hosts' own addresses"}</option>
           ${free.some(v => v.from === "vips") ? `<optgroup label="An address of its own: ${esc(name)}'s VIPs">${free.filter(v => v.from === "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}</optgroup>` : ""}
           ${free.some(v => v.from !== "vips") ? `<optgroup label="An address of its own: free in ${esc(name)}'s IP pools">${free.filter(v => v.from !== "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
           <option value="__typed">Type an address…</option></select>
         <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
-        { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
+        { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its hosts' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
       addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
         { help: "Blank keeps the existing port or uses 9000. The console uses the next port; both must be available." }))}
     ${UI.more("Whose address this is", `<p>This address serves ${esc(name)}'s backup store. The destination reads backups from it without taking the address. The store shares the source cluster's disks; keep an independent backup.</p>`)}
@@ -2556,7 +2556,7 @@ function moveDevicesTable(plan, cluster, kind, name) {
         ${uploaded ? `<option selected disabled>${esc(MOVE_ROM_NAMES[d.name] || "Supplied vBIOS")}</option>` : ""}</select>
         <input type="file" class="pd_rom" aria-label="Upload destination vBIOS for ${esc(d.name)}" accept=".rom,.bin,application/octet-stream" onchange="moveDeviceRom(${handler},this)" ${choice.resource === "" ? "disabled" : ""}></td></tr>`;
   }).join("");
-  return `<div class="f"><label>Passthrough on this cluster</label><p class="dim small">Map each source device to hardware here, or leave it out. Prepare IOMMU and devices under Nodes → Hardware first. A different GPU may need a different vBIOS.</p>
+  return `<div class="f"><label>Passthrough on this cluster</label><p class="dim small">Map each source device to hardware here, or leave it out. Prepare IOMMU and devices under Hosts → Hardware first. A different GPU may need a different vBIOS.</p>
     <div class="tblwrap"><table class="tbl stack dense vm-passthrough-table"><colgroup><col style="width:25%"><col style="width:40%"><col style="width:35%"></colgroup><thead><tr><th>Source device</th><th>Destination device</th><th>vBIOS</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${plan.device_hosts?.length ? `<p class="dim small">Hosts offering all selected devices: ${plan.device_hosts.map(esc).join(", ")}.</p>` : ""}</div>`;
 }

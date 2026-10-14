@@ -16,7 +16,7 @@ function guideCopy(value) {
 
 function guideScreens(g) {
   const role = g.management_count < 3
-    ? `<b>Default Role</b>. This cluster has ${g.management_count} management node${g.management_count === 1 ? "" : "s"};
+    ? `<b>Default Role</b>. This cluster has ${g.management_count} management host${g.management_count === 1 ? "" : "s"};
        Harvester promotes new hosts to management until there are three.`
     : "<b>Default Role</b> - with three management nodes already, it joins as a worker. Pick <b>Worker Role</b> to say so outright.";
   const rows = [
@@ -63,7 +63,7 @@ window.clusterOnboarding = async () => {
       <p class="dim xs">Write it to a USB stick with Rufus (in DD mode) or balenaEtcher, or mount it as virtual media from the
         server's BMC (iDRAC, iLO, IPMI). Boot from it and choose <b>Harvester Installer</b>.</p></section>
     <section class="guide-step"><h4><span>2</span>Read the cluster token</h4>
-      <p>It is on every management node. Sign in as <span class="mono">rancher</span>, with the password set when that host was installed:</p>
+      <p>It is on every management host. Sign in as <span class="mono">rancher</span>, with the password set when that host was installed:</p>
       ${guideCopy(`ssh rancher@${g.token_host || "<management-node>"}`)}
       ${guideCopy(g.token_command)}
       <p class="dim xs">Copy the value after <span class="mono">token:</span>. Anyone holding it can join a machine to this cluster,
@@ -88,7 +88,7 @@ async function guideWatch() {
   const fresh = (nodes || []).filter(n => !ONBOARD.known.has(n.name));
   host.innerHTML = fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
       <b>${esc(n.name)}</b><span>${n.status === "Ready" ? "joined and Ready" : "registered - finishing setup"}</span>
-      <button class="btn sm" onclick="closeModal();go('nodes')">Nodes</button></div>`).join("")
+      <button class="btn sm" onclick="closeModal();go('nodes')">Hosts</button></div>`).join("")
     : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here as soon as Harvester registers it, about a minute after it reboots.</div>';
   ONBOARD.timer = setTimeout(guideWatch, 10000);
 }
@@ -146,8 +146,8 @@ window.clusterCleanupPaint = async () => {
   const rows = cleanupRows(report);
   // Kept, so the next refresh draws it straight away instead of the page
   // shrinking while it is fetched again and growing back when it arrives.
-  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a node that stopped reporting, a Cluster API machine with no node, a Longhorn node record with no host, a k3s/RKE2 node password, apps and volumes tied to a host that is gone, a volume still attached there.")}</div>
-    <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to tidy</b><span>Every node is ready and nothing is left over.</span></div></div>'}</div>`;
+  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a host that stopped reporting, a Cluster API machine with no host, a Longhorn node record with no host, a k3s/RKE2 node password, apps and volumes tied to a host that is gone, a volume still attached there.")}</div>
+    <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to tidy</b><span>Every host is ready and nothing is left over.</span></div></div>'}</div>`;
   host.innerHTML = STATE.data.cleanupHtml;
   if (window.applyRole) window.applyRole();
 };

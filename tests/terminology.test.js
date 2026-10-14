@@ -1,23 +1,32 @@
 "use strict";
-// One name for each thing (#508): what runs from an image is an app (with
-// "container" for the process inside); "workload" is Kubernetes' word. It
-// stays only where it names a networking feature that serves VMs too.
+// One name for each thing (#508). What runs from an image is an app (with
+// "container" for the process inside); "workload" is Kubernetes' word and
+// stays only where it names a networking feature that serves VMs too. A
+// machine in the cluster is a host; "node" stays only for Kubernetes' and
+// Longhorn's own terms.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { prose, hold } = require("./helpers/prose");
 
-const KEPT = new Set(["views-network.js", "views-firewall.js"]);
-// A word a person reads: not a property, a variable or a path.
-const WORD = /(?<![.{\w$/-])[Ww]orkloads?(?![\w(/-]|\.\w)/;
-const NAMED = /workload (VIPs?|Services?|policies|firewall)|Workload VIPs|Expose workload|Kubernetes workloads/i;
+const files = fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js");
+const html = fs.readFileSync("web/index.html", "utf8").replace(/<script[\s\S]*?<\/script>/g, "");
+const pieces = files.flatMap(f => prose(fs.readFileSync(`web/js/${f}`, "utf8")).map(p => ({ ...p, file: f })))
+  .concat([...html.matchAll(/>([^<>]*\s[^<>]*)</g)].map(m => ({ text: m[1], file: "index.html" })));
+const where = p => `${p.file}: ${p.text.trim().slice(0, 70)}`;
 
-const text = line => [...line.matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`|>([^<>]+)</g)].map(m => m.slice(1).find(Boolean) || "");
+const KEPT_FILES = new Set(["views-network.js", "views-firewall.js"]);
+const NAMED = /workload (VIPs?|Services?|policies|firewall)|Workload VIPs|Expose workload|Kubernetes workloads/gi;
+const WORKLOAD = /(?<![\w$/-])[Ww]orkloads?(?![\w(/-])/;
 
 test("no screen says workload, except a networking feature that serves VMs too", () => {
-  const left = [];
-  for (const file of [...fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js" && !KEPT.has(f)).map(f => `web/js/${f}`), "web/index.html"])
-    fs.readFileSync(file, "utf8").split("\n").forEach((line, i) => {
-      if (/^\s*(\/\/|\/\*|\*)/.test(line)) return;
-      if (text(line).some(t => t.includes(" ") && WORD.test(t.replace(NAMED, "")))) left.push(`${file.split("/").pop()}:${i + 1}`);
-    });
+  const left = pieces.filter(p => !KEPT_FILES.has(p.file) && WORKLOAD.test(hold(p.text, [NAMED]).text)).map(where);
   assert.deepEqual(left, [], "say app, or apps and VMs");
+});
+
+const NODE_TERMS = /node (labels?|selectors?|objects|agents?|probes?|password|tags?|disks)|Node (filesystem|probe|role|tags)|Longhorn nodes?|Harvester nodes?|management nodes|Management nodes|nodes? tagged|nodes with (a|every) tag|No node has a tag|(?:on|to|across) (?:one|many|several) nodes?(?= at a time| through|\.|,| using| but)|RWO · one node|RWX · many nodes|single-node \(RWO\)|pods of a node|failed node's volumes|node-down/g;
+const NODE = /(?<![\w$/-])[Nn]odes?(?![\w(/-])/;
+
+test("a machine in the cluster is a host on screen; node only for Kubernetes' and Longhorn's own terms", () => {
+  const left = pieces.filter(p => NODE.test(hold(p.text, [NODE_TERMS]).text)).map(where);
+  assert.deepEqual(left, [], "say host");
 });

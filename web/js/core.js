@@ -1104,7 +1104,7 @@ function privilegeFields(prefix, p = {}) {
     <label class="switch"><input type="checkbox" id="${prefix}_tun" ${p.tun ? "checked" : ""}> VPN tunnel
       ${tip("Mounts /dev/net/tun and grants NET_ADMIN, so a VPN client can open its tunnel and add routes. Fixes \"RTNETLINK answers: Operation not permitted\" in transmission-openvpn, gluetun and similar - without making the container privileged.")}</label>
     <label class="switch"><input type="checkbox" id="${prefix}_priv" ${p.privileged ? "checked" : ""}> Privileged
-      ${tip("Everything the host allows, as Unraid's Privileged does. A last resort: the container can reach every device and kernel setting on the node.")}</label>
+      ${tip("Everything the host allows, as Unraid's Privileged does. A last resort: the container can reach every device and kernel setting on the host.")}</label>
     <div class="f"><label>Extra capabilities ${tip("Linux capabilities by name, separated by spaces or commas - e.g. NET_ADMIN SYS_TIME. Unraid's --cap-add.")}</label>
       <input id="${prefix}_caps" class="mono" value="${esc(caps.join(" "))}" placeholder="none"></div></div>`;
 }

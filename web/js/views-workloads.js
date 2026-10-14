@@ -715,7 +715,7 @@ function renderWorkloads() {
   const layout = viewLayout("containers");
   const items = [{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
     { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
-    { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
+    { label: "If a host fails", icon: "node", run: "wlFailover()", tip: "What each container does when its host fails: move, or wait for the host" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
     { label: "Move several…", icon: "move", run: "moveSeveral()", need: "operator", tip: "Tick containers and move them to a host you choose, reviewed together" },
     { label: "Set reservations from use…", icon: "sliders", run: "reservationsReview()", need: "operator", tip: "Reserve CPU and memory for apps from what they used over the last week" },
@@ -1102,7 +1102,7 @@ window.wlScale = async (ns, name, n) => {
             : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},true)`, { kind: "pri" })));
         return;
       }
-    } catch (e) { return toast(`Could not check node memory: ${e.message}`, "bad"); }
+    } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }
   }
   return wlScaleGo(ns, name, n, false);
 };
@@ -1476,7 +1476,7 @@ window.wlStopSelfGo = async (ns, name) => {
    decides whether a moved container's single-node volume can follow it, so
    its policy is shown here too. */
 window.wlFailover = async () => {
-  modal("If a node fails", '<div class="empty"><span class="spin2"></span></div>', true);
+  modal("If a host fails", '<div class="empty"><span class="spin2"></span></div>', true);
   const [rows, lh] = await Promise.all([api("/api/workloads").catch(() => STATE.data.wl || []),
     api("/api/longhorn/capacity").catch(() => null)]);
   const policy = lh?.node_down || "";
@@ -1484,14 +1484,14 @@ window.wlFailover = async () => {
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
     ${lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
-      ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another node takes its volume with it.`
+      ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another host takes its volume with it.`
       : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
     <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
       ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value=${jsq(v)})">${esc(l)}</button>`).join("")}</div>
-    <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>
+    <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its host fails</th></tr></thead><tbody>
       ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
           ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
-        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s node fails`)}</td></tr>`).join("")}
+        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s host fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
@@ -1510,7 +1510,7 @@ window.wlFailoverSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlFailoverPolicy = async () => {
-  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod.", { title: "Pod deletion when a node is down", ok: "Allow" }))) return;
+  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Host is Down\" set to delete-both-statefulset-and-deployment-pod.", { title: "Pod deletion when a host is down", ok: "Allow" }))) return;
   try {
     await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });
@@ -2377,7 +2377,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "d_mem", DCFG.memory, { placeholder: "128", label: "Memory reserved" })}</div>
       </div>
       <div class="f"><label>Memory max (optional) ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", "d_mem_limit", DCFG.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "d_mem" })}</div>
-      <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
+      <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto hosts marked as having that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
@@ -2391,7 +2391,7 @@ async function viewDeploy(pre) {
     `},
     {key:"storage", title:"Storage", lead:"Choose where the first container stores its data.", html:`
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
-      ${UI.more("Choose a storage type", "RWO suits a single app. RWX allows sharing across nodes. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
+      ${UI.more("Choose a storage type", "RWO suits a single app. RWX allows sharing across hosts. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
     `},
     {key:"address", title:"Address", lead:"Choose how clients reach the app.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
@@ -2712,7 +2712,7 @@ async function vipChoices(networkData) {
   // controller's) and addresses other software owns are never offered: an app
   // sharing the management VIP is how host joining breaks.
   const closed = { ...(net?.platform_addresses || {}), ...(net?.foreign_addresses || {}) };
-  for (const ip of net?.node_ips || []) closed[ip] = "Cluster node address";
+  for (const ip of net?.node_ips || []) closed[ip] = "Cluster host address";
   for (const service of net?.services || []) {
     if (service.exclusive_vip) for (const ip of service.external_ips || []) closed[ip] = service.name;
   }
@@ -2748,7 +2748,7 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
       <div class="f" id="${prefix}_vip_wrap"><label>Specific VIP</label>${vipPicker(prefix, cfg.lb_ip || "", vips, editing)}</div>
       ${lanHtml}
       ${UI.more("How addresses work", nodeAddressesOnly()
-        ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
+        ? "Host addresses expose each port on every host. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
         : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the app another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div>${portsHtml}`;
 }

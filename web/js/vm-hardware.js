@@ -96,9 +96,9 @@ function vmHardwareFields(h, o = {}, locked = false, creating = false) {
       <div class="vh-3"><div class="f"><label>Sockets</label><input id="vh_sockets" type="number" min="1" max="8" value="${c.sockets}" oninput="vmHardwareChanged()"></div>
         <div class="f"><label>Cores per socket</label><input id="vh_cores" type="number" min="1" max="128" value="${c.cores}" oninput="vmHardwareChanged()"></div>
         <div class="f"><label>Threads per core</label><input id="vh_threads" type="number" min="1" max="8" value="${c.threads}" oninput="vmHardwareChanged()"></div></div>`}
-      <div class="f"><label>CPU model ${tip("host-model: the node's CPU, as a named model KubeVirt can match on other nodes. host-passthrough: every feature of this node's exact CPU - fastest, but live migration only to identical CPUs. A named model keeps VMs movable across mixed hardware.")}</label>
+      <div class="f"><label>CPU model ${tip("host-model: the host's CPU, as a named model KubeVirt can match on other hosts. host-passthrough: every feature of this host's exact CPU - fastest, but live migration only to identical CPUs. A named model keeps VMs movable across mixed hardware.")}</label>
         <select id="vh_model" onchange="vmHardwareChanged()">${models.map(m => vhOpt(m, m || "Cluster default", c.model)).join("")}</select></div>
-      ${vhCheck("vh_dedicated", "Dedicated CPUs (pinned)", c.dedicated, "Each vCPU gets a host CPU of its own, as Proxmox's affinity does. Needs the kubelet's static CPU manager policy on the node.")}
+      ${vhCheck("vh_dedicated", "Dedicated CPUs (pinned)", c.dedicated, "Each vCPU gets a host CPU of its own, as Proxmox's affinity does. Needs the kubelet's static CPU manager policy on the host.")}
       ${vhCheck("vh_isolate", "Isolate the emulator thread", c.isolate_emulator, "QEMU's own work runs on one more dedicated CPU, away from the guest's. Needs dedicated CPUs.")}`)}
     ${section("firmware", `<div class="f2"><div class="f"><label>Firmware</label>
         <select id="vh_firmware" onchange="vmHardwareChanged()">${vhOpt("bios", "BIOS (SeaBIOS)", h.firmware)}${vhOpt("uefi", "UEFI (OVMF)", h.firmware)}</select></div>
@@ -120,9 +120,9 @@ function vmHardwareFields(h, o = {}, locked = false, creating = false) {
       ${vhCheck("vh_rng", "Random-number device", h.rng, "virtio-rng: entropy from the host, so a new guest does not stall making keys.")}
       ${vhCheck("vh_balloon", "Memory balloon", h.balloon, "Lets the guest report and return unused memory.")}
       ${vhCheck("vh_sound", "Sound card", h.sound, "An ich9 sound card, for a desktop guest.")}`)}
-    ${section("memory", `<div class="f2"><div class="f"><label>Hugepages ${tip("Guest memory in large pages: faster for big or busy guests, but the pages must be reserved on the node beforehand.")}</label>
+    ${section("memory", `<div class="f2"><div class="f"><label>Hugepages ${tip("Guest memory in large pages: faster for big or busy guests, but the pages must be reserved on the host beforehand.")}</label>
         <select id="vh_huge" onchange="vmHardwareChanged()">${vhOpt("", "Normal pages", h.hugepages)}${vhOpt("2Mi", "2 MiB", h.hugepages)}${vhOpt("1Gi", "1 GiB", h.hugepages)}</select></div>
-      <div class="f"><label>On node drain ${tip("What happens when its node is drained for maintenance: move it running to another node, try to, or stop it.")}</label>
+      <div class="f"><label>On host drain ${tip("What happens when its host is drained for maintenance: move it running to another host, try to, or stop it.")}</label>
         <select id="vh_evict" onchange="vmHardwareChanged()">${vhOpt("", "Cluster default", h.eviction)}${vhOpt("LiveMigrate", "Live-migrate", h.eviction)}${vhOpt("LiveMigrateIfPossible", "Live-migrate if it can", h.eviction)}${vhOpt("None", "Stop it", h.eviction)}</select></div></div>`)}
     <div id="vh_notes"></div></div>`;
 }
@@ -170,12 +170,12 @@ function vmHardwareNotes(h, o = {}) {
   const notes = [];
   if (h.secure_boot && h.firmware !== "uefi") notes.push(["bad", "Secure Boot needs UEFI firmware."]);
   if (h.cpu.isolate_emulator && !h.cpu.dedicated) notes.push(["bad", "An isolated emulator thread needs dedicated CPUs."]);
-  if (h.cpu.dedicated) notes.push(["warn", "Dedicated CPUs need nodes whose kubelet runs the static CPU manager policy; elsewhere the VM does not start."]);
-  if (h.hugepages) notes.push(["warn", `${h.hugepages} hugepages must be reserved on the node (a kernel setting), or the VM does not start.`]);
+  if (h.cpu.dedicated) notes.push(["warn", "Dedicated CPUs need hosts whose kubelet runs the static CPU manager policy; elsewhere the VM does not start."]);
+  if (h.hugepages) notes.push(["warn", `${h.hugepages} hugepages must be reserved on the host (a kernel setting), or the VM does not start.`]);
   if ((h.efi_persistent || h.tpm === "persistent") && !gates.has("VMPersistentState"))
     notes.push(["info", "Kept EFI variables and TPM state live in a small volume per VM; KubeVirt before 1.5 needs its VMPersistentState feature for them."]);
-  if (h.cpu.model === "host-passthrough") notes.push(["info", "host-passthrough: the VM can live-migrate only to nodes with the same CPU."]);
-  if (h.eviction === "LiveMigrate" && (o.nodes || []).length < 2) notes.push(["info", "Live migration needs a second node; on one node a drain waits for the VM."]);
+  if (h.cpu.model === "host-passthrough") notes.push(["info", "host-passthrough: the VM can live-migrate only to hosts with the same CPU."]);
+  if (h.eviction === "LiveMigrate" && (o.nodes || []).length < 2) notes.push(["info", "Live migration needs a second host; on one host a drain waits for the VM."]);
   if (h.boot_output === "gpu") {
     if (h.firmware !== "uefi") notes.push(["bad", "GPU boot output needs UEFI firmware."]);
     notes.push(["warn", "Connect the monitor to the passed-through GPU. Its ROM must support UEFI; the guest needs GPU drivers. A BIOS-installed guest may need its bootloader repaired after switching to UEFI."]);

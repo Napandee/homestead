@@ -10,10 +10,10 @@ async function mqttPaint() {
   STATE.data.mqtt = m;
   const s = m.status || {}, admin = can("admin");
   const state = { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["crit", "error"], off: ["low", "off"] }[s.state] || ["low", s.state || "off"];
-  host.innerHTML = `${UI.moduleHeader(`Publish`, `Cluster and node stats to other systems`, ``)}
+  host.innerHTML = `${UI.moduleHeader(`Publish`, `Cluster and host stats to other systems`, ``)}
     ${serviceRow("MQTT and Home Assistant", `<span class="pill ${state[0]}">${esc(state[1])}</span>`,
       s.state === "publishing" ? `${esc(s.detail)} · ${m.sensors.cluster + m.sensors.node} sensors · last ${Date.now() / 1000 - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(Date.now() / 1000 - s.last_publish))}`
-        : m.enabled ? esc(s.detail || "starting") : `Off · ${m.sensors.cluster} cluster sensors and ${m.sensors.node} for each node, with Home Assistant discovery`,
+        : m.enabled ? esc(s.detail || "starting") : `Off · ${m.sensors.cluster} cluster sensors and ${m.sensors.node} for each host, with Home Assistant discovery`,
       actionBar([admin ? { label: "Configure", run: "mqttConfigure()" } : null, { label: "What is published", run: "mqttPreview()" }].filter(Boolean)))}
     ${s.error ? `<div class="note bad">${esc(s.error)}</div>` : ""}
     <pre class="mono helm-values" id="mqttPreview" hidden></pre>`;
@@ -21,14 +21,14 @@ async function mqttPaint() {
 /* Its fields, in a dialog: broker, sign-in, topics, how often. */
 window.mqttConfigure = () => {
   const m = STATE.data.mqtt || {};
-  modal("MQTT and Home Assistant", UI.lead(`Publishes cluster and node stats to an MQTT broker, with Home Assistant discovery: ${m.sensors?.cluster ?? 0} cluster sensors and ${m.sensors?.node ?? 0} for each node.`) + `
+  modal("MQTT and Home Assistant", UI.lead(`Publishes cluster and host stats to an MQTT broker, with Home Assistant discovery: ${m.sensors?.cluster ?? 0} cluster sensors and ${m.sensors?.node ?? 0} for each host.`) + `
     <label class="switch"><input type="checkbox" id="mq_on" ${m.enabled ? "checked" : ""}> Publish stats to MQTT</label>
     <div class="mqtt-grid">
       <div class="f"><label>Broker</label><input id="mq_host" class="mono" value="${esc(m.host || "")}" placeholder="192.0.2.177"></div>
       <div class="f"><label>Port</label><input id="mq_port" type="number" min="1" max="65535" value="${m.port || 1883}"></div>
       <div class="f"><label>Username</label><input id="mq_user" value="${esc(m.username || "")}" placeholder="none" autocomplete="off"></div>
       <div class="f"><label>Password</label><input id="mq_pass" type="password" autocomplete="new-password" placeholder="${m.has_password ? "saved · blank keeps it" : "none"}"></div>
-      <div class="f"><label>Base topic ${tip("States go to <base>/cluster/state and <base>/node/<node>/state.")}</label><input id="mq_base" class="mono" value="${esc(m.base || "")}"></div>
+      <div class="f"><label>Base topic ${tip("States go to <base>/cluster/state and <base>/node/<host>/state.")}</label><input id="mq_base" class="mono" value="${esc(m.base || "")}"></div>
       <div class="f"><label>Discovery prefix ${tip("Home Assistant listens for discovery under homeassistant unless it has been changed.")}</label><input id="mq_disc" class="mono" value="${esc(m.discovery || "")}"></div>
       <div class="f"><label>Every (seconds)</label><input id="mq_every" type="number" min="10" max="3600" value="${m.interval || 60}"></div>
       <div class="f"><label>Device name</label><input id="mq_name" value="${esc(m.device_name || "")}"></div>
