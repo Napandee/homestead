@@ -26,7 +26,7 @@ class WorkloadHierarchyTests(unittest.TestCase):
             },
         }
 
-        rows = server.pod_container_rows(pod)
+        rows = server.CLUSTER_ROUTES.pod_container_rows(pod)
 
         self.assertEqual(["init", "app"], [row["kind"] for row in rows])
         self.assertEqual("Completed", rows[0]["state"])
@@ -36,7 +36,7 @@ class WorkloadHierarchyTests(unittest.TestCase):
 
     def test_waiting_reason_and_message_are_exposed_without_full_event_dump(self):
         message = "pull failed " * 40
-        rows = server.pod_container_rows({
+        rows = server.CLUSTER_ROUTES.pod_container_rows({
             "spec": {"containers": [{"name": "app", "image": "example/app:latest"}]},
             "status": {"containerStatuses": [{
                 "name": "app", "ready": False, "restartCount": 0,
