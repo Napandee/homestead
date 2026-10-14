@@ -306,6 +306,7 @@ window.vmPower = async (ns, name, action) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+const VM_POWER_WHAT = { start: "Starts", restart: "Restarts", unpause: "Resumes" };
 window.vmPowerReview = async config => {
   if (VM_POWER_BUSY) return;
   VM_POWER_REVIEW = null;
@@ -322,7 +323,7 @@ window.vmPowerReview = async config => {
     const plan = review.capacity, facts = plan.vm || {};
     const policy = facts.policy_after && facts.policy_after !== facts.policy_before
       ? ` Its restart policy changes from ${esc(facts.policy_before || "unknown")} to <b>${esc(facts.policy_after)}</b>.` : "";
-    const what = frozen.action === "restart" ? "Restarts" : frozen.action === "unpause" ? "Resumes" : "Starts";
+    const what = VM_POWER_WHAT[frozen.action];
     const downtime = frozen.action === "restart" ? " The guest stops and starts again." : "";
     const guest = facts.guest_memory_gb != null ? ` <span class="ui-help">${esc(facts.guest_memory_gb)} GiB guest memory.</span>` : "";
     $("#mbody").innerHTML = startReview(plan, { what, name: frozen.name, extra: `${downtime}${policy}${guest}`,
@@ -348,7 +349,7 @@ window.vmPowerReviewReady = () => {
   return ready;
 };
 window.vmPowerReviewedApply = async () => {
-  if (!vmPowerReviewReady()) return toast("Tick Start it anyway to accept the warning", "bad");
+  if (!vmPowerReviewReady()) return toast(`Tick ${reviewAck(VM_POWER_WHAT[VM_POWER_REVIEW?.config?.action])} to accept the warning`, "bad");
   const review = VM_POWER_REVIEW, button = $("#vmPowerApply");
   VM_POWER_REVIEW = null; // one shot, including errors and lost responses
   VM_POWER_BUSY = true;

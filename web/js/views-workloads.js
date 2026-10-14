@@ -1047,6 +1047,10 @@ function capacityHostTable(plan) {
 }
 window.capacityHostTable = capacityHostTable;
 
+/* The acknowledgement a review asks for, from what it does: "Restarts" asks
+   "Restart it anyway", never "Start it anyway". */
+const reviewAck = what => `${String(what || "Starts").split(" ")[0].replace(/s$/, "")} it anyway`;
+window.reviewAck = reviewAck;
 function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "" }) {
   const { concerns, caveats } = capacityNotes(plan);
   const placement = plan.placement || {}, hosts = plan.candidates || [];
@@ -1080,7 +1084,7 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
       ${caveats.length ? `<ul class="ui-list">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
       ${details}
       <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`),
-    !plan.blocked && problems.length ? UI.ack(ackId, "Start it anyway", { onchange: onAck }) : "",
+    !plan.blocked && problems.length ? UI.ack(ackId, reviewAck(what), { onchange: onAck }) : "",
   ].join("");
 }
 window.startReview = startReview;
