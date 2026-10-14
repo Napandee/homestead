@@ -1,32 +1,31 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict"), fs=require("node:fs"), vm=require("node:vm");
 function setup({blocked=false,missing=false}={}) {
-  const fields={"#k_go":{disabled:true},"#k_capacity_confirm":{checked:false},"#k_review":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML+=html;}}};
+  const fields={"#k_go":{disabled:true},"#k_capacity_confirm":{checked:false},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[], cfg={name:"cluster",memory:"4Gi",password:"private-data"};
   const ctx={console,Date,Map,Promise,URLSearchParams,encodeURIComponent,STATE:{data:{}},document:{addEventListener(){}},
-    $:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),toast(){},go(){},closeModal(){},
+    $:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),toast(){},go(){},closeModal(){},modalBack(){},childModal:(_title,html)=>{fields["#mbody"].innerHTML=html;},
     api:async(path,options)=>{
       const body=JSON.parse(options.body);sent.push({path,body});
       if(path.endsWith("/plan"))return {config:missing ? null : {...body,review_id:"frozen",macs:{guest:"52:54:00:11:22:33"}},
         capacity_token:"signed-batch",ok:!blocked,nodes:[{name:"guest",role:"server",address:"192.0.2.20"}],
         capacity:{blocked,status:blocked?"blocked":"fits",warnings:["capacity may change"],nodes:[],example:[]}};
       return {ok:true};}};
-  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx);require("./helpers/load-ui")(ctx);vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   ctx.k3sBody=()=>({...cfg});
   return {ctx,fields,sent,cfg};
 }
 test("batch requires consent and submits frozen server-normalized configuration once",async()=>{
   const t=setup();await t.ctx.k3sReview();await t.ctx.k3sCreate();assert.equal(t.sent.length,1);
-  assert.doesNotMatch(t.fields["#k_review"].innerHTML,/private-data/);
+  assert.doesNotMatch(t.fields["#mbody"].innerHTML,/private-data/);
   t.fields["#k_capacity_confirm"].checked=true;await t.ctx.k3sCreate();await t.ctx.k3sCreate();
   assert.equal(t.sent.length,2);assert.equal(t.sent[1].body.review_id,"frozen");
   assert.equal(t.sent[1].body.capacity_token,"signed-batch");
   assert.equal(t.sent[1].body.macs.guest,"52:54:00:11:22:33");
 });
-test("editing a field invalidates approval even if its DOM event is missed",async()=>{
+test("going back to the form to change it withdraws the review",async()=>{
   const t=setup();await t.ctx.k3sReview();t.fields["#k_capacity_confirm"].checked=true;
-  t.cfg.memory="8Gi";await t.ctx.k3sCreate();assert.equal(t.sent.length,1);
-  assert.equal(t.fields["#k_go"].disabled,true);
+  t.ctx.k3sReviewBack();await t.ctx.k3sCreate();assert.equal(t.sent.length,1);
 });
 test("blocked or incomplete batch response never permits creation",async()=>{
   for(const options of [{blocked:true},{missing:true}]){

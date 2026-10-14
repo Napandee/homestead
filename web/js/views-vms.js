@@ -756,10 +756,7 @@ window.k3sCluster = async () => {
     <div class="sec">Network</div>
     <div class="f"><label>LAN network ${tip("The network bridged to your LAN the nodes join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
     ${vmAddressFields("k", opts, 3)}
-    <div id="k_review"></div>
-    ${UI.actions(`<button class="btn" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>
-      <button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
+    ${UI.actions(UI.cancel() + `<button class="btn pri" data-need="operator" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>`)}`;
   k3sCountChanged();
   $$("#mbody input, #mbody select").forEach(field => {
     field.addEventListener("input", k3sInvalidateReview);
@@ -790,13 +787,11 @@ function k3sBody() {
     addresses: $("#k_ip").value.split(",").map(x => x.trim()).filter(Boolean) });
 }
 let K3S_REVIEW = null, K3S_REVIEW_SEQUENCE = 0, K3S_CREATE_BUSY = false;
-window.k3sInvalidateReview = () => {
-  K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE;
-  if ($("#k_go")) { $("#k_go").disabled = true; $("#k_go").textContent = "Create reviewed cluster"; }
-  if ($("#k_review")) $("#k_review").innerHTML = "";
-};
+window.k3sInvalidateReview = () => { K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE; };
 window.k3sReviewReady = () => {
-  const ready = !!(K3S_REVIEW && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked && $("#k_capacity_confirm")?.checked);
+  // The tickbox is there only when there is a warning to accept.
+  const ready = !!(K3S_REVIEW && K3S_REVIEW.ok !== false && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked
+    && (!$("#k_capacity_confirm") || $("#k_capacity_confirm").checked));
   if ($("#k_go")) $("#k_go").disabled = !ready;
   return ready;
 };
@@ -806,37 +801,42 @@ window.k3sReview = async () => {
   const sequence = K3S_REVIEW_SEQUENCE, input = JSON.stringify(k3sBody());
   try {
     const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: input });
-    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    if (sequence !== K3S_REVIEW_SEQUENCE) return;
     if (!plan.config || !plan.capacity_token || typeof plan.capacity?.blocked !== "boolean" || !Array.isArray(plan.nodes))
       throw new Error("Complete VM batch review unavailable; nothing can be created yet.");
     K3S_REVIEW = {...plan, input};
-    $("#k_review").innerHTML = `<div class="sec">What it makes</div>
-      <table class="tbl dense stack"><thead><tr><th>VM</th><th>Role</th><th>Address</th></tr></thead><tbody>
-      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
-        <td data-label="Address" class="mono">${esc(n.address)}${n.problem ? `<div class="badtext xs">${esc(n.problem)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
-      <div class="note ${plan.ok ? "" : "bad"}" style="margin-top:10px">${plan.ok
-        ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}${plan.kubevirt ? " and KubeVirt" : ""}, and join.
-           ${plan.url ? `Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""} The job tray follows it.`
-        : "The batch cannot proceed under the checked constraints. Resolve the issues below and review again."}</div>
-      <div class="reviewbox"><b>Whole-batch capacity · ${plan.capacity.vm_count ?? plan.nodes.length} VMs</b>
-        <p class="small">Each VM: ${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk.</p>
-        <p class="small muted">All VMs share one capacity budget, including new VMs waiting for launcher pods. The example is not an enforced reservation.</p>
-        <div class="dependency-list">${(plan.capacity.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} → up to ${esc(n.upper_gb)} GiB (${esc(n.upper_percent)}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
-        ${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).length ? `<div class="note bad">${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).map(esc).join(" · ")}</div>` : ""}
-        <div class="note warn">${(plan.capacity.warnings || []).map(esc).join(" ")}</div>
-        ${(plan.capacity.example || []).length ? `<p class="small muted">Example placement: ${plan.capacity.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}</div>
-      ${!plan.capacity.blocked ? '<div class="note">Memory warnings can be overridden, even above 100%, but that may cause OOM restarts or downtime. Hardware, storage and checked scheduling blockers cannot be overridden.</div><label class="check"><input type="checkbox" id="k_capacity_confirm" onchange="k3sReviewReady()"> Create this exact batch and accept the capacity and partial-creation risks. If a step fails, keep all resources for inspection.</label>' : ""}`;
+    const cap = plan.capacity, name = JSON.parse(input).name || "k3s";
+    const blockers = [...(cap.blockers || []), ...(cap.reasons || []), ...plan.nodes.filter(n => n.problem).map(n => `${n.name}: ${n.problem}`)];
+    const warnings = cap.warnings || [];
+    const stopped = cap.blocked || plan.ok === false;
+    childModal(`Create cluster · ${name}`, [
+      UI.lead(stopped ? `<b>${esc(name)}</b> can't be created until what is below is resolved.`
+        : `Creates ${plan.nodes.length} VMs for <b>${esc(name)}</b>, which install ${esc(String(K3S_SETUPS[plan.setup] || plan.setup).split(" - ")[0])}${plan.kubevirt ? " and KubeVirt" : ""} and join in 10-15 minutes.${plan.url ? ` Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""}`),
+      UI.notices([...blockers.map(b => ["bad", b]), ...(stopped && !blockers.length ? [["bad", "The batch can't go ahead under the checked constraints."]] : []),
+        ...warnings.map(w => ["warn", w])], stopped ? "Can't create" : "Check first"),
+      UI.table([{ label: "VM" }, { label: "Role" }, { label: "Address" }], plan.nodes.map(n => [
+        `<b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div>`,
+        n.role === "server" ? UI.chip("server", "info") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
+      UI.facts([["Each VM", `${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
+      (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
+      UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and the job tray follows the VMs coming up.
+        All the VMs share one capacity budget, new VMs waiting for launcher pods included; the placement below is an example, not a reservation.</p>
+        ${(cap.example || []).length ? `<p class="ui-help">Example placement: ${cap.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}
+        <p class="ui-help">Memory warnings can be accepted, even above 100%, at the risk of out-of-memory restarts. Hardware, storage and scheduling blockers can't.</p>`),
+      !stopped && warnings.length ? UI.ack("k_capacity_confirm", reviewAck("Creates"), { onchange: "k3sReviewReady()" }) : "",
+      UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="k3sReviewBack()">Back to configuration</button><button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>`),
+    ].join(""), true);
     k3sReviewReady();
   } catch (e) {
-    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    if (sequence !== K3S_REVIEW_SEQUENCE) return;
     K3S_REVIEW = null;
-    $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true;
+    toast(e.message, "bad");
   }
 };
+window.k3sReviewBack = () => { if (!K3S_CREATE_BUSY) { k3sInvalidateReview(); modalBack(); } };
 window.k3sCreate = async () => {
   const button = $("#k_go");
   if (K3S_CREATE_BUSY || !button || !k3sReviewReady()) return;
-  if (JSON.stringify(k3sBody()) !== K3S_REVIEW.input) { k3sInvalidateReview(); return toast("Configuration changed; review the VM batch again", "bad"); }
   const review = K3S_REVIEW;
   K3S_REVIEW = null;
   K3S_CREATE_BUSY = true;
@@ -848,7 +848,7 @@ window.k3sCreate = async () => {
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
   } catch (e) {
     toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-    $("#k_review")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
+    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
     if (window.refreshOperations) refreshOperations(true);
   } finally { K3S_CREATE_BUSY = false; }
 };

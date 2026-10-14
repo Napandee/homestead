@@ -109,3 +109,30 @@ test("a warning that is also a capacity concern is listed once", () => {
     { what: "Saves", name: "vm", warnings: ["Partial saves keep disks"], ackId: "ok" });
   assert.equal((html.match(/Partial saves keep disks/g) || []).length, 1);
 });
+
+const k3sPlan = extra => ({ ok: true, setup: "homestead", kubevirt: false, url: "https://192.0.2.60", capacity_token: "t",
+  config: { cores: 2, memory: "4Gi", disk_gb: 40, macs: {} }, input: "{}",
+  nodes: [{ name: "k3s-demo-server-1", role: "server", address: "192.0.2.60" }, { name: "k3s-demo-agent-1", role: "agent", address: "192.0.2.61" }],
+  capacity: { blocked: false, vm_count: 2, nodes: [], blockers: [], reasons: [], warnings: [], example: [] }, ...extra });
+
+test("New k3s cluster reviews in a child dialog that reads like the others", async () => {
+  const { c, shown } = vmContext(k3sPlan());
+  vm.runInContext("k3sBody = () => ({ name: 'k3s-demo' })", c);
+  await c.k3sReview();
+  assert.match(shown.title, /Create cluster · k3s-demo/);
+  assert.doesNotMatch(shown.html, /reviewbox|class="note/);
+  assert.match(shown.html, /k3s-demo-agent-1/);
+  assert.doesNotMatch(shown.html, /k_capacity_confirm/, "nothing to accept, no tickbox");
+  assert.match(shown.html, />Create cluster</);
+  assert.doesNotMatch(shown.html, /reviewed/);
+  const warned = vmContext(k3sPlan({ capacity: { ...k3sPlan().capacity, warnings: ["Memory above 90% on host-1"] } }));
+  vm.runInContext("k3sBody = () => ({ name: 'k3s-demo' })", warned.c);
+  await warned.c.k3sReview();
+  assert.equal((warned.shown.html.match(/class="ui-callout /g) || []).length, 1);
+  assert.match(warned.shown.html, /Create it anyway/);
+});
+
+test("the New k3s cluster form has no inline review or reviewed button", () => {
+  const source = fs.readFileSync("web/js/views-vms.js", "utf8");
+  assert.doesNotMatch(source, /Create reviewed cluster|id="k_review"/);
+});
