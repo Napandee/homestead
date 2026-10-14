@@ -23,8 +23,8 @@ const AGENT_MONO = /(^|_)(uid|id|ip|vip|image|mac|url|pvc|digest|address)$/;
 const agentLabel = key => AGENT_LABELS[key] || String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase())
   .replace(/\b(ip|vip|uid|url|mac|pvc)\b/g, word => word.toUpperCase());
 
-const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", "info"], done: ["done", "ok"],
-  denied: ["denied", "warn"], expired: ["expired", ""], failed: ["failed", "bad"] };
+const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", ""], done: ["done", "ok"],
+  denied: ["denied", ""], expired: ["expired", ""], failed: ["failed", "bad"] };
 const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, ""]));
 
 /* One value of a plan, as a person reads it. Lists of plain values are
@@ -147,7 +147,7 @@ window.agentDeny = async id => {
 };
 
 /* ---------------- Settings › Users and access ---------------- */
-const AGENT_OUTCOME = { ok: "ok", approved: "ok", pending: "info", denied: "warn", refused: "warn", error: "bad", expired: "" };
+const AGENT_OUTCOME = { ok: "ok", approved: "ok", pending: "warn", denied: "", refused: "warn", error: "bad", expired: "" };
 
 window.mcpCardPaint = async () => {
   const card = document.getElementById("mcpCard");

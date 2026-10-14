@@ -1156,7 +1156,7 @@ html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-steps .cur
 .wacts{gap:4px;flex-wrap:nowrap;padding-top:0;min-height:28px}.wacts>.btn{height:28px;padding:4px 7px;border-radius:9px;font-size:11px}
 .actionmenu{position:relative;margin-left:auto}.actionmenu>summary{list-style:none;font-size:17px;line-height:1;padding:3px 8px!important;height:28px}
 .actionmenu>summary::-webkit-details-marker{display:none}.actionmenu-pop{position:absolute;right:0;bottom:calc(100% + 6px);z-index:12;width:172px;padding:6px;border:1px solid var(--line2);border-radius:11px;background:rgba(20,20,23,.98);box-shadow:0 16px 45px rgba(0,0,0,.6);backdrop-filter:blur(20px)}
-.actionmenu-pop button{width:100%;display:flex;align-items:center;gap:8px;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:var(--tx);font:600 12px "Inter Tight",sans-serif;cursor:pointer;text-align:left}.actionmenu-pop button:hover{background:rgba(255,255,255,.08)}.actionmenu-pop button.danger{color:#ff9fa3}.actionmenu-pop .btnicon{width:14px;height:14px}
+.actionmenu-pop button{width:100%;display:flex;align-items:center;gap:8px;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:var(--tx);font:600 12px "Inter Tight",sans-serif;cursor:pointer;text-align:left}.actionmenu-pop button:hover{background:rgba(255,255,255,.08)}.actionmenu-pop button.danger{color:#ff9fa3}.actionmenu-pop button.warn{color:var(--med)}.actionmenu-pop .btnicon{width:14px;height:14px}
 .updatebar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:-4px 0 16px;
   padding:13px 15px;border-radius:13px;border:1px solid rgba(255,176,32,.28);background:rgba(255,176,32,.075)}
 .updatebar.quiet{border-color:var(--line);background:rgba(255,255,255,.025)}
@@ -3442,7 +3442,7 @@ html[data-theme="light"] .dashboard-resource-state.bad{color:#a1242a}
 /* Mobile notifications reuse the standard dialog, with comfortable action rows. */
 .notification-center{display:grid;gap:6px;min-width:0}
 .notification-center>button{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surf2);color:var(--tx);font:inherit;font-size:13px;text-align:left;white-space:normal;cursor:pointer}
-.notification-center>button svg{width:18px;height:18px;flex:none}.notification-center>button.danger{color:var(--crit)}
+.notification-center>button svg{width:18px;height:18px;flex:none}.notification-center>button.danger{color:var(--crit)}.notification-center>button.warn{color:var(--med)}
 .notification-center .bell-head{padding:10px 0 2px;font-family:inherit;font-size:12px;letter-spacing:0;text-transform:none;color:var(--mut)}
 .notification-center .bell-job{display:flex;flex-direction:column;align-items:stretch}
 .notification-center .bell-job-msg{white-space:normal;color:var(--mut);line-height:1.4}
