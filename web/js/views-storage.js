@@ -2214,7 +2214,7 @@ window.volumeReclass = async x => {
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
       UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
     '<div id="rc_plan"></div>' +
-    UI.ack("rc_ack", "I approve the downtime and the storage warnings shown above.", {onchange:"volumeReclassReady()"}) +
+    UI.ack("rc_ack", "Copy it despite the downtime and warnings", {onchange:"volumeReclassReady()"}) +
     UI.actions(UI.cancel() + UI.button("Move volume", `volumeReclassStart(${jsArg(x.namespace || "lab")},${jsArg(x.pvc_name || x.name)})`, {kind:"pri",id:"rc_go",disabled:true})), false, "operation-review");
   volumeReclassPlan(x.namespace || "lab", x.pvc_name || x.name);
 };

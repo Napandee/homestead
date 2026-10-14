@@ -67,7 +67,7 @@ function agentCard(r, target) {
     ${UI.more("Raw details", `<pre class="mono small agent-raw">${esc(rawDetails)}</pre>`, false, `agent-raw-${r.id}`)}
     ${pending ? `<div class="agent-req-actions">${why ? `<span class="dim small">${esc(why)}</span>` : ""}${actionBar([
       { label: "Deny", run: `agentDeny(${jsq(r.id)})`, disabled: !r.can_decide, tip: why },
-      { label: "Approve", run: `agentApprove(${jsq(r.id)})`, pri: true, disabled: !r.can_decide, tip: why }], { shown: 2 })}</div>` : ""}
+      { label: "Approve", run: `agentApprove(${jsq(r.id)})`, pri: !agentResult(r).risky, danger: agentResult(r).risky, disabled: !r.can_decide, tip: why }], { shown: 2 })}</div>` : ""}
   </section>`;
 }
 
@@ -109,14 +109,25 @@ window.viewAgents = viewAgents;
 
 const agentPost = (path, id) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
 
+/* A request that deletes or puts back data can't be undone: its button is a
+   danger one named from what it does, such as Delete lab/old-wiki (#500). */
+const AGENT_RISKY = /^(delete|remove|restore|revert|rollback|wipe)_/;
+function agentResult(r) {
+  if (!AGENT_RISKY.test(r.tool || "")) return { risky: false, label: "Run it" };
+  const verb = (r.tool.split("_")[0] || "").replace(/^./, c => c.toUpperCase());
+  const a = r.args || {}, target = a.namespace && a.name ? `${a.namespace}/${a.name}` : a.name || a.snapshot || a.volume || "";
+  return { risky: true, label: target ? `${verb} ${target}` : verb };
+}
+
 /* Approving runs the plan, as the person approving, so it asks first. */
 window.agentApprove = id => {
   const r = (STATE.data.agentRequests?.requests || []).find(x => x.id === id);
   if (!r) return;
-  modal("Approve this request", UI.callout("warn", r.action || r.title, `${esc(r.key)} asked for this. Approving runs it now, as you.`)
+  const result = agentResult(r);
+  modal(`Approve · ${r.title || "request"}`, UI.lead(`${esc(r.key)} asks to ${esc((r.action || r.title || "").replace(/^./, c => c.toLowerCase()))}. Approving runs it now, as you.`)
     + agentPlanHtml(r.summary)
-    + UI.ack("agentOk", "Run it now, as the plan above describes", { onchange: "$('#agentGo').disabled=!this.checked" })
-    + UI.actions(UI.cancel() + UI.button("Approve and run", `agentApproveRun(${jsArg(id)},this)`, { kind: "pri", id: "agentGo", disabled: true })));
+    + UI.ack("agentOk", result.risky ? `${result.label}, as planned` : "Run it as planned", { onchange: "$('#agentGo').disabled=!this.checked" })
+    + UI.actions(UI.cancel() + UI.button(result.label, `agentApproveRun(${jsArg(id)},this)`, { kind: result.risky ? "danger" : "pri", id: "agentGo", disabled: true })));
 };
 
 window.agentApproveRun = async (id, button) => {

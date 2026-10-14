@@ -202,7 +202,7 @@ test('single-host shutdown and reboot need outage acknowledgement without force'
     assert.match(t.html(), /does not evict pods/);
     assert.match(t.html(), /id="pw_outage"/);
     assert.doesNotMatch(t.html(), /Override these checks|id="pw_allow"|waits for Longhorn during drain|host stays cordoned/);
-    if(action==='poweroff') assert.match(t.html(), /console or physical access to power this host on again/);
+    if(action==='poweroff') assert.match(t.html(), /powered on by hand/);
     await t.c.window.nodePower('host1',action);
     assert.equal(t.sent.length,0);
     t.fields['#pw_outage'].checked=true;

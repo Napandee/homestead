@@ -273,8 +273,8 @@ window.composeReview = async body => {
     COMPOSE.review = { config, ...response };
     childModal("Review Compose batch", `${composeCapacityHtml(response.capacity)}
       <div class="note">Each service is rechecked against the remaining batch before creation. A later failure stops the batch without deleting created workloads or volumes. Copy the Compose file somewhere safe if you need to recover it after a page refresh.</div>
-      ${!response.capacity.blocked ? `<div class="note">Capacity warnings can be overridden, including conservative RAM estimates over 100%. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</div><label class="switch"><input type="checkbox" id="composeCapacityConfirm"> Proceed despite capacity warnings — I accept the batch, storage and partial-creation risks</label>` : ""}
-      <div id="composeApplyResult"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create reviewed workloads</button>`)}`, true);
+      ${!response.capacity.blocked ? `<div class="note">Capacity warnings can be overridden, including conservative RAM estimates over 100%. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</div><label class="switch"><input type="checkbox" id="composeCapacityConfirm"> Create them anyway</label>` : ""}
+      <div id="composeApplyResult"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create workloads</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 

@@ -288,7 +288,7 @@ window.nodeRemovalMode = () => {
     const parts = [lost ? `${lost} volume${lost === 1 ? "" : "s"} that only ${plan.node} held` : "",
       pinned ? `${pinned} volume${pinned === 1 ? "" : "s"} kept on it, made again empty` : ""].filter(Boolean);
     box.closest("label").hidden = !parts.length;
-    text.textContent = `I accept losing ${parts.join(", and ")}`;
+    text.textContent = `Remove it, losing ${parts.join(", and ")}`;
   }
   if (button) button.disabled = !!(box && !box.closest("label").hidden && !box.checked);
 };

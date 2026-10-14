@@ -680,7 +680,7 @@ window.vmEditReviewedApply = async () => {
   const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
   VM_EDIT_REVIEW = null;
   VM_EDIT_BUSY = true;
-  button.disabled = true; button.textContent = "Saving reviewed changes…";
+  button.disabled = true; button.textContent = "Saving changes…";
   let saved = false;
   try {
     const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},

@@ -103,7 +103,7 @@ try {
       };
     });
     await page.locator('#editCapacityConfirm').check();
-    await page.getByRole('button', {name:'Save reviewed changes',exact:true}).click();
+    await page.getByRole('button', {name:'Save changes',exact:true}).click();
     await page.getByRole('button', {name:'Reload saved workload',exact:true}).waitFor();
     assert.equal(await page.locator('#editGo').isDisabled(),true);
     assert.match(await page.locator('#mbody').innerText(), /Some changes may already be saved/);
