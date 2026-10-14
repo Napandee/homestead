@@ -1772,9 +1772,8 @@ async function lhSettingsPaint() {
         ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
         .map(([v, l]) => `<option value="${v}" ${v === cap.node_down ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
-    <div class="dim xs" style="margin-top:10px">Largest new volume</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
-    <div class="note" style="margin-top:12px">Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused;
-      nothing already placed is moved. What fills a disk for real is data written — ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
+    <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
+    <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
