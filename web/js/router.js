@@ -24,7 +24,7 @@
   const ROUTES = Object.freeze({
     dash:      Object.freeze({ path: "/",                label: "Dashboard",       section: "Overview" }),
     flow:      Object.freeze({ path: "/architecture",    label: "Architecture",    section: "Overview", parent: "dash" }),
-    nodes:     Object.freeze({ path: "/nodes",           label: "Nodes",           section: "Overview" }),
+    nodes:     Object.freeze({ path: "/nodes",           label: "Hosts",           section: "Overview" }),
     portal:    Object.freeze({ path: "/portal",          label: "Portal",          section: "Overview" }),
     workloads: Object.freeze({ path: "/containers",      label: "Containers",      section: "Apps" }),
     deploy:    Object.freeze({ path: "/deploy",          label: "Deploy",          section: "Apps", parent: "workloads" }),
@@ -51,7 +51,7 @@
   /* The tabs across the top of a page and the pages folded into it. */
   const TABS = Object.freeze({
     dash: [["dash", "Overview"], ["flow", "Architecture"]],
-    workloads: [["workloads", "Running"], ["monitoring", "Monitoring"], ["images", "Images"], ["schedules", "Schedules"], ["imports", "Import"]],
+    workloads: [["workloads", "Running"], ["monitoring", "Monitoring"], ["images", "Image Cache"], ["schedules", "Schedules"], ["imports", "Import"]],
     vms: [["vms", "Machines"], ["vmimport", "Import"]],
     store: [["store", "Apps"], ["helm", "Helm"]],
     cluster: [["cluster", "Health"], ["events", "Events"], ["resources", "Resources"]],

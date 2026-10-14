@@ -53,7 +53,7 @@ const SHOTS = [
   { name: "networking", view: "network", caption: "VIPs and services", hide: "Networking roles" },
   { name: "volumes", view: "storage", caption: "Replicated volumes" },
   { name: "protection", view: "protect", caption: "Snapshots and backups" },
-  { name: "nodes", view: "nodes", caption: "Nodes" },
+  { name: "nodes", view: "nodes", caption: "Hosts" },
 ];
 const taken = [];
 for (const shot of SHOTS) {
