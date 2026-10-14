@@ -84,3 +84,12 @@ test("the dashboard, Nodes and the node's page give the same temperature and dis
   assert.match(card, /Node filesystem/); assert.match(summary, /Node filesystem/);
   assert.doesNotMatch(summary, /Disk <b>/);
 });
+
+test("shapes a real probe reports: a hottest sensor that is the CPU itself adds nothing", () => {
+  const c = context();
+  // As a Raspberry Pi's probe reports it: the hottest sensor is the SoC's ADC, at the CPU's temperature.
+  assert.deepEqual(JSON.parse(JSON.stringify(c.nodeTemp({ ...base, temps: { cpu_c: 52.6, max_c: 52.6, max_source: "rp1_adc", disks: [] } }))),
+    { value: 52.6, label: "CPU temp", text: "52.6°C", extra: "" });
+  // A drive running hotter than the CPU is named beside it.
+  assert.equal(c.nodeTemp({ ...base, temps: { cpu_c: 30, max_c: 37.9, max_source: "NVMe nvme0", disks: [] } }).extra, "max 37.9°C, NVMe nvme0");
+});
