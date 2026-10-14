@@ -190,8 +190,7 @@ function networkOpen() {
 function networkPage(key, bodyHtml, { actions = "", actionsClass = "" } = {}) {
   const items = NETWORK_SECTIONS.map(([id, , group, icon]) => ({ key: id, label: networkSectionLabel(id), group, icon,
     descriptionHtml: networkSectionLine(id) }));
-  paint(`${UI.pageHeader("Networking", esc(networkSectionRow(key)[4]), actions
-      || `<button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>`, { mobileSummary: "omit", actionsClass })}
+  paint(`${UI.pageHeader("Networking", esc(networkSectionRow(key)[4]), actions, { mobileSummary: "omit", actionsClass })}
     ${UI.workspace(UI.workspaceNav(items, { label: "Networking sections", selected: key, onSelect: id => `networkTab(${jsArg(id)})` }),
       `<div class="network-pane" data-pane="${esc(key)}">${bodyHtml}</div>`,
       { open: networkOpen(), backLabel: "All sections", currentLabel: networkSectionLabel(key), back: "networkBack()" })}`);
@@ -220,8 +219,15 @@ async function viewNetworking() {
     lan: () => networkLanHtml(),
     ports: () => networkPortsHtml(),
   }[key] || (() => networkOverviewHtml(data, baseline));
-  const actions = key === "services" ? `${moreMenu([{ label: `${STATE.networkSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}
-      <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>` : "";
+  // Each section's own create action is in the header (#504); Expose workload
+  // belongs where workloads are connected: Overview, Services and VIPs.
+  const expose = (kind = "pri") => `<button class="btn ${kind}" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>`;
+  const actions = {
+    overview: expose(),
+    services: `${moreMenu([{ label: `${STATE.networkSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}${expose()}`,
+    vips: `${expose("")}<button class="btn pri" data-need="admin" onclick="vipAdd()">＋ Add VIP</button>`,
+    lan: `<button class="btn pri" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button>`,
+  }[key] || "";
   networkPage(key, body(), { actions });
   if (key === "overview" || key === "vips") selfAddressPaint();
   if (key === "lan") await networkVmNetsPaint();
@@ -290,7 +296,7 @@ function networkServicesHtml(data) {
           <div class="dim xs">${row.endpoints.ready.map(e => `${esc(e.target || e.addresses[0] || "endpoint")} @ ${esc(e.node || "unknown host")}`).join(" · ") || "No ready target"}</div></td>
         <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
         <td>${row.system ? "" : actionBar([{ label: row.orphaned ? "Release" : "Remove", icon: "trash", run: `networkServiceDelete(${jsq(row.namespace)},${jsq(row.name)})`,
-      need: "admin", danger: row.orphaned, tip: row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN" }])}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
+      need: "admin", danger: true, tip: row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN" }], { shown: 0, label: `Actions for ${row.name}` })}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
     ${data.ingresses.length ? UI.section("Ingress routes", `<div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>`) : ""}`;
 }
 
@@ -298,7 +304,7 @@ function networkVipsHtml(data) {
   return `${networkProblemsHtml(data)}
     <section class="vip-section" aria-label="Workload VIPs">
     <div class="vip-section-heading"><p class="dim small">A saved VIP is advertised once a workload's Service requests it. <b>Default:</b> <span class="mono">${esc(data.shared_vip?.ip || "not configured")}</span> · several workloads can share it on different ports; changing it does not move existing services.</p>
-      <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIP</button></div>
+</div>
     ${(data.registered_vips || []).length ? "" : `<ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
       <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>
       <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>`}
@@ -309,8 +315,7 @@ function networkVipsHtml(data) {
 }
 
 function networkLanHtml() {
-  return `<div class="between" id="lanNetworks"><p class="dim small">${esc("Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</p>
-      <button class="btn sm pri" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
+  return `<div id="lanNetworks"><p class="dim small">${esc("Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</p></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>`;
 }
 
@@ -366,7 +371,7 @@ window.selfAddressMove = async (preset = "") => {
     <div class="f"><label>VIP</label><select id="sa_vip" onchange="selfAddressPlan()">${vips.map(v => `<option value="${esc(v.ip)}" ${v.ip === first ? "selected" : ""}>${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}</select></div>
     <label class="check"><input type="checkbox" id="sa_default" ${shared ? "" : "checked"}> Also make it the default for new apps</label>
     <div id="sa_plan" class="small"><span class="spin2"></span> checking</div>
-    ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Put Homestead here", "selfAddressGo()", { kind: "pri", id: "sa_go", attrs: 'data-need="admin"' }))}</div>`);
+    ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Put Homestead here", "selfAddressGo()", { kind: "pri", id: "sa_go", attrs: 'data-need="admin"' }))}</div>`);
   selfAddressPlan();
 };
 window.selfAddressPlan = async () => {
@@ -396,7 +401,7 @@ window.vipChange = ip => {
     <div class="f"><label for="vc_new">New address</label><input id="vc_new" class="mono" placeholder="e.g. 192.0.2.210" autocomplete="off" data-ipam oninput="vipChangeReset()"></div>
     <label class="check"><input type="checkbox" id="vc_confirm"> The new address is reserved outside DHCP and no other device uses it</label>
     <div id="vc_plan" class="small"></div>
-    ${UI.actions(UI.button("Cancel", "closeModal()") + UI.button("Review the move", `vipChangeReview(${jsArg(ip)})`, { kind: "pri", id: "vc_go", attrs: 'data-need="admin"' }))}</div>`);
+    ${UI.actions(UI.button("Cancel", "closeModal()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Review the move", `vipChangeReview(${jsArg(ip)})`, { kind: "pri", id: "vc_go", attrs: 'data-need="admin"' }))}</div>`);
 };
 /* What a VIP carries now: each port, the app behind it, and that app's node. */
 function vipRoutes(ip) {
@@ -589,7 +594,7 @@ function networkInvalidateReview() {
   NETWORK_REVIEW = null;
   if ($("#net_review")) $("#net_review").innerHTML = "";
   const actions = $("#net_editor .ui-actions");
-  if (actions) actions.outerHTML = UI.actions(UI.button("Review changes", "networkReview()", {kind:"pri"}), UI.button("Cancel", "modalBack()"));
+  if (actions) actions.outerHTML = UI.actions(UI.button("Review changes", "networkReview()", {kind:"pri"}), UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }));
 }
 
 /* The VIP the dialog was opened for, on a new connection. */
@@ -653,7 +658,7 @@ window.networkReview = async () => {
     $("#net_review").innerHTML = `<div class="reviewbox"><b>After applying</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(cfg.workload)}</span></div>
       <div class="dim xs">${plan.ports.map(p => `${p.port}/${p.protocol} → ${p.targetPort}`).join(" · ")}</div>${plan.warnings.map(w => `<div class="tag warn" style="margin-top:8px">${esc(w)}</div>`).join("")}</div>`;
     const actions = $("#mbody .ui-actions");
-    actions.outerHTML = UI.actions(UI.button("Apply changes", "networkCreate()", {kind:"pri"}), UI.button("Cancel", "modalBack()"));
+    actions.outerHTML = UI.actions(UI.button("Apply changes", "networkCreate()", {kind:"pri"}), UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }));
   } catch (error) { toast(error.message, "bad"); }
 };
 

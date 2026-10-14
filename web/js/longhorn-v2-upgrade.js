@@ -99,7 +99,7 @@ window.lhV2UpgradeSettings = (enabled, timeoutOnly = false) => {
   childModal(timeoutOnly ? 'V2 host upgrade timeout' : enabled ? 'Enable V2 live upgrades' : 'Pause V2 live upgrades',
     UI.lead(enabled ? 'Longhorn can upgrade V2 instance managers automatically after future manager upgrades. Check volume backups and replica health before each upgrade.' : 'The current host upgrade can finish. Longhorn will wait before upgrading another host.')
     + UI.fields(UI.field('Host timeout (minutes)',`<input id="lhV2UpgradeTimeout" type="number" min="1" max="1440" value="${view.report.upgrade.timeout}">`,{help:'Changes also affect the current upgrade. Waiting for healthy volumes has no timeout.'}))
-    + UI.actions([UI.button('Back','lhV2Upgrade()'),UI.button('Review settings',`lhV2UpgradeSettingsReview(${enabled})`,{kind:'pri'})].join('')));
+    + UI.actions([UI.button('Back','lhV2Upgrade()', { attrs: 'data-dialog-dismiss="true"' }),UI.button('Review settings',`lhV2UpgradeSettingsReview(${enabled})`,{kind:'pri'})].join('')));
 };
 let LH_V2_SETTINGS_REVIEW = null;
 window.lhV2UpgradeSettingsReview = async enabled => {
@@ -115,7 +115,7 @@ window.lhV2UpgradeSettingsReview = async enabled => {
     LH_V2_SETTINGS_REVIEW = {...cfg,capacity_token:review.capacity_token};
     childModal('Apply V2 upgrade settings',UI.facts([['Live upgrades',enabled ? 'Enabled' : 'Paused'],['Host timeout',`${timeout} minutes`]])
       + UI.ack('lhV2SettingsAck',enabled ? 'Turn on automatic V2 upgrades; backups are checked' : 'Pause them; the host being upgraded still finishes')
-      + UI.actions([UI.button('Back','lhV2Upgrade()'),UI.button('Apply settings','lhV2UpgradeSettingsApply()',{kind:'pri'})].join('')));
+      + UI.actions([UI.button('Back','lhV2Upgrade()', { attrs: 'data-dialog-dismiss="true"' }),UI.button('Apply settings','lhV2UpgradeSettingsApply()',{kind:'pri'})].join('')));
   } catch (e) { toast(e.message,'bad'); }
   finally { LH_V2_UPGRADE_BUSY = false; }
 };

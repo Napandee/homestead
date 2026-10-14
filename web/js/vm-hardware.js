@@ -346,7 +346,7 @@ window.vmIsoAddFolderGo = async (share, path) => {
       <div class="iso-dirs">${path ? `<button class="btn sm" onclick="vmIsoAddFolderGo(${jsq(share)},${jsq(up)})">↑ Up</button>` : ""}
         ${r.folders.map(d => `<button class="btn sm" onclick="vmIsoAddFolderGo(${jsq(share)},${jsq(path ? `${path}/${d}` : d)})">${esc(d)}</button>`).join("") || '<span class="dim xs">No folders inside</span>'}</div>
       <div class="dim xs">${r.isos} .iso file${r.isos === 1 ? "" : "s"} here</div>
-      ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Use this folder", `vmIsoPickFolder(${jsArg(share)},${jsArg(path)})`, { kind: "pri" }))}`;
+      ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Use this folder", `vmIsoPickFolder(${jsArg(share)},${jsArg(path)})`, { kind: "pri" }))}`;
   } catch (e) { host.innerHTML = UI.callout("bad", "That folder could not be read.", esc(e.message)); }
 };
 

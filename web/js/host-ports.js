@@ -174,8 +174,8 @@ function uplinksBody(inv) {
       uplinkHostChips(c),
       `<span class="mono">${esc(c.nics.join(" + ") || "—")}</span>`,
       `${esc(c.nics.length > 1 ? c.mode : "single NIC")}${c.mtu ? ` <span class="dim xs">MTU ${esc(c.mtu)}</span>` : ""}`,
-      `<span class="row" style="gap:6px"><button class="btn sm" data-need="admin" onclick="uplinkDialog({config:${jsq(c.name)}})">Change…</button>
-        <button class="btn sm" data-need="admin" onclick="uplinkReview({action:'remove',config:${jsq(c.name)}})">Remove</button></span>`]);
+      actionBar([{ label: "Change…", run: `uplinkDialog({config:${jsq(c.name)}})`, need: "admin" },
+        { label: "Remove", icon: "trash", run: `uplinkReview({action:'remove',config:${jsq(c.name)}})`, need: "admin", danger: true }], { shown: 1, label: `More actions for ${c.name}` })]);
     return `<div class="uplink-net">${head}
       ${rows.length ? UI.table([{ label: "Uplink" }, { label: "Hosts" }, { label: "NICs" }, { label: "Bond" }, { label: "" }], rows) : ""}
       ${net.uncovered.length ? `<div class="dim xs">No uplink on ${esc(net.uncovered.join(", "))}: VMs there cannot use ${esc(net.name)}'s networks.</div>` : ""}</div>`;
@@ -289,7 +289,7 @@ window.uplinkBack = () => {
 
 window.uplinkReview = async opts => {
   const req = uplinkRequest(opts);
-  const back = req.action === "remove" ? "" : UI.button("Back", "uplinkBack()");
+  const back = req.action === "remove" ? "" : UI.button("Back", "uplinkBack()", { attrs: 'data-dialog-dismiss="true"' });
   modal("Review the uplink", '<div class="empty"><span class="spin2"></span> Checking the hosts…</div>');
   let plan;
   try {
@@ -410,7 +410,7 @@ window.hostBondReview = async node => {
   let p;
   try {
     p = await api("/api/node/bond/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
-  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It could not be checked", esc(e.message)) + UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`)); return; }
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It could not be checked", esc(e.message)) + UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`, { attrs: 'data-dialog-dismiss="true"' })); return; }
   HOST_BOND.pending = { ...req, digest: p.digest };
   const before = window.Diagram ? Diagram.ports(hostBondPorts(info, info.shape.members || [], info.shape.bond || "bond0", info.shape.mode, info.shape.iface)) : "";
   const after = window.Diagram ? Diagram.ports(hostBondPorts(info, p.action === "remove" ? [] : p.members, p.bond, p.mode, p.carries_on)) : "";
@@ -421,11 +421,11 @@ window.hostBondReview = async node => {
       <div><div class="ui-help">After</div><div class="ports-picture">${after}</div></div></div>
     ${UI.checklist([...p.refusals.map(r => ({ state: "bad", title: r })), ...p.warnings.map(w => ({ state: "warn", title: w })),
       !p.refusals.length && { state: "ok", title: `Checked from outside: ${p.address} on ${p.carries_on}, the default route, the gateway, every member${p.mode === "802.3ad" ? ", the switch's LACP answer" : ""}` }])}
-    ${p.refusals.length ? UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`)) : `
+    ${p.refusals.length ? UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`, { attrs: 'data-dialog-dismiss="true"' })) : `
       ${UI.callout("warn", `${node}'s network stops for a few seconds`, `netplan's files are copied aside and a rollback is armed on the host first. Unless Homestead sees
         every check pass, ${esc(node)} puts its old network back by itself ${Math.round(p.rollback_seconds / 60)} minutes after the change${p.mode === "802.3ad" ? ", or at once if the switch does not answer LACP within a minute" : ""}. Containers keep running.`)}
       <div class="f"><label>Type <span class="mono">${esc(node)}</span> to confirm</label><input id="hb_confirm" class="mono" autocomplete="off"></div>
-      ${UI.actions(UI.cancel() + UI.button("Back", `hostBondDialog(${jsArg(node)})`) + UI.button({ create: "Bond them", change: `Change ${p.bond}`, remove: `Remove ${p.bond}` }[p.action],
+      ${UI.actions(UI.cancel() + UI.button("Back", `hostBondDialog(${jsArg(node)})`, { attrs: 'data-dialog-dismiss="true"' }) + UI.button({ create: "Bond them", change: `Change ${p.bond}`, remove: `Remove ${p.bond}` }[p.action],
         `hostBondGo(${jsArg(node)})`, { kind: "danger", id: "hb_go", attrs: 'data-need="admin"' }))}`}</div>`;
   if (window.applyRole) applyRole();
 };

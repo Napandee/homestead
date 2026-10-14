@@ -245,6 +245,26 @@ function vmTable(rows) {
 }
 window.viewVMs = viewVMs;
 
+/* The VM dialog's actions (#504): its state's main power action and Console
+   as buttons; the rest - other power actions, with Force off as danger, Edit,
+   Schedule and Delete - in ⋯, so a phone shows one row. */
+function vmDialogActions(v) {
+  const run = action => `vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(action)})`;
+  const power = v.actions.filter(a => VM_ACTIONS[a]);
+  const main = power.find(a => ["start", "unpause", "stop", "restart"].includes(a));
+  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"] : VM_ACTIONS[a];
+  const item = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start", danger: a === "force-stop" });
+  const console = v.actions.includes("console");
+  return actionBar([
+    main && item(main),
+    console && { label: "Console", icon: "console", run: `vmConsole(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    ...power.filter(a => a !== main).map(item),
+    { label: "Edit", icon: "edit", run: `vmEdit(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    { label: "Schedule", icon: "clock", run: `vmSchedule(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    { label: "Delete", icon: "trash", run: `vmDelete(${jsq(v.ns)},${jsq(v.name)})`, need: "operator", danger: true },
+  ], { shown: (main ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}` });
+}
+
 function vmActionButton(v, action, primary = false, iconOnly = false, extra = "") {
   const [label, iconName, title] = action === "stop" && v.stop_retries
     ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"]
@@ -379,10 +399,9 @@ window.vmOpen = async (ns, name) => {
   try { v = await api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`); }
   catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmOpen(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,${jsq(id)})">${label}</button>`;
-  $("#mbody").innerHTML = `<div class="between"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
+  $("#mbody").innerHTML = `<div class="between vm-head"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
       <span class="dim xs"> run strategy ${esc(v.run_strategy)}${v.node ? ` · on ${esc(v.node)}` : ""}</span></div>
-      <div class="row">${v.actions.filter(a => VM_ACTIONS[a]).map(a => vmActionButton(v, a, a === "start")).join("")}
-        <button class="btn sm" data-need="operator" onclick="vmEdit(${jsq(ns)},${jsq(name)})">${icon("edit")}Edit</button></div></div>
+      ${vmDialogActions(v)}</div>
     ${v.problem ? `<div class="note bad" style="margin-top:10px">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
@@ -665,7 +684,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
   } catch (error) {
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
     VM_EDIT_REVIEW = null;
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="vmEditReviewBack()">Back to edit</button>`;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
   }
 };
 window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };

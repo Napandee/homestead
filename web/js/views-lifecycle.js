@@ -558,7 +558,7 @@ function storageCopyReview(config, capacity) {
     UI.more("Capacity and placement details", UI.section("After the move",deployCapacityHtml(capacity)) +
       UI.section("Temporary copy helper",deployCapacityHtml(capacity.copy_helper)), capacity.blocked) +
     (!capacity.blocked ? UI.ack("editCapacityConfirm","Move its storage despite the outage and warnings") : "") +
-    UI.actions(UI.button("Back to edit","modalBack()") + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
+    UI.actions(UI.button("Back to edit","modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
 }
 window.editReview = async body => {
   if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
@@ -2368,7 +2368,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
       addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
         { help: "Blank keeps the existing port or uses 9000. The console uses the next port; both must be available." }))}
     ${UI.more("Whose address this is", `<p>This address serves ${esc(name)}'s backup store. The destination reads backups from it without taking the address. The store shares the source cluster's disks; keep an independent backup.</p>`)}
-    ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
+    ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
   </div>`);
 };
 window.clusterStorageGo = async name => {

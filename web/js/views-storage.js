@@ -1393,7 +1393,7 @@ window.smbUserEdit = (name = "") => {
     + (user?.shares.length ? UI.callout("warn", "SMB connections will restart", `This changes access to ${esc(user.shares.join(", "))}. Reconnect clients with the new password.`) : "")
     + UI.fields(UI.field("Username", `<input id="su_user" value="${esc(name)}" ${name ? "readonly" : ""} autocomplete="username" maxlength="32">`)
       + UI.field("New password", '<input id="su_password" type="password" autocomplete="new-password">'))
-    + UI.actions(UI.button("Back", "smbUsers()") + UI.button(name ? "Change password" : "Add user", `smbUserSave(${jsArg(name ? "password" : "create")},this)`, { kind: "pri" })), false, "smb-access");
+    + UI.actions(UI.button("Back", "smbUsers()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button(name ? "Change password" : "Add user", `smbUserSave(${jsArg(name ? "password" : "create")},this)`, { kind: "pri" })), false, "smb-access");
 };
 window.smbUserSave = async (action, button) => {
   const user = $("#su_user").value.trim(), password = $("#su_password").value;
@@ -1409,7 +1409,7 @@ window.smbUserSave = async (action, button) => {
 };
 window.smbUserRemove = name => {
   modal(`Remove SMB user · ${esc(name)}`, UI.lead("Remove this unused account and its saved password. Shares and their data are kept.")
-    + UI.actions(UI.button("Back", "smbUsers()") + UI.button("Remove user", `smbUserDelete(${jsArg(name)},this)`, { kind: "danger" })), false, "smb-access");
+    + UI.actions(UI.button("Back", "smbUsers()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Remove user", `smbUserDelete(${jsArg(name)},this)`, { kind: "danger" })), false, "smb-access");
 };
 window.smbUserDelete = async (user, button) => {
   button.disabled = true;
@@ -1988,7 +1988,7 @@ window.diskSetup = async (node, device) => {
   let f;
   try {
     f = await api("/api/disks/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, device }) });
-  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disk could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disk could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })); return; }
   STATE.data.diskFacts = f;
   const what = {
     blank: "It is blank.",
@@ -2021,8 +2021,8 @@ window.diskSetup = async (node, device) => {
       <p class="dim xs">Mounted the safe way: the empty folder is locked so nothing lands on the system disk if the drive dies, fstab names it
         by UUID with <span class="mono">nofail</span> so the host still starts without it (a copy of fstab is kept first), and the mount is checked
         before Longhorn is told. New disks are tagged <span class="mono">ssd</span> or <span class="mono">hdd</span>.</p>
-      ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Set it up", `diskSetupGo(${jsArg(node)},${jsArg(device)})`, { kind: "pri", id: "ds_go", attrs: 'data-need="admin"' }))}`
-      : UI.actions(UI.button("Back", "modalBack()"))}</div>`;
+      ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Set it up", `diskSetupGo(${jsArg(node)},${jsArg(device)})`, { kind: "pri", id: "ds_go", attrs: 'data-need="admin"' }))}`
+      : UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }))}</div>`;
   diskSetupChanged();
   if (window.applyRole) applyRole();
 };
@@ -2037,7 +2037,7 @@ window.diskOsSpace = async node => {
   let f;
   try {
     f = await api("/api/disks/os-space", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
-  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disks could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disks could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })); return; }
   STATE.data.osSpace = f;
   const v2 = !!STATE.data.lhcap?.v2?.enabled;
   const lvmFree = f.vg && !f.error && f.usable_gb >= 5;
@@ -2052,7 +2052,7 @@ window.diskOsSpace = async node => {
       ${UI.more("What Homestead will and will not do", `<p class="small">It uses space nothing else does: free space in the
         system's LVM volume group, or space past a GPT disk's last partition. It never shrinks or moves a partition or
         filesystem of a running system - ext4 cannot shrink while mounted and XFS not at all; that needs a rescue boot.</p>`)}
-      ${UI.actions(UI.button("Back", "modalBack()"))}</div>`;
+      ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }))}</div>`;
     return;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
@@ -2065,7 +2065,7 @@ window.diskOsSpace = async node => {
     <p class="small" id="os_what"></p>
     <div class="f" id="os_confirm_row" hidden><label id="os_confirm_label"></label><input id="os_confirm" class="mono" autocomplete="off"></div>
     <p class="dim xs">On the system's drive it shares a drive with the system, so a copy here and one on another folder of that drive are not two drives.</p>
-    ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}</div>`;
+    ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}</div>`;
   window.__osSources = Object.fromEntries(sources.map(([value, , max]) => [value, max]));
   diskOsSpaceChanged(true);
   if (window.applyRole) applyRole();

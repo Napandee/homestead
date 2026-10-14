@@ -89,7 +89,7 @@ window.diskV2EraseReview = async id => {
       UI.callout('warn','The filesystem will be erased','Remove the V1 entry, unmount this filesystem, remove its mount from fstab and erase its signatures. Its old replica files become inaccessible. The blank device will be registered with V2.') +
       UI.field(`Type ${plan.device} to confirm`,`<input id="diskV2Device" autocomplete="off" spellcheck="false" oninput="diskV2EraseReady()" aria-label="Confirm device to erase">`) +
       UI.ack('diskV2EraseConfirm','Erase this evacuated device and use it for V2',{onchange:'diskV2EraseReady()'}) +
-      UI.actions(UI.button('Back to task',`diskV2Watch(${jsq(id)})`) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
+      UI.actions(UI.button('Back to task',`diskV2Watch(${jsq(id)})`, { attrs: 'data-dialog-dismiss="true"' }) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
     if(typeof MODAL_STACK!=='undefined' && MODAL_STACK.length) MODAL_STACK[MODAL_STACK.length-1].onReturn=()=>diskV2Watch(id);
     window.applyRole?.();
   } catch(e) {toast(e.message,'bad');if(sequence===diskV2Sequence && $('#diskV2Status') && !$('#modal')?.classList.contains('hidden')) await diskV2Watch(id);}

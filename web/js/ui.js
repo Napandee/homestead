@@ -489,7 +489,7 @@ function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtm
     ${noticeHtml ? `<div class="dialog-rail-notice">${noticeHtml}</div>` : ""}
     ${UI.actions((always ? finishHtml : `<span data-finish${list.length > 1 ? " hidden" : ""}>${finishHtml}</span>`) +
       (!always && list.length > 1 ? UI.button("Next", `stepGo(${jsArg(id)},1,true)`, {kind:"pri",attrs:"data-next"}) : ""),
-      cancelHtml + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs:"data-back hidden"})), {className:"stepper-foot"})}
+      cancelHtml + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs: 'data-dialog-dismiss="true" data-back hidden'})), {className:"stepper-foot"})}
   </div>`;
 }
 function selectDialogSection(id, key) {

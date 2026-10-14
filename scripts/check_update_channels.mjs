@@ -48,7 +48,7 @@ try {
       return { name: el.querySelector(".hs-cluster-name b").textContent, left: box && box.right <= name.left, level: box && Math.abs(box.top - name.top) < 14 };
     }));
     for (const row of rows) assert.ok(row.left && row.level, `the tickbox sits beside ${row.name} at ${width}px`);
-    const button = () => page.locator("#hsUpdateBody .hs-actions .btn.pri").textContent();
+    const button = () => page.locator("#hsUpdateBody .ui-actions-end .btn.pri").textContent();
     assert.match(await button(), /^Update to /);
     await page.locator("#hsUpdateBody .hs-cluster", { hasText: "Branch office" }).locator("input").check();
     assert.equal(await button(), "Update 2 clusters");

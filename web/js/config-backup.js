@@ -121,7 +121,7 @@ window.configRestoreParts = result => {
     <div id="cfgUsersWarn" hidden>${UI.callout("warn", "Restoring users signs everyone out.", "Every account and password becomes the backup's. Sign in again with one of those.")}</div>
     ${UI.more("What a restore does", `<p>Each chosen part is put back as the backup holds it; parts left unticked stay as they are,
       and nothing is deleted. Settings apply straight away; shares, MQTT and IP addresses within a minute. Linked clusters are not in backups.</p>`)}
-    ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Restore", "configRestoreGo()", { kind: "pri", id: "cfgGo", attrs: 'data-verb="Restore"' }))}
+    ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Restore", "configRestoreGo()", { kind: "pri", id: "cfgGo", attrs: 'data-verb="Restore"' }))}
   </div>`);
   configPartsChanged();
 };

@@ -262,7 +262,7 @@
         `<pre class="diagnostic-preview">${esc(draft.body)}</pre>` +
         (draft.comment_shortened ? '<p class="dim xs">The comment was shortened to fit a GitHub draft link. The downloaded report keeps the full comment.</p>' : "") +
         UI.ack("bugShareAck", "I reviewed this draft for information I do not want to publish.", { onchange: "document.querySelector('#bugGitHub').disabled=!this.checked" }) +
-        UI.actions(UI.button("Back", `bugReview(${jsArg(current.id)})`) + UI.button("Continue on GitHub", `window.open(${jsArg(draft.url)},'_blank','noopener,noreferrer')`, { kind: "pri", id: "bugGitHub", attrs: "disabled" }))));
+        UI.actions(UI.button("Back", `bugReview(${jsArg(current.id)})`, { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Continue on GitHub", `window.open(${jsArg(draft.url)},'_blank','noopener,noreferrer')`, { kind: "pri", id: "bugGitHub", attrs: "disabled" }))));
     } catch (error) { fail(error); }
   };
   window.bugDelete = id => modal("Delete bug report", wrap(UI.lead("Deletes this saved report and its original logs from Homestead. Downloads already saved to your device are kept.") +

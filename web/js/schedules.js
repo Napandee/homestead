@@ -90,7 +90,7 @@ function scheduleDialog(kind, ns, name, back = null) {
     <div class="sched-preview" id="sc_next" aria-live="polite"></div>
     <div class="dim xs">${esc(zoneLine())}.${elsewhere ? ` These times were set in ${esc(s.tz)}; saving sets them in ${esc(zone)}.` : ""} A time missed while Homestead was not running is skipped, not done late.</div>
     <div id="sc_last"></div>
-    ${UI.actions((back ? UI.button("Back", "schedBack()") : UI.cancel()) + UI.button("Save", "schedSave()", { kind: "pri", id: "sc_go", attrs: 'data-need="operator"' }),
+    ${UI.actions((back ? UI.button("Back", "schedBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Save", "schedSave()", { kind: "pri", id: "sc_go", attrs: 'data-need="operator"' }),
       s ? UI.button("No schedule", "schedSave(true)", { attrs: 'data-need="operator"' }) : "")}</div>`);
   schedPreview();
   if (s) api("/api/power-schedules").then(d => {
