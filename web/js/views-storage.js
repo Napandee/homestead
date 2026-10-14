@@ -110,7 +110,7 @@ async function viewFlow() {
         <div class="row hide-sm arch-legend">
           <span><i style="background:var(--arch-access)"></i>port</span>
           <span><i style="background:var(--arch-mount)"></i>mount</span>
-          <span><i style="background:var(--arch-copy)"></i>replica</span>
+          <span><i style="background:repeating-linear-gradient(90deg,var(--arch-copy) 0 3px,transparent 3px 7px)"></i>replica</span>
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
