@@ -16,7 +16,7 @@ class BatchCapacityTests(unittest.TestCase):
 
     def entry(self, name, memory="1Gi", **overrides):
         cfg = {**self.cfg, "name": name, "memory": memory, "memory_limit": memory, **overrides}
-        _, dep, _, _ = server.capacity_manifest(cfg)
+        _, dep, _, _ = server.DEPLOY_ROUTES.capacity_manifest(cfg)
         return {"name": name, "deployment": dep, "replicas": dep["spec"]["replicas"]}
 
     def plan(self, **kwargs):

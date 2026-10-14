@@ -54,6 +54,7 @@ MODULES = (
     "homestead_config_backup",
     "homestead_container_rebalance",
     "homestead_deploy",
+    "homestead_deploy_server",
     "homestead_diagnostics",
     "homestead_disk_v2",
     "homestead_disks",

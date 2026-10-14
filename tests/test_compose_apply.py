@@ -56,8 +56,8 @@ class ComposeApplyTests(unittest.TestCase):
         raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
     def apply(self, body):
-        token = server.compose_preview(body)["capacity_token"]
-        return server.compose_apply({**body, "capacity_token": token, "confirm_capacity": True})
+        token = server.DEPLOY_ROUTES.compose_preview(body)["capacity_token"]
+        return server.DEPLOY_ROUTES.compose_apply({**body, "capacity_token": token, "confirm_capacity": True})
 
     def _deploy(self, cfg):
         if cfg["workload_name"] == self.fail_on:
@@ -94,7 +94,7 @@ class ComposeApplyTests(unittest.TestCase):
 
     def test_a_namespace_must_be_a_name(self):
         with self.assertRaisesRegex(ValueError, "namespace"):
-            server.compose_report({"text": STACK, "namespace": "../etc"})
+            server.DEPLOY_ROUTES.compose_report({"text": STACK, "namespace": "../etc"})
 
     def test_what_was_checked_is_what_is_created(self):
         """The page's copy of the report is never trusted; the text is read again."""
@@ -105,15 +105,15 @@ class ComposeApplyTests(unittest.TestCase):
 
     def test_apply_requires_review_token_before_any_creation(self):
         with self.assertRaises(server.CAPACITY_REVIEW.Rejected):
-            server.compose_apply({"text": STACK, "namespace": "lab", "confirm_capacity": True})
+            server.DEPLOY_ROUTES.compose_apply({"text": STACK, "namespace": "lab", "confirm_capacity": True})
         self.assertEqual([], self.created)
 
     def test_changed_file_or_selection_invalidates_review(self):
         body = {"text": STACK, "namespace": "lab"}
-        token = server.compose_preview(body)["capacity_token"]
+        token = server.DEPLOY_ROUTES.compose_preview(body)["capacity_token"]
         for change in ({"text": STACK.replace("image: web", "image: changed")}, {"services": ["db"]}):
             with self.subTest(change=change), self.assertRaises(server.CAPACITY_REVIEW.Rejected):
-                server.compose_apply({**body, **change, "capacity_token": token, "confirm_capacity": True})
+                server.DEPLOY_ROUTES.compose_apply({**body, **change, "capacity_token": token, "confirm_capacity": True})
         self.assertEqual([], self.created)
 
     def test_joint_shortfall_writes_nothing_even_with_signed_ack(self):
@@ -125,7 +125,7 @@ class ComposeApplyTests(unittest.TestCase):
     def test_parser_refuses_missing_or_paginated_inventory(self):
         for result in ({}, {"items": [], "metadata": {"continue": "next"}}):
             with mock.patch.object(server, "kget", return_value=result), self.assertRaises(ValueError):
-                server.compose_report({"text": STACK, "namespace": "lab"})
+                server.DEPLOY_ROUTES.compose_report({"text": STACK, "namespace": "lab"})
 
     def test_unknown_selected_service_does_not_silently_create_subset(self):
         with self.assertRaisesRegex(ValueError, "no longer exists"):

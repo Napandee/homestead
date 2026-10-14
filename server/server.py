@@ -149,6 +149,14 @@ from homestead_vm_server import (
     set_vm_logos, vm_create_options,
 )
 VM_ROUTES.bind_routes(_late(*VM_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in VM_ROUTES.VALUES})
+import homestead_deploy_server as DEPLOY_ROUTES
+from homestead_deploy_server import (
+    _moves_loop, additional_container_configs, apply_deploy_bindings, compose_apply,
+    compose_preview, compose_report, delete_workload, deploy_capacity_plan, deploy_options,
+    deployment_volumes, import_capacity_plan, operation_item, prepare_deploy_network,
+    rebalance_move, redact_deployment_preview, reviewed_deploy,
+)
+DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 
 
 def _heartbeats():
@@ -831,49 +839,6 @@ def new_claims(volumes):
 
 
 
-def additional_container_configs(cfg):
-    """Explicit extra definitions in a new pod; the original deploy stays compatible."""
-    rows = cfg.get("additional_containers") or []
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise ValueError("additional containers must be a list of definitions")
-    if rows and cfg.get("target_mode", "new") != "new":
-        raise ValueError("add containers to an existing workload from its editor")
-    if len(rows) > 31:
-        raise ValueError("a new workload supports up to 32 containers")
-    result = []
-    for row in rows:
-        allowed = {"name", "image", "env", "ports", "volumes", "hardware", "cpu", "memory", "memory_limit",
-                   "privileges", "privileged", "cap_add", "tun", "volume_owners", "new", "container_name"}
-        if set(row) - allowed - {"namespace", "workload_name", "network_mode", "target_mode", "app_profile", "env_bindings"}:
-            raise ValueError("additional containers use their own image, resources, ports, environment, hardware and storage; pod settings are shared")
-        item = {key: copy.deepcopy(value) for key, value in row.items() if key in allowed}
-        item.update(namespace=cfg.get("namespace") or DEFAULT_NS,
-                    workload_name=cfg.get("workload_name") or cfg.get("name"),
-                    container_name=row.get("name"), name=row.get("name"),
-                    network_mode=cfg.get("network_mode"), target_mode="new")
-        privileges = item.pop("privileges", {}) or {}
-        if not isinstance(privileges, dict) or set(privileges) - {"privileged", "cap_add", "tun"}:
-            raise ValueError("invalid additional container privileges")
-        item.update(privileges)
-        item = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(item))
-        result.append(item)
-    return result
-
-
-def deployment_volumes(cfg):
-    return [volume for item in [cfg, *additional_container_configs(cfg)]
-            for volume in item.get("volumes") or []]
-
-
-def prepare_deploy_network(cfg):
-    extras = additional_container_configs(cfg)
-    if not extras:
-        return NETWORK.prepare_deploy(cfg)
-    combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
-    planned = NETWORK.prepare_deploy(combined)
-    return dict(planned, ports=cfg.get("ports") or [])
-
-
 def prepare_lan(cfg):
     """A container's own LAN address, checked as free and its network made,
     before the Deployment that joins it."""
@@ -928,48 +893,6 @@ def rollout_review_context(current):
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
 
 
-def import_namespace(value):
-    """Where an import goes: the default, or an app namespace that exists."""
-    ns = str(value or DEFAULT_NS).strip()
-    if ns == DEFAULT_NS:
-        return ns
-    ns = _dns_name(ns, "namespace")
-    if ns in SYS_NS or ns not in NSMOD.names(False):
-        raise ValueError(f"namespace {ns} is not one an app can be imported into; create it under Namespaces first")
-    return ns
-
-
-def import_capacity_plan(body):
-    """Review both sequential phases before an import creates any resources."""
-    cfg = copy.deepcopy(body)
-    ns = cfg["namespace"] = import_namespace(body.get("namespace"))
-    guard_managed_smb(ns, cfg.get("name"))
-    cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
-    prepared = IMP.prepare_import(cfg)
-    if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
-        raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
-    inventory, pods = IMP.import_inventory(prepared, kget)
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}
-    nodes = PLACE.get_nodes()
-    phases = []
-    for kind, title in (("job", "Copy files"), ("deployment", "Imported application")):
-        manifest = prepared[kind]
-        if manifest:
-            plan = PLACE.manifest_plan(manifest, ns, manifest["metadata"]["name"], 1,
-                                       threshold, planned_claims=claims, pod_snapshot=pods,
-                                       nodes_snapshot=nodes)
-            phases.append({"title": title, "capacity": plan})
-    warnings = ["No resources are created until you confirm. Copy and application are reviewed separately, not as concurrent workloads.",
-                "Imported files can replace files with the same names in existing volumes. Source consistency is not guaranteed; stop the source app or use a consistent backup.",
-                "Storage provisioning, actual free filesystem space and future placement are not guaranteed by this review.",
-                "The application stays stopped while copying. Starting it later requires a fresh capacity check."]
-    capacity = {"blocked": any(row["capacity"]["blocked"] for row in phases),
-                "requires_confirmation": True, "warnings": warnings}
-    context = {"action": "import", "namespace": ns, **inventory, "prepared": prepared}
-    return cfg, prepared, phases, capacity, context
-
-
 def preview_import(body):
     _, prepared, phases, capacity, context = import_capacity_plan(body)
     return {"phases": phases, "capacity": capacity, "volumes": prepared["volumes"],
@@ -1002,48 +925,6 @@ def reviewed_image_update(body, action):
     if action == "update":
         enforce_update_policy(body)  # Registry/preflight reads may cross a window boundary.
     return UPDATES.commit_prepared(prepared)
-
-
-def capacity_manifest(config, existing=None):
-    """Construct a read-only manifest and planned claims without provisioning."""
-    cfg = DEPLOY.analyze_deploy_intent(copy.deepcopy(config))
-    ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
-    cfg["namespace"] = ns
-    joining = cfg.get("target_mode") == "existing"
-    if joining:
-        target = _dns_name(cfg.get("target_workload"), "existing workload")
-        if existing is None:
-            existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, _ = DEPLOY.build_sidecar_deployment(cfg, existing)
-    elif cfg.get("target_mode", "new") == "new":
-        dep, _ = DEPLOY.build_deployment(cfg)
-    else:
-        raise ValueError("deployment target must be new or existing")
-    claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
-    for row in claims.values():
-        if row["access_mode"] not in ("ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"):
-            raise ValueError("invalid volume access mode")
-        # StorageClass names may contain dots, unlike our workload names.
-        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", row["storage_class"]):
-            raise ValueError("invalid storage class name")
-    pspec = dep["spec"]["template"]["spec"]
-    if not joining and claims and not pspec.get("initContainers"):
-        # Owner discovery reads the image later and may add this init stage.
-        # Include its request now without fetching layers or writing a helper.
-        pspec["initContainers"] = [VOLOWNER.init_container([])]
-    return cfg, dep, claims, existing
-
-
-def deploy_capacity_plan(config, existing=None):
-    """Read-only new-workload or shared-pod rollout preview."""
-    cfg, dep, claims, existing = capacity_manifest(config, existing)
-    ns = cfg["namespace"]
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    if cfg.get("target_mode") == "existing":
-        return ROLLOUT_CAPACITY.plan(existing, dep, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-                                     threshold, planned_claims=claims)
-    return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
-                               threshold, planned_claims=claims)
 
 
 def hardware_device_paths():
@@ -1096,148 +977,6 @@ def copy_admission(dep):
     return PLACE.manifest_plan(dep, dep["metadata"]["namespace"], dep["metadata"]["name"], dep["spec"]["replicas"],
         get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
         nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
-
-
-def reviewed_deploy(b):
-    """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
-    b = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(b)))
-    HOSTACCESS.require_cfg([b, *additional_container_configs(b)])
-    if b.get("target_mode", "new") not in ("new", "existing"):
-        raise ValueError("deployment target must be new or existing")
-    current = None
-    context = None
-    if b.get("target_mode") == "existing":
-        ns = _dns_name(b.get("namespace") or DEFAULT_NS, "namespace")
-        target = _dns_name(b.get("target_workload"), "existing workload")
-        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        context = rollout_review_context(current)
-    # Bind the original input and, for a shared pod, the fresh controller
-    # version. The final PUT keeps this resourceVersion for optimistic locking.
-    plan = deploy_capacity_plan(b, existing=current)
-    CAPACITY_REVIEW.enforce(b, plan, context)
-    return DEPLOY.run_deploy(b, reviewed_current=current) if current is not None else DEPLOY.run_deploy(b)
-
-
-def compose_report(b):
-    """Read a pasted Compose file against what this namespace already holds."""
-    ns = str(b.get("namespace") or DEFAULT_NS)
-    _dns_name(ns, "namespace")
-    text = str(b.get("text") or "")
-    if len(text) > 256 * 1024:
-        raise ValueError("a Compose file over 256 KiB is more than Homestead will read")
-    workloads = {d["metadata"]["name"] for d in
-                 ROLLOUT_CAPACITY.items(kget, f"/apis/apps/v1/namespaces/{ns}/deployments")}
-    claims = {c["metadata"]["name"] for c in
-              ROLLOUT_CAPACITY.items(kget, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")}
-    vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto", "nodes") else "shared"
-    if NETWORK.node_addresses_only():
-        # On k3s every service shares the nodes' addresses, so ports must differ.
-        vip_mode = "shared"
-    return COMPOSE.convert(text, b.get("variables") or "", ns, workloads, claims,
-                           HW.features(), vip_mode)
-
-
-def compose_preparation(b):
-    """Resolve the selected batch without provisioning or persisting inputs."""
-    report = compose_report(b)
-    chosen = set(b.get("services") or [row["name"] for row in report["services"]])
-    if chosen - {row["name"] for row in report["services"]}:
-        raise ValueError("selected Compose service no longer exists; review again")
-    rows = {row["name"]: row for row in report["services"] if row["name"] in chosen}
-    if not rows:
-        raise ValueError("choose at least one service to create")
-    problems = report["errors"] + [dict(e, service=name) for name, row in rows.items() for e in row["errors"]]
-    if problems:
-        first = problems[0]
-        where = f"{first['service']}: " if first.get("service") else ""
-        raise ValueError(f"fix the file first: {where}{first['message']}"
-                         + (f" (line {first['line']})" if first.get("line") else ""))
-    configs, entries, claims = [], [], {}
-    for name in report["order"]:
-        if name not in rows:
-            continue
-        cfg = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
-        guard_managed_smb(cfg.get("namespace") or DEFAULT_NS, cfg.get("workload_name") or cfg.get("name"))
-        cfg, dep, pending, _ = capacity_manifest(cfg)
-        for claim, descriptor in pending.items():
-            if claim in claims and claims[claim] != descriptor:
-                raise ValueError("inconsistent shared PVC settings: " + claim)
-            claims[claim] = descriptor
-        configs.append(cfg)
-        entries.append({"name": name, "deployment": dep, "replicas": dep["spec"]["replicas"]})
-    return configs, entries, claims
-
-
-def compose_preview(b):
-    configs, entries, claims = compose_preparation(b)
-    HOSTACCESS.require_cfg(configs)
-    return {"capacity": DEPLOY.compose_capacity(entries, claims),
-            "capacity_token": CAPACITY_REVIEW.issue(b, {"action": "compose", "configs": configs})}
-
-
-def compose_apply(b):
-    """Guard the entire batch before any writes, then recheck its remainder."""
-    configs, entries, claims = compose_preparation(b)
-    HOSTACCESS.require_cfg(configs)
-    plan = DEPLOY.compose_capacity(entries, claims)
-    if plan["status"] == "unknown":
-        raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
-    CAPACITY_REVIEW.enforce(b, plan, {"action": "compose", "configs": configs})
-    created, controllers = [], {}
-    for cfg, entry in zip(configs, entries):
-        name = entry["name"]
-        try:
-            if created:
-                fresh = DEPLOY.compose_capacity(entries, claims, controllers)
-                if fresh["blocked"]:
-                    return {"ok": False, "created": created, "failed": name,
-                            "error": "Remaining batch no longer fits the checked capacity; review again", "capacity": fresh}
-            result = DEPLOY.run_deploy(copy.deepcopy(cfg))
-            created.append(result["name"])
-            # Never assume the Deployment has pods just because POST returned.
-            ns = cfg["namespace"]
-            controller = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{result['name']}")
-            if not controller.get("metadata", {}).get("uid"):
-                raise ValueError("created workload identity is unavailable; stopped before the next service")
-            controllers[name] = controller
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", "replace")[:300]
-            return {"ok": False, "created": created, "failed": name, "error": f"HTTP {error.code}: {detail}"}
-        except Exception as error:
-            return {"ok": False, "created": created, "failed": name, "error": str(error)}
-    return {"ok": True, "created": created}
-
-
-def deploy_options(ns):
-    """Return the live choices needed by the deployment editor."""
-    deployments = []
-    for item in kget(f"/apis/apps/v1/namespaces/{ns}/deployments").get("items", []):
-        pspec = item.get("spec", {}).get("template", {}).get("spec", {})
-        volumes = []
-        for volume in pspec.get("volumes", []) or []:
-            row = {"name": volume.get("name", ""), "kind": "other", "source": ""}
-            if volume.get("persistentVolumeClaim"):
-                row.update({"kind": "pvc", "source": volume["persistentVolumeClaim"].get("claimName", "")})
-            elif volume.get("hostPath"):
-                row.update({"kind": "host", "source": volume["hostPath"].get("path", "")})
-            elif volume.get("emptyDir") is not None:
-                row["kind"] = "emptyDir"
-            elif volume.get("configMap"):
-                row.update({"kind": "configMap", "source": volume["configMap"].get("name", "")})
-            elif volume.get("secret"):
-                row.update({"kind": "secret", "source": volume["secret"].get("secretName", "")})
-            volumes.append(row)
-        deployments.append({
-            "name": item["metadata"]["name"],
-            "containers": [c.get("name", "") for c in pspec.get("containers", []) or []],
-            "volumes": volumes,
-        })
-    classes = storage_classes()
-    return {"deployments": sorted(deployments, key=lambda x: x["name"]),
-            "pvcs": _pvc_rows(ns),
-            "storage_classes": selectable_storage_classes(classes),
-            "shared_storage_classes": shared_storage_classes(classes),
-            "storage_class_facts": storage_class_facts(classes)}
 
 
 # Harvester keeps these for VM images and VM state; they are not general
@@ -1401,11 +1140,6 @@ def homestead_running_on():
 # that very replica; the job then says which pod to look for, and the leader
 # carries it on from another replica (homestead_power_jobs).
 POD_NAME = os.environ.get("HOSTNAME", "")
-def operation_item(operation_id):
-    """A job-tray item as it stands now, or None."""
-    return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
-
-
 def own_node():
     """The node this Homestead pod runs on."""
     try:
@@ -1491,22 +1225,6 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
     return name
 
 
-def apply_deploy_bindings(cfg):
-    """Resolve values that depend on the reviewed cluster-side network plan."""
-    bindings = cfg.get("env_bindings") or {}
-    if not bindings:
-        return cfg
-    updated = dict(cfg)
-    updated["env"] = dict(cfg.get("env") or {})
-    for key, binding in bindings.items():
-        if binding == "vip":
-            vip = cfg.get("lb_ip") or ""
-            if not vip:
-                raise ValueError(f"{key} requires a dedicated Service VIP")
-            updated["env"][key] = vip
-    return updated
-
-
 def apply_generated_secrets(cfg):
     """Fill catalogue password defaults without trusting a public feed value."""
     generate = {item.get("key") for item in (cfg.get("env_meta") or [])
@@ -1528,23 +1246,6 @@ def ensure_profile_compatible(cfg):
     return cfg
 
 
-def redact_deployment_preview(deployment, cfg=None):
-    """Return a manifest safe to display, including for existing shared pods."""
-    if not deployment:
-        return deployment
-    sensitive = {item.get("key") for item in ((cfg or {}).get("env_meta") or [])
-                 if item.get("masked") and item.get("key")}
-    safe = copy.deepcopy(deployment)
-    containers = safe.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
-    for container in containers:
-        for item in container.get("env") or []:
-            key = str(item.get("name") or "")
-            if key in sensitive or re.search(r"(?:PASSWORD|PASS|TOKEN|SECRET|API_?KEY|PRIVATE_?KEY)$", key, re.I):
-                if "value" in item:
-                    item["value"] = "••••••"
-    return safe
-
-
 def raw_get(path, timeout=20):
     """Plain-text GET against the API (pod logs and similar)."""
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {TOKEN}"})
@@ -1559,7 +1260,6 @@ _shim.raw_get = raw_get
 sys.modules["homestead_shim"] = _shim
 
 import homestead_lifecycle as LC
-import homestead_env_secrets as ENVSEC
 import homestead_stale_mount as STALE_MOUNT
 import homestead_imports as IMP
 import homestead_auth as AUTH
@@ -1597,7 +1297,6 @@ import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
-import homestead_compose as COMPOSE
 import homestead_deploy as DEPLOY
 import homestead_workloads as WORKLOADS
 import homestead_onboard as ONBOARD
@@ -1690,18 +1389,6 @@ HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 # The helper image is read from Homestead's own pod, defined further down.
 POWER_JOBS.bind(kget, ksend, lambda read, ns: _self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
-
-
-def rebalance_move(ns, name, node):
-    """One container of a rebalance: the manual move's capacity check and
-    placement - a preference, not a pin - or a reason to leave it."""
-    body = {"ns": ns, "name": name, "node": node, "pin": False}
-    proposed, capacity, _ = WORKLOADS.move_capacity_plan(body)
-    if capacity.get("blocked"):
-        raise ValueError("; ".join(capacity.get("blockers") or []) or f"{node} cannot take it now")
-    meta = proposed["metadata"]
-    ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
-    PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
 
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
@@ -2074,41 +1761,6 @@ OPS.RESOLVERS["helm"] = HELM.job_status
 OPS.RESOLVERS["multus"] = ADDONS.multus_progress
 
 
-def delete_workload(ns, name):
-    """A workload deleted, with every Service that points at it and its own
-    LAN network; the Services removed are returned."""
-    require_workload_target(ns, name)
-    guard_self(ns, name, deleting=True)
-    guard_managed_smb(ns, name)
-    try:
-        LAN.remove_nad(ns, name)       # its own LAN network, if it had one
-    except Exception:
-        pass
-    # Every Service selecting these pods, not just the one sharing the
-    # workload's name: a sidecar or a hand-made listener is named
-    # differently and would otherwise keep its VIP port forever.
-    services = set(NETWORK.workload_service_names(ns, name)) | {name}
-    try:
-        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    except Exception:
-        current = None
-    ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    if current:
-        try:
-            ENVSEC.remove(ns, current, kget, ksend)  # its variables' Secret goes with it
-        except Exception:
-            pass
-    removed = []
-    for service in sorted(services):
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
-            removed.append(service)
-        except urllib.error.HTTPError:
-            pass
-    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-    return removed
-
-
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: STORAGE_CLASSES.cleanup_restore_classes())
 CANCEL.register(OPS)
@@ -2149,18 +1801,6 @@ class Query(dict):
     given gets a 400 naming it, not a 500 from a bare KeyError."""
     def __missing__(self, key):
         raise MissingParameter(f"missing parameter: {key}")
-
-
-def _moves_loop():
-    """The move engine, on the leader only: a move's next step is taken once."""
-    while True:
-        if LEADER.is_leader():
-            try:
-                MOVE_ENGINE.tick_all()
-                beat("moves", MOVE_ENGINE.TICK_SECONDS, leader_only=True)
-            except Exception as error:
-                beat("moves", MOVE_ENGINE.TICK_SECONDS, error, leader_only=True)
-        time.sleep(MOVE_ENGINE.TICK_SECONDS)
 
 
 def homestead_data_volume(dep=None):
@@ -3652,19 +3292,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, self_data_preparation(b, self.user, start=p == "/api/self/data/prepare"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
-            if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
-                action = p.rsplit("/", 1)[1]
-                result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
-                          else HELM.uninstall(b.get("namespace", ""), b.get("name", "")))
-                _cache.pop("helm", None)
-                name = result.get("name") or b.get("name", "")
-                job = f"helm-{'delete' if action == 'uninstall' else 'install'}-{name}"
-                result["operation"] = OPS.start("helm", f"Helm {action} {name}",
-                                                {"kind": "HelmChart", "name": name, "namespace": HELM.CONTROLLER_NS},
-                                                "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job,
-                                                          "action": action},
-                                                "Waiting for the Helm controller")
-                return self._send(200, result)
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
