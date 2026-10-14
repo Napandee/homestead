@@ -116,6 +116,30 @@ class StylesheetTests(unittest.TestCase):
             ratio = contrast(over(rgba(color), ground), ground)
             self.assertGreaterEqual(ratio, 4.5, f"{selector} is {ratio:.2f}:1 in the light theme")
 
+    def test_one_focus_ring_in_both_themes(self):
+        """Focus is one 2px ring in one colour, the --focus token of each theme."""
+        tokens = {}
+        for selectors, declarations in rules():
+            if selectors in ([":root"], ['html[data-theme="light"]']):
+                tokens.setdefault(selectors[0], {}).update(declarations)
+        for theme in (":root", 'html[data-theme="light"]'):
+            self.assertIn("--focus", tokens.get(theme, {}), f"{theme} defines --focus")
+        everywhere = [d for selectors, d in rules() if selectors == [":focus-visible"]]
+        self.assertTrue(everywhere, "one :focus-visible rule for everything")
+        self.assertEqual("2px solid var(--focus)", everywhere[-1].get("outline"))
+        for selectors, declarations in rules():
+            outline = declarations.get("outline", "")
+            if any(":focus" in s for s in selectors) and outline and outline != "none":
+                self.assertIn("var(--focus)", outline, f"{selectors} draws its own focus colour")
+
+    def test_nothing_hides_the_focus_ring(self):
+        """outline:none on a focused element, a field, the search or a breadcrumb hides where the keyboard is."""
+        for selectors, declarations in rules():
+            if declarations.get("outline") not in ("none", "0"):
+                continue
+            hides = [s for s in selectors if ":focus" in s or s in (".search",) or "input" in s or s.startswith(".crumb")]
+            self.assertEqual([], hides, f"outline:none on {selectors}")
+
     def test_faint_text_reads_on_every_surface_and_stays_below_muted(self):
         """`.dim` carries namespaces, sizes and hints: 4.5:1 on each surface, in both themes,
         and still quieter than `--mut`, so the three levels of text stay apart."""

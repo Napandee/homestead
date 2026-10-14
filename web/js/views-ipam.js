@@ -181,7 +181,7 @@ function ipamRow(row) {
   const name = row.name ? `<b>${esc(row.name)}</b>`
     : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
   const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
-  const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
+  const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" role="img" tabindex="0" aria-label="${esc(`${f.level === "warn" ? "Warning" : "Note"}: ${f.text}`)}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
     + (row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") + (note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : "");
   // Cells with nothing in them are left empty, so on a phone - where each
   // row is a short card - they take no room.
