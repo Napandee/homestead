@@ -13,7 +13,7 @@ test("Image Cache explains how images are kept in a guide, not a note above the 
 
 test("Settings › Monitoring explains in tips, says amber, and says Recommended: 1 once", () => {
   const src = read("web/js/views-settings.js");
-  assert.doesNotMatch(src, /Warning changes the metric and node card to yellow/);
+  assert.doesNotMatch(src, /changes the metric and node card to yellow/);
   assert.doesNotMatch(src, /<div class="note[^"]*"><b>Device differences are preserved\.<\/b>/);
   assert.match(src, /Warning turns a bar amber, critical red/);
   assert.equal((src.match(/Recommended: 1/g) || []).length, 1);
