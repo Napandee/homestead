@@ -2050,7 +2050,7 @@ div.ipam-line.dim{display:block}
 .lh-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:4px 18px;margin-top:6px}
 .lh-v2{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:grid;gap:6px}.lh-v2-nodes{display:flex;gap:6px;flex-wrap:wrap}
 .badtext{color:var(--crit)}
-.lh-tight{display:inline-block;margin-top:8px;cursor:pointer}
+.lh-tight{display:inline-block;margin-top:8px;cursor:pointer;white-space:normal;text-align:left}
 .disk-card{padding:11px 0;border-bottom:1px solid var(--line)}.disk-card:last-of-type{border-bottom:0}
 .disk-lh{margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.025);display:grid;gap:6px}
 .disk-lh>.between{flex-wrap:wrap;gap:2px 10px}.disk-lh>.between>span{min-width:0}
@@ -2570,7 +2570,7 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 
 /* Architecture: an address says what it is and where it lives; a node its
    addresses. */
-.a2vipip{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.a2vipip{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:2px 6px}
 .a2vip.a2broken{border-color:var(--crit)}
 .a2why{margin:-2px 0 6px;color:var(--crit);font-size:10.5px}
 .a2addrs{display:flex;flex-wrap:wrap;gap:4px;margin:-2px 0 7px}
@@ -3399,7 +3399,7 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 #clusterHealth{margin-bottom:var(--page-gap,14px)}
 
 /* Node summaries use the widget's available width, including editor previews. */
-.node-compact-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(148px,100%),1fr));gap:16px 14px}
+.node-compact-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:16px 14px}
 .node-compact-host{min-width:0;font-size:12px;line-height:1.35}
 .node-compact-heading{display:flex;align-items:center;gap:7px;min-width:0}
 .node-compact-heading button{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;min-width:0}
@@ -3595,6 +3595,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 /* A VM's logo beside its name in rows. */
 .tbl td.cell-name>.vm-name-cell,.tbl.stack.compact td.cell-name>.vm-name-cell{display:flex;align-items:center;gap:10px;min-width:0}
 .vm-name-text{min-width:0}
+.vm-name-text>b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* An OS logo is a tile of its own: it fills the avatar rather than sitting in a circle. */
 .av.appav.os-logo{border-radius:9px;background:none;box-shadow:none}.av.appav.os-logo img{padding:0}
 .vm-edit-logo{gap:10px;align-items:center;flex-wrap:wrap}
@@ -3817,3 +3818,5 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .agent-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}
 /* The VM dialog's state and its actions share a line, and wrap on a phone (#504). */
 .vm-head{flex-wrap:wrap;gap:10px}
+/* Remove container sits clear of the first field (#495). */
+.edit-container-remove{display:flex;justify-content:flex-end;margin-bottom:12px}

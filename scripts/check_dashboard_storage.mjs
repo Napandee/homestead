@@ -31,7 +31,7 @@ try {
     }
   };
   await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
-  await page.locator(".node-compact-grid").waitFor();
+  await page.locator(".node-compact-grid").waitFor({state:"attached"});
   await page.evaluate(async()=>{
     const prefs=await api('/api/auth/preferences/dashboard');
     const items=Dashboard.defaults().map(item=>item.id==='nodes'?{...item,display:'detailed'}:item);
@@ -104,4 +104,14 @@ try {
   }
   assert.deepEqual(errors,[]);
   await context.close();
+  // On a phone in the critical scenario, with the default dashboard (#495):
+  // one host per Node health row, and the nearly-full tag keeps its size
+  // inside the Storage card.
+  const fresh=await browser.newContext({...devices["Pixel 7"]}), phone=await fresh.newPage();
+  await phone.goto(`${base}/?demo=1&demo-scenario=critical`,{waitUntil:"networkidle"});
+  await phone.locator(".node-compact-grid").waitFor({state:"attached"});
+  assert.equal(await phone.evaluate(()=>getComputedStyle(document.querySelector(".node-compact-grid")).gridTemplateColumns.split(" ").length),1,"one host per row on a phone");
+  const tight=phone.locator(".lh-tight");
+  if(await tight.count()) assert.equal(await tight.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,"the nearly-full tag fits");
+  await fresh.close();
 } finally {await browser.close();}

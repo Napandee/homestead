@@ -85,7 +85,7 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
-    <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="row"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
+    <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="edit-container-remove"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
       ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
 };
@@ -484,7 +484,12 @@ window.containerRestore = index => {
 };
 function containerRemoveButtons() {
   const cards = $$("#e_basics_containers .edit-container");
-  cards.forEach(card => { $("[data-container-remove]", card).disabled = cards.length <= 1; });
+  // With one container there is nothing to remove: the row goes, not just the button.
+  cards.forEach(card => {
+    const button = $("[data-container-remove]", card);
+    button.disabled = cards.length <= 1;
+    button.closest(".edit-container-remove").hidden = cards.length <= 1;
+  });
 }
 window.containerAdd = mode => {
   if (mode === "deploy") return deployAddContainer();

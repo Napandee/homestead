@@ -70,3 +70,10 @@ test('a direct node visit offers preparation without cached engine settings and 
   Object.assign(disk,{role:'unused',longhorn:[],v2_preparation:{id:'task-1',phase:'preparing'}});
   const active=t.c.diskRowsHtml('node-1',[disk],false);assert.match(active,/V2 preparation/);assert.doesNotMatch(active,/diskSetup/);
 });
+
+test('the system drive shows one system tag',()=>{
+  const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=()=>'';t.c.meter=()=>'';
+  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  const html=t.c.diskRowsHtml('node-1',[{device:'nvme0n1',mounts:['/'],system:true,role:'system',longhorn:[]}],false);
+  assert.equal((html.match(/>system</g)||[]).length,1);
+});
