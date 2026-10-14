@@ -31,7 +31,8 @@ try {
   await page.locator("#modal.hidden").waitFor({ state: "attached" });
   assert.equal(await page.evaluate(() => document.activeElement?.dataset?.focusCheck), "opener", "focus returns to the opener");
 
-  // Toasts are announced; an error stays until it is dismissed.
+  // Toasts are announced; an error stays until it is dismissed or the
+  // person acts again, and never takes a click meant for what is under it.
   assert.equal(await page.locator("#toast").getAttribute("aria-live"), "polite");
   await page.evaluate(() => toast("Could not save: timed out", "bad"));
   await page.waitForTimeout(4600);
@@ -39,6 +40,12 @@ try {
   assert.equal(await error.count(), 1, "the error is still there after the usual 4.2 s");
   await error.getByRole("button", { name: "Dismiss" }).click();
   assert.equal(await error.count(), 0);
+  await page.evaluate(() => toast("Could not save: timed out", "bad"));
+  const text = await error.locator("span").boundingBox();
+  assert.equal(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest("#toast"), { x: text.x + text.width / 2, y: text.y + text.height / 2 }), false,
+    "a click on the toast's text reaches what is under it");
+  await page.mouse.click(10, 300);
+  assert.equal(await error.count(), 0, "the next click elsewhere clears the error");
   assert.deepEqual(errors, []);
-  console.log("Dialog focus: moves in, Tab stays inside, returns to the opener; Close is a button; error toasts stay until dismissed");
+  console.log("Dialog focus: moves in, Tab stays inside, returns to the opener; Close is a button; error toasts stay until dismissed or the next action, and let clicks through");
 } finally { await browser.close(); }

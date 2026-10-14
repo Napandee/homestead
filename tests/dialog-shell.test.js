@@ -16,14 +16,18 @@ test("the toast area is announced", () => {
 });
 
 function toasts() {
-  const timers = [], box = { children: [], appendChild(node) { this.children.push(node); node.parent = this; } };
+  const timers = [], box = { children: [], appendChild(node) { this.children.push(node); node.parent = this; },
+    contains(node) { return node === this || this.children.some(n => n === node || n.children.includes(node)); } };
+  const listeners = {};
   const c = { setTimeout: (fn, ms) => timers.push({ fn, ms }), $: id => id === "#toast" ? box : null,
-    document: { createElement: tag => ({ tag, className: "", textContent: "", attrs: {}, dataset: {}, children: [], listeners: {},
+    document: { listeners, addEventListener(t, fn) { (listeners[t] ||= []).push(fn); },
+      removeEventListener(t, fn) { listeners[t] = (listeners[t] || []).filter(f => f !== fn); }, createElement: tag => ({ tag, className: "", textContent: "", attrs: {}, dataset: {}, children: [], listeners: {},
       setAttribute(k, v) { this.attrs[k] = v; }, appendChild(n) { this.children.push(n); }, addEventListener(t, fn) { this.listeners[t] = fn; },
       remove() { box.children = box.children.filter(n => n !== this); } }), documentElement: { style: { setProperty() {} } } } };
   c.window = c; vm.createContext(c);
   vm.runInContext(core.slice(core.indexOf("function toast("), core.indexOf("if (window.ResizeObserver && $(\"#jobTray\"))")), c);
-  return { c, box, timers };
+  const act = (type, target) => (listeners[type] || []).slice().forEach(fn => fn({ type, target }));
+  return { c, box, timers, act };
 }
 
 test("a success toast is polite and goes on its own; an error is an alert that stays until dismissed", () => {
@@ -49,4 +53,23 @@ test("a newer error replaces an older one, and other toasts leave it showing", (
   assert.deepEqual(shown(), ["Could not save", "3 container image updates available"]);
   c.toast("Could not delete", "bad");
   assert.deepEqual(shown(), ["3 container image updates available", "Could not delete"]);
+});
+
+test("a staying error leaves at the person's next action, unless that action is on the toast", () => {
+  const { c, box, act } = toasts();
+  c.toast("Clear Isolated VM before adding a network card", "bad");
+  const error = box.children.at(-1);
+  act("keydown", error.children.find(n => n.tag === "button"));
+  assert.ok(box.children.includes(error), "a key on its own × leaves it to the ×");
+  act("pointerdown", { tag: "button" });
+  assert.ok(!box.children.includes(error), "a click elsewhere clears it");
+  c.toast("Could not save", "bad");
+  act("keydown", { tag: "input" });
+  assert.equal(box.children.length, 0, "a key press clears it too");
+});
+
+test("a toast never takes a click meant for what is under it; only its × does", () => {
+  const css = fs.readFileSync("web/style.css", "utf8");
+  assert.match(css, /#toast\{[^}]*pointer-events:none/);
+  assert.match(css, /\.tst-close\{[^}]*pointer-events:auto/);
 });

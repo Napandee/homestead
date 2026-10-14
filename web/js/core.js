@@ -280,6 +280,16 @@ function toast(msg, kind = "") {
     const close = document.createElement("button");
     close.setAttribute("type", "button"); close.setAttribute("aria-label", "Dismiss"); close.className = "tst-close"; close.textContent = "×";
     close.addEventListener("click", () => d.remove());
+    // It stays while the person looks away, and goes at their next action:
+    // toasts sit where a dialog's main button is, so it must not stay on top.
+    const leave = event => {
+      if (box.contains(event.target)) return;
+      d.remove();
+      document.removeEventListener("pointerdown", leave, true);
+      document.removeEventListener("keydown", leave, true);
+    };
+    document.addEventListener("pointerdown", leave, true);
+    document.addEventListener("keydown", leave, true);
     d.appendChild(text); d.appendChild(close);
   } else {
     d.setAttribute("role", "status"); d.textContent = msg;
