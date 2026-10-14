@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
+const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
 
 await mkdir("release-assets/layout-checks", { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -14,7 +15,7 @@ try {
   await page.addInitScript(() => localStorage.setItem("homestead.settings",
     JSON.stringify({ theme: "dark", bg: "soft", motion: "off", refresh: 60 })));
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto("http://127.0.0.1:4173/?demo=1", { waitUntil: "networkidle" });
+  await page.goto(`${base}/?demo=1`, { waitUntil: "networkidle" });
   await page.evaluate(() => go("storage"));
   await page.locator(".voltable tbody tr").first().waitFor();
   await page.evaluate(() => document.fonts.ready);

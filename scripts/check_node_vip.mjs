@@ -2,12 +2,13 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
+const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4174";
 await mkdir("release-assets/vip-access-checks", {recursive:true});
 const browser = await chromium.launch({headless:true});
 try {
   const page = await browser.newPage({viewport:{width:1280,height:1100}});
   const errors=[]; page.on("pageerror", e=>errors.push(e.message));
-  await page.goto("http://127.0.0.1:4174/?demo=1", {waitUntil:"networkidle"});
+  await page.goto(`${base}/?demo=1`, {waitUntil:"networkidle"});
   await page.evaluate(async () => {
     const original=api;
     api=async (url,init) => {

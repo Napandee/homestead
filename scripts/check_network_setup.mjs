@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
+const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4174";
 
 await mkdir("release-assets/network-checks", { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -9,7 +10,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto("http://127.0.0.1:4174/?demo=1", { waitUntil: "networkidle" });
+  await page.goto(`${base}/?demo=1`, { waitUntil: "networkidle" });
   await page.evaluate(() => {
     const original = api;
     api = async (url, ...args) => {
@@ -26,9 +27,9 @@ try {
       return result;
     };
     STATE.platform = { distribution: "k3s", load_balancer: "kube-vip", servicelb: true };
-    go("network");
+    go("network"); networkTab("vips");
   });
-  await page.getByText("Networking roles", { exact: true }).waitFor();
+  await page.locator(".vip-card").first().waitFor();
   for (const width of [1280, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1200 });
     const cards = await page.locator(".vip-card").evaluateAll(cards => cards.map(card => {
