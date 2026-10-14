@@ -1311,7 +1311,7 @@ window.vmCreateReviewedApply = async () => {
 /* ---------------- image cache ---------------- */
 /* Why an image is kept: something runs it, will run it, or can go back to it. */
 const IMAGE_REASONS = {
-  active: { tone: "ok", tip: "" },
+  active: { tone: "ok", tip: "a running container uses it" },
   rollback: { tone: "warn", tip: "kept so Roll back can return to it" },
   stopped: { tone: "info", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
   scheduled: { tone: "info", tip: "a scheduled job that runs this image" },
@@ -1330,6 +1330,9 @@ async function viewImages() {
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
   paint(`${UI.pageHeader(`Image cache`, `${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each node's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}`, `<label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label>`)}
+    ${UI.guide("How images are kept", `<p><b>Clean up</b> removes an image nothing uses from the nodes that hold it.
+      <b>active</b> images are what running containers use, and <b>stopped</b> ones what a container scaled to zero starts from; both stay.
+      <b>rollback</b> copies are the image a container had before its last update, kept so <b>Roll back</b> can return to it. <b>Forget</b> one and it becomes unused, to clean up like the rest.</p>`)}
     <div class="grid g3 statgrid" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle" title="${esc(n.node)}">${esc(n.node)}</div>
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
@@ -1338,9 +1341,6 @@ async function viewImages() {
     ${(d.scanning || []).length ? `<div class="note" style="margin-bottom:12px"><span class="spin2"></span> Asking containerd on ${d.scanning.length} node${d.scanning.length === 1 ? "" : "s"} for every image it holds…</div>`
       : !d.complete ? `<div class="note warn between" style="margin-bottom:12px"><span>Kubernetes reports only each node's largest images, so some - running ones included - are missing here.
           A scan asks each node's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every node</button></div>` : ""}
-    <div class="note" style="margin-bottom:12px"><b>Removing images.</b> <b>Clean up</b> removes an image nothing uses from the nodes that hold it.
-      <span class="tag ok">active</span> images are what running containers use, and <span class="tag info">stopped</span> ones what a container scaled to zero starts from; both stay. <span class="tag warn">rollback</span> copies are the image a container
-      had before its last update, kept so <b>Roll back</b> can return to it - <b>Forget</b> one and it becomes unused, to clean up like the rest.</div>
     ${(d.pulls || []).map(pull => `<div class="note warn between prepull-note" style="margin-bottom:12px">
       <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} node${pull.desired === 1 ? "" : "s"} done.
         It runs until every node has the image; its pods come straight back if you delete them.</span>
