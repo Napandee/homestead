@@ -5,7 +5,7 @@ const HealthInsights = (() => {
   const sources = {alerts:"/api/alerts",overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
   const needs = {health:["cluster","protection","nodes","self","settings","overview","alerts"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
   const rank = {critical:0,medium:1,low:2};
-  const tone = severity => ({critical:"bad",medium:"warn",low:"info",healthy:"ok"}[severity] || "info");
+  const tone = severity => ({critical:"bad",medium:"warn",low:"",healthy:"ok"}[severity] ?? "");
   const item = (id,severity,title,detail,route) => ({id,severity,title,detail,route});
   const known = n => typeof n === "number" && Number.isFinite(n);
   function advice(data) {
@@ -133,7 +133,7 @@ const HealthInsights = (() => {
     const acked=r.alert?.acknowledged, review=`HealthInsights.open(${jsArg(r.route)})`;
     const actionsHtml=r.alert ? UI.button("Review",review)+UI.button(acked?"Undo":"Acknowledge",`HealthInsights.acknowledge(${jsArg(r.alert.key)},${jsArg(r.alert.version)},${acked})`,
       {attrs:`data-tip="${acked?"Show this finding as active again":"Mark as reviewed until it gets worse"}"`}) : "";
-    return {...r,tone:acked?"info":r.tone || tone(r.severity),label:acked?"Acknowledged":r.label || r.severity,action:"Review",onclick:review,actionsHtml};
+    return {...r,tone:acked?"":r.tone || tone(r.severity),label:acked?"Acknowledged":r.label || r.severity,action:"Review",onclick:review,actionsHtml};
   }));
   async function acknowledge(key,version,undo=false) {
     try{await api("/api/alerts/acknowledge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,version,undo})});
@@ -166,7 +166,7 @@ const HealthInsights = (() => {
       const incomplete=needs.updates.some(k=>data[k]===null) || r?.partial || (Array.isArray(r?.errors)?r.errors.length:r?.errors) || (data.hosts?.applies && !Object.keys(data.hosts.hosts || {}).length);
       return `<div class="insight-summary">${rows.length} item${rows.length===1?"":"s"} to review</div>`+list(rows,4)+(rows.length?"":'<div class="empty small">No updates reported by the available checks.</div>')+(incomplete?'<div class="ui-help">Some update checks are unavailable or incomplete. Review Updates.</div>':"");
     }
-    if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>({...item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs"),label:j.status,tone:j.status==="failed"?"bad":"warn"})),4);}
+    if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>({...item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs"),label:j.status,tone:j.status==="failed"?"bad":""})),4);}
     return "";
   }
   function widget(id, settings={}) {const resource=["containers","vms"].includes(id);const route={containers:"workloads",vms:"vms",health:"health",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget${resource?" dashboard-resource-widget":""}"${resource?` style="--resource-list-height:${settings.height || 360}px"`:""}>${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id,settings)}</div></div>`;}
