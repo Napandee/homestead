@@ -227,7 +227,7 @@ window.evacuateNode = async node => {
       <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> Leave ${impact.stranded.map(w => esc(w.name)).join(", ")} down for now</label>` : ""}
     ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${plural(wls.length, "app")}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">Each workload restarts on another host. With
+    <div class="note" style="margin-top:14px">Each app restarts on another host. With
     ReadWriteOnce volumes they restart one at a time, so this is not instant.</div>` : ""}`);
 };
 window.doEvacuate = async node => {

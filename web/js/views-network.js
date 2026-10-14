@@ -5,7 +5,7 @@ const networkPortText = row => (row.ports || []).map(p => `${p.port}/${p.protoco
 
 function networkVipCard(v, data) {
   const isDefault = v.ip === data.shared_vip?.ip;
-  const blocked = v.blocked || ((data.node_ips || []).includes(v.ip) ? "This is a node address, not a workload VIP." : "");
+  const blocked = v.blocked || ((data.node_ips || []).includes(v.ip) ? "This is a host address, not a workload VIP." : "");
   const canUse = !blocked && !nodeAddressesOnly();
   return `<article class="vip-card${isDefault ? " is-default" : ""}">
     <div class="vip-card-heading"><b class="mono">${esc(v.ip)}</b><span class="tag ${blocked ? "bad" : v.free ? "" : "info"}">${blocked ? "Unavailable" : v.free ? "Not assigned" : "In use"}</span></div>
@@ -705,7 +705,7 @@ window.vipAdd = () => {
     ${supported && STATE.data.selfAddress && !STATE.data.selfAddress.on_vip ? `<label class="vip-check"><input id="va_self" type="checkbox" ${STATE.data.network?.shared_vip?.ip ? "" : "checked"}><span><b>Put Homestead itself here</b><span class="dim small">Its page (port 8088), backup storage and shares also answer on this address, and Longhorn backs up to it. Their node addresses keep working.</span></span></label>` : ""}
 
     ${UI.more("Choosing an address", `<p>Choose an unused IPv4 address on the LAN your load balancer serves, outside your router's DHCP allocation range. Do not use a host, router or cluster-management address. Homestead checks the conflicts it knows about in the cluster, but cannot tell whether another device on the LAN uses it.</p>
-      <p>${provider === "kube-vip" ? "kube-vip advertises the address when a workload Service requests it; saving it alone does not make it respond." : provider === "metallb" ? "MetalLB must also have these addresses in a configured address pool. Saving them here does not configure MetalLB's pools." : "You can save addresses now. Install kube-vip or MetalLB in Settings → Hardware and storage → Add-ons before using a movable workload VIP; ServiceLB uses node addresses."}</p>`)}
+      <p>${provider === "kube-vip" ? "kube-vip advertises the address when a workload Service requests it; saving it alone does not make it respond." : provider === "metallb" ? "MetalLB must also have these addresses in a configured address pool. Saving them here does not configure MetalLB's pools." : "You can save addresses now. Install kube-vip or MetalLB in Settings → Hardware and storage → Add-ons before using a movable workload VIP; ServiceLB uses host addresses."}</p>`)}
     <label class="vip-check"><input id="va_confirm" type="checkbox"><span>I have checked that these addresses are reserved outside DHCP and are not used by another device.</span></label>
     <div id="va_result" class="small" role="status" aria-live="polite"></div>
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="va_save" onclick="vipAddGo()">Add VIP</button>`)}</div>`);

@@ -42,7 +42,7 @@ function objectStoreCard(store, target) {
     if (target?.configured) return "";
     return `<div class="note between" style="margin-bottom:18px"><span>
       <b>No backup storage.</b> Longhorn writes volume backups to an S3 bucket, and nothing here
-      provides one — so backups, and moving a workload to another cluster, have nowhere to go.</span>
+      provides one — so backups, and moving an app to another cluster, have nowhere to go.</span>
       <button class="btn sm pri" data-need="admin" onclick="objectStoreSetup()">Set up storage</button></div>`;
   }
   const pointed = store.longhorn?.pointed === true;
@@ -66,10 +66,10 @@ function objectStoreCard(store, target) {
         <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div></div>`}
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
-      restore from these backups. Give its Service an address to migrate workloads elsewhere.</div>`}
+      restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
     <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket lives on
-      the same Longhorn storage it protects, so it survives a lost workload or a bad upgrade, not a lost
-      cluster. It exists so a workload can be rebuilt somewhere else.</div>
+      the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
+      cluster. It exists so an app or VM can be rebuilt somewhere else.</div>
   </div>`;
 }
 
@@ -77,7 +77,7 @@ window.objectStoreSetup = () => {
   const store = STATE.data.objectStore || {};
   modal(store.deployed ? "Backup storage settings" : "Set up backup storage", `
   <p>Runs an S3 server (RustFS) on a Longhorn volume and points Longhorn's backups at it. Volume backups,
-    and moving a workload to another cluster, both read and write here.</p>
+    and moving an workload to another cluster, both read and write here.</p>
   <div class="f2"><div class="f"><label>Size (GiB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="${store.size_gb || 100}" ${store.deployed ? "disabled" : ""}></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>

@@ -252,7 +252,7 @@ function placementSection(p, w, nodes, containers) {
     <div class="place-level"><div class="place-title">Containers in this pod</div>
       <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
         : `<span class="tag">${esc(names[0] || w.name)}</span> is this pod's only container.`}
-        Containers in one pod cannot be spread apart; to run one on its own node, make it a workload of its own and use the rules below.</div></div>
+        Containers in one pod cannot be spread apart; to run one on its own host, make it an app of its own and use the rules below.</div></div>
     <div class="place-level"><div class="place-title">Copies of this app</div>
       <div class="place-grid">
         <div class="f"><label>Copies ${tip("How many copies of this app run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
@@ -626,7 +626,7 @@ window.confirmEdit = async () => {
 window.wlMoveLegacy = async (ns, name) => {
   const nodes = (STATE.data.ov ? STATE.data.ov.nodes : []);
   modal("Move · " + name, `
-    <p class="muted small">Pick the host this workload should run on. Homestead pins it with a
+    <p class="muted small">Pick the host this app should run on. Homestead pins it with a
     node selector and rolls the pod.</p>
     <div class="f" style="margin-top:14px"><label>Target host</label><select id="mv_node">
       <option value="">any node (unpin)</option>
@@ -2417,7 +2417,7 @@ window.clusterInventory = report => {
     ${theirs ? `<b class="mono">v${esc(theirs)}</b>` : "an older release that does not say which"};
     this one runs <b class="mono">v${esc(HOMESTEAD_VERSION)}</b>.</div>
   ${rows.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
-    <th>Workload</th><th>Runs</th><th>Volumes</th><th>State</th><th></th></tr></thead><tbody>
+    <th>App</th><th>Runs</th><th>Volumes</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(w => `<tr>
       <td><b>${esc(w.name)}</b> ${w.kind === "vm" ? '<span class="tag">VM</span>' : ""}
         <div class="dim xs mono">${esc(w.namespace)}</div></td>

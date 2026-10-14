@@ -206,7 +206,7 @@ function dashboardNodes(nodes, display="compact") {
 }
 
 function consumerTable(workloads, metric) {
-  return `<div class="tblwrap"><table class="tbl stack compact consumer-table"><thead><tr><th>Workload</th><th>${metric === "cpu" ? "CPU" : "RAM"}</th></tr></thead>
+  return `<div class="tblwrap"><table class="tbl stack compact consumer-table"><thead><tr><th>App</th><th>${metric === "cpu" ? "CPU" : "RAM"}</th></tr></thead>
     <tbody>${workloads.slice(0, 5).map(w => consumerRow(w, metric)).join("")}</tbody></table></div>`;
 }
 
@@ -446,7 +446,7 @@ function nodeComparisonMarkup(id) {
         <div><span>Addresses</span><b>${nodeAddressTags(selected) || "—"}</b></div>
         <div><span>Duties</span><b>${nodeDutyTags(selected) || "—"}</b></div>
         <div><span>Hardware</span><b>${hardwareTags(nodeHardwareIds(selected)) || "None defined"}</b></div>
-        <div><span>Workloads</span><b>${esc((selected.workloads || []).join(", ") || "None")}</b></div>
+        <div><span>Apps</span><b>${esc((selected.workloads || []).join(", ") || "None")}</b></div>
       </div>
     </div></section>`;
 }

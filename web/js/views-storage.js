@@ -114,7 +114,7 @@ async function viewFlow() {
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
-    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} apps and VMs · ${graph.nodes.length} nodes</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
+    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} apps and VMs · ${graph.nodes.length} hosts</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
   // A live refresh redraws the page; whatever was being traced stays traced.
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);
   else drawArch();
