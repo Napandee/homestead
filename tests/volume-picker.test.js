@@ -59,3 +59,27 @@ test("a reused new volume must resolve before saving, with the same mount valida
   assert.match(volumeRowIssue({ ...resolved, sub_path: "../outside" }), /inside its volume/);
   assert.match(volumeRowIssue({ ...resolved, source: "Invalid Name" }), /lowercase/);
 });
+
+/* A new pod volume starts on a class several hosts can mount: a migratable
+   class mounts on one host at a time, fine for one pod, not for a share. */
+test("a new pod volume defaults to the first class that isn't migratable, not to a class picked by name", () => {
+  const { defaultStorageClass } = context.window;
+  const facts = { "harvester-longhorn": { migratable: true, default: true }, "longhorn-r2": { migratable: true }, longhorn: {} };
+  assert.equal(defaultStorageClass(["longhorn", "longhorn-r2"], "", {}), "longhorn");
+  assert.equal(defaultStorageClass(["harvester-longhorn", "longhorn"], "", facts), "longhorn");
+  assert.equal(defaultStorageClass(["longhorn-r2", "harvester-longhorn"], "", facts), "harvester-longhorn", "all migratable: the cluster's default");
+  assert.equal(defaultStorageClass(["longhorn-r2", "longhorn"], "longhorn-r2", facts), "longhorn-r2", "what was asked for is kept");
+  assert.equal(defaultStorageClass([], "", {}), "", "no classes: the cluster's own default");
+});
+
+test("a migratable class's badge says what it is fit for, not that it is for VM disks only", () => {
+  const html = context.window.storageClassBadges({ migratable: true });
+  assert.doesNotMatch(html, /VM disks only/);
+  assert.match(html, /<span class="tag" data-tip="[^"]*several hosts[^"]*">VM disk class<\/span>/);
+});
+
+test("with no classes the picker offers the cluster's default rather than a name it made up", () => {
+  const html = context.window.storageClassOptions([], "", {});
+  assert.match(html, /<option value="" selected>Cluster default<\/option>/);
+  assert.doesNotMatch(html, /longhorn-r2/);
+});

@@ -112,7 +112,7 @@ async function viewDash() {
   };
 
   paint(`
-  ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
+  ${UI.pageHeader(`Cluster overview`, dashboardScope(o), `
       <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
@@ -135,6 +135,15 @@ async function viewDash() {
 }
 
 /* Dense host summaries respond to widget width, rather than viewport width. */
+/* The dashboard reads this cluster only. With All clusters picked it says so,
+   and points to Nodes, which combines them. */
+function dashboardScope(o) {
+  const count = `${o.nodes_total} node${o.nodes_total === 1 ? "" : "s"}`;
+  if (!fleetAll()) return `Live health, capacity and placement across ${count}`;
+  const me = (FLEET.view?.members || []).find(m => m.self);
+  return `${esc(me?.name || "This cluster")} only · ${count} · the Dashboard doesn't combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's nodes</button>`;
+}
+
 function dashboardNodes(nodes, display="compact") {
   const header=UI.moduleHeader("Node health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
   if(display==="detailed")return `<div class="card flat dashboard-nodes">${header}${nodeComparison(nodes,"dashboard")}</div>`;
@@ -746,7 +755,7 @@ window.probeInstall = async () => {
 
 window.probeRemove = async () => {
   if (!(await ask("Remove the node probe from every node?" + String.fromCharCode(10, 10)
-      + "Temperatures, drive health and disk throughput stop being reported."))) return;
+      + "Temperatures, drive health and disk throughput stop being reported.", { title: "Remove the node probe", ok: "Remove", danger: true }))) return;
   try {
     const result = await api("/api/node/probe/remove", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -803,7 +812,7 @@ window.allocationProbeSave = async (enabled, button) => {
   if (enabled && !$("#allocationProbeConsent")?.checked) return toast("Confirm socket access and the probe restart first", "bad");
   if (enabled && current.capacity?.blocked) return toast("Resolve the host checks before enabling", "bad");
   if (enabled && current.capacity?.warnings?.length && !$("#allocationProbeCapacity")?.checked) return toast("Review and acknowledge the capacity warnings first", "bad");
-  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged."))) return;
+  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged.", { title: "Disable allocation collection", ok: "Disable", danger: true }))) return;
   const body = {enabled, directory: $("#allocationProbeDirectory")?.value || "",
     uid: current.uid, resource_version: current.resource_version, acknowledge_host_access: enabled,
     confirm_capacity: !!$("#allocationProbeCapacity")?.checked, capacity_review: current.capacity?.fingerprint};
@@ -933,7 +942,7 @@ window.hardwareFeatureSave = async oldId => {
 };
 window.hardwareFeatureDelete = async id => {
   const f = hardwareDef(id);
-  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting workloads using its node label are not changed.`))) return;
+  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting workloads using its node label are not changed.`, { title: "Delete hardware feature", ok: "Delete", danger: true }))) return;
   const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== id);
   try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
     STATE.data.hardwareFeatures = null; toast(`${f.name} deleted`, "ok"); backToHardwareList(); }

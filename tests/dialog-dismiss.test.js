@@ -52,7 +52,8 @@ test("typing in a dialog's field and pressing Escape asks before the changes go"
   await c.dismissModal();
   assert.equal(c.asked.length, 1);
   assert.equal(c.asked[0].message, "Discard your changes to Edit · frigate?");
-  assert.equal(c.asked[0].ok, "Discard");
+  assert.equal(c.asked[0].ok, "Discard changes");
+  assert.equal(c.asked[0].danger, true, "discarding typed work is red");
   assert.equal(c.asked[0].cancel, "Keep editing");
   assert.ok(c.isOpen(), "Keep editing leaves the dialog open");
   c.answer = true;

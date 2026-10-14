@@ -162,17 +162,23 @@ function componentRow(c) {
       !running && c.next && {label:`Upgrade to ${c.next}`,run:`componentUpgrade(${jsq(c.id)})`,need:'admin'},
       {label:'V2 upgrade status',run:'lhV2Upgrade()'},
       c.notes_url && {label:'Release notes',run:`window.open(${jsq(safeHref(c.notes_url))},'_blank','noopener,noreferrer')`}
-    ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}`}</div></div>`;
+    ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}${action}`}</div></div>`;
 }
 
 function componentsCard(r, settings = false) {
   const rows = (r.components || []).filter(c => !(r.harvester && c.id === "cluster"));
-  // Counted: what can be upgraded here. Harvester's own parts move with it.
+  // Counted: what can be upgraded here. Parts that are behind but move with
+  // Harvester, or were installed outside Homestead, say who upgrades them.
   const behind = rows.filter(c => c.next).length;
+  const elsewhere = rows.filter(c => c.behind && !c.next);
+  const by = elsewhere.every(c => c.how === "harvester") ? "upgraded with Harvester"
+    : elsewhere.every(c => c.how === "manual") ? "upgraded outside Homestead" : "upgraded elsewhere";
+  const pill = behind ? clusterPill("attention", `${behind} update${behind === 1 ? "" : "s"}`)
+    : elsewhere.length ? clusterPill("unknown", `${elsewhere.length} newer, ${by}`) : clusterPill("healthy", "up to date");
   const body = `
     ${UI.moduleHeader(`Platform versions`, `What runs under your apps, and whether anything newer is out. ${r.harvester
         ? "Harvester upgrades its own Longhorn and KubeVirt."
-        : "Upgrades go one minor version at a time, as each project supports."}`, `${clusterPill(behind ? "attention" : "healthy", behind ? `${behind} update${behind === 1 ? "" : "s"}` : "up to date")}
+        : "Upgrades go one minor version at a time, as each project supports."}`, `${pill}
         <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check now</button>`)}
     <div class="release-list">${rows.map(componentRow).join("") || '<div class="dim small">Nothing to report.</div>'}</div>
   `;
