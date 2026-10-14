@@ -176,14 +176,14 @@
   <main class="main">
     <header class="top">
       <div class="topleft">
-        <div class="iconbtn only-sm" id="hamburger" title="Menu"><svg><use href="#i-menu"/></svg></div>
+        <button type="button" class="iconbtn only-sm" id="hamburger" title="Menu" aria-label="Menu"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
       <div>
         <nav class="crumb" id="crumb" aria-label="Breadcrumb">Dashboard</nav>
         <h1 id="title">Dashboard</h1>
       </div></div>
       <div class="topright">
         <button class="iconbtn only-sm" id="refresh" type="button" title="Refresh this page" aria-label="Refresh this page"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
-        <div class="iconbtn only-sm" id="searchbtn" title="Search"><svg><use href="#i-search"/></svg></div>
+        <button type="button" class="iconbtn only-sm" id="searchbtn" title="Search" aria-label="Search"><svg aria-hidden="true"><use href="#i-search"/></svg></button>
         <div class="searchwrap" id="searchwrap">
           <span class="sicon"><svg width="14" height="14"><use href="#i-search"/></svg></span>
           <input id="globalSearch" class="search" placeholder="Search apps, VMs, nodes, pages…" aria-label="Search" role="combobox" aria-controls="searchResults" aria-autocomplete="list" aria-expanded="false" autocomplete="off">
@@ -196,9 +196,9 @@
         <details class="actionmenu bellmenu" id="bell"><summary class="iconbtn" title="Nothing needs you" aria-label="Notifications" onclick="if(matchMedia('(max-width:900px)').matches){event.preventDefault();notificationsDialog()}">
           <svg><use href="#i-bell"/></svg><span id="bellCount" class="hidden">0</span><b id="bellErrors" class="hidden"></b></summary>
           <div class="actionmenu-pop bellpop" id="bellPop"><div class="bell-empty">Nothing needs you</div></div></details>
-        <div class="iconbtn" id="opensettings" title="Your settings"><svg><use href="#i-gear"/></svg></div>
-        <div class="whoami" id="whoami" title="Account"><div class="av" id="whoav">?</div>
-          <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></div>
+        <button type="button" class="iconbtn" id="opensettings" title="Your settings" aria-label="Your settings"><svg aria-hidden="true"><use href="#i-gear"/></svg></button>
+        <button type="button" class="whoami" id="whoami" title="Account" aria-label="Account and settings"><span class="av" id="whoav">?</span>
+          <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></button>
       </div>
     </header>
     <div class="pull-refresh" id="pullRefresh" role="status" aria-live="polite" aria-atomic="true" hidden><svg aria-hidden="true"><use href="#i-refresh"/></svg><span></span></div>
