@@ -529,7 +529,7 @@ window.volumeCreate = async () => {
     <div class="f"><label>Namespace</label><select id="vc_ns">${nss.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f2"><div class="f"><label>Size (GB)</label><input id="vc_size" type="number" min="1" value="10"></div>
     <div class="f"><label>Access mode ${tip("RWO mounts on one node at a time and suits most apps. RWX can mount on several nodes, using Longhorn's shared-volume support.")}</label><select id="vc_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div></div>
-    <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, "longhorn-r2", classes.facts)}</select>
+    <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, defaultStorageClass(scs, "", classes.facts), classes.facts)}</select>
       <div class="vclass-badges" id="vc_badges"></div></div>
     <div class="note" id="vc_mode_note" hidden></div>
     ${UI.actions(`<button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -790,7 +790,7 @@ function storageClassCard(classes, v2 = null) {
       ${restores.length ? ` · <a class="linkish" data-need="admin" onclick="storageClassCleanup()">Remove unused restore classes</a>` : ""}</div>` : "";
   // What a volume on it can do, as tags: one column, not three.
   const features = row => [
-    row.migratable ? '<span class="tag" data-tip="Live-migratable volumes for VM disks. Longhorn cannot mount those into a pod, so it cannot back shared storage.">VM disks only</span>'
+    row.migratable ? '<span class="tag" data-tip="Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX).">VM disk class</span>'
       : '<span class="tag ok" data-tip="Volumes can be shared between pods (RWX)">shareable</span>',
     row.encrypted ? '<span class="tag info">encrypted</span>' : "",
     row.expandable ? '<span class="tag">can grow</span>' : '<span class="tag" data-tip="Volumes keep the size they were made with">fixed size</span>',
@@ -844,7 +844,7 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
       <div class="dim xs" id="sc_reach" style="margin-top:6px"></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
-    <div class="note" id="sc_hint">Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.</div>
+    <div class="note" id="sc_hint">Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).</div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -918,8 +918,8 @@ window.storageClassHint = () => {
   const on = $("#sc_migratable").checked, hint = $("#sc_hint");
   hint.classList.toggle("bad", on);
   hint.innerHTML = on
-    ? "<b>Volumes from this class cannot be mounted by containers.</b> Only pick this for VM disks that need live migration; ReadWriteMany claims built on it will never attach to a pod."
-    : "Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.";
+    ? "<b>Volumes from this class can't be shared between hosts.</b> One pod on one host can use them; a ReadWriteMany claim on it never attaches to a second host's pod."
+    : "Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).";
 };
 window.storageClassSave = async button => {
   const name = $("#sc_name").value.trim();
@@ -964,8 +964,8 @@ window.volumeClassFacts = () => {
   const usable = (classes.shared || []).includes(name);
   note.hidden = !(rwx && !usable);
   if (!note.hidden) {
-    note.innerHTML = `<b>${esc(name)} cannot back a shared volume.</b> It creates live-migratable
-      volumes for VM disks, which Longhorn will not mount into a pod.
+    note.innerHTML = `<b>${esc(name)} cannot back a shared volume.</b> Its volumes are live-migratable,
+      so they mount on one host at a time, and a shared volume needs several.
       ${(classes.shared || []).length ? `Use ${(classes.shared || []).map(esc).join(" or ")} instead.` : ""}`;
   }
 };
@@ -1057,7 +1057,7 @@ window.volumeFiles = async (namespace, pvc, attached) => {
   if (cluster) headers["X-Homestead-Cluster"] = cluster;
   const session = FILEVIEW.liveSession = { namespace, pvc, headers };
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`))) {
+  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
     if (FILEVIEW.liveSession === session) closeModal();
     return;
   }
@@ -1105,7 +1105,7 @@ function filesReleaseLate(session) {
 window.fileBrowse = async (path) => {
   const { namespace, pvc } = FILEVIEW;
   const session = FILEVIEW.liveSession;
-  if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   disposeEditor();
   try {
     const snapshot = FILEVIEW.snapshotSession;
@@ -1234,7 +1234,7 @@ window.fileSave = async (ignoreSyntax = false) => {
   } catch (e) {
     if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     // A syntax complaint is a warning, not a refusal: it is your file.
-    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`))) {
+    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) {
       return fileSave(true);
     }
     toast(e.message, "bad");
@@ -1246,7 +1246,7 @@ window.fileSave = async (ignoreSyntax = false) => {
 window.closeFiles = async () => {
   if (FILEVIEW.snapshotSession) return snapshotFilesClose();
   const { dirty } = FILEVIEW;
-  if (dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   const closing = filesDismiss();
   closeModal();
   await closing;
@@ -1656,7 +1656,7 @@ function eventRowHtml(x) {
   return `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
     <td data-status><span class="pill slim ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
     <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
-    <td class="dim xs mono nowrap" data-sm-hide title="${esc((x.time || "").replace("T", " ").replace("Z", ""))}">${esc(ago)}</td></tr>`;
+    <td class="dim xs mono nowrap" data-sm-hide title="${esc(x.time ? new Date(x.time).toLocaleString() : "")}">${esc(ago)}</td></tr>`;
 }
 
 /* The table and the count, from the rows already read. */
@@ -1952,7 +1952,7 @@ function disksRepaint(node) {
 
 window.diskAction = async (action, node, disk, value) => {
   if (action === "remove" && !(await ask(`Remove ${disk} on ${node} from Longhorn? Nothing is on it, and its files are left where they are.`, { title: "Remove disk", ok: "Remove disk", danger: true }))) return;
-  if (action === "evict" && value && !(await ask(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`))) return;
+  if (action === "evict" && value && !(await ask(`Move every replica off ${disk}? Longhorn rebuilds each one on another disk first, which copies their data.`, { title: "Move every replica", ok: "Move replicas" }))) return;
   const body = { node, disk };
   if (action === "scheduling") body.allow = value;
   if (action === "evict") body.on = value;

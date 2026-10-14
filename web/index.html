@@ -186,7 +186,8 @@
         <div class="iconbtn only-sm" id="searchbtn" title="Search"><svg><use href="#i-search"/></svg></div>
         <div class="searchwrap" id="searchwrap">
           <span class="sicon"><svg width="14" height="14"><use href="#i-search"/></svg></span>
-          <input id="globalSearch" class="search" placeholder="Search workloads, nodes, volumes…">
+          <input id="globalSearch" class="search" placeholder="Search apps, VMs, nodes, pages…" aria-label="Search" role="combobox" aria-controls="searchResults" aria-autocomplete="list" aria-expanded="false" autocomplete="off">
+          <div id="searchResults" class="searchresults hidden" role="listbox" aria-label="Search results"></div>
         </div>
         <!-- Everything that wants attention, in one place: Homestead's own
              update, container updates, and image checks that failed. -->
@@ -288,6 +289,7 @@
 <script src="/js/cluster-shutdown.js?v=2.8.326"></script>
 <script src="/js/onboard.js?v=2.8.326"></script>
 <script src="/js/pwa.js?v=2.8.326"></script>
+<script src="/js/search.js?v=2.8.326"></script>
 <script src="/js/app.js?v=2.8.326"></script>
 <script src="/js/mobile-refresh.js?v=2.8.326"></script>
 <script src="/js/auth.js?v=2.8.326"></script>

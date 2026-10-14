@@ -85,7 +85,7 @@ window.resOpen = async (ns, name, reveal = false) => {
     const host = $("#res_events");
     if (host) host.innerHTML = events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>
       ${events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
-        <td class="small">${esc(e.message)}</td><td class="mono">${e.count}</td><td class="small dim">${esc((e.last || "").replace("T", " ").slice(0, 16))}</td></tr>`).join("")}</tbody></table>`
+        <td class="small">${esc(e.message)}</td><td class="mono">${e.count}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>`
       : "No recent events.";
   }).catch(() => {});
 };

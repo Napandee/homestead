@@ -5,16 +5,16 @@ const vm = require("vm");
 
 // Only the removal: the rest of auth.js needs a page.
 const src = fs.readFileSync("web/js/auth.js", "utf8");
-const body = src.slice(src.indexOf("async function userRemove"), src.indexOf("window.delUser"));
+const body = src.slice(src.indexOf("async function userRemove"), src.indexOf("window.userRemove = userRemove"));
 
 function load(answer) {
-  const calls = { toasts: [], dialog: 0, settings: 0, asked: [] };
+  const calls = { toasts: [], settings: 0, asked: [] };
   const ctx = {
     STATE: { view: "settings" }, window: {},
     ask: async (msg, opts) => { calls.asked.push([msg, opts]); return true; },
     api: async () => { if (answer instanceof Error) throw answer; return answer; },
     toast: (m, k) => calls.toasts.push([m, k]),
-    manageUsers: () => { calls.dialog++; }, resetPaint: () => {}, viewSettings: () => { calls.settings++; },
+    resetPaint: () => {}, viewSettings: () => { calls.settings++; },
   };
   vm.createContext(ctx);
   vm.runInContext(body + ";this.userRemove = userRemove;", ctx);
@@ -24,7 +24,6 @@ function load(answer) {
 test("removing from the card stays on the card and redraws it", async () => {
   const { ctx, calls } = load({ ok: true });
   await ctx.userRemove("alex", "card");
-  assert.equal(calls.dialog, 0, "the old Users dialog does not open");
   assert.equal(calls.settings, 1, "the card is drawn again without the user");
   assert.deepEqual(calls.toasts, [["alex removed", "ok"]]);
   assert.equal(calls.asked[0][1].ok, "Remove", "the button says what it does");
@@ -39,7 +38,15 @@ test("a user already removed elsewhere is not an error, and the row goes", async
 
 test("any other failure still redraws, so the list matches the server", async () => {
   const { ctx, calls } = load(new Error("cannot delete the only administrator"));
-  await ctx.userRemove("alex", "dialog");
+  await ctx.userRemove("alex");
   assert.deepEqual(calls.toasts, [["cannot delete the only administrator", "bad"]]);
-  assert.equal(calls.dialog, 1, "the dialog it came from is redrawn");
+  assert.equal(calls.settings, 1, "Settings, Users and access is redrawn");
+});
+
+/* Users are managed in Settings, Users and access, and the setup guide's
+   Users step opens it (#465); the old dialog has nothing left that opens it. */
+test("the old Users dialog is gone", () => {
+  for (const name of ["manageUsers", "addUser", "setRole", "delUser"])
+    assert.doesNotMatch(src, new RegExp(`window\\.${name}\\s*=`), `${name} is removed`);
+  assert.doesNotMatch(body, /"dialog"/, "userRemove has no dialog path");
 });
