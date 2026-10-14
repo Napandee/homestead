@@ -63,3 +63,17 @@ test("no view formats a time itself", () => {
   }
   assert.deepEqual(left, [], "use fmtWhen, fmtAt, fmtNext, fmtDay or fmtClock from core.js");
 });
+
+test("the uptime card's durations drop a zero second part too", () => {
+  const src = fs.readFileSync("web/js/views-overview.js", "utf8"), from = src.indexOf("function uptimeDuration");
+  const uptimeDuration = Function(`${src.slice(from, src.indexOf("\n}\n", from) + 2)}; return uptimeDuration;`)();
+  assert.equal(uptimeDuration(2 * 86400), "2d");
+  assert.equal(uptimeDuration(3 * 3600), "3h");
+  assert.equal(uptimeDuration(2 * 86400 + 5 * 3600), "2d 5h");
+});
+
+test("Schedules names the reader's zone for its next runs, not just \"your time\"", () => {
+  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  assert.doesNotMatch(src, /next runs in your time`/);
+  assert.match(src, /next runs in your time zone \(\$\{esc\(yourZone\(\)\)\}\)/);
+});

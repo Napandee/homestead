@@ -162,7 +162,8 @@ const fmtWhen = v => {
 /* A time to come, such as a next run: "Tue 22 Sep, 05:00". */
 const fmtNext = v => { const at = asDate(v); return at ? `<span data-tip="${esc(utcTip(at))}">${esc(fmtAt(at, { weekday: true }))}</span>` : "—"; };
 /* Said once on a page or dialog that shows times to come in local time. */
-const zoneLine = () => { let zone = ""; try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* no Intl zone */ } return `Times are in your time zone (${zone || "UTC"})`; };
+const yourZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
+const zoneLine = () => `Times are in your time zone (${yourZone()})`;
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");

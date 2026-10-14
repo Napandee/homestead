@@ -232,9 +232,9 @@ const uptimePct = v => v == null ? "—" : v >= 99.995 ? "100%" : `${v.toFixed(v
 function uptimeDuration(s) {
   s = Math.max(0, Math.round(s));
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.round(s % 3600 / 60);
-  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${Math.max(1, m)}m`;
+  return d ? (h ? `${d}d ${h}h` : `${d}d`) : h ? (m ? `${h}h ${m}m` : `${h}h`) : `${Math.max(1, m)}m`;
 }
-const uptimeWhen = t => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const uptimeWhen = t => fmtAt(t);
 
 /* The node page's uptime card: how it is now, the windows, ninety days as a
    strip, and a log of each outage and reboot. The log is history - an entry
@@ -258,7 +258,7 @@ window.nodeUptimePaint = async n => {
     <div class="uptime-windows">${Object.entries(u.windows).map(([label, v]) => `<div><span class="dim xs">LAST ${label.toUpperCase()}</span>
       <b class="mono uptime-${tone(v)}">${uptimePct(v)}</b></div>`).join("")}</div>
     <div class="uptime-strip" aria-label="Each of the last 90 days">${u.days.map(d => `<i class="uptime-${tone(d.up)}"
-      data-tip="${new Date(d.day * 1000).toLocaleDateString()} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")}</div>
+      data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")}</div>
     <div class="between dim xs" style="margin-top:3px"><span>90 days ago</span><span>today</span></div>
     <div class="dim xs uptime-loghead">OUTAGES AND REBOOTS</div>
     ${events.length ? `<div class="uptime-events">${events.map(e => e.kind === "reboot"
@@ -480,7 +480,7 @@ function nodeUptimeStrip(n) {
   return `<div class="node-upstrip" data-tip="${esc(tip)}">
     <span class="dim xs">UPTIME</span>
     <div class="uptime-strip mini" aria-label="Each of the last 30 days">${days.length
-      ? days.map(d => `<i class="uptime-${uptimeTone(d.up)}" data-tip="${new Date(d.day * 1000).toLocaleDateString()} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")
+      ? days.map(d => `<i class="uptime-${uptimeTone(d.up)}" data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")
       : "<i></i>".repeat(30)}</div>
     <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d</span></div>`;
 }
