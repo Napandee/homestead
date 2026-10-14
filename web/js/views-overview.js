@@ -745,7 +745,7 @@ window.probeInstall = async () => {
 
 window.probeRemove = async () => {
   if (!(await ask("Remove the node probe from every node?" + String.fromCharCode(10, 10)
-      + "Temperatures, drive health and disk throughput stop being reported."))) return;
+      + "Temperatures, drive health and disk throughput stop being reported.", { title: "Remove the node probe", ok: "Remove", danger: true }))) return;
   try {
     const result = await api("/api/node/probe/remove", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -802,7 +802,7 @@ window.allocationProbeSave = async (enabled, button) => {
   if (enabled && !$("#allocationProbeConsent")?.checked) return toast("Confirm socket access and the probe restart first", "bad");
   if (enabled && current.capacity?.blocked) return toast("Resolve the host checks before enabling", "bad");
   if (enabled && current.capacity?.warnings?.length && !$("#allocationProbeCapacity")?.checked) return toast("Review and acknowledge the capacity warnings first", "bad");
-  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged."))) return;
+  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged.", { title: "Disable allocation collection", ok: "Disable", danger: true }))) return;
   const body = {enabled, directory: $("#allocationProbeDirectory")?.value || "",
     uid: current.uid, resource_version: current.resource_version, acknowledge_host_access: enabled,
     confirm_capacity: !!$("#allocationProbeCapacity")?.checked, capacity_review: current.capacity?.fingerprint};
@@ -932,7 +932,7 @@ window.hardwareFeatureSave = async oldId => {
 };
 window.hardwareFeatureDelete = async id => {
   const f = hardwareDef(id);
-  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting workloads using its node label are not changed.`))) return;
+  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting workloads using its node label are not changed.`, { title: "Delete hardware feature", ok: "Delete", danger: true }))) return;
   const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== id);
   try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
     STATE.data.hardwareFeatures = null; toast(`${f.name} deleted`, "ok"); backToHardwareList(); }

@@ -57,7 +57,7 @@
   window.reloadApp = async () => {
     if (!(await settingsLeave())) return;
     if ((editing() || visible($("#modal:not(.hidden)"))) &&
-        !(await ask("Reload the app? Unsaved work is lost and open consoles disconnect.", { ok: "Reload app" }))) return;
+        !(await ask("Reload the app? Unsaved work is lost and open consoles disconnect.", { title: "Reload the app", ok: "Reload app" }))) return;
     window.location.reload();
   };
   $("#reloadApp").onclick = window.reloadApp;

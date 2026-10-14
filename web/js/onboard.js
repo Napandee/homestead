@@ -152,6 +152,13 @@ window.clusterCleanupPaint = async () => {
   if (window.applyRole) window.applyRole();
 };
 
+/* Each cleanup's title and button: what it does, in a few words. */
+const SETUP_CLEANUP_TITLES = {
+  password: ["Delete node password", "Delete password"],
+  pin: ["Let it run anywhere", "Unpin"],
+  attachment: ["Release the volume", "Release"],
+  "pinned-volume": ["Make the volume again, empty", "Make it again"],
+};
 window.clusterCleanup = async (kind, name, force = false) => {
   const asks = {
     password: `Delete the node password ${name}?\n\nA host rebuilt under that name can then join the cluster.`,
@@ -160,13 +167,13 @@ window.clusterCleanup = async (kind, name, force = false) => {
     "pinned-volume": `Make ${name} again, empty?\n\nIts data was on a host that is gone and cannot be read back. The claim is made again under the same name, empty, so its app can start on another host.`,
   };
   if (asks[kind]) {
-    if (!(await ask(asks[kind]))) return;
+    if (!(await ask(asks[kind], { title: SETUP_CLEANUP_TITLES[kind][0], ok: SETUP_CLEANUP_TITLES[kind][1], danger: kind !== "pin" }))) return;
   } else {
     const what = kind === "machine" ? `the leftover Cluster API machine ${name}` : `Longhorn's record of ${name}`;
     const forced = kind === "machine"
       ? "\n\nIts deletion is waiting on a host that will not answer. Forcing clears the finalizers holding it; only do this if the host is gone for good."
       : "\n\nThe replica records Longhorn keeps there are deleted too, and it rebuilds them from the remaining copies. Only do this if the host is gone for good.";
-    if (!(await ask(`${force ? "Force-delete" : "Delete"} ${what}?${force ? forced : ""}`))) return;
+    if (!(await ask(`${force ? "Force-delete" : "Delete"} ${what}?${force ? forced : ""}`, { title: force ? "Force-delete" : "Delete", ok: force ? "Force-delete" : "Delete", danger: true }))) return;
   }
   try {
     const result = await api("/api/cluster/cleanup/run", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -290,7 +297,7 @@ window.nodeRemove = async name => {
   const gone = $('input[name="rm_mode"]:checked')?.value === "gone";
   if (!(await ask(gone
     ? `Remove ${name} for good?\n\nIts pods and VMs are force-stopped so they start elsewhere, its volume attachments and replica records are let go, and its machine is deleted even if something still waits on it. This cannot be undone from Homestead.`
-    : `Remove ${name} from the cluster?\n\nThis cannot be undone from Homestead.`))) return;
+    : `Remove ${name} from the cluster?\n\nThis cannot be undone from Homestead.`, { title: "Remove host", ok: gone ? "Remove for good" : "Remove host", danger: true }))) return;
   const button = $("#rm_go");
   if (button) { button.disabled = true; button.innerHTML = '<span class="spin2"></span> removing'; }
   try {

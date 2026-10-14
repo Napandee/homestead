@@ -434,7 +434,7 @@ window.networkServiceDelete = async (namespace, name) => {
   const serving = row?.targets?.length
     ? `\n\n${name} still serves ${row.targets.join(", ")}, which will lose its LAN address.` : "";
   const frees = listeners.length ? `Frees ${listeners.join(", ")}.` : "It holds no external listener.";
-  if (!(await ask(`Remove Service ${namespace}/${name}?${serving}\n\n${frees}`))) return;
+  if (!(await ask(`Remove Service ${namespace}/${name}?${serving}\n\n${frees}`, { title: "Remove Service", ok: "Remove Service", danger: true }))) return;
   try {
     const result = await api("/api/network/service/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name, force: !!row?.targets?.length }) });
@@ -684,7 +684,7 @@ window.networkCreate = async () => {
 /* ---------------- your VIPs ----------------
    Addresses kept for Homestead to hand to Services, one or a range. */
 window.vipDefault = async ip => {
-  if (!(await ask(`Use ${ip} by default for new workload Services? Existing Services and Homestead's access address are unchanged. Each shared port must be unique.`))) return;
+  if (!(await ask(`Use ${ip} by default for new workload Services? Existing Services and Homestead's access address are unchanged. Each shared port must be unique.`, { title: "Default VIP", ok: "Use by default" }))) return;
   try {
     const r = await api("/api/network/vips/default", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
     if (STATE.data.ov) STATE.data.ov.lb_ip = ip;
@@ -765,7 +765,7 @@ window.vipAddGo = async () => {
   finally { save.disabled = false; }
 };
 window.vipRemove = async ip => {
-  if (!(await ask(`Stop keeping ${ip} for Homestead?`))) return;
+  if (!(await ask(`Stop keeping ${ip} for Homestead?`, { title: "Stop keeping the address", ok: "Stop keeping it", danger: true }))) return;
   try {
     const r = await api("/api/network/vips/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
     toast(r.detail, "ok"); viewNetworking();

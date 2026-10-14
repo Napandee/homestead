@@ -30,12 +30,12 @@ test("ask resolves to the answer, and askText to the text or null", async () => 
   const ctx = { document, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
-  const start = source.indexOf("const ASK_DANGER"), end = source.indexOf("/* The X and Escape");
+  const start = source.indexOf("function askDialog("), end = source.indexOf("/* The X and Escape");
   vm.runInContext(source.slice(start, end), ctx);
   const click = answer => body.children[0].handlers.click({ target: { closest: () => ({ dataset: { a: answer } }) } });
 
-  let pending = ctx.window.ask("Delete it?");
-  assert.match(body.children[0].html, /btn danger/, "a destructive question gets a danger button");
+  let pending = ctx.window.ask("Delete it?", { title: "Delete", ok: "Delete", danger: true });
+  assert.match(body.children[0].html, /btn danger/, "a question marked danger gets a danger button");
   click("yes");
   assert.equal(await pending, true);
   assert.equal(body.children.length, 0, "the dialog is gone once answered");
@@ -60,7 +60,7 @@ test("ask shows the title and the button label it is given", () => {
   const ctx = { document: { createElement: make, body, addEventListener() {}, removeEventListener() {} }, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
-  vm.runInContext(source.slice(source.indexOf("const ASK_DANGER"), source.indexOf("/* The X and Escape")), ctx);
+  vm.runInContext(source.slice(source.indexOf("function askDialog("), source.indexOf("/* The X and Escape")), ctx);
   ctx.window.ask("Delete backup \"nightly\"?", { title: "Delete backup", ok: "Delete backup", danger: true });
   const html = body.children[0].html;
   assert.match(html, /<h3>Delete backup<\/h3>/);
@@ -105,3 +105,36 @@ test("storage prompts that delete or remove something have a title and a button 
   assert.equal(checked.length, 10, `expected the ten storage prompts, found ${checked.join(", ")}`);
   assert.deepEqual(missing, []);
 });
+
+/* Every confirmation says what it is and what its button does: a title and
+   a button naming the result, never an untitled box with "Continue". */
+test("every ask() has a title and a button that names the result", () => {
+  const dir = path.join(__dirname, "..", "web", "js"), missing = [];
+  let checked = 0;
+  for (const name of fs.readdirSync(dir).filter(f => f.endsWith(".js"))) {
+    const source = fs.readFileSync(path.join(dir, name), "utf8");
+    for (const match of source.matchAll(/(^|[^.\w])ask\(/gm)) {
+      const from = match.index + match[1].length;
+      if (/function\s+$/.test(source.slice(Math.max(0, from - 10), from))) continue;
+      const call = askCall(source, from + 3);
+      if (!call.includes(",")) { if (/^\(\)/.test(call)) continue; }
+      checked++;
+      if (!/\btitle:/.test(call) || !/\bok:/.test(call)) missing.push(`${name}:${source.slice(0, from).split("\n").length}`);
+    }
+  }
+  assert.ok(checked > 50, `found ${checked} ask() calls`);
+  assert.deepEqual(missing, []);
+});
+
+test("a red button is the caller's choice, not a guess from the first word", () => {
+  const body = { children: [], appendChild(el) { this.children.push(el); } };
+  const make = () => ({ attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener() {}, focus() {},
+    querySelector(sel) { return sel === ".askin" ? null : make(); }, set innerHTML(html) { this.html = html; }, get innerHTML() { return this.html; } });
+  const ctx = { document: { createElement: make, body, addEventListener() {}, removeEventListener() {} }, window: {}, esc: s => String(s) };
+  vm.createContext(ctx); require("./helpers/load-ui")(ctx);
+  const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
+  vm.runInContext(source.slice(source.indexOf("function askDialog("), source.indexOf("/* The X and Escape")), ctx);
+  ctx.window.ask("Delete the draft?", { title: "Delete draft", ok: "Delete draft" });
+  assert.match(body.children[0].html, /class="btn pri" data-a="yes">Delete draft</);
+});
+
