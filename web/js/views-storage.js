@@ -527,7 +527,7 @@ window.volumeCreate = async () => {
   window.__volumeClasses = classes;
   modal("Create volume", `<div class="f2"><div class="f"><label>Name</label><input id="vc_name" placeholder="frigate-media"></div>
     <div class="f"><label>Namespace</label><select id="vc_ns">${nss.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
-    <div class="f2"><div class="f"><label>Size (GB)</label><input id="vc_size" type="number" min="1" value="10"></div>
+    <div class="f2"><div class="f"><label>Size (GiB)</label><input id="vc_size" type="number" min="1" value="10"></div>
     <div class="f"><label>Access mode ${tip("RWO mounts on one node at a time and suits most apps. RWX can mount on several nodes, using Longhorn's shared-volume support.")}</label><select id="vc_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div></div>
     <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, defaultStorageClass(scs, "", classes.facts), classes.facts)}</select>
       <div class="vclass-badges" id="vc_badges"></div></div>
@@ -558,7 +558,7 @@ window.volumeEdit = async (x, fromRoute = false) => {
   if ($("#ve_loading") !== loading || $("#modal").classList.contains("hidden")) return;
   const size = options.requested_gb || Math.ceil(x.size_gb);
   modal("Edit · " + name, `
-  <div class="f2"><div class="f"><label>Size (GB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${size}" value="${size}" ${options.can_expand ? "" : "disabled"}></div>
+  <div class="f2"><div class="f"><label>Size (GiB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${size}" value="${size}" ${options.can_expand ? "" : "disabled"}></div>
   <div class="f"><label>Replica count</label><input id="ve_reps" type="number" min="1" max="5" value="${x.replicas}"></div></div>
   ${options.can_expand ? "" : `<div class="note"><b>Size cannot be changed.</b> ${esc(options.reason)}<br>Replica count can still be changed.
     ${options.repair_class ? `<div class="row" style="margin-top:10px"><button class="btn sm" data-need="admin" onclick="volumeClassRepairReview(${jsq(namespace)},${jsq(name)},${jsq(options.storage_class)})">Repair resize support…</button></div>` : ""}</div>`}
@@ -1532,7 +1532,7 @@ window.editShare = name => {
     <div class="callout"><b>\\\\${esc(STATE.data.samba?.address || "address pending")}\\${esc(s.name)}</b><br>
       ${s.owned === false ? `Files come from <span class="mono">${esc(s.pvc || "")}${s.sub_path ? "/" + esc(s.sub_path) : ""}</span>, a volume this share only mounts.` : "The claim can grow but cannot shrink."}
       Size-only changes keep Samba running; access changes briefly disconnect open SMB sessions.</div>
-    <div class="f2" style="margin-top:14px"><div class="f"><label>Requested size (GB) ${tip("Longhorn volumes can grow online. Kubernetes and Longhorn do not support shrinking a populated claim.")}</label>
+    <div class="f2" style="margin-top:14px"><div class="f"><label>Requested size (GiB) ${tip("Longhorn volumes can grow online. Kubernetes and Longhorn do not support shrinking a populated claim.")}</label>
       <input type="number" id="she_size" min="${esc(s.size_gb || 1)}" value="${esc(s.size_gb || 1)}" ${s.owned === false ? "disabled" : ""}>
       ${s.owned === false ? `<span class="dim xs">Sized with <span class="mono">${esc(s.pvc || "its volume")}</span> in Volumes, because this share borrows it.</span>` : ""}</div>
       <div class="f"><label>Access</label><select id="she_access" onchange="shareAccessToggle()">
@@ -2061,7 +2061,7 @@ window.diskOsSpace = async node => {
       `<option value="${esc(value)}">${esc(label)}</option>`).join("")}</select></div>
     ${v2 ? `<div class="f"><label>Engine</label><select id="os_engine" onchange="diskOsSpaceChanged()">
       <option value="v1">V1 - a filesystem of its own, mounted</option><option value="v2">V2 (SPDK) - the raw volume or partition</option></select></div>` : ""}
-    <div class="f"><label>Size (GB)</label><input id="os_size" type="number" min="5"></div>
+    <div class="f"><label>Size (GiB)</label><input id="os_size" type="number" min="5"></div>
     <p class="small" id="os_what"></p>
     <div class="f" id="os_confirm_row" hidden><label id="os_confirm_label"></label><input id="os_confirm" class="mono" autocomplete="off"></div>
     <p class="dim xs">On the system's drive it shares a drive with the system, so a copy here and one on another folder of that drive are not two drives.</p>

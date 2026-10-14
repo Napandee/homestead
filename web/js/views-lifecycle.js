@@ -1108,7 +1108,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Memory</label><input type="text" id="v_mem" value="2Gi"></div>
     </div>
     <div class="f2">
-      <div class="f"><label>Disk (GB)</label><input type="number" id="v_disk" value="20" min="5"></div>
+      <div class="f"><label>Disk (GiB)</label><input type="number" id="v_disk" value="20" min="5"></div>
       <div class="f"><label>Root password ${tip("Required when Homestead provisions a new disk. Optional for an imported disk that already has login access configured.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
 `;
@@ -2355,7 +2355,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
       ? `The backup storage on <b>${esc(name)}</b> runs, but only inside that cluster. Give it an address on your LAN and this cluster reads the backups from there.`
       : `Puts an S3 store (RustFS) on a Longhorn volume on <b>${esc(name)}</b> and points its Longhorn backups at it. A move backs each volume up there, then restores it here.`)}
     ${UI.fields(
-      addressOnly ? "" : UI.field("Size (GB)", '<input id="cs_size" type="number" min="5" value="100">'),
+      addressOnly ? "" : UI.field("Size (GiB)", '<input id="cs_size" type="number" min="5" value="100">'),
       UI.field("Address", `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'">
           <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}` : "Its nodes' own addresses"}</option>
           ${free.some(v => v.from === "vips") ? `<optgroup label="An address of its own: ${esc(name)}'s VIPs">${free.filter(v => v.from === "vips").map(v =>

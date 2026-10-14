@@ -274,7 +274,7 @@ window.fleetMigration = async id => {
     const shared = ready?.shared_vip;
     body = `${lead}
       ${UI.fields(
-        UI.field("Size (GB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
+        UI.field("Size (GiB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
         UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
             <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : "Its shared address"}</option>
             <option value="__typed">An address of its own…</option></select>
