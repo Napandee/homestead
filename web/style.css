@@ -716,7 +716,7 @@ pre{background:rgba(0,0,0,.5);border:1px solid var(--line);border-radius:13px;pa
 .store-section{margin-bottom:26px}
 .app[role="button"]{cursor:pointer}.app[role="button"]:hover{border-color:var(--line2)}
 .store-by{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.store-official{color:var(--ok);font-weight:650}
+.store-official{color:var(--mut);font-weight:650}
 .store-tags{gap:5px;flex-wrap:wrap}
 .store-why{font-size:12px;font-style:italic;color:var(--mut);line-height:1.45}
 .store-card-actions{gap:6px;margin-top:auto}.store-card-actions .btn{flex:1;justify-content:center}

@@ -2343,7 +2343,7 @@ async function viewDeploy(pre) {
   const sections = [
     {key:"basics", title:"Basics", lead:"Name the app and its first container.", html:`
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "low"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
         ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
@@ -2829,7 +2829,7 @@ function storeCard(app, mode) {
       <div style="min-width:0"><div class="nm">${esc(app.name)}</div>
         <div class="dim xs store-by">${esc(app.maintainer || "")}${app.official ? ' · <span class="store-official">official</span>' : ""}</div></div></div>
     <div class="row store-tags">${label ? `<span class="tag">${esc(label)}</span>` : ""}
-      ${app.deploy?.app_profile ? `<span class="tag ${app.deploy.app_profile.level === "dependency" ? "warn" : "info"}">${esc(app.deploy.app_profile.label)}</span>` : ""}
+      ${app.deploy?.app_profile ? `<span class="tag${app.deploy.app_profile.level === "dependency" ? " warn" : ""}">${esc(app.deploy.app_profile.label)}</span>` : ""}
       ${app.beta ? '<span class="tag warn">beta</span>' : ""}</div>
     <div class="store-metric">${storeMetric(app, mode)}</div>
     ${mode === "spotlight" && app.spotlight?.reason ? `<div class="store-why">“${esc(app.spotlight.reason)}”</div>` : ""}
