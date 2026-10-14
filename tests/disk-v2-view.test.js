@@ -6,8 +6,8 @@ function setup() {
   const item={id:'task-1',node:'node-1',device:'/dev/sdb',phase:'awaiting-erase',status:'running',progress:70,message:'Ready for review',remaining:0,volumes:[],needs_erase_review:true,cancellable:true};
   const prep={operation_id:'task-1',device:'/dev/sdb',node:'node-1',size_bytes:plan.size_bytes,request_id:'b'.repeat(24),capacity_token:'erase-token'};
   function register(body) {
-    for(const [,id] of body.matchAll(/id="([^"]+)"/g)) {
-      let value='';const el={checked:false,disabled:false,value:''};
+    for(const [tag,id] of body.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)) {
+      let value='';const el={checked:false,disabled:false,value:'',dataset:{typedExpect:tag.match(/data-typed-expect="([^"]*)"/)?.[1]}};
       Object.defineProperty(el,'innerHTML',{get:()=>value,set:s=>{value=s;register(s);}});fields['#'+id]=el;
     }
   }

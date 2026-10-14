@@ -375,7 +375,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
           esc(writeName(row.last_write)), esc(row.relationship)]))) +
         UI.more("Identity checks and recovery limits", (p.warnings || []).map(w => `<p>${esc(w)}</p>`).join("") +
           (p.resources || []).map(row => `<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
-        (!p.blocked ? UI.field(`Type ${esc(p.confirm)} to stop tracking`, '<input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()">') +
+        (!p.blocked ? UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" }) +
           UI.ack("powerRecoveryAck", "I inspected the planned VMs; an earlier request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
         UI.actions(UI.cancel("Keep tracking") + UI.button("Stop tracking batch", "powerRecoveryResolve()", {kind:"pri", id:"powerRecoveryApply", disabled:true}));
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
@@ -392,7 +392,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         <p class="small">Queued power changes: ${esc(observed.queued_changes)} · Original VM: ${observed.same_vm ? "same identity" : "missing or replaced"}</p>
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
-      ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
+      ${!p.blocked ? `${UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" })}
         <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> Record it as unknown: I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and what it kept" : ""}</label>
         <p class="ui-help">The old request may still take effect late. Recording it lets a new ${mutation ? "VM change" : "power action"} be reviewed.</p>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
@@ -404,7 +404,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
   }
 };
 window.powerRecoveryReady = () => {
-  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && (POWER_RECOVERY.importing || $("#powerRecoveryName")?.value===POWER_RECOVERY.plan.confirm));
+  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && (POWER_RECOVERY.importing || typedConfirmMatches("powerRecoveryName")));
   if ($("#powerRecoveryApply")) $("#powerRecoveryApply").disabled=!ready;
   return ready;
 };
@@ -458,8 +458,7 @@ window.cancelOperation = async id => {
       ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" && !plan.copy_recovery ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
       ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" onchange="cancelOperationGate()" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
-      ${plan.confirm ? `<div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(plan.confirm)}</b> to confirm</label>
-        <input id="oc_confirm" autocomplete="off" oninput="cancelOperationGate()"></div>` : ""}
+      ${plan.confirm ? UI.typedConfirm({ id: "oc_confirm", expect: plan.confirm, oninput: "cancelOperationGate()" }) : ""}
       ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
       ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup ? "Remove what it made" : plan.action)}</button>
@@ -471,7 +470,7 @@ window.cancelOperation = async id => {
 window.cancelOperationGate = () => {
   const plan = window.__cancelPlan || {};
   const go = $("#oc_go");
-  if (go) go.disabled = (!!plan.confirm && ($("#oc_confirm")?.value || "").trim() !== plan.confirm) ||
+  if (go) go.disabled = (!!plan.confirm && !typedConfirmMatches("oc_confirm")) ||
     (!!plan.copy_recovery && !$("[data-cancel-option='ack']")?.checked);
 };
 window.cancelOperationGo = async id => {

@@ -834,16 +834,17 @@ window.nodeBridge = async node => {
         `netplan's files are copied aside first, and a rollback is armed on the host: unless Homestead sees ${esc(f.address)} on ${esc(f.bridge)}
          with the gateway answering, the host puts its old network back by itself after ${Math.round(f.rollback_seconds / 60)} minutes.
          kube-vip then starts again on ${esc(f.bridge)}${(f.services || []).length ? `, and on a cluster of several hosts ${esc(f.services[0])} restarts so flannel follows` : ""}. Containers keep running.`)}
-      <div class="f"><label>Type <span class="mono">${esc(node)}</span> to confirm</label><input id="nb_confirm" class="mono" autocomplete="off"></div>
-      ${UI.actions(UI.cancel() + UI.button(`Move into ${f.bridge}`, `nodeBridgeGo(${jsArg(node)})`, { kind: "danger", id: "nb_go", attrs: 'data-need="admin"' }))}`}</div>`;
+      ${UI.typedConfirm({ id: "nb_confirm", expect: node, button: "nb_go" })}
+      ${UI.actions(UI.cancel() + UI.button(`Move into ${f.bridge}`, `nodeBridgeGo(${jsArg(node)})`, { kind: "danger", id: "nb_go", disabled: true, attrs: 'data-need="admin"' }))}`}</div>`;
   if (window.applyRole) applyRole();
 };
 window.nodeBridgeGo = async node => {
+  if (!typedConfirmMatches("nb_confirm")) return;
   const go = $("#nb_go");
   if (go) { go.disabled = true; go.textContent = "Moving…"; }
   try {
     const r = await api("/api/node/bridge", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, confirm: $("#nb_confirm").value }) });
+      body: JSON.stringify({ node, confirm: $("#nb_confirm").value.trim() }) });
     toast(r.detail, "ok"); closeModal();
   } catch (e) {
     toast(e.message, "bad");

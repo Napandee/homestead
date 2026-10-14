@@ -658,8 +658,7 @@ window.volumeDelete = async x => {
       ["Persistent volume", `<span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy ${esc(pv.reclaim_policy || "unknown")}`],
       ["Longhorn volume", `<span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}`],
     ])),
-    UI.section("3. Confirm", UI.field(`Type ${name} to confirm`,
-      `<input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()">`)),
+    UI.section("3. Confirm", UI.typedConfirm({ id: "vd_confirm", expect: name, oninput: "volumeDeleteGate()" })),
     UI.actions(UI.cancel() + (blocked || p.inventory_complete === false ? UI.button("Refresh review", "volumeDeleteRefresh()") : "") +
       UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
@@ -679,7 +678,7 @@ window.volumeDeleteGate = () => {
 window.volumeDeleteNow = async (namespace, name, uid) => {
   const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
   const confirmation = $("#vd_confirm").value.trim();
-  if (!volumeDeleteConfirmationValid(name, confirmation)) return toast("Type the volume name exactly to confirm", "bad");
+  if (!volumeDeleteConfirmationValid(name, confirmation)) return;
   if (!action) return toast("Choose whether to retain or permanently delete the backing data", "bad");
   const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
   try {
@@ -2017,7 +2016,7 @@ window.diskSetup = async (node, device) => {
         ${modes.includes("wipe") ? choice("wipe", "Wipe and prepare it", "Switches its old volume groups off and removes them, wipes the LVM labels, filesystem signatures and partition table, has the host re-read the disk, checks it is blank, then formats it. Everything on it is destroyed.", true) : ""}
         ${modes.includes("erase") ? choice("erase", "Erase it and format", "Everything on it is destroyed.", !modes.includes("import")) : ""}</div>
       <div class="f" id="ds_fs_row"><label>Filesystem</label><select id="ds_fs"><option value="ext4">ext4</option><option value="xfs">XFS</option></select></div>
-      <div class="f" id="ds_confirm_row"><label>Type <span class="mono">${esc(device)}</span> to confirm - this erases it</label><input id="ds_confirm" class="mono" autocomplete="off"></div>
+      <div id="ds_confirm_row">${UI.typedConfirm({ id: "ds_confirm", expect: device, oninput: "diskSetupChanged()", help: "This erases it." })}</div>
       <p class="dim xs">Mounted the safe way: the empty folder is locked so nothing lands on the system disk if the drive dies, fstab names it
         by UUID with <span class="mono">nofail</span> so the host still starts without it (a copy of fstab is kept first), and the mount is checked
         before Longhorn is told. New disks are tagged <span class="mono">ssd</span> or <span class="mono">hdd</span>.</p>
@@ -2063,7 +2062,7 @@ window.diskOsSpace = async node => {
       <option value="v1">V1 - a filesystem of its own, mounted</option><option value="v2">V2 (SPDK) - the raw volume or partition</option></select></div>` : ""}
     <div class="f"><label>Size (GiB)</label><input id="os_size" type="number" min="5"></div>
     <p class="small" id="os_what"></p>
-    <div class="f" id="os_confirm_row" hidden><label id="os_confirm_label"></label><input id="os_confirm" class="mono" autocomplete="off"></div>
+    <div id="os_confirm_row" hidden></div>
     <p class="dim xs">On the system's drive it shares a drive with the system, so a copy here and one on another folder of that drive are not two drives.</p>
     ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}</div>`;
   window.__osSources = Object.fromEntries(sources.map(([value, , max]) => [value, max]));
@@ -2084,8 +2083,15 @@ window.diskOsSpaceChanged = (first = false) => {
     : `A logical volume of its own, <span class="mono">${esc(f.vg)}/${engine === "v2" ? "longhorn-v2" : "longhorn"}</span>, ${engine === "v2"
       ? "given raw to the V2 engine" : `formatted ext4 and mounted at <span class="mono">${esc(f.mount_point)}</span> the safe way`}. Nothing existing is resized.`;
   $("#os_confirm_row").hidden = !part;
-  if (part) $("#os_confirm_label").innerHTML = `Type <span class="mono">/dev/${esc(disk)}</span> to confirm - its partition table gets a new entry`;
-  if ($("#os_go")) $("#os_go").disabled = !!taken;
+  // Drawn again only when the disk changes, so a half-typed name stays.
+  if (part && $("#os_confirm")?.dataset.typedExpect !== `/dev/${disk}`)
+    $("#os_confirm_row").innerHTML = UI.typedConfirm({ id: "os_confirm", expect: `/dev/${disk}`, oninput: "diskOsSpaceGate()", help: "Its partition table gets a new entry." });
+  window.__osTaken = !!taken;
+  diskOsSpaceGate();
+};
+window.diskOsSpaceGate = () => {
+  const part = !$("#os_confirm_row")?.hidden;
+  if ($("#os_go")) $("#os_go").disabled = !!window.__osTaken || (part && !typedConfirmMatches("os_confirm"));
 };
 window.diskOsSpaceGo = async node => {
   const go = $("#os_go");
@@ -2093,7 +2099,7 @@ window.diskOsSpaceGo = async node => {
   try {
     const r = await api("/api/disks/os-space/use", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, size_gb: +$("#os_size").value, source: $("#os_source").value,
-        engine: $("#os_engine")?.value || "v1", confirm: $("#os_confirm")?.value || "" }) });
+        engine: $("#os_engine")?.value || "v1", confirm: ($("#os_confirm")?.value || "").trim() }) });
     toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
   } catch (e) {
     toast(e.message, "bad");
@@ -2109,12 +2115,15 @@ window.diskSetupChanged = () => {
   if ($("#ds_fs_row")) $("#ds_fs_row").hidden = v2 || mode === "import";
   // Formatting a blank disk still asks for the device: it is a format all the same.
   if ($("#ds_confirm_row")) $("#ds_confirm_row").hidden = v2 ? f.state === "blank" : mode === "import";
+  // Erasing waits for the device's name; importing what is on it does not.
+  if ($("#ds_go")) $("#ds_go").disabled = !$("#ds_confirm_row")?.hidden && !typedConfirmMatches("ds_confirm");
 };
 
 window.diskSetupGo = async (node, device) => {
   const v2 = $("#ds_engine")?.value === "v2";
   const body = { node, device, engine: v2 ? "v2" : "v1", mode: $("input[name=ds_mode]:checked")?.value || "",
-    fstype: $("#ds_fs")?.value || "ext4", confirm: $("#ds_confirm")?.value || "" };
+    fstype: $("#ds_fs")?.value || "ext4", confirm: ($("#ds_confirm")?.value || "").trim() };
+  if (!$("#ds_confirm_row")?.hidden && !typedConfirmMatches("ds_confirm")) return;
   const go = $("#ds_go");
   if (go) { go.disabled = true; go.textContent = "Setting it up…"; }
   try {
@@ -2170,14 +2179,19 @@ window.diskRetire = async (node, disk) => {
       If the drive is only unplugged, reconnect it instead: the data comes back with it. Otherwise restore
       ${p.only_copies === 1 ? "it" : "them"} from a backup (Data protection). Carrying on leaves ${p.only_copies === 1 ? "it" : "them"} alone and keeps the disk,
       unless you give ${p.only_copies === 1 ? "it" : "them"} up:
-      <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
-      <div id="dr_confirm_row" hidden class="f" style="margin-top:8px"><label>Type <span class="mono">${esc(disk)}</span> to confirm</label><input id="dr_confirm" class="mono"></div></div>` : ""}
-    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
+      <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked;diskRetireGate()"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
+      <div id="dr_confirm_row" hidden>${UI.typedConfirm({ id: "dr_confirm", expect: disk, oninput: "diskRetireGate()" })}</div></div>` : ""}
+    ${UI.actions(`<button class="btn pri" id="dr_go" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
       <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();
 };
+/* Giving up the only copies waits for the disk's name to be typed. */
+window.diskRetireGate = () => {
+  if ($("#dr_go")) $("#dr_go").disabled = !!$("#dr_force")?.checked && !typedConfirmMatches("dr_confirm");
+};
 window.diskRetireGo = async (node, disk) => {
   const force = !!$("#dr_force")?.checked;
+  if (force && !typedConfirmMatches("dr_confirm")) return;
   try {
     await api("/api/disks/retire", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, disk, force, confirm: force ? $("#dr_confirm").value.trim() : "" }) });

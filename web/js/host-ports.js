@@ -424,18 +424,19 @@ window.hostBondReview = async node => {
     ${p.refusals.length ? UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`, { attrs: 'data-dialog-dismiss="true"' })) : `
       ${UI.callout("warn", `${node}'s network stops for a few seconds`, `netplan's files are copied aside and a rollback is armed on the host first. Unless Homestead sees
         every check pass, ${esc(node)} puts its old network back by itself ${Math.round(p.rollback_seconds / 60)} minutes after the change${p.mode === "802.3ad" ? ", or at once if the switch does not answer LACP within a minute" : ""}. Containers keep running.`)}
-      <div class="f"><label>Type <span class="mono">${esc(node)}</span> to confirm</label><input id="hb_confirm" class="mono" autocomplete="off"></div>
+      ${UI.typedConfirm({ id: "hb_confirm", expect: node, button: "hb_go" })}
       ${UI.actions(UI.cancel() + UI.button("Back", `hostBondDialog(${jsArg(node)})`, { attrs: 'data-dialog-dismiss="true"' }) + UI.button({ create: "Bond them", change: `Change ${p.bond}`, remove: `Remove ${p.bond}` }[p.action],
-        `hostBondGo(${jsArg(node)})`, { kind: "danger", id: "hb_go", attrs: 'data-need="admin"' }))}`}</div>`;
+        `hostBondGo(${jsArg(node)})`, { kind: "danger", id: "hb_go", disabled: true, attrs: 'data-need="admin"' }))}`}</div>`;
   if (window.applyRole) applyRole();
 };
 
 window.hostBondGo = async node => {
+  if (!typedConfirmMatches("hb_confirm")) return;
   const go = $("#hb_go");
   if (go) { go.disabled = true; go.textContent = "Changing…"; }
   try {
     const r = await api("/api/node/bond", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...HOST_BOND.pending, confirm: $("#hb_confirm").value }) });
+      body: JSON.stringify({ ...HOST_BOND.pending, confirm: $("#hb_confirm").value.trim() }) });
     toast(r.detail, "ok"); closeModal();
   } catch (e) {
     toast(e.message, "bad");

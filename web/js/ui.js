@@ -142,6 +142,16 @@ const UI = (() => {
     <input type="checkbox" id="${text(id)}"${onchange ? ` onchange="${text(onchange)}"` : ""}><span>${text(sentence)}</span></label>`;
 
   const fields = (...html) => `<div class="ui-fields">${html.join("")}</div>`;
+  /* The typed confirmation before an action that can't be undone (#489):
+     the exact text to type, and the button (by id, drawn disabled by the
+     dialog) enabled only when it matches; typedConfirmMatches(id) checks it
+     again on submit. */
+  // A dialog whose button waits on more than this field passes no button and
+  // its own oninput, and checks typedConfirmMatches(id) in its readiness.
+  const typedConfirm = ({ id, expect, button = "", oninput = "", help = "" }) => `<div class="f ui-typed">
+    <label for="${text(id)}">Type <b class="mono">${text(expect)}</b> to confirm</label>
+    <input id="${text(id)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${text(expect)}"
+      data-typed-expect="${text(expect)}"${button ? ` data-typed-button="${text(button)}"` : ""}${oninput ? ` oninput="${text(oninput)}"` : ""}>${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
   const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => {
     const [html, id] = withControlId(controlHtml);
     return `<div class="ui-field${wide ? " wide" : ""}">
@@ -332,7 +342,7 @@ const UI = (() => {
   }
 
   return { lead, callout, notices, section, facts, checklist, steps, progress, meter, table, more, ack,
-    fields, field, chip, button, actions, cancel, error, empty, stats, guide,
+    fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
@@ -873,6 +883,25 @@ if (typeof document !== "undefined" && typeof MutationObserver === "function" &&
     queued = true;
     queueMicrotask(() => { queued = false; linkFieldLabels(document); });
   }).observe(document.documentElement, { childList: true, subtree: true });
+}
+
+// Looked up the way the dialogs' own code does, with core.js's $ when it is there.
+const typedField = id => typeof $ === "function" ? $(`#${id}`) : document.getElementById(id);
+const typedConfirmOk = input => !!input && input.value.trim() === input.dataset.typedExpect;
+function typedConfirmSync(input) {
+  const button = input.dataset.typedButton && typedField(input.dataset.typedButton);
+  if (button) button.disabled = !typedConfirmOk(input);
+}
+function typedConfirmKey(event) {
+  if (event.key === "Enter" && event.target?.dataset?.typedExpect !== undefined && !typedConfirmOk(event.target)) {
+    event.preventDefault(); event.stopPropagation();
+  }
+}
+const typedConfirmMatches = id => typedConfirmOk(typedField(id));
+if (typeof window !== "undefined") Object.assign(window, { typedConfirmSync, typedConfirmKey, typedConfirmMatches });
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("input", event => { if (event.target?.dataset?.typedExpect !== undefined) typedConfirmSync(event.target); });
+  document.addEventListener("keydown", typedConfirmKey, true);
 }
 
 /* Back to top (#292): on any page, once it is scrolled more than a screen

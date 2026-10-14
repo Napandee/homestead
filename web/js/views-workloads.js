@@ -1586,18 +1586,14 @@ window.wlDelete = async (ns, name) => {
       <div class="dependency-row"><span>Volumes kept</span>
         <b>${claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
     </div>
-    <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
-      <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate(${jsq(name)})"></div>
+    ${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
       onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete app</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
-window.wlDeleteGate = name => {
-  const button = $("#wd_go"), input = $("#wd_confirm");
-  if (button && input) button.disabled = input.value.trim() !== name;
-};
 window.wlDeleteNow = async (ns, name, button) => {
+  if (!typedConfirmMatches("wd_confirm")) return;
   if (button) { button.disabled = true; button.textContent = "Deleting…"; }
   try {
     const result = await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });

@@ -4,13 +4,14 @@ function setup({cleanup=true,mode="forget",copy=false,blocked=false}={}) {
   const elements={};
   for(const id of ["jobTray","jobSummary","jobClear","jobList","oc_go","oc_confirm"])
     elements[`#${id}`]={innerHTML:"",value:"",disabled:true,classList:{add(){},remove(){},toggle(){}},setAttribute(){}};
+  elements["#oc_confirm"].dataset={typedExpect:"k3s-lab"};
   const ack={checked:false,dataset:{cancelOption:"ack"}};
   elements["[data-cancel-option='ack']"]=ack;
   const calls=[],modal={};
   const job={id:"old",kind:"k3s-cluster",status:"failed",title:"Legacy build",progress:20,
     tracking_only:true,cleanable:true,dismissible:false,cancellable:false};
   const ctx={Date,URL,console,STATE:{data:{operations:[job]}},ME:null,$:id=>elements[id],esc:String,icon:()=>"",
-    setTimeout(){},clearTimeout(){},can:()=>true,toast(){},closeModal(){},document:{querySelectorAll:()=>copy?[ack]:[]},
+    setTimeout(){},clearTimeout(){},can:()=>true,toast(){},closeModal(){},document:{querySelectorAll:()=>copy?[ack]:[],getElementById:id=>elements[`#${id}`]||null},
     modal:(title,body,wide,context)=>Object.assign(modal,{title,body,context}),api:async(path,options)=>{
       calls.push({path,body:JSON.parse(options.body)});
       if(path.endsWith("cancel-plan"))return {id:"old",title:"Legacy build",mode,cleanup,can:!blocked,severity:"low",

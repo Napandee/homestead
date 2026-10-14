@@ -886,13 +886,13 @@ window.lhSnapDel = async (name, vol, label) => {
       ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)
         : p.head_parent ? UI.callout("warn", "This is the parent of Volume Head", "Cleanup can wait until you take a fresh snapshot. Homestead will show that dependency in the job; it will not create snapshots automatically.") : ""}
       <p class="dim small">A persistent job tracks request, merge/purge and verified removal. Closing this dialog does not stop it. Removal cannot be undone or cancelled.</p>
-      <div class="f"><label>Type <b class="mono">${esc(p.name)}</b> to confirm</label><input id="sd_confirm" autocomplete="off" oninput="lhSnapDeleteGate()"></div>
+      ${UI.typedConfirm({ id: "sd_confirm", expect: p.name, oninput: "lhSnapDeleteGate()" })}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button id="sd_go" class="btn danger" data-need="admin" disabled onclick="lhSnapDeleteGo()">Start cleanup job</button>`)}`;
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnapDel(${jsArg(name)},${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhSnapDeleteGate = () => {
   const p = window.__snapshotDeletePlan;
-  $("#sd_go").disabled = !p?.ready || $("#sd_confirm").value.trim() !== p.name;
+  $("#sd_go").disabled = !p?.ready || !typedConfirmMatches("sd_confirm");
 };
 window.lhSnapDeleteGo = async () => {
   const p = window.__snapshotDeletePlan, confirmation = $("#sd_confirm").value.trim();

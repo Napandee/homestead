@@ -103,10 +103,15 @@ window.resSave = async (ns, name) => {
     toast(r.detail, "ok"); resOpen(ns, name);
   } catch (e) { toast(e.message, "bad"); }
 };
-window.resDelete = async (ns, name) => {
+window.resDelete = (ns, name) => {
   const k = RES.pick;
-  const typed = (await askText(`Delete ${k.kind} ${name}${ns ? ` in ${ns}` : ""}? Whatever controls it may make it again; whatever depends on it may stop.\n\nType its name to delete it:`));
-  if (typed !== name) { if (typed !== null) toast("The name did not match; nothing was deleted", "bad"); return; }
+  childModal(`Delete ${k.kind} · ${name}`, `${UI.lead(`Deletes <b>${esc(name)}</b>${ns ? ` in ${esc(ns)}` : ""}. Whatever controls it may make it again; whatever depends on it may stop.`)}
+    ${UI.typedConfirm({ id: "res_delete_confirm", expect: name, button: "res_delete_go" })}
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn danger" id="res_delete_go" disabled onclick="resDeleteGo(${jsq(ns)},${jsq(name)})">Delete ${esc(k.kind)}</button>`)}`);
+};
+window.resDeleteGo = async (ns, name) => {
+  if (!typedConfirmMatches("res_delete_confirm")) return;
+  const k = RES.pick;
   try { const r = await resPost("/api/resources/delete", { group: k.group, version: k.version, resource: k.resource, ns, name });
     toast(r.detail, "ok"); closeModal(); viewResources(); } catch (e) { toast(e.message, "bad"); }
 };

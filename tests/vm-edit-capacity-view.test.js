@@ -4,7 +4,7 @@ function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
   const fields={"#vmEditLoading":{},"#vmEditApprove":{checked:false},"#vmEditApply":{},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[],restarts=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
-    document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
     toast(){},refresh(){},closeModal(){},modalBack(){},childModal:(_title,html)=>fields["#mbody"].innerHTML=html,
     deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,
     api:async(path,options)=>{
@@ -24,7 +24,7 @@ test("edit initialization consent is separate and submitted only for exact typed
   await t.ctx.vmEditReview({ns:"lab",name:"guest",memory:"6Gi"});
   assert.match(t.fields["#mbody"].innerHTML,/Fresh state is not recovery/);
   t.fields["#vmEditApprove"].checked=true;
-  t.fields["#vmEditStateAck"]={checked:false};t.fields["#vmEditStateName"]={value:"guest"};
+  t.fields["#vmEditStateAck"]={checked:false};t.fields["#vmEditStateName"]={value:"guest",dataset:{typedExpect:"guest"}};
   await t.ctx.vmEditReviewedApply();assert.equal(t.sent.length,1);
   t.fields["#vmEditStateAck"].checked=true;t.fields["#vmEditStateName"].value="wrong";
   assert.equal(t.ctx.vmEditReviewReady(),false);

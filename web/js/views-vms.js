@@ -307,13 +307,13 @@ window.vmStateInitHtml = (plan, prefix, changed) => {
   return `<div class="reviewbox vm-state-confirm"><b>Initialize fresh VM state?</b>
     <div class="note warn">${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.</div>
     <label class="check"><input type="checkbox" id="${prefix}StateAck" onchange="${changed}()"> I intend to initialize fresh state, not recover the original TPM/EFI or backup state</label>
-    <div class="f"><label for="${prefix}StateName">Type ${esc(state.name)} to confirm</label><input id="${prefix}StateName" autocomplete="off" spellcheck="false" oninput="${changed}()"></div></div>`;
+    ${UI.typedConfirm({ id: `${prefix}StateName`, expect: state.name, oninput: `${changed}()` })}</div>`;
 };
 window.vmStateInitReady = (plan, prefix) => !plan.vm?.state_initialization ||
-  ($(`#${prefix}StateAck`)?.checked === true && $(`#${prefix}StateName`)?.value === plan.vm.state_initialization.name);
+  ($(`#${prefix}StateAck`)?.checked === true && typedConfirmMatches(`${prefix}StateName`));
 window.vmStateInitBody = (plan, prefix) => plan.vm?.state_initialization ? {
   ack_state_initialization: $(`#${prefix}StateAck`)?.checked === true,
-  confirm_state_name: $(`#${prefix}StateName`)?.value || ""
+  confirm_state_name: ($(`#${prefix}StateName`)?.value || "").trim()
 } : {};
 let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
@@ -721,16 +721,15 @@ window.vmDelete = (ns, name) => {
   const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || { disks: [] };
   const filling = v.filling || [], unfinished = new Set(filling.map(f => f.claim));
   const disks = v.disks.filter(d => (d.kind === "disk" || d.kind === "cd-rom") && d.claim && !unfinished.has(d.claim));
-  modal(`Delete · ${name}`, `<p>The VM is deleted${v.status === "Running" ? ", and stopped first" : ""}. It shows as Deleting until everything it owns is gone.</p>
-    ${filling.length ? `<div class="note warn">${filling.map(f => `<b class="mono">${esc(f.claim)}</b> is still being filled${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join("; ")}.
-      Deleting the VM stops that and removes the unfinished disk.</div>` : ""}
+  modal(`Delete VM · ${name}`, `${UI.lead(`Deletes <b>${esc(name)}</b>${v.status === "Running" ? ", stopping it first" : ""}. It shows as Deleting until everything it owns is gone.`)}
+    ${filling.length ? UI.callout("warn", "A disk is still being filled", `${filling.map(f => `<b class="mono">${esc(f.claim)}</b>${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join(", ")}: deleting the VM stops that and removes the unfinished disk.`) : ""}
     ${disks.length ? `<label class="switch"><input type="checkbox" id="vd_disks"> Delete its disks too: ${disks.map(d => `<span class="mono">${esc(d.claim)}</span>`).join(", ")}</label>
       <div class="dim xs">Left unticked, the disks are kept and can be attached to another VM or deleted from Volumes later.</div>` : ""}
-    <div class="f" style="margin-top:12px"><label>Type the VM's name to delete it</label><input id="vd_confirm" autocomplete="off"></div>
-    ${UI.actions(`<button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+    ${UI.typedConfirm({ id: "vd_confirm", expect: name, button: "vd_go" })}
+    ${UI.actions(UI.cancel() + `<button class="btn danger" id="vd_go" disabled onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete VM</button>`)}`);
 };
 window.vmDeleteGo = async (ns, name) => {
-  if ($("#vd_confirm").value.trim() !== name) return toast("Type the VM's name exactly", "bad");
+  if (!typedConfirmMatches("vd_confirm")) return;
   try { const r = await api("/api/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, disks: !!$("#vd_disks")?.checked }) });
     toast(r.detail, "ok"); closeModal(); refresh(true); } catch (e) { toast(e.message, "bad"); }
