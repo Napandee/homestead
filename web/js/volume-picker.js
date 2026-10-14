@@ -226,7 +226,7 @@ function volumeSourceList(row, kind) {
         const name = $(".vs", other).value.trim();
         if (!name || seen.has(name)) return [];
         seen.add(name);
-        return [{ value: name, label: `${$(".vk", other).value === "new-rwx" ? "RWX" : "RWO"} · created with this workload` }];
+        return [{ value: name, label: `${$(".vk", other).value === "new-rwx" ? "RWX" : "RWO"} · created with this app` }];
       });
   }
   const choice = $(".vselect", row), requested = String(choice.value || $(".vs", row).value).trim();
@@ -301,7 +301,7 @@ function syncVolumeRow(row) {
   const selectedPodVolume = actual === "pod" ? (ctx.podVolumes() || []).find(v => v.name === selectedSource) : null;
   $(".vhelp", row).textContent = first ? `Shares ${selectedSource}, created once using the original mapping's size and storage class. Choose a folder here, or leave blank to mount the whole volume.`
     : actual === "planned" ? "Choose a new volume defined in another storage mapping. It does not need to exist yet."
-    : actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
+    : actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this app (single-node attachment).")
     : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that several pods can mount at once.") +
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
     : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."

@@ -27,7 +27,7 @@ try{for(const theme of ['dark','light']){
  assert.equal(await page.locator('[data-widget="containers"] tbody tr').count(),0,'empty means none');
  await page.locator('#dashboardGroupOptions input[data-group="Media"]').check();
  assert.equal(await page.locator('[data-widget="containers"] tbody tr').count(),2);
- await page.getByLabel('Workload status',{exact:true}).selectOption('running');
+ await page.getByLabel('App status',{exact:true}).selectOption('running');
  assert.equal(await page.locator('[data-widget="containers"] tbody tr').count(),1);
  await page.getByLabel('Widget start column',{exact:true}).selectOption('9');
  let a=await page.locator('[data-widget="compute"]').boundingBox(),b=await page.locator('[data-widget="containers"]').boundingBox();
@@ -44,7 +44,7 @@ try{for(const theme of ['dark','light']){
  await page.getByRole('button',{name:'Undo',exact:true}).click();
  assert.equal(await page.getByLabel('Portal display',{exact:true}).inputValue(),'compact');
  await page.getByRole('button',{name:'Settings for Containers',exact:true}).click();
- assert.equal(await page.getByLabel('Workload status',{exact:true}).inputValue(),'running','switching widgets updates the visible selection');
+ assert.equal(await page.getByLabel('App status',{exact:true}).inputValue(),'running','switching widgets updates the visible selection');
  assert.equal(await page.getByLabel('Start a new row',{exact:true}).isChecked(),false);
  assert.equal(await page.locator('#dashboardGroupOptions input[data-group="Media"]').isChecked(),true);
  assert.ok((await page.locator('.dashboard-library').boundingBox()).y+(await page.locator('.dashboard-library').boundingBox()).height<=1000,'control panel fits viewport');

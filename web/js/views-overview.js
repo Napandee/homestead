@@ -390,7 +390,7 @@ function comparisonDisk(n, d) {
 }
 function nodePodDots(n) {
   const sys = Math.max(0, Number(n.pods_sys) || 0), wl = Math.max(0, Number(n.pods_wl) || 0);
-  return `<div class="podgrid" role="img" aria-label="${wl} workload pods and ${sys} system pods" data-tip="${wl} workload pods (bright) · ${sys} system pods">
+  return `<div class="podgrid" role="img" aria-label="${wl} of your pods and ${sys} system pods" data-tip="${wl} of your pods (bright) · ${sys} system pods">
     ${'<i></i>'.repeat(Math.min(sys,80))}${'<i class="wl"></i>'.repeat(Math.min(wl,40))}</div>`;
 }
 
@@ -821,7 +821,7 @@ window.allocationProbeSettings = async () => {
       <p>Checks whether dedicated CPUs and memory are available together before starting a NUMA VM.</p>
       <div class="note">${esc(current.detail || "Status unavailable")}</div>
       ${!current.installed ? '<p>Install the node probe first in Cluster → Add-ons.</p>' : `
-      <p>Uses an extra 32–96 MiB RAM per node. Saving briefly restarts host monitoring. Workload containers and VMs are not restarted.</p>
+      <p>Uses an extra 32–96 MiB RAM per node. Saving briefly restarts host monitoring. Apps and VMs are not restarted.</p>
       ${capacity.blockers.map(text=>`<div class="note warn">${esc(text)}</div>`).join("")}
       ${capacity.warnings.length ? `<div class="note warn">${capacity.warnings.map(esc).join("<br>")}</div><label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these capacity warnings.</span></label>` : ""}
       <details class="vm-placement-advanced"><summary>Advanced · host access and socket location</summary>
@@ -860,7 +860,7 @@ window.allocationProbeSave = async (enabled, button) => {
   if (enabled && !$("#allocationProbeConsent")?.checked) return toast("Confirm socket access and the probe restart first", "bad");
   if (enabled && current.capacity?.blocked) return toast("Resolve the host checks before enabling", "bad");
   if (enabled && current.capacity?.warnings?.length && !$("#allocationProbeCapacity")?.checked) return toast("Review and acknowledge the capacity warnings first", "bad");
-  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Workloads and their volumes are unchanged.", { title: "Disable allocation collection", ok: "Disable", danger: true }))) return;
+  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Apps and their volumes are unchanged.", { title: "Disable allocation collection", ok: "Disable", danger: true }))) return;
   const body = {enabled, directory: $("#allocationProbeDirectory")?.value || "",
     uid: current.uid, resource_version: current.resource_version, acknowledge_host_access: enabled,
     confirm_capacity: !!$("#allocationProbeCapacity")?.checked, capacity_review: current.capacity?.fingerprint};
@@ -887,7 +887,7 @@ window.smartStart = async (node, disk, type) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareEdit = n => modal("Hardware · " + n.name, `
-  <p class="muted small">Choose which configured features workloads may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
+  <p class="muted small">Choose which configured features apps and VMs may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
   <div class="hwchoices">${hardwareChoices("hw_node", nodeHardwareIds(n))}</div>
   <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported hardware inventory yet."}</div>
   ${UI.actions(`<button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -924,7 +924,7 @@ window.hardwareFeatureEdit = async id => {
   }
   const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
   childModal((id ? "Edit" : "Add") + " hardware feature", `
-    <div class="f2"><div class="f"><label>Feature ID ${tip("Stable internal ID used by workloads and node labels. It cannot be changed after creation.")}</label><input id="hf_id" value="${esc(old.id)}" ${id ? "disabled" : ""} placeholder="hailo-8"></div>
+    <div class="f2"><div class="f"><label>Feature ID ${tip("Stable internal ID used by apps and VMs and node labels. It cannot be changed after creation.")}</label><input id="hf_id" value="${esc(old.id)}" ${id ? "disabled" : ""} placeholder="hailo-8"></div>
       <div class="f"><label>Display name</label><input id="hf_name" value="${esc(old.name)}" placeholder="Hailo-8 accelerator"></div></div>
     <div class="f"><label>Description</label><input id="hf_desc" value="${esc(old.description || "")}" placeholder="Optional note for operators"></div>
     <div class="f2"><div class="f"><label>Host device path ${tip("Path present on the Harvester node. It is also used for automatic detection when USB IDs are blank.")}</label><input id="hf_host" value="${esc(old.host_path)}" placeholder="/dev/hailo0"></div>
@@ -990,7 +990,7 @@ window.hardwareFeatureSave = async oldId => {
 };
 window.hardwareFeatureDelete = async id => {
   const f = hardwareDef(id);
-  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting workloads using its node label are not changed.`, { title: "Delete hardware feature", ok: "Delete", danger: true }))) return;
+  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting apps and VMs using its node label are not changed.`, { title: "Delete hardware feature", ok: "Delete", danger: true }))) return;
   const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== id);
   try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
     STATE.data.hardwareFeatures = null; toast(`${f.name} deleted`, "ok"); backToHardwareList(); }

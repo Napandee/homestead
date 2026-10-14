@@ -43,8 +43,8 @@
     apps.forEach(a => { b += app(30, y, 162, a); y += 24; });
     // The rest are on the node's Workloads section: the link goes there (#367).
     if (more) {
-      b += `<a href="#" class="dg-more" role="button" aria-label="Show all ${(n.workloads || []).length} workloads on ${e(n.name)}"
-        onclick="window.nodeSectionGo?.('workloads');return false">${text(30, y + 14, `+${more} more · show all`, "dg-xs dg-link")}</a>`;
+      b += `<a href="#" class="dg-more" role="button" aria-label="Show all ${(n.workloads || []).length} apps on ${e(n.name)}"
+        onclick="window.nodeSectionGo?.('apps');return false">${text(30, y + 14, `+${more} more · show all`, "dg-xs dg-link")}</a>`;
       y += 24;
     }
     if (vms) { b += vm(30, y, 162, vms === 1 ? "1 virtual machine" : `${vms} virtual machines`); y += 24; }

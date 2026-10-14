@@ -67,22 +67,22 @@ test("An uncertain edit requires fresh saved state instead of replaying addition
   assert.equal(t.fields["#editGo"].disabled, true);
   assert.equal(t.fields["#editGo"].onclick, null);
   assert.match(t.html(), /Some changes may already be saved/);
-  assert.match(t.html(), /Reload saved workload/);
+  assert.match(t.html(), /Reload saved app/);
   assert.match(t.html(), /does not need a new name/);
   await t.c.window.editReview({ns:"lab",name:"demo",containers:[{new:true,name:"helper"}]});
   await t.c.window.editSave("lab","demo");
   assert.equal(t.sent.length,1);
-  assert.match(t.notices.at(-1),/Reload the saved workload/);
+  assert.match(t.notices.at(-1),/Reload the saved app/);
 });
 
 test("Rename review explains a name-only outage and requires a separate acknowledgement", async () => {
   const t = setup({ ...review, capacity: { ...review.capacity, rename: { from: "<old>", to: "new" } } });
   await t.c.window.editReview({ ns: "lab", name: "old", workload_name: "new" });
   assert.match(t.html(), /&lt;old&gt;/);
-  assert.match(t.html(), /Only the workload name changes/);
+  assert.match(t.html(), /Only the app name changes/);
   assert.match(t.html(), /Save other edits separately/);
   assert.match(t.html(), /short outage/);
-  assert.match(t.html(), /Rename workload/);
+  assert.match(t.html(), /Rename app/);
   await t.c.window.confirmEdit();
   assert.equal(t.sent.length, 0);
   t.fields["#editCapacityConfirm"].checked = true;
@@ -184,9 +184,9 @@ test("uncertain rename directs inspection of both names and never offers stale r
   await t.c.window.editReview({ns:'lab',name:'old',workload_name:'new'});
   t.fail();t.fields['#editCapacityConfirm'].checked=true;
   await t.c.window.confirmEdit();
-  assert.match(t.html(),/Inspect both workload names/);
-  assert.match(t.html(),/Inspect workloads/);
-  assert.doesNotMatch(t.html(),/Reload saved workload/);
+  assert.match(t.html(),/Inspect both app names/);
+  assert.match(t.html(),/Inspect apps/);
+  assert.doesNotMatch(t.html(),/Reload saved app/);
   assert.equal(t.fields['#editGo'].disabled,true);
 });
 

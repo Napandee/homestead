@@ -6,12 +6,12 @@ const Dashboard = (() => {
     throughput: {title:"Throughput", description:"Network traffic and local disk", width:4, widths:[4,6,8,12]},
     storage: {title:"Storage", description:"Capacity and replica health", width:4, widths:[4,6,8,12]},
     nodes: {title:"Node health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
-    cpu: {title:"Top CPU", description:"The busiest workloads", width:6, widths:[4,6,8,12]},
-    memory: {title:"Top memory", description:"Workloads using the most RAM", width:6, widths:[4,6,8,12]},
+    cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12]},
+    memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12]},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
     ...Object.fromEntries([
       ["health","Health suggestions","Prioritized checks and next steps"],
-      ["workloads","Workload health","Readiness and stopped workloads"],
+      ["workloads","App and VM health","Readiness and stopped apps and VMs"],
       ["containers","Containers","Compact app status and live usage"],
       ["vms","Virtual machines","Compact VM status and live usage"],
       ["backups","Backup freshness","Oldest external backups and missing copies"],
@@ -202,7 +202,7 @@ const Dashboard = (() => {
         ${item.id==="nodes"?`<label>Display<select aria-label="Node health display" onchange="Dashboard.nodeDisplay(this.value)"><option value="compact" ${item.display!=="detailed"?"selected":""}>Compact summaries</option><option value="detailed" ${item.display==="detailed"?"selected":""}>Detailed comparison</option></select></label>`:""}
         <label>Start column<select aria-label="Widget start column" onchange="Dashboard.option('column',+this.value)"><option value="0">Automatic</option>${Array.from({length:13-item.width},(_,i)=>`<option value="${i+1}" ${item.column===i+1?"selected":""}>${i+1}</option>`).join("")}</select></label>
         <label class="dashboard-check"><input type="checkbox" ${item.newRow?"checked":""} data-option="newRow" onchange="Dashboard.option('newRow',this.checked)"> Start a new row</label>
-        ${["containers","vms"].includes(item.id)?`<label>Show<select aria-label="Workload status" onchange="Dashboard.option('status',this.value)">${[["all","All states"],["running","Running"],["stopped","Stopped"],["attention","Needs attention"]].map(([v,label])=>`<option value="${v}" ${(item.status || "all")===v?"selected":""}>${label}</option>`).join("")}</select></label>`:""}
+        ${["containers","vms"].includes(item.id)?`<label>Show<select aria-label="App status" onchange="Dashboard.option('status',this.value)">${[["all","All states"],["running","Running"],["stopped","Stopped"],["attention","Needs attention"]].map(([v,label])=>`<option value="${v}" ${(item.status || "all")===v?"selected":""}>${label}</option>`).join("")}</select></label>`:""}
         ${item.id==="portal"?`<label>Display<select aria-label="Portal display" onchange="Dashboard.option('display',this.value)"><option value="compact" ${item.display!=="tiles"?"selected":""}>Compact rows</option><option value="tiles" ${item.display==="tiles"?"selected":""}>Tiles</option></select></label>`:""}
         ${widgets[item.id].custom?DashboardCustom.fields(item):""}
         <div id="dashboardGroupOptions">${groupOptions(item)}</div>
@@ -230,7 +230,7 @@ const Dashboard = (() => {
     const current=draft.find(item=>item.id===selected);
     for(const field of ["width","height"]){const input=document.querySelector(`[aria-label="Widget ${field}"]`);if(input && current)input.value=String(current[field]);}
     if(current){
-      for(const [label,value] of [["Widget start column",current.column || 0],["Workload status",current.status || "all"],["Portal display",current.display || "compact"],["Node health display",current.display || "compact"]]){
+      for(const [label,value] of [["Widget start column",current.column || 0],["App status",current.status || "all"],["Portal display",current.display || "compact"],["Node health display",current.display || "compact"]]){
         const field=document.querySelector(`[aria-label="${label}"]`);if(field)field.value=String(value);
       }
       const row=document.querySelector('[data-option="newRow"]');if(row)row.checked=!!current.newRow;

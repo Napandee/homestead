@@ -198,7 +198,7 @@ function fleetMigrationButton(m, state) {
   const on = !!state?.allowed;
   const label = !state ? "Migration" : on ? "Migration on" : "Migration off";
   return `<button type="button" class="btn sm fleet-mig${on ? " on" : ""}" onclick="fleetMigration(${jsq(m.id)})"
-    title="${esc(on ? `Workloads can move from ${m.name} to another cluster` : `Workloads cannot move from ${m.name} yet`)}">
+    title="${esc(on ? `Apps can move from ${m.name} to another cluster` : `Apps cannot move from ${m.name} yet`)}">
     <span class="fleet-dot ${on ? "ok" : ""}" aria-hidden="true"></span>${esc(label)}</button>`;
 }
 
@@ -234,7 +234,7 @@ window.fleetMigration = async id => {
     if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
   }
   if (!$("#mbody")) return;
-  const lead = UI.lead(`Move workloads from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
+  const lead = UI.lead(`Move apps from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
   const target = ready?.target || {};
   let body;
   if (state.allowed) {
@@ -326,7 +326,7 @@ window.fleetMigrationSet = async (id, allow) => {
 function moveSourceRow(c) {
   return `<li><span class="fleet-dot" id="msd_${esc(c.name)}" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(c.label || c.name)}</b><span class="fleet-sub" id="mss_${esc(c.name)}">checking…</span></div>
-    ${UI.button("Browse workloads", `clusterBrowse(${jsArg(c.name)})`)}</li>`;
+    ${UI.button("Browse apps", `clusterBrowse(${jsArg(c.name)})`)}</li>`;
 }
 
 async function moveSourceCheck(c) {
@@ -402,7 +402,7 @@ window.fleetMovesPaint = async () => {
   const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(() => []), api("/api/move/clusters").catch(() => [])]);
   if (!$("#fleetMovesCard")) return;
   host.hidden = !moves.length && !clusters.length;
-  host.innerHTML = `${UI.moduleHeader(`Moving workloads`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets workloads move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
+  host.innerHTML = `${UI.moduleHeader(`Moving workloads`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
     <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();

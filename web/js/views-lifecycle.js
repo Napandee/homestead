@@ -154,7 +154,7 @@ function placementRow(kind, row = {}) {
   const key = row.name ? `${row.ns || EDIT_PLACEMENT.ns}/${row.name}` : "";
   const known = !key || others.some(w => `${w.ns}/${w.name}` === key);
   return `<div class="aff-row" data-kind="${kind}">
-    <select class="aff-target"><option value="">choose a workload…</option>${known ? "" : `<option value="${esc(key)}" selected>${esc(key)} (gone)</option>`}
+    <select class="aff-target"><option value="">choose an app…</option>${known ? "" : `<option value="${esc(key)}" selected>${esc(key)} (gone)</option>`}
       ${others.map(w => `<option value="${esc(w.ns)}/${esc(w.name)}" ${`${w.ns}/${w.name}` === key ? "selected" : ""}>${esc(w.name)}${w.ns !== EDIT_PLACEMENT.ns ? ` · ${esc(w.ns)}` : ""}</option>`).join("")}</select>
     <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
     <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
@@ -253,10 +253,10 @@ function placementSection(p, w, nodes, containers) {
       <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
         : `<span class="tag">${esc(names[0] || w.name)}</span> is this pod's only container.`}
         Containers in one pod cannot be spread apart; to run one on its own node, make it a workload of its own and use the rules below.</div></div>
-    <div class="place-level"><div class="place-title">Copies of this workload</div>
+    <div class="place-level"><div class="place-title">Copies of this app</div>
       <div class="place-grid">
-        <div class="f"><label>Copies ${tip("How many copies of this workload run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
-        <div class="f"><label>Spread copies ${tip("Puts this workload's copies on different nodes, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
+        <div class="f"><label>Copies ${tip("How many copies of this app run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
+        <div class="f"><label>Spread copies ${tip("Puts this app's copies on different nodes, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
           <select id="e_spread" onchange="placementChanged()"><option value="">no preference</option>
             <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different nodes</option>
             <option value="require" ${p.spread === "require" ? "selected" : ""}>require different nodes</option></select></div>
@@ -264,9 +264,9 @@ function placementSection(p, w, nodes, containers) {
           <option value="">any node</option>
           ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
         </select></div></div></div>
-    <div class="place-level"><div class="place-title">Other workloads</div>
+    <div class="place-level"><div class="place-title">Other apps</div>
       <div class="place-grid two">
-        <div class="f"><label>Run on the same node as ${tip("For apps that talk constantly or share a device. Required: this does not start until that workload is running, and only on its node.")}</label>
+        <div class="f"><label>Run on the same node as ${tip("For apps that talk constantly or share a device. Required: this does not start until that app is running, and only on its node.")}</label>
           <div id="e_with">${(p.with || []).map(row => placementRow("with", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('with')">＋ Add</button></div>
         <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
@@ -312,8 +312,8 @@ window.placementChanged = () => {
   if (p.spread && replicas > 1 && singleNode)
     warnings.push("A single-node (RWO) volume attaches to one node at a time, so instances spread across nodes cannot all mount it.");
   const names = [...p.with, ...p.apart].map(row => `${row.ns}/${row.name}`);
-  if (names.length !== new Set(names).size) warnings.push("A workload is named twice; each can be kept either with this one or apart from it.");
-  if (p.with.some(row => row.mode === "require")) warnings.push("Required: this workload waits for the one it runs with, and stops being schedulable if that one stops.");
+  if (names.length !== new Set(names).size) warnings.push("An app is named twice; each can be kept either with this one or apart from it.");
+  if (p.with.some(row => row.mode === "require")) warnings.push("Required: this app waits for the one it runs with, and stops being schedulable if that one stops.");
   note.hidden = !warnings.length;
   note.innerHTML = warnings.map(esc).join("<br>");
 };
@@ -352,12 +352,12 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     EDIT_REMOVED_PANELS = new Map();
     const panels = section => `<div id="e_${section}_containers">${containers.map((container, index) => editContainerPanel(container, index, section)).join("")}</div>`;
     const basics = `
-      <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
-      ${UI.more("Optional settings", `<div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
+      <div class="f"><label>App name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
+      ${UI.more("Optional settings", `<div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the app name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><div class="row logo-field"><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/logo.png or https://example.com">
         <button class="btn" type="button" onclick="logoFindInline(${jsq(ns)},${jsq(name)},'e_icon')">${icon("search")}Find</button></div><div id="e_icon_find"></div></div>`)}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
-        Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
+        Autostart ${tip("On keeps the app running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       <div class="between"><div class="sec">Containers in each pod</div>
         <button class="btn" type="button" onclick="containerAdd('edit')">＋ Add container</button></div>
@@ -370,7 +370,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const environment = `
       ${panels("environment")}
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
-        <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
+        <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the app so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
           <div class="between seed-head"><div><b>${esc(s.key)}</b><div class="dim xs mono">ConfigMap ${esc(s.config_map)} · init ${esc(s.init_container)}</div></div><span class="pill info">seeded on start</span></div>
           <label for="e_seed_${i}">Contents</label>
@@ -378,7 +378,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
             data-init="${esc(s.init_container)}" data-config-map="${esc(s.config_map)}" data-key="${esc(s.key)}">${esc(s.value)}</textarea>
           ${s.command ? `<div class="dim xs mono seed-command">${esc(s.command)}</div>` : ""}
         </div>`).join("")}` : ""}`;
-    const storage = `${UI.more("Choosing storage", "<p>RWO is best for one workload; RWX permits multi-node sharing. An existing PVC keeps its current data; a volume already in this pod shares its backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</p>")}
+    const storage = `${UI.more("Choosing storage", "<p>RWO is best for one app; RWX permits multi-node sharing. An existing PVC keeps its current data; a volume already in this pod shares its backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</p>")}
       ${panels("storage")}`;
     const address = `${addressStepHtml("e", editAddressNow(w, network, vips), vips, vips.shared || "", {
         onChange: "editAddressChanged()",
@@ -386,7 +386,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
           <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div>`,
         portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
           ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
-      ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or placement. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
+      ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or placement. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either app.</p>")}`;
     $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
@@ -428,7 +428,7 @@ window.editPortsChanged = () => {
   $$(".ep-host").forEach(input => { input.disabled = !$(".ep-expose", input.closest(".edit-port-row")).checked; });
   if (!exposed.length && window.__editHadService) {
     note.hidden = false;
-    note.innerHTML = "<b>No port is exposed.</b> Saving removes this workload's Service, so its LAN address is released and clients lose the listener.";
+    note.innerHTML = "<b>No port is exposed.</b> Saving removes this app's Service, so its LAN address is released and clients lose the listener.";
   } else if (remapped.length) {
     note.hidden = false;
     note.innerHTML = `<b>LAN listeners change on save:</b> ${remapped.map(row =>
@@ -510,7 +510,7 @@ window.containerRemove = (mode, index) => {
 };
 let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
-  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved workload before reviewing another save", "bad");
+  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
   const workloadName = $("#e_workload_name").value.trim();
   if (workloadName !== name) return window.editReview({ns, name, workload_name: workloadName});
   const containers = $$("#e_containers .edit-container[data-original-name]").map(readEditedContainer);
@@ -561,7 +561,7 @@ function storageCopyReview(config, capacity) {
     UI.actions(UI.button("Back to edit","modalBack()") + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
 }
 window.editReview = async body => {
-  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved workload before reviewing another save", "bad");
+  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
   EDIT_REVIEW = null;
   const sequence = ++EDIT_REVIEW_SEQUENCE;
   const config = JSON.parse(JSON.stringify(body));
@@ -577,13 +577,13 @@ window.editReview = async body => {
       childModal("Move container data", storageCopyReview(config,review.capacity), true, "operation-review");
       return;
     }
-    childModal(rename ? "Rename workload" : "Review workload changes", `
+    childModal(rename ? "Rename app" : "Review app changes", `
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
-      ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
-      ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
+      ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
+      ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
         <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${plural((review.capacity.warnings || []).length, "warning")}</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save changes"}</button>`)}`, true, "operation-review");
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename app" : "Save changes"}</button>`)}`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmEdit = async () => {
@@ -615,9 +615,9 @@ window.confirmEdit = async () => {
     button.textContent = "Inspect before saving again";
     button.onclick = null;
     $("#mbody").insertAdjacentHTML("beforeend", `<div id="editSaveNotice" class="note warn" role="alert"><b>${esc(e.message)}</b><p>${renaming
-      ? "The rename may have partly completed. Inspect both workload names and Recent jobs before another action."
-      : "Some changes may already be saved, including new containers or volumes. Reload the saved workload to inspect what applied before making another change. Reload replaces this form's unsaved edits; the workload does not need a new name."}</p>
-      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Inspect workloads" : "Reload saved workload"}</button></div>`);
+      ? "The rename may have partly completed. Inspect both app names and Recent jobs before another action."
+      : "Some changes may already be saved, including new containers or volumes. Reload the saved app to inspect what applied before making another change. Reload replaces this form's unsaved edits; the app does not need a new name."}</p>
+      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Inspect apps" : "Reload saved app"}</button></div>`);
     $("#editSaveNotice")?.scrollIntoView({ block: "nearest" });
   }
 };
@@ -785,7 +785,7 @@ window.nodePowerReview = async (node, action, force = false) => {
         + (overridable ? `<label class="switch" data-need="admin"><input type="checkbox" onchange="if (this.checked) nodePowerReview(${jsq(node)},${jsq(action)},true)">
             Override these checks - ${esc(action === "reboot" ? "reboot" : "shut down")} anyway, without cordon or drain</label>` : "")
       : concerns.length ? UI.callout(forced ? "bad" : "warn", forced ? "Forced - what happens" : "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : "",
-    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect workloads and storage when the host returns." : plan.cordoned ? "The host was cordoned before this and stays so." : "The host is cordoned while it is down, and scheduling is allowed again when it is back with its volumes available.")),
+    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect apps and VMs and storage when the host returns." : plan.cordoned ? "The host was cordoned before this and stays so." : "The host is cordoned while it is down, and scheduling is allowed again when it is back with its volumes available.")),
   ].join("");
   const apps = plan.hold ? (hold.length
       ? `<p class="ui-help">${outage ? "Nothing can move off the only host: each is stopped cleanly first and started again when the host is back."
@@ -820,7 +820,7 @@ window.nodePowerReview = async (node, action, force = false) => {
     outage ? UI.ack("pw_outage", action === "reboot"
       ? "Reboot anyway: the whole cluster, Homestead too, is offline until it returns"
       : "Power off anyway: the whole cluster stays offline until it is powered on by hand") : "",
-    !outage && (plan.hold ? strandedMove : plan.stranded?.length) ? UI.ack("pw_allow", `Leave ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} down`) : "",
+    !outage && (plan.hold ? strandedMove : plan.stranded?.length) ? UI.ack("pw_allow", `Leave ${plan.stranded.length} app or VM${plan.stranded.length === 1 ? "" : "s"} down`) : "",
     plan.requires_data_ack ? UI.ack("pw_data", "Go ahead despite the risk to volume copies") : "",
   ].join("") : "";
   childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, UI.sectionForm("hostPower", sections,
@@ -836,7 +836,7 @@ window.nodePower = async (node, action) => {
     return toast("Acknowledge the whole-cluster outage", "bad");
   const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
   if (!plan.planned_outage && $("#pw_allow") && !$("#pw_allow").checked)
-    return toast("Confirm the workloads that will remain down", "bad");
+    return toast("Confirm the apps and VMs that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
     return toast("Confirm the volume risk", "bad");
   // Consume approval before sending, including double clicks and lost replies.
@@ -849,9 +849,9 @@ window.nodePower = async (node, action) => {
         allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     if (r.operation) window.noteOperation?.(r.operation);
     if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.force || plan.planned_outage
-      ? "Sent without cordon or drain. Scheduling was left unchanged; inspect workloads and storage when the host returns."
+      ? "Sent without cordon or drain. Scheduling was left unchanged; inspect apps and VMs and storage when the host returns."
       : `The host is cordoned and drained before the command is sent. ${plan.cordoned ? "It was cordoned before, and stays so." : "Scheduling is allowed again when it is back."}`);
-    modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect workloads and storage when the host returns.`
+    modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect apps and storage when the host returns.`
       : `Follow progress in Recent jobs. ${plan.cordoned ? "The host stays cordoned, as it was before." : "Scheduling is allowed again when it is back."}`) +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
   } catch (e) {
@@ -875,7 +875,7 @@ function nodePowerSteps(power) {
     ...(power.direct ? [["verifying", "Recheck the host"], ...(power.holds ? [["holding", "Stop the apps and VMs so their volumes detach"]] : [])] : [
       ["cordoning", "Stop new work on the host (cordon)"],
       ...(power.holds ? [["holding", "Stop what waits for the host; live-migrate VMs"]] : []),
-      ["draining", "Move workloads off the host (drain)"],
+      ["draining", "Move apps and VMs off the host (drain)"],
       ["verifying", "Recheck quorum, VMs and volume copies"]]),
     ["sending", `Send the ${reboot ? "restart" : "shutdown"} command`],
     ["observing", reboot ? "Wait for the host to restart and its volumes to recover" : "Wait for the host to power off"],
@@ -1643,10 +1643,10 @@ window.importRemove = async (name, state, namespace = defaultNamespace()) => {
     <div class="volume-delete-grid">
       <label class="volume-delete-option ${plan.workload ? "" : "disabled"}">
         <input type="checkbox" id="imr_workload" ${plan.workload ? "" : "disabled"}>
-        <span><b>The workload${plan.workload ? ` · ${esc(plan.workload)}` : ""}</b>
+        <span><b>The app${plan.workload ? ` · ${esc(plan.workload)}` : ""}</b>
           <small>${plan.workload
             ? "Deletes the Deployment this import created, and every Service pointing at it."
-            : "This import created no workload, or it has already been deleted."}</small></span></label>
+            : "This import created no app, or it has already been deleted."}</small></span></label>
       ${claims.length ? claims.map(claim => `
       <label class="volume-delete-option danger ${claim.created ? "" : "disabled"}">
         <input type="checkbox" class="imr-volume" value="${esc(claim.name)}" ${claim.created ? "" : "disabled"}>
@@ -1828,7 +1828,7 @@ window.imageCleanupReview = digest => {
   if (image.protected || image.system) return toast("This image is protected and cannot be cleaned", "bad");
   const perNode = bytesText(image.size_mb * 1024 ** 2);
   modal("Clean cached image", `<div class="update-review">
-    <div class="note dependency-danger"><b>This deletes only the cached image layers, not a workload.</b>
+    <div class="note dependency-danger"><b>This deletes only the cached image layers, not an app.</b>
       A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.</div>
     <div class="update-image"><div><span>Image</span><code>${esc(image.name)}</code></div>
       <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per node</span><code>${esc(perNode)}</code></div></div>
@@ -2146,7 +2146,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   // stay out of the way, offered only if someone wants to add some anyway.
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
   const appStep = `
-    <div class="f2"><div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
+    <div class="f2"><div class="f"><label>App name</label><input type="text" id="im_name" value="${esc(name)}"></div>
       <div class="f"><label>Namespace ${tip("The app, its volumes and the copy are all created here. Existing volumes to merge into are offered from this namespace.")}</label>
         <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set([defaultNamespace(), ...(STATE.data.importNamespaces || [])])].map(n =>
           `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
@@ -2227,7 +2227,7 @@ function clusterCardHtml(c) {
       <button class="iconbtn clrecheck" data-tip="Check the version again" onclick="clusterCheck(${jsq(c.name)})">${icon("refresh")}</button></div>
     <div id="clvermsg_${esc(c.name)}"></div>
     <div class="clsteps" id="clready_${esc(c.name)}"></div>
-    <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse(${jsq(c.name)})">Browse workloads</button></div>
+    <div class="row" style="margin-top:12px"><button class="btn sm" onclick="clusterBrowse(${jsq(c.name)})">Browse apps</button></div>
     <div class="dim xs" id="cluster_${esc(c.name)}" style="margin-top:10px"></div>
   </div>`;
 }
@@ -2314,7 +2314,7 @@ window.clusterReady = async name => {
               `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Finish setting it up</button></div>`)
         : step(false, `${esc(name)} has no backup storage yet`,
             `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Set it up on ${esc(name)}</button></div>`))
-    + step(r.ready, "Browse its workloads and move them here");
+    + step(r.ready, "Browse its apps and move them here");
   if (window.applyRole) applyRole();
   clearTimeout(window["__clready_" + name]);
   if (store.deployed && (!store.ready || ["pending", "applying"].includes(store.longhorn?.state)))
@@ -2400,7 +2400,7 @@ window.clusterBrowse = async name => {
     STATE.data.remoteInventory = report;
     clusterInventory(report);
     const volumeCount = (report.volumes || []).length;
-    if (host) host.textContent = `${report.workloads.length} workload${report.workloads.length === 1 ? "" : "s"}`
+    if (host) host.textContent = `${report.workloads.length} app${report.workloads.length === 1 ? "" : "s"}`
       + ` · ${report.movable} movable` + (volumeCount ? ` · ${volumeCount} volume${volumeCount === 1 ? "" : "s"}` : "");
   } catch (e) {
     if (host) host.innerHTML = `<span class="bad">${esc(e.message)}</span>`;
@@ -2412,7 +2412,7 @@ window.clusterBrowse = async name => {
 window.clusterInventory = report => {
   const rows = [...(report.workloads || []), ...(report.vms || [])];
   const theirs = report.version || "";
-  modal(`Workloads on ${report.cluster}`, `
+  modal(`Apps on ${report.cluster}`, `
   <div class="dim xs" style="margin-bottom:10px">${esc(report.cluster)} runs Homestead
     ${theirs ? `<b class="mono">v${esc(theirs)}</b>` : "an older release that does not say which"};
     this one runs <b class="mono">v${esc(HOMESTEAD_VERSION)}</b>.</div>
@@ -2792,7 +2792,7 @@ window.doImport = async source => {
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), ...(readPrivileges("im_pv") || {}), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
-  if (!body.name || !body.image) return toast("Workload name and image are required", "bad");
+  if (!body.name || !body.image) return toast("App name and image are required", "bad");
   for (const volume of volumes) {
     const measured = body.mappings.filter(row => row.pvc === volume.name)
       .reduce((sum, row) => sum + (row.bytes || 0), 0);

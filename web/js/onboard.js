@@ -192,7 +192,7 @@ window.clusterRemovePick = async () => {
   const nodes = await api("/api/nodes").catch(() => []);
   const down = nodes.filter(n => n.status !== "Ready"), up = nodes.filter(n => n.status === "Ready");
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned workloads before confirming.</p>
+    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned apps and VMs before confirming.</p>
     ${down.length ? `<div class="sec">Not ready</div><div class="cleanup-card card flat">${down.map(n => `<div class="cleanup-row bad"><div>
         <b>${esc(n.name)}</b><span>${esc((n.roles || []).join(" · ") || "worker")} · ${esc(n.status || "not ready")}</span></div>
         <button class="btn sm danger" onclick="nodeRemoval(${jsq(n.name)})">Check and remove…</button></div>`).join("")}</div>`

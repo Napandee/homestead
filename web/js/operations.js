@@ -289,20 +289,20 @@ window.storageRecoveryReview = async id => {
         (p.can_continue && !tokens.continue) || (p.can_pause && !tokens.pause)) throw new Error("The review is incomplete. Refresh it before taking action.");
     const action = p.can_continue ? "continue" : p.can_pause ? "pause" : null;
     STORAGE_RECOVERY = {id, action, tokens, host};
-    const phases = {stop:"Stopping workloads",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting workloads",done:"Complete"};
-    const leads = {stop:"Continue stopping the affected workloads before copying their data.",
-      copy:"Continue copying and checking the data. Workloads remain stopped during the copy.",
-      cutover:"Switch the verified copy into place. Restarting workloads gets its own capacity review.",
-      restart:"Restart workloads on the copied volume after fresh capacity checks. The original data is retained."};
+    const phases = {stop:"Stopping apps and VMs",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting apps and VMs",done:"Complete"};
+    const leads = {stop:"Continue stopping the affected apps and VMs before copying their data.",
+      copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
+      cutover:"Switch the verified copy into place. Restarting apps and VMs gets its own capacity review.",
+      restart:"Restart apps and VMs on the copied volume after fresh capacity checks. The original data is retained."};
     const issues = p.blockers.length ? p.blockers : p.warnings;
     const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
     host.innerHTML = UI.lead(action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
       action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy job already running can still finish." :
-      "This move needs inspection before it can continue. Its workloads and data have been left in place.") +
+      "This move needs inspection before it can continue. Its apps and VMs and data have been left in place.") +
       (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Before you continue", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
       UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`]]) +
       UI.section("Current position", `<p>${esc(p.message || "Waiting for the next step")}</p>`) +
-      UI.more("Workloads and retained resources", UI.table(["Workload","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
+      UI.more("Apps and VMs and retained resources", UI.table(["Workload","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
         UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
       (action ? UI.ack("storageRecoveryAck", action === "continue" ? "Continue despite the warnings" : "Pause it; a copy already running still finishes", {onchange:"storageRecoveryReady()"}) : "") +
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +

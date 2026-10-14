@@ -20,7 +20,7 @@ function clusterNodeCard(node) {
       <span><small>Disk</small><b>${clusterMetric(node.disk_pct)}</b></span>
       <span><small>Pods</small><b>${node.pods ?? "—"}</b></span>
     </div>
-    <div class="cluster-node-foot"><span>${node.schedulable ? "Accepting workloads" : "Cordoned"}</span>
+    <div class="cluster-node-foot"><span>${node.schedulable ? "Accepting apps and VMs" : "Cordoned"}</span>
       ${node.pressure?.length ? `<span class="warntext">${esc(node.pressure.join(", "))}</span>` : `<span>${esc(node.version || "version unavailable")}</span>`}</div>
   </article>`;
 }

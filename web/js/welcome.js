@@ -58,7 +58,7 @@ window.setupDismissVisit = () => { setupVisit(""); $("#setupReturn")?.classList.
 
 // Say exactly what is observed; configuration is not proof of end-to-end health.
 const SETUP_CHECKS = {
-  health: "Checks the current node, workload and volume health reports.",
+  health: "Checks the current node, app or VM and volume health reports.",
   quorum: "Checks the number of control-plane servers; one server is accepted for a lab.",
   placement: "Checks that a way of sharing the work is chosen; Kubernetes' default counts. It does not check where apps run now.",
   clocks: "Checks the time-sync reports available from hosts.",
@@ -142,7 +142,7 @@ function setupVisible(state) {
 /* ---------------- the steps ---------------- */
 const SETUP_STEPS = {
   health: {
-    title: "Cluster check", lead: s => s.done ? "No health issues are reported for nodes, workloads or attached volumes." :
+    title: "Cluster check", lead: s => s.done ? "No health issues are reported for nodes, apps and VMs or attached volumes." :
       "Review the reported issues before continuing with setup.",
     body: s => s.done ? "" : `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Resource</th><th>Severity</th><th>Details</th></tr></thead><tbody>
       ${(s.issues || []).map(i => `<tr><td><b>${esc(i.name || i.kind)}</b><div class="dim xs">${esc(i.kind)}</div></td>
@@ -214,11 +214,11 @@ const SETUP_STEPS = {
   },
   lan: {
     title: "LAN networks",
-    lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating workloads that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
+    lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating apps and VMs that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
     body: s => `${UI.steps([
-      { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run these workloads." },
+      { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run them." },
       { title: "Choose the network and addresses", detailHtml: "Use an untagged network for your usual LAN, or a VLAN configured on your switch. VMs can use your router’s DHCP; reserve static addresses outside its DHCP range when assigning addresses yourself." },
-      { title: "Create and test the network", detailHtml: "A host bridge supports both VMs and containers. Separate VM-only or container-only networks are also supported. After saving, test a workload’s address and connectivity before relying on it." },
+      { title: "Create and test the network", detailHtml: "A host bridge supports both VMs and containers. Separate VM-only or container-only networks are also supported. After saving, test an app’s address and connectivity before relying on it." },
     ])}<div class="about-grid"><div><span>VM networks</span><b>${esc((s.vms || []).join(", ") || "Not configured")}</b></div><div><span>Container networks</span><b>${esc((s.containers || []).join(", ") || "Not configured")}</b></div></div>`,
     actions: () => [{ label: "Configure LAN networks", run: "go('network', { params: { section: 'lan' } })", pri: true }],
     more: "<p>VM-only macvtap networks cannot be used by containers, and container-only macvlan networks cannot be used by VMs. With either, the host may be unable to reach its own guests directly. A host bridge avoids that limitation. Creating a bridge can briefly interrupt host networking; review the network page’s checks before applying it.</p>",
@@ -265,7 +265,7 @@ const SETUP_STEPS = {
   },
   osupdates: {
     title: "OS updates", lead: s => s.done ? "The host OS update schedule is enabled. Review host status and recent update results." :
-      "Schedule host OS updates during a maintenance window. Hosts update one at a time, with workload draining and a restart when required.",
+      "Schedule host OS updates during a maintenance window. Hosts update one at a time, with app or VM draining and a restart when required.",
     actions: () => [{ label: "Review the update schedule", run: "osUpdates()", pri: true }],
   },
   appearance: {
@@ -301,8 +301,8 @@ const SETUP_STEPS = {
   },
   ipam: {
     title: "IP addresses",
-    lead: s => s.done ? "Your subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free ones for VIPs and LAN workloads."
-      : "Keep track of your LAN's addresses: add your subnets with their DHCP ranges, bring in what UniFi knows, and scan to see what answers. Homestead then warns about conflicts and suggests free addresses for VIPs and LAN workloads.",
+    lead: s => s.done ? "Your subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free ones for VIPs and LAN apps."
+      : "Keep track of your LAN's addresses: add your subnets with their DHCP ranges, bring in what UniFi knows, and scan to see what answers. Homestead then warns about conflicts and suggests free addresses for VIPs and LAN apps.",
     body: s => {
       const subnets = s.subnets || [];
       const unscanned = subnets.filter(n => !n.scanned);
@@ -339,7 +339,7 @@ const SETUP_STEPS = {
   },
   homeassistant: {
     title: "Home Assistant", lead: s => s.done ? "An unexpired API key is available. Configure the integration in Home Assistant and test the connection." :
-      "Create an API key for Home Assistant to read cluster status or control workloads. Limit its permissions and allowed source addresses to what the integration needs.",
+      "Create an API key for Home Assistant to read cluster status or control apps and VMs. Limit its permissions and allowed source addresses to what the integration needs.",
     actions: () => [{ label: "Create an API key", run: "settingsTab('access');go('settings');setTimeout(() => window.apiKeyNew && apiKeyNew(), 900)", pri: true }],
   },
   linked: {

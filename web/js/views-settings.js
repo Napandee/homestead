@@ -1,8 +1,8 @@
 /* Full settings workspace: cluster policy, hardware, access, and installation info. */
 
 const ROLE_COPY = {
-  viewer: "Read-only access to dashboards, workloads, storage, events, and settings.",
-  operator: "Viewer access plus deploy, edit, move, start, and stop workloads and VMs.",
+  viewer: "Read-only access to dashboards, apps and VMs, storage, events, and settings.",
+  operator: "Viewer access plus deploy, edit, move, start, and stop apps and VMs and VMs.",
   admin: "Full access, including users, hosts, hardware mappings, imports, and cluster policy.",
 };
 // What each role adds, in a word or two, beside its name where it is chosen (#350).
@@ -1130,7 +1130,7 @@ window.sambaInstallGo = async (selectedAddress = null) => {
 };
 
 window.sambaRemove = () => {
-  modal("Remove SMB server", `<p>The SMB address and server workload will be removed. Network shares stop being served.</p>
+  modal("Remove SMB server", `<p>The SMB address and its server will be removed. Network shares stop being served.</p>
     <div class="note warn">Share definitions, passwords, all PVCs and their data remain. Re-enable SMB here to serve them again.</div>
     <div class="f"><label>Type <b class="mono">homestead-smb</b> to confirm</label><input id="smb_remove_confirm" autocomplete="off"></div>
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="sambaRemoveGo()">Remove server</button>`)}`);

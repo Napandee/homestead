@@ -206,7 +206,7 @@ function loginForm(err, setup) {
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
     ${setup ? `<div class="gatehint">Minimum 10 characters. Stored as PBKDF2-SHA256 with a
       per-user salt in a Kubernetes Secret — never in plain text.</div>`
-      : `<div class="gatehint">Homestead can deploy, move and delete workloads.<br>
+      : `<div class="gatehint">Homestead can deploy, move and delete apps and VMs.<br>
         A session stays signed in while you keep using it. Leave the box unticked on a
         shared computer.</div>`}`);
   const go = () => setup ? doSetup() : doLogin();

@@ -35,7 +35,7 @@ window.composeImport = async () => {
   </div>
   ${UI.actions(`<button class="btn" onclick="composeClear()">Clear</button>
     <button class="btn" onclick="composeCheck(true)">Check again</button>
-    <button class="btn pri" id="composeCreate" data-need="operator" disabled onclick="composeCreate()">Create workloads</button>`, '<span class="dim xs" id="composeState"></span>', {className:'compose-actions'})}`, true, "compose");
+    <button class="btn pri" id="composeCreate" data-need="operator" disabled onclick="composeCreate()">Create apps</button>`, '<span class="dim xs" id="composeState"></span>', {className:'compose-actions'})}`, true, "compose");
   if (window.applyRole) window.applyRole();
   $("#composeVars").addEventListener("input", () => composeChanged());
   $("#composeNs").addEventListener("change", () => composeChanged(0));
@@ -171,7 +171,7 @@ function composeShow(report) {
   if (!report) {
     host.innerHTML = '<div class="empty">Paste a Compose file to check it.</div>';
     if (state) state.textContent = "";
-    if (create) { create.disabled = true; create.textContent = "Create workloads"; }
+    if (create) { create.disabled = true; create.textContent = "Create apps"; }
     return;
   }
   const services = report.services || [];
@@ -180,7 +180,7 @@ function composeShow(report) {
   if (state) state.textContent = errors ? `${errors} to fix` : warnings ? `ready · ${warnings} to review` : "ready";
   if (create) {
     create.disabled = !report.ok;
-    create.textContent = services.length ? `Create ${services.length} workload${services.length === 1 ? "" : "s"}` : "Create workloads";
+    create.textContent = services.length ? `Create ${services.length} app${services.length === 1 ? "" : "s"}` : "Create apps";
   }
   const order = report.order || [];
   host.innerHTML = `
@@ -269,12 +269,12 @@ window.composeReview = async body => {
   try {
     const response = await api("/api/compose/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
     if (sequence !== COMPOSE.reviewSequence) return;
-    if (!response.capacity || !response.capacity_token) throw new Error("Batch capacity preview unavailable; refresh before creating workloads.");
+    if (!response.capacity || !response.capacity_token) throw new Error("Batch capacity preview unavailable; refresh before creating apps.");
     COMPOSE.review = { config, ...response };
     childModal("Review Compose batch", `${composeCapacityHtml(response.capacity)}
-      <div class="note">Each service is rechecked against the remaining batch before creation. A later failure stops the batch without deleting created workloads or volumes. Copy the Compose file somewhere safe if you need to recover it after a page refresh.</div>
+      <div class="note">Each service is rechecked against the remaining batch before creation. A later failure stops the batch without deleting created apps or volumes. Copy the Compose file somewhere safe if you need to recover it after a page refresh.</div>
       ${!response.capacity.blocked ? `<div class="note">Capacity warnings can be overridden, including conservative RAM estimates over 100%. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</div><label class="switch"><input type="checkbox" id="composeCapacityConfirm"> Create them anyway</label>` : ""}
-      <div id="composeApplyResult"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create workloads</button>`)}`, true);
+      <div id="composeApplyResult"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create apps</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 

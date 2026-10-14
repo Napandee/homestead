@@ -13,7 +13,7 @@ window.clusterShutdown = async () => {
     const plan = await api('/api/cluster/shutdown/plan');
     if (sequence !== shutdownSequence) return;
     shutdownReview = plan;
-    modal('Shut down cluster', UI.lead(`Stop workloads on all <b>${esc(plan.nodes.length)}</b> hosts, then shut down the hosts. Homestead is the last application to stop.`) +
+    modal('Shut down cluster', UI.lead(`Stop apps and VMs on all <b>${esc(plan.nodes.length)}</b> hosts, then shut down the hosts. Homestead is the last application to stop.`) +
       UI.callout(plan.ready ? 'warn' : 'bad', plan.ready ? 'The entire cluster will be offline' : 'Resolve these before shutdown', plan.ready
         ? 'Applications and storage become unavailable. You will need console or physical access to power hosts on and restore scheduling.'
         : `<ul class="ui-list">${(plan.blockers || []).map(p => `<li>${esc(p)}</li>`).join('')}</ul>`) +
@@ -108,7 +108,7 @@ window.clusterShutdownCancel = async () => {
 window.clusterShutdownRecover = async run => {
   try {
     await api('/api/cluster/shutdown/recover', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({run})});
-    toast('Scheduling restored. Check workload and storage health.', 'ok');
+    toast('Scheduling restored. Check app or VM and storage health.', 'ok');
     clusterShutdown();
   } catch (error) { toast(error.message, 'bad'); }
 };

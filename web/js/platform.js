@@ -268,7 +268,7 @@ window.kubevirtEmulation = async enabled => {
 };
 
 window.multusRepair = async () => {
-  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
+  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing apps and VMs are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
   try {
     const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     toast(r.detail, "ok");

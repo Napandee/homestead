@@ -78,7 +78,7 @@ async function viewFlow() {
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
-      <section class="a2col"><h4>Workloads <span class="dim">${f.workloads.length}</span></h4>
+      <section class="a2col"><h4>Apps <span class="dim">${f.workloads.length}</span></h4>
         <div class="a2group"><div class="a2subhead">Containers <span>${containers.length}</span></div>
           ${containers.map(workloadCard).join("") || '<div class="dim xs">No containers</div>'}</div>
         ${vms.length ? `<div class="a2group a2vmgroup"><div class="a2subhead">Virtual machines <span>${vms.length}</span></div>
@@ -114,7 +114,7 @@ async function viewFlow() {
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
-    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} workloads · ${graph.nodes.length} nodes</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
+    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} apps and VMs · ${graph.nodes.length} nodes</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
   // A live refresh redraws the page; whatever was being traced stays traced.
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);
   else drawArch();
@@ -631,7 +631,7 @@ window.volumeDelete = async x => {
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
       : UI.callout("ok", "Impact check passed.", p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
-        : "This claim is detached and has no active workload references. Choose what should happen to its backing data."),
+        : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
     UI.facts([
       ["Longhorn footprint", `${esc(lh.actual_gb ?? "?")} GiB`],
       ["Replicas", esc(lh.replicas ?? "?")],
@@ -642,11 +642,11 @@ window.volumeDelete = async x => {
       { state: detached ? "ok" : verifyPending ? "warn" : "bad",
         title: detached ? "Already detached." : verifyPending ? "Longhorn reports detached; safety checks are incomplete." : "Stop and unmount this claim first.",
         detailHtml: verifyPending ? "Refresh the review to verify the remaining checks before deleting." :
-          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
+          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the apps and VMs listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
       jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
         detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> already completed - typically the copy job from an import. Kubernetes could otherwise hold the claim in Terminating.` },
     ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounts" }], consumers)
-      : `<div class="ui-empty">${p.inventory_complete === false ? "No workload references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
+      : `<div class="ui-empty">${p.inventory_complete === false ? "No app or VM references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
     UI.section("2. Choose what happens to the data", `<div class="volume-delete-grid">
       <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
         <span><b>Delete claim, keep data</b><small>The PV policy becomes Retain, then the PVC is deleted. The released data needs Kubernetes or Longhorn administration to recover or remove later.</small></span></label>
@@ -1056,7 +1056,7 @@ window.volumeFiles = async (namespace, pvc, attached) => {
   if (cluster) headers["X-Homestead-Cluster"] = cluster;
   const session = FILEVIEW.liveSession = { namespace, pvc, headers };
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
+  if (attached && !(await ask(`${pvc} is attached to a running app or VM.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the app or VM is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
     if (FILEVIEW.liveSession === session) closeModal();
     return;
   }
@@ -1266,7 +1266,7 @@ window.volumeChown = async (namespace, name) => {
     <div class="f2" style="margin-top:14px">
       <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
       <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>
-    <div class="note">Stop the workload first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the workload holds it.</div>
+    <div class="note">Stop the app or VM first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the app or VM holds it.</div>
     ${UI.actions(`<button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
@@ -1435,7 +1435,7 @@ window.newShare = async () => {
       <input type="text" id="sh_name" placeholder="media" autocomplete="off"></div>
     <div class="sec">Storage ${tip("A new Longhorn volume, or a folder in an existing one.")}</div>
     <div id="sh_storage"></div>
-    ${UI.more("Sharing an existing volume", "A volume can also be used by a container. ReadWriteOnce storage attaches on one node, so Samba and that workload must run on the same host.")}
+    ${UI.more("Sharing an existing volume", "A volume can also be used by a container. ReadWriteOnce storage attaches on one node, so Samba and that app must run on the same host.")}
 `;
   const shareAccess = `
     ${UI.section("SMB access", `<div class="f"><label>SMB user</label><select id="sh_identity" onchange="shareAccountHint()">
@@ -1567,7 +1567,7 @@ window.saveShareEdit = async (name, button) => {
   } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };
 window.rmShare = async name => {
-  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`, { title: "Remove share", ok: "Remove share", danger: true }))) return;
+  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other apps may also keep the volume attached.`, { title: "Remove share", ok: "Remove share", danger: true }))) return;
   try {
     const result = await api("/api/shares/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -2209,7 +2209,7 @@ window.volumeReclass = async x => {
   const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
   if (!classes.length) return toast("There is no other storage class to move it to", "warn");
   const pick = classes.find(c => c.default) || classes[0];
-  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Workloads using it stop during the move; the original data is kept afterward.") +
+  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move; the original data is kept afterward.") +
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
       UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
     '<div id="rc_plan"></div>' +
@@ -2240,9 +2240,9 @@ window.volumeReclassPlan = async (ns, claim) => {
     : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
   const messages = [...p.blockers, ...p.warnings];
   host.innerHTML = (messages.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "This move cannot start" : "Before moving", `<ul>${messages.map(m=>`<li>${esc(m)}</li>`).join("")}</ul>`) : "") +
-    UI.section("Affected workloads", UI.table([{label:"Workload"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No workloads currently reference this volume."})) +
+    UI.section("Affected apps and VMs", UI.table([{label:"Workload"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No apps and VMs currently reference this volume."})) +
     UI.section("Storage needed", UI.facts([["New volume",esc(sizeText(sp.size_gb))],["Replica allocation",`${esc(sizeText(sp.allocated_gb))} · ${esc(sp.replicas)} copies`],["Estimated destination room",sp.room_gb == null ? "Unknown" : esc(sizeText(sp.room_gb))]])) +
-    UI.more("What is checked", "The volume, backing disk, destination class and affected workloads are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
+    UI.more("What is checked", "The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
   RECLASS_REVIEW = {config,plan:p};
   volumeReclassReady();
   if (window.applyRole) applyRole();

@@ -104,7 +104,7 @@ function workloadHierarchy(w) {
         <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
       </div>${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
         ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
-    </div>`).join("") || `<div class="dim xs">No pods exist yet. The workload controller will create them when the instance count is above zero.</div>`}</div>
+    </div>`).join("") || `<div class="dim xs">No pods exist yet. Kubernetes creates them once the instance count is above zero.</div>`}</div>
   </details>`;
 }
 
@@ -300,7 +300,7 @@ function workloadGroupHead(group, rows, folded) {
   const running = rows.filter(w => w.desired > 0 && w.ready === w.desired).length;
   const head = `<button type="button" class="wgroup-head" aria-expanded="${!folded}" onclick="foldWorkloadGroup(${groupKeyIndex(group || NO_GROUP)})">
     <span class="wgroup-chevron">›</span><b>${esc(group || "Ungrouped")}</b>
-    <span class="dim xs">${rows.length} workload${rows.length === 1 ? "" : "s"}${running < rows.length ? ` · ${running} running` : ""}</span></button>`;
+    <span class="dim xs">${rows.length} app${rows.length === 1 ? "" : "s"}${running < rows.length ? ` · ${running} running` : ""}</span></button>`;
   // Homestead's own group looks after its own tier (#429); Ungrouped isn't a group.
   if (!group || rows.every(w => w.homestead || w.platform)) return `<div class="wgroup-headrow">${head}</div>`;
   const tier = rows.find(w => w.group_tier)?.group_tier || "";
@@ -358,7 +358,7 @@ window.wlGroup = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
   const names = workloadGroupNames(STATE.data.wl || []);
   window.__groupTarget = [{ ns, name }];
-  modal("Group · " + name, `<p class="muted small">Groups gather workloads under a divider on Containers, and each gets a chip to show it alone.</p>
+  modal("Group · " + name, `<p class="muted small">Groups gather apps under a divider on Containers, and each gets a chip to show it alone.</p>
     <div class="f" style="margin-top:12px"><label>Group</label><input id="wg_name" list="wg_names" maxlength="40" value="${esc(w.group || "")}" placeholder="e.g. Media">
       <datalist id="wg_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
     <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px">
@@ -981,7 +981,7 @@ function capacityPlacementHtml(plan) {
     detail = "The paused VM keeps its current host.";
   } else if (placement.pinned) {
     title = `Required host: ${placement.pinned}`;
-    detail = "This workload is pinned to this host. It cannot launch on another host.";
+    detail = "This app is pinned to this host. It cannot launch on another host.";
   } else if (placement.preferred) {
     const available = hosts.some(host => host.name === placement.preferred);
     title = `${available ? "Preferred host" : "Preferred host currently unavailable"}: ${placement.preferred}`;
@@ -991,7 +991,7 @@ function capacityPlacementHtml(plan) {
     detail = "Kubernetes can schedule it here if these constraints still hold at launch.";
   } else {
     title = hosts.length ? "Host selected at launch" : "Launch host not determined";
-    detail = hosts.length ? "Kubernetes chooses from the eligible hosts below when the workload starts." : "No eligible host has been confirmed by this review.";
+    detail = hosts.length ? "Kubernetes chooses from the eligible hosts below when the app starts." : "No eligible host has been confirmed by this review.";
   }
   if (plan.blocked) detail += " Launch is blocked until the issues below are resolved.";
   const names = hosts.length > 1 || placement.preferred ? `<p>Eligible hosts: <b>${hosts.map(host => esc(host.name)).join(", ") || "none"}</b>.</p>` : "";
@@ -1573,7 +1573,7 @@ window.wlDelete = async (ns, name) => {
     .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
   const claims = (vols || []).filter(vol => (vol.attached || []).includes(name));
   $("#mbody").innerHTML = `
-    <div class="note dependency-danger"><b>This removes the workload, not its data.</b>
+    <div class="note dependency-danger"><b>This removes the app, not its data.</b>
       The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
       removed afterwards from Volumes.</div>
     <div class="dependency-list" style="margin-top:12px">
@@ -1589,7 +1589,7 @@ window.wlDelete = async (ns, name) => {
     <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
       <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate(${jsq(name)})"></div>
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
-      onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete workload</button>
+      onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete app</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
@@ -1606,7 +1606,7 @@ window.wlDeleteNow = async (ns, name, button) => {
     toast(`${name} deleted${freed ? ` with ${freed} service${freed === 1 ? "" : "s"}` : ""}`, "ok");
     setTimeout(() => refresh(true), 900);
   } catch (e) {
-    if (button) { button.disabled = false; button.textContent = "Delete workload"; }
+    if (button) { button.disabled = false; button.textContent = "Delete app"; }
     toast(e.message, "bad");
   }
 };
@@ -1909,7 +1909,7 @@ window.imageReviewedApply = async () => {
             continue;
           }
           states[key] = state; paint();
-          if (rolloutChanged(result, state)) throw new Error("Workload changed during monitoring; review remaining updates again");
+          if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
           if (state.phase === "failed") throw new Error("Rollout failed");
           if (state.phase === "ready") { refreshAfterRollout(); break; }
           if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
@@ -2121,7 +2121,7 @@ window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(n
 /* ---------------- interactive container console ---------------- */
 window.wlConsole = (ns, name, fromRoute = false) => {
   const workload = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name);
-  if (!workload) return toast("Workload details are not available yet", "bad");
+  if (!workload) return toast("App details are not available yet", "bad");
   const pods = (workload.pods || []).filter(p => p.phase === "Running" && (p.containers || []).some(c => c.kind === "app"));
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "console", ns, workload: name }, name + " console");
   window.__consoleWorkload = workload;
@@ -2138,7 +2138,7 @@ window.wlConsole = (ns, name, fromRoute = false) => {
     ${pods.length ? `<div class="console-security">Operator-only · session start and stop are audited; commands and output are not recorded.</div>
       <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
       <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
-      : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the workload and wait until its pod is running.</span></div>`}`, true);
+      : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the app and wait until its pod is running.</span></div>`}`, true);
   if (pods.length) consolePodChanged();
 };
 
@@ -2345,21 +2345,21 @@ async function viewDeploy(pre) {
   const sharedVip = vips.shared || "";
   resetPaint();
   const sections = [
-    {key:"basics", title:"Basics", lead:"Name the workload and its first container.", html:`
+    {key:"basics", title:"Basics", lead:"Name the app and its first container.", html:`
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
         ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
         ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
-      <div class="f"><label>Deployment model ${tip("A new workload gets its own pod and lifecycle. Adding to an existing workload creates a sidecar container; Kubernetes restarts that workload's pods to apply it.")}</label>
-        <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>New workload · independent pod</option>
-          <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>Add container to existing workload · shared pod</option></select></div>
+      <div class="f"><label>Deployment model ${tip("A new app gets its own pod and lifecycle. Adding to an existing app creates a sidecar container; Kubernetes restarts that app's pods to apply it.")}</label>
+        <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>New app · independent pod</option>
+          <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>Add container to existing app · shared pod</option></select></div>
       <div id="d_join_wrap" class="joinbox">
-        <div class="f"><label>Existing workload</label><select id="d_target_workload"></select></div>
+        <div class="f"><label>Existing app</label><select id="d_target_workload"></select></div>
         <div id="d_join_note" class="note"></div>
       </div>
-      <div class="f" id="d_workload_name_wrap"><label>Workload name ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
-      <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the workload name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
+      <div class="f" id="d_workload_name_wrap"><label>App name ${tip("The stable name for this app. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
+      <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the app name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
       <div class="f"><label>Image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
       <div class="row" id="d_add_container"><button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button>
         <button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button>
@@ -2367,7 +2367,7 @@ async function viewDeploy(pre) {
       ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>`)}
       <div class="f2 compact-fields">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
+        <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this app run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
       <div id="d_priority_wrap">${UI.more("Optional settings", deployTierField(DCFG.priority))}</div>
     `},
@@ -2391,10 +2391,10 @@ async function viewDeploy(pre) {
     `},
     {key:"storage", title:"Storage", lead:"Choose where the first container stores its data.", html:`
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
-      ${UI.more("Choose a storage type", "RWO suits a single workload. RWX allows sharing across nodes. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
+      ${UI.more("Choose a storage type", "RWO suits a single app. RWX allows sharing across nodes. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
     `},
-    {key:"address", title:"Address", lead:"Choose how clients reach the workload.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
+    {key:"address", title:"Address", lead:"Choose how clients reach the app.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
         lanHtml: '<div id="d_lan_box" hidden></div>',
         portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>${monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : "")}`})}
     `},
@@ -2402,13 +2402,13 @@ async function viewDeploy(pre) {
       <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
         <div id="d_extra_containers"></div>
         <button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button></div>
-      <div id="d_extra_join" class="empty small" hidden>Add one container to the existing workload at a time.</div>
+      <div id="d_extra_join" class="empty small" hidden>Add one container to the existing app at a time.</div>
     `},
     {key:"summary", title:"Summary", lead:"Check the configuration, then review capacity and rollout impact.", html:`
       <div id="d_summary" class="deploy-summary"></div>
     `}
   ];
-  paint(`${UI.pageHeader("Deploy a container", "Configure the workload, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
+  paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
       UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
       {page:true,cancelHtml:UI.button("Cancel", "go('workloads')")})}</div>`);
@@ -2441,7 +2441,7 @@ function updateJoinNote() {
   const target = selectedTarget(), note = $("#d_join_note"); if (!note) return;
   note.innerHTML = target
     ? `<b>Shared lifecycle:</b> Adding this container updates <span class="mono">${esc(target.name)}</span> and may restart all ${target.containers.length} existing containers. Network and placement are shared; review shows the rollout impact.`
-    : `<b>No existing workload is available.</b> Select another namespace or create a new workload.`;
+    : `<b>No existing app is available.</b> Select another namespace or create a new app.`;
 }
 async function refreshDeployOptions() {
   collect();
@@ -2497,11 +2497,11 @@ function syncSummary() {
   const imageNote = $("#d_image_note"); if (imageNote) imageNote.innerHTML = imagePullNote(c.image);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
-    (c.target_mode === "existing" ? "" : row("◈", "Workload / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
+    (c.target_mode === "existing" ? "" : row("◈", "App / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
     (c.additional_containers?.length ? row("▣", "Containers in each pod", [c.container_name, ...c.additional_containers.map(item => item.name)].map(esc).join(", ")) : "") +
     row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
-    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
+    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins app" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
     row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
@@ -2529,9 +2529,9 @@ function deployVolumePicker() {
     podVolumes: () => selectedTarget()?.volumes || [],
     allowPod: () => $("#d_target_mode")?.value === "existing",
     podLabel: "Existing volume in selected pod",
-    podEmpty: "Choose a volume from the selected workload…",
-    podUnavailable: "No reusable volumes in the selected workload",
-    podHelp: "Mounts a volume already defined on the selected workload into this sidecar.",
+    podEmpty: "Choose a volume from the selected app…",
+    podUnavailable: "No reusable volumes in the selected app",
+    podHelp: "Mounts a volume already defined on the selected app into this sidecar.",
     onChange: () => { if (!DRENDERING) syncSummary(); },
   });
 }
@@ -2630,7 +2630,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
     ${UI.more("How this is estimated", `${rollout}
       ${caveats.length ? `<p>Estimate assumptions:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
-      <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
+      <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the app or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
   </div>`;
 }
@@ -2657,8 +2657,8 @@ window.doDeploy = async () => {
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");
-  if (c.target_mode === "new" && !c.workload_name) return deployInvalid("Workload name is required.", "#d_workload_name");
-  if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing workload.", "#d_target_workload");
+  if (c.target_mode === "new" && !c.workload_name) return deployInvalid("App name is required.", "#d_workload_name");
+  if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing app.", "#d_target_workload");
   const extra = c.additional_containers || [];
   if (extra.some(container => !container.name || !container.image)) return deployInvalid("Every container needs a name and image.", "#d_extra_containers input");
   if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return deployInvalid("Container names must be unique in this pod.", "#d_container_name");
@@ -2667,7 +2667,7 @@ window.doDeploy = async () => {
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
-    if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
+    if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this app needs a Kubernetes-specific design", "bad");
     const joining = c.target_mode === "existing";
     if (!plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
     DEPLOY_REVIEW = { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token };
@@ -2682,7 +2682,7 @@ window.doDeploy = async () => {
       ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again" : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${esc(c.target_workload)} as its pods roll out`}</label>` : ""}
       ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Deploy it despite the warnings</label>` : ""}
       <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button>`)}</div>`, true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}</div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmDeploy = async () => {
@@ -2733,7 +2733,7 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
   const mode = value => cfg.network_mode === value ? "selected" : "";
   const vip = value => cfg.vip_mode === value ? "selected" : "";
   return `
-      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
+      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other apps that must own common ports.")}</div>
       <div class="f2"><div class="f"><label>Access mode</label><select id="${prefix}_net"${change}${editing && host ? " disabled" : ""}>
         <option value="loadbalancer" ${mode("loadbalancer")}>LAN access (VIP)</option>
         <option value="internal" ${mode("internal")}>Cluster only</option>
@@ -2749,7 +2749,7 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
       ${lanHtml}
       ${UI.more("How addresses work", nodeAddressesOnly()
         ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
-        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the workload another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
+        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the app another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div>${portsHtml}`;
 }
 window.addressStepHtml = addressStepHtml;
