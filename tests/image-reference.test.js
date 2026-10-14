@@ -60,3 +60,9 @@ test("the release Homestead tracks names a digest-pinned image", () => {
   assert.deepEqual([...context.imageChangeWords(`nginx@sha256:${"a".repeat(64)}`, `nginx@sha256:${"b".repeat(64)}`, "latest", "latest")],
     ["latest · aaaaaaa", "latest · bbbbbbb"]);
 });
+
+test("the short image label keeps the name and tag, and the start of a digest", () => {
+  assert.equal(context.imageShortLabel("ghcr.io/blakeblackshear/frigate:stable"), "frigate:stable");
+  assert.equal(context.imageShortLabel("nginx"), "nginx:latest");
+  assert.equal(context.imageShortLabel("registry.example.com:5000/team/app@sha256:0123456789abcdef0123"), "app@sha256:0123456789ab…");
+});

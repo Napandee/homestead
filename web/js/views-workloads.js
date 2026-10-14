@@ -747,6 +747,16 @@ function imageLabel(ref) {
   return ref.split("/").pop().includes(":") ? ref : `${ref}:latest`;
 }
 
+/* The part of an image people judge an update by: its name and tag, or the
+   start of its digest. The full reference goes in a title beside it. */
+function imageShortLabel(ref) {
+  const label = imageLabel(ref), name = label.split("/").pop();
+  const pinned = name.match(/^(.*@sha256:)([0-9a-f]+)$/);
+  return pinned ? `${pinned[1]}${pinned[2].slice(0, 12)}${pinned[2].length > 12 ? "…" : ""}` : name;
+}
+const imageTitle = images => esc((images || []).map(imageLabel).join(" · "));
+const imageShort = images => (images || []).map(i => esc(imageShortLabel(i))).join(" · ");
+
 /* Show what containerd will resolve without changing what the user entered. */
 function imagePullRef(ref) {
   const tagged = imageLabel((ref || "").trim());
@@ -809,6 +819,16 @@ function workloadActions(w, update, off, compact = false) {
   ]);
 }
 
+/* A workload's state tags, the same in a row and a card so the two can't
+   drift: its schedule, how it updates, who updates it, and an update waiting.
+   A row whose own Update button is shown says the update there, not twice. */
+function workloadStateTags(w, update, { row = false } = {}) {
+  const owner = updateOwner(update);
+  const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
+  return `${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
+    : update?.available && !button ? `<span class="${row ? "tag" : "pill"} warn">update available</span>` : ""}${uncheckedMark(update)}`;
+}
+
 function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
       const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
@@ -821,9 +841,9 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · ${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink"
                 onclick="moveWorkload(${jsq(w.name)},${jsq(w.ns)})">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}</div></div>
           </div>
-          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${updateOwner(update) ? updateOwnerPill(update) : update?.available ? '<span class="pill warn">update available</span>' : ""}${uncheckedMark(update)}
+          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${workloadStateTags(w, update)}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
-          ${autoUpdateTag(w)}<span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
+          <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
@@ -831,7 +851,7 @@ function workloadCard(w) {
           <div><div class="dim xs" data-tip="Memory in use right now">RAM</div><div class="mono small">${workloadMemory(w.mem_mb)}</div></div>
           <div><div class="dim xs">ACCESS</div><div class="waccess">${accessPorts(w.ports)}</div></div>
         </div>
-        <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</span>
+        <div class="dim xs mono wimg"><span class="wimage-name" title="${imageTitle(w.images)}">${imageShort(w.images)}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         ${answerCardRow(w)}
         ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
@@ -896,11 +916,11 @@ function workloadTableRows(rows) {
         <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
         <span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${off ? "Stopped" : `${w.ready}/${w.desired}`}</span>
-        ${answerTag(w)}${scheduleTag(w)}${autoUpdateTag(w)}${updateOwner(update) ? updateOwnerPill(update, true) : update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
+        ${answerTag(w)}${workloadStateTags(w, update, { row: true })}
         ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
         ${pull ? `<span class="tag" title="Fetching ${esc(pull.image || "image")}">Pulling ${Math.min(100, pull.percent || 0)}%</span>` : ""}
         ${blocked ? `<span class="tag bad" data-tip="${esc(blocked)}">Blocked</span>` : ""}</div></td>
-      <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
+      <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${imageTitle(w.images)}">${imageShort(w.images)}</div>
         ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</td>
       <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
       <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${off ? "—" : workloadMemory(w.mem_mb)}</td>
