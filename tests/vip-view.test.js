@@ -131,3 +131,29 @@ test("partial range additions stay visible and never silently choose another def
   assert.match(elements["#va_result"].textContent, /skipped/);
   assert.equal(ctx.closed, undefined);
 });
+
+/* Homestead itself goes on a new VIP only when that VIP becomes the default,
+   as the installer does; a second VIP, for an app, leaves it where it is. */
+test("a second VIP is offered for Homestead itself unticked", () => {
+  const { ctx } = setup();
+  ctx.STATE.data.selfAddress = { on_vip: false };
+  ctx.STATE.data.network = { ...(ctx.STATE.data.network || {}), shared_vip: { ip: "192.0.2.242" } };
+  ctx.vipAdd();
+  assert.match(ctx.html, /id="va_self" type="checkbox"/);
+  assert.doesNotMatch(ctx.html, /id="va_self" type="checkbox" checked/);
+});
+
+test("the first VIP, which becomes the default, takes Homestead itself too", () => {
+  const { ctx } = setup();
+  ctx.STATE.data.selfAddress = { on_vip: false };
+  ctx.STATE.data.network = { ...(ctx.STATE.data.network || {}), shared_vip: null };
+  ctx.vipAdd();
+  assert.match(ctx.html, /id="va_self" type="checkbox" checked/);
+});
+
+test("the note for Homestead itself says Longhorn's backups move too", () => {
+  const { ctx } = setup();
+  ctx.STATE.data.selfAddress = { on_vip: false };
+  ctx.vipAdd();
+  assert.match(ctx.html, /Longhorn backs up to it/);
+});
