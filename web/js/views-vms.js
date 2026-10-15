@@ -80,11 +80,13 @@ window.vmStore = async (check = false) => {
       + (r.versions.length > 1 ? ` <span class="dim xs" data-tip="Older builds stay while a disk was made from them">+${r.versions.length - 1} older</span>` : "")
       + (r.update ? ' <span class="pill slim warn" data-tip="The publisher has a newer build; it downloads on the next check if this keeps itself current">newer build out</span>' : "");
   };
-  const actions = r => `<div class="row nowrap" style="gap:6px;justify-content:flex-end">
-      ${s.harvester && !r.kept ? `<button class="btn sm" data-need="admin" onclick="vmStoreKeep(${jsq(r.id)})" data-tip="Download it now as a Harvester image, so VMs start from a local copy">Keep</button>` : ""}
-      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto(${jsq(r.id)}, this.checked)"> current</label>` : ""}
-      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew(${jsq("store:" + r.id)})">New VM</button>
-      ${s.harvester && r.kept ? `<button class="btn sm danger" data-need="admin" title="Stop keeping it; builds a disk came from stay" onclick="vmStoreForget(${jsq(r.id)})">${icon("trash")}</button>` : ""}</div>`;
+  // Keeping current is a setting of a kept image, so it sits with its state.
+  const current = r => s.harvester && r.kept ? ` <label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto(${jsq(r.id)}, this.checked)"> current</label>` : "";
+  const actions = r => actionBar([
+    s.harvester && !r.kept ? { label: "Keep", run: `vmStoreKeep(${jsq(r.id)})`, need: "admin", tip: "Download it now as a Harvester image, so VMs start from a local copy" } : null,
+    { label: "New VM", run: `vmStoreNew(${jsq("store:" + r.id)})`, need: "operator", pri: true },
+    s.harvester && r.kept ? { label: "Stop keeping", icon: "trash", run: `vmStoreForget(${jsq(r.id)})`, need: "admin", danger: true, tip: "Stop keeping it; builds a disk came from stay" } : null,
+  ], { shown: s.harvester && r.kept ? 1 : 2, label: `Actions for ${r.name}` });
   const rows = s.images.filter(r => r.available);
   const distros = [...new Set(rows.map(r => r.distro))];
   const filter = (STATE.vmStoreFilter || "").toLowerCase();
@@ -112,7 +114,7 @@ window.vmStore = async (check = false) => {
             <td data-label="Variant"><span class="tag" data-tip="${esc(r.about)}">${esc(r.variant)}</span></td>
             <td class="mono small" data-label="Download">${mb(r.size)}</td>
             <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
-            ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
+            ${s.harvester ? `<td data-label="Here">${state(r)}${current(r)}</td>` : ""}<td data-actions>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
       }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
     <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
       <span class="dim xs">Import your own disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>

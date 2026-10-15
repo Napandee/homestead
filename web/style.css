@@ -2623,9 +2623,6 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 
 /* ISO library */
 .iso-lib .iso-folders,.iso-lib .iso-files{display:flex;flex-direction:column;gap:6px}
-.iso-folder,.iso-file{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);min-width:0}
-.iso-file>div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
-.iso-file>div:first-child span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iso-dirs{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
 .iso-crumb{font-size:12px;color:var(--mut)}
 .iso-lib{grid-template-columns:minmax(0,1fr)}

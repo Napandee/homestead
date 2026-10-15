@@ -258,7 +258,10 @@ window.vmIsoLibrary = async () => {
   const size = bytes => bytesText(bytes);
   const state = f => f.volume
     ? (f.state === "ready" ? `<span class="pill ok">ready</span>` : f.state === "copying" ? '<span class="pill low">copying</span>' : '<span class="pill crit">failed</span>')
-    : `<button class="btn sm" data-need="operator" onclick="vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})">Make ready</button>`;
+    : '<span class="dim xs">on the share only</span>';
+  const volumeOf = f => lib.volumes.find(v => v.name === f.volume);
+  // Each list is a stack table whose rows end in an actionBar (#506).
+  const table = (heads, rows) => `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>${heads.map(h => `<th>${h}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   const orphans = lib.volumes.filter(v => !lib.files.some(f => f.volume === v.name));
   // A copy no VM has in a drive: how long until the tidy-up removes it.
   const unused = v => {
@@ -269,18 +272,22 @@ window.vmIsoLibrary = async () => {
   $("#mbody").innerHTML = `<div class="ui-stack iso-lib">
     ${UI.lead("Use ISOs from Network Shares as VM installation media. <b>Make ready</b> creates a shared copy with one replica. Originals stay on the share; lost copies can be recreated.")}
     <div class="iso-folders"><div class="between"><b>Folders</b><button class="btn sm" data-need="admin" onclick="vmIsoAddFolder()">＋ Folder</button></div>
-      ${lib.folders.length ? lib.folders.map((f, i) => `<div class="iso-folder"><span class="mono">${esc(f.share)}${f.path ? ` / ${esc(f.path)}` : ""}</span>
-        <button class="btn sm" data-need="admin" onclick="vmIsoRemoveFolder(${i})">Remove</button></div>`).join("")
+      ${lib.folders.length ? table(["Folder"], lib.folders.map((f, i) => `<tr><td class="mono">${esc(f.share)}${f.path ? ` / ${esc(f.path)}` : ""}</td>
+        <td data-actions>${actionBar([{ label: "Remove", run: `vmIsoRemoveFolder(${i})`, need: "admin", tip: "Stop listing this folder; its files and copies stay" }], { label: `Actions for ${f.share}${f.path ? ` / ${f.path}` : ""}` })}</td></tr>`).join(""))
         : `<div class="dim small">${lib.shares.length ? "No folders chosen yet. Add a folder from one of your shares." : "No Network Shares yet: make one under Storage → Network shares, then choose a folder on it here."}</div>`}
       ${(lib.problems || []).map(p => `<div class="note small bad">${esc(p.share)}${p.path ? ` / ${esc(p.path)}` : ""}: ${esc(p.error)}</div>`).join("")}</div>
-    ${lib.files.length ? `<div class="iso-files">${lib.files.map(f => `<div class="iso-file"><div><b>${esc(f.name)}</b>
-        <span class="dim xs mono">${esc(f.share)}${f.folder ? ` / ${esc(f.folder)}` : ""} · ${size(f.size)}${f.volume && (lib.volumes.find(v => v.name === f.volume)?.used_by || []).length
-          ? ` · in ${esc(lib.volumes.find(v => v.name === f.volume).used_by.join(", "))}` : esc(unused(lib.volumes.find(v => v.name === f.volume)))}</span></div>
-        <div class="row">${state(f)}${f.volume ? `<button class="btn sm" data-need="admin" title="Delete its volume; the file on the share is kept" onclick="vmIsoDelete(${jsq(f.volume)})">${icon("trash")}</button>` : ""}</div></div>`).join("")}</div>`
+    ${lib.files.length ? `<div class="iso-files">${table(["File", "Copy"], lib.files.map(f => `<tr><td><b>${esc(f.name)}</b>
+        <div class="dim xs mono">${esc(f.share)}${f.folder ? ` / ${esc(f.folder)}` : ""} · ${size(f.size)}${f.volume && (volumeOf(f)?.used_by || []).length
+          ? ` · in ${esc(volumeOf(f).used_by.join(", "))}` : esc(unused(volumeOf(f)))}</div></td>
+        <td data-label="Copy">${state(f)}</td>
+        <td data-actions>${actionBar([
+          f.volume ? null : { label: "Make ready", run: `vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})`, need: "operator", tip: "Make a shared copy VMs can boot from" },
+          f.volume ? { label: "Delete copy", icon: "trash", run: `vmIsoDelete(${jsq(f.volume)})`, need: "admin", danger: true, tip: "Delete its volume; the file on the share is kept" } : null,
+        ], { shown: f.volume ? 0 : 1, label: `Actions for ${f.name}` })}</td></tr>`).join(""))}</div>`
       : lib.folders.length ? '<div class="dim small">No .iso files in these folders yet.</div>' : ""}
-    ${orphans.length ? `<div class="iso-files"><div class="dim xs">VOLUMES WHOSE FILE HAS GONE OR CHANGED</div>${orphans.map(v => `<div class="iso-file"><div><b>${esc(v.file || v.name)}</b>
-        <span class="dim xs mono">${esc(v.name)}${v.used_by.length ? ` · in ${esc(v.used_by.join(", "))}` : esc(unused(v))}</span></div>
-        <button class="btn sm" data-need="admin" onclick="vmIsoDelete(${jsq(v.name)})">${icon("trash")}Delete</button></div>`).join("")}</div>` : ""}
+    ${orphans.length ? `<div class="iso-files"><div class="dim xs">VOLUMES WHOSE FILE HAS GONE OR CHANGED</div>${table(["Volume"], orphans.map(v => `<tr><td><b>${esc(v.file || v.name)}</b>
+        <div class="dim xs mono">${esc(v.name)}${v.used_by.length ? ` · in ${esc(v.used_by.join(", "))}` : esc(unused(v))}</div></td>
+        <td data-actions>${actionBar([{ label: "Delete", icon: "trash", run: `vmIsoDelete(${jsq(v.name)})`, need: "admin", danger: true }], { shown: 0, label: `Actions for ${v.file || v.name}` })}</td></tr>`).join(""))}</div>` : ""}
     <div class="iso-keep"><label for="iso_keep">Remove copies no VM uses after</label>
       <input id="iso_keep" type="number" min="0" max="365" value="${esc(lib.keep_days ?? 7)}" ${can("admin") ? "" : "disabled"}> <span class="dim small">days (0 keeps them)</span>
       <button class="btn sm" data-need="admin" onclick="vmIsoKeep()">Save</button></div>
