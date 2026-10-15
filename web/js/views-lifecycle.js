@@ -820,7 +820,7 @@ window.nodePowerReview = async (node, action, force = false) => {
     outage ? UI.ack("pw_outage", action === "reboot"
       ? "Reboot anyway: the whole cluster, Homestead too, is offline until it returns"
       : "Power off anyway: the whole cluster stays offline until it is powered on by hand") : "",
-    !outage && (plan.hold ? strandedMove : plan.stranded?.length) ? UI.ack("pw_allow", `Leave ${plan.stranded.length} app or VM${plan.stranded.length === 1 ? "" : "s"} down`) : "",
+    !outage && (plan.hold ? strandedMove : plan.stranded?.length) ? UI.ack("pw_allow", `Leave ${plan.stranded.length === 1 ? "1 app or VM" : `${plan.stranded.length} apps and VMs`} down`) : "",
     plan.requires_data_ack ? UI.ack("pw_data", "Go ahead despite the risk to volume copies") : "",
   ].join("") : "";
   childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, UI.sectionForm("hostPower", sections,

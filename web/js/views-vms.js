@@ -819,7 +819,7 @@ window.k3sReview = async () => {
         n.role === "server" ? UI.chip("server", "info") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
       UI.facts([["Each VM", `${esc(plan.config.cores || 2)} vCPUs · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
       (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
-      UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and the job tray follows the VMs coming up.
+      UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and Jobs follows the VMs coming up.
         All the VMs share one capacity budget, new VMs waiting for launcher pods included; the placement below is an example, not a reservation.</p>
         ${(cap.example || []).length ? `<p class="ui-help">Example placement: ${cap.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}
         <p class="ui-help">Memory warnings can be accepted, even above 100%, at the risk of out-of-memory restarts. Hardware, storage and scheduling blockers can't.</p>`),
@@ -848,7 +848,7 @@ window.k3sCreate = async () => {
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
   } catch (e) {
     toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check the job tray and Virtual Machines before a new review.</div>`);
+    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>`);
     if (window.refreshOperations) refreshOperations(true);
   } finally { K3S_CREATE_BUSY = false; }
 };

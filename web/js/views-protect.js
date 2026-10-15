@@ -77,7 +77,7 @@ window.objectStoreSetup = () => {
   const store = STATE.data.objectStore || {};
   modal(store.deployed ? "Backup storage settings" : "Set up backup storage", `
   <p>Runs an S3 server (RustFS) on a Longhorn volume and points Longhorn's backups at it. Volume backups,
-    and moving an workload to another cluster, both read and write here.</p>
+    and moving an app to another cluster, both read and write here.</p>
   <div class="f2"><div class="f"><label>Size (GiB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="${store.size_gb || 100}" ${store.deployed ? "disabled" : ""}></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>

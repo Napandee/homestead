@@ -11,7 +11,7 @@ function nodeTemp(n) {
   return { value, label: cpu != null || max == null ? "CPU temp" : "Max temp", text: value == null ? "—" : `${value}°C`, extra };
 }
 /* The kubelet's filesystem, which may not be the system drive's. */
-const NODE_FS_TIP = "The filesystem the kubelet reports for this node; Storage lists each drive.";
+const NODE_FS_TIP = "The filesystem the kubelet reports for this host; Storage lists each drive.";
 /* The processor, as the node probe reads it, with its cores. */
 const cpuSummary = n => [n.temps?.cpu_model, n.cpu_cap != null ? `${n.cpu_cap} core${n.cpu_cap == 1 ? "" : "s"}` : ""].filter(Boolean).map(esc).join(" · ") || "—";
 const smartTone = health => health === "passed" ? "ok" : health === "failed" ? "bad" : "";
