@@ -752,7 +752,7 @@ def alert_facts(inv):
                               "resolved": f"Longhorn disk warning cleared: {node} / {disk['path']}",
                               "body": (disk.get("missing") or disk.get("problem") or "Longhorn reports it not ready")
                                       + f" ({disk['path']}). Check volume replicas; workload availability depends on healthy copies.",
-                              "href": f"/nodes/{node}"})
+                              "href": f"/nodes?node={node}&section=storage"})
     return facts
 
 

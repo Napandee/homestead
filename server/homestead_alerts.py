@@ -303,10 +303,10 @@ def join_facts(nodes):
                     for c in (node.get("status") or {}).get("conditions") or [])
         facts.append({"key": f"joins:{uid}:seen", "category": "joins", "event": True, "severity": "info",
                       "title": f"{name} is joining the cluster", "body": "Kubernetes registered this host. Waiting for readiness.",
-                      "href": "/nodes"})
+                      "href": f"/nodes?node={name}"})
         if ready:
             facts.append({"key": f"joins:{uid}:ready", "category": "joins", "event": True, "severity": "info",
-                          "title": f"Host {name} is ready", "body": "Kubernetes reports this host as Ready.", "href": "/nodes"})
+                          "title": f"Host {name} is ready", "body": "Kubernetes reports this host as Ready.", "href": f"/nodes?node={name}"})
     return facts
 
 
@@ -352,7 +352,8 @@ def update_facts(report):
                                 else f"Update available: {workload['name']}"),
                       "body": ("Review this update in Settings › Updates." if own
                                else f"A newer image is available{f' ({tags})' if tags else ''}"),
-                      "href": "/settings?tab=updates"})
+                      # Homestead's own card in Settings; an app's, the list of image updates.
+                      "href": "/settings?tab=updates#homesteadUpdateCard" if own else "/containers?panel=updates"})
     return facts
 
 

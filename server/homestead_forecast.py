@@ -18,6 +18,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 
 import homestead_shared as SHARED
 
@@ -173,6 +174,17 @@ def report(now=None):
     return sorted(out, key=lambda r: (r["days_left"] is None, r["days_left"] if r["days_left"] is not None else 0, r["label"]))
 
 
+def forecast_href(r):
+    """The page to review what fills: the volume, marked on Volumes; a disk
+    on its host's Storage section."""
+    if r.get("kind") == "volume":
+        name = r.get("label") or r.get("volume") or ""
+        return "/volumes" + (f"?find={urllib.parse.quote(name)}" if name else "")
+    if r.get("kind") == "disk" and r.get("node"):
+        return f"/nodes?node={urllib.parse.quote(r['node'])}&section=storage"
+    return "/volumes"
+
+
 def alert_facts(rows):
     """Something fills within WARN_DAYS: degraded; within CRIT_DAYS: critical."""
     facts = []
@@ -188,7 +200,7 @@ def alert_facts(rows):
                       "title": f"{what} fills up {when}",
                       "body": f"It is {r['pct']}% full and has grown {rate} over the last weeks; at that rate it is full by {r['full_on']}.",
                       "resolved": f"{what} is no longer forecast to fill within {WARN_DAYS} days",
-                      "href": "/storage" if r["kind"] == "volume" else "/nodes", "signals": {"days_left": round(left)}})
+                      "href": forecast_href(r), "signals": {"days_left": round(left)}})
     return facts
 
 

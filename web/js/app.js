@@ -84,9 +84,7 @@ async function applyDeepLink(v, params) {
     return window.openJob?.(params.job);
   }
   if(v === "cluster" && params.section === "health") {
-    const section=document.getElementById("clusterHealth");
-    section?.setAttribute("tabindex","-1");
-    section?.focus({preventScroll:true});section?.scrollIntoView({block:"start"});
+    window.focusInPage?.("clusterHealth");
     renderBreadcrumb(v,"Health");
     return;
   }
@@ -128,6 +126,10 @@ async function applyDeepLink(v, params) {
       detail = params.workload + " console";
       open = () => wlConsole(params.ns, params.workload, true);
     }
+  } else if (v === "workloads" && params.panel === "updates") {
+    // An image update's alert: the list of updates to review, not the page.
+    detail = "Image updates";
+    open = () => imageUpdateCenter();
   } else if (v === "storage" && params.panel === "edit" && params.ns && params.volume) {
     const volume = (STATE.data.vols || []).find(x =>
       (x.namespace || "lab") === params.ns && (x.pvc_name || x.name) === params.volume);
@@ -187,14 +189,20 @@ function go(v, options = {}) {
     $("#searchbtn")?.classList.remove("filtering");
   }
   const locationParams = options.fromLocation ? HomesteadRouter.queryParams(window.location.search) : null;
+  // The card a link names (#settingsHostUpdates), and a row to mark in it.
+  let anchor = options.anchor || "", mark = options.mark || "";
+  if (options.fromLocation && window.location.hash) {
+    try { anchor = decodeURIComponent(window.location.hash.slice(1)); } catch (_) { /* no card */ }
+  }
   if (locationParams) {
     STATE.q = typeof locationParams.q === "string" ? locationParams.q.trim() : "";
     $("#globalSearch").value = STATE.q;
     const find = typeof locationParams.find === "string" ? locationParams.find.trim() : "";
     if (find) {
       // Found and marked once, then dropped from the address, so a reload
-      // does not look for it again.
-      setTimeout(() => window.highlightInPage && highlightInPage(find), 300);
+      // does not look for it again. With a card named, it is marked in there.
+      if (anchor) mark = find;
+      else setTimeout(() => window.highlightInPage && highlightInPage(find), 300);
       const clean = new URL(window.location.href);
       clean.searchParams.delete("find");
       window.history.replaceState(window.history.state, "", clean.pathname + clean.search);
@@ -220,6 +228,7 @@ function go(v, options = {}) {
   // A new page starts at its top, not wherever the last one was scrolled to.
   window.scrollPageTop();
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
+    .then(() => { if (anchor && STATE.view === v) window.focusInPage?.(anchor, mark); })
     .catch(e => { resetPaint(); V().innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 window.go = go;
