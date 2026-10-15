@@ -340,8 +340,23 @@ function volumeShortCell(x) {
   const short = x.copies_short;
   if (!short) return "";
   if (!short.whole) return `<span class="pill crit" data-tip="No whole copy of this volume is left; Longhorn cannot rebuild it">no whole copy</span>`;
-  return `<span class="pill med" data-tip="Detached with ${short.whole} of ${short.wanted} copies. Longhorn rebuilds the rest only while the volume is attached, or offline when that is on">${short.whole} of ${short.wanted} copies</span>
-    <button class="btn sm" data-need="operator" data-tip="Rebuild the missing copies now, with the volume attached where nothing can mount it" onclick="event.stopPropagation();volumeRebuild(${jsq(x.name)})">Rebuild now</button>`;
+  return `<span class="pill med" data-tip="Detached with ${short.whole} of ${short.wanted} copies. Longhorn rebuilds the rest only while the volume is attached, or offline when that is on. Rebuild now is in the row's actions">${short.whole} of ${short.wanted} copies</span>`;
+}
+/* A volume row's buttons (#506): Rebuild now first when a detached volume is
+   short of copies, then Snapshots and Edit, the rest and Delete in ⋯. */
+function volumeActions(x) {
+  const vol = esc(JSON.stringify(x)), ns = jsq(x.namespace || "lab"), pvc = jsq(x.pvc_name || x.name);
+  const rebuild = x.copies_short?.whole ? { label: "Rebuild now", icon: "refresh", run: `volumeRebuild(${jsq(x.name)})`, need: "operator",
+    tip: "Rebuild the missing copies now, with the volume attached where nothing can mount it" } : null;
+  return actionBar([
+    rebuild,
+    { label: "Snapshots", icon: "snapshot", run: `lhSnaps(${jsq(x.name)},${pvc})`, tip: "Snapshots and backups of this volume: take one now, or restore" },
+    { label: "Edit", icon: "edit", run: `volumeEdit(${vol})`, need: "operator", tip: "Resize or change replicas" },
+    { label: "Browse files", icon: "list", run: `fileManager(${ns},${pvc},${x.state === "attached"},${esc(JSON.stringify(x.access_modes || []))})`, need: "admin", tip: "Browse and edit the files on this volume" },
+    { label: "Change storage class", icon: "move", run: `volumeReclass(${vol})`, need: "admin", tip: "Copy it to a volume on another class, under the same name" },
+    { label: "Fix ownership", icon: "shield", run: `volumeChown(${ns},${pvc})`, need: "admin", tip: "Hand this volume's files to the user the container runs as" },
+    { label: "Delete", icon: "trash", run: `volumeDelete(${vol})`, need: "admin", danger: true, tip: "Review attachment and data-loss impact before deleting" },
+  ], { shown: rebuild ? 3 : 2, label: `More actions for ${x.pvc_name || x.name}`, iconOnly: true });
 }
 window.volumeRebuild = async name => {
   try {
@@ -411,6 +426,9 @@ function volumeProgressWatch() {
         health.classList.toggle("hasreason", !!(volumeReason(x) || volumeBusy(x)));
       }
       if (usage) usage.innerHTML = volumeUsageCell(x);
+      // Rebuild now comes and goes with the copies; an open ⋯ is left alone.
+      const actions = row.querySelector("td.volactions");
+      if (actions && !actions.querySelector("details[open]")) actions.innerHTML = volumeActions(x);
     }
     volumeProgressWatch();
   }, 4000);
@@ -508,16 +526,7 @@ async function viewStorage() {
        <span class="tag ${+x.replicas === 1 || (x.copies?.length && x.copies.length < +x.replicas) ? "warn" : ""}" data-tip="${esc(volumeCopiesTip(x))}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
      <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
      <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
-     <td class="volactions"><div class="row">
-       <button class="iconbtn" data-tip="Snapshots and backups of this volume: take one now, or restore" onclick="lhSnaps(${jsq(x.name)},${jsq(x.pvc_name || x.name)})">${icon("snapshot")}</button>
-       <button class="iconbtn" data-need="operator" data-tip="Resize or change replicas" onclick='volumeEdit(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("edit")}</button>
-       <details class="actionmenu"><summary class="iconbtn" title="More actions" aria-label="More actions for ${esc(x.pvc_name || x.name)}">⋯</summary><div class="actionmenu-pop">
-         <button data-need="admin" title="Browse and edit the files on this volume" onclick="this.closest('details').open=false;fileManager(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)},${x.state === "attached"},${esc(JSON.stringify(x.access_modes || []))})">${icon("list")}Browse files</button>
-         <button data-need="admin" title="Copy it to a volume on another class, under the same name" onclick='this.closest("details").open=false;volumeReclass(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("move")}Change storage class</button>
-         <button data-need="admin" title="Hand this volume's files to the user the container runs as" onclick="this.closest('details').open=false;volumeChown(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${icon("shield")}Fix ownership</button>
-         <button class="danger" data-need="admin" title="Review attachment and data-loss impact before deleting" onclick='this.closest("details").open=false;volumeDelete(${JSON.stringify(x).replace(/'/g, "&#39;")})'>${icon("trash")}Delete</button>
-       </div></details>
-     </div></td>
+     <td class="volactions" data-actions>${volumeActions(x)}</td>
       </tr>`).join("") || `<tr><td colspan=7 class="empty">No volumes to show.</td></tr>`}
    </tbody></table></div></div>
   ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume moved to another storage class, kept in case the new copy disappoints. Remove each once its app works on the new one.")}</div>
