@@ -910,10 +910,7 @@ window.lhSnapDeleteGo = async () => {
 window.lhTarget = () => {
   const t = (STATE.data.lh || {}).target || {};
   modal("Backup target", `
-    <p class="muted small">Where Longhorn uploads backups. Snapshots do not need this —
-    they live on the volume. Backups do.</p>
-    ${t.harvester ? `<div class="note">On Harvester this is saved as Harvester's own <span class="mono">backup-target</span> setting,
-      which it passes to Longhorn and uses for VM backups too. Harvester takes NFS or S3, and writes to the top of an S3 bucket.</div>` : ""}
+    ${UI.lead("Where Longhorn uploads backups. Snapshots don't need this; they live on the volume. Backups do.")}
     <div class="f" style="margin-top:14px"><label>Target URL</label>
       <input type="text" id="bt_url" value="${esc(t.url || "")}"
         placeholder="nfs://192.0.2.177:/mnt/user/backups">
@@ -936,11 +933,10 @@ window.lhTarget = () => {
       <div class="f"><label>Poll interval</label>
         <input type="text" id="bt_poll" value="${esc(t.interval || "5m")}"></div>
     </div>
+    ${UI.more("NFS exports", `<p>The export must be reachable from every host and allow root writes, otherwise backups fail with a permission error that only shows up on the first scheduled run.</p>`)}
+    ${UI.more("On Harvester", `<p>${t.harvester ? "This" : "On Harvester this"} is saved as Harvester's own <span class="mono">backup-target</span> setting, which it passes to Longhorn and uses for VM backups too. Harvester takes NFS or S3, and writes to the top of an S3 bucket.</p>`)}
     ${UI.actions(`<button class="btn pri" onclick="lhTargetSave()">Save target</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">For NFS the export must be reachable from every host
-    and allow root writes, otherwise backups fail with a permission error that only shows up on the
-    first scheduled run.</div>`);
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   const s3 = () => { $("#bt_s3").hidden = !$("#bt_url").value.trim().startsWith("s3://"); };
   $("#bt_url").addEventListener("input", s3); s3();
 };
