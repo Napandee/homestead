@@ -39,6 +39,12 @@ The form asks, in order:
   and storage. **Remove container** removes a draft definition; at least one
   stays. **Pod copies** controls how many copies of the whole pod run, so two
   containers with two pod copies means two pods, each running both containers.
+- **When the cluster is short of room.** Under **Optional settings**, a new
+  app can start as **Critical**, **Normal** (the default) or **Low**; see
+  [Priority tiers](#priority-tiers). It applies to a new workload, not to a
+  container added to one that exists, and the review shows the class it will
+  use. If the app is put in a group later, it follows the group's tier only
+  while it was left at Normal.
 - **Memory reserved and Memory max.** Reserved memory is the scheduler's
   request; optional Memory max is the container's enforced limit and must be
   at least the request. Leave max blank for no container memory limit. A limit

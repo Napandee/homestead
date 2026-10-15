@@ -2304,6 +2304,13 @@ function generatedSecret() {
   const bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+/* A new app's tier (#431), chosen as Edit chooses it. Normal writes no class. */
+function deployTierField(tier) {
+  if (!["critical", "normal", "low"].includes(tier)) tier = "normal";
+  return `<div class="f"><label>When the cluster is short of room</label>${prioritySelect("d_priority", tier,
+    `aria-label="Tier when the cluster is short of room" aria-describedby="d_priority_help" onchange="$('#d_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}
+    <div class="dim small" id="d_priority_help" aria-live="polite">${esc(PRIORITY_HELP[tier])}</div></div>`;
+}
 async function viewDeploy(pre) {
   pre = pre || window.__deployPrefill;
   window.__deployPrefill = null;
@@ -2356,6 +2363,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
+      <div id="d_priority_wrap">${UI.more("Optional settings", deployTierField(DCFG.priority))}</div>
     `},
     {key:"hardware", title:"Hardware and access", lead:"Set resources and host access for the first container.", html:`
       <div class="f2 compact-fields">
@@ -2442,6 +2450,7 @@ function applyDeployMode() {
   $("#d_workload_name_wrap").style.display = joining ? "none" : "block";
   $("#d_rep_wrap").style.display = joining ? "none" : "block";
   $("#d_add_container").hidden = joining;
+  $("#d_priority_wrap").hidden = joining;   // the app it joins keeps its own tier
   $("#d_extra_wrap").hidden = joining;
   $("#d_extra_join").hidden = !joining;
   const host = [...$("#d_net").options].find(o => o.value === "host");
@@ -2459,6 +2468,7 @@ function collect() {
   DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim();
   DCFG.memory_limit = $("#d_mem_limit").value.trim(); DCFG.icon = $("#d_icon").value.trim();
   if ($("#d_mon")) DCFG.monitoring = monitoringFieldValue("d");
+  DCFG.priority = $("#d_priority")?.value || "normal";
   DCFG.hardware = selectedHardware("d_hw");
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;

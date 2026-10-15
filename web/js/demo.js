@@ -766,7 +766,8 @@
       const containerName = body.container_name || body.name;
       return { deployment: { apiVersion: "apps/v1", kind: "Deployment",
           metadata: { name: joining ? body.target_workload : workloadName, namespace: body.namespace },
-          spec: { template: { spec: { containers: [{ name: containerName, image: body.image }] } } } },
+          spec: { template: { spec: { containers: [{ name: containerName, image: body.image }],
+            ...(!joining && ["critical", "low"].includes(body.priority) ? { priorityClassName: "homestead-" + body.priority } : {}) } } } },
         service: null, capacity: { additional: 1, pod_request_gb: 0.25, pod_memory_gb: 0.5,
           pod_cpu_request_percent: 10, blocked: false, requires_confirmation: joining,
           ...(joining ? { rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["demo-pod"], release_request_gb: 0.25 } } : {}),
