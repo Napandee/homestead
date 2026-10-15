@@ -3632,6 +3632,8 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
   .tbl.stack.compact.restore-table tr{grid-template-columns:minmax(0,1fr)}
   .tbl.stack.compact.restore-table td{white-space:normal;min-width:0}
   .tbl.stack.compact.restore-table td[data-actions]{justify-self:end}
+  /* A cell's lines stay on lines of their own, not inline as in other compact tables (#542). */
+  .tbl.stack.compact.restore-table td>div{display:block}
 }
 
 /* The sign-in in front of Homestead (Cloudflare Access) has lapsed (auth.js). */
