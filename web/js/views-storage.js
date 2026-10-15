@@ -462,8 +462,8 @@ function otherVolumesHtml(rows) {
       <td data-label="Mode"><span class="tag">${esc(r.access_modes.map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", ") || "?")}</span></td>
       <td data-label="State"><span class="pill ${r.phase === "Bound" ? "ok" : "crit"}">${esc(r.phase === "Bound" ? "in use" : r.phase || "unknown")}</span>
         ${r.reason ? `<div class="dim xs" style="margin-top:4px">${esc(r.reason)}</div>` : ""}</td>
-      <td data-label="">${UI.button("Delete", `volumeDelete(${JSON.stringify({ name: r.volume || "", pvc_name: r.name, namespace: r.namespace })})`,
-        { kind: "danger", attrs: 'data-need="admin" title="Review what uses it and what would be lost before deleting"' })}</td></tr>`).join("")}</tbody></table></div></div>`;
+      <td data-actions>${actionBar([{ label: "Delete", icon: "trash", run: `volumeDelete(${esc(JSON.stringify({ name: r.volume || "", pvc_name: r.name, namespace: r.namespace }))})`,
+        need: "admin", danger: true, tip: "Review what uses it and what would be lost before deleting" }], { shown: 0, label: `Actions for ${r.name}` })}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 
 async function viewStorage() {
