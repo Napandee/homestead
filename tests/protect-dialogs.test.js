@@ -42,3 +42,48 @@ test("the destination name is checked at its field, not in a box", async () => {
   assert.doesNotMatch(check, /note (bad|good)/);
   assert.match(check, /ui-field-error/);
 });
+
+const body = name => { const from = src.indexOf(`window.${name} =`); assert.ok(from >= 0, name); return src.slice(from, src.indexOf("\n};\n", from)); };
+
+test("Protection plans and Protect open with a lead, not a muted paragraph", () => {
+  for (const name of ["lhPlans", "lhAssign"]) {
+    assert.match(body(name), /UI\.lead\(/, name);
+    assert.doesNotMatch(body(name), /<p class="muted small">/, name);
+  }
+});
+
+test("Snapshots says once how to read it, and its actions sit in a Close footer", () => {
+  const snaps = body("lhSnaps");
+  assert.match(snaps, /UI\.lead\("Oldest first\. Restore or browse any snapshot or backup\."\)/);
+  assert.doesNotMatch(snaps, /Checkpoint ancestry can branch/);
+  assert.doesNotMatch(src, /No active Longhorn purge reported/);
+  assert.match(snaps, /UI\.actions\([\s\S]*Take snapshot now[\s\S]*UI\.cancel\("Close"\)/);
+  assert.doesNotMatch(snaps, /<div class="row" style="margin-bottom:16px">/);
+});
+
+test("Backups has one notice when the volume is gone, and a Close footer", () => {
+  const backups = body("lhBackupList");
+  assert.match(backups, /UI\.callout\("warn", "The volume is gone"/);
+  assert.doesNotMatch(backups, /class="note/);
+  assert.match(backups, /UI\.cancel\("Close"\)/);
+});
+
+test("Backup target opens with a lead and keeps its explanations in UI.more", () => {
+  const target = body("lhTarget");
+  assert.match(target, /UI\.lead\(/);
+  assert.doesNotMatch(target, /class="note/);
+  assert.equal((target.match(/UI\.more\(/g) || []).length, 2);
+});
+
+test("warning and error boxes in Data Protection only go down", () => {
+  assert.ok((src.match(/class="note (warn|bad)/g) || []).length <= 2, "use UI.callout for a notice");
+});
+
+test("New storage class says nothing about migration until Live-migratable is ticked", () => {
+  const storage = fs.readFileSync("web/js/views-storage.js", "utf8");
+  assert.match(storage, /<div id="sc_hint" hidden><\/div>/);
+  assert.match(storage, /Live-migratable · for VM disks \$\{tip\("Migratable is for VM live migration/);
+  const hint = storage.slice(storage.indexOf("window.storageClassHint"), storage.indexOf("\n};\n", storage.indexOf("window.storageClassHint")));
+  assert.match(hint, /hint\.hidden = !on/);
+  assert.match(hint, /UI\.callout\("warn"/);
+});
