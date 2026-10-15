@@ -14,7 +14,7 @@ function element() {
     get firstChild() { return this.children[0] || null; },
     replaceChildren(...nodes) { this.children = nodes; },
     addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); },
-    querySelector() { return null; },
+    querySelector() { return null; }, querySelectorAll() { return []; }, focus() {},
   };
 }
 function field(value = "", type = "text") {

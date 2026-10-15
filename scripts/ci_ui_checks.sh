@@ -24,6 +24,7 @@ case "${1:-}" in
     node scripts/check_node_vip.mjs
     node scripts/check_image_admission.mjs
     node scripts/check_import_admission.mjs
+    node scripts/check_dialog_focus.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs

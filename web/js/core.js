@@ -264,11 +264,38 @@ window.openHardwareManager = cls => {
 window.hardwareManagerBack = () => modalBack();
 
 /* ---------------- toast / modal ---------------- */
+/* A toast is announced (#486): a failure as an alert, which stays until it
+   is dismissed or a newer failure replaces it, so a person who looked away
+   still sees why; anything else politely, for a few seconds. */
 function toast(msg, kind = "") {
   liftToasts();
+  const box = $("#toast");
+  if (kind === "bad") [...box.children].filter(old => old.dataset.stays).forEach(old => old.remove());
   const d = document.createElement("div");
-  d.className = "tst " + kind; d.textContent = msg;
-  $("#toast").appendChild(d); setTimeout(() => d.remove(), 4200);
+  d.className = "tst " + kind;
+  if (kind === "bad") {
+    d.setAttribute("role", "alert");
+    d.dataset.stays = "1";
+    const text = document.createElement("span"); text.textContent = msg;
+    const close = document.createElement("button");
+    close.setAttribute("type", "button"); close.setAttribute("aria-label", "Dismiss"); close.className = "tst-close"; close.textContent = "×";
+    close.addEventListener("click", () => d.remove());
+    // It stays while the person looks away, and goes at their next action:
+    // toasts sit where a dialog's main button is, so it must not stay on top.
+    const leave = event => {
+      if (box.contains(event.target)) return;
+      d.remove();
+      document.removeEventListener("pointerdown", leave, true);
+      document.removeEventListener("keydown", leave, true);
+    };
+    document.addEventListener("pointerdown", leave, true);
+    document.addEventListener("keydown", leave, true);
+    d.appendChild(text); d.appendChild(close);
+  } else {
+    d.setAttribute("role", "status"); d.textContent = msg;
+    setTimeout(() => d.remove(), 4200);
+  }
+  box.appendChild(d);
 }
 /* Toasts and the job tray share the bottom-right corner, so toasts stand on
    top of the tray - however tall it is, open or closed - rather than over it. */
@@ -282,6 +309,8 @@ if (window.ResizeObserver && $("#jobTray")) {
   new MutationObserver(liftToasts).observe($("#jobTray"), { attributes: true, attributeFilter: ["class"] });
 }
 function modal(t, h, wide, contextClass = "") {
+  const opening = !modalIsOpen(), retitled = $("#mtitle").textContent !== t;
+  if (opening) MODAL_OPENER = document.activeElement;
   if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
   window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
@@ -297,8 +326,31 @@ function modal(t, h, wide, contextClass = "") {
   $("#modal").classList.remove("hidden");
   paintModalBack();
   modalHeadHeight();
+  if (opening || retitled) focusModal();
 }
 
+/* Focus in a dialog (#486): opening one moves focus into it - its first
+   field, or its title on a touch screen, where a field would raise the
+   keyboard - Tab stays inside it, and closing gives focus back to what
+   opened it. */
+let MODAL_OPENER = null;
+const MODAL_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+function focusModal() {
+  const touch = window.matchMedia?.("(pointer: coarse)").matches;
+  const field = touch ? null : [...$("#mbody").querySelectorAll("input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])")]
+    .find(el => el.offsetParent);
+  (field || $("#mtitle")).focus({ preventScroll: true });
+}
+const restoreFocus = el => { if (el?.isConnected && typeof el.focus === "function") el.focus({ preventScroll: true }); };
+document.addEventListener("keydown", event => {
+  if (event.key !== "Tab" || !modalIsOpen() || document.querySelector(".askdlg")) return;
+  const box = $(".modalbox"), items = [...box.querySelectorAll(MODAL_FOCUSABLE)].filter(el => el.offsetParent);
+  if (!items.length) return;
+  const first = items[0], last = items.at(-1), here = document.activeElement;
+  if (!box.contains(here)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+  else if (event.shiftKey && (here === first || here === $("#mtitle"))) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && here === last) { event.preventDefault(); first.focus(); }
+});
 /* What a person has changed in the open dialog (#459). A field's value is
    noted when a person first reaches for it - after any code has filled it
    in - so only their own edits count, and a field put back as it was is not
@@ -341,7 +393,7 @@ function pushModal(onReturn) {
   const body = $("#mbody"), fragment = document.createDocumentFragment();
   const scroll = $(".modalbox").scrollTop;     // the box scrolls, not its body
   while (body.firstChild) fragment.appendChild(body.firstChild);
-  MODAL_STACK.push({ title: $("#mtitle").textContent, fragment, scroll,
+  MODAL_STACK.push({ title: $("#mtitle").textContent, fragment, scroll, focus: document.activeElement,
     wide: $(".modalbox").classList.contains("wide"), context: $(".modalbox").dataset.context || "",
     guard: window.__modalGuard, edits: MODAL_EDITS, url: window.location.pathname + window.location.search,
     route: STATE.modalRoute, detail: STATE.modalDetail, onReturn });
@@ -365,6 +417,7 @@ function modalBack() {
   modal(back.title, "", back.wide, back.context);
   $("#mbody").replaceChildren(back.fragment);
   $(".modalbox").scrollTop = back.scroll;
+  restoreFocus(back.focus);
   window.__modalGuard = back.guard;
   MODAL_EDITS = back.edits;
   if (back.url !== window.location.pathname + window.location.search) {
@@ -440,9 +493,11 @@ function askDialog(message, { title = "", ok = "", cancel = "", danger = false, 
       field.value = input.value || "";
       field.placeholder = input.placeholder || "";
     }
+    const before = document.activeElement;
     const done = answer => {
       document.removeEventListener("keydown", key, true);
       layer.remove();
+      if (before?.isConnected && typeof before.focus === "function") before.focus({ preventScroll: true });
       resolve(input ? (answer ? field.value : null) : answer);
     };
     const key = event => {
@@ -488,6 +543,7 @@ function closeModal(updateRoute = true) {
   MODAL_STACK.length = 0;
   paintModalBack();
   $("#modal").classList.add("hidden");
+  const opener = MODAL_OPENER; MODAL_OPENER = null; restoreFocus(opener);
   if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
   if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
   if (window.__consoleSocket) { window.__consoleSocket.close(); window.__consoleSocket = null; }
