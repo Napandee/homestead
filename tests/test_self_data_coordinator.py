@@ -151,6 +151,15 @@ class Cluster:
         job = self.objects[self.job_path]
         job["status"] = {"conditions": [{"type": "Complete", "status": "True"}]}
         pod = obj("Pod", "copy-pod", copy.deepcopy(job["spec"]["template"]["spec"]), owner=("Job", job["metadata"]["uid"]))
+        # What a real Job pod carries, as a pod list returns it: the template's
+        # labels plus the Job controller's, its tracking finalizer until the
+        # controller has counted the pod, and no kind or apiVersion on the item.
+        pod["metadata"]["labels"] = {**job["spec"]["template"]["metadata"]["labels"],
+                                     "controller-uid": job["metadata"]["uid"], "job-name": job["metadata"]["name"],
+                                     "batch.kubernetes.io/controller-uid": job["metadata"]["uid"],
+                                     "batch.kubernetes.io/job-name": job["metadata"]["name"]}
+        pod["metadata"]["finalizers"] = ["batch.kubernetes.io/job-tracking"]
+        pod.pop("kind"); pod.pop("apiVersion")
         pod["spec"]["nodeName"] = "node1"
         pod["status"] = {"phase": "Succeeded", "containerStatuses": [{"name": "copy", "containerID": "containerd://copy-runtime",
                           "restartCount": 0, "state": {"terminated": {"exitCode": 0}}}]}
@@ -302,6 +311,42 @@ class CoordinatorTests(unittest.TestCase):
                 c.put("/api/v1/namespaces/lab/pods/another", other)
             with self.subTest(failure=failure), self.assertRaises(Held): c.step()
             self.assertNotIn("release-copy", [e["step"] for e in c.fresh().load(**c.handle).item()["ref"]["storage_writes"]])
+
+    def test_copy_receipt_holds_the_real_pod_to_its_dry_run(self):
+        """The finished copy pod gets the dry run's admitted() check (#467): its
+        security contexts, priority and labels must be what was reviewed, with
+        only the Job controller's additions allowed."""
+        for failure in ("pod-security", "container-security", "priority", "label", "finalizer", "unread-classes"):
+            c = Cluster(); c.copying(); c.finish_copy()
+            pod = c.objects["/api/v1/namespaces/lab/pods/copy-pod"]
+            if failure == "pod-security": pod["spec"]["securityContext"] = {}
+            if failure == "finalizer": pod["metadata"]["finalizers"].append("example.com/keep")
+            if failure == "container-security": pod["spec"]["containers"][0]["securityContext"]["privileged"] = True
+            if failure == "priority": pod["spec"].update(priorityClassName="x-critical", priority=100000)
+            if failure == "label": pod["metadata"]["labels"]["app"] = "other"
+            if failure == "unread-classes":
+                # A class admission would add from a default: with the classes unreadable it can't be confirmed (#466).
+                pod["spec"].update(priorityClassName="site-default", priority=1000)
+                read = c.read
+                def unread(path):
+                    if path.endswith("/priorityclasses"):
+                        raise urllib.error.HTTPError(path, 500, "boom", {}, None)
+                    return read(path)
+                c.read = unread
+            with self.subTest(failure=failure), self.assertRaises(Held): c.step()
+            self.assertNotIn("release-copy", [e["step"] for e in c.fresh().load(**c.handle).item()["ref"]["storage_writes"]])
+
+    def test_copy_receipt_accepts_the_clusters_default_class_on_the_real_pod(self):
+        """What admission gives every pod from a globalDefault PriorityClass (#437) is accepted, as in the dry run."""
+        c = Cluster(); c.copying(); c.finish_copy()
+        c.objects["/api/v1/namespaces/lab/pods/copy-pod"]["spec"].update(priorityClassName="site-default", priority=1000)
+        read = c.read
+        def with_default(path):
+            if path.endswith("/priorityclasses"):
+                return {"items": [{"metadata": {"name": "site-default"}, "value": 1000, "globalDefault": True}]}
+            return read(path)
+        c.read = with_default
+        self.assertEqual("verify", c.step()["phase"])
 
     def test_copy_log_pod_replacement_is_rejected(self):
         c = self.c; c.copying(); c.finish_copy(); worker = c.worker()
