@@ -254,7 +254,7 @@ def alert_facts(rep):
              "title": f"Homestead's data volume is {pct:.0f}% full",
              "body": f"The most is in {biggest}. Homestead now keeps less of its logs and logos; if it keeps filling, "
                      "make its data volume larger under Volumes.",
-             "resolved": "Homestead's data volume has room again", "href": "/settings#homestead-data",
+             "resolved": "Homestead's data volume has room again", "href": "/settings?tab=about#homestead-data",
              "signals": {"pct": round(pct)}}]
 
 

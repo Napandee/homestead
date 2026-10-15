@@ -105,6 +105,11 @@ UPGRADE = {
 BLK = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 
 
+def updates_href(node):
+    """Settings > Updates, at the Host updates card, with this host marked."""
+    return f"/settings?tab=updates&find={node}#settingsHostUpdates"
+
+
 def bind(_kget, _hostrun, _platform, data_dir="/data"):
     global kget, hostrun, platform, DATA_DIR
     kget, hostrun, platform, DATA_DIR = _kget, _hostrun, _platform, data_dir
@@ -491,7 +496,7 @@ def alert_facts(state=None):
             facts.append({"key": f"hostos:{node}:security", "category": "updates", "severity": "degraded",
                           "title": f"{node} has {host['security']} security update{'s' if host['security'] != 1 else ''}",
                           "resolved": f"No security updates reported on {node}",
-                          "body": "Review host updates in Settings › Updates.", "href": "/settings?tab=updates",
+                          "body": "Review host updates in Settings › Updates.", "href": updates_href(node),
                           "signals": {"security_updates": host["security"]}})
         auto = host.get("auto") or {}
         if auto.get("on") and auto.get("reboots") and not auto.get("held"):
@@ -500,20 +505,20 @@ def alert_facts(state=None):
                           "resolved": f"{node} no longer restarts itself for updates",
                           "body": ("unattended-upgrades has Automatic-Reboot on, so it restarts without a drain. "
                                    "Review host update and restart settings in Settings › Updates."),
-                          "href": "/settings?tab=updates"})
+                          "href": updates_href(node)})
         if host.get("reboot"):
             facts.append({"key": f"hostos:{node}:reboot", "category": "updates", "severity": "info",
                           "title": f"{node} needs a restart to finish an update", "resolved": f"Restart requirement cleared on {node}",
-                          "body": host.get("reboot_for") or "", "href": "/settings?tab=updates"})
+                          "body": host.get("reboot_for") or "", "href": updates_href(node)})
         if host.get("failed_units"):
             facts.append({"key": f"hostos:{node}:failed", "category": "degraded", "severity": "degraded",
                           "title": f"{node}: {', '.join(host['failed_units'][:3])} failed",
                           "resolved": f"No failed services reported on {node}", "body": "Review failed services on the host.", "signals": {unit: 1 for unit in host["failed_units"]},
-                          "href": "/nodes"})
+                          "href": f"/nodes?node={node}&section=hostos"})
         if host.get("root_used_pct", 0) >= 90:
             facts.append({"key": f"hostos:{node}:root", "category": "degraded", "severity": "degraded",
                           "title": f"{node}'s root filesystem is {host['root_used_pct']}% full",
-                          "resolved": f"Root filesystem usage is below 90% on {node}", "href": "/nodes",
+                          "resolved": f"Root filesystem usage is below 90% on {node}", "href": f"/nodes?node={node}&section=hostos",
                           "signals": {"used_percent_band": int(host["root_used_pct"] // 5)}})
     return facts
 

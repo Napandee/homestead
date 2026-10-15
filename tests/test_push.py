@@ -215,9 +215,13 @@ class AlertTests(unittest.TestCase):
             {"ns": "lab", "name": "homestead", "homestead": "self", "available": True,
              "images": [{"available": True, "remote_digest": "sha256:h", "candidate_tag": "2.9.0"}]},
             {"ns": "lab", "name": "homestead-nfs", "homestead": "nfs", "available": True,
-             "images": [{"available": True, "remote_digest": "sha256:n", "candidate_tag": "3.21"}]}]})
-        self.assertEqual([("Homestead 2.9.0 is available", "/settings?tab=updates"),
-                          ("Update available: homestead-nfs", "/settings?tab=updates")],
+             "images": [{"available": True, "remote_digest": "sha256:n", "candidate_tag": "3.21"}]},
+            {"ns": "lab", "name": "grafana", "available": True,
+             "images": [{"available": True, "remote_digest": "sha256:g", "candidate_tag": "11.2"}]}]})
+        # Review opens Homestead's own update card; an app's, the list of image updates.
+        self.assertEqual([("Homestead 2.9.0 is available", "/settings?tab=updates#homesteadUpdateCard"),
+                          ("Update available: homestead-nfs", "/settings?tab=updates#homesteadUpdateCard"),
+                          ("Update available: grafana", "/containers?panel=updates")],
                          [(f["title"], f["href"]) for f in facts])
 
 

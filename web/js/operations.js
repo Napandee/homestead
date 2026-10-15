@@ -190,9 +190,12 @@ window.openOperation = (href, id = "", savedOperation = null) => {
   const q = (url.searchParams.get("find") || url.searchParams.get("q") || "").trim();
   url.searchParams.delete("find");
   url.searchParams.delete("q");
-  go(route.view, { params: Object.fromEntries(url.searchParams) });
+  // #card names the card on the page; the name is then marked inside it.
+  let anchor = "";
+  try { anchor = decodeURIComponent(url.hash.slice(1)); } catch (_) { /* no card */ }
+  go(route.view, { params: Object.fromEntries(url.searchParams), anchor, mark: anchor ? q : "" });
   const opensItsOwn = ["reclass", "image-update", "image-rollback"].includes(operation?.kind);
-  if (q && !opensItsOwn) highlightInPage(q);
+  if (q && !opensItsOwn && !anchor) highlightInPage(q);
   // An image update or rollback opens its rollout, as it looked when it ran.
   const target = operation?.resource || {};
   if (operation?.kind === "vm-power" && target.name && window.vmOpen)
@@ -205,18 +208,47 @@ window.openOperation = (href, id = "", savedOperation = null) => {
 /* Bring the row or card that mentions this name into view and mark it for a
    moment, once the page has drawn. The name must match a whole word, so
    "frigate" does not land on "frigate-config". */
+const wholeWord = name => new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9-])`, "i");
+const flashFound = el => {
+  el.classList.add("flash-find");
+  setTimeout(() => el.classList.remove("flash-find"), 2600);
+};
 function highlightInPage(name, tries = 8) {
-  const words = new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9-])`, "i");
+  const words = wholeWord(name);
   const find = () => [...document.querySelectorAll("#views tr, #views .card, #views [data-vol], #views .wlcard, #views .row-item")]
     .filter(el => el.offsetParent !== null && words.test(el.innerText || ""))
     .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
   const el = find();
   if (!el) { if (tries > 0) setTimeout(() => highlightInPage(name, tries - 1), 400); return; }
   el.scrollIntoView({ block: "center", behavior: "smooth" });
-  el.classList.add("flash-find");
-  setTimeout(() => el.classList.remove("flash-find"), 2600);
+  flashFound(el);
 }
 window.highlightInPage = highlightInPage;
+/* A link can name the card to review as well as the page -
+   /settings?tab=updates#settingsHostUpdates. A card that reads its own data
+   draws a spinner first, and while a card above it is still loading it is not
+   yet where it will end up; so this waits for the card and every visible one
+   before it, then brings it under the header and marks it. A name as well
+   (?find=) marks that row in the card. Six seconds at most: a card that never
+   finishes loading still gets scrolled to. */
+function focusInPage(id, mark = "", tries = 24) {
+  const el = id ? document.getElementById(id) : null;
+  const shown = !!el && el.offsetParent !== null;
+  const loading = shown && [...document.querySelectorAll("#views .spin2")].some(spin => spin.offsetParent !== null
+    && (el.contains(spin) || !!(spin.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)));
+  if ((!shown || loading) && tries > 0) { setTimeout(() => focusInPage(id, mark, tries - 1), 250); return; }
+  if (!shown) { if (mark) highlightInPage(mark); return; }
+  el.classList.add("anchor-target");
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ block: "start" });
+  const words = mark ? wholeWord(mark) : null;
+  const row = words && [...el.querySelectorAll("tr, .row-item, .wlcard")]
+    .filter(item => item.offsetParent !== null && words.test(item.innerText || ""))
+    .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+  flashFound(row || el);
+}
+window.focusInPage = focusInPage;
 
 window.dismissFinishedOperations = async () => {
   try {

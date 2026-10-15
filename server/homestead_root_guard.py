@@ -119,5 +119,5 @@ def alert_facts():
                       "resolved": f"Root filesystem protection cleared on {node}",
                       "body": (f"{row.get('free_gb')} GB free of {row.get('total_gb')} GB. Copies already there stay; "
                                "Review disk usage and move replicas or expand storage to free space."),
-                      "href": "/nodes"})
+                      "href": f"/nodes?node={node}&section=storage"})
     return facts
