@@ -43,6 +43,7 @@ test("a k3s VM's cluster and role tags are the shared neutral cluster tag", () =
   const src = read("web/js/views-vms.js");
   assert.doesNotMatch(src, /vmClusterTag = v => v\.cluster \? `<span class="tag info"/);
   assert.doesNotMatch(src, /<span class="tag info">server<\/span>/);
+  assert.doesNotMatch(src, /UI\.chip\("server", "info"\)/, "the k3s review's role chips are neutral too");
 });
 
 test("an Unraid VM that is shut off has a pill, as Stopped does", () => {
