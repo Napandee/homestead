@@ -655,9 +655,10 @@ function snapshotTimeline(snaps, vol, label) {
 
 let SNAPSHOT_REFRESH = 0, SNAPSHOT_TIMER = null;
 function snapshotCleanupHtml(p) {
-  if (!p || p.error) return `<div class="note warn">Cleanup progress unavailable${p?.error ? `: ${esc(p.error)}` : ""}. Retrying; no completion is assumed.</div>`;
-  if (p.errors?.length) return `<div class="note bad"><b>Longhorn cleanup error</b><p>${p.errors.map(esc).join("; ")}</p></div>`;
-  if (!p.active) return `<div class="dim small">${p.known ? "No active Longhorn purge reported. Marked snapshots may still be waiting for a new boundary or controller cleanup." : "No engine status available; the volume may be detached. Cleanup progress is unknown."}</div>`;
+  if (!p || p.error) return UI.callout("warn", "Cleanup progress unavailable", `${p?.error ? `${esc(p.error)}. ` : ""}Retrying; no completion is assumed.`);
+  if (p.errors?.length) return UI.callout("bad", "Longhorn cleanup error", p.errors.map(esc).join("; "));
+  // Nothing is being cleaned up: nothing to say (#501).
+  if (!p.active) return "";
   const pct = p.percent;
   return `<div class="note"><div class="between"><b>Longhorn cleanup ${pct == null ? "in progress" : `${+pct}%`}</b><span class="tag warn">Merging / purging</span></div>
     ${pct == null ? '<span class="spin2"></span>' : `<div class="meter" role="progressbar" aria-label="Longhorn volume cleanup" aria-valuenow="${+pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.max(0, Math.min(100, +pct))}%"></span></div>`}
@@ -676,7 +677,7 @@ async function refreshSnapshotDialog(token, vol, label) {
     host.innerHTML = snapshotCleanupHtml(progress) + `<div class="sec">Snapshots (${snaps.length})</div>` + snapshotTimeline(snaps, vol, label);
     if (window.applyRole) applyRole();
   } catch (e) {
-    if ($("#snapshot_live") === host) host.innerHTML = `<div class="note warn">Snapshot refresh failed: ${esc(e.message)}. Retrying; previous cleanup may still be running.</div>`;
+    if ($("#snapshot_live") === host) host.innerHTML = UI.callout("warn", "Snapshot refresh failed", `${esc(e.message)}. Retrying; previous cleanup may still be running.`);
   }
   if ($("#snapshot_live") === host) {
     clearTimeout(SNAPSHOT_TIMER);
@@ -693,17 +694,17 @@ window.lhSnaps = async (vol, label) => {
       api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(() => []),
     ]);
     if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
-    $("#mbody").innerHTML = `
-      <div class="row" style="margin-bottom:16px">
-        <button class="btn pri" data-need="operator" onclick="lhSnapNow(${jsq(vol)},${jsq(label)})">Take snapshot now</button>
-        <button class="btn" data-need="operator" onclick="lhBackupNow(${jsq(vol)},${jsq(label)})">Back up now</button>
-        <button class="btn" data-need="operator" data-tip="Give Longhorn back the space deleted files still hold. Every volume is also trimmed weekly." onclick="lhTrimNow(${jsq(vol)})">Trim now</button>
-        <button class="btn" onclick="lhSnaps(${jsq(vol)},${jsq(label)})">${icon("refresh")}Refresh</button>
-      </div>
-      <p class="dim small">Creation timeline, oldest first. Checkpoint ancestry can branch after rollback; this is not a dependency graph.</p>
+    // One lead, then the timeline; the volume's actions sit in the footer,
+    // the main one on the right and the rest in its ⋯ (#501).
+    $("#mbody").innerHTML = `${UI.lead("Oldest first. Restore or browse any snapshot or backup.")}
       <div id="snapshot_live" data-token="${token}"><div class="sec">Snapshots (${snaps.length})</div>${snapshotTimeline(snaps, vol, label)}</div>
       <div class="sec">Backups (${bks.length})</div>
-      ${backupTable(bks, vol, label)}`;
+      ${backupTable(bks, vol, label)}
+      ${UI.actions(actionBar([
+        { label: "Take snapshot now", run: `lhSnapNow(${jsq(vol)},${jsq(label)})`, need: "operator", pri: true },
+        { label: "Back up now", run: `lhBackupNow(${jsq(vol)},${jsq(label)})`, need: "operator" },
+        { label: "Trim now", run: `lhTrimNow(${jsq(vol)})`, need: "operator", tip: "Give Longhorn back the space deleted files still hold. Every volume is also trimmed weekly." },
+        { label: "Refresh", icon: "refresh", run: `lhSnaps(${jsq(vol)},${jsq(label)})` }], { shown: 1, label: `More for ${label}` }), UI.cancel("Close"))}`;
     if (window.applyRole) window.applyRole();
     refreshSnapshotDialog(token, vol, label);
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnaps(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
