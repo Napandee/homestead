@@ -718,7 +718,7 @@ function backupTable(bks, vol, label) {
       <td class="mono">${b.size_mb} MiB</td>
       <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
-        b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
+        b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)},${jsq(label)})`, need: "admin" } : null,
         { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")
       || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
   </tbody></table></div></div>`;
@@ -770,8 +770,8 @@ window.lhBackupNow = async (vol, label) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 let restoreCheckTimer = 0;
-window.lhRestore = async backup => {
-  modal("Restore backup", `<div class="empty"><span class="spin2"></span>checking backup and namespaces</div>`, true);
+window.lhRestore = async (backup, label = "") => {
+  modal(`Restore backup${label ? ` · ${label}` : ""}`, `<div class="empty"><span class="spin2"></span>checking backup and namespaces</div>`, true);
   try {
     const [plan, namespaces] = await Promise.all([
       api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=&name=`),
@@ -779,18 +779,18 @@ window.lhRestore = async backup => {
     ]);
     const preferred = typeof defaultNamespace === "function" ? defaultNamespace() : "lab";
     const defaultNs = namespaces.includes(preferred) ? preferred : (namespaces[0] || "default");
-    $("#mbody").innerHTML = `
-      <div class="note"><b>This creates a new PVC.</b> The backup and its source volume stay unchanged.
-        Restore progress stays under Jobs if this dialog is closed or Homestead is refreshed.</div>
-      <div class="drow"><div class="dl">Backup</div><div class="dv mono small">${esc(plan.backup)}</div></div>
-      <div class="drow"><div class="dl">Source volume</div><div class="dv mono small">${esc(plan.source_volume)}</div></div>
-      <div class="drow"><div class="dl">Original capacity</div><div class="dv">${plan.minimum_size_gb} GiB</div></div>
+    if (!label) { const title = $("#mtitle"); if (title) title.textContent = `Restore backup · ${plan.source_volume}`; }
+    $("#mbody").innerHTML = `${UI.lead("This makes a new PVC from the backup; the backup and its source volume stay as they are. Restoring carries on under Jobs if this dialog is closed.")}
+      ${UI.facts([["Backup", `<span class="mono small">${esc(plan.backup)}</span>`],
+        ["Source volume", `<span class="mono small">${esc(plan.source_volume)}</span>`],
+        ["Original capacity", `${plan.minimum_size_gb} GiB`]])}
       <div class="f2" style="margin-top:16px">
         <div class="f"><label>Namespace ${tip("The Kubernetes namespace that will own the new PersistentVolumeClaim.")}</label>
           <select id="lr_ns" onchange="lhRestoreCheck()">${namespaces.map(ns =>
             `<option value="${esc(ns)}" ${ns === defaultNs ? "selected" : ""}>${esc(ns)}</option>`).join("")}</select></div>
         <div class="f"><label>New PVC name ${tip("Must be unique in the selected namespace. Existing claims are never overwritten.")}</label>
-          <input id="lr_name" value="${esc(plan.suggested_name)}" oninput="lhRestoreCheck()"></div>
+          <input id="lr_name" value="${esc(plan.suggested_name)}" oninput="lhRestoreCheck()">
+          <div id="lr_check" class="ui-help" aria-live="polite"><span class="spin2"></span> Checking the name…</div></div>
       </div>
       <div class="f2">
         <div class="f"><label>Capacity (GiB) ${tip("May be larger than the backup volume, but never smaller.")}</label>
@@ -802,13 +802,12 @@ window.lhRestore = async backup => {
       <div class="f"><label>Storage class ${tip("The restored PVC uses this configured class. Replica count, disk tags and other storage settings come from it.")}</label>
         <select id="lr_sc" onchange="lhRestoreCheck()">${(plan.storage_classes || []).map(name => `<option value="${esc(name)}" ${name === plan.storage_class ? "selected" : ""}>${esc(name)}</option>`).join("")}</select>
         <div class="dim small">The restored volume keeps this class and its storage settings.</div></div>
-      <div id="lr_check" class="note"><span class="spin2"></span> checking destination name</div>
       ${UI.actions(`<button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
           onclick="lhRestoreStart(this.dataset.backup)" disabled>${icon("rollback")}Start restore</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (window.applyRole) window.applyRole();
     lhRestoreCheck();
-  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRestore(${jsArg(backup)})`, dialog: true }); }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRestore(${jsArg(backup)},${jsArg(label)})`, dialog: true }); }
 };
 window.lhRestoreCheck = () => {
   clearTimeout(restoreCheckTimer);
@@ -818,14 +817,17 @@ window.lhRestoreCheck = () => {
     const backup = button.dataset.backup || "";
     const ns = $("#lr_ns").value, name = $("#lr_name").value.trim();
     button.disabled = true;
-    if (!name) { box.className = "note bad"; box.textContent = "Enter a PVC name."; return; }
-    if (!$("#lr_sc").value) { box.className = "note bad"; box.textContent = "Create a regular Longhorn storage class before restoring."; return; }
-    box.className = "note"; box.innerHTML = '<span class="spin2"></span> checking destination name';
+    // The answer sits under the name field: help while checking or when the
+    // name is free, the field's error when it is not (#501).
+    const say = (error, text) => { box.className = error ? "ui-field-error" : "ui-help"; box.textContent = text; };
+    if (!name) return say(true, "Enter a PVC name.");
+    if (!$("#lr_sc").value) return say(true, "Create a regular Longhorn storage class before restoring.");
+    box.className = "ui-help"; box.innerHTML = '<span class="spin2"></span> Checking the name…';
     try {
       const plan = await api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
-      if (plan.conflict) { box.className = "note bad"; box.textContent = plan.conflict.message; }
-      else { box.className = "note good"; box.textContent = `${ns}/${name} is available. Existing PVCs will not be changed.`; button.disabled = false; }
-    } catch (e) { box.className = "note bad"; box.textContent = e.message; }
+      if (plan.conflict) say(true, plan.conflict.message);
+      else { say(false, `${ns}/${name} is free; nothing existing changes.`); button.disabled = false; }
+    } catch (e) { say(true, e.message); }
   }, 250);
 };
 window.lhRestoreStart = async backup => {
