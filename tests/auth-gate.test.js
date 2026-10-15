@@ -74,7 +74,7 @@ test("session loss during initialization cannot restart background polls", async
   t.ctx.startLoop = () => loops++;
   // Restore the real initialization function (the fixture normally stubs it).
   const auth = fs.readFileSync("web/js/auth.js", "utf8");
-  t.run(auth.slice(auth.indexOf("async function afterAuth()"), auth.indexOf("window.setRole =")));
+  t.run(auth.slice(auth.indexOf("async function afterAuth()"), auth.indexOf("/* ---------------- API keys")));
   const initializing = t.ctx.afterAuth();
   const failed = t.ctx.api("/api/overview").catch(() => {}); t.fail(); await failed;
   finish(); await initializing;

@@ -130,10 +130,10 @@ def resolve(dep, tiers, ladder, *, kind="app", managed=False):
     runs: the tier its template has now. tiers is None when the map can't be
     read: an app that follows a group then has tier None. managed: Flux or
     Argo CD applies it - it never follows, but its group's tier, if there is
-    one, is what it should run with. VMs are always their own."""
+    one, is what it should run with. VMs and StatefulSets are always their own."""
     runs, cls = PRIORITY.tier_of(_spec(dep), ladder)
     own = {"tier": runs, "class": cls or None, "source": "own", "runs": runs}
-    if kind == "vm":
+    if kind in ("vm", "sts"):
         return own
     group = group_of(dep)
     following = follows(dep) and not managed

@@ -27,7 +27,7 @@ function userRow(u, admin, count) {
         ${["viewer", "operator", "admin"].map(r => `<option value="${r}"${u.role === r ? " selected" : ""}>${ROLE_NAMES[r]} - ${esc(ROLE_SHORT[r])}</option>`).join("")}</select>`;
   const actions = admin ? actionBar([
     { label: "Sign-in history", run: `userSignins(${jsq(u.name)})` },
-    !me && count > 1 && { label: "Remove", run: `userRemove(${jsq(u.name)},'card')`, danger: true }], { shown: 0, label: `More for ${u.name}` }) : "";
+    !me && count > 1 && { label: "Remove", run: `userRemove(${jsq(u.name)})`, danger: true }], { shown: 0, label: `More for ${u.name}` }) : "";
   return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ' <span class="tag ok">you</span>' : ""}</td>
     <td data-label="Role">${role}</td><td data-label="Last sign-in" class="dim xs mono">${esc(u.last_login || "never")}</td>${admin ? `<td>${actions}</td>` : ""}</tr>`;
 }
@@ -164,32 +164,30 @@ async function viewSettings() {
         <div class="srows">
           ${settingRow("Password", "", '<button class="btn sm" onclick="pwChange()">Change</button>')}
           ${settingRow("Sign out everywhere", "Every session of yours, on every device", '<button class="btn sm" onclick="signOutEverywhere()">Sign out everywhere</button>')}
-          ${settingRow("Sign out", "This browser", '<button class="btn sm danger" onclick="doLogout()">Sign out</button>')}
+          ${settingRow("Sign out", "This browser", '<button class="btn sm" onclick="doLogout()">Sign out</button>')}
         </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div>`, {tab:`you`})}
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone ${tip("Warning turns a bar amber, critical red. A node shows its worst result across CPU, memory, disk and temperature.")}`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained node CPU pressure", thresholds.cpu)}
           ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated node RAM pressure", thresholds.memory)}
           ${thresholdEditor("disk", "Node disk utilisation", "%", "Local filesystem capacity", thresholds.disk)}
           ${thresholdEditor("temperature", "CPU temperature", "°C", "Host thermal warning", thresholds.temperature)}
         </div>
-        <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Drive health`, `SMART warnings shown on node cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
-          <div class="threshold-card counters"><div><b>Media counters</b><div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
+          <div class="threshold-card counters"><div><b>Media counters</b> ${tip("NVMe reports media errors; ATA disks report reallocated, pending and uncorrectable sectors. A counter a drive doesn't report shows as unsupported, not zero.")}<div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
             <div class="smart-threshold-values">
-              <label>Reallocated · warning ${tip("Sectors already replaced with spares. A stable count can be historical; review increases and verify backups. Recommended: 1.")} <input id="set_smart_reallocated" type="number" min="1" max="1000000" value="${smart.reallocated_warning}" ${can("admin") ? "" : "disabled"}></label>
-              <label>Pending · critical ${tip("Sectors the drive cannot currently read reliably. Verify backups and investigate any nonzero count. Recommended: 1.")} <input id="set_smart_pending" type="number" min="1" max="1000000" value="${smart.pending_critical}" ${can("admin") ? "" : "disabled"}></label>
-              <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts. Recommended: 1.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Reallocated · warning ${tip("Sectors already replaced with spares. A stable count can be historical; review increases and verify backups.")} <input id="set_smart_reallocated" type="number" min="1" max="1000000" value="${smart.reallocated_warning}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Pending · critical ${tip("Sectors the drive cannot currently read reliably. Verify backups and investigate any nonzero count.")} <input id="set_smart_pending" type="number" min="1" max="1000000" value="${smart.pending_critical}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
             </div></div>
         </div>
         <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
-        <div class="note"><b>Device differences are preserved.</b> NVMe reports media errors; ATA disks report reallocated, pending, and uncorrectable sectors. Missing counters are shown as unsupported, not zero.</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
@@ -287,7 +285,7 @@ async function viewSettings() {
       `, {tab:`connections`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into; Deploy offers each of them. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
+        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into; Deploy offers each of them. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" aria-label="New namespace" placeholder="new-namespace" maxlength="63" autocomplete="off"
             onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}`)}
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
       `, {tab:`namespaces`, id:`nsCard`})}
@@ -398,14 +396,14 @@ async function replicasPaint() {
   const note = r.desired > 1 && r.spread_nodes < Math.min(r.desired, ready)
     ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} node${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as nodes free up.</div>`
     : r.desired === 1 ? `<div class="note">One copy: if its node fails, Homestead is away until Kubernetes starts it elsewhere - about a minute. Two copies on different nodes keep it answering.</div>` : "";
-  STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
+  STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count" aria-label="Copies of Homestead">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
         `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
         <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}`)}
     ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every node can mount.</b> ${esc(r.data.reason)}.
       ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
     ${r.data?.pvc ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px"><span class="small">Its data: <span class="mono">${esc(r.data.pvc)}</span> on <b>${esc(r.data.storage_class || "?")}</b></span>
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
-        <select id="rep_class">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
+        <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.
@@ -678,7 +676,7 @@ async function namespacesPaint() {
   if (!host) return;
   let inv;
   try { inv = await api("/api/namespaces/manage", { keep: true }); }
-  catch (e) { host.innerHTML = `<div class="empty small">${esc(e.message)}</div>`; return; }
+  catch (e) { host.innerHTML = UI.error(e, { retry: "namespacesPaint()" }); return; }
   const what = r => [r.deployments && `${r.deployments} app${r.deployments === 1 ? "" : "s"}`,
     r.statefulsets && `${r.statefulsets} stateful set${r.statefulsets === 1 ? "" : "s"}`,
     r.volumes && `${r.volumes} volume${r.volumes === 1 ? "" : "s"}`,
@@ -760,7 +758,7 @@ window.saveHealthSettings = async () => {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || {}) } };
     STATE.data.appSettings = null;
-    toast("health thresholds saved", "ok");
+    toast("Health thresholds saved", "ok");
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -924,7 +922,7 @@ window.settingsDiscard = () => { STATE.settingsDirty = new Set(); resetPaint(); 
 /* Changing section, or leaving Settings, with changes not saved asks first. */
 window.settingsLeave = async () => {
   if (!STATE.settingsDirty?.size) return true;
-  if (!(await ask("Leave without saving? The changes on this section are discarded."))) return false;
+  if (!(await ask("Leave without saving? The changes on this section are discarded.", { title: "Leave without saving?", ok: "Discard changes", danger: true }))) return false;
   STATE.settingsDirty = new Set();
   return true;
 };
@@ -1022,7 +1020,7 @@ window.saveUpdateSettings = async () => {
   try {
     const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     STATE.data.appSettings = saved;
-    toast("image update policy saved", "ok");
+    toast("Image update policy saved", "ok");
     await loadImageUpdates(false, true);
     viewSettings();
   } catch (e) { toast(e.message, "bad"); }
@@ -1111,7 +1109,7 @@ window.sambaToggle = async box => {
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="sambaInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept."))) {
+  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.", { title: "Stop Samba", ok: "Stop Samba", danger: true }))) {
     box.checked = true; return;
   }
   box.disabled = true;
@@ -1124,7 +1122,7 @@ window.sambaToggle = async box => {
 
 window.sambaInstallGo = async (selectedAddress = null) => {
   const address = selectedAddress === null ? ($("#smb_lb_ip")?.value || "").trim() : selectedAddress;
-  if (!address && !nodeAddressesOnly()) return toast("choose an address - add VIPs under Networking if the list is empty", "bad");
+  if (!address && !nodeAddressesOnly()) return toast("Choose an address - add VIPs under Networking if the list is empty", "bad");
   try {
     const r = await api("/api/self/samba", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true, address }) });
     toast(r.detail, "ok"); closeModal(); setTimeout(() => { addonsPaint(); selfHealthPaint(); }, 1500);
@@ -1139,7 +1137,7 @@ window.sambaRemove = () => {
 };
 window.sambaRemoveGo = async () => {
   const confirm = $("#smb_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-smb") return toast("type homestead-smb to confirm", "bad");
+  if (confirm !== "homestead-smb") return toast("Type homestead-smb to confirm", "bad");
   try {
     const r = await api("/api/addons/smb/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm }) });
@@ -1160,14 +1158,14 @@ window.nfsToggle = async box => {
     choices.used = [];
     choices.own = (choices.own || []).filter(v => v.free);
     const own = (choices.own || []).find(v => v.free);
-    return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${(nfs.exports || []).length} selected RWX share(s) on TCP port 2049. File access pauses if its host fails, until the replacement server and storage are available.</p>
+    return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${plural((nfs.exports || []).length, "selected RWX share")} on TCP port 2049. File access pauses if its host fails, until the replacement server and storage are available.</p>
       ${nfsRecovery(nfs, true)}
       <div class="note warn">Only the client networks configured for each share can mount it. Removing this server later leaves every share definition and PVC in place.</div>
       <p class="small">SMB and NFS use different ports, but their separately placed servers need separate VIPs to keep client IP restrictions and routing correct after a host failure. Sharing one VIP would require a combined file-server pod.</p>
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept."))) {
+  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.", { title: "Stop NFS", ok: "Stop NFS", danger: true }))) {
     box.checked = true; return;
   }
   box.disabled = true;
@@ -1178,7 +1176,7 @@ window.nfsToggle = async box => {
 };
 window.nfsInstallGo = async () => {
   const address = ($("#nfs_lb_ip")?.value || "").trim();
-  if (!address) return toast("choose a dedicated VIP for NFS", "bad");
+  if (!address) return toast("Choose a dedicated VIP for NFS", "bad");
   try {
     const result = await api("/api/self/nfs", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true, address }) });
@@ -1191,7 +1189,7 @@ window.nfsRemove = () => modal("Remove NFS server", `<p>The NFS container and it
   ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="nfsRemoveGo()">Remove server</button>`)}`);
 window.nfsRemoveGo = async () => {
   const confirm = $("#nfs_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-nfs") return toast("type homestead-nfs to confirm", "bad");
+  if (confirm !== "homestead-nfs") return toast("Type homestead-nfs to confirm", "bad");
   try {
     const result = await api("/api/addons/nfs/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm }) });
     closeModal(); toast(result.detail, "ok"); addonsPaint();

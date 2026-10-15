@@ -229,7 +229,7 @@ function go(v, options = {}) {
   window.scrollPageTop();
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
     .then(() => { if (anchor && STATE.view === v) window.focusInPage?.(anchor, mark); })
-    .catch(e => { resetPaint(); V().innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    .catch(e => { resetPaint(); V().innerHTML = UI.error(e, { retry: `go(${jsArg(v)})` }); });
 }
 window.go = go;
 
@@ -280,39 +280,69 @@ function closeNav() { document.body.classList.remove("navopen"); }
 $("#hamburger").onclick = () => document.body.classList.toggle("navopen");
 $("#navscrim").onclick = closeNav;
 
-let searchTimer = null;
+let searchTimer = null, searchHits = [], searchActive = -1;
+const SEARCH_ICONS = { Container: "box", VM: "vm", Node: "node", Volume: "disk", Share: "share", "App Store": "store", Page: "list", Settings: "gear" };
+function searchClose() {
+  const out = $("#searchResults"), input = $("#globalSearch");
+  out?.classList.add("hidden");
+  input?.setAttribute("aria-expanded", "false");
+  input?.removeAttribute("aria-activedescendant");
+  searchActive = -1;
+}
+function searchMark(index) {
+  searchActive = index;
+  $$("#searchResults .sresult").forEach((option, i) => option.setAttribute("aria-selected", String(i === index)));
+  const option = $(`#searchResult${index}`), input = $("#globalSearch");
+  if (option) { input.setAttribute("aria-activedescendant", option.id); option.scrollIntoView({ block: "nearest" }); }
+  else input.removeAttribute("aria-activedescendant");
+}
+// A result opens its own item, not only the page it is on.
+async function searchOpen(index) {
+  const hit = searchHits[index];
+  if (!hit) return;
+  searchClose();
+  const open = hit.open;
+  if (open.type === "workload") return openUpdateWorkload(open.name);
+  if (open.type === "vm") { go("vms"); return vmOpen(open.ns, open.name); }
+  if (open.type === "node") { go("nodes"); return nodeDetail(open.name); }
+  if (open.type === "volume") return openWorkloadVolume(open.name);
+  if (open.type === "share") { go("shares"); return highlightInPage(open.name); }
+  if (open.type === "store") { STORE_APPS.set(storeKey(open.app), open.app); go("store"); return storeDetails(storeKey(open.app)); }
+  if (open.type === "settings") return go("settings", { params: { tab: open.tab } });
+  return go(open.view, open.tab ? { params: { tab: open.tab } } : {});
+}
 async function globalSearch(q) {
-  const wrap = $("#searchwrap");
-  let out = $("#searchResults");
-  if (!out) {
-    out = document.createElement("div"); out.id = "searchResults"; out.className = "searchresults hidden";
-    wrap.appendChild(out);
-  }
-  if (!q) { out.classList.add("hidden"); out.innerHTML = ""; return; }
+  const out = $("#searchResults"), input = $("#globalSearch");
+  if (!q) { out.innerHTML = ""; searchHits = []; return searchClose(); }
   out.classList.remove("hidden");
-  out.innerHTML = '<div class="searchloading"><span class="spin2"></span> searching…</div>';
+  input.setAttribute("aria-expanded", "true");
+  out.innerHTML = '<div class="searchloading" role="presentation"><span class="spin2"></span> searching…</div>';
   try {
-    const [wls, nodes, vols] = await Promise.all([
-      STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"),
-      STATE.data.nodes ? Promise.resolve(STATE.data.nodes) : api("/api/nodes"),
-      STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes"),
+    const cached = (key, path) => STATE.data[key] ? Promise.resolve(STATE.data[key]) : api(path);
+    const [wls, nodes, vols, vms, shares, store] = await Promise.all([
+      cached("wl", "/api/workloads"), cached("nodes", "/api/nodes"), cached("vols", "/api/volumes"),
+      // Optional parts: a cluster without KubeVirt, Samba or the App Store still searches the rest.
+      cached("vms", "/api/vms").catch(() => []), cached("shares", "/api/shares").catch(() => []),
+      api("/api/appstore?q=" + encodeURIComponent(q)).catch(() => ({ apps: [] })),
     ]);
-    STATE.data.wl = wls; STATE.data.nodes = nodes; STATE.data.vols = vols;
-    const s = q.toLowerCase();
-    const hits = [
-      ...wls.filter(x => [x.name, x.ns, ...(x.images || []), ...(x.nodes || [])].join(" ").toLowerCase().includes(s))
-        .map(x => ({ view: "workloads", kind: "Container", name: x.name, sub: `${x.ns} · ${(x.nodes || []).join(", ") || "unscheduled"}`, icon: x.icon })),
-      ...nodes.filter(x => [x.name, x.os, ...(x.roles || []), ...(x.workloads || [])].join(" ").toLowerCase().includes(s))
-        .map(x => ({ view: "nodes", kind: "Node", name: x.name, sub: `${x.status} · ${x.pods_wl || 0} workloads` })),
-      ...vols.filter(x => [x.name, x.pvc_name, x.namespace, x.attached_to].join(" ").toLowerCase().includes(s))
-        .map(x => ({ view: "storage", kind: "Volume", name: x.pvc_name || x.name, sub: `${x.size_gb} GB · ${x.state}` })),
-    ].slice(0, 12);
-    out.innerHTML = hits.length ? hits.map((x, i) => `<button class="sresult" data-view="${x.view}" ${i === 0 ? 'data-first="1"' : ""}>
-      ${x.icon ? `<img src="${esc(x.icon)}" alt="" onerror="this.remove()">` : '<span class="smark">⌕</span>'}
-      <span><b>${esc(x.name)}</b><small>${esc(x.kind)} · ${esc(x.sub)}</small></span></button>`).join("")
-      : `<div class="searchloading">No containers, nodes or volumes match “${esc(q)}”.</div>`;
-    $$(".sresult", out).forEach(b => b.onclick = () => { out.classList.add("hidden"); go(b.dataset.view, { keepSearch: true }); });
-  } catch (e) { out.innerHTML = `<div class="searchloading">Search unavailable · ${esc(e.message)}</div>`; }
+    Object.assign(STATE.data, { wl: wls, nodes, vols, vms, shares });
+    if (q !== STATE.q) return; // a newer search has started
+    const pages = Object.entries(HomesteadRouter.ROUTES).filter(([view]) => VIEWS[view])
+      .map(([view, route]) => ({ view, label: route.label, section: route.section }))
+      .concat(typeof NETWORK_SECTIONS !== "undefined" ? NETWORK_SECTIONS.filter(([tab]) => tab !== "overview")
+        .map(([tab, label]) => ({ view: "network", tab, label, section: "Networking" })) : []);
+    searchHits = HomesteadSearch.hits(q, { workloads: wls, nodes, volumes: vols, vms, shares, apps: (store.apps || []).slice(0, 5),
+      pages, settings: typeof SETTINGS_SECTIONS !== "undefined" ? SETTINGS_SECTIONS : [] });
+    out.innerHTML = searchHits.length ? searchHits.map((x, i) => `<div class="sresult" role="option" id="searchResult${i}" aria-selected="false" data-index="${i}">
+      ${x.icon ? `<img src="${esc(x.icon)}" alt="" onerror="this.remove()">` : `<span class="smark">${icon(SEARCH_ICONS[x.kind] || "search")}</span>`}
+      <span><b>${esc(x.name)}</b><small>${esc(x.kind)} · ${esc(x.sub)}</small></span></div>`).join("")
+      : `<div class="searchloading" role="presentation">Nothing matches “${esc(q)}”.</div>`;
+    searchActive = -1;
+    $$(".sresult", out).forEach(option => {
+      option.addEventListener("mousedown", e => e.preventDefault()); // keep focus in the search box
+      option.onclick = () => searchOpen(+option.dataset.index);
+    });
+  } catch (e) { out.innerHTML = `<div class="searchloading" role="presentation">Search unavailable · ${esc(e.message)}</div>`; }
 }
 $("#globalSearch").addEventListener("input", e => {
   STATE.q = e.target.value.trim();
@@ -328,10 +358,19 @@ $("#globalSearch").addEventListener("input", e => {
   clearTimeout(searchTimer); searchTimer = setTimeout(() => globalSearch(STATE.q), 180);
 });
 $("#globalSearch").addEventListener("keydown", e => {
-  if (e.key === "Enter") { const first = $("#searchResults .sresult[data-first]"); if (first) first.click(); }
+  const open = !$("#searchResults").classList.contains("hidden") && searchHits.length;
+  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && open) {
+    e.preventDefault();
+    searchMark(searchActive < 0 && e.key === "ArrowUp" ? searchHits.length - 1
+      : (searchActive + (e.key === "ArrowDown" ? 1 : -1) + searchHits.length) % searchHits.length);
+  } else if (e.key === "Enter" && open) {
+    e.preventDefault(); searchOpen(Math.max(0, searchActive));
+  } else if (e.key === "Escape" && open) {
+    e.preventDefault(); e.stopPropagation(); searchClose();
+  } else if (e.key === "Tab") searchClose();
 });
 document.addEventListener("click", e => {
-  if (!e.target.closest("#searchwrap")) $("#searchResults")?.classList.add("hidden");
+  if (!e.target.closest("#searchwrap")) searchClose();
 });
 /* mobile: search collapses behind an icon so the bar has room for the title */
 const sbtn = $("#searchbtn");

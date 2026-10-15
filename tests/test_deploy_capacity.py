@@ -115,11 +115,19 @@ class DeployCapacityTests(unittest.TestCase):
         self.assertTrue(result["blocked"])
         self.assertNotIn("planned, not provisioned", " ".join(result["warnings"]))
 
-    def test_migratable_vm_class_is_not_for_container_claim(self):
-        self.volume()
+    def migratable_class(self):
         self.objects["/apis/storage.k8s.io/v1/storageclasses/test-class"]["provisioner"] = "driver.longhorn.io"
         self.objects["/apis/storage.k8s.io/v1/storageclasses/test-class"]["parameters"] = {"migratable": "true"}
-        self.assertTrue(self.plan()["blocked"])
+
+    def test_a_readwriteonce_container_claim_on_a_migratable_class_can_start(self):
+        self.volume()
+        self.migratable_class()
+        self.assertFalse(self.plan()["blocked"], "one pod on one host mounts a migratable class's volume")
+
+    def test_a_readwritemany_container_claim_on_a_migratable_class_is_blocked(self):
+        self.volume(access_mode="ReadWriteMany")
+        self.migratable_class()
+        self.assertTrue(self.plan()["blocked"], "a second host's pod would start a live migration, not a mount")
 
     def test_owner_init_is_included_without_registry_or_mutations(self):
         self.volume()

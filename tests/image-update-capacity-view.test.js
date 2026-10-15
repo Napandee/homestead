@@ -31,7 +31,7 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
       return {uid:"workload-uid",generation:4,phase:"starting",ready:0,desired:1};
     }};
   ctx.window=ctx;
-  vm.createContext(ctx);
+  vm.createContext(ctx); require("./helpers/core-text")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);

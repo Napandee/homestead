@@ -38,6 +38,24 @@ acts, and leave a person able to see what happened.
 Keep to it: a feature's server code goes in its own module rather than a
 larger neighbour, and its browser code in the `web/js/` file for that area.
 
+`server/server.py` is the composition root: imports, constants, each module's
+`bind()`, start-up, and a handler that answers only the routes that need the
+connection itself (cookies, request headers, forwarding to a linked Homestead,
+a WebSocket). Every other route is declared in its module's `ROUTES`, and code
+moved out of `server.py` reaches what `server.py` still owns through
+`bind_routes()` and `_late`, so a test that patches `server.kget` reaches it
+too. Three tests in `tests/test_module_routes.py` hold this, and each failure
+says what to do:
+
+- **the ratchet:** `server.py` may not grow past `MAX_LINES`; when it shrinks
+  by more than 20 lines, lower `MAX_LINES` to its new length in the same commit;
+- **the inline-route list:** a `/api/` path answered in `server.py`'s handler
+  must be in `INLINE_ROUTES` with the reason it needs the handler; a new route
+  goes in its module's `ROUTES` instead;
+- **the alias cap:** a name kept on `server` only because a test patches it
+  there sits in the marked alias block, capped by `ALIASES`; point the test at
+  the module instead of adding one.
+
 ## Running it locally
 
 You need Python 3.12 and, for the browser tests only, Node.js 20 or later.

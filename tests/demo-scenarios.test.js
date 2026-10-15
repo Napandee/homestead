@@ -73,7 +73,15 @@ test("explicit incident and critical scenarios retain unhealthy evaluation cases
     assert.equal(broken.status, "ErrorUnschedulable");
     assert.match(broken.problem, /Insufficient memory/);
     assert.equal(broken.disks[0].made, false);
-    if (scenario === "critical") assert.equal(overview.nodes_ready, 2);
+    if (scenario === "critical") {
+      assert.equal(overview.nodes_ready, 2);
+      // A node that isn't answering has no live readings, and is down now.
+      const node3 = (await api("/api/nodes")).find(row => row.status === "NotReady");
+      assert.equal(node3.cpu_pct, 0); assert.equal(node3.fs_used_gb, undefined); assert.equal(node3.temps.cpu_c, undefined);
+      const uptime = (await api("/api/nodes/uptime")).nodes[node3.name];
+      assert.ok(uptime.outages.some(row => row.ongoing), "an ongoing outage");
+      assert.ok(uptime.windows["24h"] < 100);
+    }
   }
 });
 

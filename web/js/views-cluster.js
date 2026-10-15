@@ -128,10 +128,10 @@ async function clusterComponentsPaint(force = false) {
     const settingsHost = $("#settingsComponents");
     if (settingsHost) settingsHost.outerHTML = componentsCard(report, true);
     if (window.applyRole) applyRole();
-    if (force) toast("releases checked", "ok");
+    if (force) toast("Releases checked", "ok");
   } catch (e) {
     const host = $("#settingsComponents");
-    if (host && host.querySelector(".spin2")) host.innerHTML = `${UI.moduleHeader(`Platform versions`, ``, `<button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button>`)}
+    if (host && host.querySelector(".spin2")) host.innerHTML = `${UI.moduleHeader(`Platform versions`, ``, `<button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check now</button>`)}
       <div class="empty small">Could not load platform versions: ${esc(e.message)}</div>`;
     if (force) toast(e.message, "bad");
   }
@@ -162,18 +162,24 @@ function componentRow(c) {
       !running && c.next && {label:`Upgrade to ${c.next}`,run:`componentUpgrade(${jsq(c.id)})`,need:'admin'},
       {label:'V2 upgrade status',run:'lhV2Upgrade()'},
       c.notes_url && {label:'Release notes',run:`window.open(${jsq(safeHref(c.notes_url))},'_blank','noopener,noreferrer')`}
-    ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}`}</div></div>`;
+    ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}${action}`}</div></div>`;
 }
 
 function componentsCard(r, settings = false) {
   const rows = (r.components || []).filter(c => !(r.harvester && c.id === "cluster"));
-  // Counted: what can be upgraded here. Harvester's own parts move with it.
+  // Counted: what can be upgraded here. Parts that are behind but move with
+  // Harvester, or were installed outside Homestead, say who upgrades them.
   const behind = rows.filter(c => c.next).length;
+  const elsewhere = rows.filter(c => c.behind && !c.next);
+  const by = elsewhere.every(c => c.how === "harvester") ? "upgraded with Harvester"
+    : elsewhere.every(c => c.how === "manual") ? "upgraded outside Homestead" : "upgraded elsewhere";
+  const pill = behind ? clusterPill("attention", `${behind} update${behind === 1 ? "" : "s"}`)
+    : elsewhere.length ? clusterPill("unknown", `${elsewhere.length} newer, ${by}`) : clusterPill("healthy", "up to date");
   const body = `
     ${UI.moduleHeader(`Platform versions`, `What runs under your apps, and whether anything newer is out. ${r.harvester
         ? "Harvester upgrades its own Longhorn and KubeVirt."
-        : "Upgrades go one minor version at a time, as each project supports."}`, `${clusterPill(behind ? "attention" : "healthy", behind ? `${behind} update${behind === 1 ? "" : "s"}` : "up to date")}
-        <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button>`)}
+        : "Upgrades go one minor version at a time, as each project supports."}`, `${pill}
+        <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check now</button>`)}
     <div class="release-list">${rows.map(componentRow).join("") || '<div class="dim small">Nothing to report.</div>'}</div>
   `;
   return settings ? UI.settingsCard(body, {tab:"updates",id:"settingsComponents"})
@@ -228,7 +234,7 @@ window.harvesterUpgradeStart = version => {
 };
 
 window.harvesterUpgradeGo = async version => {
-  if ($("#hv_up_confirm").value.trim() !== version) return toast(`type ${version} to start it`, "bad");
+  if ($("#hv_up_confirm").value.trim() !== version) return toast(`Type ${version} to start it`, "bad");
   try {
     const r = await api("/api/cluster/upgrades/start", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ version }) });
@@ -250,7 +256,7 @@ async function clusterUpgradesPaint(force = false) {
     STATE.data.upgradeHtml = upgradesCard(report);
     const host = $("#clusterUpgrades");
     if (host) host.innerHTML = STATE.data.upgradeHtml;
-    if (force) toast("releases checked", "ok");
+    if (force) toast("Releases checked", "ok");
   } catch (e) { if (force) toast(e.message, "bad"); }
 }
 window.clusterUpgradesPaint = clusterUpgradesPaint;
@@ -300,7 +306,7 @@ function upgradesCard(r) {
     : behind ? `${r.stable.tag} is out; this cluster runs v${r.current}` : `v${r.current} is the newest stable release`;
   return `<section class="card flat cluster-wide upgrades-card" style="margin-top:14px">
     ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
-        <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check</button>`)}
+        <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check now</button>`)}
     ${r.last ? upgradeProgress(r.last) : ""}
     <div class="release-list">
       ${releaseRow("NEWEST STABLE", r.stable, "stable")}

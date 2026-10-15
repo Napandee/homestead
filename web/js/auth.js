@@ -98,7 +98,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error, cause = "") {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.326" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.327" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
@@ -129,8 +129,8 @@ function dataHandoffStarting(state = {}) {
       <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been authorized.</p>
       <p class="dim small">Review the preparation or keep using the original volume. Both volumes will be retained.</p>
       ${state.signed_in === false ? `<p class="small">Sign in as an administrator to review it.</p>
-        <input id="rg_user" autocomplete="username" placeholder="Username">
-        <input id="rg_pass" type="password" autocomplete="current-password" placeholder="Password" style="margin-top:8px"
+        <input id="rg_user" autocomplete="username" aria-label="Username" placeholder="Username">
+        <input id="rg_pass" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" style="margin-top:8px"
           onkeydown="if (event.key === 'Enter') recoverySignIn()">
         <div class="gateerr" id="rg_err" hidden></div>
         <button class="btn wide" style="margin-top:10px" onclick="recoverySignIn()">Sign in and review</button>`
@@ -160,7 +160,7 @@ window.sessionSummary = (state = {}) => {
 
 window.signOutEverywhere = async () => {
   if (!(await ask("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
-      + "Every session for your account stops working immediately."))) return;
+      + "Every session for your account stops working immediately.", { title: "Sign out everywhere", ok: "Sign out everywhere" }))) return;
   try {
     await _fetch("/api/auth/signout-everywhere", { method: "POST",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" } });
@@ -191,15 +191,15 @@ function stopAuthenticatedWork() {
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.326" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.327" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
-    <div class="f"><label>Username</label>
+    <div class="f"><label for="lg_user">Username</label>
       <input type="text" id="lg_user" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
-    <div class="f"><label>Password</label>
+    <div class="f"><label for="lg_pass">Password</label>
       <input type="password" id="lg_pass" autocomplete="${setup ? "new-password" : "current-password"}"></div>
-    ${setup ? `<div class="f"><label>Confirm password</label>
+    ${setup ? `<div class="f"><label for="lg_pass2">Confirm password</label>
       <input type="password" id="lg_pass2" autocomplete="new-password"></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
       ${localStorage.getItem("homestead.remember") === "0" ? "" : "checked"}>Keep me signed in on this device</label>
@@ -263,9 +263,9 @@ window.doLogout = async () => {
 };
 
 window.pwChange = () => modal("Change password", `
-  <div class="f"><label>Current password</label><input type="password" id="pw_old" autocomplete="current-password"></div>
-  <div class="f"><label>New password</label><input type="password" id="pw_new" autocomplete="new-password"></div>
-  <div class="f"><label>Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
+  <div class="f"><label for="pw_old">Current password</label><input type="password" id="pw_old" autocomplete="current-password"></div>
+  <div class="f"><label for="pw_new">New password</label><input type="password" id="pw_new" autocomplete="new-password"></div>
+  <div class="f"><label for="pw_new2">Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
   ${UI.actions(`<button class="btn pri" onclick="doPwChange()">Change password</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
   <div class="note" style="margin-top:14px">Changing your password signs out every other
@@ -273,11 +273,11 @@ window.pwChange = () => modal("Change password", `
 
 window.doPwChange = async () => {
   const a = $("#pw_new").value, b = $("#pw_new2").value;
-  if (a !== b) return toast("new passwords do not match", "bad");
+  if (a !== b) return toast("New passwords do not match", "bad");
   try {
     await api("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ old: $("#pw_old").value, new: a }) });
-    toast("password changed — other sessions signed out", "ok"); closeModal();
+    toast("Password changed — other sessions signed out", "ok"); closeModal();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -291,56 +291,11 @@ window.userSignins = name => {
   go("events", { keepSearch: true });
 };
 
-window.manageUsers = async () => {
-  modal("Users", `<div class="empty"><span class="spin2"></span>loading</div>`);
-  try {
-    const us = await api("/api/auth/users");
-    $("#mbody").innerHTML = `
-      <div class="card flat pad0" style="margin-bottom:16px"><div class="tblwrap"><table class="tbl stack">
-        <thead><tr><th>User</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>
-        ${us.map(u => `<tr><td><div class="row" style="gap:9px">
-            <div class="av">${esc(u.name.slice(0, 2).toUpperCase())}</div><b>${esc(u.name)}</b>
-            ${u.name === ME ? '<span class="tag ok">you</span>' : ""}</div></td>
-          <td><select onchange="setRole(${jsq(u.name)},this.value)" ${u.name === ME ? "disabled" : ""}
-              style="padding:5px 9px;font-size:12px;width:auto">
-            ${["viewer", "operator", "admin"].map(r =>
-              `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
-          </select></td>
-          <td class="dim small mono">${esc(u.last_login || "never")}
-            <div><a class="linkish xs" onclick="userSignins(${jsq(u.name)})">Sign-in history</a></div></td>
-          <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
-            : actionBar([{ label: "Remove", run: `delUser(${jsq(u.name)})`, danger: true }])}</td>
-        </tr>`).join("")}</tbody></table></div></div>
-      <div class="sec">Add a user</div>
-      <div class="f2">
-        <div class="f"><label>Username</label><input type="text" id="nu_user" autocapitalize="none"></div>
-        <div class="f"><label>Password</label><input type="password" id="nu_pass" autocomplete="new-password"></div>
-      </div>
-      <div class="f"><label>Role</label><select id="nu_role">
-        <option value="viewer">viewer — read only</option>
-        <option value="operator" selected>operator — manage workloads</option>
-        <option value="admin">admin — everything, including hosts and import</option>
-      </select></div>
-      <button class="btn pri" onclick="addUser()">Add user</button>
-      <div class="note" style="margin-top:16px"><b>viewer</b> can look but not touch.
-      <b>operator</b> can deploy, edit, move, start and stop workloads and VMs.
-      <b>admin</b> adds user management, host cordon/drain/power, shares, and import —
-      which stores credentials for other machines.</div>`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-};
-window.addUser = async () => {
-  try {
-    await api("/api/auth/users", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: $("#nu_user").value.trim(), password: $("#nu_pass").value,
-        role: $("#nu_role").value }) });
-    toast("user added", "ok"); manageUsers();
-  } catch (e) { toast(e.message, "bad"); }
-};
-/* Remove a user, from the Settings card or the Users dialog: whichever it
-   came from is redrawn from the server afterwards, success or not, so a row
-   never outlives its user (#368). A user someone else already removed is
-   what was wanted: it says so and the row goes (#369). */
-async function userRemove(name, from) {
+/* Remove a user from Settings, Users and access: the card is redrawn from
+   the server afterwards, success or not, so a row never outlives its user
+   (#368). A user someone else already removed is what was wanted: it says
+   so and the row goes (#369). */
+async function userRemove(name) {
   if (!(await ask(`Remove ${name}? They are signed out, and their API keys stop working.`, { title: "Remove user", ok: "Remove", danger: true }))) return;
   try {
     await api("/api/auth/users/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -350,11 +305,9 @@ async function userRemove(name, from) {
     if (/no such user|does not exist/i.test(e.message)) toast(`${name} had already been removed`, "ok");
     else toast(e.message, "bad");
   }
-  if (from === "dialog") manageUsers();
-  else if (typeof STATE !== "undefined" && STATE.view === "settings") { resetPaint(); viewSettings(); }
+  if (typeof STATE !== "undefined" && STATE.view === "settings") { resetPaint(); viewSettings(); }
 }
 window.userRemove = userRemove;
-window.delUser = name => userRemove(name, "dialog");
 
 /* any 401 anywhere drops straight back to the sign-in gate */
 const _api = window.api;
@@ -433,7 +386,7 @@ async function afterAuth() {
 }
 
 /* Settings › Users and access (#350): a role changed where it is shown, and a
-   user added from the card. Manage users stays for doing several at once. */
+   user added from the card. */
 window.userRoleSet = async (name, select) => {
   const role = select.value, was = select.dataset.was;
   select.disabled = true;
@@ -464,14 +417,6 @@ window.userAddSave = async button => {
     toast("User added", "ok"); closeModal();
     if (STATE.view === "settings") { resetPaint(); viewSettings(); }
   } catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
-};
-
-window.setRole = async (name, role) => {
-  try {
-    await api("/api/auth/role", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: name, role }) });
-    toast(name + " is now " + role, "ok"); manageUsers();
-  } catch (e) { toast(e.message, "bad"); manageUsers(); }
 };
 
 /* ---------------- API keys ----------------
@@ -550,8 +495,8 @@ window.apiKeySave = async (button, id) => {
   const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
     mcp: $("#ak_mcp").checked, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
   if ($("#ak_ttl").value) body.ttl_seconds = +$("#ak_ttl").value;
-  if (!body.name) return toast("give the key a name", "bad");
-  if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
+  if (!body.name) return toast("Give the key a name", "bad");
+  if (!body.scopes.length) return toast("Choose at least one thing it may do", "bad");
   button.disabled = true;
   try {
     const done = await api("/api/auth/keys/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -573,8 +518,8 @@ window.apiKeyNew = () => {
 window.apiKeyMake = async button => {
   const body = { name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
     mcp: $("#ak_mcp").checked, ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
-  if (!body.name) return toast("give the key a name", "bad");
-  if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
+  if (!body.name) return toast("Give the key a name", "bad");
+  if (!body.scopes.length) return toast("Choose at least one thing it may do", "bad");
   button.disabled = true;
   let made;
   try {
@@ -599,7 +544,7 @@ window.apiKeyMake = async button => {
 };
 
 window.apiKeyRevoke = async (id, name) => {
-  if (!(await ask(`Revoke ${name}? Anything using it is refused from now on.`, { danger: true, ok: "Revoke" }))) return;
+  if (!(await ask(`Revoke ${name}? Anything using it is refused from now on.`, { title: "Revoke key", danger: true, ok: "Revoke" }))) return;
   try {
     await api("/api/auth/keys/revoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(`${name} revoked`, "ok");

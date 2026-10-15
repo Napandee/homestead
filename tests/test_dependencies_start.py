@@ -169,3 +169,27 @@ class DependencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlannedMigratableClaimTests(unittest.TestCase):
+    """A migratable Longhorn class mounts on one host at a time: fine for a
+    ReadWriteOnce claim, refused for one several hosts mount."""
+
+    def snapshot(self, mode):
+        spec = {"containers": [{"name": "app"}], "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]}
+        sc = {"metadata": {"name": "harvester-longhorn"}, "provisioner": "driver.longhorn.io", "parameters": {"migratable": "true"}}
+
+        def get(path):
+            if path.endswith("/storageclasses/harvester-longhorn"):
+                return sc
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        planned = {"data": {"access_mode": mode, "storage_class": "harvester-longhorn"}}
+        return deps.Snapshot(spec, "lab", get, [], planned_claims=planned)
+
+    def test_a_planned_readwriteonce_claim_on_a_migratable_class_can_start(self):
+        reasons, warnings, _ = self.snapshot("ReadWriteOnce").check({"name": "a", "labels": {}}, lambda *_: True)
+        self.assertFalse([r for r in reasons if "migratable" in r], reasons)
+
+    def test_a_planned_readwritemany_claim_on_a_migratable_class_is_refused(self):
+        reasons, _, _ = self.snapshot("ReadWriteMany").check({"name": "a", "labels": {}}, lambda *_: True)
+        self.assertTrue([r for r in reasons if "migratable" in r and "several hosts" in r], reasons)

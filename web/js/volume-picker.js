@@ -142,7 +142,20 @@ function storageClassLabel(name, facts) {
 }
 window.storageClassLabel = storageClassLabel;
 
+/* The class a new pod volume starts on: the one asked for, else the first
+   that isn't migratable (a migratable class mounts on one host at a time,
+   fine for one pod but not for a volume several hosts mount), else the
+   cluster's default, else "" - the cluster's own default, when it has no
+   classes to list. */
+function defaultStorageClass(classes, requested = "", facts = {}) {
+  const list = classes || [];
+  if (requested && list.includes(requested)) return requested;
+  return list.find(name => !(facts || {})[name]?.migratable) || list.find(name => (facts || {})[name]?.default) || list[0] || "";
+}
+window.defaultStorageClass = defaultStorageClass;
+
 function storageClassOptions(classes, selected, facts) {
+  if (!(classes || []).length) return '<option value="" selected>Cluster default</option>';
   return classes.map(sc => `<option value="${esc(sc)}" ${sc === selected ? "selected" : ""}>${esc(storageClassLabel(sc, facts))}</option>`).join("");
 }
 window.storageClassOptions = storageClassOptions;
@@ -156,7 +169,7 @@ function storageClassBadges(facts) {
   badges.push(facts.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="tag">not encrypted</span>');
   badges.push(facts.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>');
   if (facts.reclaim === "Retain") badges.push('<span class="tag info">keeps data on delete</span>');
-  if (facts.migratable) badges.push('<span class="tag warn" data-tip="Volumes from this class carry a second controller for VM live migration, which Longhorn will not mount into a pod.">VM disks only</span>');
+  if (facts.migratable) badges.push('<span class="tag" data-tip="Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX).">VM disk class</span>');
   if (facts.default) badges.push('<span class="tag ok">default</span>');
   return badges.join("");
 }
@@ -236,11 +249,10 @@ function volumeClassList(row, kind) {
   const all = ctx.storageClasses() || [];
   // Only a non-migratable class can serve ReadWriteMany to a pod.
   const shared = ctx.sharedStorageClasses ? (ctx.sharedStorageClasses() || []) : all;
-  const usable = (kind === "new-rwx" ? shared : all).length
-    ? (kind === "new-rwx" ? shared : all) : ["longhorn-r2"];
-  const wanted = select.value || row.dataset.storageClass || "";
-  select.innerHTML = usable.map(name =>
-    `<option ${name === wanted ? "selected" : ""}>${esc(name)}</option>`).join("");
+  const usable = kind === "new-rwx" ? shared : all;
+  const wanted = select.value || row.dataset.storageClass || defaultStorageClass(usable, "", ctx.classFacts());
+  select.innerHTML = usable.length ? usable.map(name =>
+    `<option ${name === wanted ? "selected" : ""}>${esc(name)}</option>`).join("") : '<option value="" selected>Cluster default</option>';
   if (usable.includes(wanted)) select.value = wanted;
   row.dataset.storageClass = select.value;
   return all.length - usable.length;
@@ -314,7 +326,7 @@ function addVolumeRow(host, v = {}) {
   // Where an existing mount's data lives now, so moving it can bring the data.
   d.dataset.originClaim = (v.origin && v.origin.claim) || "";
   d.dataset.originFolder = (v.origin && v.origin.sub_path) || "";
-  const classes = (ctx.storageClasses() || []).length ? ctx.storageClasses() : ["longhorn-r2"];
+  const classes = ctx.storageClasses() || [];
   d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
       ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
     ${v.description ? `<div class="dim small volume-desc">${esc(v.description)}</div>` : ""}
@@ -322,10 +334,10 @@ function addVolumeRow(host, v = {}) {
       <div><label>${esc(ctx.pathLabel)}</label><input class="vp" type="text" value="${esc(v.path || "")}" placeholder="${esc(ctx.pathPlaceholder)}"></div>
       <div><label>Storage source</label><select class="vk">${kinds.map(k =>
         `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
-      <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" style="display:none"></select></div>
+      <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" aria-label="Volume" style="display:none"></select></div>
       <div class="vfolder"><label title="Mount one folder of the volume here, so several paths can share one volume">Folder in volume</label><input class="vsub" type="text" value="${esc(v.sub_path || "")}" placeholder="whole volume"></div>
       <div class="vnew"><div><label class="vsize-label">Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
-        <div><label>Storage class</label><select class="vsc">${storageClassOptions(classes, v.storage_class || "longhorn-r2", ctx.classFacts())}</select></div></div>
+        <div><label>Storage class</label><select class="vsc">${storageClassOptions(classes, defaultStorageClass(classes, v.storage_class, ctx.classFacts()), ctx.classFacts())}</select></div></div>
     </div>
     <div class="vclass-badges" style="display:none"></div>
     <label class="switch vcopy" style="display:none"><input class="vcopy-on" type="checkbox" checked><span class="vcopy-text"></span></label>

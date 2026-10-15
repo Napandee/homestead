@@ -476,7 +476,7 @@ window.cancelOperationGate = () => {
 window.cancelOperationGo = async id => {
   const plan = window.__cancelPlan || {};
   const confirm = ($("#oc_confirm")?.value || "").trim();
-  if (plan.confirm && confirm !== plan.confirm) return toast(`type ${plan.confirm} exactly to confirm`, "bad");
+  if (plan.confirm && confirm !== plan.confirm) return toast(`Type ${plan.confirm} exactly to confirm`, "bad");
   const options = Object.fromEntries([...document.querySelectorAll("[data-cancel-option]")]
     .map(box => [box.dataset.cancelOption, box.checked]));
   if (plan.copy_recovery && !options.ack) return toast("Check the storage and acknowledge partial data first", "bad");

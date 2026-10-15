@@ -7,7 +7,7 @@ function context() {
     appAvatar:()=>"", clusterAttr:r=>r.site?` data-cluster=\"${r.site.id}\"`:"", clusterTag:()=>"",remoteRow:r=>!!r.site&&!r.site.self,
     platformTag:()=>"",hardwareTags:()=>"",imageLabel:String, fmtUp:String, svcUrl:()=>"",fmtAgo:String,
     ratePair:()=>["0","Mb/s"],sizePair:()=>"0/10 GB",sizeText:()=>"10 GB",meter:()=>"",sev:()=>""};
-  c.window=c;vm.createContext(c);
+  c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
   vm.runInContext(core.slice(0,core.indexOf("/* Put text on the clipboard.")),c);
   for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
@@ -51,7 +51,7 @@ test("node comparison keeps one scrollable matrix and selection across refresh",
   assert.doesNotMatch(c.nodeComparison(nodes.slice(0,2),"test"),/aria-label="Select compute-host-4"/);
 });
 test("sorting keeps detail rows next to their parents, including empty values and stable ties",()=>{
-  const c={};vm.createContext(c);
+  const c={};vm.createContext(c);require("./helpers/core-text")(c);
   vm.runInContext(core.slice(core.indexOf('const SORT_UNITS'),core.indexOf('function sortRows(')),c);
   vm.runInContext(core.slice(core.indexOf('function sortBody('),core.indexOf('/* On a phone a stacked table')),c);
   const row=(key,value)=>({dataset:{rowKey:key},cells:[{dataset:{sort:value},textContent:value}]});
@@ -72,4 +72,22 @@ test("a remote node never borrows local uptime history under the same name",()=>
 test("a Longhorn drive without a device name still has a readable identity",()=>{
   const c=context();
   assert.match(c.comparisonDisk({}, {device:"",lh_size_gb:100,size_gb:200}),/Longhorn filesystem/);
+});
+test("rows and cards show the same tags, scheduled included, and name an update the same way",()=>{
+  const c=context(),a=workload();a.schedule={start:"0 7 * * *",stop:"0 23 * * *"};
+  vm.runInContext('STATE.data.imageUpdateMap={"apps/example-app":{available:true,images:[{}]}}',c);
+  const row=c.workloadTableRows([a]).split('<tr class="wl-detail-row"')[0],card=c.workloadCard(a);
+  for(const html of [row,card])assert.match(html,/sched-tag/,"scheduled shows in both views");
+  assert.match(card,/update available/);
+  assert.doesNotMatch(row,/class="tag warn">(Update|update available)</,"a row says it once, with its Update button");
+  assert.match(row,/aria-label="Update example-app"/);
+  vm.runInContext('this.can=()=>false',c);
+  assert.match(c.workloadTableRows([a]).split('<tr class="wl-detail-row"')[0],/update available/,"someone who can't update still sees it");
+});
+test("rows and cards show the image's name and tag, with the full reference on hover",()=>{
+  const c=context(),a=workload();a.images=["ghcr.io/home-assistant/home-assistant:2026.10.1"];
+  for(const html of [c.workloadTableRows([a]),c.workloadCard(a)]){
+    assert.match(html,/title="ghcr.io\/home-assistant\/home-assistant:2026.10.1"/);
+    assert.match(html,/>home-assistant:2026.10.1</);
+  }
 });

@@ -34,6 +34,19 @@
 
    Each returns HTML, escaped where it takes plain text: arguments named
    *Html are inserted as they are. */
+/* The first visible control in some HTML, given an id when it has none, so a
+   label can name it: returns [html, id], or [html, ""] with no control. */
+let CONTROL_IDS = 0;
+function withControlId(html) {
+  const s = String(html ?? "");
+  const tag = [...s.matchAll(/<(input|select|textarea)\b[^>]*>/g)].map(m => m[0]).find(t => !/\stype="?hidden/.test(t));
+  if (!tag) return [s, ""];
+  const has = tag.match(/\sid="([^"]+)"/);
+  if (has) return [s, has[1]];
+  const id = `field-c${++CONTROL_IDS}`;
+  return [s.replace(tag, tag.replace(/^<(input|select|textarea)\b/, `<$1 id="${id}"`)), id];
+}
+
 const UI = (() => {
   const text = value => esc(value ?? "");
   const TONES = new Set(["info", "ok", "warn", "bad"]);
@@ -119,8 +132,11 @@ const UI = (() => {
     <input type="checkbox" id="${text(id)}"${onchange ? ` onchange="${text(onchange)}"` : ""}><span>${text(sentence)}</span></label>`;
 
   const fields = (...html) => `<div class="ui-fields">${html.join("")}</div>`;
-  const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => `<div class="ui-field${wide ? " wide" : ""}">
-    <label>${text(label)}${tipHtml}</label>${controlHtml}${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
+  const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => {
+    const [html, id] = withControlId(controlHtml);
+    return `<div class="ui-field${wide ? " wide" : ""}">
+    <label${id ? ` for="${text(id)}"` : ""}>${text(label)}${tipHtml}</label>${html}${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
+  };
 
   const statusDot = kind => `<i class="ui-status-dot ${["ok","bad","warn","info","neutral"].includes(kind)?kind:"neutral"}" aria-hidden="true"></i>`;
   const insightList = rows => `<div class="ui-insight-list">${rows.map(r=>`<div class="ui-insight-row">${statusDot(r.tone)}<div><b>${text(r.title)}</b><small>${text(r.detail)}</small></div><div class="ui-insight-action">${chip(r.label,r.tone)}${r.actionsHtml || (r.onclick?button(r.action || "Review",r.onclick):"")}</div></div>`).join("")}</div>`;
@@ -143,6 +159,16 @@ const UI = (() => {
     return `<div class="ui-actions${className ? ` ${text(className)}` : ""}" ${attrs}>
       ${start ? `<div class="ui-actions-start">${start}</div>` : ""}<div class="ui-actions-end">${endHtml}</div></div>`;
   };
+  /* A failed load: what went wrong and Try again, never an empty list. In a
+     dialog it brings its footer, so Close still works (#507). */
+  const error = (err, { retry = "", title = "Couldn't load this", dialog = false } = {}) => {
+    const again = retry ? button("Try again", retry, { icon: "refresh", kind: dialog ? "pri" : "" }) : "";
+    const box = callout("bad", title, `<p>${text(err?.message || err || "Something went wrong.")}</p>`);
+    if (dialog) return box + actions(cancel("Close") + again);
+    return `<div class="ui-error">${box}${again ? `<div class="ui-error-actions">${again}</div>` : ""}</div>`;
+  };
+  /* Nothing here: one sentence, and the next step when there is one. */
+  const empty = (sentence, { action = "" } = {}) => `<div class="ui-empty">${text(sentence)}${action ? `<div class="ui-empty-action">${action}</div>` : ""}</div>`;
   const cancel = (label = "Cancel") => button(label, "closeModal()", { attrs: 'data-dialog-dismiss="true"' });
 
   /* [{ title, value, unit, sub, tone, wide, tipHtml }]: tone ok | warn | bad | info
@@ -173,7 +199,7 @@ const UI = (() => {
     `<div class="settings-layout${guide ? " setup-layout" : ""}"${id ? ` id="${text(id)}"` : ""}${guide ? "" : ` data-open="${open ? 1 : 0}"`}>${pickerHtml}${navigationHtml}<div class="settings-main"${contentId ? ` id="${text(contentId)}"` : ""}>${backLabel ? `<nav class="workspace-location" aria-label="Section navigation"><button type="button" class="settings-back" onclick="${text(back)}">‹ ${text(backLabel)}</button><span class="workspace-current" aria-current="location">${text(currentLabel)}</span></nav>` : ""}${bodyHtml}</div></div>`;
   const workspaceNav = (items, { label, selected, onSelect, guide = false } = {}) =>
     `<nav class="settings-nav${guide ? " setup-nav" : ""}"${guide ? "" : ' role="tablist" aria-orientation="vertical"'} aria-label="${text(label)}">${items.map((item, i) =>
-      `${item.group && item.group !== items[i - 1]?.group ? `<div class="${guide ? "setup-chapter" : "settings-nav-group"}">${text(item.group)}</div>` : ""}<button type="button"${guide ? "" : ` role="tab" aria-selected="${item.key === selected}" tabindex="${item.key === selected ? 0 : -1}"`} data-${guide ? "step" : "tab"}="${text(item.key)}" class="${guide ? "setup-step" : ""}${item.key === selected ? " on" : ""}"${item.ariaLabel ? ` aria-label="${text(item.ariaLabel)}"` : ""} onclick="${text(`UI.navigateWorkspace(this, () => ${onSelect(item.key)})`)}">${item.markerHtml || ""}${item.icon ? `<svg class="settings-nav-icon" aria-hidden="true"><use href="#i-${text(item.icon)}"/></svg>` : ""}<span>${guide ? text(item.label) : `<b>${text(item.label)}</b>${item.descriptionHtml ? `<small>${item.descriptionHtml}</small>` : ""}`}</span>${guide ? "" : '<i aria-hidden="true">›</i>'}</button>`).join("")}</nav>`;
+      `${item.group && item.group !== items[i - 1]?.group ? `<div class="${guide ? "setup-chapter" : "settings-nav-group"}">${text(item.group)}</div>` : ""}<button type="button"${guide ? "" : ` role="tab" aria-selected="${item.key === selected}" tabindex="${item.key === selected ? 0 : -1}"`} data-${guide ? "step" : "tab"}="${text(item.key)}" class="${guide ? "setup-step" : ""}${item.key === selected ? " on" : ""}"${guide && item.key === selected ? ' aria-current="step"' : ""}${item.ariaLabel ? ` aria-label="${text(item.ariaLabel)}"` : ""} onclick="${text(`UI.navigateWorkspace(this, () => ${onSelect(item.key)})`)}">${item.markerHtml || ""}${item.icon ? `<svg class="settings-nav-icon" aria-hidden="true"><use href="#i-${text(item.icon)}"/></svg>` : ""}<span>${guide ? text(item.label) : `<b>${text(item.label)}</b>${item.descriptionHtml ? `<small>${item.descriptionHtml}</small>` : ""}`}</span>${guide ? "" : '<i aria-hidden="true">›</i>'}</button>`).join("")}</nav>`;
   const navigateWorkspace = async (button, run) => {
     const nav = button.closest(".settings-nav"), label = nav?.getAttribute("aria-label");
     const key = button.dataset.tab ?? button.dataset.step;
@@ -296,7 +322,7 @@ const UI = (() => {
   }
 
   return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
-    fields, field, chip, button, actions, cancel, stats, guide,
+    fields, field, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
@@ -415,7 +441,10 @@ if (typeof window !== "undefined") window.actionBar = actionBar;
 /* A setting: its label and one line of help on the left, its control on
    the right - a switch, a number and its unit, a choice, a short text. */
 function settingRow(label, help, control) {
-  return `<div class="srow"><div class="srow-l"><b>${label}</b>${help ? `<small>${help}</small>` : ""}</div><div class="srow-c">${control}</div></div>`;
+  // The control is named by the setting's label, which stays a <b> so it looks the same.
+  const [html, id] = withControlId(control);
+  const named = id ? html.replace(/<(input|select|textarea)\b/, `<$1 aria-labelledby="${id}-label"`) : html;
+  return `<div class="srow"><div class="srow-l"><b${id ? ` id="${id}-label"` : ""}>${label}</b>${help ? `<small>${help}</small>` : ""}</div><div class="srow-c">${named}</div></div>`;
 }
 /* Something Homestead runs or talks to: its name and state, what it is doing,
    and its buttons (an actionBar) - its settings open in a dialog. */
@@ -578,9 +607,14 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
       if (!d.contains(event.target) && !d.shell?.contains(event.target) && !path.includes(d) && !path.includes(d.shell)) d.open = false;
     });
   });
+  // Escape closes an open menu, not the dialog around it.
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape") document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
-  });
+    if (event.key !== "Escape") return;
+    const open = document.querySelectorAll("details.actionmenu[open]");
+    if (!open.length) return;
+    event.stopPropagation();
+    open.forEach(d => { d.open = false; });
+  }, true); // before the page's own Escape, which closes the dialog
   window.addEventListener("scroll", event => {
     if (event.target?.closest?.(".actionmenu-portal")) return;
     document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
@@ -623,6 +657,24 @@ function restoreDialogDisclosures(body) {
     if (dialogDisclosureState.has(key)) detail.open = dialogDisclosureState.get(key);
   });
 }
+/* A field that needs fixing: the reason under it, the field marked invalid,
+   shown and focused. The note goes once the field changes. */
+window.fieldError = (field, message) => {
+  if (typeof field === "string") field = document.querySelector(field);
+  if (!field) return toast(message, "bad");
+  const id = `${field.id || "field"}-error`;
+  let note = document.getElementById(id);
+  if (!note) {
+    note = document.createElement("div");
+    note.id = id; note.className = "ui-field-error"; note.setAttribute("role", "alert");
+    (field.closest(".f, .ui-field") || field.parentElement).appendChild(note);
+  }
+  note.textContent = message;
+  field.setAttribute("aria-invalid", "true");
+  field.setAttribute("aria-describedby", id);
+  field.addEventListener("input", () => { note.remove(); field.removeAttribute("aria-invalid"); field.removeAttribute("aria-describedby"); }, { once: true });
+  window.revealDialogField(field);
+};
 window.revealDialogField = field => {
   if (typeof field === "string") field = document.querySelector(field);
   if (!field) return;
@@ -786,6 +838,31 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   }, true); // before the page's own Escape, which closes the dialog
   window.addEventListener("resize", place);
   window.addEventListener("scroll", event => { if (event.target !== pop) place(); }, { passive: true, capture: true });
+}
+
+/* Labels name their fields (#505). A hand-written field block - a <label>
+   and then its control, as in <div class="f"> - is linked as it is drawn:
+   the control gets an id when it has none and the label a for, so a screen
+   reader reads the label and clicking it focuses the field. */
+function linkFieldLabels(root) {
+  for (const label of root.querySelectorAll?.("label:not([for]):not([data-wraps])") || []) {
+    if (label.querySelector("input, select, textarea")) { label.dataset.wraps = "1"; continue; }
+    const control = [...(label.parentElement?.querySelectorAll("input:not([type=hidden]), select, textarea") || [])]
+      .find(e => !e.labels?.length && !e.getAttribute("aria-label") && (label.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+    if (!control) continue;
+    if (!control.id) control.id = `field-${++linkFieldLabels.next}`;
+    label.htmlFor = control.id;
+  }
+}
+linkFieldLabels.next = 0;
+if (typeof window !== "undefined") window.linkFieldLabels = linkFieldLabels;
+if (typeof document !== "undefined" && typeof MutationObserver === "function" && document.documentElement) {
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; linkFieldLabels(document); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
 }
 
 /* Back to top (#292): on any page, once it is scrolled more than a screen

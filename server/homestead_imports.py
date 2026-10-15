@@ -1958,6 +1958,7 @@ def list_jobs():
         out.append({
             "name": c["metadata"]["name"],
             "schedule": sp.get("schedule", ""),
+            "time_zone": sp.get("timeZone") or "",
             "suspend": bool(sp.get("suspend")),
             "image": cont.get("image", ""),
             "command": " ".join(cont.get("command", [])[-1:]) if cont.get("command") else "",
@@ -1974,7 +1975,7 @@ def save_job(cfg):
     body = {
         "apiVersion": "batch/v1", "kind": "CronJob",
         "metadata": {"name": name, "namespace": NS, "labels": {NAMES.key("managed"): "true"}},
-        "spec": {"schedule": cfg["schedule"], "suspend": bool(cfg.get("suspend")),
+        "spec": {"schedule": cfg["schedule"], "timeZone": "Etc/UTC", "suspend": bool(cfg.get("suspend")),
                  "concurrencyPolicy": "Forbid",
                  "successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 3,
                  "jobTemplate": {"spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 86400,
@@ -1983,8 +1984,12 @@ def save_job(cfg):
                          "command": ["sh", "-c", cfg["command"]],
                      }]}}}}},
     }
+    # Without a timeZone the schedule runs on the controller host's clock,
+    # so a saved one is pinned to UTC, which is what the page shows. A zone
+    # already set, say with kubectl, is kept.
     try:
-        kget(f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}")
+        current = kget(f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}")
+        body["spec"]["timeZone"] = current.get("spec", {}).get("timeZone") or body["spec"]["timeZone"]
         return ksend("PUT", f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}", body)
     except urllib.error.HTTPError as e:
         if e.code != 404:

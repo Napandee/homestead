@@ -36,10 +36,22 @@ function fmWhen(seconds) {
     + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-window.fileManager = async (namespace, pvc, attached) => {
+/* The helper opens a volume on the node it is attached to, beside the app
+   using it; a shared (ReadWriteMany) one opens anywhere. Only a
+   ReadWriteOncePod claim, which one pod alone may mount, needs the app
+   stopped first. */
+function filesInUseQuestion(pvc, attached, modes = []) {
+  if (!attached || modes.includes("ReadWriteMany")) return null;
+  if (modes.includes("ReadWriteOncePod")) return { title: "Browse files in use", ok: "Try anyway",
+    message: `${pvc} can be mounted by one pod only, and an app has it.\n\nStop the app first, or the file browser will not start.` };
+  return { title: "Browse files in use", ok: "Open files",
+    message: `An app is using ${pvc}. You can browse it while the app runs; edits change its live files.` };
+}
+window.fileManager = async (namespace, pvc, attached, modes = []) => {
   if (window.filesDismiss) await window.filesDismiss();
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>opening ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume mounts in one place, so its files can only be opened once the workload is stopped. Continue anyway?`))) {
+  const question = filesInUseQuestion(pvc, attached, modes);
+  if (question && !(await ask(question.message, { title: question.title, ok: question.ok }))) {
     closeModal();
     return;
   }
@@ -125,7 +137,7 @@ function fmPaintPane(index) {
           <span class="fm-size dim xs">${e.kind === "dir" ? "folder" : fileSize(e.size)}</span>
           <span class="fm-perm mono xs" title="${esc(e.mode)}">${fmMode(e.mode)}</span>
           <span class="fm-own xs">${esc(e.user)}:${esc(e.group)}</span>
-          <span class="fm-when dim xs">${fmWhen(e.modified)}</span></div>`).join("") || '<div class="fm-empty dim">this folder is empty</div>'}
+          <span class="fm-when dim xs">${fmWhen(e.modified)}</span></div>`).join("") || '<div class="fm-empty dim">This folder is empty.</div>'}
       </div>${pane.listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}`;
   host.innerHTML = `<div class="fm-panehead">
       <select aria-label="Volume in this pane" onchange="fmVolume(${index}, this.value)">${fmVolumeOptions(pane)}</select>
@@ -395,12 +407,12 @@ window.fmSave = async (ignoreSyntax = false) => {
     const state = $("#fm_editstate"); if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
-    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`))) return fmSave(true);
+    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) return fmSave(true);
     toast(e.message, "bad");
   }
 };
 window.fmEditDone = async () => {
-  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   try { FM.editing?.editor?.getModel()?.dispose(); FM.editing?.editor?.dispose(); } catch (_) { /* already gone */ }
   const index = FM.editing?.index ?? 0;
   FM.editing = null;
@@ -447,7 +459,7 @@ async function fmRelease(keepalive = false) {
   }
 }
 window.fmClose = async () => {
-  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?"))) return;
+  if (FM.editing?.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   const closing = fmRelease();
   closeModal();
   await closing;
