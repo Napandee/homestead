@@ -157,11 +157,14 @@ try {
     if (await custom.isVisible()) await custom.click();
     else {
       // Its menu may open in place or be lifted out of the card into the page,
-      // and the step can repaint as its storage loads: open it again if so.
+      // and the step can repaint as its storage loads: open it again if so. A
+      // repaint can also replace the ⋯ itself mid-click, so that click retries too.
       for (let attempt = 1; ; attempt++) {
-        await page.locator("#setupStep details.actionmenu > summary").click();
-        try { await page.getByRole("button", { name: "Custom storage class", exact: true }).locator("visible=true").first().click({ timeout: 3000 }); break; }
-        catch (error) { if (attempt === 3) throw error; }
+        try {
+          await page.locator("#setupStep details.actionmenu > summary").click({ timeout: 5000 });
+          await page.getByRole("button", { name: "Custom storage class", exact: true }).locator("visible=true").first().click({ timeout: 3000 });
+          break;
+        } catch (error) { if (attempt === 3) throw error; }
       }
     }
     await page.waitForFunction(() => !document.querySelector("#sc_go").disabled);
