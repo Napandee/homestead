@@ -843,8 +843,8 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
       <div class="row sc-tags" id="sc_nodetags"></div>
       <div class="dim xs" id="sc_reach" style="margin-top:6px"></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
-    <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
-    <div class="note" id="sc_hint">Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).</div>
+    <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks ${tip("Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).")}</label>
+    <div id="sc_hint" hidden></div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -915,11 +915,11 @@ window.storageClassEngine = async () => {
       : `${v2.ready_nodes} of ${v2.total_nodes} hosts are ready for V2 volumes.`;
 };
 window.storageClassHint = () => {
+  // Nothing to say until it is ticked; then it is the dialog's one notice (#501).
   const on = $("#sc_migratable").checked, hint = $("#sc_hint");
-  hint.classList.toggle("bad", on);
-  hint.innerHTML = on
-    ? "<b>Volumes from this class can't be shared between hosts.</b> One pod on one host can use them; a ReadWriteMany claim on it never attaches to a second host's pod."
-    : "Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).";
+  hint.hidden = !on;
+  hint.innerHTML = on ? UI.callout("warn", "Volumes from this class can't be shared between hosts",
+    "One pod on one host can use them; a ReadWriteMany claim on it never attaches to a second host's pod.") : "";
 };
 window.storageClassSave = async button => {
   const name = $("#sc_name").value.trim();
