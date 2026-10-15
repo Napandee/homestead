@@ -1047,7 +1047,11 @@ function capacityHostTable(plan) {
 }
 window.capacityHostTable = capacityHostTable;
 
-function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "" }) {
+/* The acknowledgement a review asks for, from what it does: "Restarts" asks
+   "Restart it anyway", never "Start it anyway". */
+const reviewAck = what => `${String(what || "Starts").split(" ")[0].replace(/s$/, "")} it anyway`;
+window.reviewAck = reviewAck;
+function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "", objects = "", warnings = [] }) {
   const { concerns, caveats } = capacityNotes(plan);
   const placement = plan.placement || {}, hosts = plan.candidates || [];
   const ok = hosts.filter(host => host.eligible), out = hosts.filter(host => !host.eligible);
@@ -1058,19 +1062,21 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
     : ok.length ? ` on one of ${ok.length} hosts` : "";
   const topology = plan.topology_status === "blocked" ? "Its affinity and spread rules cannot fit all requested replicas."
     : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its affinity and spread placement remains unverified." : "";
-  const problems = [...(plan.blockers || []), ...concerns,
+  const problems = [...new Set([...(plan.blockers || []), ...concerns,
     ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
-    ...(topology ? [topology] : [])];
+    ...(topology ? [topology] : []), ...warnings])];
+  const verb = reviewAck(what).split(" ")[0].toLowerCase();
   const list = problems.length ? `<ul class="ui-list">${problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
   const rows = hosts.length;
   const reservations = ok.filter(host => host.reservations_known).map(host =>
     `<li>${esc(host.name)}: Already reserved: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb ?? "?")} GiB RAM · ${esc(host.reserved_cpu_percent ?? "?")}% CPU${host.request_slots != null ? ` · room for ${esc(host.request_slots)} more` : ""}</li>`)
     .concat(ok.filter(host => !host.reservations_known).map(host => `<li>${esc(host.name)}: Scheduler reservations unavailable</li>`));
   return [
-    UI.lead(plan.blocked ? `<b>${esc(name)}</b> can't start until what is below is resolved.`
+    UI.lead(plan.blocked ? `<b>${esc(name)}</b> can't ${verb} until what is below is resolved.`
       : `${what} <b>${esc(name)}</b>${where}.${extra}`),
-    plan.blocked ? UI.callout("bad", "Can't start", list || "No host that may run it has room for it.")
+    plan.blocked ? UI.callout("bad", `Can't ${verb}`, list || "No host that may run it has room for it.")
       : problems.length ? UI.callout("warn", "Check first", list) : "",
+    objects,
     rows ? UI.section("Hosts with room", capacityHostTable(plan)) : "",
     UI.more("Details", `${UI.facts([
         [plan.vm ? "VM reserves" : `Each pod reserves`, `${esc(plan.pod_request_gb ?? "?")} GiB RAM${plan.vm?.request_is_lower_bound ? " at least" : ""} · ${esc(plan.pod_cpu_request_percent ?? "?")}% CPU`],
@@ -1080,7 +1086,7 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
       ${caveats.length ? `<ul class="ui-list">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
       ${details}
       <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`),
-    !plan.blocked && problems.length ? UI.ack(ackId, "Start it anyway", { onchange: onAck }) : "",
+    !plan.blocked && problems.length ? UI.ack(ackId, reviewAck(what), { onchange: onAck }) : "",
   ].join("");
 }
 window.startReview = startReview;

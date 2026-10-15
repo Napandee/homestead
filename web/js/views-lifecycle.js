@@ -1263,15 +1263,17 @@ window.vmCreateReview = async (body, network = {}) => {
       throw new Error("VM creation review unavailable. Nothing was created; refresh before continuing.");
     VM_CREATE_REVIEW = {...review, network:{...network}};
     const cfg = review.config;
-    childModal(`Review new VM · ${cfg.name}`, `<div class="update-review">
-      <div class="reviewbox"><b>${esc(cfg.namespace)}/${esc(cfg.name)}</b><p class="small">${esc(cfg.cores || 2)} virtual CPUs · ${esc(cfg.memory || "2Gi")} guest memory · ${esc(cfg.start === false ? "Created stopped" : "Starts after disk preparation")}</p>
-        <p class="small muted">${cfg.isolated ? "Isolated VM - no virtual network cards" : `${esc(cfg.network || "pod")} · MAC ${esc(cfg.mac)}${cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : ""}`}. Guest login settings are included in this review but are not displayed.</p></div>
-      <div class="reviewbox"><b>Disks to create</b>${review.volumes?.length ? review.volumes.map(v=>`<p class="small"><b>${esc(v.name)}</b> · ${esc(v.size)} · ${esc(v.access_mode)} · ${esc(v.volume_mode)}<br><span class="muted">${esc(v.storage_class)}</span></p>`).join("") : '<p class="small muted">Uses the selected existing imported disk; no new disk claim.</p>'}</div>
-      ${cfg.host_devices?.add?.length ? `<div class="reviewbox"><b>Passthrough</b>${cfg.host_devices.add.map(d => `<p class="small">${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}</p>`).join("")}</div>` : ""}
-      ${review.capacity.blockers?.length ? `<div class="note bad">${review.capacity.blockers.map(esc).join(" · ")}</div>` : ""}
-      ${deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked && capacityNotes(review.capacity).concerns.length ? '<label class="check"><input id="vmCreateApprove" type="checkbox" onchange="vmCreateReviewReady()"> Create it anyway, accepting the warnings above</label>' : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button>`)}</div>`,true);
+    const ip = cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : "";
+    const objects = UI.facts([
+      ["VM", `${esc(cfg.cores || 2)} virtual CPUs · ${esc(cfg.memory || "2Gi")} memory · ${cfg.start === false ? "created stopped" : "starts once its disks are ready"}`],
+      ["Network", cfg.isolated ? "Isolated: no virtual network cards" : `${esc(cfg.network || "pod")} · MAC <span class="mono">${esc(cfg.mac)}</span>${ip}`],
+      ["Disks", review.volumes?.length ? review.volumes.map(v => `<span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)}`).join("<br>") : "none"],
+      cfg.host_devices?.add?.length ? ["Passthrough", cfg.host_devices.add.map(d => `${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}`).join("<br>")] : null]);
+    const details = `${review.volumes?.length ? `<ul class="ui-list">${review.volumes.map(v => `<li><span class="mono">${esc(v.name)}</span>: ${esc(v.access_mode)} · ${esc(v.volume_mode)}</li>`).join("")}</ul>` : ""}
+      <p class="ui-help">Guest login settings are part of this review but are not shown.</p>`;
+    childModal(`Create VM · ${cfg.name}`, startReview(review.capacity, { what: "Creates", name: cfg.name, objects, details,
+        ackId: "vmCreateApprove", onAck: "vmCreateReviewReady()" })
+      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button>`), true);
     vmCreateReviewReady();
   } catch (error) { if(sequence === VM_CREATE_SEQUENCE) toast(error.message,"bad"); }
 };

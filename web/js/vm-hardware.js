@@ -196,7 +196,7 @@ window.vmHardwareChanged = () => {
   if ($("#vh_efikeep")) $("#vh_efikeep").disabled = h.firmware !== "uefi";
   if ($("#vh_isolate")) $("#vh_isolate").disabled = !h.cpu.dedicated;
   const notes = vmHardwareNotes(full, window.__vhOpts || {});
-  $("#vh_notes").innerHTML = notes.map(([tone, text]) => `<div class="note small ${tone === "bad" ? "bad" : tone === "warn" ? "warn" : ""}">${esc(text)}</div>`).join("");
+  $("#vh_notes").innerHTML = UI.notices(notes.map(([tone, text]) => [tone === "bad" || tone === "warn" ? tone : "info", text]));
 };
 
 window.vmBootOutputChanged = () => {
