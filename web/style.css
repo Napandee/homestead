@@ -2235,14 +2235,20 @@ div.ipam-line.dim{display:block}
   .ui-fields{grid-template-columns:1fr}
   .volume-delete-grid{grid-template-columns:1fr}
   .ui-facts{grid-template-columns:1fr 1fr}
-  /* Tables become cards: each cell on its own line, with its column's label. */
+  /* Tables fold as a stack table does (#506): the first cell is the card's
+     title, short values sit two to a line with their label above, and a long
+     value (data-wide, from labelStackTables) or the actions take the whole
+     line. An empty cell is left out rather than shown as a lone label. */
   .ui-table thead{display:none}
-  .ui-table,.ui-table tbody,.ui-table tr,.ui-table td{display:block;width:auto!important}
-  .ui-table tr{padding:10px 13px;border-bottom:1px solid var(--line)}
+  .ui-table,.ui-table tbody{display:block;width:auto!important}
+  .ui-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 14px;padding:12px 13px;border-bottom:1px solid var(--line)}
   .ui-table tr:last-child{border-bottom:0}
-  .ui-table td{padding:3px 0;border:0;text-align:left!important}
+  .ui-table td{display:block;width:auto!important;min-width:0;padding:0;border:0;text-align:left!important;white-space:normal;overflow-wrap:anywhere}
   .ui-table td[data-label]:not([data-label=""]):not(:first-child)::before{content:attr(data-label);display:block;font:500 11px "Inter Tight",sans-serif;color:var(--mut);margin-bottom:2px}
-  .ui-table td:first-child{font-weight:600;padding-bottom:6px}
+  .ui-table td:first-child{grid-column:1/-1;order:-1;font-weight:600;padding-bottom:2px}
+  .ui-table td[data-wide],.ui-table td[data-label=""],.ui-table td[colspan]{grid-column:1/-1}
+  .ui-table td[data-wide]{order:1}.ui-table td[data-label=""]{order:2}
+  .ui-table td:empty{display:none}
 }
 html[data-theme="light"] .ui-facts>div{background:var(--surf)}
 html[data-theme="light"] .ui-callout.warn b{color:#8a5200}html[data-theme="light"] .ui-callout.bad b{color:#a1242a}

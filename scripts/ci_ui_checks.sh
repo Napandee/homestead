@@ -36,6 +36,7 @@ case "${1:-}" in
     CUSTOM_WIDGET_SCREENSHOTS=release-assets/pages/custom-widget node tests/integration/dashboard-custom.mjs
     PORTAL_COLUMN_SCREENSHOTS=release-assets/pages/portal-columns node tests/integration/portal-widget-columns.mjs
     RESTORE_LINES_SCREENSHOTS=release-assets/pages/restore-lines node tests/integration/restore-tests-lines.mjs
+    UI_TABLE_SCREENSHOTS=release-assets/pages/ui-table node tests/integration/ui-table-phone.mjs
     ;;
   pages-dashboard)
     INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs

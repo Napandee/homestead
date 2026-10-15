@@ -29,6 +29,11 @@ test("table cells carry their column's label for the phone layout", () => {
   assert.match(UI.table([{ label: "Host" }], [], { empty: "No hosts <yet>" }), /ui-empty">No hosts &lt;yet&gt;/);
 });
 
+test("a UI.table is a stack table, so it folds on a phone like every other list (#506)", () => {
+  const html = UI.table([{ label: "Host" }], [["a"]]);
+  assert.match(html, /<table class="ui-table stack">/, "the stack labeller and phone layout apply to it");
+});
+
 test("steps mark what is done and what is current", () => {
   const html = UI.steps([{ title: "Copy" }, { title: "Verify" }, { title: "Switch" }], 1);
   assert.match(html, /<li class="done">/);
