@@ -1999,11 +1999,6 @@ div.ipam-line.dim{display:block}
 .vm-desc{margin-top:-4px}
 .vm-problem{margin:0;font-size:12px}
 .vm-restart{color:var(--med)}
-.vm-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px}
-.vm-facts.wide{grid-template-columns:repeat(3,1fr)}
-.vm-facts>div{display:grid;gap:2px;min-width:0}
-.vm-facts span{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
-.vm-facts b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vm-actions{flex-wrap:wrap;gap:6px;margin-top:auto}
 .vm-actions>.actionmenu{margin-left:auto}
 .vm-name{min-width:0}.vm-name>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2034,7 +2029,7 @@ div.ipam-line.dim{display:block}
 .vm-table .vm-addr{flex-wrap:nowrap}
 .vm-table .vm-actions{flex-wrap:nowrap}
 .vm-iconbtn{padding-left:9px;padding-right:9px}.vm-iconbtn .btnicon{margin:0}
-@media(max-width:560px){.vm-grid{grid-template-columns:1fr}.vm-facts,.vm-facts.wide{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.vm-grid{grid-template-columns:1fr}}
 
 /* A pill that opens something: the update count beside the layout switch. */
 .pillbtn{cursor:pointer;font:inherit;font-size:11px;font-weight:650;border-style:solid}.pillbtn:hover{filter:brightness(1.15)}
