@@ -1389,26 +1389,32 @@ function priorityStatus(a) {
 }
 function priorityHtml(plan) {
   const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current), over = changes.length > plan.max;
-  const restarting = changes.filter(a => a.kind !== "vm").length, vms = changes.length - restarting;
+  // A VM, and a StatefulSet that doesn't restart itself, takes its tier when it next starts.
+  const rolling = changes.filter(a => a.kind !== "vm" && a.restarts !== false), restarting = rolling.length;
+  const sets = rolling.filter(a => a.kind === "sts").length, held = changes.length - restarting;
+  const vms = changes.filter(a => a.kind === "vm").length, heldSets = held - vms;
+  const count = (n, noun) => n ? `${n} ${noun}${n === 1 ? "" : "s"}` : "";
+  const and = (...parts) => parts.filter(Boolean).join(" and ");
+  const chips = { vm: "VM", sts: "StatefulSet" };
   const rows = apps.map((a, i) => [
-    `<span class="mono">${esc(a.kind === "vm" ? `${a.ns}/${a.name}` : a.id)}</span>${a.kind === "vm" ? ` ${UI.chip("VM")}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
+    `<span class="mono">${esc(chips[a.kind] ? `${a.ns}/${a.name}` : a.id)}</span>${chips[a.kind] ? ` ${UI.chip(chips[a.kind])}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
     `${prioritySelect(`prio_${i}`, a.tier, `${a.managed || a.status === "unknown_group" ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
       <span class="sub">${priorityStatus(a)}</span>
       <span class="sub">${esc(a.note || (a.status === "unknown_group" ? "Group tiers couldn't be read; try again shortly." : "") || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
   return [
     UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
-      : changes.length ? [restarting ? `Changes the tier of ${restarting} app${restarting === 1 ? "" : "s"}. Each restarts once, one at a time.` : "",
-        vms ? `${vms} VM${vms === 1 ? " takes its" : "s take their"} new tier when ${vms === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
+      : changes.length ? [restarting ? `Changes the tier of ${and(count(restarting - sets, "app"), count(sets, "StatefulSet"))}. Each restarts once, one at a time${sets ? "; a StatefulSet one pod at a time" : ""}.` : "",
+        held ? `${and(count(vms, "VM"), count(heldSets, "StatefulSet"))} ${held === 1 ? "takes its" : "take their"} new tier when ${held === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
       : "Every app keeps its tier. Choose a tier to change one."),
     // What the cluster's classes get wrong (#429), said once.
     (plan.warnings || []).length ? UI.callout("warn", "Check first", `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`) : "",
     (plan.groups || []).length ? UI.section(`Groups · ${plan.groups.length}`, `<ul class="ui-list">${plan.groups.map(g =>
       `<li><b>${esc(g.name)}</b> ${esc(g.tier === null ? "tier unknown" : g.tier || "no tier")} · ${g.apps} app${g.apps === 1 ? "" : "s"}</li>`).join("")}</ul>`) : "",
-    UI.section(`Apps and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
+    UI.section(`Apps, StatefulSets and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
-    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
-      <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
-    changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting} apps now`) : "",
+    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. StatefulSets take tiers of their own, never a group's; one that waits for its pods to be deleted (OnDelete, or a partition at or above its replicas) takes its tier when they next restart, and Homestead never deletes them. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
+      <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again, and a StatefulSet one pod at a time. If one does not come back within ten minutes - for a StatefulSet, ten per pod - the job stops and the rest are not changed.</p>`, false, "prio-how"),
+    changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting}${sets ? "" : " apps"} now`) : "",
   ].join("");
 }
 window.priorityItem = (id, tier) => {
@@ -1426,7 +1432,9 @@ window.priorityStart = async () => {
   try {
     await api("/api/workloads/priority", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier, follow: !!a.follow })), review_token: plan.review_token, restart: true }) });
-    closeModal(); toast(`Setting the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+    const sets = changes.filter(a => a.kind === "sts").length, apps = changes.length - sets;
+    const named = [apps || !sets ? `${apps} app${apps === 1 ? "" : "s"}` : "", sets ? `${sets} StatefulSet${sets === 1 ? "" : "s"}` : ""];
+    closeModal(); toast(`Setting the tier of ${named.filter(Boolean).join(" and ")}; follow it in Jobs`, "ok");
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set tiers"; }
