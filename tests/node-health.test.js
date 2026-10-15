@@ -46,7 +46,7 @@ test("a host that isn't Ready shows no readings, only dashes", () => {
   assert.doesNotMatch(summary, /undefined|\b0%/);
   assert.match(summary, /CPU <b>—<\/b>/);
   const rows = vm.runInContext("nodeComparisonRows", c)([down]);
-  for (const label of ["CPU", "Memory", "Network", "Temp"]) assert.doesNotMatch(rows.find(row => row.label === label).values[0], /\b0%|undefined|°C/, label);
+  for (const label of ["CPU", "Memory", "Network", "CPU temp"]) assert.doesNotMatch(rows.find(row => row.label === label).values[0], /\b0%|undefined|°C/, label);
   const card = c.dashboardNodes([down], "compact");
   assert.doesNotMatch(card, /<b class="mono">0%<\/b>/);
 });
@@ -61,4 +61,35 @@ test("the node's Storage line counts drive warnings, and Overview has one callou
   assert.match(callout, /HealthInsights\.open\(&#39;health&#39;\)|HealthInsights\.open\('health'\)/);
   assert.match(c.nodeAttention(down), /ui-callout bad[\s\S]*not answering/);
   assert.equal(c.nodeAttention(base), "");
+});
+
+const warm = { ...base, temps: { cpu_c: 39, max_c: 51, max_source: "NVMe nvme0", disks: [] } };
+
+test("nodeTemp gives the CPU temperature, and the hottest sensor when it runs hotter", () => {
+  const c = context();
+  const t = c.nodeTemp(warm);
+  assert.equal(t.label, "CPU temp"); assert.equal(t.value, 39); assert.equal(t.extra, "max 51°C, NVMe nvme0");
+  assert.equal(c.nodeTemp({ ...base, temps: { cpu_c: 45, max_c: 45, disks: [] } }).extra, "");
+  assert.equal(c.nodeTemp({ ...base, temps: { max_c: 50, disks: [] } }).label, "Max temp");
+  assert.equal(c.nodeTemp({ ...base, temps: { disks: [] } }).value, null);
+});
+
+test("the dashboard, Nodes and the node's page give the same temperature and disk labels", () => {
+  const c = context();
+  const card = c.dashboardNodes([warm], "compact"), summary = c.nodePageSummary(warm);
+  const rows = vm.runInContext("nodeComparisonRows", c)([warm]);
+  assert.match(card, /CPU temp[\s\S]*39°C/); assert.doesNotMatch(card, /Max temp/);
+  assert.ok(rows.some(row => row.label === "CPU temp" && /39°C/.test(row.values[0])), rows.map(r => r.label).join());
+  assert.match(summary, /CPU temp <b[^>]*>39°C<\/b>/); assert.doesNotMatch(summary, /CPU <b[^>]*>39°C/);
+  assert.match(card, /Node filesystem/); assert.match(summary, /Node filesystem/);
+  assert.doesNotMatch(summary, /Disk <b>/);
+});
+
+test("shapes a real probe reports: a hottest sensor that is the CPU itself adds nothing", () => {
+  const c = context();
+  // As a Raspberry Pi's probe reports it: the hottest sensor is the SoC's ADC, at the CPU's temperature.
+  assert.deepEqual(JSON.parse(JSON.stringify(c.nodeTemp({ ...base, temps: { cpu_c: 52.6, max_c: 52.6, max_source: "rp1_adc", disks: [] } }))),
+    { value: 52.6, label: "CPU temp", text: "52.6°C", extra: "" });
+  // A drive running hotter than the CPU is named beside it.
+  assert.equal(c.nodeTemp({ ...base, temps: { cpu_c: 30, max_c: 37.9, max_source: "NVMe nvme0", disks: [] } }).extra, "max 37.9°C, NVMe nvme0");
 });

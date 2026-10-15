@@ -2,6 +2,16 @@ const tempCls = c => c == null ? "" : sev(c, "temperature") === "b" ? "t-hot" : 
 const tempTag = c => c == null ? "" : sev(c, "temperature") === "b" ? "bad" : sev(c, "temperature") === "w" ? "warn" : "";
 /* The sensor a maximum came from, in brackets: "71° (NVMe nvme0)". */
 const tempSource = temps => temps?.max_source ? ` (${esc(temps.max_source)})` : "";
+/* One temperature for a host, labelled the same on every page (#485): the
+   CPU's, with the hottest sensor beside it when that runs hotter. */
+function nodeTemp(n) {
+  const t = n.temps || {}, cpu = t.cpu_c ?? null, max = t.max_c ?? null;
+  const value = cpu ?? max;
+  const extra = cpu != null && max != null && max > cpu ? `max ${max}°C${t.max_source ? `, ${t.max_source}` : ""}` : "";
+  return { value, label: cpu != null || max == null ? "CPU temp" : "Max temp", text: value == null ? "—" : `${value}°C`, extra };
+}
+/* The kubelet's filesystem, which may not be the system drive's. */
+const NODE_FS_TIP = "The filesystem the kubelet reports for this node; Storage lists each drive.";
 /* The processor, as the node probe reads it, with its cores. */
 const cpuSummary = n => [n.temps?.cpu_model, n.cpu_cap != null ? `${n.cpu_cap} core${n.cpu_cap == 1 ? "" : "s"}` : ""].filter(Boolean).map(esc).join(" · ") || "—";
 const smartTone = health => health === "passed" ? "ok" : health === "failed" ? "bad" : "";
@@ -182,14 +192,13 @@ function dashboardNodes(nodes, display="compact") {
     const {issues,tone,status,ready}=nodeHealth(n);
     // A host that isn't answering has no current readings: dashes, not zeros.
     const live=value=>ready?value:null;
-    const cpuTemp=live(n.temps?.cpu_c), maxTemp=live(n.temps?.max_c);
-    const temperature=known(maxTemp)?maxTemp:cpuTemp;
+    const temp=ready?nodeTemp(n):{label:"CPU temp",text:"—",extra:""};
     const network=ready&&known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
     return `<article class="node-compact-host"${clusterAttr(n)}>
       <div class="node-compact-heading">${UI.statusDot(tone,status)}<button class="linkish" onclick="nodeDetail(${jsq(n.name)})" title="${esc(n.name)}">${esc(n.name)}</button></div>
       <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${esc(status)}</div>
-      ${percent("CPU",live(n.cpu_pct),"cpu")}${percent("Memory",live(n.mem_pct),"memory")}${percent("Disk",live(n.fs_pct),"disk")}
-      ${line("Network",network,"Receive / transmit")}${line("Max temp",known(temperature)?temperature+"°C"+(known(maxTemp)?tempSource(n.temps):""):"—","Maximum observed host temperature, and the sensor it came from; CPU temperature when no maximum is reported")}
+      ${percent("CPU",live(n.cpu_pct),"cpu")}${percent("Memory",live(n.mem_pct),"memory")}${percent("Node filesystem",live(n.fs_pct),"disk")}
+      ${line("Network",network,"Receive / transmit")}${line(temp.label,temp.text+(temp.extra?` · ${temp.extra}`:""),"The CPU's temperature, and the hottest sensor when it runs hotter")}
       ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
       ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc(issues.join("; "))}">${esc(issues.join("; "))}</button>`:""}
     </article>`;
@@ -400,7 +409,9 @@ function nodeComparisonRows(nodes) {
     ...Array.from({length:Math.max(1,...nodes.map(n => (n.disks || []).length))}, (_, i) =>
       metric(`Storage ${i + 1}`, n => n.disks?.length ? comparisonDisk(n,n.disks[i]) : i ? '<span class="dim">—</span>' : comparisonDisk(n,{device:"filesystem",name:"Node filesystem",root_fs:true,system:true,size_gb:n.fs_cap_gb}), false)),
     metric("Network", n => n.status === "Ready" ? `<span class="mono small">${ratePair(n.rx_mbps, n.tx_mbps).join(" ")}</span>` : '<span class="dim">—</span>', false),
-    metric("Temp", n => n.status !== "Ready" || n.temps?.cpu_c == null ? '<span class="dim">—</span>' : `<span class="mono ${tempCls(n.temps.cpu_c)}">${esc(n.temps.cpu_c)}°C</span>`),
+    metric("CPU temp", n => { const t = nodeTemp(n);
+      return n.status !== "Ready" || t.value == null ? '<span class="dim">—</span>'
+        : `<span class="mono ${tempCls(t.value)}">${esc(t.text)}</span>${t.extra ? `<span class="comparison-note">${esc(t.extra)}</span>` : ""}`; }),
     metric("Pods", n => `<b class="mono">${esc(n.pods ?? "—")}</b>${nodePodDots(n)}`),
     metric("VMs", n => `<span class="mono">${esc(n.vms ?? 0)}</span>`),
     metric("Uptime", n => `${nodeUptimeStrip(n)}<span class="comparison-note">${esc(nodeUpFor(n) || "—")}</span>`),
@@ -619,7 +630,7 @@ async function nodePage(name) {
         <div id="nodeDisks" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
       <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
         <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div></div>`],
-    ["hardware", "Hardware", esc([hwNames.join(", "), n.temps?.cpu_c != null ? `CPU ${n.temps.cpu_c}°C` : ""].filter(Boolean).join(" · ") || "none defined"), `
+    ["hardware", "Hardware", esc([hwNames.join(", "), nodeTemp(n).value != null ? `${nodeTemp(n).label} ${nodeTemp(n).text}` : ""].filter(Boolean).join(" · ") || "none defined"), `
       <div class="card flat">${UI.moduleHeader(`Hardware for apps`, `What placement checks look for before a container moves or starts`, `<button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button>`)}
         <div>${hardwareTags(hw) || '<span class="dim xs">No hardware is defined.</span>'}</div></div>
       <div class="card flat" id="nodeDevices"><div class="ctitle">Devices for VMs</div><div class="csub">PCI and USB devices this host can give to its virtual machines</div>
@@ -679,8 +690,8 @@ function nodePageSummary(n) {
   return `<span class="sumitem"><span class="pill ${h.tone === "bad" ? "crit" : h.tone}" data-tip="${esc([n.status, ...h.issues].join(" · "))}">${esc(h.status)}</span></span>
     <span class="sumitem">CPU <b>${known(n.cpu_pct) ? `${esc(n.cpu_pct)}%` : "—"}</b> of ${esc(n.cpu_cap ?? "—")}</span>
     <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
-    <span class="sumitem">Disk <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
-    ${known(n.temps?.cpu_c) ? `<span class="sumitem">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c}°C</b></span>` : ""}
+    <span class="sumitem" data-tip="${esc(NODE_FS_TIP)}">Node filesystem <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
+    ${h.ready && nodeTemp(n).value != null ? `<span class="sumitem">${nodeTemp(n).label} <b class="${tempCls(nodeTemp(n).value)}">${esc(nodeTemp(n).text)}</b>${nodeTemp(n).extra ? ` <span class="dim xs">${esc(nodeTemp(n).extra)}</span>` : ""}</span>` : ""}
     ${n.schedulable ? "" : '<span class="sumitem"><span class="tag warn">cordoned</span></span>'}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */
