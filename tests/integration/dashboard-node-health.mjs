@@ -12,7 +12,7 @@ try{for(const theme of ["dark","light"]){
    window.api=async(path,opts)=>{const answer=await original(path,opts);if(path==="/api/nodes")return nodes;if(path==="/api/overview")return {...answer,nodes,nodes_total:5,health:"degraded",health_issues:[{kind:"Disk",name:"backup-node/sda",severity:"degraded",reason:"2 reallocated sectors"}],health_summary:"Disk backup-node/sda: 2 reallocated sectors"};return answer;};
    await viewDash();
  },theme);
- await page.locator('.clusteralert button').click();await page.locator('#clusterHealth').waitFor();
+ await page.locator('.dash-alert[data-health]').getByRole('button',{name:'Review'}).click();await page.locator('#clusterHealth').waitFor();
  await page.waitForFunction(()=>document.querySelector('#clusterHealth')?.textContent.includes('2 reallocated sectors'));
  assert.equal(new URL(page.url()).searchParams.get('section'),'health');assert.equal(await page.locator('#clusterHealth').evaluate(el=>el===document.activeElement),true);
  await page.evaluate(()=>go('dash'));await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();

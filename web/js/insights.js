@@ -173,10 +173,10 @@ const HealthInsights = (() => {
   // The dashboard banner: once this account has acknowledged every issue in
   // it, it says so quietly instead of warning.
   function paintBanner() {
-    const banner=document.querySelector(".clusteralert"), issues=data.overview?.health_issues || [];
+    const banner=document.querySelector(".dash-alert[data-health]"), issues=data.overview?.health_issues || [];
     if(!banner || !data.alerts || !issues.length)return;
     const alerts=new Map((data.alerts.active || []).map(a=>[a.key,a]));
-    const done=issues.every(i=>alerts.get(`health:${i.kind}:${i.name}`)?.acknowledged), title=banner.querySelector("b");
+    const done=issues.every(i=>alerts.get(`health:${i.kind}:${i.name}`)?.acknowledged), title=banner.querySelector(".ui-callout b");
     title.dataset.text ||= title.textContent;
     banner.classList.toggle("acknowledged",done);
     title.textContent=done?"Acknowledged until it gets worse":title.dataset.text;
@@ -185,7 +185,7 @@ const HealthInsights = (() => {
   async function load(force=false) {
     if(request){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
-    const keys=[...new Set([...ids.flatMap(id=>needs[id] || []),...(document.querySelector(".clusteralert")?["overview","alerts"]:[])])];if(!keys.length)return;
+    const keys=[...new Set([...ids.flatMap(id=>needs[id] || []),...(document.querySelector(".dash-alert[data-health]")?["overview","alerts"]:[])])];if(!keys.length)return;
     if(!force && checkedAt>Date.now()-30000 && keys.every(key=>key in data)){paint();return;}
     const token=window.NAV_TOKEN, epoch=generation;
     request=(async()=>{
