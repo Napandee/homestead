@@ -426,7 +426,7 @@ function planList(group, chosen) {
 }
 window.lhPlans = (group = "default") => {
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
-  modal("Protection plans", `<p class="muted small">A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.</p>
+  modal("Protection plans", `${UI.lead("A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.")}
     <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>
       `<option value="${esc(g)}" ${g === group ? "selected" : ""}>${esc(g)}${g === "default" ? " - volumes with no other group" : ""}</option>`).join("")}</select>
       <div class="dim xs" style="margin-top:6px">A plan for a group of its own needs the group first:
@@ -585,8 +585,7 @@ window.lhAssign = (vol, label) => {
   const d = STATE.data.lh;
   const v = (d.volumes || []).find(x => x.name === vol) || { groups: [], jobs: [] };
   modal("Protect · " + label, `
-    <p class="muted small">Groups and jobs are labels on the volume. Ticking one takes effect
-    on the job's next run.</p>
+    ${UI.lead("Groups and jobs are labels on the volume. Ticking one takes effect on the job's next run.")}
     <div class="sec">Groups</div>
     <div id="pa_groups">${(d.groups || []).map(g => `<label class="switch" style="margin:0 0 8px">
       <input type="checkbox" class="pg" value="${esc(g)}" ${v.groups.includes(g) ? "checked" : ""}>
