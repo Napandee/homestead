@@ -150,6 +150,12 @@ test("workspace navigation escapes labels and handlers and groups items once", (
   assert.match(UI.workspace(html,'<input id="kept">',{open:false,backLabel:'Back',back:'goBack()'}), /data-open="0"/);
   assert.match(UI.workspace(html,'<input id="kept">',{open:true}), /data-open="1"/);
 });
+test("a guide's navigation marks the open step as the current one, and only that one", () => {
+  const html = UI.workspaceNav([{key:'intro',label:'Start here'}, {key:'lan',label:'LAN networks'}],
+    {label:'Setup steps',selected:'lan',guide:true,onSelect:id => `setupOpen(${JSON.stringify(id)})`});
+  assert.equal((html.match(/aria-current="step"/g)||[]).length,1);
+  assert.match(html, /<button[^>]*aria-current="step"[^>]*>[\s\S]*?LAN networks/);
+});
 
 
 test("page section forms have an in-flow footer and return action without changing dialog dismissal",()=>{

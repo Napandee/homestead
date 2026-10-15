@@ -80,7 +80,7 @@ function portalDots() {
 }
 
 window.portalRecheck = async () => {
-  try { STATE.data.portalStatus = await api("/api/portal/status?force=1"); portalDots(); toast("links checked", "ok"); }
+  try { STATE.data.portalStatus = await api("/api/portal/status?force=1"); portalDots(); toast("Links checked", "ok"); }
   catch (e) { toast(e.message, "bad"); }
 };
 
@@ -108,12 +108,12 @@ function portalEditRows() {
     ${PORTAL_EDIT.map((row, i) => `<div class="pe-row card flat" data-i="${i}">
       <div class="pe-icon">${portalIcon({ ...row, shown: portalPreview(row) }, "sm")}</div>
       <div class="pe-fields">
-        <div class="pe-line"><input class="pe-title" value="${esc(row.title)}" placeholder="Title" maxlength="60" data-k="title">
-          <input class="pe-url mono" value="${esc(row.url)}" placeholder="http://192.0.2.1" data-k="url"></div>
-        <div class="pe-line"><input class="pe-section" list="pe_sections" value="${esc(row.section || "")}" placeholder="Section, e.g. Network" maxlength="40" data-k="section">
-          <select class="pe-iconpick" data-k="icon">${portalIconOptions(row.icon || "")}</select>
+        <div class="pe-line"><input class="pe-title" aria-label="Title" value="${esc(row.title)}" placeholder="Title" maxlength="60" data-k="title">
+          <input class="pe-url mono" aria-label="Address" value="${esc(row.url)}" placeholder="http://192.0.2.1" data-k="url"></div>
+        <div class="pe-line"><input class="pe-section" aria-label="Section" list="pe_sections" value="${esc(row.section || "")}" placeholder="Section, e.g. Network" maxlength="40" data-k="section">
+          <select class="pe-iconpick" aria-label="Icon" data-k="icon">${portalIconOptions(row.icon || "")}</select>
           ${row.icon === "url" ? `<input class="pe-iconurl" value="${esc(row.icon_url || "")}" placeholder="https://…/logo.png" data-k="icon_url">` : ""}</div>
-        <input class="pe-note" value="${esc(row.note || "")}" placeholder="Note (optional): what or where it is" maxlength="120" data-k="note">
+        <input class="pe-note" aria-label="Note" value="${esc(row.note || "")}" placeholder="Note (optional): what or where it is" maxlength="120" data-k="note">
       </div>
       <div class="pe-move">
         <button class="iconbtn" type="button" title="Move up" onclick="portalMove(${i},-1)" ${i ? "" : "disabled"}>↑</button>
@@ -153,7 +153,7 @@ window.portalEdit = async (pick = false) => {
       ${UI.actions(`<button class="btn pri" id="pe_save" onclick="portalSave()">Save links</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (pick) portalPick();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `portalEdit(${pick ? "true" : "false"})`, dialog: true }); }
 };
 
 document.addEventListener("input", event => {
@@ -212,7 +212,7 @@ window.portalSave = async () => {
     section: String(row.section || "").trim(), note: String(row.note || "").trim(),
     icon: row.icon === "url" ? String(row.icon_url || "").trim() : row.icon || "" }));
   const blank = links.findIndex(link => !link.title || !link.url);
-  if (blank >= 0) return toast(`link ${blank + 1} needs a title and an address`, "bad");
+  if (blank >= 0) return toast(`Link ${blank + 1} needs a title and an address`, "bad");
   const button = $("#pe_save");
   button.disabled = true; button.textContent = "Saving…";
   try {

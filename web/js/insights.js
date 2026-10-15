@@ -101,7 +101,7 @@ const HealthInsights = (() => {
     return records.filter(r=>id!=="containers" || !r.platform).map(r=>{
       const vm=id==="vms", stopped=vm?r.status==="Stopped":r.desired===0;
       const ready=vm?r.status==="Running":r.desired>0 && r.ready>=r.desired;
-      const status=vm?r.status || "Unknown":stopped?"Stopped":ready?"Running":known(r.ready)&&known(r.desired)?`${r.ready}/${r.desired} ready`:"Unknown";
+      const status=vm?(typeof stateWords==="function"?stateWords(r.status):r.status) || "Unknown":stopped?"Stopped":ready?"Running":known(r.ready)&&known(r.desired)?`${r.ready}/${r.desired} ready`:"Unknown";
       return {record:r,name:r.name,ns:r.ns,status,tone:stopped?"neutral":ready?"ok":vm && /Error|Fail|Crash|BackOff/i.test(status)?"bad":"warn",
         cpu:stopped?null:vm?r.usage?.cpu_pct:known(r.cpu)?r.cpu*100:null,
         memory:stopped?null:vm?r.usage?.mem:known(r.mem_mb)?r.mem_mb*1024**2:null};
@@ -148,7 +148,7 @@ const HealthInsights = (() => {
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
   }
   function body(id, settings={}) {
-    if (!needs[id].every(key=>key in data))return '<div class="empty small">Loading checks…</div>';
+    if (!needs[id].every(key=>key in data))return '<div class="empty small"><span class="spin2"></span>Loading checks…</div>';
     if(id==="health")return healthBody(true);
     if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
     if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"],settings);

@@ -6,7 +6,7 @@
 # the group that finishes soonest (the CI job's timings show which).
 set -eu
 # The demo server the CI job starts; the checks that do not read it ignore it.
-export HOMESTEAD_URL=http://127.0.0.1:4173
+export HOMESTEAD_URL="${HOMESTEAD_URL:-http://127.0.0.1:4173}"
 
 case "${1:-}" in
   dialogs-0|dialogs-1|dialogs-2)
@@ -19,6 +19,12 @@ case "${1:-}" in
     PASSTHROUGH_SCREENSHOTS=release-assets/dialogs/passthrough node tests/integration/passthrough-devices.mjs
     VM_ISOLATION_SCREENSHOTS=release-assets/dialogs/vm-isolation node tests/integration/vm-network-isolation.mjs
     FIREWALL_SCREENSHOTS=release-assets/dialogs/firewall node tests/integration/workload-firewall.mjs
+    node scripts/check_network_setup.mjs
+    node scripts/check_network_edit.mjs
+    node scripts/check_node_vip.mjs
+    node scripts/check_image_admission.mjs
+    node scripts/check_import_admission.mjs
+    node scripts/check_dialog_focus.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs
@@ -39,6 +45,7 @@ case "${1:-}" in
     ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
     node scripts/check_dashboard_storage.mjs
     node scripts/check_collection_layouts.mjs
+    SEARCH_SCREENSHOTS=release-assets/pages/global-search node scripts/check_global_search.mjs
     ;;
   pages-setup)
     node scripts/check_setup_guide.mjs

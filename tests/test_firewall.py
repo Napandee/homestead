@@ -204,6 +204,13 @@ class FirewallTests(unittest.TestCase):
         self.assertEqual("DELETE", self.sent[0][0])
         self.assertEqual({"uid": "policy-1", "resourceVersion": "10"}, self.sent[0][2]["preconditions"])
 
+    def test_provider_says_whether_a_policy_controller_was_found(self):
+        self.assertTrue(F.provider()["found"])  # k3s ships its own controller
+        F.bind(self.get, lambda *args: self.sent.append(args), lambda: {"distribution": "kubeadm"}, "lab")
+        unknown = F.provider()
+        self.assertFalse(unknown["found"])
+        self.assertEqual("Unverified", unknown["name"])
+
     def test_host_and_platform_pods_cannot_be_selected(self):
         self.workload["spec"]["template"]["spec"]["hostNetwork"] = True
         with self.assertRaisesRegex(ValueError, "host networking"): F.preview(self.cfg)

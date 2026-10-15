@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.326";
+const HOMESTEAD_VERSION = "2.8.327-dev.2";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -142,9 +142,27 @@ const fmtUp = sec => {
 };
 const fmtAgo = sec => sec ? fmtUp(sec) + " ago" : "—";
 const ageSecs = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000)) : 0;
+/* An API timestamp, which is UTC, in the reader's own time and how long ago:
+   "22 Sep, 05:00 · 6h 2m ago". The UTC value goes in the tooltip. */
+const fmtWhen = iso => {
+  const at = iso ? new Date(iso) : null;
+  if (!at || isNaN(at)) return "—";
+  const text = at.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+    ...(at.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) });
+  const ago = ageSecs(iso) >= 60 ? ` · ${fmtAgo(ageSecs(iso))}` : "";
+  return `<span data-tip="${esc(at.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC"))}">${esc(text + ago)}</span>`;
+};
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
+/* A count in words: plural(1, "pod") is "1 pod", plural(3, "pod") "3 pods". */
+const plural = (n, word, many = word + "s") => `${n} ${Number(n) === 1 ? word : many}`;
+/* A Kubernetes state as people write it: "NotReady" is "Not ready". Callers
+   keep the raw state in a tooltip. */
+const STATE_WORDS = { ErrorUnschedulable: "Can't be scheduled", ErrImagePull: "Image can't be pulled",
+  ImagePullBackOff: "Image can't be pulled" };
+const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/([a-z])([A-Z])/g, "$1 $2")
+  .replace(/ (.*)$/, (all, rest) => " " + rest.toLowerCase());
 
 /* ---------------- settings ---------------- */
 const SET = Object.assign(
@@ -246,11 +264,38 @@ window.openHardwareManager = cls => {
 window.hardwareManagerBack = () => modalBack();
 
 /* ---------------- toast / modal ---------------- */
+/* A toast is announced (#486): a failure as an alert, which stays until it
+   is dismissed or a newer failure replaces it, so a person who looked away
+   still sees why; anything else politely, for a few seconds. */
 function toast(msg, kind = "") {
   liftToasts();
+  const box = $("#toast");
+  if (kind === "bad") [...box.children].filter(old => old.dataset.stays).forEach(old => old.remove());
   const d = document.createElement("div");
-  d.className = "tst " + kind; d.textContent = msg;
-  $("#toast").appendChild(d); setTimeout(() => d.remove(), 4200);
+  d.className = "tst " + kind;
+  if (kind === "bad") {
+    d.setAttribute("role", "alert");
+    d.dataset.stays = "1";
+    const text = document.createElement("span"); text.textContent = msg;
+    const close = document.createElement("button");
+    close.setAttribute("type", "button"); close.setAttribute("aria-label", "Dismiss"); close.className = "tst-close"; close.textContent = "×";
+    close.addEventListener("click", () => d.remove());
+    // It stays while the person looks away, and goes at their next action:
+    // toasts sit where a dialog's main button is, so it must not stay on top.
+    const leave = event => {
+      if (box.contains(event.target)) return;
+      d.remove();
+      document.removeEventListener("pointerdown", leave, true);
+      document.removeEventListener("keydown", leave, true);
+    };
+    document.addEventListener("pointerdown", leave, true);
+    document.addEventListener("keydown", leave, true);
+    d.appendChild(text); d.appendChild(close);
+  } else {
+    d.setAttribute("role", "status"); d.textContent = msg;
+    setTimeout(() => d.remove(), 4200);
+  }
+  box.appendChild(d);
 }
 /* Toasts and the job tray share the bottom-right corner, so toasts stand on
    top of the tray - however tall it is, open or closed - rather than over it. */
@@ -264,9 +309,12 @@ if (window.ResizeObserver && $("#jobTray")) {
   new MutationObserver(liftToasts).observe($("#jobTray"), { attributes: true, attributeFilter: ["class"] });
 }
 function modal(t, h, wide, contextClass = "") {
+  const opening = !modalIsOpen(), retitled = $("#mtitle").textContent !== t;
+  if (opening) MODAL_OPENER = document.activeElement;
   if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
   window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
+  MODAL_EDITS = new Map();
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
@@ -278,7 +326,51 @@ function modal(t, h, wide, contextClass = "") {
   $("#modal").classList.remove("hidden");
   paintModalBack();
   modalHeadHeight();
+  if (opening || retitled) focusModal();
 }
+
+/* Focus in a dialog (#486): opening one moves focus into it - its first
+   field, or its title on a touch screen, where a field would raise the
+   keyboard - Tab stays inside it, and closing gives focus back to what
+   opened it. */
+let MODAL_OPENER = null;
+const MODAL_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+function focusModal() {
+  const touch = window.matchMedia?.("(pointer: coarse)").matches;
+  const field = touch ? null : [...$("#mbody").querySelectorAll("input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])")]
+    .find(el => el.offsetParent);
+  (field || $("#mtitle")).focus({ preventScroll: true });
+}
+const restoreFocus = el => { if (el?.isConnected && typeof el.focus === "function") el.focus({ preventScroll: true }); };
+document.addEventListener("keydown", event => {
+  if (event.key !== "Tab" || !modalIsOpen() || document.querySelector(".askdlg")) return;
+  const box = $(".modalbox"), items = [...box.querySelectorAll(MODAL_FOCUSABLE)].filter(el => el.offsetParent);
+  if (!items.length) return;
+  const first = items[0], last = items.at(-1), here = document.activeElement;
+  if (!box.contains(here)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+  else if (event.shiftKey && (here === first || here === $("#mtitle"))) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && here === last) { event.preventDefault(); first.focus(); }
+});
+/* What a person has changed in the open dialog (#459). A field's value is
+   noted when a person first reaches for it - after any code has filled it
+   in - so only their own edits count, and a field put back as it was is not
+   a change. A change with nothing noted before it (autofill) counts. */
+let MODAL_EDITS = new Map();
+const MODAL_UNKNOWN = Symbol("unknown");
+function fieldValue(field) {
+  if (field.type === "checkbox" || field.type === "radio") return field.checked;
+  if (field.multiple) return [...field.selectedOptions].map(option => option.value).join("\n");
+  return field.value;
+}
+function noteModalField(event) {
+  const field = event.target;
+  if (!event.isTrusted || !field?.matches?.("input, textarea, select") || MODAL_EDITS.has(field)) return;
+  const changed = event.type === "input" || event.type === "change";
+  const toggle = field.type === "checkbox" || field.type === "radio";
+  MODAL_EDITS.set(field, !changed ? fieldValue(field) : toggle ? !field.checked : MODAL_UNKNOWN);
+}
+const modalChanged = () => [...MODAL_EDITS].some(([field, start]) => fieldValue(field) !== start);
+if ($("#mbody")) for (const type of ["focusin", "pointerdown", "keydown", "input", "change"]) $("#mbody").addEventListener(type, noteModalField, true);
 
 /* A dialog's section rail sticks below its header, not under it (#374): the
    header's height, which a long title can change, is kept as --modalhead-h. */
@@ -301,9 +393,9 @@ function pushModal(onReturn) {
   const body = $("#mbody"), fragment = document.createDocumentFragment();
   const scroll = $(".modalbox").scrollTop;     // the box scrolls, not its body
   while (body.firstChild) fragment.appendChild(body.firstChild);
-  MODAL_STACK.push({ title: $("#mtitle").textContent, fragment, scroll,
+  MODAL_STACK.push({ title: $("#mtitle").textContent, fragment, scroll, focus: document.activeElement,
     wide: $(".modalbox").classList.contains("wide"), context: $(".modalbox").dataset.context || "",
-    guard: window.__modalGuard, url: window.location.pathname + window.location.search,
+    guard: window.__modalGuard, edits: MODAL_EDITS, url: window.location.pathname + window.location.search,
     route: STATE.modalRoute, detail: STATE.modalDetail, onReturn });
   return true;
 }
@@ -325,7 +417,9 @@ function modalBack() {
   modal(back.title, "", back.wide, back.context);
   $("#mbody").replaceChildren(back.fragment);
   $(".modalbox").scrollTop = back.scroll;
+  restoreFocus(back.focus);
   window.__modalGuard = back.guard;
+  MODAL_EDITS = back.edits;
   if (back.url !== window.location.pathname + window.location.search) {
     window.history.replaceState(window.history.state, "", back.url);
   }
@@ -382,17 +476,16 @@ window.pushModal = pushModal;
    any dialog already open, leave it as it is, and resolve to the answer:
    ask() to true or false, askText() to the text or null. Escape cancels,
    Enter answers. */
-const ASK_DANGER = /^(delete|remove|erase|force|stop|uninstall|disable|forget|unlink|disconnect|discard|cancel|clear|turning)/i;
-function askDialog(message, { title = "", ok = "", danger = null, input = null } = {}) {
+function askDialog(message, { title = "", ok = "", cancel = "", danger = false, input = null } = {}) {
   return new Promise(resolve => {
     const layer = document.createElement("div");
     layer.className = "askdlg";
     layer.setAttribute("role", "dialog");
     layer.setAttribute("aria-modal", "true");
-    const risky = danger === null ? ASK_DANGER.test(String(message).trim()) : danger;
+    const risky = !!danger;
     layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">Cancel</button>
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">${esc(cancel || "Cancel")}</button>
         <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button>`, "", {className:'askbtns'})}</div>`;
     layer.querySelector(".askmsg").textContent = String(message);
     const field = layer.querySelector(".askin");
@@ -400,9 +493,11 @@ function askDialog(message, { title = "", ok = "", danger = null, input = null }
       field.value = input.value || "";
       field.placeholder = input.placeholder || "";
     }
+    const before = document.activeElement;
     const done = answer => {
       document.removeEventListener("keydown", key, true);
       layer.remove();
+      if (before?.isConnected && typeof before.focus === "function") before.focus({ preventScroll: true });
       resolve(input ? (answer ? field.value : null) : answer);
     };
     const key = event => {
@@ -423,13 +518,18 @@ window.ask = (message, options = {}) => askDialog(message, options);
 window.askText = (message, value = "", options = {}) => askDialog(message, { ...options, input: { value, placeholder: options.placeholder } });
 
 /* The X and Escape are the only ways a person dismisses a modal, and either can
-   land on unsaved work, so both ask a modal that has something at stake first.
+   land on unsaved work, so both ask a modal that has something at stake first:
+   one whose own guard says so, or, without one, one with changes typed in it.
    Code that closes a modal after finishing its job calls closeModal directly. */
 async function dismissModal() {
   const guard = window.__modalGuard;
   if (typeof guard === "function") {
     const question = guard();
-    if (question && !(await ask(question))) return;
+    if (question && !(await ask(question, { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
+  } else if (modalIsOpen() && modalChanged()) {
+    const discard = await ask(`Discard your changes to ${$("#mtitle").textContent}?`,
+      { title: "Unsaved changes", ok: "Discard changes", cancel: "Keep editing", danger: true });
+    if (!discard) return;
   }
   if (MODAL_STACK.length) return modalBack();
   closeModal();
@@ -439,9 +539,11 @@ function closeModal(updateRoute = true) {
   if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;
+  MODAL_EDITS = new Map();
   MODAL_STACK.length = 0;
   paintModalBack();
   $("#modal").classList.add("hidden");
+  const opener = MODAL_OPENER; MODAL_OPENER = null; restoreFocus(opener);
   if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
   if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
   if (window.__consoleSocket) { window.__consoleSocket.close(); window.__consoleSocket = null; }

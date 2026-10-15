@@ -154,7 +154,6 @@ const networkSectionLabel = key => key === "ports" && STATE.platform?.harvester 
 function networkSectionLine(key) {
   const data = STATE.data.network, ports = window.PORTS_VIEW?.report;
   const due = networkAttentionAll().filter(item => key === "overview" || item.section === key).length;
-  const plural = (n, word, many = word + "s") => `${n} ${n === 1 ? word : many}`;
   const said = {
     overview: () => networkAttentionAll().length ? "" : data ? "Nothing needs attention" : "Status and attention",
     services: () => data && plural(data.summary.app_services, "app Service"),
@@ -434,7 +433,7 @@ window.networkServiceDelete = async (namespace, name) => {
   const serving = row?.targets?.length
     ? `\n\n${name} still serves ${row.targets.join(", ")}, which will lose its LAN address.` : "";
   const frees = listeners.length ? `Frees ${listeners.join(", ")}.` : "It holds no external listener.";
-  if (!(await ask(`Remove Service ${namespace}/${name}?${serving}\n\n${frees}`))) return;
+  if (!(await ask(`Remove Service ${namespace}/${name}?${serving}\n\n${frees}`, { title: "Remove Service", ok: "Remove Service", danger: true }))) return;
   try {
     const result = await api("/api/network/service/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name, force: !!row?.targets?.length }) });
@@ -466,7 +465,7 @@ function networkVipCards(current, choices) {
   return `<input id="net_lb_ip" type="hidden" value="${esc(current)}"><div class="net-address-list" role="group" aria-label="Available VIPs">${addresses.map(ip => {
     const used = choices.used.find(v => v.ip === ip);
     const label = choices.labels[ip] || choices.own.find(v => v.ip === ip)?.label || "";
-    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${used.services} service(s) · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
+    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${plural(used.services, "service")} · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
   }).join("") || '<p class="small">No saved VIPs yet. Add reserved addresses in Networking → Workload VIPs.</p>'}</div>
   <details class="net-custom-address" ${typed ? "open" : ""}><summary>Use another reserved address</summary><p class="small">Only use an unused LAN address reserved outside DHCP. Node and cluster-management addresses are not VIP choices.</p><label for="net_custom_ip">Reserved IPv4 address</label><input id="net_custom_ip" value="${typed ? esc(current) : ""}" placeholder="e.g. 192.0.2.230" oninput="networkAddressPicked(this.value,true)" data-ipam></details>`;
 }
@@ -684,7 +683,7 @@ window.networkCreate = async () => {
 /* ---------------- your VIPs ----------------
    Addresses kept for Homestead to hand to Services, one or a range. */
 window.vipDefault = async ip => {
-  if (!(await ask(`Use ${ip} by default for new workload Services? Existing Services and Homestead's access address are unchanged. Each shared port must be unique.`))) return;
+  if (!(await ask(`Use ${ip} by default for new workload Services? Existing Services and Homestead's access address are unchanged. Each shared port must be unique.`, { title: "Default VIP", ok: "Use by default" }))) return;
   try {
     const r = await api("/api/network/vips/default", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
     if (STATE.data.ov) STATE.data.ov.lb_ip = ip;
@@ -703,7 +702,7 @@ window.vipAdd = () => {
       <div class="f hidden" id="va_end_wrap"><label for="va_end">Last address (inclusive)</label><input id="va_end" class="mono" placeholder="e.g. 192.0.2.239" autocomplete="off" data-ipam><span class="dim xs">Up to 64 addresses per range.</span></div></div>
     <div class="f"><label for="va_label">Label (optional) ${tip("Shown in the VIP list and the workload address picker.")}</label><input id="va_label" maxlength="60" placeholder="e.g. Shared apps or Media"></div>
     <label class="vip-check"><input id="va_default" type="checkbox" ${supported ? "" : "disabled"} ${supported && !STATE.data.network?.shared_vip?.ip ? "checked" : ""}><span><b>Make this the default workload VIP</b><span class="dim small" id="va_default_hint">New workloads can share this address on different ports. Existing services will not move.</span></span></label>
-    ${supported && STATE.data.selfAddress && !STATE.data.selfAddress.on_vip ? `<label class="vip-check"><input id="va_self" type="checkbox" checked><span><b>Put Homestead itself here</b><span class="dim small">Its page (port 8088), backup storage and shares get a connection on this address too; their node addresses keep working.</span></span></label>` : ""}
+    ${supported && STATE.data.selfAddress && !STATE.data.selfAddress.on_vip ? `<label class="vip-check"><input id="va_self" type="checkbox" ${STATE.data.network?.shared_vip?.ip ? "" : "checked"}><span><b>Put Homestead itself here</b><span class="dim small">Its page (port 8088), backup storage and shares also answer on this address, and Longhorn backs up to it. Their node addresses keep working.</span></span></label>` : ""}
 
     ${UI.more("Choosing an address", `<p>Choose an unused IPv4 address on the LAN your load balancer serves, outside your router's DHCP allocation range. Do not use a host, router or cluster-management address. Homestead checks the conflicts it knows about in the cluster, but cannot tell whether another device on the LAN uses it.</p>
       <p>${provider === "kube-vip" ? "kube-vip advertises the address when a workload Service requests it; saving it alone does not make it respond." : provider === "metallb" ? "MetalLB must also have these addresses in a configured address pool. Saving them here does not configure MetalLB's pools." : "You can save addresses now. Install kube-vip or MetalLB in Settings → Hardware and storage → Add-ons before using a movable workload VIP; ServiceLB uses node addresses."}</p>`)}
@@ -765,7 +764,7 @@ window.vipAddGo = async () => {
   finally { save.disabled = false; }
 };
 window.vipRemove = async ip => {
-  if (!(await ask(`Stop keeping ${ip} for Homestead?`))) return;
+  if (!(await ask(`Stop keeping ${ip} for Homestead?`, { title: "Stop keeping the address", ok: "Stop keeping it", danger: true }))) return;
   try {
     const r = await api("/api/network/vips/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip }) });
     toast(r.detail, "ok"); viewNetworking();

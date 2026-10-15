@@ -13,7 +13,7 @@ async function render(server) {
     api: async path => path === "/api/shares" ? [{ name: "photos", pvc: "single" }, { name: "media", pvc: "copies" }]
       : path === "/api/shares/server" ? server : {},
   };
-  vm.createContext(context);
+  vm.createContext(context); require("./helpers/core-text")(context);
   context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("web/js/views-storage.js", "utf8"), context);

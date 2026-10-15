@@ -2,13 +2,14 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
+const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4174";
 await mkdir("release-assets/network-edit-checks", {recursive: true});
 const browser = await chromium.launch({headless: true});
 try {
   const page = await browser.newPage({viewport: {width: 1280, height: 1000}});
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
-  await page.goto("http://127.0.0.1:4174/?demo=1", {waitUntil: "networkidle"});
+  await page.goto(`${base}/?demo=1`, {waitUntil: "networkidle"});
   await page.evaluate(() => {
     const original = api;
     window.__sent = [];
@@ -19,17 +20,16 @@ try {
       if (url === "/api/network") {
         result.shared_vip = {ip: "192.0.2.108"};
         result.registered_vips = [{ip: "192.0.2.108", free: true, used_by: [], label: "Default apps"}, {ip: "192.0.2.109", free: true, used_by: [], label: "Chosen apps"}];
-        result.workloads.push({namespace: "lab", name: "new-vm", kind: "VirtualMachine", ports: []});
+        result.workloads.push({namespace: "lab", name: "new-vm", kind: "VirtualMachine", ports: []}, {namespace: "default", name: "home-assistant-os", kind: "VirtualMachine", ports: []});
         const svc = result.services.find(s => s.name === "frigate");
         Object.assign(svc, {uid: "svc-uid", resource_version: "7", type: "LoadBalancer", requested_ips: ["192.0.2.109"], targets: ["frigate"], ports: [{name: "web", port: 5000, target_port: 5001, protocol: "TCP"}]});
       }
       return result;
     };
     STATE.platform = {...STATE.platform, distribution: "k3s", load_balancer: "kube-vip", servicelb: true};
-    return wlEdit("lab", "frigate");
+    // A container's own editor picks its VIP inline now; its Service is changed from Networking.
+    return networkManage("lab", "frigate");
   });
-  await page.locator("#e_workload_name").fill("unsaved-name");
-  await page.getByRole("button", {name: "Configure default / selected VIP", exact: true}).click();
   assert.equal(await page.locator("#net_existing").inputValue(), "frigate");
   assert.equal(await page.locator(".np-target").inputValue(), "5001");
   await page.locator("input[name=net_access][value=shared]").check();
@@ -47,26 +47,30 @@ try {
   }
   await page.getByRole("button", {name: "Review changes", exact: true}).click();
   await page.getByRole("button", {name: "Apply changes", exact: true}).click();
-  await page.locator("#e_workload_name").waitFor();
-  assert.equal(await page.locator("#e_workload_name").inputValue(), "unsaved-name");
+  await page.waitForFunction(() => window.__sent.length > 0);
   const saved = await page.evaluate(() => window.__sent[0]);
   assert.equal(saved.update, true); assert.equal(saved.uid, "svc-uid");
   assert.equal(saved.ports[0].name, "web", "VIP-only updates preserve named Ingress port references");
   assert.equal(saved.ports[0].target_port, "5001"); assert.equal(saved.vip, "192.0.2.108");
-  await page.evaluate(() => { closeModal(); return vmNew(); });
+  await page.evaluate(async () => { closeModal(); await vmNew(); stepGo("v_steps", 2); });
   await page.locator("#v_service").selectOption("manual");
   await page.locator("#vsvc_lb_pick").selectOption("192.0.2.109");
   assert.equal(await page.locator("#v_service_pick").isVisible(), true);
-  await page.locator("#v_name").fill("new-vm");
-  await page.locator("#v_pass").fill("demo-only-password");
-  await page.getByRole("button", {name: "Create VM", exact: true}).click();
+  await page.evaluate(async () => {
+    document.querySelector("#v_name").value = "new-vm"; document.querySelector("#v_pass").value = "demo-only-password";
+    await doVmCreate();
+  });
+  await page.locator("#vmCreateApply").waitFor();
+  // The demo's capacity review may ask for a tick before Create.
+  if (await page.locator("#vmCreateApprove").count()) await page.locator("#vmCreateApprove").check();
+  await page.locator("#vmCreateApply:not([disabled])").click();
   await page.locator("#net_workload").waitFor({state: "attached"});
   assert.equal(await page.locator("#net_workload").inputValue(), "lab/new-vm/VirtualMachine");
   assert.equal(await page.locator("#net_lb_ip").inputValue(), "192.0.2.109");
-  await page.evaluate(() => {closeModal(); return vmEdit("lab", "new-vm");});
-  await page.locator("#mbody .seg button").filter({hasText: /^Network/}).click();
+  await page.evaluate(() => {closeModal(); return vmEdit("default", "home-assistant-os");});
+  await page.evaluate(() => UI.selectSection("ve", "network"));
   await page.getByRole("button", {name: "Configure default / selected VIP", exact: true}).click();
-  assert.equal(await page.locator("#net_workload").inputValue(), "lab/new-vm/VirtualMachine");
+  assert.equal(await page.locator("#net_workload").inputValue(), "default/home-assistant-os/VirtualMachine");
   await page.getByRole("button", {name: "Cancel", exact: true}).click();
   await page.locator("#ve_mem").waitFor({state: "attached"});
   await page.evaluate(() => {closeModal(); return lhSnaps("pvc-demo", "Media");});
@@ -75,5 +79,5 @@ try {
   await page.screenshot({path: "release-assets/network-edit-checks/snapshot-progress.png"});
   await page.evaluate(() => closeModal());
   assert.deepEqual(errors, []);
-  console.log("Container VIP edit preserves unsaved fields; selected VM VIP setup; live snapshot purge progress; mobile bounds passed");
+  console.log("Container Service VIP edit; selected VM VIP setup; live snapshot purge progress; mobile bounds passed");
 } finally {await browser.close();}

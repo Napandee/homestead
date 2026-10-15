@@ -39,6 +39,12 @@ The form asks, in order:
   and storage. **Remove container** removes a draft definition; at least one
   stays. **Pod copies** controls how many copies of the whole pod run, so two
   containers with two pod copies means two pods, each running both containers.
+- **When the cluster is short of room.** Under **Optional settings**, a new
+  app can start as **Critical**, **Normal** (the default) or **Low**; see
+  [Priority tiers](#priority-tiers). It applies to a new workload, not to a
+  container added to one that exists, and the review shows the class it will
+  use. If the app is put in a group later, it follows the group's tier only
+  while it was left at Normal.
 - **Memory reserved and Memory max.** Reserved memory is the scheduler's
   request; optional Memory max is the container's enforced limit and must be
   at least the request. Leave max blank for no container memory limit. A limit
@@ -729,6 +735,19 @@ VMs have tiers too, in the same **Priority tiers…** list. A VM takes its tier
 when it next starts, so setting one restarts nothing; until then it keeps the
 one it started with.
 
+StatefulSets are in the list too, outside the system namespaces, as
+`ns/name` with a StatefulSet chip. A StatefulSet always has a tier of its own:
+groups don't apply, since it isn't a Containers app. As with an app's own
+tier, one Flux or Argo CD applies is read-only (set `priorityClassName` where
+it's applied), and one Homestead may change starts at its suggestion. The job
+writes the class to its template and the StatefulSet restarts its pods one at
+a time; it waits up to ten minutes per pod. With a `partition` below its
+replicas, only the pods at or above the partition restart, and the job waits
+for those. One that doesn't restart itself - `updateStrategy: OnDelete`, or a
+`partition` at or above its replicas, often a database operator's choice -
+takes its tier when its pods are next restarted. Homestead never deletes its
+pods.
+
 #### Group tiers
 
 A group can have a tier too: **Tier…** on its heading in Containers sets it to
@@ -784,6 +803,7 @@ change, so in every case the app's template changes and its pods are replaced.
 | Homestead | Edit, Priority tiers…, or its group's Tier… then Priority tiers… | Homestead changes the template; the app restarts once |
 | kubectl | `kubectl patch` of `spec.template.spec.priorityClassName` | A rollout; the app restarts |
 | A KubeVirt VM | `spec.template.spec.priorityClassName` on the VM | It takes effect at the VM's next start; nothing restarts now |
+| A StatefulSet, by Homestead | Priority tiers… | Its pods restart one at a time (with a partition, those at or above it); with `OnDelete` or a partition at or above its replicas, at their next restart |
 
 Homestead can't tell a plain Helm install from its own apps, so it treats them
 as its own. They get "needs a restart" and the reviewed job, and the next

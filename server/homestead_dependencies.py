@@ -107,8 +107,13 @@ class Snapshot:
                 warnings.append(f"PVC {name} access mode is unknown")
             if pvc.get("_planned"):
                 warnings.append(f"PVC {name} is planned, not provisioned; storage capacity and attachment remain unverified")
+                # A migratable class mounts on one host at a time: a second
+                # host's pod starts a live migration and its mount is refused.
                 if self.workload_kind != "vm" and sc and sc.get("provisioner") == "driver.longhorn.io" and str((sc.get("parameters") or {}).get("migratable", "")).lower() == "true":
-                    reasons.append(f"PVC {name}'s storage class is for migratable VM disks, not container filesystems")
+                    if "ReadWriteMany" in modes:
+                        reasons.append(f"PVC {name}'s storage class is migratable, so several hosts can't mount it; choose a class without migratable for a shared volume")
+                    else:
+                        warnings.append(f"PVC {name}'s storage class is migratable: fine for one host, not for a volume several hosts mount")
             if pv:
                 if pv.get("_missing"):
                     reasons.append(f"PVC {name}'s bound PV is missing")

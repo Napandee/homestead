@@ -144,7 +144,7 @@ function renderIpam() {
     ${(subnet.pool_clash || []).length ? `<div class="note bad"><b>Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.</b> A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.</div>` : ""}
     ${u.configured && u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
     <div class="between ipam-tools"><div class="row">
-      <select onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
+      <select aria-label="Show" onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
         ["reserved", "Held"], ["infrastructure", "Network gear"], ["cluster", "Cluster"], ["undocumented", "Undocumented"], ["flagged", `Needs attention (${flagged})`]]
         .map(([v, l]) => `<option value="${v}" ${STATE.ipamFilter === v || (!STATE.ipamFilter && !v) ? "selected" : ""}>${esc(l)}</option>`).join("")}
         <optgroup label="Category">${Object.entries(IPAM_CATEGORIES).map(([k, [label]]) =>
@@ -152,8 +152,8 @@ function renderIpam() {
       <span class="dim xs">${rows.length} shown</span></div></div>
       <div class="row ipam-bulk" id="ipamBulk" ${ipamPicks().size ? "" : "hidden"}><b class="small" id="ipamBulkCount">${ipamPicks().size} selected</b>
         <button class="btn sm" type="button" onclick="ipamSelectAll(false)" title="Untick every address">Clear</button>
-        <select id="ipamBulkCategory">${ipamCategoryOptions("", "category…")}</select>
-        <select id="ipamBulkKind"><option value="">kind…</option>${Object.entries(IPAM_KIND_LABELS).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
+        <select id="ipamBulkCategory" aria-label="Category for the selected addresses">${ipamCategoryOptions("", "category…")}</select>
+        <select id="ipamBulkKind" aria-label="Kind for the selected addresses"><option value="">kind…</option>${Object.entries(IPAM_KIND_LABELS).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
         <input id="ipamBulkTag" placeholder="add tag" style="width:110px">
         <input id="ipamBulkOwner" placeholder="owner" style="width:110px">
         <button class="btn sm pri" onclick="ipamBulk()">Apply</button>
@@ -181,7 +181,7 @@ function ipamRow(row) {
   const name = row.name ? `<b>${esc(row.name)}</b>`
     : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
   const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
-  const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
+  const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" role="img" tabindex="0" aria-label="${esc(`${f.level === "warn" ? "Warning" : "Note"}: ${f.text}`)}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
     + (row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") + (note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : "");
   // Cells with nothing in them are left empty, so on a phone - where each
   // row is a short card - they take no room.
@@ -264,7 +264,7 @@ const ipamRemoveQuestion = count => `Remove ${count === 1 ? "this address" : `${
   `Its name, notes and tags are deleted. A device still using ${count === 1 ? "it" : "one"} shows up again after the next scan${ipamUnifiOn() ? " or UniFi sync" : ""}.`;
 window.ipamBulk = async (forget = false) => {
   const ips = [...ipamPicks()];
-  if (forget && !(await ask(ipamRemoveQuestion(ips.length)))) return;
+  if (forget && !(await ask(ipamRemoveQuestion(ips.length), { title: "Remove addresses", ok: "Remove", danger: true }))) return;
   const changes = forget ? { forget: true } : {};
   if (!forget) {
     if ($("#ipamBulkKind").value) changes.kind = $("#ipamBulkKind").value;
@@ -306,7 +306,7 @@ window.ipamEdit = (ip = "") => {
       ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}`)}`);
 };
 window.ipamRemove = async ip => {
-  if (!(await ask(ipamRemoveQuestion(1)))) return;
+  if (!(await ask(ipamRemoveQuestion(1), { title: "Remove address", ok: "Remove", danger: true }))) return;
   try { const r = await ipamPost("/api/ipam/bulk", { ips: [ip], changes: { forget: true } }); toast(r.detail, "ok"); ipamPicks().delete(ip); closeModal(); viewIpam(); }
   catch (e) { toast(e.message, "bad"); }
 };
@@ -336,7 +336,7 @@ function ipamSubnetRow(s = {}) {
       <div class="f"><label>DHCP from</label><input class="is-d1 mono" value="${esc(s.dhcp_start || "")}"></div>
       <div class="f"><label>DHCP to</label><input class="is-d2 mono" value="${esc(s.dhcp_end || "")}"></div>
       <div class="f"><label>VLAN</label><input class="is-vlan" type="number" min="1" max="4094" value="${s.vlan || ""}"></div></div>
-    <div class="row"><input class="is-note" value="${esc(s.note || "")}" placeholder="Notes" style="flex:1">
+    <div class="row"><input class="is-note" aria-label="Notes" value="${esc(s.note || "")}" placeholder="Notes" style="flex:1">
       <button class="btn sm danger" type="button" onclick="this.closest('.ipam-subnet').remove()">Remove</button></div></div>`;
 }
 window.ipamSubnets = (add = "") => {
@@ -353,7 +353,7 @@ window.ipamSubnetsSave = async () => {
   const subnets = $$("#is_rows .ipam-subnet").map(el => ({ cidr: $(".is-cidr", el).value.trim(), name: $(".is-name", el).value,
     gateway: $(".is-gw", el).value.trim(), dhcp_start: $(".is-d1", el).value.trim(), dhcp_end: $(".is-d2", el).value.trim(),
     vlan: $(".is-vlan", el).value, note: $(".is-note", el).value })).filter(s => s.cidr);
-  try { await ipamPost("/api/ipam/subnets", { subnets }); toast("subnets saved", "ok"); closeModal(); viewIpam(); }
+  try { await ipamPost("/api/ipam/subnets", { subnets }); toast("Subnets saved", "ok"); closeModal(); viewIpam(); }
   catch (e) { toast(e.message, "bad"); }
 };
 
@@ -382,7 +382,7 @@ window.ipamUnifiSave = async sync => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.ipamUnifiForget = async () => {
-  if (!(await ask("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing what UniFi knows. Nothing on the controller changes."))) return;
+  if (!(await ask("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing what UniFi knows. Nothing on the controller changes.", { title: "Disconnect UniFi", ok: "Disconnect", danger: true }))) return;
   try { await ipamPost("/api/ipam/unifi", { forget: true }); toast("UniFi disconnected", "ok"); closeModal(); ipamAfterUnifi(); }
   catch (e) { toast(e.message, "bad"); }
 };

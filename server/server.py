@@ -5164,6 +5164,10 @@ def _replace_own_pod():
     _ksend("DELETE", f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(POD_NAME, safe='')}", shutdown_bypass=True)
 
 
+# Names tests still patch on server; track 2 moves their tests.
+# End of the names tests still patch on server.
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     http_server = HTTP.BoundedHTTPServer(("0.0.0.0", port), H)

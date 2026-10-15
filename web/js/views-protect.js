@@ -22,17 +22,6 @@ const PROTECT_PLANS = [
       { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
-/* When a time on the cluster's clock is, for the person reading. */
-function localTime(date) {
-  return date.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
-}
-function nextRun(cron) {
-  const at = CRON.next(cron, new Date(), 1)[0];
-  if (!at) return '<span class="dim">never</span>';
-  const minutes = Math.max(1, Math.round((at - Date.now()) / 60000));
-  const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;
-  return `<span class="small" data-tip="${esc(localTime(at))}, your time">${soon}</span>`;
-}
 /* where: what says why a run failed - Longhorn's own jobs by default. */
 function lastRunText(j, where = "its pod's log in longhorn-system") {
   if (j.running) return '<span class="pill slim med">running</span>';
@@ -252,7 +241,7 @@ async function viewProtect() {
       <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ' <span class="tag warn" data-tip="The volume is gone; its backups are all that is left of it">volume deleted</span>'}
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
-      <td class="small dim">${b.last_backup_at ? esc(b.last_backup_at.replace("T", " ").replace("Z", "")) : "—"}</td>
+      <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
       <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
@@ -305,7 +294,7 @@ function protectVolumeRow(v) {
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
       || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
-    <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", ""))
+    <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
       : (v.protected_by || []).length ? '<span class="tag warn" data-tip="A job covers it, but no backup of it has been made yet">never</span>' : "never"}</td>
     <td>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
       { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`;
@@ -412,43 +401,6 @@ window.lhJobNewGroup = () => {
 /* Trims and cleanups keep nothing, so they have nothing to count. */
 const KEEPS = task => /^(snapshot|backup)(-force-create|-delete)?$/.test(task);
 window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").value); };
-/* ---------------- schedule builder ----------------
-   Shapes people use - every few minutes or hours, daily, some weekdays,
-   monthly - written to cron for Longhorn, with the next runs shown in the
-   reader's own time. Custom keeps the raw expression. */
-function scheduleBuilder(cron) {
-  const plan = CRON.toPlan(cron);
-  const time = (hour, minute) => `${String(hour ?? 2).padStart(2, "0")}:${String(minute ?? 0).padStart(2, "0")}`;
-  const kinds = [["minutes", "Every few minutes"], ["hours", "Every few hours"], ["daily", "Every day"], ["weekly", "On chosen days"], ["monthly", "Every month"], ["custom", "Custom cron"]];
-  return `<div class="f sched"><label>Schedule</label>
-    <div class="sched-row"><select id="ls_kind" onchange="scheduleChanged()">${kinds.map(([value, label]) =>
-      `<option value="${value}" ${plan.kind === value ? "selected" : ""}>${label}</option>`).join("")}</select>
-      <select id="ls_minutes" data-for="minutes">${CRON.MINUTE_STEPS.map(n => `<option value="${n}" ${plan.every === n ? "selected" : ""}>every ${n} min</option>`).join("")}</select>
-      <select id="ls_hours" data-for="hours">${CRON.HOUR_STEPS.map(n => `<option value="${n}" ${plan.kind === "hours" && plan.every === n ? "selected" : ""}>every ${n === 1 ? "hour" : `${n} hours`}</option>`).join("")}</select>
-      <label class="inline" data-for="hours">at minute <input id="ls_minute" type="number" min="0" max="59" value="${plan.kind === "hours" ? plan.minute : 0}"></label>
-      <select id="ls_day" data-for="monthly">${Array.from({ length: 28 }, (_, i) => i + 1).map(n => `<option value="${n}" ${plan.day === n ? "selected" : ""}>on day ${n}</option>`).join("")}</select>
-      <label class="inline" data-for="daily weekly monthly">at <input id="ls_time" type="time" value="${time(plan.hour, plan.minute)}"> UTC</label></div>
-    <div class="sched-days" data-for="weekly">${CRON.SHORT.map((day, i) => `<label class="daychip"><input type="checkbox" value="${i}" ${(plan.days || [0]).includes(i) ? "checked" : ""}><span>${day}</span></label>`).join("")}</div>
-    <input type="text" id="lj_cron" class="mono" data-for="custom" value="${esc(cron)}" placeholder="min hour day month weekday">
-    <div class="dim xs sched-next" id="ls_next"></div></div>`;
-}
-window.scheduleChanged = () => {
-  const kind = $("#ls_kind").value;
-  $$(".sched [data-for]").forEach(el => { el.hidden = !el.dataset.for.split(" ").includes(kind); });
-  if (kind !== "custom") {
-    const [hour, minute] = ($("#ls_time").value || "02:00").split(":").map(Number);
-    $("#lj_cron").value = CRON.fromPlan({ kind, hour, minute,
-      every: +(kind === "minutes" ? $("#ls_minutes").value : $("#ls_hours").value),
-      ...(kind === "hours" ? { minute: Math.max(0, Math.min(59, +$("#ls_minute").value || 0)) } : {}),
-      days: $$(".sched-days input:checked").map(box => +box.value), day: +$("#ls_day").value });
-  }
-  const cron = $("#lj_cron").value.trim(), runs = CRON.next(cron, new Date(), 3);
-  $("#ls_next").innerHTML = runs.length
-    ? `${esc(CRON.describe(cron))}. Next: ${runs.map(at => esc(localTime(at))).join(" · ")} <span class="dim">(your time)</span>`
-    : `<span class="bad-text">That cron expression never runs, or is not five fields.</span>`;
-};
-document.addEventListener("input", event => { if (event.target.closest(".sched")) scheduleChanged(); });
-document.addEventListener("change", event => { if (event.target.closest(".sched") && event.target.id !== "ls_kind") scheduleChanged(); });
 
 window.lhRun = async name => {
   try {
@@ -555,7 +507,7 @@ window.lhGroupSave = async original => {
     jobs: $$("#lg_jobs input:checked").map(box => box.value),
     leave_default: $("#lg_leave") ? $("#lg_leave").checked : false };
   const plan = PROTECT_PLANS.find(p => p.id === $("#lg_plan").value);
-  if (!name) return toast("give the group a name", "bad");
+  if (!name) return fieldError("#lg_name", "Give the group a name.");
   try {
     if (plan) body.jobs.push(...await planApply(plan, name));
     const result = await api("/api/lh/group", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -570,8 +522,8 @@ window.lhGroupSave = async original => {
 window.lhGroupDel = async name => {
   const row = ((STATE.data.lh || {}).group_rows || []).find(g => g.name === name) || { volumes: [], jobs: [] };
   if (!(await ask(`Delete group "${name}"?` + String.fromCharCode(10, 10)
-      + `${row.volumes.length} volume(s) leave it; any with no other group go back to default and its jobs.`
-      + ` ${row.jobs.length} job(s) stop covering it. Snapshots and backups already taken are kept.`,
+      + `${plural(row.volumes.length, "volume")} leave it; any with no other group go back to default and its jobs.`
+      + ` ${plural(row.jobs.length, "job")} stop covering it. Snapshots and backups already taken are kept.`,
       { title: "Delete group", ok: "Delete group", danger: true }))) return;
   try {
     const result = await api("/api/lh/group/delete", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -590,12 +542,12 @@ window.lhJobSave = async () => {
   const body = { name: $("#lj_name").value.trim(), task,
     cron: $("#lj_cron").value.trim(), retain: KEEPS(task) ? +$("#lj_retain").value : 0,
     concurrency: +$("#lj_conc").value, groups };
-  if (!body.name) return toast("name is required", "bad");
-  if (!groups.length) return toast("pick at least one group, or the job protects nothing", "bad");
+  if (!body.name) return fieldError("#lj_name", "Give the job a name.");
+  if (!groups.length) return fieldError("#lj_newgroup", "Pick at least one group, or type a new one: without a group the job protects nothing.");
   try {
     await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    toast(`job "${body.name}" saved`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`Job "${body.name}" saved`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhJobDel = async name => {
@@ -604,7 +556,7 @@ window.lhJobDel = async name => {
   try {
     await api("/api/lh/job/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast("deleted", "ok"); resetPaint(); viewProtect();
+    toast("Deleted", "ok"); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhQuickStart = async () => {
@@ -612,14 +564,14 @@ window.lhQuickStart = async () => {
     await api("/api/lh/job", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *",
         retain: 7, concurrency: 2, groups: ["default"] }) });
-    toast("daily snapshot of every volume, keeping 7", "ok"); resetPaint(); viewProtect();
+    toast("Daily snapshot of every volume, keeping 7", "ok"); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.lhCovered = name => {
   const j = (STATE.data.lh.jobs || []).find(x => x.name === name);
   const vols = STATE.data.lh.volumes || [];
   modal("Covered by · " + name, j && j.volumes.length
-    ? `<p class="muted small">${j.volumes.length} volume(s), via group${j.groups.length === 1 ? "" : "s"}
+    ? `<p class="muted small">${plural(j.volumes.length, "volume")}, via group${j.groups.length === 1 ? "" : "s"}
        ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")} or a direct label.</p>
        <div style="margin-top:14px">${j.volumes.map(v => {
          const vv = vols.find(x => x.name === v) || {};
@@ -639,7 +591,7 @@ window.lhAssign = (vol, label) => {
     <div id="pa_groups">${(d.groups || []).map(g => `<label class="switch" style="margin:0 0 8px">
       <input type="checkbox" class="pg" value="${esc(g)}" ${v.groups.includes(g) ? "checked" : ""}>
       ${esc(g)}</label>`).join("")}</div>
-    <input type="text" id="pa_newgroup" placeholder="…or a new group" autocomplete="off">
+    <input type="text" id="pa_newgroup" aria-label="New group" placeholder="…or a new group" autocomplete="off">
     <div class="dim xs" style="margin-top:6px">A volume in <span class="mono">default</span> and another group gets both groups' jobs.</div>
     <div class="sec">Individual jobs</div>
     <div id="pa_jobs">${(d.jobs || []).map(j => `<label class="switch" style="margin:0 0 8px">
@@ -665,13 +617,13 @@ window.lhAssignSave = async vol => {
   });
   const extra = ($("#pa_newgroup").value || "").trim().toLowerCase();
   if (extra && !(d.groups || []).includes(extra)) calls.push({ volumes: [vol], name: extra, kind: "group", enabled: true });
-  if (!calls.length) { closeModal(); return toast("nothing changed"); }
+  if (!calls.length) { closeModal(); return toast("Nothing changed"); }
   try {
     for (const c of calls) {
       await api("/api/lh/assign", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(c) });
     }
-    toast(`${calls.length} change(s) applied`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`${plural(calls.length, "change")} applied`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -698,7 +650,7 @@ function snapshotTimeline(snaps, vol, label) {
         {label:s.deleting ? 'Track cleanup' : source === 'system' ? 'Clean up' : 'Delete', icon:'trash', need:'admin', danger:true, disabled:source === 'unknown', run:`lhSnapDel(${jsq(s.name)},${jsq(vol)},${jsq(label)})`}
       ], {shown:1, label:'More snapshot actions'})}</div>
       </div></article>`;
-  }).join("") || '<div class="empty small">No snapshots yet</div>'}
+  }).join("") || '<div class="empty small">No snapshots yet.</div>'}
     <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
 }
 
@@ -755,7 +707,7 @@ window.lhSnaps = async (vol, label) => {
       ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
     refreshSnapshotDialog(token, vol, label);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnaps(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 function backupTable(bks, vol, label) {
   return `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backups" class="tbl stack">
@@ -764,7 +716,7 @@ function backupTable(bks, vol, label) {
       <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
       <td class="mono">${b.size_mb} MB</td>
-      <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
+      <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
         b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
         { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")
@@ -781,7 +733,7 @@ window.lhBackupList = async (vol, label) => {
       one of these; point the app at it, or restore it under the old claim's name.</div>`}
       ${backupTable(bks, vol, label)}`;
     if (window.applyRole) window.applyRole();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhBackupList(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhBackupDel = async (name, vol, label) => {
   if (!(await ask(`Delete backup "${name}"?` + String.fromCharCode(10, 10)
@@ -790,7 +742,7 @@ window.lhBackupDel = async (name, vol, label) => {
   try {
     await api("/api/lh/backup/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast("backup deleted", "ok");
+    toast("Backup deleted", "ok");
     if ($("#mbody")) lhBackupList(vol, label);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -798,7 +750,7 @@ window.lhSnapNow = async (vol, label) => {
   try {
     await api("/api/lh/snapshot", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }) });
-    toast("snapshot taken", "ok"); lhSnaps(vol, label);
+    toast("Snapshot taken", "ok"); lhSnaps(vol, label);
   } catch (e) { toast(e.message, "bad"); }
 };
 /* Trim one volume now; the weekly job trims every volume. Longhorn trims
@@ -814,7 +766,7 @@ window.lhBackupNow = async (vol, label) => {
   try {
     await api("/api/lh/backup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }) });
-    toast("backup started", "ok"); setTimeout(() => lhSnaps(vol, label), 1500);
+    toast("Backup started", "ok"); setTimeout(() => lhSnaps(vol, label), 1500);
   } catch (e) { toast(e.message, "bad"); }
 };
 let restoreCheckTimer = 0;
@@ -856,7 +808,7 @@ window.lhRestore = async backup => {
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (window.applyRole) window.applyRole();
     lhRestoreCheck();
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRestore(${jsArg(backup)})`, dialog: true }); }
 };
 window.lhRestoreCheck = () => {
   clearTimeout(restoreCheckTimer);
@@ -906,7 +858,7 @@ window.lhRevert = async (vol, snap, label) => {
       ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
         <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button>`)}`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRevert(${jsArg(vol)},${jsArg(snap)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhRevertGo = async (vol, snap) => {
   try {
@@ -996,7 +948,7 @@ window.lhTargetSave = async () => {
     await api("/api/lh/target", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: $("#bt_url").value.trim(), secret: $("#bt_secret").value.trim(),
         poll: $("#bt_poll").value.trim() || "5m", ...(keys.access_key || keys.secret_key ? { keys } : {}) }) });
-    toast("backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
+    toast("Backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -1016,7 +968,7 @@ async function loadRestoreTests() {
   const row = r => {
     const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
     const result = r.running ? '<span class="pill info">testing now</span>'
-      : last ? `<span class="pill ${last.ok ? "ok" : "crit"}" data-tip="${esc(last.message || "")}">${last.ok ? "passed" : "failed"}</span> <span class="dim xs">${esc(restoreWhen(last.at))}${last.seconds ? ` · ${Math.round(last.seconds / 60)} min` : ""}</span>`
+      : last ? `<span class="pill ${last.ok ? "ok" : "crit"}">${last.ok ? "passed" : "failed"}</span> <span class="dim xs">${esc(restoreWhen(last.at))}${last.seconds ? ` · ${Math.round(last.seconds / 60)} min` : ""}</span>`
       : '<span class="dim xs">never tested</span>';
     return `<tr><td class="cell-name"><div class="vm-name-cell">${appAvatar(r.name, r.icon)}<div class="vm-name-text"><b>${esc(r.name)}</b><div class="dim xs">${esc(r.ns)}</div></div></div></td>
       <td data-label="Restores" class="small">${r.restores.length ? esc(restores) : '<span class="dim">nothing: ' + esc(r.without.map(w => `${w.claim} has ${w.why}`).join("; ")) + "</span>"}
@@ -1026,13 +978,14 @@ async function loadRestoreTests() {
   };
   host.innerHTML = `<div class="between restore-head"><div class="sec">Restore tests</div>
       <label class="switch" data-need="admin"><input type="checkbox" id="rt_on" ${d.enabled ? "checked" : ""} onchange="restoreTestsSwitch(this.checked)"> Test each app every ${d.every_days} days</label></div>
-    <p class="dim small">A test restores an app's newest backups into new volumes, starts a copy of it on them - cut off from the network, its other volumes left empty so it cannot touch real data - and checks it starts and answers. Then it removes everything it made. One runs at a time, outside the maintenance window, when Longhorn has room.</p>
+    <div class="dim xs" id="rt_off"${d.enabled ? " hidden" : ""}>Off · tests run only when you click Test now</div>
+    ${UI.guide("How restore tests work", `<p>A test restores an app's newest backups into new volumes, starts a copy of it on them - cut off from the network, its other volumes left empty so it cannot touch real data - and checks it starts and answers. Then it removes everything it made. One runs at a time, outside the maintenance window, when Longhorn has room.</p>`)}
     ${d.apps.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact restore-table"><thead><tr><th>App</th><th>Restores</th><th>Last test</th><th data-nosort></th></tr></thead>
       <tbody>${d.apps.map(row).join("")}</tbody></table></div></div>` : '<div class="empty small">No app has Longhorn volumes to test.</div>'}`;
 }
 
 window.restoreTestsSwitch = async on => {
-  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); }
+  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); const off = $("#rt_off"); if (off) off.hidden = on; }
   catch (e) { toast(e.message, "bad"); const box = $("#rt_on"); if (box) box.checked = !on; }
 };
 

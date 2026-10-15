@@ -1071,7 +1071,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.326/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.327-dev.2/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1082,7 +1082,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.326 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.327-dev.2 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1508,12 +1508,13 @@ elsewhere cannot attach twice, and a claim from a migratable class answers a
 second node by starting a live migration rather than attaching, which the CSI
 driver will not filesystem-mount while it is in flight.
 
-One parameter decides whether a class can back container storage at all.
-A class with `migratable: true` hands out two-controller volumes so a VM disk
-can live-migrate between hosts, and Longhorn's CSI driver refuses to
-filesystem-mount those into a pod: a ReadWriteMany claim created on such a
-class binds happily and then strands whatever tries to use it in
-`ContainerCreating`. Homestead therefore refuses ReadWriteMany claims on a
+One parameter decides whether a class can back a volume several hosts
+mount. A class with `migratable: true` is made so a VM disk can live-migrate
+between hosts: its volume attaches to one host at a time, which is fine for
+one pod there. A pod on a second host makes Longhorn start a live migration
+instead of attaching, and the CSI driver refuses that filesystem mount, so a
+ReadWriteMany claim created on such a class binds happily and then strands
+the second host's pod in `ContainerCreating`. Homestead therefore refuses ReadWriteMany claims on a
 migratable class, naming the classes that would work, and the storage picker
 narrows its class list as soon as RWX is chosen. Harvester's reserved internal
 classes are never offered.
@@ -2008,10 +2009,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.326`, the workflow publishes:
+For a release such as `v2.8.327-dev.2`, the workflow publishes:
 
 ```text
-ghcr.io/homestead-lab/homestead:2.8.326
+ghcr.io/homestead-lab/homestead:2.8.327-dev.2
 ghcr.io/homestead-lab/homestead:2.8
 ghcr.io/homestead-lab/homestead:2
 ghcr.io/homestead-lab/homestead:latest
@@ -2022,8 +2023,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.326
-git push origin v2.8.326
+git tag v2.8.327-dev.2
+git push origin v2.8.327-dev.2
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

@@ -210,7 +210,7 @@ window.imageUpdateCenter = async () => {
     ${affected.length ? [here, elsewhere].map((rows, i) => !rows.length ? "" : `${i ? UI.section(`Updated elsewhere · ${rows.length}`, "") : ""}<div class="settings-list">${rows.map(w => {
       const failures = (w.images || []).filter(image => image.error);
       const owner = updateOwner(w), pick = w.available && !owner;
-      return `<div class="settings-list-row update-center-row">${pick ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
+      return `<div class="settings-list-row update-center-row">${pick ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" aria-label="Select ${esc(w.name)}" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
         ${owner ? `<div class="dim xs">${esc(updateOwnerTip(owner))}</div>` : ""}
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
         <div class="row">${owner ? updateOwnerPill(w) : w.available ? '<span class="pill warn">update available</span>' : ""}
@@ -747,6 +747,16 @@ function imageLabel(ref) {
   return ref.split("/").pop().includes(":") ? ref : `${ref}:latest`;
 }
 
+/* The part of an image people judge an update by: its name and tag, or the
+   start of its digest. The full reference goes in a title beside it. */
+function imageShortLabel(ref) {
+  const label = imageLabel(ref), name = label.split("/").pop();
+  const pinned = name.match(/^(.*@sha256:)([0-9a-f]+)$/);
+  return pinned ? `${pinned[1]}${pinned[2].slice(0, 12)}${pinned[2].length > 12 ? "…" : ""}` : name;
+}
+const imageTitle = images => esc((images || []).map(imageLabel).join(" · "));
+const imageShort = images => (images || []).map(i => esc(imageShortLabel(i))).join(" · ");
+
 /* Show what containerd will resolve without changing what the user entered. */
 function imagePullRef(ref) {
   const tagged = imageLabel((ref || "").trim());
@@ -809,6 +819,16 @@ function workloadActions(w, update, off, compact = false) {
   ]);
 }
 
+/* A workload's state tags, the same in a row and a card so the two can't
+   drift: its schedule, how it updates, who updates it, and an update waiting.
+   A row whose own Update button is shown says the update there, not twice. */
+function workloadStateTags(w, update, { row = false } = {}) {
+  const owner = updateOwner(update);
+  const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
+  return `${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
+    : update?.available && !button ? `<span class="${row ? "tag" : "pill"} warn">update available</span>` : ""}${uncheckedMark(update)}`;
+}
+
 function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
       const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
@@ -821,9 +841,9 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · ${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink"
                 onclick="moveWorkload(${jsq(w.name)},${jsq(w.ns)})">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}</div></div>
           </div>
-          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${updateOwner(update) ? updateOwnerPill(update) : update?.available ? '<span class="pill warn">update available</span>' : ""}${uncheckedMark(update)}
+          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${workloadStateTags(w, update)}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
-          ${autoUpdateTag(w)}<span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
+          <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
@@ -831,7 +851,7 @@ function workloadCard(w) {
           <div><div class="dim xs" data-tip="Memory in use right now">RAM</div><div class="mono small">${workloadMemory(w.mem_mb)}</div></div>
           <div><div class="dim xs">ACCESS</div><div class="waccess">${accessPorts(w.ports)}</div></div>
         </div>
-        <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</span>
+        <div class="dim xs mono wimg"><span class="wimage-name" title="${imageTitle(w.images)}">${imageShort(w.images)}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         ${answerCardRow(w)}
         ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
@@ -896,11 +916,11 @@ function workloadTableRows(rows) {
         <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
         <span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${off ? "Stopped" : `${w.ready}/${w.desired}`}</span>
-        ${answerTag(w)}${scheduleTag(w)}${autoUpdateTag(w)}${updateOwner(update) ? updateOwnerPill(update, true) : update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
+        ${answerTag(w)}${workloadStateTags(w, update, { row: true })}
         ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
         ${pull ? `<span class="tag" title="Fetching ${esc(pull.image || "image")}">Pulling ${Math.min(100, pull.percent || 0)}%</span>` : ""}
         ${blocked ? `<span class="tag bad" data-tip="${esc(blocked)}">Blocked</span>` : ""}</div></td>
-      <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
+      <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${imageTitle(w.images)}">${imageShort(w.images)}</div>
         ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</td>
       <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
       <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${off ? "—" : workloadMemory(w.mem_mb)}</td>
@@ -1369,26 +1389,32 @@ function priorityStatus(a) {
 }
 function priorityHtml(plan) {
   const apps = plan.apps || [], changes = apps.filter(a => a.tier !== a.current), over = changes.length > plan.max;
-  const restarting = changes.filter(a => a.kind !== "vm").length, vms = changes.length - restarting;
+  // A VM, and a StatefulSet that doesn't restart itself, takes its tier when it next starts.
+  const rolling = changes.filter(a => a.kind !== "vm" && a.restarts !== false), restarting = rolling.length;
+  const sets = rolling.filter(a => a.kind === "sts").length, held = changes.length - restarting;
+  const vms = changes.filter(a => a.kind === "vm").length, heldSets = held - vms;
+  const count = (n, noun) => n ? `${n} ${noun}${n === 1 ? "" : "s"}` : "";
+  const and = (...parts) => parts.filter(Boolean).join(" and ");
+  const chips = { vm: "VM", sts: "StatefulSet" };
   const rows = apps.map((a, i) => [
-    `<span class="mono">${esc(a.kind === "vm" ? `${a.ns}/${a.name}` : a.id)}</span>${a.kind === "vm" ? ` ${UI.chip("VM")}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
+    `<span class="mono">${esc(chips[a.kind] ? `${a.ns}/${a.name}` : a.id)}</span>${chips[a.kind] ? ` ${UI.chip(chips[a.kind])}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
     `${prioritySelect(`prio_${i}`, a.tier, `${a.managed || a.status === "unknown_group" ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
       <span class="sub">${priorityStatus(a)}</span>
       <span class="sub">${esc(a.note || (a.status === "unknown_group" ? "Group tiers couldn't be read; try again shortly." : "") || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
   return [
     UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
-      : changes.length ? [restarting ? `Changes the tier of ${restarting} app${restarting === 1 ? "" : "s"}. Each restarts once, one at a time.` : "",
-        vms ? `${vms} VM${vms === 1 ? " takes its" : "s take their"} new tier when ${vms === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
+      : changes.length ? [restarting ? `Changes the tier of ${and(count(restarting - sets, "app"), count(sets, "StatefulSet"))}. Each restarts once, one at a time${sets ? "; a StatefulSet one pod at a time" : ""}.` : "",
+        held ? `${and(count(vms, "VM"), count(heldSets, "StatefulSet"))} ${held === 1 ? "takes its" : "take their"} new tier when ${held === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
       : "Every app keeps its tier. Choose a tier to change one."),
     // What the cluster's classes get wrong (#429), said once.
     (plan.warnings || []).length ? UI.callout("warn", "Check first", `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`) : "",
     (plan.groups || []).length ? UI.section(`Groups · ${plan.groups.length}`, `<ul class="ui-list">${plan.groups.map(g =>
       `<li><b>${esc(g.name)}</b> ${esc(g.tier === null ? "tier unknown" : g.tier || "no tier")} · ${g.apps} app${g.apps === 1 ? "" : "s"}</li>`).join("")}</ul>`) : "",
-    UI.section(`Apps and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
+    UI.section(`Apps, StatefulSets and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
-    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
-      <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again. If one does not come back within ten minutes, the job stops and the rest are not changed.</p>`, false, "prio-how"),
-    changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting} apps now`) : "",
+    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. StatefulSets take tiers of their own, never a group's; one that waits for its pods to be deleted (OnDelete, or a partition at or above its replicas) takes its tier when they next restart, and Homestead never deletes them. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
+      <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again, and a StatefulSet one pod at a time. If one does not come back within ten minutes - for a StatefulSet, ten per pod - the job stops and the rest are not changed.</p>`, false, "prio-how"),
+    changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting}${sets ? "" : " apps"} now`) : "",
   ].join("");
 }
 window.priorityItem = (id, tier) => {
@@ -1406,7 +1432,9 @@ window.priorityStart = async () => {
   try {
     await api("/api/workloads/priority", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier, follow: !!a.follow })), review_token: plan.review_token, restart: true }) });
-    closeModal(); toast(`Setting the tier of ${changes.length} app${changes.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+    const sets = changes.filter(a => a.kind === "sts").length, apps = changes.length - sets;
+    const named = [apps || !sets ? `${apps} app${apps === 1 ? "" : "s"}` : "", sets ? `${sets} StatefulSet${sets === 1 ? "" : "s"}` : ""];
+    closeModal(); toast(`Setting the tier of ${named.filter(Boolean).join(" and ")}; follow it in Jobs`, "ok");
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set tiers"; }
@@ -1457,7 +1485,7 @@ window.wlFailover = async () => {
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>
       ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
           ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
-        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`)}</td></tr>`).join("")}
+        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s node fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
@@ -1468,7 +1496,7 @@ window.wlFailoverSave = async () => {
     .map(s => ({ ns: s.dataset.ns, name: s.dataset.name, mode: s.value }));
   if (!items.length) return closeModal();
   if (items.some(i => (STATE.data.wl || []).some(w => w.self && w.ns === i.ns && w.name === i.name))
-      && !(await ask("Homestead itself is among them: it restarts, and this page reconnects when it is back."))) return;
+      && !(await ask("Homestead itself is among them: it restarts, and this page reconnects when it is back.", { title: "Homestead restarts", ok: "Save and restart" }))) return;
   try {
     const r = await api("/api/workloads/failover", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }) });
@@ -1476,7 +1504,7 @@ window.wlFailoverSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlFailoverPolicy = async () => {
-  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod."))) return;
+  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod.", { title: "Pod deletion when a node is down", ok: "Allow" }))) return;
   try {
     await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });
@@ -2276,6 +2304,13 @@ function generatedSecret() {
   const bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+/* A new app's tier (#431), chosen as Edit chooses it. Normal writes no class. */
+function deployTierField(tier) {
+  if (!["critical", "normal", "low"].includes(tier)) tier = "normal";
+  return `<div class="f"><label>When the cluster is short of room</label>${prioritySelect("d_priority", tier,
+    `aria-label="Tier when the cluster is short of room" aria-describedby="d_priority_help" onchange="$('#d_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}
+    <div class="dim small" id="d_priority_help" aria-live="polite">${esc(PRIORITY_HELP[tier])}</div></div>`;
+}
 async function viewDeploy(pre) {
   pre = pre || window.__deployPrefill;
   window.__deployPrefill = null;
@@ -2328,6 +2363,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
+      <div id="d_priority_wrap">${UI.more("Optional settings", deployTierField(DCFG.priority))}</div>
     `},
     {key:"hardware", title:"Hardware and access", lead:"Set resources and host access for the first container.", html:`
       <div class="f2 compact-fields">
@@ -2414,6 +2450,7 @@ function applyDeployMode() {
   $("#d_workload_name_wrap").style.display = joining ? "none" : "block";
   $("#d_rep_wrap").style.display = joining ? "none" : "block";
   $("#d_add_container").hidden = joining;
+  $("#d_priority_wrap").hidden = joining;   // the app it joins keeps its own tier
   $("#d_extra_wrap").hidden = joining;
   $("#d_extra_join").hidden = !joining;
   const host = [...$("#d_net").options].find(o => o.value === "host");
@@ -2431,6 +2468,7 @@ function collect() {
   DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim();
   DCFG.memory_limit = $("#d_mem_limit").value.trim(); DCFG.icon = $("#d_icon").value.trim();
   if ($("#d_mon")) DCFG.monitoring = monitoringFieldValue("d");
+  DCFG.priority = $("#d_priority")?.value || "normal";
   DCFG.hardware = selectedHardware("d_hw");
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
@@ -2543,7 +2581,7 @@ function capacityNoteWords(text) {
   if (text.startsWith("live RAM still includes old pods")) return "Live memory usage still includes the old pods, so the estimate keeps that usage until they stop.";
   if (text.startsWith("intermediate rolling-update placement")) return "The check covers starting the rollout. Later placement and readiness can still delay completion.";
   const rolling = text.match(/^RollingUpdate permits (\d+) extra pod\(s\) and (\d+) unavailable replica\(s\);/);
-  if (rolling) return `The rollout allows ${rolling[1]} extra pod(s) and ${rolling[2]} unavailable replica(s). Pods still stopping can temporarily increase the total.`;
+  if (rolling) return `The rollout allows ${plural(rolling[1], "extra pod")} and ${plural(rolling[2], "unavailable replica")}. Pods still stopping can temporarily increase the total.`;
   return text;
 }
 function capacityNotes(plan) {
@@ -2569,11 +2607,11 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
     : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.";
   const shown = needs;
   const concerns = shown.length ? `<ul class="ui-list">${shown.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
-  const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known
-      ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
+  const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plural(plan.rollout.replicas, "desired replica"))} · ${plan.rollout.ownership_known
+      ? `${esc(plural(plan.rollout.owned_pods.length, "existing pod"))} identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
       : "Pod ownership is unverified; released capacity is unknown."}</p>
-    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plan.rollout.max_surge)} extra pod(s), ${esc(plan.rollout.max_unavailable)} unavailable replica(s). Intermediate rollout steps remain unverified.</p>` : ""}` : "";
-  const requests = `${esc(plan.additional)} ${plan.vm ? "VM launcher" : "pod(s)"}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
+    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plural(plan.rollout.max_surge, "extra pod"))}, ${esc(plural(plan.rollout.max_unavailable, "unavailable replica"))}. Intermediate rollout steps remain unverified.</p>` : ""}` : "";
+  const requests = `${esc(plural(plan.additional, plan.vm ? "VM launcher" : "pod"))}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
   return `<div class="deploy-capacity ui-stack">
     ${overlap ? "" : capacityPlacementHtml(plan)}
     ${UI.section(title, [
@@ -2800,13 +2838,16 @@ function storeCard(app, mode) {
       <button class="btn pri sm" onclick="event.stopPropagation();storeInstall(${key})">Configure &amp; deploy</button></div></div>`;
 }
 
-/* Say where the listings come from: the public feed, or one set in Settings. */
+/* Say where the listings come from, once the server has said: the public feed,
+   or one set in Settings. The trademark line shows whatever the feed. */
 function storeSource(source) {
   const host = $("#s_source");
-  if (!host || !source) return;
-  host.innerHTML = source.default
-    ? `Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours; another feed can be set in Settings. Homestead is independent and is not endorsed by the catalogue maintainers. Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.`
-    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed; review what each one asks for before deploying it.`;
+  if (!host) return;
+  const feed = !source ? ""
+    : source.default
+    ? `Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours; another feed can be set in Settings. Homestead is independent and is not endorsed by the catalogue maintainers. `
+    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed; review what each one asks for before deploying it. `;
+  host.innerHTML = `${feed}Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.`;
 }
 
 function storeSection(mode, apps, total) {
@@ -2820,7 +2861,7 @@ function storeSection(mode, apps, total) {
 
 async function viewStore() {
   resetPaint();
-  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
+  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" aria-label="Search the App Store" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
       <button class="btn pri" onclick="storeSearch()">Search</button>`, {actionsClass:`store-search`})}
     <div class="store-browse-head"><div class="seg store-modes" id="s_modes">
       ${Object.entries(STORE_MODES).map(([mode, [label]]) => `<button data-mode="${mode}" class="${STORE_MODE === mode ? "on" : ""}" onclick="storeBrowse(${jsq(mode)})">${label}</button>`).join("")}
@@ -2828,6 +2869,7 @@ async function viewStore() {
     <div id="s_res"><div class="empty"><span class="spin2"></span>loading catalogue…</div></div>
     <div class="note catalogue-notice" id="s_source"></div>`);
   $("#s_q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); storeSearch(); } });
+  storeSource(null);
   if (STATE.q) storeSearch(); else storeBrowse(STORE_MODE);
 }
 window.storeSearch = async () => {
@@ -2837,11 +2879,12 @@ window.storeSearch = async () => {
   $("#s_res").innerHTML = `<div class="empty"><span class="spin2"></span>searching catalogue…</div>`;
   try {
     const r = await api("/api/appstore?q=" + encodeURIComponent(q));
+    storeSource(r.source);
     $("#s_res").innerHTML = r.apps.length
       ? `<div class="dim small" style="margin-bottom:12px">${r.total} match${r.total === 1 ? "" : "es"} · showing ${r.apps.length}</div>
         <div class="apps stagger">${r.apps.map(a => storeCard(a, "search")).join("")}</div>`
       : `<div class="empty">nothing matched “${esc(q)}”</div>`;
-  } catch (e) { $("#s_res").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#s_res").innerHTML = UI.error(e, { retry: "storeSearch()" }); }
 };
 window.storeBrowse = async mode => {
   STORE_MODE = STORE_MODES[mode] ? mode : "home";
@@ -2860,7 +2903,7 @@ window.storeBrowse = async mode => {
     const [title, detail] = STORE_MODES[STORE_MODE];
     $("#s_res").innerHTML = `<div class="store-section-head"><div><h3>${title}</h3><span>${detail}</span></div><b>${r.apps.length}</b></div>
       ${r.apps.length ? `<div class="apps stagger">${r.apps.map(a => storeCard(a, STORE_MODE)).join("")}</div>` : `<div class="empty">No apps to show.</div>`}`;
-  } catch (e) { $("#s_res").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $("#s_res").innerHTML = UI.error(e, { retry: `storeBrowse(${jsArg(mode)})` }); }
 };
 
 window.storeInstall = key => {

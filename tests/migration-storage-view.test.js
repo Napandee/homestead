@@ -5,7 +5,7 @@ function setup() {
   const fields = {"#mv_ns": {value:"lab"}, "#mv_mode": {value:"shared"},
     "#mv_sc": {value:"fast"}, "#mv_plan": {}, "#mv_go": {disabled:true}};
   const calls=[], replies=[];
-  const ctx = {console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent, clearTimeout,
+  const ctx = {console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent, clearTimeout, defaultNamespace: () => "lab",
     document:{addEventListener(){}}, STATE:{data:{}}, $:key=>fields[key], $$:()=>[],
     esc:value=>String(value ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])), toast:()=>{}, ask:async()=>true, closeModal:()=>{}, movesRepaint:()=>{}, tip:t=>t,
     childModal:(title,html)=>{ctx.modalTitle=title;ctx.modalHtml=html;},

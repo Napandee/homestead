@@ -5,9 +5,11 @@ const firewallPost = (path, body) => api(`/api/firewall/${path}`, { method: "POS
   headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" }, body: JSON.stringify(body) });
 const firewallTargetKey = row => `${row.namespace}/${row.kind}/${row.name}`;
 const firewallDirection = (spec, direction) => {
-  if (!(spec.policyTypes || ["Ingress", ...(spec.egress ? ["Egress"] : [])]).includes(direction)) return "Unchanged";
+  // The editor's words: a direction the policy leaves alone is unrestricted,
+  // and a restricted one with no rules lets nothing through.
+  if (!(spec.policyTypes || ["Ingress", ...(spec.egress ? ["Egress"] : [])]).includes(direction)) return "unrestricted";
   const count = (spec[direction.toLowerCase()] || []).length;
-  return `${count} allow rule${count === 1 ? "" : "s"}`;
+  return count ? `${count} allow rule${count === 1 ? "" : "s"}` : "nothing allowed";
 };
 
 async function viewFirewall() {
@@ -16,7 +18,10 @@ async function viewFirewall() {
   const q = (STATE.q || "").toLowerCase();
   const rows = data.policies.filter(row => `${row.namespace} ${row.name} ${row.config?.target?.name || ""}`.toLowerCase().includes(q));
   networkPage("firewall", `
-    ${summaryLine("firewall", [`<b>${data.policies.length}</b> ${data.policies.length === 1 ? "policy" : "policies"}`, `${esc(data.provider.name)} · enforcement unverified`])}
+    ${summaryLine("firewall", [`<b>${data.policies.length}</b> ${data.policies.length === 1 ? "policy" : "policies"}`,
+      data.provider.found === false ? "no policy controller found" : `${esc(data.provider.name)} found · enforcement not tested`])}
+    ${data.provider.found === false ? UI.callout("warn", "No policy controller found: these policies may not filter traffic",
+      "Policies only take effect when your network provider enforces Kubernetes NetworkPolicy.") : ""}
     ${UI.guide("How workload firewall policies work", `<p>${esc(data.provider.detail)}</p>
       <p>A policy selects a workload's pods. Restrict inbound or outbound traffic, then add the connections it needs.
       An empty restricted direction allows no connections in that direction through this policy. Reply traffic is handled by the network provider.</p>
@@ -27,7 +32,7 @@ async function viewFirewall() {
     ${UI.table([{label:"Policy"}, {label:"Workload"}, {label:"Inbound / outbound"}, {label:"Actions"}], rows.map(row => [
       `<b>${esc(row.name)}</b><div class="dim small">${esc(row.namespace)} · ${row.managed ? "Homestead" : "Managed elsewhere / inspect only"}</div>`,
       row.config ? `${esc(row.config.target.name)}<div class="dim small">${esc(row.config.target.kind)}</div>` : "Custom selector",
-      `${esc(firewallDirection(row.spec, "Ingress"))}<div class="dim small">${esc(firewallDirection(row.spec, "Egress"))}</div>`,
+      `In: ${esc(firewallDirection(row.spec, "Ingress"))}<div class="dim small">Out: ${esc(firewallDirection(row.spec, "Egress"))}</div>`,
       actionBar([{label:"Inspect", run:`firewallInspect(${jsq(row.namespace)},${jsq(row.name)})`},
         row.managed && {label:"Edit", run:`firewallEdit(${jsq(row.namespace)},${jsq(row.name)})`, need:"admin"},
         row.managed && {label:"Remove", run:`firewallRemove(${jsq(row.namespace)},${jsq(row.name)})`, need:"admin", danger:true}])

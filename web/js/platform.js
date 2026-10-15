@@ -125,13 +125,16 @@ window.baselineInstallGo = async () => {
   }
 };
 
-window.nfsRecovery = (state, expanded = false) => {
+// The recovery state in one line, and how the server works in UI.more, as the
+// SMB card does. `lead` opens the explanation, where a page has more to say.
+// The chip says lock recovery is off when the state line doesn't already.
+window.nfsRecovery = (state, expanded = false, lead = "") => {
   const recovery = state?.recovery;
-  if (!recovery) return '<div class="dim xs">Node-failure recovery has not been checked.</div>';
+  if (!recovery) return `<div class="dim xs" style="margin-top:8px">Node-failure recovery has not been checked.</div>${lead ? UI.more("How the NFS server works", lead) : ""}`;
   const issues = [...(recovery.blockers || []), ...(recovery.warnings || [])];
-  return `<details class="small" ${expanded ? "open" : ""} style="margin-top:8px"><summary>Recovery: ${esc(recovery.detail || "not checked")}</summary>
-    <div class="dim xs" style="margin-top:6px">${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : " · enable NFS server support on the hosts and update the node probe"}. Access pauses while the server, VIP and storage recover.</div>
-    ${issues.length ? `<ul>${issues.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}</details>`;
+  return `<div class="row small" style="margin-top:8px;gap:6px;flex-wrap:wrap"><span>Recovery: ${esc(recovery.detail || "not checked")}</span>${recovery.lock_recovery === false && !/lock recovery/i.test(recovery.detail || "") ? UI.chip("No lock recovery", "warn") : ""}</div>
+    ${UI.more("How the NFS server works", `${lead}<p>${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : " · enable NFS server support on the hosts and update the node probe"}. Access pauses while the server, VIP and storage recover.</p>
+    ${issues.length ? `<ul>${issues.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}`, expanded)}`;
 };
 
 window.addonsPaint = async () => {
@@ -244,7 +247,7 @@ window.hostConsoleNow = async (node, button) => {
 
 window.hostConsoleSet = async input => {
   const on = input.checked;
-  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts."))) {
+  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts.", { title: "Remove the host console", ok: "Remove", danger: true }))) {
     input.checked = true; return;
   }
   try {
@@ -255,7 +258,7 @@ window.hostConsoleSet = async input => {
 };
 
 window.kubevirtEmulation = async enabled => {
-  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted."))) return;
+  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted.", { title: "Allow software emulation", ok: "Allow" }))) return;
   try {
     const result = await api("/api/addons/kubevirt/emulation", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }) });
@@ -265,7 +268,7 @@ window.kubevirtEmulation = async enabled => {
 };
 
 window.multusRepair = async () => {
-  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout."))) return;
+  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
   try {
     const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     toast(r.detail, "ok");
@@ -278,14 +281,14 @@ window.addonInstall = async key => {
   let body = {};
   if (key === "kubevirt") {
     const s = await api("/api/addons").catch(() => ({}));
-    if (s.kvm_nowhere && !(await ask("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?"))) return;
+    if (s.kvm_nowhere && !(await ask("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
     body = {};
   } else if (key === "kube-vip") {
     const s = await api("/api/addons").catch(() => ({}));
     const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each node's default route uses.`
       : "The nodes did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
-    if (!(await ask(`Install kube-vip? ${a.needs} ${where}`))) return;
-  } else if (!(await ask(`Install ${a.name}? ${a.needs}`))) return;
+    if (!(await ask(`Install kube-vip? ${a.needs} ${where}`, { title: "Install kube-vip", ok: "Install" }))) return;
+  } else if (!(await ask(`Install ${a.name}? ${a.needs}`, { title: `Install ${a.name}`, ok: "Install" }))) return;
   try {
     const r = await api(`/api/addons/${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail || `${a.name} is being installed`, "ok");
