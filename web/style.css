@@ -1647,16 +1647,15 @@ html[data-theme="light"] .compose-editor{background:#fff}
    kind, its name, then its MAC and what has seen it - with the tick at the
    side, instead of six labelled lines, most of them empty, per address. */
 .ipam-narrow{display:none}
+.ipam-stats .linkish{padding:0}
 @media(max-width:560px){
   .ipam-wide{display:none}.ipam-narrow{display:inline-block}
   .ipam-head-acts{flex-wrap:nowrap}
-  .ipam-stats{gap:8px!important;margin:10px 0 12px!important}
-  .ipam-stats>.card{padding:11px 12px}
+  .ipam-stats .ui-stats{gap:8px;margin:10px 0 12px}
+  .ipam-stats .ui-stat{padding:11px 12px}
   .ipam-stats .ctitle{font-size:12px}
-  .ipam-stats .bignum{font-size:24px!important;margin-top:4px!important}
+  .ipam-stats .bignum{font-size:24px;margin-top:4px}
   .ipam-stats .csub{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .ipam-stats .csub:has(.btn){white-space:normal;display:flex;flex-wrap:wrap;gap:4px}
-  .ipam-stats .csub .btn{margin-top:4px;padding:4px 8px;font-size:11.5px}
   .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
     grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
   .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
