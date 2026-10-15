@@ -858,7 +858,7 @@ window.lhRevert = async (vol, snap, label) => {
       ${users.length ? `<div class="note"><b>Stopped while it is done, then started again:</b>
         ${users.map(u => `<span class="tag">${esc(u.kind === "VirtualMachine" ? "VM" : u.kind)} ${esc(u.name)}</span>`).join(" ")}</div>`
         : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
-      ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
+      ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
         <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button>`)}`;
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRevert(${jsArg(vol)},${jsArg(snap)},${jsArg(label || "")})`, dialog: true }); }
@@ -883,12 +883,12 @@ window.lhSnapDel = async (name, vol, label) => {
     window.__snapshotDeletePlan = p;
     $("#mbody").innerHTML = `<div class="note"><b>${p.source === "system" ? "System checkpoint cleanup" : "Remove recovery point"}</b><p>${p.source === "system" ? "Longhorn created this checkpoint. Homestead requests cleanup through Longhorn's controller; it never removes active Volume Head or forces finalizers." : "This recovery point will no longer be usable for rollback. Current files and external backups are not deleted."}</p>
       Longhorn merges shared blocks and may also purge other already-removed or eligible system checkpoints on this volume. The displayed snapshot size is not a promise of space recovered.</div>
-      ${p.head_parent ? '<div class="note warn">This is the parent of Volume Head. Cleanup can wait until you take a fresh snapshot. Homestead will show that dependency in the job; it will not create snapshots automatically.</div>' : ""}
-      ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
+      ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)
+        : p.head_parent ? UI.callout("warn", "This is the parent of Volume Head", "Cleanup can wait until you take a fresh snapshot. Homestead will show that dependency in the job; it will not create snapshots automatically.") : ""}
       <p class="dim small">A persistent job tracks request, merge/purge and verified removal. Closing this dialog does not stop it. Removal cannot be undone or cancelled.</p>
       <div class="f"><label>Type <b class="mono">${esc(p.name)}</b> to confirm</label><input id="sd_confirm" autocomplete="off" oninput="lhSnapDeleteGate()"></div>
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button id="sd_go" class="btn danger" data-need="admin" disabled onclick="lhSnapDeleteGo()">Start cleanup job</button>`)}`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnapDel(${jsArg(name)},${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhSnapDeleteGate = () => {
   const p = window.__snapshotDeletePlan;
