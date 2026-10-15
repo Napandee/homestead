@@ -1296,7 +1296,6 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 @media(prefers-reduced-motion:reduce){.flash-find{animation:none;outline:2px solid var(--vio)}}
 /* The card a link names, brought up under the sticky header rather than behind it. */
 .anchor-target{scroll-margin-top:calc(var(--hdr) + 12px)}
-.anchor-target:focus{outline:none}
 
 /* What a search is narrowing the page to: only where the search box itself
    is folded behind its icon, which then carries a dot. */
