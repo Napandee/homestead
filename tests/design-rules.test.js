@@ -90,7 +90,7 @@ test("page and Settings structure is authored only by the UI module", () => {
    still exists: a count may go down as screens move to the components, never
    up. When you remove some, lower the number in the same change. */
 const LEGACY = [
-  [/class="note\b/g, 215, 'UI.callout for a notice, UI.lead or ui-help for prose'],
+  [/class="note\b/g, 210, 'UI.callout for a notice, UI.lead or ui-help for prose'],
   [/class="sec"/g, 66, "UI.section"],
   [/deployCapacityHtml\(/g, 14, "startReview or capacityHostTable for a new review"],
   [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],

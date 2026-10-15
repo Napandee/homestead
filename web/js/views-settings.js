@@ -167,29 +167,27 @@ async function viewSettings() {
           ${settingRow("Sign out", "This browser", '<button class="btn sm" onclick="doLogout()">Sign out</button>')}
         </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div>`, {tab:`you`})}
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone ${tip("Warning turns a bar amber, critical red. A node shows its worst result across CPU, memory, disk and temperature.")}`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained node CPU pressure", thresholds.cpu)}
           ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated node RAM pressure", thresholds.memory)}
           ${thresholdEditor("disk", "Node disk utilisation", "%", "Local filesystem capacity", thresholds.disk)}
           ${thresholdEditor("temperature", "CPU temperature", "°C", "Host thermal warning", thresholds.temperature)}
         </div>
-        <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Drive health`, `SMART warnings shown on node cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
-          <div class="threshold-card counters"><div><b>Media counters</b><div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
+          <div class="threshold-card counters"><div><b>Media counters</b> ${tip("NVMe reports media errors; ATA disks report reallocated, pending and uncorrectable sectors. A counter a drive doesn't report shows as unsupported, not zero.")}<div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
             <div class="smart-threshold-values">
-              <label>Reallocated · warning ${tip("Sectors already replaced with spares. A stable count can be historical; review increases and verify backups. Recommended: 1.")} <input id="set_smart_reallocated" type="number" min="1" max="1000000" value="${smart.reallocated_warning}" ${can("admin") ? "" : "disabled"}></label>
-              <label>Pending · critical ${tip("Sectors the drive cannot currently read reliably. Verify backups and investigate any nonzero count. Recommended: 1.")} <input id="set_smart_pending" type="number" min="1" max="1000000" value="${smart.pending_critical}" ${can("admin") ? "" : "disabled"}></label>
-              <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts. Recommended: 1.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Reallocated · warning ${tip("Sectors already replaced with spares. A stable count can be historical; review increases and verify backups.")} <input id="set_smart_reallocated" type="number" min="1" max="1000000" value="${smart.reallocated_warning}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Pending · critical ${tip("Sectors the drive cannot currently read reliably. Verify backups and investigate any nonzero count.")} <input id="set_smart_pending" type="number" min="1" max="1000000" value="${smart.pending_critical}" ${can("admin") ? "" : "disabled"}></label>
+              <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
             </div></div>
         </div>
         <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
-        <div class="note"><b>Device differences are preserved.</b> NVMe reports media errors; ATA disks report reallocated, pending, and uncorrectable sectors. Missing counters are shown as unsupported, not zero.</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`

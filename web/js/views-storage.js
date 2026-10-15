@@ -1323,7 +1323,7 @@ async function viewShares() {
     <div class="dim small">${nfs.error ? `Status unavailable: ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
       `${nfs.enabled ? `${nfs.ready || 0}/${nfs.desired || 1} ready` : "Stopped"}${nfs.address ? ` · ${esc(nfs.address)}:/<share>` : " · waiting for an address"}`} · ${(nfs.exports || []).length} configured exports</div></div>
     <button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>
-    <div class="dim xs" style="margin-top:9px">NFS is a separate opt-in container. Only selected RWX shares are exported to their allowed client networks; SMB and all PVCs remain independent.</div>${nfsRecovery(nfs)}</div>
+    ${nfsRecovery(nfs, false, "<p>NFS is a separate opt-in container. Only selected RWX shares are exported to their allowed client networks; SMB and all PVCs remain independent.</p>")}</div>
   <div class="card flat pad0"><div class="tblwrap sharetable"><table data-sort="shares" class="tbl stack">
     <thead><tr><th>Share</th><th>Storage</th><th>Size</th><th>Access</th><th>UNC path</th><th></th></tr></thead><tbody>
     ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
@@ -1772,9 +1772,8 @@ async function lhSettingsPaint() {
         ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
         .map(([v, l]) => `<option value="${v}" ${v === cap.node_down ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
-    <div class="dim xs" style="margin-top:10px">Largest new volume</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
-    <div class="note" style="margin-top:12px">Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused;
-      nothing already placed is moved. What fills a disk for real is data written — ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
+    <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
+    <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},

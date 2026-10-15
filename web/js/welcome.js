@@ -486,7 +486,7 @@ function setupStepHtml(id, state, status, ids) {
   const others = actions.filter(a => a !== mainAction).map(a => ({ label: a.label, run: a.run }));
   const rest = others.length ? actionBar(others, { shown: 0, label: `More for ${step.title}` }) : "";
   const onward = next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsArg(next)})`, { kind: main ? "" : "pri" })
-    : UI.button("Finish guide", "setupFinish()", { kind: main ? "" : "pri" });
+    : UI.button("Finish guide", "setupFinish()", { kind: main ? "" : "pri" }) + tip("Finish guide stops the reminder. It does not mark unfinished checks as passed.");
   const skip = st === "done" ? "" : st === "skipped"
     ? UI.button("Undo skip", `setupSkip(${jsArg(id)}, false)`) : UI.button("Skip this step", `setupSkip(${jsArg(id)}, true)`);
   return `<section class="card flat setup-card" data-step="${id}">
@@ -496,8 +496,6 @@ function setupStepHtml(id, state, status, ids) {
       ${s.error ? UI.callout("warn", "Homestead could not check this just now", esc(s.error)) : ""}
       ${step.body ? `<div class="setup-body">${step.body(s)}</div>` : ""}
       ${step.more ? UI.more("How this works", step.more) : ""}
-      <p class="small dim">Next does not mark this step complete.</p>
-      ${!next ? '<p class="small dim">Finish guide stops the reminder. It does not mark unfinished checks as passed.</p>' : ""}
       ${UI.actions(rest + onward + main, skip)}
     </section>`;
 }
