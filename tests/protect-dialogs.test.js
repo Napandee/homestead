@@ -64,6 +64,7 @@ test("Snapshots says once how to read it, and its actions sit in a Close footer"
 test("Backups has one notice when the volume is gone, and a Close footer", () => {
   const backups = body("lhBackupList");
   assert.match(backups, /UI\.callout\("warn", "The volume is gone"/);
+  assert.match(backups, /UI\.lead\(/, "it opens with one sentence, like the other dialogs");
   assert.doesNotMatch(backups, /class="note/);
   assert.match(backups, /UI\.cancel\("Close"\)/);
 });

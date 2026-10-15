@@ -729,9 +729,10 @@ window.lhBackupList = async (vol, label) => {
   try {
     const bks = await api("/api/lh/backups?volume=" + encodeURIComponent(vol));
     const live = ((STATE.data.lh || {}).volumes || []).some(v => v.name === vol);
-    $("#mbody").innerHTML = `${live ? "" : `<div class="note warn">The volume is gone. Restore makes a new volume from
-      one of these; point the app at it, or restore it under the old claim's name.</div>`}
-      ${backupTable(bks, vol, label)}`;
+    $("#mbody").innerHTML = `${UI.lead("Restore any of these into a new volume; the backup stays.")}
+      ${live ? "" : UI.callout("warn", "The volume is gone", "Restore makes a new volume from one of these; point the app at it, or restore it under the old claim's name.")}
+      ${backupTable(bks, vol, label)}
+      ${UI.actions("", UI.cancel("Close"))}`;
     if (window.applyRole) window.applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhBackupList(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
