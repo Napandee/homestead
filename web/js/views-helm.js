@@ -5,9 +5,12 @@
 const HELM_MANAGED = { homestead: ["installed here", "", "Installed from Homestead as a HelmChart: it can be upgraded and uninstalled here"],
   helmchart: ["HelmChart", "", "Managed by a HelmChart object, which Homestead can change"] };
 
+// Helm's states in words; the raw state stays in the tooltip.
+const HELM_WORDS = { deployed: "Deployed", "pending-install": "Installing…", "pending-upgrade": "Upgrading…", "pending-rollback": "Rolling back…",
+  uninstalling: "Uninstalling…", superseded: "Superseded", failed: "Failed", uninstalled: "Uninstalled", unknown: "Unknown" };
 function helmStatus(status) {
   const tone = status === "deployed" ? "ok" : /pending/.test(status) ? "med" : status === "superseded" ? "neutral" : "crit";
-  return `<span class="pill slim ${tone}">${esc(status || "unknown")}</span>`;
+  return `<span class="pill slim ${tone}" title="${esc(status || "unknown")}">${esc(HELM_WORDS[status || "unknown"] || status)}</span>`;
 }
 
 async function viewHelm() {
@@ -48,8 +51,8 @@ function renderHelm() {
       <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button>`)}
     ${controls}
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="helm"><thead><tr>
-      <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="clickable" onclick="helmRelease(${jsq(r.namespace)},${jsq(r.name)})">
+      <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th><th data-nosort></th></tr></thead><tbody>
+      ${rows.map(r => `<tr>
         <td><div class="row nowrap" style="gap:9px">${appAvatar(r.name, r.icon && /^https:/.test(r.icon) ? r.icon : "")}<div><b>${esc(r.name)}</b>
           ${HELM_MANAGED[r.managed] ? `<span class="tag ${HELM_MANAGED[r.managed][1]}" data-tip="${esc(HELM_MANAGED[r.managed][2])}">${esc(HELM_MANAGED[r.managed][0])}</span>` : ""}
           <div class="dim xs mono">${esc(r.namespace)}</div></div></div></td>
@@ -57,10 +60,22 @@ function renderHelm() {
         <td data-label="App" class="mono small">${esc(r.app_version || "—")}</td>
         <td data-label="Status" data-sort="${esc(r.status)}">${helmStatus(r.status)}</td>
         <td data-label="Revision" class="mono">${r.revision || "—"}</td>
-        <td data-label="Updated" class="small dim">${r.updated ? esc(fmtAgo(Math.max(0, (Date.now() - Date.parse(r.updated)) / 1000))) : "—"}</td></tr>`).join("")}
+        <td data-label="Updated" class="small dim">${r.updated ? esc(fmtAgo(Math.max(0, (Date.now() - Date.parse(r.updated)) / 1000))) : "—"}</td>
+        <td data-actions>${helmActions(r)}</td></tr>`).join("")}
       </tbody></table></div></div>`
       : `<div class="empty">${q ? "Nothing matches that search." : `No Helm releases${hidden ? " outside the platform's own" : ""} yet. <a style="cursor:pointer;text-decoration:underline" onclick="helmInstall()">Install a chart</a> from Artifact Hub.`}</div>`}`);
   loadAppIcons(V());
+}
+
+/* A release row's buttons (#506). Only a release installed through a
+   HelmChart can be changed here; the others open read-only. */
+function helmActions(r) {
+  const ns = jsq(r.namespace), name = jsq(r.name), editable = !!HELM_MANAGED[r.managed];
+  return actionBar([
+    { label: "Open", icon: "list", run: `helmRelease(${ns},${name})`, tip: "Values, notes, history and objects" },
+    editable ? { label: "Upgrade", icon: "refresh", run: `helmRelease(${ns},${name})`, need: "admin", tip: "Change its chart version or values" } : null,
+    editable ? { label: "Uninstall", icon: "trash", run: `helmUninstall(${ns},${name})`, need: "admin", danger: true } : null,
+  ], { label: `Actions for ${r.name}` });
 }
 
 window.helmRelease = async (ns, name) => {
