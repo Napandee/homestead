@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 import urllib.error
+import homestead_history as HISTORY
 import homestead_maintenance as MAINTENANCE
 import homestead_power_hold as HOLD
 
@@ -360,12 +361,36 @@ def status(item):
     starts again what waited for it, on other hosts where it can run."""
     state = _status(item)
     ref = item.get("ref") or {}
+    _close_maintenance(item, ref, state)
     if state[0] == "failed" and ref.get("held") and ref.get("restored") is None:
         if RESTORE and RESTORE(item, False):
             return state[0], state[1], state[2] + _started(ref)
         # Only the leader starts things; the job stays open until it has.
         return "running", state[1], state[2] + ". Starting again what waited for the host"
     return state
+
+
+# Failures that mean the host stayed down past the job's limit: from then on
+# its downtime is an outage, not maintenance.
+LIMIT_FAILURES = ("Host did not return Ready within 10 minutes", "Power transition was not verified within 10 minutes")
+
+
+def _close_maintenance(item, ref, state):
+    """Close the maintenance this job opened when it sent power (#535): when the
+    host is back on a new boot, or when the job ends another way. Either
+    Homestead copy may observe the job, so it closes by the job's id."""
+    if ref.get("phase") in BEFORE_SEND or not item.get("id") or ref.get("maintenance_closed"):
+        return
+    try:
+        if ref.get("returned_at"):
+            HISTORY.maintenance_close(item["id"], now=ref["returned_at"], outcome="returned")
+        elif state[0] in ("succeeded", "failed", "cancelled"):
+            HISTORY.maintenance_close(item["id"], outcome="limit" if str(state[2]).startswith(LIMIT_FAILURES) else "ended")
+        else:
+            return
+        ref["maintenance_closed"] = True   # saved with the job, so later looks don't read history again
+    except Exception:
+        pass  # bookkeeping; never what decides the job's state
 
 
 # The steps before power is sent: nothing about the host's power to observe yet.
