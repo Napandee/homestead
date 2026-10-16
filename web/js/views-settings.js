@@ -187,7 +187,8 @@ async function viewSettings() {
               <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
             </div></div>
         </div>
-        <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
+        <div class="srows" style="margin-top:14px">${settingRow("Include SMART failures and threshold breaches in cluster health notifications", "",
+          `<label class="toggle"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
@@ -1098,10 +1099,10 @@ async function selfHealthPaint() {
 }
 window.selfHealthPaint = selfHealthPaint;
 
-window.sambaToggle = async box => {
-  const on = box.checked;
+/* The SMB and NFS servers are actions, not settings: Enable or Disable acts
+   at once, so they are buttons, not switches beside fields (#511). */
+window.sambaSet = async on => {
   if (on && !STATE.data.sambaInstalled) {
-    box.checked = false;
     if (nodeAddressesOnly()) return sambaInstallGo("");
     const choices = await vipChoices();
     const own = (choices.own || []).find(v => v.free);
@@ -1109,15 +1110,12 @@ window.sambaToggle = async box => {
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="sambaInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.", { title: "Stop Samba", ok: "Stop Samba", danger: true }))) {
-    box.checked = true; return;
-  }
-  box.disabled = true;
+  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.", { title: "Stop Samba", ok: "Stop Samba", danger: true }))) return;
   try {
     const r = await api("/api/self/samba", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(r.detail, "ok");
     setTimeout(() => { addonsPaint(); selfHealthPaint(); }, 1500);
-  } catch (e) { toast(e.message, "bad"); box.checked = !on; box.disabled = false; }
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.sambaInstallGo = async (selectedAddress = null) => {
@@ -1145,11 +1143,9 @@ window.sambaRemoveGo = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.nfsToggle = async box => {
-  const on = box.checked;
+window.nfsSet = async on => {
   const nfs = STATE.data.nfs || {};
   if (on && !nfs.installed) {
-    box.checked = false;
     if (!(nfs.exports || []).length) return modal("Set up NFS exports", `<p>Choose an RWX share and its allowed client IP or CIDR in Network Shares before installing the NFS server.</p>
       ${UI.actions(`<button class="btn pri" onclick="closeModal();go('shares')">Network Shares</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
     if (nodeAddressesOnly()) return modal("NFS needs a VIP", `<p>k3s ServiceLB cannot provide the dedicated address and preserved client IPs needed for this NFSv4 server. Install kube-vip under Cluster Add-ons, then try again.</p>
@@ -1165,14 +1161,11 @@ window.nfsToggle = async box => {
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.", { title: "Stop NFS", ok: "Stop NFS", danger: true }))) {
-    box.checked = true; return;
-  }
-  box.disabled = true;
+  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.", { title: "Stop NFS", ok: "Stop NFS", danger: true }))) return;
   try {
     const result = await api("/api/self/nfs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(result.detail, "ok"); setTimeout(() => { addonsPaint(); if (STATE.view === "shares") viewShares(); }, 1500);
-  } catch (e) { toast(e.message, "bad"); box.checked = !on; box.disabled = false; }
+  } catch (e) { toast(e.message, "bad"); }
 };
 window.nfsInstallGo = async () => {
   const address = ($("#nfs_lb_ip")?.value || "").trim();

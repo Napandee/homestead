@@ -156,7 +156,7 @@ window.addonsPaint = async () => {
     const a = ADDONS[key];
     const runtime = key === "multus" && state.state;
     const pill = runtime ? `<span class="pill ${state.ready ? "ok" : "med"}">${esc(state.state)}</span>` : state.installed ? '<span class="pill ok">installed</span>'
-      : state.installing ? '<span class="pill med">installing</span>' : '<span class="pill">not installed</span>';
+      : state.installing ? '<span class="pill low">installing</span>' : '<span class="pill">not installed</span>';
     const button = state.repairable ? '<button class="btn sm pri" data-need="admin" onclick="multusRepair()">Repair configuration</button>' : state.installed || state.installing ? ""
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
@@ -177,7 +177,7 @@ window.addonsPaint = async () => {
       <div class="row">${button}${emulationButton}</div></div>`;
   };
   const probePill = !probe.installed ? '<span class="pill">not installed</span>'
-    : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill med">${probe.ready || 0}/${probe.desired || 0} ready</span>`
+    : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill low">${probe.ready || 0}/${probe.desired || 0} ready</span>`
     : '<span class="pill ok">installed</span>';
   const probeButton = !can("admin") ? "" : !probe.installed
     ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
@@ -188,24 +188,24 @@ window.addonsPaint = async () => {
     <div class="row">${probeButton}</div></div>`;
   const smbPill = !smb.installed ? '<span class="pill">not installed</span>'
     : !smb.enabled ? '<span class="pill med">off</span>'
-    : smb.ready < smb.desired ? '<span class="pill med">starting</span>'
+    : smb.ready < smb.desired ? '<span class="pill low">starting</span>'
     : smb.partial ? '<span class="pill med">partial service</span>' : '<span class="pill ok">serving</span>';
   const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
       <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
       <div class="dim xs" style="margin-top:4px">${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"} · stopping or removing SMB keeps all PVCs and share settings</div></div>
     <div class="row"><button class="btn sm" onclick="go('shares')">Shares</button>
-      ${can("admin") ? `<label class="switch"><input type="checkbox" ${smb.enabled ? "checked" : ""} onchange="sambaToggle(this)"> ${smb.enabled ? "On" : "Off"}</label>
-        ${smb.installed ? '<button class="btn sm danger" onclick="sambaRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
+      ${can("admin") ? actionBar([{ label: smb.enabled ? "Disable" : "Enable", run: `sambaSet(${!smb.enabled})` },
+        smb.installed && { label: "Remove server", run: "sambaRemove()", danger: true }].filter(Boolean), { shown: 1, label: "SMB server" }) : ""}</div></div>`;
   STATE.data.nfs = nfs;
   const nfsPill = nfs.error ? '<span class="pill crit">status unavailable</span>' : !nfs.installed ? '<span class="pill">not installed</span>'
     : !nfs.enabled ? '<span class="pill med">off</span>'
-    : nfs.ready < nfs.desired ? '<span class="pill med">starting</span>' : '<span class="pill ok">serving</span>';
+    : nfs.ready < nfs.desired ? '<span class="pill low">starting</span>' : '<span class="pill ok">serving</span>';
   const nfsRow = `<div class="addon-row"><div><b>NFSv4 network shares</b> ${nfsPill}
       <div class="dim small">A separate, opt-in NFS container serving selected RWX shares to allowed client networks</div>
       <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div>${nfsRecovery(nfs)}</div>
     <div class="row"><button class="btn sm" onclick="go('shares')">Exports</button>
-      ${can("admin") && !nfs.error ? `<label class="switch"><input type="checkbox" ${nfs.enabled ? "checked" : ""} onchange="nfsToggle(this)"> ${nfs.enabled ? "On" : "Off"}</label>
-        ${nfs.installed ? '<button class="btn sm danger" onclick="nfsRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
+      ${can("admin") && !nfs.error ? actionBar([{ label: nfs.enabled ? "Disable" : "Enable", run: `nfsSet(${!nfs.enabled})` },
+        nfs.installed && { label: "Remove server", run: "nfsRemove()", danger: true }].filter(Boolean), { shown: 1, label: "NFS server" }) : ""}</div></div>`;
   const clusterRows = s.harvester ? "" : `${hostConsoleRow(consoles)}${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
   card.innerHTML = `${UI.moduleHeader(`Add-ons`, `${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
         : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}`, ``)}
@@ -221,9 +221,9 @@ function hostConsoleRow(c) {
   if (!c || c.harvester) return "";
   const hosts = c.nodes.filter(n => !n.native);
   const pill = c.enabled === null ? '<span class="pill">not checked yet</span>'
-    : !c.enabled ? (c.installed ? `<span class="pill med">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
+    : !c.enabled ? (c.installed ? `<span class="pill low">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
     : c.settled ? '<span class="pill ok">installed</span>'
-    : `<span class="pill med">${c.current} of ${c.hosts} up to date</span>`;
+    : `<span class="pill low">${c.current} of ${c.hosts} up to date</span>`;
   // A host behind this release, or one that failed, can be done now rather
   // than on the next pass (failed hosts wait an hour between tries).
   const behind = n => c.enabled && n.ready && (!n.enabled || n.current === false || /failed/.test(n.detail || ""));
@@ -234,7 +234,7 @@ function hostConsoleRow(c) {
       <div class="dim xs" style="margin-top:4px">Bundled with Homestead v${esc(c.version)}; installed on new hosts and updated with Homestead, a couple of hosts every ten minutes.
         A host shows the new one at once, or after a logout if someone is signed in on its screen. Harvester keeps its own console.</div>
       <details class="small" style="margin-top:6px"><summary>${hosts.length} host${hosts.length === 1 ? "" : "s"}</summary>${lines}</details></div>
-    <div class="row">${can("admin") ? `<label class="switch"><input type="checkbox" ${c.enabled ? "checked" : ""} onchange="hostConsoleSet(this)"> ${c.enabled ? "On" : "Off"}</label>` : ""}</div></div>`;
+    <div class="row">${can("admin") ? actionBar([{ label: c.enabled ? "Disable" : "Enable", run: `hostConsoleSet(${!c.enabled})` }], { label: "Host console" }) : ""}</div></div>`;
 }
 
 window.hostConsoleNow = async (node, button) => {
@@ -245,16 +245,13 @@ window.hostConsoleNow = async (node, button) => {
   } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Update now"; }
 };
 
-window.hostConsoleSet = async input => {
-  const on = input.checked;
-  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts.", { title: "Remove the host console", ok: "Remove", danger: true }))) {
-    input.checked = true; return;
-  }
+window.hostConsoleSet = async on => {
+  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts.", { title: "Remove the host console", ok: "Remove", danger: true }))) return;
   try {
     const r = await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(r.detail, "ok");
     addonsPaint();
-  } catch (e) { toast(e.message, "bad"); input.checked = !on; }
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.kubevirtEmulation = async enabled => {

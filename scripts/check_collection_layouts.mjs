@@ -213,6 +213,12 @@ try {
     await page.evaluate(()=>go('vms'));
     await page.locator('.vm-table').waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    // A VM's name, cluster tag and line under it stay inside the name cell (#495).
+    const spill=await page.evaluate(()=>[...document.querySelectorAll('.vm-table .vm-name-text')].flatMap(box=>{
+      const cell=box.closest('td').getBoundingClientRect();
+      return [...box.querySelectorAll(':scope>b, :scope>.tag, .vm-tags .tag, .vm-sub')].filter(el=>el.checkVisibility()&&el.getBoundingClientRect().right>cell.right+1).map(el=>el.textContent.trim().slice(0,30));
+    }));
+    assert.deepEqual(spill,[],`${width}px: name cells`);
     await page.screenshot({path:`${output}/vms-${width}-${theme}.png`,fullPage:true});
     if(width<=560) {
       const header=page.locator('.vms-page .collection-mobile-head');

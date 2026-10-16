@@ -72,9 +72,9 @@ async function viewFlow() {
           <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
             <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
           ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no host answers")}</div>` : ""}
-          <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
-            data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
-            onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
+          <div class="a2ports">${v.ports.map(p => `<button type="button" class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
+            data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}" aria-label="Open ${esc(p.app)} on port ${p.port}"
+            onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</button>`).join("")}</div></div>`).join("")
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
@@ -104,13 +104,13 @@ async function viewFlow() {
     </div></div>`;
   };
   const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips","jobs"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
-  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container, VM or scheduled job is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
           <span><i style="background:var(--arch-access)"></i>port</span>
           <span><i style="background:var(--arch-mount)"></i>mount</span>
-          <span><i style="background:var(--arch-copy)"></i>replica</span>
+          <span><i style="background:repeating-linear-gradient(90deg,var(--arch-copy) 0 3px,transparent 3px 7px)"></i>replica</span>
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
@@ -165,13 +165,20 @@ function archAddressWords(v) {
    live refresh that adds a row does not leave it unwired. */
 function archWatch() {
   $$(".arch2wrap").forEach(wrap=>{
+  // Every traced item takes focus, so the keyboard can trace too (#487).
+  $$("[data-id]:not(button):not([tabindex])", wrap).forEach(item => item.setAttribute("tabindex", "0"));
   if (wrap.dataset.watched) return;
   wrap.dataset.watched = "1";
-  wrap.addEventListener("mouseover", event => {
+  const trace = event => {
     const item = event.target.closest("[data-id]");
     if (item && item.dataset.id !== STATE.data.archHover) archHighlight(item.dataset.id);
-  });
+  };
+  // Hover with a mouse, focus with the keyboard, a tap on a touch screen.
+  wrap.addEventListener("mouseover", trace);
+  wrap.addEventListener("focusin", trace);
+  wrap.addEventListener("click", trace);
   wrap.addEventListener("mouseleave", () => archHighlight(null));
+  wrap.addEventListener("focusout", event => { if (!wrap.contains(event.relatedTarget)) archHighlight(null); });
   if (window.ResizeObserver) new ResizeObserver(() => drawArch(STATE.data.archKeep)).observe(wrap);
   });
 }
@@ -315,7 +322,7 @@ function volumeHealthCell(x) {
     ${volumeProgressBar(rebuild.pct)}`;
   if (x.rebalancing && x.state === "attached") return `<span class="pill ok" data-tip="${esc(x.health_reason)}">healthy</span> <span class="tag info">moving a copy</span>
     ${volumeShortCell(x)}`;
-  if (rebuild) return `<span class="pill med" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
+  if (rebuild) return `<span class="pill low" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
     ${volumeProgressBar(rebuild.pct)}
     <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 replica" : `${rebuild.replicas} replicas`} catching up</span>`;
   return `${x.state === "attached"
@@ -1760,10 +1767,10 @@ async function lhSettingsPaint() {
         <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
     <div class="f" style="margin-top:10px"><label>Replicas rebuilt at once, per host ${tip("When a host or disk comes back, or a volume is a copy short, Longhorn rebuilds replicas by copying them from a healthy one. More at once makes volumes whole sooner; fewer keeps the disks and network free for everything else while it runs. Longhorn's default is 5.")}</label>
       <input id="lh_rebuild" type="number" min="1" max="10" value="${cap.rebuild_limit ?? 5}" ${admin ? "" : "disabled"}></div>
-    ${offline ? `<label class="switch" style="margin-top:10px"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}>
-      Rebuild copies of detached volumes ${tip(offline.supported
+    ${offline ? `<div class="srows" style="margin-top:10px">${settingRow(`Rebuild copies of detached volumes ${tip(offline.supported
         ? "Longhorn rebuilds a missing copy only while its volume is attached. With this on, it also attaches a detached volume by itself - nothing can mount it meanwhile - until its copies are whole, so a volume nothing uses is not left with one copy."
-        : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot do it offline. With this on, Homestead attaches a detached volume short of copies itself - nothing can mount it meanwhile - one at a time, until its copies are whole, and lets go as soon as anything else asks for it.")}</label>
+        : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot do it offline. With this on, Homestead attaches a detached volume short of copies itself - nothing can mount it meanwhile - one at a time, until its copies are whole, and lets go as soon as anything else asks for it.")}`, "",
+      `<label class="toggle"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>
       ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}` : ""}
     <div class="f" style="margin-top:10px"><label>Pods on a failed host ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead host, so a container moving to another host cannot mount it there until the host is back. Containers > If a host fails chooses which containers move.")}</label>
       <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the host"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
@@ -1845,7 +1852,7 @@ function diskRowsHtml(node, disks, harvester) {
     return `<div class="disk-card">
       <div class="between"><div><b class="mono">${esc(d.device || "Longhorn")}</b> <span class="dim xs">${esc(d.model || "")}</span>
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
-        <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
+        <div class="row">${d.system ? '<span class="tag">system</span>' : ""}${d.system && d.role === "system" ? "" : `<span class="tag ${tone}">${esc(word)}</span>`}
           ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
           ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>

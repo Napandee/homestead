@@ -157,5 +157,18 @@ class StylesheetTests(unittest.TestCase):
                 self.assertLess(dim, contrast(rgba(tokens["--mut"]), ground), f"{name} --dim is not quieter than --mut on {surface}")
 
 
+    def test_colour_means_state(self):
+        """Ports are blue because they open something; replicas, the setup bar
+        and "official" are not a state, so they take no state colour (#490)."""
+        style = {}
+        for selectors, declarations in rules():
+            for selector in selectors:
+                style.setdefault(selector, {}).update(declarations)
+        self.assertEqual(style[":root"]["--arch-access"], "var(--low)")
+        self.assertEqual(style[":root"]["--arch-copy"], "var(--mut)")
+        self.assertNotIn("255,176,32", style[".a2port"]["border"].replace(" ", ""))
+        self.assertNotIn("--ok", style[".setup-return"]["background"])
+        self.assertNotIn("--ok", style[".store-official"]["color"])
+
 if __name__ == "__main__":
     unittest.main()

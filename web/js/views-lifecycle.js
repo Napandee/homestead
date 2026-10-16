@@ -85,7 +85,7 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
-    <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="row"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
+    <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="edit-container-remove"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
       ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
 };
@@ -484,7 +484,12 @@ window.containerRestore = index => {
 };
 function containerRemoveButtons() {
   const cards = $$("#e_basics_containers .edit-container");
-  cards.forEach(card => { $("[data-container-remove]", card).disabled = cards.length <= 1; });
+  // With one container there is nothing to remove: the row goes, not just the button.
+  cards.forEach(card => {
+    const button = $("[data-container-remove]", card);
+    button.disabled = cards.length <= 1;
+    button.closest(".edit-container-remove").hidden = cards.length <= 1;
+  });
 }
 window.containerAdd = mode => {
   if (mode === "deploy") return deployAddContainer();
@@ -1314,9 +1319,9 @@ window.vmCreateReviewedApply = async () => {
 /* Why an image is kept: something runs it, will run it, or can go back to it. */
 const IMAGE_REASONS = {
   active: { tone: "ok", tip: "a running container uses it" },
-  rollback: { tone: "warn", tip: "kept so Roll back can return to it" },
-  stopped: { tone: "info", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
-  scheduled: { tone: "info", tip: "a scheduled job that runs this image" },
+  rollback: { tone: "", tip: "kept so Roll back can return to it" },
+  stopped: { tone: "", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
+  scheduled: { tone: "", tip: "a scheduled job that runs this image" },
 };
 async function viewImages() {
   const [d, vm] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(() => null)]);
@@ -1486,7 +1491,7 @@ async function viewSchedules() {
         <td class="mono small dim">${esc(j.image)}</td>
         <td class="small dim">${fmtWhen(j.last)}</td>
         <td>${j.suspend ? '<span class="pill low">paused</span>'
-            : j.active ? '<span class="pill med">running</span>' : '<span class="pill ok">active</span>'}</td>
+            : j.active ? '<span class="pill low">running</span>' : '<span class="pill ok">active</span>'}</td>
         <td>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
           { label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
           { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
@@ -1572,7 +1577,7 @@ async function viewImport() {
       <th>App</th><th>Job</th><th>State</th><th>Progress</th><th data-nosort>Started</th><th></th></tr></thead><tbody>
       ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== defaultNamespace() ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
-        <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
+        <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "low"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${fmtWhen(j.start)}</td>
         <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },

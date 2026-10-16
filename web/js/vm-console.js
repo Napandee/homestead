@@ -26,10 +26,10 @@ window.vmConsole = (ns, name, kind = "vnc") => {
   vmConsoleStop();
   Object.assign(VMC, { ns, name, kind, keyboard: false });
   modal("Console · " + name, `<div class="vmc-bar">
-      <div class="seg" role="tablist">
-        <button class="${kind === "vnc" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'vnc')">Screen</button>
-        <button class="${kind === "serial" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'serial')">Serial</button></div>
-      <span class="dim xs" id="vmcState">connecting…</span>
+      <div class="seg" role="tablist" aria-label="Console">
+        <button type="button" role="tab" aria-selected="${kind === "vnc"}" class="${kind === "vnc" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'vnc')">Screen</button>
+        <button type="button" role="tab" aria-selected="${kind === "serial"}" class="${kind === "serial" ? "on" : ""}" onclick="vmConsole(${jsq(ns)},${jsq(name)},'serial')">Serial</button></div>
+      <span class="dim xs" id="vmcState" aria-live="polite">connecting…</span>
       ${kind === "vnc" ? `<span class="vmc-tools">
         ${VMC_TOUCH() ? `<button class="btn sm" id="vmcKeyboard" onclick="vmConsoleKeyboard()" title="Open this device's keyboard to type into the VM">Keyboard</button>` : ""}
         <button class="btn sm" onclick="vmConsoleKeys()" title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>

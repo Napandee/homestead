@@ -348,8 +348,8 @@ function nodeCard(n) {
         ${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">none defined</span>'}</div></div>
       <div class="badgegroup"><span class="badgecap">WORKLOADS</span><div class="badge-values">
         ${n.workloads.length ? n.workloads.slice(0, 5).map(w =>
-            `<span class="tag movable" title="Move ${esc(w)} to another host"
-               onclick="event.stopPropagation();moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
+            `<button type="button" class="tag movable" title="Move ${esc(w)} to another host"
+               onclick="event.stopPropagation();moveWorkload(${jsq(w)})">${esc(w)} <span class="mv" aria-hidden="true">⇄</span></button>`).join("")
             + (n.workloads.length > 5 ? `<span class="tag more" data-tip="${esc(n.workloads.slice(5).join(", "))}">+${n.workloads.length - 5}</span>` : "")
           : '<span class="dim xs">none</span>'}</div></div>
     </div></div>`;
@@ -557,7 +557,7 @@ function nodeWorkloadChips(n) {
     return selecting
       ? `<label class="tag movable"><input type="checkbox" value="${esc(id)}" ${picked.has(id) ? "checked" : ""}
           onchange="nodePick(${jsq(n.name)},${jsq(id)},this.checked)"> ${esc(name)}</label>`
-      : `<span class="tag movable" onclick="moveWorkload(${jsq(name)},${jsq(ns)})">${esc(name)} <span class="mv">⇄</span></span>`; }).join("");
+      : `<button type="button" class="tag movable" title="Move ${esc(name)} to another host" onclick="moveWorkload(${jsq(name)},${jsq(ns)})">${esc(name)} <span class="mv" aria-hidden="true">⇄</span></button>`; }).join("");
   const bar = selecting
     ? `<div class="wg-selbar"><b aria-live="polite">${picked.size} selected</b>
         ${UI.button("Select all", `nodePickAll(${jsq(n.name)},true,${esc(JSON.stringify(ids))})`, { kind: "sm" })}

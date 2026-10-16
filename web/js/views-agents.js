@@ -23,8 +23,8 @@ const AGENT_MONO = /(^|_)(uid|id|ip|vip|image|mac|url|pvc|digest|address)$/;
 const agentLabel = key => AGENT_LABELS[key] || String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase())
   .replace(/\b(ip|vip|uid|url|mac|pvc)\b/g, word => word.toUpperCase());
 
-const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", "info"], done: ["done", "ok"],
-  denied: ["denied", "warn"], expired: ["expired", ""], failed: ["failed", "bad"] };
+const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", ""], done: ["done", "ok"],
+  denied: ["denied", ""], expired: ["expired", ""], failed: ["failed", "bad"] };
 const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, ""]));
 
 /* One value of a plan, as a person reads it. Lists of plain values are
@@ -147,7 +147,7 @@ window.agentDeny = async id => {
 };
 
 /* ---------------- Settings › Users and access ---------------- */
-const AGENT_OUTCOME = { ok: "ok", approved: "ok", pending: "info", denied: "warn", refused: "warn", error: "bad", expired: "" };
+const AGENT_OUTCOME = { ok: "ok", approved: "ok", pending: "warn", denied: "", refused: "warn", error: "bad", expired: "" };
 
 window.mcpCardPaint = async () => {
   const card = document.getElementById("mcpCard");
@@ -165,8 +165,9 @@ window.mcpCardPaint = async () => {
   const copy = (name, label = "Copy") => `<button type="button" class="btn sm" onclick="copyText(window.__mcpText.${name}).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">${label}</button>`;
   const waiting = requests.pending || 0;
   card.innerHTML = `${UI.moduleHeader("AI agents (MCP)", "Let an AI assistant such as Claude manage this cluster with an API key, through the Model Context Protocol")}
-    <div class="srows">${settingRow("Allow AI agents to connect", "Off, every request to the endpoint is refused. Each agent still needs an API key marked for AI agents.",
-      `<label class="toggle"><input type="checkbox" id="mcp_on" ${on ? "checked" : ""} onchange="mcpSwitch(this)"><span></span></label>`)}</div>
+    <div class="srows">${serviceRow("AI agents", on ? '<span class="pill ok">allowed</span>' : '<span class="pill low">refused</span>',
+      on ? "Agents with an API key marked for AI agents can connect." : "Every request to the endpoint is refused. Each agent also needs an API key marked for AI agents.",
+      actionBar([{ label: on ? "Disable" : "Enable", run: `mcpSet(${!on})`, need: "admin" }], { label: "AI agents" }))}</div>
     ${location.protocol === "http:" ? UI.callout("warn", "This page is not served over HTTPS", STATE.data.apiKeys?.you?.node_address
       ? "An agent's key would travel unencrypted on the network. Set up HTTPS first. Limiting keys to a client's address does not work on this cluster: Homestead sees a host's address for every request (see API keys)."
       : "An agent's key would travel unencrypted on the network. Set up HTTPS first, and limit each key to the address of the client that uses it.") : ""}
@@ -183,9 +184,13 @@ window.mcpCardPaint = async () => {
       { empty: "No agent has called yet." }))}`;
 };
 
-window.mcpSwitch = async box => {
-  const enabled = box.checked;
-  box.disabled = true;
+/* An action, not a setting: it changes who can reach the cluster, so it
+   asks first and takes effect at once rather than waiting for Save (#511). */
+window.mcpSet = async enabled => {
+  if (!(await ask(enabled
+    ? "An agent with an API key marked for AI agents can then manage this cluster: reading and routine changes run at once, deletes and restores wait for approval."
+    : "Every agent's next request is refused until AI agents are allowed again. Their API keys are kept.",
+    { title: enabled ? "Allow AI agents" : "Refuse AI agents", ok: enabled ? "Allow AI agents" : "Refuse AI agents", danger: !enabled }))) return;
   try {
     const current = { ...(await loadHealthSettings()) };
     delete current.info;
@@ -194,6 +199,6 @@ window.mcpSwitch = async box => {
     STATE.data.appSettings = null;
     await loadHealthSettings(true);
     toast(enabled ? "AI agents may connect" : "AI agents are refused", "ok");
-  } catch (e) { box.checked = !enabled; toast(e.message, "bad"); }
-  finally { box.disabled = false; }
+  } catch (e) { toast(e.message, "bad"); }
+  mcpCardPaint();
 };

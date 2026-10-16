@@ -80,10 +80,12 @@ function paintBell() {
   // AI agents' requests have a line of their own, which opens them, so
   // their alerts are not counted twice.
   const waitingAgents = window.PWA_ALERTS?.report?.agents?.pending || 0;
-  const alertCount=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged && a.category !== "agents").length;
+  const alerts=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged && a.category !== "agents"), alertCount=alerts.length;
+  // A waiting request needs a person but is not an error; alerts are red
+  // only while one of them is critical.
   const rows = [
-    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "danger") : "",
-    alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), "danger") : "",
+    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "warn") : "",
+    alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), alerts.some(a => a.severity === "critical") ? "danger" : "warn") : "",
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
     errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",

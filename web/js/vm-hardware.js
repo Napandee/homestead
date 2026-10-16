@@ -257,7 +257,7 @@ window.vmIsoLibrary = async () => {
   STATE.data.isoLibrary = lib;
   const size = bytes => bytesText(bytes);
   const state = f => f.volume
-    ? (f.state === "ready" ? `<span class="pill ok">ready</span>` : f.state === "copying" ? '<span class="pill med">copying</span>' : '<span class="pill crit">failed</span>')
+    ? (f.state === "ready" ? `<span class="pill ok">ready</span>` : f.state === "copying" ? '<span class="pill low">copying</span>' : '<span class="pill crit">failed</span>')
     : `<button class="btn sm" data-need="operator" onclick="vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})">Make ready</button>`;
   const orphans = lib.volumes.filter(v => !lib.files.some(f => f.volume === v.name));
   // A copy no VM has in a drive: how long until the tidy-up removes it.

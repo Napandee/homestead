@@ -1,8 +1,8 @@
 /* Virtual machines: each one's real state and the actions that fit it, a
    page per VM (disks, network, guest, events), editing and deleting. */
 
-const VM_TONE = { Running: "ok", Stopped: "low", Paused: "info", Migrating: "info", Starting: "med", Stopping: "med", Deleting: "med",
-  Provisioning: "med", WaitingForVolumeBinding: "med" };
+const VM_TONE = { Running: "ok", Stopped: "low", Paused: "low", Migrating: "low", Starting: "low", Stopping: "low", Deleting: "low",
+  Provisioning: "low", WaitingForVolumeBinding: "low" };
 const VM_ACTIONS = {
   // Shut down asks the guest to power off, as its own power button would;
   // Force off cuts it at once, like pulling the plug. Each has an icon of
@@ -191,31 +191,32 @@ function vmUsage(v) {
     ${cell("RAM", u.mem_pct, u.mem != null ? vmBytes(u.mem) : "—", "memory")}
     <div><span>DISK</span>${vmIo(u)}</div></div>`;
 }
-const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
+const vmClusterTag = v => v.cluster ? `<span class="tag cluster-tag" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
 
 function vmActions(v, compact = false) {
+  // One power action beside Console, as a container card has Logs; the rest
+  // are in ⋯, the shared action bar, named for this VM (#487).
+  const ns = jsq(v.ns), name = jsq(v.name), run = a => `vmPower(${ns},${name},${jsq(a)})`;
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
-  // One power action beside Console, as a container card has Logs; the
-  // others are the first entries of ⋯.
-  const shown = main.slice(0, 1);
-  const later = [];
-  return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact, i > 0 ? "sm-more" : "")).join("")}
-      ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole(${jsq(v.ns)},${jsq(v.name)})">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
-      <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
-        ${later.map(a => `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button onclick="this.closest('details').open=false;vmOpen(${jsq(v.ns)},${jsq(v.name)})">${icon("list")}Details</button>
-        ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
-        <button data-need="operator" onclick="this.closest('details').open=false;vmLogo(${jsq(v.ns)},${jsq(v.name)})">${icon("logo")}Logo</button>
-        <button onclick="this.closest('details').open=false;vmMonitoring(${jsq(v.ns)},${jsq(v.name)})">${icon("pulse")}Monitoring</button>
-        <button data-need="operator" onclick="this.closest('details').open=false;vmSchedule(${jsq(v.ns)},${jsq(v.name)})">${icon("clock")}Schedule</button>
-        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
-        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move to another host</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Keep the source VM and create a stopped copy on another linked cluster" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'copy',${jsq(v.ns)})">${icon("copy")}Copy to cluster</button>` : ""}
-        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
-        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete(${jsq(v.ns)},${jsq(v.name)})">${icon("trash")}Delete</button>
-      </div></details>`;
+  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"] : VM_ACTIONS[a];
+  const power = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start" });
+  const console = v.actions.includes("console");
+  return actionBar([
+    main[0] && power(main[0]),
+    console && { label: "Console", icon: "console", run: `vmConsole(${ns},${name})`, need: "operator", tip: "Console" },
+    { label: "Details", icon: "list", run: `vmOpen(${ns},${name})` },
+    ...main.slice(1).map(power),
+    { label: "Edit", icon: "edit", run: `vmEdit(${ns},${name})`, need: "operator" },
+    { label: "Logo", icon: "logo", run: `vmLogo(${ns},${name})`, need: "operator" },
+    { label: "Monitoring", icon: "pulse", run: `vmMonitoring(${ns},${name})` },
+    { label: "Schedule", icon: "clock", run: `vmSchedule(${ns},${name})`, need: "operator" },
+    v.actions.includes("pause") && { label: "Pause", icon: "pause", run: run("pause"), need: "operator" },
+    v.actions.includes("migrate") && { label: "Move to another host", icon: "move", run: `vmMove(${ns},${name})`, need: "operator" },
+    FLEET.view?.linked && { label: "Move to cluster", icon: "move", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'move',${ns})`, need: "admin", tip: "Move it to another linked cluster, disks and all" },
+    FLEET.view?.linked && { label: "Copy to cluster", icon: "copy", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'copy',${ns})`, need: "admin", tip: "Keep the source VM and create a stopped copy on another linked cluster" },
+    v.actions.includes("force-stop") && { label: "Force off", icon: "plug", run: run("force-stop"), need: "operator", danger: true, tip: VM_ACTIONS["force-stop"][2] },
+    { label: "Delete", icon: "trash", run: `vmDelete(${ns},${name})`, need: "admin", danger: true },
+  ], { shown: (main.length ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}`, iconOnly: compact });
 }
 
 /* The same VMs as rows: everything a card says, one VM a line. */
@@ -230,7 +231,8 @@ function vmTable(rows) {
   return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms" data-sort-controls="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
     ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
-      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
+      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b title="${esc(v.name)}">${esc(v.name)}</b>
+        ${clusterTag(v) || vmClusterTag(v) ? `<div class="row vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></div></div></td>
       <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>${answerTag(v, true)}${scheduleTag(v)}
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
@@ -521,11 +523,6 @@ window.vmEdit = async (ns, name) => {
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
       <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div>
-      <div class="f"><label>Logo</label><div class="row vm-edit-logo">${vmAvatar((STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || v)}
-        <button class="btn sm" type="button" data-need="operator" onclick="vmLogo(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button>
-        <span class="dim xs">Saved on its own, at once; the VM keeps running. Other changes here are not saved by it.</span></div></div>
-      <div class="f"><label>Monitoring</label><div class="row vm-edit-logo">${(() => { const a = answerOf({ ns, name }, true); return a ? `<span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span><span class="dim xs">${esc(answerDetail(a))}</span>` : '<span class="dim xs">Not checked yet</span>'; })()}
-        <button class="btn sm" type="button" data-need="operator" onclick="vmMonitoring(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button></div></div>
       ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsq(ns)},${jsq(name)})`, { attrs: 'data-need="admin"' }))}`},
     v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)},
     {key:"disks", title:`Disks · ${disks.length}`, html:`
@@ -834,7 +831,7 @@ window.k3sReview = async () => {
         ...warnings.map(w => ["warn", w])], stopped ? "Can't create" : "Check first"),
       UI.table([{ label: "VM" }, { label: "Role" }, { label: "Address" }], plan.nodes.map(n => [
         `<b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div>`,
-        n.role === "server" ? UI.chip("server", "info") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
+        n.role === "server" ? UI.chip("server") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
       UI.facts([["Each VM", `${esc(plan.config.cores || 2)} vCPUs · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
       (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
       UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and Jobs follows the VMs coming up.
@@ -952,7 +949,7 @@ window.uvmLoad = async name => {
       : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.name)})`, need: "admin", pri: true }
         : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.name)},this)`, need: "admin", tip: "Shut it down on Unraid, so its disk is copied as it was left" }]);
     return `<tr><td><b>${esc(vm.name)}</b>${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
-      <td data-label="State"><span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
+      <td data-label="State"><span class="pill ${off ? "low" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
       <td data-label="Machine" class="small">${machine}</td>
       <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GiB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
       <td>${action}</td></tr>`;
