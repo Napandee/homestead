@@ -143,7 +143,7 @@
       reports = await api("/api/diagnostics", { keep: true });
       if (!host.isConnected) return;
       host.innerHTML = UI.table([{ label: "Report" }, { label: "State" }, { label: "Actions" }], reports.map(row => [
-        `<b>${esc(row.title)}</b><div class="dim xs">${esc(new Date(row.created * 1000).toLocaleString())} · ${row.events} events</div>`,
+        `<b>${esc(row.title)}</b><div class="dim xs">${esc(fmtAt(row.created))} · ${row.events} events</div>`,
         esc(row.status), actionBar([{ label: "Review", run: `bugReview(${jsq(row.id)})` }, { label: "Delete", danger: true, run: `bugDelete(${jsq(row.id)})` }], { shown: 1 }),
       ]), { empty: "No saved reports. Record a bug or collect a logs package." });
     } catch (error) { host.textContent = "Could not load saved reports. " + error.message; }
@@ -219,7 +219,7 @@
       if (record.status !== "ready") { await post("stop", { id }); return bugDescribe(id); }
       modal("Review bug report", wrap(UI.lead(esc(record.title)) + choices("bugFormat", "bugReviewFormat(this.value)") +
         (format === "full" ? fullWarning() : UI.more("Anonymisation", "Detected credentials are removed and known names and addresses replaced with consistent aliases. No alias mapping is included. Automatic checks cannot identify every secret in arbitrary text; review before sharing.")) +
-        UI.facts([["Events", String(record.events.length)], ["Saved until", esc(new Date(record.expires * 1000).toLocaleString())]]) +
+        UI.facts([["Events", String(record.events.length)], ["Saved until", esc(fmtAt(record.expires))]]) +
         UI.more("Report preview", `<pre class="diagnostic-preview">${esc(record.comment + "\n\n" + record.events.slice(0, 80).map(row => JSON.stringify(row)).join("\n"))}</pre><p class="dim xs">First 80 events. Downloads include all captured events and selected sources.</p>`) +
         UI.more("Collection results", UI.table([{ label: "Source" }, { label: "State" }], record.manifest.map(row => [esc(row.source), esc(row.state)]))) +
         (record.truncated ? '<p class="warn">The recording reached its limit. Some events are missing.</p>' : "") +

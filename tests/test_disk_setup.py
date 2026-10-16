@@ -293,7 +293,7 @@ class OsSpaceTests(unittest.TestCase):
     def test_a_volume_of_its_own_is_made_and_mounted_the_safe_way_within_the_reserve(self):
         host = Host(lvm(), setup_out="OK 1234 ext4 /mnt/longhorn-os\n")
         SETUP.bind(host)
-        with self.assertRaisesRegex(ValueError, "from 5 to 111 GB"):
+        with self.assertRaisesRegex(ValueError, "from 5 to 111 GiB"):
             SETUP.use_os_space("k3s", 120)
         self.assertEqual("/mnt/longhorn-os", SETUP.use_os_space("k3s", 100)["path"])
         script = host.scripts[-1]
@@ -339,7 +339,7 @@ class RegionTests(unittest.TestCase):
         self.assertGreaterEqual(first, 209717249)
         self.assertLessEqual(first + length, 209717249 + 100 * G)
         self.assertEqual((0, 60 * G), (0, SETUP.region_plan({"sector": 512, "start": 2048, "sectors": 100 * G}, 60)[1]))
-        with self.assertRaisesRegex(ValueError, "less than 5 GB"):
+        with self.assertRaisesRegex(ValueError, "less than 5 GiB"):
             SETUP.region_plan({"sector": 512, "start": 2048, "sectors": 100 * G}, 2)
 
     def test_a_partition_is_added_live_without_touching_the_others(self):

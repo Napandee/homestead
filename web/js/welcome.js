@@ -58,7 +58,7 @@ window.setupDismissVisit = () => { setupVisit(""); $("#setupReturn")?.classList.
 
 // Say exactly what is observed; configuration is not proof of end-to-end health.
 const SETUP_CHECKS = {
-  health: "Checks the current node, workload and volume health reports.",
+  health: "Checks the current health reports for hosts, apps, VMs and volumes.",
   quorum: "Checks the number of control-plane servers; one server is accepted for a lab.",
   placement: "Checks that a way of sharing the work is chosen; Kubernetes' default counts. It does not check where apps run now.",
   clocks: "Checks the time-sync reports available from hosts.",
@@ -68,7 +68,7 @@ const SETUP_CHECKS = {
   hostname: "Checks whether this browser opened Homestead by name.",
   lan: "Checks for saved LAN network definitions that support VMs and containers. It does not test host interfaces or DHCP; it confirms configuration, not connectivity.",
   disks: "Checks for unused non-system disks in the disk inventory.",
-  storage: "Checks the default storage class and its replica count against ready nodes.",
+  storage: "Checks the default storage class and its replica count against ready hosts.",
   backups: "Checks that a backup target is configured. This does not verify a backup or restore.",
   config: "Records a settings export. Homestead cannot check where you saved the file.",
   osupdates: "Checks that the OS update schedule is enabled, not that every host has updated.",
@@ -142,7 +142,7 @@ function setupVisible(state) {
 /* ---------------- the steps ---------------- */
 const SETUP_STEPS = {
   health: {
-    title: "Cluster check", lead: s => s.done ? "No health issues are reported for nodes, workloads or attached volumes." :
+    title: "Cluster check", lead: s => s.done ? "No health issues are reported for hosts, apps, VMs or attached volumes." :
       "Review the reported issues before continuing with setup.",
     body: s => s.done ? "" : `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Resource</th><th>Severity</th><th>Details</th></tr></thead><tbody>
       ${(s.issues || []).map(i => `<tr><td><b>${esc(i.name || i.kind)}</b><div class="dim xs">${esc(i.kind)}</div></td>
@@ -152,7 +152,7 @@ const SETUP_STEPS = {
     more: "<p>The Cluster page shows these checks in detail. Reported issues also appear in notifications.</p>",
   },
   quorum: {
-    title: "Nodes and quorum", lead: s => s.servers === 2
+    title: "Hosts and quorum", lead: s => s.servers === 2
       ? "The control plane needs a majority of its servers. With two servers, both must be available. A third server - or a small machine as a tiebreaker, holding only a vote - lets it lose one."
       : s.servers >= 3 ? `The control plane has ${s.servers} servers and can tolerate ${Math.max(0, s.servers - (Math.floor(s.servers / 2) + 1))} server failures while maintaining a majority.`
       : "A single server is suitable for a lab, but has no control-plane failover. Use three servers for redundancy.",
@@ -161,8 +161,8 @@ const SETUP_STEPS = {
         tiebreaker: (s.tiebreakers || []).includes(name) }))) : "",
     actions: s => [s.servers === 2 && ["k3s", "rke2"].includes(window.STATE?.platform?.distribution)
       ? { label: "Add a tiebreaker", run: "platformJoinGuide('tiebreaker')", pri: true }
-      : { label: "Add a node", run: "platformJoinGuide()", pri: true }],
-    more: "<p>Worker nodes run applications and can hold Longhorn replicas. They do not count towards the control-plane majority.</p>",
+      : { label: "Add a host", run: "platformJoinGuide()", pri: true }],
+    more: "<p>Worker hosts run applications and can hold Longhorn replicas. They do not count towards the control-plane majority.</p>",
   },
   placement: {
     title: "How hosts share the work", lead: s => s.mode === "standby"
@@ -178,13 +178,13 @@ const SETUP_STEPS = {
   clocks: {
     title: "Time synchronisation", lead: s => s.done ? "Available host reports show synchronised clocks." :
       `Accurate clocks are required for certificates and cluster coordination. Hosts without confirmed time synchronisation: ${esc((s.unsynced || []).join(", ") || "unknown")}.`,
-    actions: () => [{ label: "Open Nodes", run: "go('nodes')", pri: true }],
-    more: "<p>Review time synchronisation on the host's Nodes page. The installer's diagnostic tool can enable it where it is disabled.</p>",
+    actions: () => [{ label: "Open Hosts", run: "go('nodes')", pri: true }],
+    more: "<p>Review time synchronisation on the host's Hosts page. The installer's diagnostic tool can enable it where it is disabled.</p>",
   },
   address: {
-    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. Its virtual IP (VIP) can move between nodes for failover. Applications can share the VIP on separate ports.`
+    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. Its virtual IP (VIP) can move between hosts for failover. Applications can share the VIP on separate ports.`
       : s.harvester ? "Harvester assigned Homestead an address during installation."
-      : "Reserve a virtual IP (VIP) outside your router's DHCP range. It provides an address that can move between nodes for failover and can be shared by Homestead and applications.",
+      : "Reserve a virtual IP (VIP) outside your router's DHCP range. It provides an address that can move between hosts for failover and can be shared by Homestead and applications.",
     body: s => window.Diagram ? Diagram.vip(s.done ? (s.url || "").replace(/^https?:\/\//, "").replace(/:\d+$/, "") : "",
       [{ port: (s.url || "").match(/:(\d+)$/)?.[1] || "8080", app: "Homestead" }]) : "",
     actions: s => s.done ? [] : ["kube-vip", "metallb"].includes(s.load_balancer)
@@ -214,11 +214,11 @@ const SETUP_STEPS = {
   },
   lan: {
     title: "LAN networks",
-    lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating workloads that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
+    lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating apps and VMs that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
     body: s => `${UI.steps([
-      { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run these workloads." },
+      { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run them." },
       { title: "Choose the network and addresses", detailHtml: "Use an untagged network for your usual LAN, or a VLAN configured on your switch. VMs can use your router’s DHCP; reserve static addresses outside its DHCP range when assigning addresses yourself." },
-      { title: "Create and test the network", detailHtml: "A host bridge supports both VMs and containers. Separate VM-only or container-only networks are also supported. After saving, test a workload’s address and connectivity before relying on it." },
+      { title: "Create and test the network", detailHtml: "A host bridge supports both VMs and containers. Separate VM-only or container-only networks are also supported. After saving, test an app’s address and connectivity before relying on it." },
     ])}<div class="about-grid"><div><span>VM networks</span><b>${esc((s.vms || []).join(", ") || "Not configured")}</b></div><div><span>Container networks</span><b>${esc((s.containers || []).join(", ") || "Not configured")}</b></div></div>`,
     actions: () => [{ label: "Configure LAN networks", run: "go('network', { params: { section: 'lan' } })", pri: true }],
     more: "<p>VM-only macvtap networks cannot be used by containers, and container-only macvlan networks cannot be used by VMs. With either, the host may be unable to reach its own guests directly. A host bridge avoids that limitation. Creating a bridge can briefly interrupt host networking; review the network page’s checks before applying it.</p>",
@@ -226,9 +226,9 @@ const SETUP_STEPS = {
   disks: {
     title: "Disks for Longhorn", lead: s => s.done ? "No unused non-system disks are reported in the inventory."
       : `${(s.unused || []).length} unused non-system disk${(s.unused || []).length === 1 ? " is" : "s are"} reported. Review each disk before assigning it to Longhorn. Disk tags let storage classes select HDD, SSD or NVMe storage.`,
-    body: s => (s.unused || []).length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Disk</th><th>Node</th><th>Size</th><th></th></tr></thead><tbody>
+    body: s => (s.unused || []).length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Disk</th><th>Host</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.unused.map(d => `<tr><td><b class="mono">${esc(d.device)}</b> ${d.kind ? `<span class="tag">${esc(d.kind)}</span>` : ""}</td><td data-label="Node">${esc(d.node)}</td>
-        <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GB</td>
+        <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GiB</td>
         <td>${actionBar([{ label: "Set up", run: `nodeDetail(${jsq(d.node)});setTimeout(() => window.nodeSectionGo && nodeSectionGo('storage'), 900)`, need: "admin" }])}</td></tr>`).join("")}</tbody></table></div>` : "",
     actions: () => [],
   },
@@ -236,8 +236,8 @@ const SETUP_STEPS = {
     title: "Default storage", lead: s => s.done ? `New volumes default to <b>${esc(s.default)}</b>, configured for ${s.copies} replica${s.copies === 1 ? "" : "s"}.`
       : !s.default ? "Choose a default storage class, or specify a class whenever you create a volume."
       : s.provisioner !== "driver.longhorn.io" ? `The default class, ${esc(s.default)}, uses a different storage provider. Review that provider's redundancy, or choose a Longhorn class.`
-      : `The default class, ${esc(s.default)}, requests ${s.copies} replica${s.copies === 1 ? "" : "s"} across ${s.nodes} ready node${s.nodes === 1 ? "" : "s"}. ${s.copies > s.nodes ? "There are not enough ready nodes for that replica count." : "Additional replicas could improve redundancy."} The suggested count is ${s.target}.`,
-    body: s => (window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `node ${i + 1}`), s.copies || 1) : "")
+      : `The default class, ${esc(s.default)}, requests ${s.copies} replica${s.copies === 1 ? "" : "s"} across ${s.nodes} ready host${s.nodes === 1 ? "" : "s"}. ${s.copies > s.nodes ? "There are not enough ready hosts for that replica count." : "Additional replicas could improve redundancy."} The suggested count is ${s.target}.`,
+    body: s => (window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `host ${i + 1}`), s.copies || 1) : "")
       + '<div id="setupStorageSuggestions" aria-live="polite"><p class="small dim">Loading storage suggestions…</p></div>',
     actions: () => [{ label: "Custom storage class", run: "setupStorageCustom()" },
       { label: "Manage storage classes", run: "settingsTab('hardware');go('settings')" }],
@@ -265,7 +265,7 @@ const SETUP_STEPS = {
   },
   osupdates: {
     title: "OS updates", lead: s => s.done ? "The host OS update schedule is enabled. Review host status and recent update results." :
-      "Schedule host OS updates during a maintenance window. Hosts update one at a time, with workload draining and a restart when required.",
+      "Schedule host OS updates during a maintenance window. Hosts update one at a time, with app or VM draining and a restart when required.",
     actions: () => [{ label: "Review the update schedule", run: "osUpdates()", pri: true }],
   },
   appearance: {
@@ -286,7 +286,7 @@ const SETUP_STEPS = {
     title: "Notifications", lead: s => s.done ? "At least one notification device is registered for this account. Send a test from Settings to confirm delivery." : !s.secure
       ? "Open Homestead over HTTPS before enabling notifications on this device."
       : s.permission === "denied" ? "This browser blocks notifications. Allow them in the browser's site settings, then return here."
-      : "Receive alerts for disk failures, unavailable nodes and pending updates. Choose which notifications to receive.",
+      : "Receive alerts for disk failures, unavailable hosts and pending updates. Choose which notifications to receive.",
     actions: s => s.done ? [{ label: "Choose notification types", run: "pwaCategories()" }] : s.secure && s.permission !== "denied" ? [{ label: "Enable notifications", run: "pwaEnable().then(() => viewSetup())", pri: true }] : [],
   },
   people: {
@@ -301,8 +301,8 @@ const SETUP_STEPS = {
   },
   ipam: {
     title: "IP addresses",
-    lead: s => s.done ? "Your subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free ones for VIPs and LAN workloads."
-      : "Keep track of your LAN's addresses: add your subnets with their DHCP ranges, bring in what UniFi knows, and scan to see what answers. Homestead then warns about conflicts and suggests free addresses for VIPs and LAN workloads.",
+    lead: s => s.done ? "Your subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free ones for VIPs and LAN apps."
+      : "Keep track of your LAN's addresses: add your subnets with their DHCP ranges, bring in what UniFi knows, and scan to see what answers. Homestead then warns about conflicts and suggests free addresses for VIPs and LAN apps.",
     body: s => {
       const subnets = s.subnets || [];
       const unscanned = subnets.filter(n => !n.scanned);
@@ -339,7 +339,7 @@ const SETUP_STEPS = {
   },
   homeassistant: {
     title: "Home Assistant", lead: s => s.done ? "An unexpired API key is available. Configure the integration in Home Assistant and test the connection." :
-      "Create an API key for Home Assistant to read cluster status or control workloads. Limit its permissions and allowed source addresses to what the integration needs.",
+      "Create an API key for Home Assistant to read cluster status or control apps and VMs. Limit its permissions and allowed source addresses to what the integration needs.",
     actions: () => [{ label: "Create an API key", run: "settingsTab('access');go('settings');setTimeout(() => window.apiKeyNew && apiKeyNew(), 900)", pri: true }],
   },
   linked: {

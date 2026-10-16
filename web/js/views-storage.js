@@ -49,14 +49,14 @@ async function viewFlow() {
   const disconnectedVolumes = f.volumes.filter(v => !mountedVolumes.has(v.id));
   const workloadCard = w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"} ${w.kind === "vm" && !w.running ? "a2stopped" : ""}"
           id="${esc(w.id)}"${clusterAttr(w)} data-kind="workload" data-id="${esc(w.id)}"
-          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB` : ""}">
+          title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MiB` : ""}">
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
           ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
             onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove(${jsq(w.ns || "lab")},${jsq(w.name)})` : `moveWorkload(${jsq(w.name)},${jsq(w.ns || "lab")})`}">⇄</button>`}
         </div>`;
   const volumeCard = (v, disconnected = false) => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"} ${disconnected ? "a2disconnected" : ""}" id="${esc(v.id)}"${clusterAttr(v)} data-kind="volume" data-id="${esc(v.id)}"
-          title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
+          title="${esc(v.name)} · ${v.size_gb} GiB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
           <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
           <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
@@ -71,14 +71,14 @@ async function viewFlow() {
           data-node="${esc(v.node || "")}" title="${esc(archAddressWords(v))}">
           <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
             <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
-          ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no node answers")}</div>` : ""}
+          ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no host answers")}</div>` : ""}
           <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
             data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
             onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
 
-      <section class="a2col"><h4>Workloads <span class="dim">${f.workloads.length}</span></h4>
+      <section class="a2col"><h4>Apps <span class="dim">${f.workloads.length}</span></h4>
         <div class="a2group"><div class="a2subhead">Containers <span>${containers.length}</span></div>
           ${containers.map(workloadCard).join("") || '<div class="dim xs">No containers</div>'}</div>
         ${vms.length ? `<div class="a2group a2vmgroup"><div class="a2subhead">Virtual machines <span>${vms.length}</span></div>
@@ -93,7 +93,7 @@ async function viewFlow() {
           ${disconnectedVolumes.map(v => volumeCard(v, true)).join("")}</div>` : ""}
       </section>
 
-      <section class="a2col"><h4>Nodes &amp; replica copies</h4>
+      <section class="a2col"><h4>Hosts &amp; replica copies</h4>
       ${f.nodes.map(n => `<div class="a2item a2node"${clusterAttr(n)} data-kind="node" data-id="${esc(n.id)}">
           <div class="a2nodehead"><b>${esc(n.name)}</b><span class="dim xs">${n.copies.length} cop${n.copies.length === 1 ? "y" : "ies"}</span></div>
           ${(n.ips || []).length || (n.vips || []).length ? `<div class="a2addrs">${(n.ips || []).map(ip => `<span class="a2addr mono" title="${esc(n.name)}'s own address">${esc(ip)}</span>`).join("")}${(n.vips || []).map(ip => `<span class="a2addr vip mono" title="${esc(n.name)} answers for VIP ${esc(ip)}">VIP ${esc(ip)}</span>`).join("")}</div>` : ""}
@@ -114,7 +114,7 @@ async function viewFlow() {
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
-    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} workloads · ${graph.nodes.length} nodes</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
+    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} apps and VMs · ${graph.nodes.length} hosts</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
   // A live refresh redraws the page; whatever was being traced stays traced.
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);
   else drawArch();
@@ -156,8 +156,8 @@ function scheduledJobs(jobs) {
 
 /* What an address is, where it lives, and why it is not reachable if not. */
 function archAddressWords(v) {
-  const what = v.kind === "node" ? `${v.ip} is ${v.node || "a node"}'s own address`
-    : v.node ? `VIP ${v.ip} · ${v.node} answers for it` : `VIP ${v.ip} · no node answers for it`;
+  const what = v.kind === "node" ? `${v.ip} is ${v.node || "a host"}'s own address`
+    : v.node ? `VIP ${v.ip} · ${v.node} answers for it` : `VIP ${v.ip} · no host answers for it`;
   return v.reason ? `${what} · ${v.reason}` : what;
 }
 
@@ -361,7 +361,7 @@ function forecastCard(f) {
   const collecting = !rows.some(r => r.days >= (f.min_days || 7));
   const line = r => `<div class="forecast-row">
       <span class="tag ${forecastTone(r.days_left, f.warn_days)}">Full ${esc(forecastWhen(r.days_left))}</span>
-      <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
+      <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GiB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
   return `<div class="card flat forecast-card"><div class="between"><div><div class="ctitle">Filling up</div>
       <div class="csub">From how each volume, disk and the pool has grown over the last 30 days</div></div></div>
     ${collecting ? `<div class="dim small forecast-empty">Collecting daily usage: forecasts start after ${f.min_days || 7} days of samples.</div>`
@@ -378,7 +378,7 @@ function volumeUsageCell(x) {
   return `<div class="volusage-body">${known
     ? `<div class="volusage-line" data-tip="Filesystem usage reported by kubelet; filesystem capacity can be slightly smaller than the provisioned block device.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
     : `<span class="dim xs" data-tip="No fresh filesystem measurement is available. Detached volumes and some shared/raw-block mounts do not report filesystem usage.">Filesystem usage unavailable</span>`}
-    ${soon ? `<span class="tag ${forecastTone(soon.days_left)} forecast-tag" data-tip="${esc(`Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate`)}">Full ${esc(forecastWhen(soon.days_left))}</span>` : ""}
+    ${soon ? `<span class="tag ${forecastTone(soon.days_left)} forecast-tag" data-tip="${esc(`Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GiB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate`)}">Full ${esc(forecastWhen(soon.days_left))}</span>` : ""}
     <span class="dim xs mono volsizes"><span data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
 }
 
@@ -430,7 +430,7 @@ function otherVolumesHtml(rows) {
   return `<div class="between" style="margin-top:22px"><div class="sec">Other volumes <span class="dim">${rows.length}</span>
       ${tip("Volumes on storage classes other than Longhorn, such as k3s's local-path. They have no replicas, snapshots or backups here; their data lives where that class keeps it.")}</div></div>
     ${stuck.length ? `<div class="note warn small" style="margin-bottom:10px"><b>${stuck.length} volume${stuck.length === 1 ? " is" : "s are"} not made.</b>
-      Usually a shared (ReadWriteMany) volume asked of a class that serves one node - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
+      Usually a shared (ReadWriteMany) volume asked of a class that serves one host - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.namespace)}</div></td>
       <td data-label="Class" class="mono">${esc(r.storage_class)}</td><td data-label="Size" class="mono">${esc(r.size || "—")}</td>
@@ -468,15 +468,15 @@ async function viewStorage() {
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${st ? summaryLine("volumes", [
-      `<b>${st.avail_gb} GB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GB</b> provisioned`,
+      `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
       `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
       `${st.attached} of ${st.volumes} attached`],
     `<div class="grid g4 statgrid">
     <div class="card flat"><div class="ctitle">Free space</div>
-      <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GB</span></div>
-      <div class="csub">of ${st.cap_gb} GB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
+      <div class="bignum" style="margin-top:8px">${st.avail_gb}<span class="unit">GiB</span></div>
+      <div class="csub">of ${st.cap_gb} GiB raw</div>${meter(st.used_pct, 'style="margin-top:10px"')}</div>
     <div class="card flat"><div class="ctitle">Provisioned</div>
-      <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GB</span></div>
+      <div class="bignum" style="margin-top:8px">${st.provisioned_gb}<span class="unit">GiB</span></div>
       <div class="csub" data-tip="Sum of Longhorn volume block footprints, including snapshots; not filesystem usage or total storage across all replica copies.">${st.actual_gb} GiB Longhorn footprint</div></div>
     <div class="card flat statwide"><div class="ctitle">Replica health</div>${(st.reasons || []).length
       ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
@@ -487,7 +487,7 @@ async function viewStorage() {
         ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
-  </div>`, "Per node") : ""}
+  </div>`, "Per host") : ""}
   ${forecastCard(forecast)}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
@@ -527,7 +527,7 @@ window.volumeCreate = async () => {
   window.__volumeClasses = classes;
   modal("Create volume", `<div class="f2"><div class="f"><label>Name</label><input id="vc_name" placeholder="frigate-media"></div>
     <div class="f"><label>Namespace</label><select id="vc_ns">${nss.map(n => `<option ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
-    <div class="f2"><div class="f"><label>Size (GB)</label><input id="vc_size" type="number" min="1" value="10"></div>
+    <div class="f2"><div class="f"><label>Size (GiB)</label><input id="vc_size" type="number" min="1" value="10"></div>
     <div class="f"><label>Access mode ${tip("RWO mounts on one node at a time and suits most apps. RWX can mount on several nodes, using Longhorn's shared-volume support.")}</label><select id="vc_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div></div>
     <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, defaultStorageClass(scs, "", classes.facts), classes.facts)}</select>
       <div class="vclass-badges" id="vc_badges"></div></div>
@@ -558,7 +558,7 @@ window.volumeEdit = async (x, fromRoute = false) => {
   if ($("#ve_loading") !== loading || $("#modal").classList.contains("hidden")) return;
   const size = options.requested_gb || Math.ceil(x.size_gb);
   modal("Edit · " + name, `
-  <div class="f2"><div class="f"><label>Size (GB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${size}" value="${size}" ${options.can_expand ? "" : "disabled"}></div>
+  <div class="f2"><div class="f"><label>Size (GiB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${size}" value="${size}" ${options.can_expand ? "" : "disabled"}></div>
   <div class="f"><label>Replica count</label><input id="ve_reps" type="number" min="1" max="5" value="${x.replicas}"></div></div>
   ${options.can_expand ? "" : `<div class="note"><b>Size cannot be changed.</b> ${esc(options.reason)}<br>Replica count can still be changed.
     ${options.repair_class ? `<div class="row" style="margin-top:10px"><button class="btn sm" data-need="admin" onclick="volumeClassRepairReview(${jsq(namespace)},${jsq(name)},${jsq(options.storage_class)})">Repair resize support…</button></div>` : ""}</div>`}
@@ -631,7 +631,7 @@ window.volumeDelete = async x => {
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
       : UI.callout("ok", "Impact check passed.", p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
-        : "This claim is detached and has no active workload references. Choose what should happen to its backing data."),
+        : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
     UI.facts([
       ["Longhorn footprint", `${esc(lh.actual_gb ?? "?")} GiB`],
       ["Replicas", esc(lh.replicas ?? "?")],
@@ -642,11 +642,11 @@ window.volumeDelete = async x => {
       { state: detached ? "ok" : verifyPending ? "warn" : "bad",
         title: detached ? "Already detached." : verifyPending ? "Longhorn reports detached; safety checks are incomplete." : "Stop and unmount this claim first.",
         detailHtml: verifyPending ? "Refresh the review to verify the remaining checks before deleting." :
-          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
+          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the apps and VMs listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
       jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
         detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> already completed - typically the copy job from an import. Kubernetes could otherwise hold the claim in Terminating.` },
     ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounts" }], consumers)
-      : `<div class="ui-empty">${p.inventory_complete === false ? "No workload references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
+      : `<div class="ui-empty">${p.inventory_complete === false ? "No app or VM references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
     UI.section("2. Choose what happens to the data", `<div class="volume-delete-grid">
       <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
         <span><b>Delete claim, keep data</b><small>The PV policy becomes Retain, then the PVC is deleted. The released data needs Kubernetes or Longhorn administration to recover or remove later.</small></span></label>
@@ -699,8 +699,8 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
 function v2Summary(v2, rows) {
   if (!v2 || (!v2.enabled && !rows.some(row => row.engine === "v2"))) return "";
   const text = !v2.enabled ? "switched off, yet a class uses it: its volumes will not schedule"
-    : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} node${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
-    : "on, but no node has a V2 disk and hugepages yet";
+    : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} host${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
+    : "on, but no host has a V2 disk and hugepages yet";
   return `<div class="dim xs v2line"><span class="tag ${v2.enabled && v2.ready_nodes ? "info" : "warn"}">Longhorn V2</span> ${esc(text)}
     <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">details</a></div>`;
 }
@@ -717,10 +717,10 @@ const V2_HOW = {
     : "On the host: sudo modprobe vfio_pci uio_pci_generic nvme_tcp - and to keep them after a reboot: printf 'vfio_pci\\nuio_pci_generic\\nnvme_tcp\\n' | sudo tee /etc/modules-load.d/longhorn-v2.conf",
   hugepages: (h, d) => h ? "Harvester reserves them once longhorn-v2-data-engine-enabled is on; the host restarts to take them."
     : `On the host: echo 'vm.nr_hugepages=1024' | sudo tee /etc/sysctl.d/90-longhorn-v2.conf && sudo sysctl --system - then restart ${d === "rke2" ? "rke2-server (or rke2-agent)" : "k3s (sudo systemctl restart k3s, or k3s-agent)"} so Kubernetes counts them. 1024 pages of 2 MiB is 2 GiB, taken from the host's memory.`,
-  disk: h => h ? "Hosts → Edit Config → Storage → Add Disk, provisioner Longhorn V2, on a disk holding nothing you need - or Homestead's Nodes → the host → Disks."
-    : "Nodes → the host → Disks → an unused disk → Give to Longhorn → V2. It takes the whole disk as a raw block device, so it must hold nothing you need.",
+  disk: h => h ? "Hosts → Edit Config → Storage → Add Disk, provisioner Longhorn V2, on a disk holding nothing you need - or Homestead's Hosts → the host → Disks."
+    : "Hosts → the host → Disks → an unused disk → Give to Longhorn → V2. It takes the whole disk as a raw block device, so it must hold nothing you need.",
   nvme: h => h ? "Harvester's OS includes it." : "On each host: sudo apt-get install -y nvme-cli (or sudo dnf install -y nvme-cli). Homestead cannot see the host's packages, so this one is yours to check: nvme version.",
-  cpu_core: () => "Longhorn's V2 engine polls rather than waiting: on every node running it, one CPU core stays busy. Longhorn's v2-data-engine-cpu-mask setting chooses which.",
+  cpu_core: () => "Longhorn's V2 engine polls rather than waiting: on every host running it, one CPU core stays busy. Longhorn's v2-data-engine-cpu-mask setting chooses which.",
 };
 const v2Mark = ok => ok === true ? '<span class="v2mark ok" aria-label="done">✓</span>'
   : ok === false ? '<span class="v2mark bad" aria-label="missing">✗</span>' : '<span class="v2mark unknown" aria-label="not known">?</span>';
@@ -754,7 +754,7 @@ window.v2Details = async (fresh = false) => {
         ${cell(n, "modules", "Kernel modules", n.missing_modules?.length ? `needs ${n.missing_modules.join(", ")}` : n.checks?.modules == null ? "probe has not said" : "")}
         ${cell(n, "hugepages", "Hugepages", `${n.hugepages_mb} MiB`)}${cell(n, "disk", "V2 disk", n.block_disks ? `${n.block_disks}` : "")}
         <td data-label="Ready">${n.ready ? '<span class="pill ok">ready</span>' : '<span class="pill">not yet</span>'}</td></tr>`).join("")
-        || '<tr><td colspan="6" class="empty">Longhorn reported no nodes</td></tr>'}</tbody></table></div></div>
+        || '<tr><td colspan="6" class="empty">Longhorn reported no hosts</td></tr>'}</tbody></table></div></div>
     <div class="row" style="margin-top:12px"><button class="btn sm" onclick="v2Details(true)">${icon("refresh")}Check again</button>
       <span class="dim xs">${v2.ready_nodes ?? 0} of ${v2.total_nodes ?? 0} host${v2.total_nodes === 1 ? "" : "s"} ready. A volume keeping 2 copies needs 2 ready hosts.</span></div>`, true);
   if (window.applyRole) applyRole();
@@ -806,7 +806,7 @@ function storageClassCard(classes, v2 = null) {
         <div class="dim xs mono">${esc(row.provisioner || "")}</div>
         ${(row.disk_tags || []).length || (row.node_tags || []).length ? `<div class="row" style="gap:4px;margin-top:4px">
           ${(row.disk_tags || []).map(t => `<span class="tag info" data-tip="Only on disks tagged ${esc(t)}">disk: ${esc(t)}</span>`).join("")}
-          ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">node: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
+          ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">host: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
       <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
       <td class="mono" data-label="Copies">${esc(row.replicas || "—")}</td>
       <td data-label="Its volumes">${features(row)}</td>
@@ -834,10 +834,10 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
     <div class="f2">
       <div class="f"><label>Reclaim policy ${tip("Retain keeps a volume's data when its claim is deleted - with an app, say - and lists it on Volumes as having no claim, to reuse or delete there. Delete removes the data with the claim.")}</label>
         <select id="sc_reclaim"><option>Retain</option><option>Delete</option></select></div>
-    <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the nodes.")}</label>
+    <div class="f"><label>Data engine ${tip("V1 is Longhorn's long-standing engine. V2 (SPDK) is faster and needs the engine switched on, a V2 disk and hugepages on the hosts.")}</label>
       <select id="sc_engine" onchange="storageClassEngine()"><option value="v1">V1 · the default</option><option value="v2">V2 · SPDK</option></select></div></div>
     <div class="note" id="sc_engine_note" hidden></div>
-    <div class="f"><label>Only on disks tagged ${tip("Longhorn puts this class's replicas only on disks with every tag chosen - tag your SSDs ssd and pick it here. Tag disks under Nodes, or Volumes → Disks.")}</label>
+    <div class="f"><label>Only on disks tagged ${tip("Longhorn puts this class's replicas only on disks with every tag chosen - tag your SSDs ssd and pick it here. Tag disks under Hosts, or Volumes → Disks.")}</label>
       <div class="row sc-tags" id="sc_disktags"><span class="dim xs">loading tags…</span></div></div>
     <div class="f"><label>Only on nodes tagged ${tip("And only on nodes with every tag chosen here.")}</label>
       <div class="row sc-tags" id="sc_nodetags"></div>
@@ -875,7 +875,7 @@ async function storageClassTags(prefill = {}, button = $("#sc_go")) {
       : `<span class="dim xs">${empty}</span>`;
   };
   STATE.data.scInv = inv;
-  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
+  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Hosts, or Volumes → Disks.");
   box("#sc_nodetags", inv?.all_node_tags || [], prefill.node_tags || [], "No node has a tag yet.");
   // One host: only "different disks" can place a second copy.
   if (inv && prefill.copies === undefined && Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
@@ -904,15 +904,15 @@ window.storageClassEngine = async () => {
   const note = $("#sc_engine_note");
   if ($("#sc_engine").value !== "v2") { note.hidden = true; return; }
   note.hidden = false;
-  note.textContent = "Checking the nodes…";
+  note.textContent = "Checking the hosts…";
   const v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => STATE.data.v2);
   if (!v2) { note.textContent = "Could not read Longhorn's V2 status."; return; }
   note.classList.toggle("bad", !v2.enabled || !v2.ready_nodes);
   note.innerHTML = !v2.enabled
     ? "<b>V2 is switched off in Longhorn.</b> A class can be made now, but its volumes will not schedule until it is on. <a onclick=\"v2Details()\" style=\"cursor:pointer;text-decoration:underline\">How to turn it on</a>"
     : v2.ready_nodes < +($("#sc_reps").value || 1)
-      ? `<b>${v2.ready_nodes} node${v2.ready_nodes === 1 ? " is" : "s are"} ready for V2</b>, fewer than the replicas asked for, so volumes will run degraded or not schedule. <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">What each node needs</a>`
-      : `${v2.ready_nodes} of ${v2.total_nodes} nodes are ready for V2 volumes.`;
+      ? `<b>${v2.ready_nodes} host${v2.ready_nodes === 1 ? " is" : "s are"} ready for V2</b>, fewer than the replicas asked for, so volumes will run degraded or not schedule. <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">What each host needs</a>`
+      : `${v2.ready_nodes} of ${v2.total_nodes} hosts are ready for V2 volumes.`;
 };
 window.storageClassHint = () => {
   const on = $("#sc_migratable").checked, hint = $("#sc_hint");
@@ -980,8 +980,7 @@ function disposeEditor() {
   }
 }
 
-const fileSize = bytes => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+const fileSize = bytes => bytesText(bytes);
 
 /* Monaco is several megabytes, so it is fetched the first time a file is
    opened rather than on page load, and never at all for the rest of the app.
@@ -1057,7 +1056,7 @@ window.volumeFiles = async (namespace, pvc, attached) => {
   if (cluster) headers["X-Homestead-Cluster"] = cluster;
   const session = FILEVIEW.liveSession = { namespace, pvc, headers };
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
+  if (attached && !(await ask(`${pvc} is attached to a running app or VM.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the app or VM is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
     if (FILEVIEW.liveSession === session) closeModal();
     return;
   }
@@ -1229,7 +1228,7 @@ window.fileSave = async (ignoreSyntax = false) => {
     FILEVIEW.revision = result.revision;
     FILEVIEW.dirty = false;
     const state = $("#file_state");
-    if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
+    if (state) state.textContent = `saved ${fmtClock(Date.now())}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
     if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
@@ -1267,7 +1266,7 @@ window.volumeChown = async (namespace, name) => {
     <div class="f2" style="margin-top:14px">
       <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
       <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>
-    <div class="note">Stop the workload first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the workload holds it.</div>
+    <div class="note">Stop the app or VM first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the app or VM holds it.</div>
     ${UI.actions(`<button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
@@ -1330,7 +1329,7 @@ async function viewShares() {
       <div><b>${esc(s.name)}</b>${(smb.offline_shares || []).some(row => row.name === s.name) ? ' <span class="pill crit">SMB offline · storage unavailable</span>' : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
       <td class="small mono" data-label="Storage"><span class="sharevol">${esc(s.pvc || "—")}${s.sub_path ? `<span class="dim">/${esc(s.sub_path)}</span>` : ""}</span>
         ${s.owned === false ? '<span class="tag">shared volume</span>' : ""}</td>
-      <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GB" : "—"}</td>
+      <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GiB" : "—"}</td>
       <td data-label="Access"><span>${s.public ? `<span class="pill med" data-tip="No sign-in. Windows 11 refuses guest shares until two of its own settings are changed - see Allow guest access when making or editing a share">guest</span>` : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private: signs in as ${esc(s.user)}. SMB users" onclick="smbUsers()">${esc(s.user)}</button>` : `<span class="pill low">${esc(s.user)}</span>`)}
         ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
         ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
@@ -1436,7 +1435,7 @@ window.newShare = async () => {
       <input type="text" id="sh_name" placeholder="media" autocomplete="off"></div>
     <div class="sec">Storage ${tip("A new Longhorn volume, or a folder in an existing one.")}</div>
     <div id="sh_storage"></div>
-    ${UI.more("Sharing an existing volume", "A volume can also be used by a container. ReadWriteOnce storage attaches on one node, so Samba and that workload must run on the same host.")}
+    ${UI.more("Sharing an existing volume", "A volume can also be used by a container. ReadWriteOnce storage attaches on one node, so Samba and that app must run on the same host.")}
 `;
   const shareAccess = `
     ${UI.section("SMB access", `<div class="f"><label>SMB user</label><select id="sh_identity" onchange="shareAccountHint()">
@@ -1533,7 +1532,7 @@ window.editShare = name => {
     <div class="callout"><b>\\\\${esc(STATE.data.samba?.address || "address pending")}\\${esc(s.name)}</b><br>
       ${s.owned === false ? `Files come from <span class="mono">${esc(s.pvc || "")}${s.sub_path ? "/" + esc(s.sub_path) : ""}</span>, a volume this share only mounts.` : "The claim can grow but cannot shrink."}
       Size-only changes keep Samba running; access changes briefly disconnect open SMB sessions.</div>
-    <div class="f2" style="margin-top:14px"><div class="f"><label>Requested size (GB) ${tip("Longhorn volumes can grow online. Kubernetes and Longhorn do not support shrinking a populated claim.")}</label>
+    <div class="f2" style="margin-top:14px"><div class="f"><label>Requested size (GiB) ${tip("Longhorn volumes can grow online. Kubernetes and Longhorn do not support shrinking a populated claim.")}</label>
       <input type="number" id="she_size" min="${esc(s.size_gb || 1)}" value="${esc(s.size_gb || 1)}" ${s.owned === false ? "disabled" : ""}>
       ${s.owned === false ? `<span class="dim xs">Sized with <span class="mono">${esc(s.pvc || "its volume")}</span> in Volumes, because this share borrows it.</span>` : ""}</div>
       <div class="f"><label>Access</label><select id="she_access" onchange="shareAccessToggle()">
@@ -1556,7 +1555,7 @@ window.saveShareEdit = async (name, button) => {
   const publicAccess = $("#she_access").value === "guest";
   const password = $("#she_pass")?.value || "";
   if (original.owned !== false && (!Number.isInteger(size) || size < +(original.size_gb || 1))) {
-    return toast(`Size must be at least ${original.size_gb || 1} GB`, "bad");
+    return toast(`Size must be at least ${original.size_gb || 1} GiB`, "bad");
   }
   if (!publicAccess && !original.has_password && !password) return toast("Set a password before enabling private access", "bad");
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
@@ -1568,7 +1567,7 @@ window.saveShareEdit = async (name, button) => {
   } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };
 window.rmShare = async name => {
-  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other workloads may also keep the volume attached.`, { title: "Remove share", ok: "Remove share", danger: true }))) return;
+  if (!(await ask(`Remove share "${name}" from SMB?\n\nThe volume and data are kept. Its mount is removed after the SMB restart unless another configured share uses the same PVC. Other apps may also keep the volume attached.`, { title: "Remove share", ok: "Remove share", danger: true }))) return;
   try {
     const result = await api("/api/shares/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -1651,12 +1650,12 @@ function eventRowHtml(x) {
     return `<tr><td><b>${esc(x.user || "—")}</b><div class="dim xs">${x.detail ? `${esc(x.detail)}` : ""}<span class="ev-when-sm">${x.detail ? " · " : ""}${esc(ago)}</span></div></td>
       <td data-status><span class="pill slim ${tone}">${esc(word)}</span></td>
       <td class="small ev-from"><span class="mono">${esc(x.ip || "—")}</span>${x.device || x.via ? ` <span class="dim xs">${esc([x.device, x.via && `via ${x.via}`].filter(Boolean).join(" · "))}</span>` : ""}</td>
-      <td class="dim xs mono nowrap" data-sm-hide title="${esc(when.toLocaleString())}">${esc(ago)}</td></tr>`;
+      <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(when))}">${esc(ago)}</td></tr>`;
   }
   return `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
     <td data-status><span class="pill slim ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
     <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
-    <td class="dim xs mono nowrap" data-sm-hide title="${esc(x.time ? new Date(x.time).toLocaleString() : "")}">${esc(ago)}</td></tr>`;
+    <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(x.time))}">${esc(ago)}</td></tr>`;
 }
 
 /* The table and the count, from the rows already read. */
@@ -1715,7 +1714,7 @@ function lhNodeRows(cap) {
   return (cap.nodes || []).map(n => `<div class="lh-node">
     <div class="between"><b>${esc(lhShort(n.name))}</b>
       <span class="mono xs ${n.level === "ok" ? "dim" : n.level === "warn" ? "warntext" : "badtext"}">${esc(sizePair(n.allocated_gb, n.limit_gb))} allocated</span></div>
-    <div class="meter ${lhLevel(n.level)}" data-tip="${esc(`${n.pct}% of what Longhorn may place here (${n.size_gb} GB × ${cap.over_provisioning}%)`)}"><span style="width:${Math.min(100, n.pct)}%"></span></div>
+    <div class="meter ${lhLevel(n.level)}" data-tip="${esc(`${n.pct}% of what Longhorn may place here (${n.size_gb} GiB × ${cap.over_provisioning}%)`)}"><span style="width:${Math.min(100, n.pct)}%"></span></div>
     <div class="dim xs">${n.blocked ? `<span class="badtext">${esc(n.blocked)}</span>` : `${esc(sizeText(n.room_gb))} allocation headroom`} · ${esc(sizeText(n.used_gb))} physically used</div>
     <div class="dim xs" data-tip="Free bytes above Longhorn's minimum-free-space reserve on the best eligible disk. A rebuild must fit its block/snapshot footprint below this budget as well as its logical allocation; tags, anti-affinity and other placement rules still apply.">Physical rebuild budget: ${Number.isFinite(n.physical_room_gb) ? `${esc(n.physical_room_gb)} GiB` : "unknown"}</div></div>`).join("");
 }
@@ -1723,7 +1722,7 @@ function lhNodeRows(cap) {
 function lhLargest(cap) {
   const count = (cap.nodes || []).length;
   return [1, 2, 3].filter(c => c <= count).map(c => `<span class="tag ${cap.largest[c] < 10 ? "bad" : cap.largest[c] < 50 ? "warn" : ""}"
-    data-tip="Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different nodes. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
+    data-tip="Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different hosts. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
 }
 
 /* The Volumes page's per-node card. */
@@ -1731,8 +1730,8 @@ function lhCapacityCard(cap, st) {
   if (!cap) return `<div class="card flat statwide"><div class="ctitle">Per-node disks</div><div class="csub">free of total</div>
       ${(st?.disks || []).map(d => `<div class="drow"><div class="dl">${esc(lhShort(d.node))}</div>
         <div class="dv mono nowrap">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("") || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}</div>`;
-  return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per node</div>
-      <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every node; add one to Longhorn">Disks</a>
+  return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per host</div>
+      <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every host; add one to Longhorn">Disks</a>
         <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></span></div>
     ${lhNodeRows(cap) || '<div class="csub" style="margin-top:8px">Longhorn has not reported any node disks yet.</div>'}
     <div class="dim xs" style="margin-top:8px">Empty-volume allocation limit</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
@@ -1760,20 +1759,20 @@ async function lhSettingsPaint() {
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
       <div class="f"><label>Minimal free space ${tip("A disk with less than this share physically free takes no new replica, whatever is allocated. Longhorn's default is 25%.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
-    <div class="f" style="margin-top:10px"><label>Replicas rebuilt at once, per node ${tip("When a node or disk comes back, or a volume is a copy short, Longhorn rebuilds replicas by copying them from a healthy one. More at once makes volumes whole sooner; fewer keeps the disks and network free for everything else while it runs. Longhorn's default is 5.")}</label>
+    <div class="f" style="margin-top:10px"><label>Replicas rebuilt at once, per host ${tip("When a host or disk comes back, or a volume is a copy short, Longhorn rebuilds replicas by copying them from a healthy one. More at once makes volumes whole sooner; fewer keeps the disks and network free for everything else while it runs. Longhorn's default is 5.")}</label>
       <input id="lh_rebuild" type="number" min="1" max="10" value="${cap.rebuild_limit ?? 5}" ${admin ? "" : "disabled"}></div>
     ${offline ? `<label class="switch" style="margin-top:10px"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}>
       Rebuild copies of detached volumes ${tip(offline.supported
         ? "Longhorn rebuilds a missing copy only while its volume is attached. With this on, it also attaches a detached volume by itself - nothing can mount it meanwhile - until its copies are whole, so a volume nothing uses is not left with one copy."
         : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot do it offline. With this on, Homestead attaches a detached volume short of copies itself - nothing can mount it meanwhile - one at a time, until its copies are whole, and lets go as soon as anything else asks for it.")}</label>
       ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}` : ""}
-    <div class="f" style="margin-top:10px"><label>Pods on a failed node ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead node, so a container moving to another node cannot mount it there until the node is back. Containers > If a node fails chooses which containers move.")}</label>
-      <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the node"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
+    <div class="f" style="margin-top:10px"><label>Pods on a failed host ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead host, so a container moving to another host cannot mount it there until the host is back. Containers > If a host fails chooses which containers move.")}</label>
+      <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the host"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
         ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
         .map(([v, l]) => `<option value="${v}" ${v === cap.node_down ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
-    <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
-    <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
+    <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a host's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
+    <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all hosts now.</div>
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
@@ -1931,14 +1930,14 @@ window.nodeDisksPaint = async node => {
 
 /* Every node's disks in one place, from Volumes or Settings. */
 window.lhDisks = async () => {
-  modal("Disks", '<div class="empty"><span class="spin2"></span>reading every node</div>', true);
+  modal("Disks", '<div class="empty"><span class="spin2"></span>reading every host</div>', true);
   try {
     const inv = await loadDisks(true);
     $("#mbody").innerHTML = `<p class="dim small" style="margin-top:0">${inv.harvester
       ? "Harvester lists each host's disks. Adding one lets Harvester format it and hand it to Longhorn, as its own UI does."
       : "Longhorn stores data in folders where a disk is mounted, or - for the V2 engine - on a raw device."}</p>
       ${Object.entries(inv.nodes).map(([node, disks]) => `<div class="sec">${esc(node)}</div>${nodeTagsLine(node, inv)}${diskRowsHtml(node, disks, inv.harvester)}`).join("")
-        || '<div class="empty small">No node has reported its disks yet.</div>'}`;
+        || '<div class="empty small">No host has reported its disks yet.</div>'}`;
     window.__disksModal = true;
     if (window.applyRole) applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: "lhDisks()", dialog: true }); }
@@ -2009,7 +2008,7 @@ window.diskSetup = async (node, device) => {
     <span><b>${label}</b><small>${detail}</small></span></label>`;
   const modes = f.choices || [];
   $("#mbody").innerHTML = `<div class="ui-stack">
-    <div class="note ${["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
+    <div class="note ${["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GiB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
     ${modes.length ? `
       ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 - formatted and mounted</option><option value="v2">V2 (SPDK) - the raw device</option></select></div>` : ""}
       <div class="disk-choices" id="ds_modes">
@@ -2044,8 +2043,8 @@ window.diskOsSpace = async node => {
   const lvmFree = f.vg && !f.error && f.usable_gb >= 5;
   const sources = [
     ...(lvmFree && (!f.taken?.v1 || (v2 && !f.taken?.v2))
-      ? [["lvm", `${f.vg} · ${f.usable_gb} GB free, ${f.reserve_gb} GB kept for the system`, f.usable_gb]] : []),
-    ...(f.regions || []).map(r => [`part:${r.disk}:${r.start}`, `/dev/${r.disk} · ${r.size_gb} GB unallocated - a new partition`, r.size_gb]),
+      ? [["lvm", `${f.vg} · ${f.usable_gb} GiB free, ${f.reserve_gb} GiB kept for the system`, f.usable_gb]] : []),
+    ...(f.regions || []).map(r => [`part:${r.disk}:${r.start}`, `/dev/${r.disk} · ${r.size_gb} GiB unallocated - a new partition`, r.size_gb]),
   ];
   if (f.problem || !sources.length) {
     $("#mbody").innerHTML = `<div class="ui-stack">${UI.callout("warn", "Nothing to use",
@@ -2057,12 +2056,12 @@ window.diskOsSpace = async node => {
     return;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.facts([["Root filesystem free", `${f.root_free_gb} GB`], f.vg ? ["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GB`] : null])}
+    ${UI.facts([["Root filesystem free", `${f.root_free_gb} GiB`], f.vg ? ["Volume group", `<span class="mono">${esc(f.vg)}</span> · ${f.size_gb} GiB`] : null])}
     <div class="f"><label>Space</label><select id="os_source" onchange="diskOsSpaceChanged(true)">${sources.map(([value, label]) =>
       `<option value="${esc(value)}">${esc(label)}</option>`).join("")}</select></div>
     ${v2 ? `<div class="f"><label>Engine</label><select id="os_engine" onchange="diskOsSpaceChanged()">
       <option value="v1">V1 - a filesystem of its own, mounted</option><option value="v2">V2 (SPDK) - the raw volume or partition</option></select></div>` : ""}
-    <div class="f"><label>Size (GB)</label><input id="os_size" type="number" min="5"></div>
+    <div class="f"><label>Size (GiB)</label><input id="os_size" type="number" min="5"></div>
     <p class="small" id="os_what"></p>
     <div class="f" id="os_confirm_row" hidden><label id="os_confirm_label"></label><input id="os_confirm" class="mono" autocomplete="off"></div>
     <p class="dim xs">On the system's drive it shares a drive with the system, so a copy here and one on another folder of that drive are not two drives.</p>
@@ -2182,7 +2181,7 @@ window.diskRetireGo = async (node, disk) => {
   try {
     await api("/api/disks/retire", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, disk, force, confirm: force ? $("#dr_confirm").value.trim() : "" }) });
-    toast("Replacing the failed disk - follow it in the job tray", "ok");
+    toast("Replacing the failed disk - follow it under Jobs", "ok");
     STATE.data.disks = null; modalBack(); if (window.refreshOperations) refreshOperations(true);
     setTimeout(() => disksRepaint(node), 1500);
   } catch (e) { toast(e.message, "bad"); }
@@ -2210,11 +2209,11 @@ window.volumeReclass = async x => {
   const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
   if (!classes.length) return toast("There is no other storage class to move it to", "warn");
   const pick = classes.find(c => c.default) || classes[0];
-  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Workloads using it stop during the move; the original data is kept afterward.") +
+  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move; the original data is kept afterward.") +
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
       UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
     '<div id="rc_plan"></div>' +
-    UI.ack("rc_ack", "I approve the downtime and the storage warnings shown above.", {onchange:"volumeReclassReady()"}) +
+    UI.ack("rc_ack", "Copy it despite the downtime and warnings", {onchange:"volumeReclassReady()"}) +
     UI.actions(UI.cancel() + UI.button("Move volume", `volumeReclassStart(${jsArg(x.namespace || "lab")},${jsArg(x.pvc_name || x.name)})`, {kind:"pri",id:"rc_go",disabled:true})), false, "operation-review");
   volumeReclassPlan(x.namespace || "lab", x.pvc_name || x.name);
 };
@@ -2241,9 +2240,9 @@ window.volumeReclassPlan = async (ns, claim) => {
     : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
   const messages = [...p.blockers, ...p.warnings];
   host.innerHTML = (messages.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "This move cannot start" : "Before moving", `<ul>${messages.map(m=>`<li>${esc(m)}</li>`).join("")}</ul>`) : "") +
-    UI.section("Affected workloads", UI.table([{label:"Workload"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No workloads currently reference this volume."})) +
+    UI.section("Affected apps and VMs", UI.table([{label:"App or VM"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No apps and VMs currently reference this volume."})) +
     UI.section("Storage needed", UI.facts([["New volume",esc(sizeText(sp.size_gb))],["Replica allocation",`${esc(sizeText(sp.allocated_gb))} · ${esc(sp.replicas)} copies`],["Estimated destination room",sp.room_gb == null ? "Unknown" : esc(sizeText(sp.room_gb))]])) +
-    UI.more("What is checked", "The volume, backing disk, destination class and affected workloads are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
+    UI.more("What is checked", "The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
   RECLASS_REVIEW = {config,plan:p};
   volumeReclassReady();
   if (window.applyRole) applyRole();

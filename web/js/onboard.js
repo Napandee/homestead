@@ -16,14 +16,14 @@ function guideCopy(value) {
 
 function guideScreens(g) {
   const role = g.management_count < 3
-    ? `<b>Default Role</b>. This cluster has ${g.management_count} management node${g.management_count === 1 ? "" : "s"};
+    ? `<b>Default Role</b>. This cluster has ${g.management_count} management host${g.management_count === 1 ? "" : "s"};
        Harvester promotes new hosts to management until there are three.`
     : "<b>Default Role</b> - with three management nodes already, it joins as a worker. Pick <b>Worker Role</b> to say so outright.";
   const rows = [
     ["Installation mode", "<b>Join an existing Harvester cluster</b>"],
     ["Node role", role],
     ["Password", "Set the <span class=\"mono\">rancher</span> password for SSH and console access."],
-    ["Installation disk", "The disk Harvester goes on. <b>Everything on it is erased.</b> An SSD of 250 GB or more."],
+    ["Installation disk", "The disk Harvester goes on. <b>Everything on it is erased.</b> An SSD of 240 GiB or more."],
     ["Data disk", "A second disk for VM and volume data, if the machine has one. On a single-disk machine, leave it as the installation disk."],
     ["Persistent size", "Leave the default (150 GiB)."],
     ["Hostname", g.hostname ? `${guideCopy(g.hostname)} <span class="dim xs">- the next free name here; any unique lowercase name works</span>`
@@ -63,7 +63,7 @@ window.clusterOnboarding = async () => {
       <p class="dim xs">Write it to a USB stick with Rufus (in DD mode) or balenaEtcher, or mount it as virtual media from the
         server's BMC (iDRAC, iLO, IPMI). Boot from it and choose <b>Harvester Installer</b>.</p></section>
     <section class="guide-step"><h4><span>2</span>Read the cluster token</h4>
-      <p>It is on every management node. Sign in as <span class="mono">rancher</span>, with the password set when that host was installed:</p>
+      <p>It is on every management host. Sign in as <span class="mono">rancher</span>, with the password set when that host was installed:</p>
       ${guideCopy(`ssh rancher@${g.token_host || "<management-node>"}`)}
       ${guideCopy(g.token_command)}
       <p class="dim xs">Copy the value after <span class="mono">token:</span>. Anyone holding it can join a machine to this cluster,
@@ -88,7 +88,7 @@ async function guideWatch() {
   const fresh = (nodes || []).filter(n => !ONBOARD.known.has(n.name));
   host.innerHTML = fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
       <b>${esc(n.name)}</b><span>${n.status === "Ready" ? "joined and Ready" : "registered - finishing setup"}</span>
-      <button class="btn sm" onclick="closeModal();go('nodes')">Nodes</button></div>`).join("")
+      <button class="btn sm" onclick="closeModal();go('nodes')">Hosts</button></div>`).join("")
     : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here as soon as Harvester registers it, about a minute after it reboots.</div>';
   ONBOARD.timer = setTimeout(guideWatch, 10000);
 }
@@ -113,7 +113,7 @@ window.removalLeftovers = removalLeftovers;
 function cleanupRows(report, withDead = true) {
   return [
     ...(withDead ? report.dead_nodes : []).map(n => `<div class="cleanup-row bad"><div><b>${esc(n.name)} is not ready</b>
-      <span>${esc((n.roles || []).join(" · ") || "worker")}${n.since ? ` · since ${esc(new Date(n.since).toLocaleString())}` : ""}</span></div>
+      <span>${esc((n.roles || []).join(" · ") || "worker")}${n.since ? ` · since ${esc(fmtAt(n.since))}` : ""}</span></div>
       <button class="btn sm danger" data-need="admin" onclick="nodeRemoval(${jsq(n.name)})">Remove…</button></div>`),
     ...report.stale_machines.map(m => `<div class="cleanup-row"><div><b>Leftover machine ${esc(m.name)}</b>
       <span>${m.stuck ? `Being deleted, but waiting on ${esc(m.node || "its host")}, which will not answer`
@@ -146,8 +146,8 @@ window.clusterCleanupPaint = async () => {
   const rows = cleanupRows(report);
   // Kept, so the next refresh draws it straight away instead of the page
   // shrinking while it is fetched again and growing back when it arrives.
-  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a node that stopped reporting, a Cluster API machine with no node, a Longhorn node record with no host, a k3s/RKE2 node password, apps and volumes tied to a host that is gone, a volume still attached there.")}</div>
-    <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to tidy</b><span>Every node is ready and nothing is left over.</span></div></div>'}</div>`;
+  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a host that stopped reporting, a Cluster API machine with no host, a Longhorn node record with no host, a k3s/RKE2 node password, apps and volumes tied to a host that is gone, a volume still attached there.")}</div>
+    <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to tidy</b><span>Every host is ready and nothing is left over.</span></div></div>'}</div>`;
   host.innerHTML = STATE.data.cleanupHtml;
   if (window.applyRole) window.applyRole();
 };
@@ -192,7 +192,7 @@ window.clusterRemovePick = async () => {
   const nodes = await api("/api/nodes").catch(() => []);
   const down = nodes.filter(n => n.status !== "Ready"), up = nodes.filter(n => n.status === "Ready");
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned workloads before confirming.</p>
+    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned apps and VMs before confirming.</p>
     ${down.length ? `<div class="sec">Not ready</div><div class="cleanup-card card flat">${down.map(n => `<div class="cleanup-row bad"><div>
         <b>${esc(n.name)}</b><span>${esc((n.roles || []).join(" · ") || "worker")} · ${esc(n.status || "not ready")}</span></div>
         <button class="btn sm danger" onclick="nodeRemoval(${jsq(n.name)})">Check and remove…</button></div>`).join("")}</div>`
@@ -288,7 +288,7 @@ window.nodeRemovalMode = () => {
     const parts = [lost ? `${lost} volume${lost === 1 ? "" : "s"} that only ${plan.node} held` : "",
       pinned ? `${pinned} volume${pinned === 1 ? "" : "s"} kept on it, made again empty` : ""].filter(Boolean);
     box.closest("label").hidden = !parts.length;
-    text.textContent = `I accept losing ${parts.join(", and ")}`;
+    text.textContent = `Remove it, losing ${parts.join(", and ")}`;
   }
   if (button) button.disabled = !!(box && !box.closest("label").hidden && !box.checked);
 };

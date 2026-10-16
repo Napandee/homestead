@@ -42,7 +42,7 @@ function objectStoreCard(store, target) {
     if (target?.configured) return "";
     return `<div class="note between" style="margin-bottom:18px"><span>
       <b>No backup storage.</b> Longhorn writes volume backups to an S3 bucket, and nothing here
-      provides one — so backups, and moving a workload to another cluster, have nowhere to go.</span>
+      provides one — so backups, and moving an app to another cluster, have nowhere to go.</span>
       <button class="btn sm pri" data-need="admin" onclick="objectStoreSetup()">Set up storage</button></div>`;
   }
   const pointed = store.longhorn?.pointed === true;
@@ -55,7 +55,7 @@ function objectStoreCard(store, target) {
     <div class="about-grid" style="margin-top:12px">
       <div><span>Endpoint</span><b class="mono">${esc(store.endpoint || "—")}</b></div>
       <div><span>Bucket</span><b class="mono">${esc(store.bucket)}</b></div>
-      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GB" : "—"}</b></div>
+      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GiB" : "—"}</b></div>
       <div><span>Longhorn target</span><b>${pointed ? "pointed here" : switching ? "switching" : "not pointed here"}</b></div>
     </div>
     ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
@@ -66,10 +66,10 @@ function objectStoreCard(store, target) {
         <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div></div>`}
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
-      restore from these backups. Give its Service an address to migrate workloads elsewhere.</div>`}
+      restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
     <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket lives on
-      the same Longhorn storage it protects, so it survives a lost workload or a bad upgrade, not a lost
-      cluster. It exists so a workload can be rebuilt somewhere else.</div>
+      the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
+      cluster. It exists so an app or VM can be rebuilt somewhere else.</div>
   </div>`;
 }
 
@@ -77,8 +77,8 @@ window.objectStoreSetup = () => {
   const store = STATE.data.objectStore || {};
   modal(store.deployed ? "Backup storage settings" : "Set up backup storage", `
   <p>Runs an S3 server (RustFS) on a Longhorn volume and points Longhorn's backups at it. Volume backups,
-    and moving a workload to another cluster, both read and write here.</p>
-  <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
+    and moving an app to another cluster, both read and write here.</p>
+  <div class="f2"><div class="f"><label>Size (GiB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="${store.size_gb || 100}" ${store.deployed ? "disabled" : ""}></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>
       <input id="os_ip" type="text" class="mono" value="${esc(store.reachable_off_cluster && store.endpoint ? new URL(store.endpoint).hostname : "")}" placeholder="Homestead's shared address" data-ipam></div>
@@ -242,7 +242,7 @@ async function viewProtect() {
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
       <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
-      <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
+      <td class="mono">${b.size_mb ? bytesText(b.size_mb * 1024 ** 2) : "—"}</td>
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
@@ -289,7 +289,7 @@ function protectFilterWrite() {
 function protectVolumeRow(v) {
   return `<tr>
     <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
-    <td class="mono">${v.size_gb} GB</td>
+    <td class="mono">${v.size_gb} GiB</td>
     <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
@@ -405,7 +405,7 @@ window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").v
 window.lhRun = async name => {
   try {
     await api("/api/lh/job/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast(`${name} started; follow it in the job tray`, "ok");
+    toast(`${name} started; follow it under Jobs`, "ok");
     setTimeout(() => { resetPaint(); viewProtect(); }, 1500);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -472,7 +472,7 @@ window.lhGroup = (name = "") => {
       <input type="text" id="lg_filter" placeholder="Filter by name or namespace" oninput="lhGroupFilter()" autocomplete="off">
       <div class="lg-list" id="lg_vols">${(d.volumes || []).map(v => `<label class="lg-row" data-q="${esc(`${v.pvc} ${v.namespace} ${v.name}`.toLowerCase())}">
         <input type="checkbox" value="${esc(v.name)}" ${row.volumes.includes(v.name) ? "checked" : ""}>
-        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GB</span></span>
+        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GiB</span></span>
         <span class="lg-tags">${v.groups.filter(g => g !== name).map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("")}</span></label>`).join("")
         || '<div class="dim xs">No volumes.</div>'}</div>
       <div class="row" style="gap:10px;margin-top:6px"><button class="linkish xs" onclick="lhGroupAll(true)">Tick all shown</button>
@@ -639,7 +639,7 @@ function snapshotTimeline(snaps, vol, label) {
     return `<article class="snapshot-point ${source === "system" ? "system" : ""}">
       <div class="snapshot-marker">${icon("snapshot")}</div><div class="snapshot-content">
       <div class="between"><b class="mono small">${esc(s.name)}</b><span class="tag ${source === "system" ? "info" : ""}">${title}</span></div>
-      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(date.toLocaleString(undefined, {day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"}))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
+      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(fmtAt(date))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
       <div class="row small"><span class="dim">${esc(s.size_mb)} MiB</span>${s.deleting || s.removed ? '<span class="tag warn">cleanup pending</span>' : !s.ready ? '<span class="tag warn">not ready</span>' : ""}
       ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
       ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
@@ -715,7 +715,7 @@ function backupTable(bks, vol, label) {
     ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
       <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
-      <td class="mono">${b.size_mb} MB</td>
+      <td class="mono">${b.size_mb} MiB</td>
       <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
         b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
@@ -781,7 +781,7 @@ window.lhRestore = async backup => {
     const defaultNs = namespaces.includes(preferred) ? preferred : (namespaces[0] || "default");
     $("#mbody").innerHTML = `
       <div class="note"><b>This creates a new PVC.</b> The backup and its source volume stay unchanged.
-        Restore progress remains in the active-jobs tray if this dialog is closed or Homestead is refreshed.</div>
+        Restore progress stays under Jobs if this dialog is closed or Homestead is refreshed.</div>
       <div class="drow"><div class="dl">Backup</div><div class="dv mono small">${esc(plan.backup)}</div></div>
       <div class="drow"><div class="dl">Source volume</div><div class="dv mono small">${esc(plan.source_volume)}</div></div>
       <div class="drow"><div class="dl">Original capacity</div><div class="dv">${plan.minimum_size_gb} GiB</div></div>
@@ -935,7 +935,7 @@ window.lhTarget = () => {
     </div>
     ${UI.actions(`<button class="btn pri" onclick="lhTargetSave()">Save target</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">For NFS the export must be reachable from every node
+    <div class="note" style="margin-top:14px">For NFS the export must be reachable from every host
     and allow root writes, otherwise backups fail with a permission error that only shows up on the
     first scheduled run.</div>`);
   const s3 = () => { $("#bt_s3").hidden = !$("#bt_url").value.trim().startsWith("s3://"); };
@@ -956,7 +956,7 @@ window.lhTargetSave = async () => {
 /* ---------------- restore tests (homestead_restore_test.py) ----------------
    Each app with Longhorn volumes: what a test restores, its last result, and
    Test now. Switched on, Homestead tests each app with backups monthly. */
-const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : new Date(at * 1000).toLocaleString()) : "";
+const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : fmtAt(at)) : "";
 
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");

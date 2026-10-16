@@ -28,7 +28,7 @@ try {
     assert.equal(await page.locator("#setupStep").evaluate(el => el.getBoundingClientRect().top < innerHeight), true, "intro is visible without scrolling past the step list");
     await page.getByRole("button", { name: /^Begin:/ }).click();
     await page.locator('.setup-card[data-step="health"]').waitFor();
-    await page.getByRole("button", { name: "Next: Nodes and quorum", exact: true }).click();
+    await page.getByRole("button", { name: "Next: Hosts and quorum", exact: true }).click();
     await page.locator('.setup-card[data-step="quorum"]').waitFor();
     assert.equal(await page.evaluate(() => STATE.data.setup.steps.health.done), false, "Next must not complete a failing check");
     // Use the mobile picker or the desktop navigation to reach disk setup.

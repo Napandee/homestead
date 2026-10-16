@@ -4,7 +4,7 @@
 
 function configCardHtml() {
   return `${UI.moduleHeader(`Configuration backup`, `Settings, users, VIPs, IP addresses, shares and the rest, in a file encrypted with a passphrase you choose.
-        Workloads and their data are not in it: volume backups under Data protection hold those.`, `${UI.button("Restore", "configRestore()", { attrs: 'data-need="admin"' })}
+        Apps, VMs and their data are not in it: volume backups under Data protection hold those.`, `${UI.button("Restore", "configRestore()", { attrs: 'data-need="admin"' })}
         ${UI.button("Back up", "configBackup()", { kind: "pri", attrs: 'data-need="admin"' })}`)}`;
 }
 window.configCardHtml = configCardHtml;
@@ -110,7 +110,7 @@ window.configRestoreRead = async () => {
 /* The parts a backup holds, each against what is here now. */
 window.configRestoreParts = result => {
   window.__configRestore ||= { doc: null, pass: "" };
-  const made = result.created ? new Date(result.created).toLocaleString() : "";
+  const made = result.created ? fmtAt(result.created) : "";
   childModal("Restore configuration", `<div class="ui-stack">
     ${UI.facts([["From", esc(result.site || "a Homestead")], ["Made", esc(made || "—")], ["With", `Homestead v${esc(result.homestead || "?")}`]])}
     <ul class="cfg-parts">${result.parts.map(p => {

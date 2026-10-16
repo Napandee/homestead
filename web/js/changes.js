@@ -6,11 +6,7 @@
    may be secret only says that it changed. */
 const HISTORY = { ns: "", name: "" };
 
-function historyWhen(at) {
-  const d = new Date(at * 1000), today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
+const historyWhen = at => fmtAt(at);
 
 const historyWho = e => e.source === "outside" ? '<span class="tag warn" data-tip="kubectl, Helm, GitOps or another tool changed it, not Homestead">outside Homestead</span>'
   : `<span class="dim small">${esc(e.by ? e.by.replace(/^api-key:/, "API key ") : "Homestead")}</span>`;

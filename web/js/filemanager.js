@@ -31,9 +31,7 @@ function fmMode(octal) {
 }
 function fmWhen(seconds) {
   if (!seconds) return "";
-  const d = new Date(seconds * 1000);
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" })
-    + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return fmtAt(seconds);
 }
 
 /* The helper opens a volume on the node it is attached to, beside the app
@@ -268,7 +266,7 @@ window.fmPermissions = () => {
         <div class="f"><label>As a number</label><input id="fm_mode" class="mono" value="${mode}" inputmode="numeric" maxlength="4" oninput="fmBoxesFromMode()"></div>`)}
       ${UI.section("Owner", `<div class="f2"><div class="f"><label>User (UID)</label><input id="fm_uid" type="number" min="0" value="${first.uid ?? ""}"></div>
           <div class="f"><label>Group (GID)</label><input id="fm_gid" type="number" min="0" value="${first.gid ?? ""}"></div></div>
-        <div class="dim xs">Now ${esc(first.user)}:${esc(first.group)}. Containers usually run as a numbered user; Fix ownership on the volume finds the one its workload uses.</div>`)}</div>
+        <div class="dim xs">Now ${esc(first.user)}:${esc(first.group)}. Containers usually run as a numbered user; Fix ownership on the volume finds the one its app uses.</div>`)}</div>
     ${folders ? `<label class="switch"><input type="checkbox" id="fm_recursive"> <span>Also everything inside the folders</span></label>` : ""}
     ${UI.actions(`${UI.button("Apply", "fmPanelGo()", { kind: "pri" })}${UI.button("Cancel", "fmPanel()")}`)}`, async () => {
     const recursive = !!$("#fm_recursive")?.checked, paths = fmPaths();
@@ -404,7 +402,7 @@ window.fmSave = async (ignoreSyntax = false) => {
   try {
     const result = await fmPost("/api/files/write", { namespace: pane.namespace, pvc: pane.pvc, path: editing.path, content, revision: editing.revision, ignore_syntax: ignoreSyntax });
     Object.assign(editing, { revision: result.revision, dirty: false });
-    const state = $("#fm_editstate"); if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
+    const state = $("#fm_editstate"); if (state) state.textContent = `saved ${fmtClock(Date.now())}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
     if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) return fmSave(true);
@@ -455,7 +453,7 @@ async function fmRelease(keepalive = false) {
       .then(answer => answer.stopped).catch(() => false)));
   if (!keepalive) {
     const left = results.filter(stopped => !stopped).length;
-    toast(left ? `Files closed; ${left === 1 ? "a helper is" : `${left} helpers are`} still stopping and will be gone within a minute` : "Files closed; the volume is free for its workload", left ? "warn" : "ok");
+    toast(left ? `Files closed; ${left === 1 ? "a helper is" : `${left} helpers are`} still stopping and will be gone within a minute` : "Files closed; the volume is free for its app or VM", left ? "warn" : "ok");
   }
 }
 window.fmClose = async () => {

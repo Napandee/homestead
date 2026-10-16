@@ -96,7 +96,7 @@ try {
     });
     await page.locator('.comparison-select').nth(1).click();
     const nodeAction=width<=560?page.locator('.node-comparison-detail[data-cluster="secondary-example"]'):page.locator('.comparison-table tbody tr').last().locator('td[data-cluster="secondary-example"]');
-    await nodeAction.getByRole('button',{name:'Open node',exact:true}).click();
+    await nodeAction.getByRole('button',{name:'Open host',exact:true}).click();
     assert.equal(await page.evaluate(()=>window.__nodeRoute.target),'secondary-example');
     await page.evaluate(()=>{window.nodeDetail=window.__nodeDetailOriginal;FLEET.target='';localStorage.removeItem('homestead.fleet.mode');window.__nodesFixture=window.__fourNodes;return go('dash')});
     await page.waitForFunction(()=>document.querySelectorAll('.node-compact-host').length===4);

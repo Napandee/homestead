@@ -1,7 +1,7 @@
 /* Read-only, shared health advice for the dashboard and Cluster Health.
    Missing observations stay unknown; advice never changes cluster configuration. */
 const HealthInsights = (() => {
-  const titles = {health:"Health suggestions", workloads:"Workload health", containers:"Containers", vms:"Virtual machines", backups:"Backup freshness", updates:"Updates awaiting review", jobs:"Running and failed jobs"};
+  const titles = {health:"Health suggestions", workloads:"App and VM health", containers:"Containers", vms:"Virtual machines", backups:"Backup freshness", updates:"Updates awaiting review", jobs:"Running and failed jobs"};
   const sources = {alerts:"/api/alerts",overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
   const needs = {health:["cluster","protection","nodes","self","settings","overview","alerts"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
   const rank = {critical:0,medium:1,low:2};
@@ -14,7 +14,7 @@ const HealthInsights = (() => {
       if (known(cp.etcd_ready) && cp.etcd_ready < Math.floor(cp.etcd_total/2)+1)
         rows.push(item("quorum","critical","etcd quorum is unavailable","Restore unavailable etcd hosts before making cluster changes.","cluster"));
       else if (cp.etcd_total === 1)
-        rows.push(item("quorum","low","Single control-plane host","This cluster's state is kept on one host, so it has no failover: if that host fails, the cluster comes back only from an etcd snapshot. That is normal for a one-node cluster. Keep snapshots (k3s takes one every 12 hours; the node doctor can take one now) and copy them to another machine. Three server nodes would survive the loss of one.","cluster"));
+        rows.push(item("quorum","low","Single control-plane host","This cluster's state is kept on one host, so it has no failover: if that host fails, the cluster comes back only from an etcd snapshot. That is normal for a one-node cluster. Keep snapshots (k3s takes one every 12 hours; the host doctor can take one now) and copy them to another machine. Three server hosts would survive the loss of one.","cluster"));
       else if (cp.etcd_total === 2)
         rows.push(item("quorum","medium","Two etcd members have no failure margin","Add a third etcd server - or a small machine as a tiebreaker, which holds a vote and runs no apps (Cluster → Add a host). Both current members are required for quorum.","cluster"));
       else if (cp.quorum_margin === 0)
@@ -22,8 +22,8 @@ const HealthInsights = (() => {
     }
     if (data.cluster?.unavailable?.length) rows.push(item("cluster-partial","low","Some platform checks are unavailable","Open Cluster to review missing observations.","cluster"));
     for (const n of data.cluster?.nodes || []) {
-      if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving workloads.","node:"+n.name));
-      else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move workloads.","node:"+n.name));
+      if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving apps and VMs.","node:"+n.name));
+      else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move apps.","node:"+n.name));
     }
     const p=data.protection;
     if (p) {
@@ -50,7 +50,7 @@ const HealthInsights = (() => {
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
       const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster";
-      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
+      const finding=item(id,severity,`${({Node:"Host",Workload:"App"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
     }
@@ -158,7 +158,7 @@ const HealthInsights = (() => {
     if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
     if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"],settings);
     if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check schedules in Protection.</div>`+(data.protection.volumes.length ? list(backupRows(data.protection).map(r=>({...r,label:r.severity==="medium"?"Missing":"Recorded"})),4) : '<div class="empty small">No Longhorn volumes reported.</div>');
-    if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready}/${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active workloads need attention.</div>');}
+    if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready}/${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active apps need attention.</div>');}
     if(id==="updates") {
       const r=data.updates, rows=(r?.workloads || []).filter(w=>w.available || w.images?.some(i=>i.error)).map(w=>item(w.ns+"/"+w.name,w.available?"low":"medium",w.name,w.available?"Image update available":"Registry check failed",w.homestead?"settings:updates#homesteadUpdateCard":"images"));
       for(const c of data.components?.components || [])if(c.next)rows.push(item("component:"+c.id,"low",c.name,`${c.installed} → ${c.next}`,"settings:updates#settingsComponents"));

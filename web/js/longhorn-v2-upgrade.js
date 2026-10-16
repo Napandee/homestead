@@ -114,7 +114,7 @@ window.lhV2UpgradeSettingsReview = async enabled => {
     if (seq !== LH_V2_UPGRADE_SEQ || !$('#lhV2UpgradeTimeout')) return;
     LH_V2_SETTINGS_REVIEW = {...cfg,capacity_token:review.capacity_token};
     childModal('Apply V2 upgrade settings',UI.facts([['Live upgrades',enabled ? 'Enabled' : 'Paused'],['Host timeout',`${timeout} minutes`]])
-      + UI.ack('lhV2SettingsAck',enabled ? 'I have checked backups and understand this enables automatic V2 upgrades.' : 'I understand the current host upgrade can still finish.')
+      + UI.ack('lhV2SettingsAck',enabled ? 'Turn on automatic V2 upgrades; backups are checked' : 'Pause them; the host being upgraded still finishes')
       + UI.actions([UI.button('Back','lhV2Upgrade()'),UI.button('Apply settings','lhV2UpgradeSettingsApply()',{kind:'pri'})].join('')));
   } catch (e) { toast(e.message,'bad'); }
   finally { LH_V2_UPGRADE_BUSY = false; }

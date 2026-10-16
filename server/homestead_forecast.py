@@ -194,7 +194,7 @@ def alert_facts(rows):
             continue
         what = {"volume": f"Volume {r['label']}", "disk": f"Disk {r['label']}", "pool": "Longhorn storage"}.get(r["kind"], r["label"])
         when = "within a day" if left < 1 else f"in about {round(left)} day{'s' if round(left) != 1 else ''}"
-        rate = f"{r['per_day'] / 1024**3:.1f} GB a day" if r.get("per_day") else ""
+        rate = f"{r['per_day'] / 1024**3:.1f} GiB a day" if r.get("per_day") else ""
         facts.append({"key": f"forecast:{r['key']}", "category": "outage" if left <= CRIT_DAYS else "degraded",
                       "severity": "critical" if left <= CRIT_DAYS else "degraded",
                       "title": f"{what} fills up {when}",

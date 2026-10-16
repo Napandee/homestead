@@ -12,6 +12,7 @@ function context() {
     appAvatar: () => "", clusterAttr: () => "", clusterTag: () => "", remoteRow: () => false, platformTag: () => "", hardwareTags: () => "",
     fmtUp: String, svcUrl: () => "", fmtAgo: String, ratePair: () => ["0", "Mb/s"], sizePair: () => "", sizeText: () => "", meter: () => "", sev: () => "" };
   c.window = c; vm.createContext(c);
+  require("./helpers/load-time")(c);
   vm.runInContext(core.slice(0, core.indexOf("/* Put text on the clipboard.")), c);
   for (const file of ["metrics-utils.js", "ui.js", "uptime.js", "autoupdate.js", "schedules.js", "views-workloads.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
@@ -37,7 +38,7 @@ test("a schedule set in another time zone says so in its time line, not as a sec
   const zone = vm.runInContext("schedZone()", c);
   c.scheduleDialog("vm", "default", "home-assistant-os");
   assert.doesNotMatch(html, /ui-callout/);
-  assert.ok(html.includes(`Times in ${zone}. These times were set in Pacific/Chatham; saving sets them in ${zone}.`), html);
+  assert.ok(html.includes(`Times are in your time zone (${zone}). These times were set in Pacific/Chatham; saving sets them in ${zone}.`), html);
 });
 
 test("several concerns make one notice, in the worst tone, with a line each", () => {

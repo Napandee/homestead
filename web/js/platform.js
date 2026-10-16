@@ -4,7 +4,7 @@
 
 const PLATFORM_NEEDS = {
   longhorn: { name: "Longhorn", why: "volumes, snapshots and backups are Longhorn's",
-    fix: "Homestead can install it here, as it can under Settings → Hardware and storage. Each node needs open-iscsi and an NFS client (nfs-common) first." },
+    fix: "Homestead can install it here, as it can under Settings → Hardware and storage. Each host needs open-iscsi and an NFS client (nfs-common) first." },
   kubevirt: { name: "KubeVirt", why: "virtual machines run on KubeVirt",
     fix: "Homestead can install it with CDI, which fills VM disks from images - here or under Settings → Hardware and storage. The machines need hardware virtualisation to run VMs at full speed." },
 };
@@ -21,15 +21,15 @@ window.loadPlatform = loadPlatform;
 /* k3s's ServiceLB puts every Service on every node's own address: there is
    no VIP to choose, so the forms offer that one choice and say so. */
 const nodeAddressesOnly = () => STATE.platform?.load_balancer === "servicelb";
-const NODE_ADDRESS_TIP = "k3s's ServiceLB puts every Service on every node's own address, at the LAN port you give it - so each needs a port no other Service uses (Traefik has 80 and 443).";
+const NODE_ADDRESS_TIP = "k3s's ServiceLB puts every Service on every host's own address, at the LAN port you give it - so each needs a port no other Service uses (Traefik has 80 and 443).";
 function nodeAddressOption() {
-  return `<option value="shared" selected>Every node's own address · k3s ServiceLB</option>`;
+  return `<option value="shared" selected>Every host's own address · k3s ServiceLB</option>`;
 }
 /* With kube-vip beside it, ServiceLB still puts a Service on the nodes' own
    addresses: offered as well as a VIP of its own. */
 const nodeAddressBeside = () => !!STATE.platform?.servicelb && STATE.platform?.load_balancer === "kube-vip";
 function nodeAddressChoice(selected = false) {
-  return nodeAddressBeside() ? `<option value="nodes" ${selected ? "selected" : ""}>Every node's own address · ServiceLB</option>` : "";
+  return nodeAddressBeside() ? `<option value="nodes" ${selected ? "selected" : ""}>Every host's own address · ServiceLB</option>` : "";
 }
 window.nodeAddressBeside = nodeAddressBeside;
 window.nodeAddressesOnly = nodeAddressesOnly;
@@ -58,13 +58,13 @@ window.platformName = platformName;
    ordinary HelmCharts afterwards. Harvester brings both. */
 const ADDONS = {
   longhorn: { name: "Longhorn", what: "Replicated volumes, snapshots and backups - the Volumes and Data protection pages",
-    needs: "Each node needs open-iscsi and an NFS client (nfs-common) installed and iscsid running; the k3s script does that. Volumes keep one copy per node, up to three." },
+    needs: "Each host needs open-iscsi and an NFS client (nfs-common) installed and iscsid running; the k3s script does that. Volumes keep one copy per host, up to three." },
   "kube-vip": { name: "kube-vip", what: "VIPs for apps: a container can have a LAN address of its own, handed out from Networking > Your VIPs, as on Harvester",
-    needs: "Announces each VIP from one node with ARP. Beside k3s's ServiceLB it takes only the Services given a VIP; the rest stay on the nodes' own addresses." },
+    needs: "Announces each VIP from one host with ARP. Beside k3s's ServiceLB it takes only the Services given a VIP; the rest stay on the hosts' own addresses." },
   multus: { name: "Multus", what: "Second networks for pods - what LAN networks need, so a container or VM can have an address of its own on your LAN",
-    needs: "Installed on every node from the chart RKE2 uses for it; apps already running are left as they are." },
+    needs: "Installed on every host from the chart RKE2 uses for it; apps already running are left as they are." },
   kubevirt: { name: "KubeVirt", what: "Virtual machines, with CDI to fill their disks from images",
-    needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a node has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
+    needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a host has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
 };
 
 /* What Homestead needs under it on k3s and RKE2 - kube-vip for VIPs, Multus
@@ -77,15 +77,15 @@ function baselineHtml(r, where = "addons") {
   return `<div class="note warn baseline-note" style="margin-bottom:12px"><b>Required components not installed</b>
     <ul class="baseline-list">${missing.map(p => `<li><b>${esc(p.name)}</b> · ${esc(p.why)}</li>`).join("")}</ul>
     <div class="dim xs">Installed with the ${esc(platformName({ distribution: r.distribution }))} Helm controller at tested versions. Upgrades are available under System → Cluster → Platform versions.
-      ${where === "network" ? "Until installed, applications are published on node addresses only." : ""}</div>
+      ${where === "network" ? "Until installed, applications are published on host addresses only." : ""}</div>
     ${can("admin") ? `<div class="row" style="margin-top:8px"><button class="btn sm pri" onclick="baselineInstall()">Install components</button></div>` : '<div class="dim xs">Installation requires the admin role.</div>'}</div>`;
 }
 window.baselineHtml = baselineHtml;
 
 const BASELINE_WORDS = {
-  multus: "Added to the CNI configuration on every node. Running pods are not affected.",
-  macvtap: "Runs on every node and lets VMs join the LAN through the node's network interface. The nodes' own network is not changed.",
-  "kube-vip": "Runs on every node and announces each virtual IP from one node. Existing services are not changed.",
+  multus: "Added to the CNI configuration on every host. Running pods are not affected.",
+  macvtap: "Runs on every host and lets VMs join the LAN through the host's network interface. The hosts' own network is not changed.",
+  "kube-vip": "Runs on every host and announces each virtual IP from one host. Existing services are not changed.",
 };
 
 /* In Homestead's own dialog, not the browser's: a browser can silence its
@@ -102,7 +102,7 @@ window.baselineInstall = async () => {
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
     <ul class="ui-list">${missing.map(p => `<li><b>${esc(p.name)}</b> - ${esc(BASELINE_WORDS[p.id] || p.why)}</li>`).join("")}</ul>
-    <p class="dim xs">Installed through the Helm controller at the versions Homestead has tested; follow each in the job tray.</p>
+    <p class="dim xs">Installed through the Helm controller at the versions Homestead has tested; follow each under Jobs.</p>
     <div id="bl_result"></div>
     ${UI.actions(UI.cancel() + UI.button("Install", "baselineInstallGo()", { kind: "pri", id: "bl_go", attrs: 'data-need="admin"' }))}</div>`;
   window.__baselineMissing = missing.map(p => p.id);
@@ -148,9 +148,9 @@ window.addonsPaint = async () => {
   card.hidden = false;
   const probe = health.probe || {}, smb = health.samba || {};
   STATE.data.sambaInstalled = !!smb.installed;
-  const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the nodes have hardware virtualisation.</span>'
-    : s.kvm_everywhere ? "Every node has hardware virtualisation."
-    : s.kvm_nowhere ? '<b>No node has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
+  const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the hosts have hardware virtualisation.</span>'
+    : s.kvm_everywhere ? "Every host has hardware virtualisation."
+    : s.kvm_nowhere ? '<b>No host has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
     : `Only ${Object.entries(s.kvm).filter(([, on]) => on).map(([n]) => esc(n)).join(", ")} ha${Object.values(s.kvm).filter(Boolean).length === 1 ? "s" : "ve"} hardware virtualisation; VMs run there.`;
   const row = (key, state) => {
     const a = ADDONS[key];
@@ -161,7 +161,7 @@ window.addonsPaint = async () => {
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
     const diagnostic = key === "multus" && !state.ready && state.diagnostic_command
-      ? `<div class="note warn addon-diagnostic"><b>${esc(state.detail || "Multus is not ready")}</b> ${esc((state.issues || []).join("; "))} SSH to a server node to gather Helm, node-agent status and logs:</div>
+      ? `<div class="note warn addon-diagnostic"><b>${esc(state.detail || "Multus is not ready")}</b> ${esc((state.issues || []).join("; "))} SSH to a server host to gather Helm, node-agent status and logs:</div>
          ${guideCopy(state.diagnostic_command)}` : "";
     const emulation = key === "kubevirt" && state.installed && state.emulation != null
       ? `<div class="dim xs" style="margin-top:4px">${state.emulation
@@ -184,7 +184,7 @@ window.addonsPaint = async () => {
     : '<button class="btn sm" onclick="allocationProbeSettings()">VM placement checks</button><button class="btn sm" onclick="probeRemove()">Remove</button>';
   const probeRow = `<div class="addon-row"><div><b>Node probe</b> ${probePill}
       <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
-      <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every node; SMART tests use its separate privileged sidecar.</div></div>
+      <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every host; SMART tests use its separate privileged sidecar.</div></div>
     <div class="row">${probeButton}</div></div>`;
   const smbPill = !smb.installed ? '<span class="pill">not installed</span>'
     : !smb.enabled ? '<span class="pill med">off</span>'
@@ -258,7 +258,7 @@ window.hostConsoleSet = async input => {
 };
 
 window.kubevirtEmulation = async enabled => {
-  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on nodes without /dev/kvm, but run much more slowly there. Running VMs are not restarted.", { title: "Allow software emulation", ok: "Allow" }))) return;
+  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on hosts without /dev/kvm, but run much more slowly there. Running VMs are not restarted.", { title: "Allow software emulation", ok: "Allow" }))) return;
   try {
     const result = await api("/api/addons/kubevirt/emulation", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }) });
@@ -268,7 +268,7 @@ window.kubevirtEmulation = async enabled => {
 };
 
 window.multusRepair = async () => {
-  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing workloads are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
+  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing apps and VMs are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
   try {
     const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     toast(r.detail, "ok");
@@ -281,12 +281,12 @@ window.addonInstall = async key => {
   let body = {};
   if (key === "kubevirt") {
     const s = await api("/api/addons").catch(() => ({}));
-    if (s.kvm_nowhere && !(await ask("No node has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
+    if (s.kvm_nowhere && !(await ask("No host has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
     body = {};
   } else if (key === "kube-vip") {
     const s = await api("/api/addons").catch(() => ({}));
-    const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each node's default route uses.`
-      : "The nodes did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
+    const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each host's default route uses.`
+      : "The hosts did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
     if (!(await ask(`Install kube-vip? ${a.needs} ${where}`, { title: "Install kube-vip", ok: "Install" }))) return;
   } else if (!(await ask(`Install ${a.name}? ${a.needs}`, { title: `Install ${a.name}`, ok: "Install" }))) return;
   try {
@@ -345,7 +345,7 @@ window.platformJoinGuide = async (role = "app") => {
   STATE.data.joinGuide = g;
   const k3s = g.distribution === "k3s";
   if (!["k3s", "rke2"].includes(g.distribution)) {
-    $("#mbody").innerHTML = `<p class="muted small">This cluster's distribution could not be told from its nodes, so Homestead cannot give its join steps. Use the installer that set the cluster up.</p>`;
+    $("#mbody").innerHTML = `<p class="muted small">This cluster's distribution could not be told from its hosts, so Homestead cannot give its join steps. Use the installer that set the cluster up.</p>`;
     return;
   }
   $("#mbody").innerHTML = `<p class="muted small">This cluster runs <b>${k3s ? "k3s" : "RKE2"} v${esc(g.version)}</b>; the new host joins with the same release. Run these on the new machine, as root or with sudo.</p>
@@ -358,5 +358,5 @@ window.platformJoinGuide = async (role = "app") => {
       <div class="answer-modes">${JOIN_ROLES.map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="joinRole" value="${value}"${value === role ? " checked" : ""}
         onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div>
       <div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>4</span>Watch it join</h4><p class="dim small">It appears on the Nodes page within a minute or two, and turns Ready once its networking is up.</p></section>`;
+    <section class="guide-step"><h4><span>4</span>Watch it join</h4><p class="dim small">It appears on the Hosts page within a minute or two, and turns Ready once its networking is up.</p></section>`;
 };

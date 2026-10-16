@@ -13,7 +13,7 @@ function setup(fail=false) {
 test("allocation collector requires host access consent and preserves reviewed identity",async()=>{
   const t=setup();await t.ctx.allocationProbeSettings();assert.match(t.html(),/&lt;private>/);
   assert.equal(t.context(),"operation-review");
-  assert.match(t.html(),/Workload containers and VMs are not restarted/);
+  assert.match(t.html(),/Apps and VMs are not restarted/);
   await t.ctx.allocationProbeSave(true,{});assert.equal(t.calls.length,1);
   t.fields["#allocationProbeConsent"].checked=true;
   await t.ctx.allocationProbeSave(true,{});assert.equal(t.calls.length,2);

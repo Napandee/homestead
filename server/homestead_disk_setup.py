@@ -529,7 +529,7 @@ def os_space_problem(facts, engine="v1"):
         if tool not in facts["tools"]:
             return f"the host has no {tool}"
     if facts["usable_gb"] < 5:
-        return (f"{facts['vg']} has {facts['free_gb']} GB free; {facts['reserve_gb']} GB of that is kept for the "
+        return (f"{facts['vg']} has {facts['free_gb']} GiB free; {facts['reserve_gb']} GiB of that is kept for the "
                 "system, which leaves too little for Longhorn")
     return ""
 
@@ -550,7 +550,7 @@ def use_os_space(node, size_gb, engine="v1"):
         raise ValueError(problem)
     size = _size(size_gb)
     if not 5 <= size <= facts["usable_gb"]:
-        raise ValueError(f"choose from 5 to {facts['usable_gb']} GB: {facts['reserve_gb']} GB of {facts['vg']} "
+        raise ValueError(f"choose from 5 to {facts['usable_gb']} GiB: {facts['reserve_gb']} GiB of {facts['vg']} "
                          "is kept free for the system")
     vg = facts["vg"]
     if engine == "v2":
@@ -589,7 +589,7 @@ def region_plan(region, size_gb):
     want = _size(size_gb) * 1024 ** 3 // sector // align * align
     length = min(want, room)
     if length * sector < 5 * 1024 ** 3:
-        raise ValueError("that leaves less than 5 GB; choose a larger size")
+        raise ValueError("that leaves less than 5 GiB; choose a larger size")
     return first, length
 
 

@@ -15,10 +15,21 @@ a set of values is a facts panel, a row of figures is stat cards, a way of
 working is a guide. Reach for the component; new markup needs a reason the
 existing ones cannot meet, and then becomes a component itself.
 
+**One name for each thing.** What runs from an image is an **app**, with
+"container" for the process inside it; "workload" is Kubernetes' word, kept
+only for the networking features that serve VMs too (workload VIPs and
+Services, firewall policies). A machine in the cluster is a **host**; "node"
+appears only where Kubernetes' or Longhorn's own term is shown (node labels,
+selectors and tags, Longhorn nodes, the RWO access mode). The first page is
+the **Dashboard**, and Containers keeps its name. A VM is **shut down**,
+**forced off**, **restarted** and **moved to another host**, and has
+**vCPUs**. Progress is followed under **Jobs**. `tests/terminology.test.js`
+holds this.
+
 **Colour means state.** Green is healthy, amber needs attention, red is an
 error or something that cannot be undone. Two more colours carry meaning of
 their own: blue marks what opens something - a port, a VIP, a link - and
-purple the hardware a workload takes from its host (an iGPU, a Coral). Every
+purple the hardware an app or VM takes from its host (an iGPU, a Coral). Every
 other tag, chip, avatar, role badge and progress bar is neutral, so a healthy
 page is calm and the one red thing stands out. If everything is amber,
 nothing is.
@@ -31,8 +42,8 @@ beside them. Nothing wraps onto a second line of buttons.
 line - and keeps the tiles and breakdowns behind it, a tap away.
 
 **Draw, don't describe.** Where a paragraph would explain a picture - what a
-node holds, where a VIP leads, where each folder goes - draw it
-(`diagrams.js`), from live data, in the README graphic's vocabulary: a node
+host holds, where a VIP leads, where each folder goes - draw it
+(`diagrams.js`), from live data, in the README graphic's vocabulary: a host
 is a column, a VIP a blue pill, an app an amber block and a VM an outlined
 one, a volume green, and dashed for whatever is moving, empty or not there
 yet. It redraws as the fields change.
@@ -87,7 +98,7 @@ column headings are the one small upper-case label.
 ### Finding a page
 
 - **The sidebar has twelve entries** in four groups: Overview (Dashboard,
-  Nodes, Portal), Apps (Containers, Virtual Machines, App Store), Storage
+  Hosts, Portal), Apps (Containers, Virtual Machines, App Store), Storage
   (Volumes, Network Shares, Data Protection) and System (Networking, Cluster,
   Settings).
 - **A page that belongs to another is its tab**, not a sidebar entry:
@@ -114,10 +125,10 @@ column headings are the one small upper-case label.
 
 ### Detail pages
 
-Something with a lot to say about it - a node - is a page of its own, not a
+Something with a lot to say about it - a host - is a page of its own, not a
 dialog: `/nodes?node=<name>`, laid out as Settings is, a column of sections
 each with its state under its name, one shown at a time (a list first on a
-phone). A node's are Overview (its picture, uptime and facts), Workloads,
+phone). A host's are Overview (its picture, uptime and facts), Apps and VMs,
 Storage, Hardware, Network and Host OS. A drive opens inside Storage.
 
 ### The setup guide
@@ -187,7 +198,7 @@ after reloading the page. Returning rechecks the facts.
 | Showing | Use | On a phone |
 |---|---|---|
 | Items with the same fields - volumes, events, services, images | A table marked `stack` (`tbl stack`, inside `.tblwrap`) | Each row is a card: the first cell its title, short values two to a line with their label above, long values and the actions across the card |
-| Rich items with their own actions - nodes, workloads, jobs | A grid of cards (`grid` with `auto-fit`/`minmax`) | One card to a row |
+| Rich items with their own actions - hosts, apps, jobs | A grid of cards (`grid` with `auto-fit`/`minmax`) | One card to a row |
 | Short, uniform tiles - services, links | A grid of small tiles | Two to a row, never one tall tile each |
 | A set of values - an endpoint, a bucket, a size | `.about-grid` on a page, `UI.facts` in a dialog | Two to a row, one panel |
 | Headline figures | `UI.stats` | Two to a row |
@@ -208,9 +219,9 @@ storage and facts beneath it. Full host names remain in accessible labels and in
 
 Compact container rows use `collectionDisclosure()` for their title. This
 native button expands facts and runtime objects directly under the row;
-`actionBar()` still holds the workload actions. Sorting moves the detail with
+`actionBar()` still holds the app actions. Sorting moves the detail with
 its parent, and refreshing keeps the disclosure state. A disclosure is a
-view control, separate from a row's workload actions.
+view control, separate from a row's app actions.
 
 The form exception: a button that edits a form laid out as a table - the ✕
 that removes a row being typed - is a plain button marked `data-form-row`.
@@ -220,7 +231,7 @@ that removes a row being typed - is a plain button marked `data-form-row`.
 Pages are designed for a phone as much as a desktop:
 
 - **The page never scrolls sideways.** A wide item table stacks; a long name
-  wraps. A node comparison can scroll within its own labelled region.
+  wraps. A host comparison can scroll within its own labelled region.
 - **Use the width.** Pair short things - stats, facts, tiles, short table
   values - two to a line. A short value alone on a full-width line, or a
   label at one edge and its value at the other, wastes the screen.
@@ -240,7 +251,7 @@ Pages are designed for a phone as much as a desktop:
 
 ### Linked clusters
 
-A list that All clusters can show - containers, VMs, nodes, volumes - marks
+A list that All clusters can show - containers, VMs, hosts, volumes - marks
 each row's outermost element with `clusterAttr(row)`, so every action and
 dialog opened from the row goes to the row's cluster, and shows
 `clusterTag(row)` beside its name. Both are empty unless All clusters is on.
@@ -469,7 +480,7 @@ visible; diagnostic output can collapse.
 Container update review shows the apps and image changes, restart impact and
 warnings, as a review (above). Exact digests and capacity collapse under Details.
 The update button stays disabled until the restart is acknowledged. During a queue, keep
-failed or waiting workloads and their reason visible. **Close queue** explicitly
+failed or waiting apps and their reason visible. **Close queue** explicitly
 stops unstarted updates; submitted rollouts continue in Jobs. Never imply that
 the browser-managed queue continues after closing it.
 
@@ -536,7 +547,7 @@ in the same module shell so controls do not change location as data arrives.
 | `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
 | `UI.sectionForm(id, sections, finish, { always, noticeHtml })` / `stepper(id, steps, finish, { always })` | Section rail and phone selector; `always` for direct editing | A short form |
 | `revealDialogField(field)` | Reveal a field’s section and disclosures before focusing an error | Showing unrelated help |
-| `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a node holds, where a VIP leads, where each folder goes - drawn live | Decoration |
+| `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a host holds, where a VIP leads, where each folder goes - drawn live | Decoration |
 | `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
 | `serviceRow(name, state, detail, actions)` | Something Homestead runs or connects to, with its state and buttons | A list of like items |
 | `UI.ack(id, sentence)` | The one checkbox a risky action needs - 16 words at most | Settings |
@@ -660,7 +671,7 @@ use the same renderers. Portal tiles come from `portalTiles`, shared with Portal
 Do not fork charts, links or resource cards for the editor.
 
 - Use a 12-column grid with third, half, two-thirds and full-width cards.
-  A widget may constrain its widths to keep its content usable. Node health supports
+  A widget may constrain its widths to keep its content usable. Host health supports
   all widths. Height is a minimum; compact resource and Portal lists scroll inside
   short, medium or tall cards.
 - Desktop Start column and Start a new row preserve intentional gaps. Calculate
@@ -779,9 +790,9 @@ state for an acknowledged problem. See [notification rules](notifications.md)
 for trigger, delivery and wording contracts.
 
 
-### Node health dashboard widget
+### Host health dashboard widget
 
-Node health supports third, half, two-thirds and full widths. Compact summaries
+Host health supports third, half, two-thirds and full widths. Compact summaries
 are the default: repeat labelled metrics per host in a grid that responds to the
 widget width, with automatic stacking on phones. Reuse shared meters, status
 dots and typography. Show missing readings as unknown; show SMART warnings even

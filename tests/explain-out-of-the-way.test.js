@@ -22,7 +22,7 @@ test("Settings › Monitoring explains in tips, says amber, and says Recommended
 test("the Longhorn storage card keeps its live figure and puts the consequence in a tip", () => {
   const src = read("web/js/views-storage.js");
   assert.doesNotMatch(src, /class="note"[^>]*>Past a node's limit/);
-  assert.match(src, /across all nodes now/);
+  assert.match(src, /across all hosts now/);
 });
 
 test("Data Protection explains restore tests in a guide and says when testing is off", () => {

@@ -198,7 +198,7 @@ function fleetMigrationButton(m, state) {
   const on = !!state?.allowed;
   const label = !state ? "Migration" : on ? "Migration on" : "Migration off";
   return `<button type="button" class="btn sm fleet-mig${on ? " on" : ""}" onclick="fleetMigration(${jsq(m.id)})"
-    title="${esc(on ? `Workloads can move from ${m.name} to another cluster` : `Workloads cannot move from ${m.name} yet`)}">
+    title="${esc(on ? `Apps can move from ${m.name} to another cluster` : `Apps cannot move from ${m.name} yet`)}">
     <span class="fleet-dot ${on ? "ok" : ""}" aria-hidden="true"></span>${esc(label)}</button>`;
 }
 
@@ -234,7 +234,7 @@ window.fleetMigration = async id => {
     if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
   }
   if (!$("#mbody")) return;
-  const lead = UI.lead(`Move workloads from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
+  const lead = UI.lead(`Move apps from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
   const target = ready?.target || {};
   let body;
   if (state.allowed) {
@@ -262,7 +262,7 @@ window.fleetMigration = async id => {
       retryTarget]);
     body = `${lead}
       ${UI.facts([["Migration", "On"], ["Backup storage", `<span class="mono">${esc((state.endpoint || "—").replace(/^https?:\/\//, ""))}</span>`],
-        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GB` : "—"]])}
+        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
       ${problems.map(([tone, title, detail, fix]) => UI.callout(tone, title, `${detail ? `<p>${esc(detail)}</p>` : ""}${fix}`)).join("")}
       ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn backs up here too.`, "Disabling migration pauses those backups until it is enabled again.") : ""}
       ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { kind: "danger", id: "fm_go", attrs: 'data-need="admin"' }))}`;
@@ -274,7 +274,7 @@ window.fleetMigration = async id => {
     const shared = ready?.shared_vip;
     body = `${lead}
       ${UI.fields(
-        UI.field("Size (GB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
+        UI.field("Size (GiB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
         UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
             <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : "Its shared address"}</option>
             <option value="__typed">An address of its own…</option></select>
@@ -326,7 +326,7 @@ window.fleetMigrationSet = async (id, allow) => {
 function moveSourceRow(c) {
   return `<li><span class="fleet-dot" id="msd_${esc(c.name)}" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(c.label || c.name)}</b><span class="fleet-sub" id="mss_${esc(c.name)}">checking…</span></div>
-    ${UI.button("Browse workloads", `clusterBrowse(${jsArg(c.name)})`)}</li>`;
+    ${UI.button("Browse apps", `clusterBrowse(${jsArg(c.name)})`)}</li>`;
 }
 
 async function moveSourceCheck(c) {
@@ -377,7 +377,7 @@ window.fleetSettingsPaint = async () => {
     ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
         ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
       <p class="ui-help">${all
-        ? "Containers, Virtual Machines, Nodes and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
+        ? "Containers, Virtual Machines, Hosts and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
         : "The switch at the start of the top bar opens any cluster here, with your sign-in and role. Its All clusters shows them together."}</p>`) : ""}
     ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on Import for moves, with an account kept here.
       Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>
@@ -402,7 +402,7 @@ window.fleetMovesPaint = async () => {
   const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(() => []), api("/api/move/clusters").catch(() => [])]);
   if (!$("#fleetMovesCard")) return;
   host.hidden = !moves.length && !clusters.length;
-  host.innerHTML = `${UI.moduleHeader(`Moving workloads`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets workloads move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
+  host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
     <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();

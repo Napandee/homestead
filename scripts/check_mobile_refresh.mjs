@@ -5,8 +5,8 @@ export async function checkMobileRefresh(page, context, installed) {
   const chromium = context.browser().browserType().name() === "chromium";
   await page.evaluate(() => {
     window.__refreshCalls = 0;
-    window.__originalRefreshView = VIEWS.dash[2];
-    VIEWS.dash[2] = async () => { window.__refreshCalls++; await window.__originalRefreshView(); };
+    window.__originalRefreshView = VIEWS.dash[1];
+    VIEWS.dash[1] = async () => { window.__refreshCalls++; await window.__originalRefreshView(); };
     clearInterval(window.__loopTimer);
   });
   const calls = () => page.evaluate(() => window.__refreshCalls);
@@ -36,7 +36,7 @@ export async function checkMobileRefresh(page, context, installed) {
   await pull();
   assert.equal(await calls(), installed ? 2 : 1, "only the installed app handles pull-to-refresh");
   if (!installed) {
-    await page.evaluate(() => { VIEWS.dash[2] = window.__originalRefreshView; });
+    await page.evaluate(() => { VIEWS.dash[1] = window.__originalRefreshView; });
     return;
   }
   let count = await calls();
@@ -108,7 +108,7 @@ export async function checkMobileRefresh(page, context, installed) {
   await client?.detach();
   await page.evaluate(() => {
     window.__pendingCalls = 0;
-    VIEWS.dash[2] = () => { window.__pendingCalls++; return new Promise(resolve => window.__finishRefresh = resolve); };
+    VIEWS.dash[1] = () => { window.__pendingCalls++; return new Promise(resolve => window.__finishRefresh = resolve); };
     void manualRefresh();
   });
   assert.equal(await page.locator("#refresh").isDisabled(), true, "refresh stays disabled while a request is pending");
@@ -117,12 +117,12 @@ export async function checkMobileRefresh(page, context, installed) {
   assert.equal(await page.evaluate(() => window.__pendingCalls), 1, "a pending request cannot start a second refresh");
   await page.evaluate(() => window.__finishRefresh()); await idle();
   await page.evaluate(() => {
-    VIEWS.dash[2] = async () => { throw new Error("Refresh failed for this test"); };
+    VIEWS.dash[1] = async () => { throw new Error("Refresh failed for this test"); };
   });
   assert.equal(await page.evaluate(() => manualRefresh()), false, "a failed refresh reports failure");
   assert.equal(await page.locator("#pullRefresh").isVisible(), false, "failure is never announced as updated");
   assert.match(await page.locator("#toast").innerText(), /Refresh failed for this test/);
-  await page.evaluate(() => { VIEWS.dash[2] = window.__originalRefreshView; document.querySelector("#toast").replaceChildren(); });
+  await page.evaluate(() => { VIEWS.dash[1] = window.__originalRefreshView; document.querySelector("#toast").replaceChildren(); });
   for (const width of [375, 360]) {
     await page.setViewportSize({ width, height: 839 });
     // The setup guide is another top-bar control that must fit with refresh.

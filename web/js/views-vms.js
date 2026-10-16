@@ -67,8 +67,8 @@ window.vmStore = async (check = false) => {
   let s;
   try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); return; }
   STATE.data.vmStore = s;
-  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`) : "—";
-  const day = t => t ? new Date(t * 1000).toLocaleDateString() : "";
+  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB`) : "—";
+  const day = t => t ? fmtDay(t) : "";
   const state = r => {
     if (!s.harvester) return "";
     if (!r.kept) return '<span class="dim xs">not here</span>';
@@ -96,7 +96,7 @@ window.vmStore = async (check = false) => {
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
-        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
+        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
         <td>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
@@ -158,7 +158,7 @@ window.vmStoreNew = value => {
 function vmSpecs(v) {
   const disks = v.disks.filter(d => d.kind === "disk");
   const size = disks.map(d => d.size).filter(Boolean).join(" + ");
-  return [`${v.cores} core${v.cores === 1 ? "" : "s"}`, v.memory || "",
+  return [`${v.cores} vCPU${v.cores === 1 ? "" : "s"}`, v.memory || "",
     disks.length ? (size ? `${size} disk${disks.length > 1 ? "s" : ""}` : `${disks.length} disk${disks.length > 1 ? "s" : ""}`) : "no disk"]
     .filter(Boolean);
 }
@@ -175,7 +175,7 @@ function vmAddress(v, withNetwork = true) {
    the metrics API; disk traffic is KubeVirt's own count, as a rate over the
    last half minute. Anything not measured is left out, not guessed. */
 const vmBytes = b => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GiB` : b >= 1024 ** 2 ? `${Math.round(b / 1024 ** 2)} MiB` : `${Math.round(b / 1024)} KiB`;
-const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MB/s` : b >= 1024 ? `${Math.round(b / 1024)} KB/s` : `${Math.round(b || 0)} B/s`;
+const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MiB/s` : b >= 1024 ? `${Math.round(b / 1024)} KiB/s` : `${Math.round(b || 0)} B/s`;
 function vmIo(u) {
   if (!u || u.read_bps == null) return `<span class="dim" data-tip="${esc(u?.io_note || "Measured from the second reading, half a minute after Homestead starts")}">—</span>`;
   return `<span class="vm-io"><span class="mono" title="Read from its disks">↓ ${vmRate(u.read_bps)}</span><span class="mono" title="Written to its disks">↑ ${vmRate(u.write_bps)}</span></span>`;
@@ -191,7 +191,7 @@ function vmUsage(v) {
     ${cell("RAM", u.mem_pct, u.mem != null ? vmBytes(u.mem) : "—", "memory")}
     <div><span>DISK</span>${vmIo(u)}</div></div>`;
 }
-const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A node of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
+const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
 
 function vmActions(v, compact = false) {
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
@@ -210,7 +210,7 @@ function vmActions(v, compact = false) {
         <button onclick="this.closest('details').open=false;vmMonitoring(${jsq(v.ns)},${jsq(v.name)})">${icon("pulse")}Monitoring</button>
         <button data-need="operator" onclick="this.closest('details').open=false;vmSchedule(${jsq(v.ns)},${jsq(v.name)})">${icon("clock")}Schedule</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
-        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
+        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move to another host</button>` : ""}
         ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
         ${FLEET.view?.linked ? `<button data-need="admin" title="Keep the source VM and create a stopped copy on another linked cluster" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'copy',${jsq(v.ns)})">${icon("copy")}Copy to cluster</button>` : ""}
         ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
@@ -237,7 +237,7 @@ function vmTable(rows) {
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
       <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
         ${v.network ? `<div class="dim xs">${esc(v.network)}</div>` : ""}</td>
-      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} core${v.cores === 1 ? "" : "s"}</span>`}</td>
+      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} vCPU${v.cores === 1 ? "" : "s"}</span>`}</td>
       <td data-label="RAM" class="nowrap vm-cell-use" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
       <td data-label="Disk IO" data-sm-hide class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
       <td class="nowrap" data-actions><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
@@ -366,7 +366,7 @@ window.vmPowerReviewedApply = async () => {
     // lost. Inspect the current VM state before initiating a fresh review.
     if ($("#vmPowerApply") === button) {
       button.textContent = "Inspect VM before retrying";
-      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Stop and Force stop remain available.</div>`);
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>`);
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
     }
     toast(error.message, "bad");
@@ -388,7 +388,7 @@ window.vmOpen = async (ns, name) => {
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
     <div class="vm-pane" data-pane="overview">
       <div class="vm-facts wide">
-        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} cores`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
+        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} vCPUs`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
         <div><span>Guest OS</span><b>${esc(v.guest?.prettyName || v.os || "unknown")}</b></div>
         <div><span>Kernel</span><b class="mono xs">${esc(v.guest?.kernelRelease || "—")}</b></div>
         <div><span>Live migration</span><b>${v.migratable ? "possible" : "not possible"}</b></div>
@@ -475,7 +475,7 @@ function vmEditResourceFields(v) {
     ? `CPU and memory are managed by instance type ${profile.name}. This form keeps that profile; it does not replace it with manual values.`
     : v.preference_profile?.name ? `Defaults come from preference ${v.preference_profile.name}. Unchanged CPU and memory are left as they are.` : "");
   return `${explanation ? `<div class="note ${v.profile_error ? "warn" : "small"}">${esc(explanation)}</div>` : ""}
-    <div class="f2"><div class="f"><label>CPU cores</label>${locked
+    <div class="f2"><div class="f"><label>vCPUs</label>${locked
       ? `<div class="mono">${esc(v.cores ?? "Unavailable")}</div>`
       : `<input id="ve_cores" type="number" min="1" max="128" value="${esc(v.cores)}">`}</div>
       <div class="f"><label>Memory</label>${locked
@@ -645,7 +645,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
     VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
     const plan = review.capacity, facts = plan.vm || {};
     const changes = UI.facts([
-      frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}`] : null,
+      frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} vCPUs · ${esc(frozen.memory || "unchanged memory")}`] : null,
       frozen.isolated ? ["Network", "Isolated: all virtual network cards are removed at the next start"]
         : frozen.isolated === false ? ["Network", "Virtual network cards are allowed"] : null,
       facts.policy_after && facts.policy_after !== facts.policy_before ? ["Restart policy", `${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after)}`] : null,
@@ -680,7 +680,7 @@ window.vmEditReviewedApply = async () => {
   const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
   VM_EDIT_REVIEW = null;
   VM_EDIT_BUSY = true;
-  button.disabled = true; button.textContent = "Saving reviewed changes…";
+  button.disabled = true; button.textContent = "Saving changes…";
   let saved = false;
   try {
     const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -738,23 +738,23 @@ window.k3sCluster = async () => {
     <p class="small" style="margin-top:0">Create a k3s cluster from VMs, each with its own LAN address. The first VM is the server; the others join it.</p>
     ${lan.length ? "" : vmNetworkNote(opts, true)}
     <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
-      <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
+      <div class="f"><label>Install ${tip("What each VM sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one VM; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
     <label class="switch" style="margin:0 0 14px"><input type="checkbox" id="k_kubevirt" onchange="k3sCountChanged()">
       <span>Include KubeVirt, for VMs inside the cluster
-      ${tip("Installs KubeVirt and CDI on the new cluster, so its Homestead can run VMs. The nodes get this host's CPU as it is, so VMs inside run with hardware virtualisation where this host allows nesting; where it does not, they are emulated - slower, but they run. Give the nodes more memory for this.")}</span></label>
+      ${tip("Installs KubeVirt and CDI on the new cluster, so its Homestead can run VMs. The VMs get this host's CPU as it is, so VMs inside run with hardware virtualisation where this host allows nesting; where it does not, they are emulated - slower, but they run. Give the VMs more memory for this.")}</span></label>
     <div class="f2"><div class="f"><label>Servers ${tip("One is enough to try things. Three keep the cluster running if one fails.")}</label>
         <select id="k_servers" onchange="k3sCountChanged()"><option value="1">1</option><option value="3">3</option></select></div>
-      <div class="f"><label>Workers ${tip("Nodes that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
-    <div class="f2"><div class="f"><label>Cores each ${tip("CPU cores for every node. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
-      <div class="f"><label>Memory each ${tip("Memory for every node, like 4Gi. Longhorn and Homestead inside want at least 4Gi on the server.")}</label><input id="k_mem" value="4Gi"></div></div>
-    <div class="f2"><div class="f"><label>Disk each (GB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
-      <div class="f"><label>Login password ${tip("For the ubuntu user on every node, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
-    <div class="f"><label>Image ${tip("The operating system every node starts from. An Ubuntu cloud image works best: it runs cloud-init, which sets up the address, login and k3s.")}</label><select id="k_image">
+      <div class="f"><label>Workers ${tip("VMs that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
+    <div class="f2"><div class="f"><label>vCPUs each ${tip("vCPUs for every VM. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
+      <div class="f"><label>Memory each ${tip("Memory for every VM, like 4Gi. Longhorn and Homestead inside want at least 4Gi on the server.")}</label><input id="k_mem" value="4Gi"></div></div>
+    <div class="f2"><div class="f"><label>Disk each (GiB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
+      <div class="f"><label>Login password ${tip("For the ubuntu user on every VM, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
+    <div class="f"><label>Image ${tip("The operating system every VM starts from. An Ubuntu cloud image works best: it runs cloud-init, which sets up the address, login and k3s.")}</label><select id="k_image">
       ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}">Harvester image · ${esc(i.display)}</option>`).join("")}
       <option value="url" selected>Ubuntu 26.04.1 LTS minimal cloud image (downloaded${opts.harvester ? " as a Harvester image" : ""})</option></select></div>
-    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class ${tip("The storage class for each node's disk on this cluster.")}</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
+    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class ${tip("The storage class for each VM's disk on this cluster.")}</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
     <div class="sec">Network</div>
-    <div class="f"><label>LAN network ${tip("The network bridged to your LAN the nodes join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
+    <div class="f"><label>LAN network ${tip("The network bridged to your LAN the VMs join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
     ${vmAddressFields("k", opts, 3)}
     ${UI.actions(UI.cancel() + `<button class="btn pri" data-need="operator" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>`)}`;
   k3sCountChanged();
@@ -817,9 +817,9 @@ window.k3sReview = async () => {
       UI.table([{ label: "VM" }, { label: "Role" }, { label: "Address" }], plan.nodes.map(n => [
         `<b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div>`,
         n.role === "server" ? UI.chip("server", "info") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
-      UI.facts([["Each VM", `${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
+      UI.facts([["Each VM", `${esc(plan.config.cores || 2)} vCPUs · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
       (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
-      UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and the job tray follows the VMs coming up.
+      UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and Jobs follows the VMs coming up.
         All the VMs share one capacity budget, new VMs waiting for launcher pods included; the placement below is an example, not a reservation.</p>
         ${(cap.example || []).length ? `<p class="ui-help">Example placement: ${cap.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}
         <p class="ui-help">Memory warnings can be accepted, even above 100%, at the risk of out-of-memory restarts. Hardware, storage and scheduling blockers can't.</p>`),
@@ -844,11 +844,11 @@ window.k3sCreate = async () => {
   try {
     await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
-    toast("Cluster VMs created - the job tray follows them coming up", "ok");
+    toast("Cluster VMs created - follow them coming up under Jobs", "ok");
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
   } catch (e) {
     toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
+    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>`);
     if (window.refreshOperations) refreshOperations(true);
   } finally { K3S_CREATE_BUSY = false; }
 };
@@ -859,7 +859,7 @@ window.k3sCreate = async () => {
    same verified SSH login, the container import uses. Disk images from a web
    address live here too. A VM running on Unraid is shut down first (its power
    button), so its disk is copied as it was left. */
-const uvmSize = bytes => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(bytes >= 1e11 ? 0 : 1)} GB` : `${Math.max(1, Math.round((bytes || 0) / 1e6))} MB`;
+const uvmSize = bytes => bytesText(bytes);
 const uvmId = name => "uvm-" + String(name).replace(/[^a-z0-9-]/gi, "-");
 const uvmPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
@@ -929,14 +929,14 @@ window.uvmLoad = async name => {
   host.innerHTML = found.vms.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
       <th>VM</th><th>State</th><th>Machine</th><th>Disk</th><th></th></tr></thead><tbody>${found.vms.map(vm => {
     const off = vm.shut_off, disk = vm.disks[0];
-    const machine = [`${vm.cores} cores`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
+    const machine = [`${vm.cores} vCPUs`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
     const action = !vm.ready ? `<span class="dim small">${esc(vm.problem)}</span>`
       : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.name)})`, need: "admin", pri: true }
         : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.name)},this)`, need: "admin", tip: "Shut it down on Unraid, so its disk is copied as it was left" }]);
     return `<tr><td><b>${esc(vm.name)}</b>${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
       <td data-label="State"><span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
       <td data-label="Machine" class="small">${machine}</td>
-      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
+      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GiB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
       <td>${action}</td></tr>`;
   }).join("")}</tbody></table></div>` : '<div class="dim small">No VMs on this server.</div>';
   if (window.applyRole) applyRole();
@@ -976,9 +976,9 @@ window.uvmImport = async (source, name) => {
     ${UI.field("Storage class", `<select id="uvm_sc">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
       { tipHtml: tip("The storage class for the disks. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
     ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
-      `${esc(d.size_gb)} GB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
+      `${esc(d.size_gb)} GiB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
       i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
-    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 100 MB/s on gigabit.</p>`;
+    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 110 MiB/s on gigabit.</p>`;
   const lan = (opts.network_details || []).filter(n => n.vms !== false);
   const network = `
     ${UI.field("Network", `<select id="uvm_net" onchange="uvmPicture()">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? " · LAN" : ""}</option>`).join("")}<option value="pod">Pod network - reached through a Service</option></select>`,
@@ -1007,10 +1007,10 @@ window.uvmPicture = () => {
     if (!kept.has(d.index)) return { what: "Disk", from: d.path.split("/").pop(), drop: true };
     const dv = n ? `${name}-disk-${n + 1}` : `${name}-disk`;
     n += 1;
-    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GB`, to: `${dv} · ${d.size_gb} GiB` };
+    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GiB`, to: `${dv} · ${d.size_gb} GiB` };
   };
   const rows = [
-    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} cores` },
+    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} vCPUs` },
     { what: "Memory", from: vm.memory, to: $("#uvm_mem")?.value || vm.memory },
     { what: "Firmware", from: vm.firmware === "uefi" ? `OVMF${vm.tpm ? " · TPM" : ""}` : "SeaBIOS", to: vm.firmware === "uefi" ? `EFI · q35${vm.tpm ? " · TPM" : ""}` : "BIOS · q35" },
     ...vm.disks.map(diskRow),

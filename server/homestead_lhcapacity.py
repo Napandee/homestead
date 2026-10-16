@@ -226,8 +226,8 @@ def alert_facts(cap):
                       "title": (f"Longhorn scheduling is blocked on {node['name']}" if node["blocked"] else
                                 f"Longhorn allocation limit is nearly reached on {node['name']}"),
                       "resolved": f"Longhorn capacity warning cleared on {node['name']}",
-                      "body": (node["blocked"] or f"{node['allocated_gb']} of {node['limit_gb']} GB allocated ({node['pct']}%); "
-                               f"a new replica there can be at most {node['room_gb']} GB"),
+                      "body": (node["blocked"] or f"{node['allocated_gb']} of {node['limit_gb']} GiB allocated ({node['pct']}%); "
+                               f"a new replica there can be at most {node['room_gb']} GiB"),
                       "href": "/volumes"})
     return facts
 

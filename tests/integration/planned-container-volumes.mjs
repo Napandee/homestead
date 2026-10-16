@@ -52,7 +52,7 @@ try {
     await page.evaluate(()=>UI.selectSection("containerDeploy","storage"));
     let rows = page.locator("#d_vols .deploy-volume"), owner = rows.nth(0), reused = rows.nth(1);
     await reused.locator(".vk").selectOption("planned");
-    assert.match(await reused.locator(".vselect").textContent(), /qbittorrent-appdata.*created with this workload/);
+    assert.match(await reused.locator(".vselect").textContent(), /qbittorrent-appdata.*created with this app/);
     await reused.locator(".vselect").selectOption("qbittorrent-appdata");
     await reused.locator(".vro").check();
     assert.equal(await reused.locator(".vnew").isVisible(), false);

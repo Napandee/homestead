@@ -289,22 +289,22 @@ window.storageRecoveryReview = async id => {
         (p.can_continue && !tokens.continue) || (p.can_pause && !tokens.pause)) throw new Error("The review is incomplete. Refresh it before taking action.");
     const action = p.can_continue ? "continue" : p.can_pause ? "pause" : null;
     STORAGE_RECOVERY = {id, action, tokens, host};
-    const phases = {stop:"Stopping workloads",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting workloads",done:"Complete"};
-    const leads = {stop:"Continue stopping the affected workloads before copying their data.",
-      copy:"Continue copying and checking the data. Workloads remain stopped during the copy.",
-      cutover:"Switch the verified copy into place. Restarting workloads gets its own capacity review.",
-      restart:"Restart workloads on the copied volume after fresh capacity checks. The original data is retained."};
+    const phases = {stop:"Stopping apps and VMs",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting apps and VMs",done:"Complete"};
+    const leads = {stop:"Continue stopping the affected apps and VMs before copying their data.",
+      copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
+      cutover:"Switch the verified copy into place. Restarting apps and VMs gets its own capacity review.",
+      restart:"Restart apps and VMs on the copied volume after fresh capacity checks. The original data is retained."};
     const issues = p.blockers.length ? p.blockers : p.warnings;
     const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
     host.innerHTML = UI.lead(action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
       action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy job already running can still finish." :
-      "This move needs inspection before it can continue. Its workloads and data have been left in place.") +
+      "This move needs inspection before it can continue. Its apps and VMs and data have been left in place.") +
       (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Before you continue", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
       UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`]]) +
       UI.section("Current position", `<p>${esc(p.message || "Waiting for the next step")}</p>`) +
-      UI.more("Workloads and retained resources", UI.table(["Workload","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
+      UI.more("Apps and VMs and retained resources", UI.table(["App or VM","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
         UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
-      (action ? UI.ack("storageRecoveryAck", action === "continue" ? "I approve continuing with the warnings shown above." : "I understand that pausing does not stop an already running copy.", {onchange:"storageRecoveryReady()"}) : "") +
+      (action ? UI.ack("storageRecoveryAck", action === "continue" ? "Continue despite the warnings" : "Pause it; a copy already running still finishes", {onchange:"storageRecoveryReady()"}) : "") +
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +
         (action ? UI.button(action === "continue" ? "Continue move" : "Pause move", "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
   } catch (error) {
@@ -393,7 +393,8 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
       ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
-        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> Record it as unknown: I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and what it kept" : ""}</label>
+        <p class="ui-help">The old request may still take effect late. Recording it lets a new ${mutation ? "VM change" : "power action"} be reviewed.</p>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   } catch(error) {
@@ -558,8 +559,8 @@ function operationCopyProgress(progress, active) {
   const percent = Math.max(0, Math.min(100, progress.percent));
   const approximate = progress.coarse && percent < 100 ? "~" : "";
   const size = Number.isFinite(progress.bytes) && progress.total_bytes > 0
-    ? `${approximate}${(progress.bytes / 1e9).toFixed(1)} / ${(progress.total_bytes / 1e9).toFixed(1)} GB` : "";
-  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1e6).toFixed(1)} MB/s` : "";
+    ? `${approximate}${(progress.bytes / 1024 ** 3).toFixed(1)} / ${(progress.total_bytes / 1024 ** 3).toFixed(1)} GiB` : "";
+  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1024 ** 2).toFixed(1)} MiB/s` : "";
   const remaining = progress.eta_seconds;
   const seconds = Math.ceil(remaining || 0), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
   const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");

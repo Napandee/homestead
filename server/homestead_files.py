@@ -410,8 +410,8 @@ def read_file(namespace, pvc, path):
     if size < 0:
         raise ValueError(f"{relative} does not exist")
     if size > MAX_EDIT_BYTES:
-        raise ValueError(f"{relative} is {round(size / 1024)} KB; only files up to "
-                         f"{MAX_EDIT_BYTES // 1024} KB can be edited here")
+        raise ValueError(f"{relative} is {round(size / 1024)} KiB; only files up to "
+                         f"{MAX_EDIT_BYTES // 1024} KiB can be edited here")
     out, err = _sh(session["namespace"], session["pod"], f"cat {_quote(target)}")
     if err and not out:
         raise ValueError(err[:200])
@@ -432,7 +432,7 @@ def write_file(namespace, pvc, path, content, revision=None):
         raise ValueError("open the file again before saving; its revision is required")
     payload = str(content if content is not None else "").encode("utf-8")
     if len(payload) > MAX_EDIT_BYTES:
-        raise ValueError(f"the file is larger than {MAX_EDIT_BYTES // 1024} KB")
+        raise ValueError(f"the file is larger than {MAX_EDIT_BYTES // 1024} KiB")
     session = open_session(namespace, pvc)
     namespace, pod = session["namespace"], session["pod"]
     target = _full(path)

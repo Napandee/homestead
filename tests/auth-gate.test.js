@@ -93,7 +93,7 @@ test("a late rejection from the old session cannot sign out a fresh login", asyn
 
 test("a visibility or manual refresh does not load the page behind sign-in", async () => {
   let calls = 0;
-  const ctx = { STATE: { view: "dash", busy: false }, VIEWS: { dash: ["", "", async () => calls++, true] },
+  const ctx = { STATE: { view: "dash", busy: false }, VIEWS: { dash: ["", async () => calls++, true] },
     $: () => ({ classList: { contains: () => false } }), toast() {} };
   vm.createContext(ctx);
   const app = fs.readFileSync("web/js/app.js", "utf8");

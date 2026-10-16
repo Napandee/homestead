@@ -1,30 +1,32 @@
 /* Homestead — router, appearance, mobile nav, quiet refresh loop */
 
+/* Each page's sidebar section, how it is drawn and whether it refreshes
+   itself. Its title is ROUTES.label in router.js, the one source (#508). */
 const VIEWS = {
-  dash:      ["Dashboard",      "overview",  viewDash,      true],
-  flow:      ["Architecture",   "overview",  viewFlow,      true],
-  nodes:     ["Nodes",          "overview",  viewNodes,     true],
-  network:   ["Networking",     "system",    viewNetworking,true],
-  portal:    ["Portal",         "overview",  viewPortal,    true],
-  workloads: ["Containers",     "workloads", viewWorkloads, true],
-  vms:       ["Virtual Machines","workloads", viewVMs,       true],
-  vmimport:  ["Import",         "workloads", () => viewVmImport(), false],
-  deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
-  store:     ["App Store",      "workloads", viewStore,     false],
-  helm:      ["Helm",           "workloads", viewHelm,      true],
-  shares:    ["Network Shares", "storage",   viewShares,    false],
-  storage:   ["Volumes",        "storage",   viewStorage,   true],
-  images:    ["Image Cache",    "storage",   viewImages,    false],
-  protect:   ["Data Protection","storage",   viewProtect,   true],
-  schedules: ["Schedules",      "system",    viewSchedules, true],
-  monitoring: ["Monitoring",    "workloads", () => viewMonitoring(), true],
-  imports:   ["Import",         "system",    viewImport,    true],
-  events:    ["Events",         "system",    viewEvents,    true],
-  resources: ["Resources",      "system",    viewResources, true],
-  cluster:   ["Cluster",        "system",    viewCluster,   true],
-  settings:  ["Settings",       "system",    viewSettings,  false],
-  setup:     ["Setup",          "system",    () => viewSetup(), false],
-  agents:    ["AI agent requests", "system", () => viewAgents(), true],
+  dash:      ["overview",  viewDash,      true],
+  flow:      ["overview",  viewFlow,      true],
+  nodes:     ["overview",  viewNodes,     true],
+  network:   ["system",    viewNetworking,true],
+  portal:    ["overview",  viewPortal,    true],
+  workloads: ["workloads", viewWorkloads, true],
+  vms:       ["workloads", viewVMs,       true],
+  vmimport:  ["workloads", () => viewVmImport(), false],
+  deploy:    ["workloads", () => viewDeploy(), false],
+  store:     ["workloads", viewStore,     false],
+  helm:      ["workloads", viewHelm,      true],
+  shares:    ["storage",   viewShares,    false],
+  storage:   ["storage",   viewStorage,   true],
+  images:    ["storage",   viewImages,    false],
+  protect:   ["storage",   viewProtect,   true],
+  schedules: ["system",    viewSchedules, true],
+  monitoring: ["workloads", () => viewMonitoring(), true],
+  imports:   ["system",    viewImport,    true],
+  events:    ["system",    viewEvents,    true],
+  resources: ["system",    viewResources, true],
+  cluster:   ["system",    viewCluster,   true],
+  settings:  ["system",    viewSettings,  false],
+  setup:     ["system",    () => viewSetup(), false],
+  agents:    ["system", () => viewAgents(), true],
 };
 
 const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal", "helm"]);
@@ -208,7 +210,7 @@ function go(v, options = {}) {
       window.history.replaceState(window.history.state, "", clean.pathname + clean.search);
     }
   }
-  const [t, , fn] = VIEWS[v];
+  const [, fn] = VIEWS[v], t = HomesteadRouter.ROUTES[v].label;
   $("#title").textContent = t;
   renderBreadcrumb(v);
   pageTitle(t);
@@ -237,7 +239,7 @@ window.go = go;
 async function refresh(force) {
   // Phone resume/visibility events also run while the sign-in gate is open.
   if (!$("#gate").classList.contains("hidden")) return false;
-  const [, , fn, live] = VIEWS[STATE.view];
+  const [, fn, live] = VIEWS[STATE.view];
   if (!live && !force) return false;
   // One at a time - on this page. A refresh of a page since left waits on
   // abandoned reads for ever, and must not hold up the next.
