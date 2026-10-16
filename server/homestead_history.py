@@ -157,14 +157,16 @@ def record(overview, now=None):
                 hours.setdefault(hour, []).append(s)
         coarse = sorted(coarse + [_rollup(rows, hour) for hour, rows in hours.items()], key=lambda c: c["t"])
         boots, events = dict(data.get("boots") or {}), list(data.get("events") or [])
+        rebooted = set()
         for node in overview.get("nodes") or []:
             boot = node.get("boot_id") or ""
             if not boot:
                 continue
             if boots.get(node["name"]) and boots[node["name"]] != boot:
                 events.append({"t": now, "node": node["name"], "kind": "reboot"})
+                rebooted.add(node["name"])
             boots[node["name"]] = boot
-        maintenance = _expire(data["maintenance"], now)
+        maintenance = _cluster_returns(_expire(data["maintenance"], now), rebooted, now)
         data = {"fine": [s for s in fine if s["t"] > now - FINE_KEEP],
                 "coarse": [c for c in coarse if c["t"] > now - COARSE_KEEP],
                 "boots": boots, "events": [e for e in events if e["t"] > now - COARSE_KEEP][-500:],
@@ -188,6 +190,26 @@ def _expire(events, now):
     for event in events:
         if event["end"] is None and event["reason"] in CEILING_REASONS and now - event["start"] > MAX_OPEN:
             event.update(end=event["start"] + MAX_OPEN, outcome="limit")
+    return events
+
+
+# A planned cluster shutdown can last as long as the cluster is off. Once
+# Homestead runs again, each host's entry closes when the host is back on a
+# new boot; one still not back RETURN_GRACE after that is an outage.
+RETURN_GRACE = 30 * 60
+SHUTDOWN_SETTLE = 10 * 60   # the hosts power off within this of the commit
+
+
+def _cluster_returns(events, rebooted, now):
+    for event in events:
+        if event["end"] is not None or event["reason"] != "cluster shutdown":
+            continue
+        if event["node"] in rebooted:
+            event.update(end=now, outcome="returned")
+        elif now >= event["start"] + SHUTDOWN_SETTLE:
+            event.setdefault("resumed", now)
+            if now - event["resumed"] > RETURN_GRACE:
+                event.update(end=now, outcome="limit")
     return events
 
 

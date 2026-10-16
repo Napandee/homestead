@@ -633,4 +633,83 @@ class ShutdownTests(unittest.TestCase):
                 send.assert_not_called()
 
 
+
+class MaintenanceTests(unittest.TestCase):
+    """A planned cluster shutdown leaves a maintenance entry per host (#535)."""
+
+    def setUp(self):
+        import tempfile
+        import homestead_history as HISTORY
+        self.H = HISTORY
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = HISTORY.DATA_DIR
+        HISTORY.bind(self.tmp.name)
+        self.f = Fake()
+
+    def tearDown(self):
+        self.H.DATA_DIR = self.saved
+        self.tmp.cleanup()
+
+    def opened(self):
+        return {n: self.H.maintenance_events(n) for n in ("a", "b", "c")}
+
+    def test_homestead_records_the_shutdown_when_it_is_back(self):
+        """The coordinator and the recovery run as helper pods without Homestead's
+        data, so Homestead records the entries itself, from the job, once it is
+        running again (#535 review C1)."""
+        self.f.start().execute()
+        state = self.f.s.state()
+        run = state["run"]
+        self.assertEqual({"a": [], "b": [], "c": []}, self.opened(), "nothing is written from the helper")
+        committed = json.loads(self.f.journal["data"]["commit"])
+        self.f.now = state["deadline"] + 400
+        for n in self.f.nodes[:2]: n["status"]["nodeInfo"]["bootID"] += "-new"
+        self.f.s.progress({"ref": {"run": run}})
+        events = self.opened()
+        for name in "abc":
+            self.assertEqual([("cluster shutdown", f"cs:{run}:{name}", committed["at"])],
+                             [(e["reason"], e["job"], e["start"]) for e in events[name]])
+        self.assertEqual(["returned", "returned", None], [events[n][0]["outcome"] for n in "abc"],
+                         "a and b are back on a new boot; c is not yet")
+        self.f.s.progress({"ref": {"run": run}})
+        self.assertEqual(1, len(self.H.maintenance_events("a")), "observing again opens nothing new")
+
+    def test_a_released_run_closes_what_is_left(self):
+        self.f.start().execute()
+        run = self.f.s.state()["run"]
+        self.f.s.progress({"ref": {"run": run}})
+        self.f.now = self.f.s.state()["deadline"] + 181
+        for n in self.f.nodes: n["status"]["nodeInfo"]["bootID"] += "-new"
+        for p in self.f.pods:
+            if S.helper(p, "journal-uid"): p["status"] = {"phase": "Succeeded"}
+        self.f.s.recover(run)
+        self.f.s.progress({"ref": {"run": run}})
+        self.assertEqual({"returned"}, {e["outcome"] for events in self.opened().values() for e in events})
+
+    def test_no_event_without_a_commit(self):
+        self.f.start()
+        self.assertEqual({"a": [], "b": [], "c": []}, self.opened())
+
+    def overview(self, boots):
+        return {"nodes": [{"name": n, "status": "Ready", "boot_id": b} for n, b in boots.items()]}
+
+    def test_a_host_back_on_a_new_boot_closes_its_entry_from_the_samples(self):
+        t = 1_700_000_000
+        self.H.record(self.overview({"a": "a-1", "b": "b-1"}), now=t)
+        self.H.maintenance_open("a", "cluster shutdown", "cs:r:a", now=t + 60)
+        self.H.maintenance_open("b", "cluster shutdown", "cs:r:b", now=t + 60)
+        self.H.record(self.overview({"a": "a-2", "b": "b-1"}), now=t + 3600)
+        self.assertEqual("returned", self.H.maintenance_events("a")[0]["outcome"])
+        self.assertIsNone(self.H.maintenance_events("b")[0]["end"], "b has not come back yet")
+
+    def test_a_host_that_never_comes_back_becomes_an_outage(self):
+        t = 1_700_000_000
+        self.H.maintenance_open("b", "cluster shutdown", "cs:r:b", now=t)
+        back = t + 86400   # the cluster was off for a day; Homestead is running again
+        self.H.record(self.overview({"a": "a-2"}), now=back)
+        self.assertIsNotNone(self.H.maintenance_open_for("b", now=back + 60), "Homestead has only just come back")
+        self.H.record(self.overview({"a": "a-2"}), now=back + self.H.RETURN_GRACE + 300)
+        event = self.H.maintenance_events("b")[0]
+        self.assertEqual(("limit", back + self.H.RETURN_GRACE + 300), (event["outcome"], event["end"]))
+
 if __name__ == "__main__": unittest.main()
