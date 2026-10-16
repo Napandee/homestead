@@ -86,6 +86,7 @@ MODULES = (
     "homestead_move_source",
     "homestead_mqtt",
     "homestead_namespaces",
+    "homestead_network_server",
     "homestead_networking",
     "homestead_nodes",
     "homestead_nodeshell",

@@ -128,6 +128,12 @@ from homestead_cluster_server import (
     cluster_shutdown, image_update_capacity_plan, pod_container_rows, preview_image_update, set_update_mode,
 )
 CLUSTER_ROUTES.bind_routes(_late(*CLUSTER_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in CLUSTER_ROUTES.VALUES})
+import homestead_network_server as NETWORK_ROUTES
+from homestead_network_server import (
+    _unifi_loop, _vip_loop, edit_lan, installer_vip, mqtt_snapshot,
+    record_lan, vm_network_details, vm_networks, vm_subnets,
+)
+NETWORK_ROUTES.bind_routes(_late(*NETWORK_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in NETWORK_ROUTES.VALUES})
 
 
 def _heartbeats():
@@ -493,23 +499,6 @@ def app_settings_payload():
 
 # Looked up when asked, so a test that patches either is the one the route calls.
 APP_SETTINGS.bind(lambda: app_settings_payload(), lambda value: save_app_settings(value))
-
-
-def _unifi_loop():
-    """Hourly on the leader, while UniFi is connected: its clients and names
-    as they are now, rather than as they were when someone last pressed Sync."""
-    time.sleep(120)
-    while True:
-        if LEADER.is_leader():
-            try:
-                if IPAM.sync_due():
-                    IPAM.sync_unifi()
-                beat("unifi", 600, leader_only=True)
-            except Exception as error:
-                # The failure is recorded on the card (last_error); the loop carries on.
-                beat("unifi", 600, leader_only=True)
-                print(f"unifi: {str(error)[:160]}", flush=True)
-        time.sleep(600)
 
 
 def logsearch_read(ns, pod, container, since, limit):
@@ -963,33 +952,6 @@ def prepare_deploy_network(cfg):
     return dict(planned, ports=cfg.get("ports") or [])
 
 
-def edit_lan(ns, name, wanted):
-    """Give a container its own LAN address, change it, or take it away."""
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    current = LAN.read(dep)
-    if not wanted:
-        if not current:
-            return ""
-        LAN.apply_to_template(dep, ns, name, None)
-        dep["metadata"].pop("managedFields", None)
-        ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-        LAN.remove_nad(ns, name)
-        return f"{name} no longer has a LAN address of its own"
-    lan = LAN.clean(wanted)
-    if current == lan:
-        return ""
-    if not current or current.get("address") != lan["address"]:
-        problem = vm_address_problem(lan["address"])
-        if problem:
-            raise ValueError(problem)
-    LAN.ensure_nad(ns, name, lan)
-    LAN.apply_to_template(dep, ns, name, lan)
-    dep["metadata"].pop("managedFields", None)
-    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    record_lan(ns, name, lan)
-    return f"{name} answers on {lan['address']} on the LAN"
-
-
 def prepare_lan(cfg):
     """A container's own LAN address, checked as free and its network made,
     before the Deployment that joins it."""
@@ -1001,14 +963,6 @@ def prepare_lan(cfg):
         raise ValueError(problem)
     cfg["lan"] = lan
     return cfg
-
-
-def record_lan(ns, name, lan):
-    try:
-        IPAM.save_record({"ip": lan["address"], "name": name, "kind": "static", "category": "server",
-                          "owner": "homestead", "note": f"container {ns}/{name}, on {lan['network']}"})
-    except Exception:
-        pass
 
 
 def _dns_name(value, label="name"):
@@ -1556,61 +1510,6 @@ def kubevirt_gates():
         return []
     return sorted(((((kv.get("spec") or {}).get("configuration") or {}).get("developerConfiguration") or {})
                    .get("featureGates") or []))
-
-
-def vm_networks():
-    """The pod network and every network attachment (Multus) a VM can join."""
-    try:
-        items = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
-    except Exception:
-        items = []
-    return ["pod"] + sorted(f"{i['metadata']['namespace']}/{i['metadata']['name']}" for i in items)
-
-
-def vm_network_details(strict=False):
-    """Each VM network, and whether it puts a VM on the LAN with an address
-    of its own - a bridge, as Harvester's VM networks are. Strict reads let
-    setup distinguish unavailable inventory from no configured networks."""
-    try:
-        items = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
-    except urllib.error.HTTPError as error:
-        if strict and error.code != 404:
-            raise
-        items = []
-    except Exception:
-        if strict:
-            raise
-        items = []
-    out = []
-    for item in items:
-        try:
-            config = json.loads((item.get("spec") or {}).get("config") or "{}")
-        except ValueError:
-            config = {}
-        labels = item["metadata"].get("labels") or {}
-        out.append({"name": f"{item['metadata']['namespace']}/{item['metadata']['name']}",
-                    "type": config.get("type", ""), "vlan": config.get("vlan"),
-                    "bridge": config.get("bridge", "") or config.get("master", "")
-                              or ((item["metadata"].get("annotations") or {}).get("k8s.v1.cni.cncf.io/resourceName") or "").rsplit("/", 1)[-1],
-                    "kind": labels.get("network.harvesterhci.io/type", ""),
-                    # On the LAN: a bridge carries VMs and containers; macvlan
-                    # gives containers a MAC of their own but cannot carry a
-                    # VM; macvtap carries VMs only.
-                    "lan": config.get("type") in ("bridge", "macvlan", "macvtap"),
-                    "vms": config.get("type") in ("bridge", "macvtap"),
-                    "containers": config.get("type") in ("bridge", "macvlan")})
-    return sorted(out, key=lambda row: row["name"])
-
-
-def vm_subnets():
-    """The subnets IP addresses knows, with the free addresses outside DHCP."""
-    try:
-        view = IPAM.view()
-    except Exception:
-        return []
-    return [{"cidr": s["cidr"], "name": s.get("name", ""), "gateway": s.get("gateway", ""),
-             "dhcp_start": s.get("dhcp_start", ""), "dhcp_end": s.get("dhcp_end", ""),
-             "free": s.get("free_list") or s.get("next_free") or []} for s in view.get("subnets") or []]
 
 
 def vm_address_problem(ip):
@@ -2399,18 +2298,6 @@ SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"
                   follow_fleet=lambda: _follow_fleet_address())
 
 
-def installer_vip(vip):
-    """The VIP the installer was given: reserved, the apps' default, and
-    Homestead's own services on it beside the nodes' addresses."""
-    NETWORK.add_vips({"ip": vip, "label": "Homestead and apps"}, IPAM.load()[0].get("records") or {})
-    NETWORK.set_default_vip(vip)
-    moved = SELF_ADDRESS.move(vip)
-    for key in ("network", "ov"):
-        _cache.pop(key, None)
-    _follow_fleet_address()
-    return "; ".join(f"{s['label']}: {s['action']} ({s['detail']})" for s in moved["steps"]) or f"{vip} reserved"
-
-
 def _follow_fleet_address():
     """Linked clusters reach this one on its VIP once it is there."""
     try:
@@ -2607,35 +2494,6 @@ NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
 
-VIP_QUICK = 5          # a look for a missing address
-VIP_FULL = 30          # a full pass regardless
-
-
-def _vip_loop():
-    """kube-vip can answer for an address and the Service lose it from its
-    status - k3s's ServiceLB empties it when the pods change - and then every
-    port there is refused. The leader records it again, as kube-vip would
-    have (homestead_vips.py): within seconds of it going missing (#365), and
-    in a full pass every VIP_FULL seconds."""
-    last_full = 0.0
-    while True:
-        if LEADER.is_leader():
-            try:
-                platform = PLATFORM.detect()
-                now = time.time()
-                if now - last_full >= VIP_FULL or VIPS.missing(platform):
-                    last_full = now
-                    if VIPS.keep(platform):
-                        with _lock:
-                            _cache.pop("network", None)
-                            _cache.pop("flow2", None)
-                beat("vips", VIP_FULL, leader_only=True)
-            except Exception as error:
-                beat("vips", VIP_FULL, error, leader_only=True)
-                print(f"VIPs: {str(error)[:160]}", flush=True)
-        time.sleep(VIP_QUICK)
-
-
 def weekly_trim():
     """Homestead's weekly trim job kept in place (homestead_longhorn), made
     once: remembered here, so one someone deleted is not made again."""
@@ -2819,48 +2677,6 @@ def _moves_loop():
             except Exception as error:
                 beat("moves", MOVE_ENGINE.TICK_SECONDS, error, leader_only=True)
         time.sleep(MOVE_ENGINE.TICK_SECONDS)
-
-
-def mqtt_snapshot():
-    """The numbers hv-exporter published, counted the way it counted them."""
-    o = cached("ov", 10, get_overview)
-    pods = kget("/api/v1/pods").get("items", [])
-    try:
-        vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
-    except Exception:
-        vmis = []
-    system = lambda p: p["metadata"]["namespace"] in SYS_NS
-    running = [p for p in pods if (p.get("status") or {}).get("phase") == "Running"]
-    bad = [p for p in pods if (p.get("status") or {}).get("phase") in ("Failed", "Pending")]
-    namespaces = {}
-    for p in pods:
-        if not system(p):
-            namespaces[p["metadata"]["namespace"]] = namespaces.get(p["metadata"]["namespace"], 0) + 1
-    ready = o.get("nodes_ready", 0)
-    total = o.get("nodes_total", 0)
-    notready = total - ready
-    degraded, faulted = o.get("vol_degraded", 0), o.get("vol_faulted", 0)
-    wl_bad = sum(1 for p in bad if not system(p))
-    sys_bad = sum(1 for p in bad if system(p))
-    health = ("critical" if notready or faulted else "degraded" if degraded or wl_bad or sys_bad else "healthy")
-    nodes = []
-    for node in o.get("nodes") or []:
-        name = node["name"]
-        mine = [p for p in running if (p.get("spec") or {}).get("nodeName") == name]
-        nodes.append({"name": name, "cpu_pct": node.get("cpu_pct", 0), "mem_pct": node.get("mem_pct", 0),
-                      "mem_gb": node.get("mem_used_gb", 0), "rx_mbps": round(node.get("rx_mbps", 0) or 0, 2),
-                      "tx_mbps": round(node.get("tx_mbps", 0) or 0, 2), "pods": len(mine),
-                      "vms": sum(1 for v in vmis if (v.get("status") or {}).get("nodeName") == name),
-                      "wl": ", ".join(node.get("workloads") or []) or "none", "status": node.get("status", "NotReady")})
-    return {"cluster": {"nodes_ready": ready, "nodes_total": total, "nodes_notready": notready,
-                        "vol_total": o.get("volumes", 0), "vol_degraded": degraded, "vol_faulted": faulted,
-                        "pods_system": sum(1 for p in running if system(p)),
-                        "pods_workload": sum(1 for p in running if not system(p)),
-                        "pods_sys_bad": sys_bad, "pods_wl_bad": wl_bad,
-                        "vms_running": sum(1 for v in vmis if (v.get("status") or {}).get("phase") == "Running"),
-                        "health": health, "wl_summary": " ".join(f"{ns}:{n}" for ns, n in sorted(namespaces.items())),
-                        "cpu_pct": o.get("cpu_pct", 0), "mem_pct": o.get("mem_pct", 0)},
-            "nodes": nodes}
 
 
 def homestead_data_volume(dep=None):
@@ -4192,9 +4008,6 @@ class H(HTTP.LimitedHandler):
                 if status is None:
                     return self._send(404, {"error": "No recorded data move with this identity"})
                 return self._send(503 if status["status"] == "unknown" else 200, status)
-            if p == "/api/mqtt/preview":
-                snap = mqtt_snapshot()
-                return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
             if p == "/api/snapshot-files/plan":
                 return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
