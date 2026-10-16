@@ -81,6 +81,24 @@ class InstallTests(unittest.TestCase):
                          "KubeVirt 1.8 and later must read the network's device itself, or the pod never gets one")
         self.assertIn("macvtap v0.13.2", result["detail"])
 
+    def test_a_kubevirt_still_deploying_gets_the_gate_too(self):
+        """KubeVirt reports no version until it has finished deploying, and
+        Add-ons installs 1.8 or later: a network added in that window must
+        still switch the gate off, or its VMs never get their device (#551)."""
+        cluster = Cluster(kubevirt="")
+        MACVTAP.register_binding()
+        developer = cluster.sent[-1][2]["spec"]["configuration"]["developerConfiguration"]
+        self.assertEqual({"disabledFeatureGates": ["ExternalNetResourceInjection"]}, developer,
+                         "the gate is assumed needed while the version is unknown; the pre-1.5 gate is not")
+        self.assertFalse(MACVTAP.nad_lookup(cluster.kv), "an unknown version with the gate on is not ready")
+        cluster.kv["spec"]["configuration"]["developerConfiguration"] = {"disabledFeatureGates": ["ExternalNetResourceInjection"]}
+        self.assertTrue(MACVTAP.nad_lookup(cluster.kv))
+        cluster = Cluster(kubevirt="", daemonset=daemonset(), binding=True)
+        self.assertFalse(MACVTAP.inspect()["ready"])
+        MACVTAP.install()
+        self.assertEqual([], cluster.charts, "installed already: only the binding is registered")
+        self.assertIn("ExternalNetResourceInjection", cluster.sent[-1][2]["spec"]["configuration"]["developerConfiguration"]["disabledFeatureGates"])
+
     def test_older_kubevirt_also_gets_the_binding_plugins_gate(self):
         cluster = Cluster(kubevirt="v1.4.2")
         MACVTAP.register_binding()
