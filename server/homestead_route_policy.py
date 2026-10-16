@@ -12,8 +12,6 @@ POLICY = {
     ('GET', '/api/auth/preferences/dashboard'): 'viewer',
     ('POST', '/api/auth/preferences/dashboard'): 'viewer',
     ('GET', '/api/diagnostics/download'): 'admin',
-    ('GET', '/api/logos'): 'viewer',
-    ('GET', '/api/logos/missing'): 'viewer',
     ('GET', '/api/auth/state'): 'viewer',
     ('GET', '/api/console'): 'operator',
     ('GET', '/api/fleet'): 'viewer',

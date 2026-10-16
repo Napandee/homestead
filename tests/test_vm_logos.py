@@ -82,7 +82,7 @@ class SaveVmLogoTests(unittest.TestCase):
             p.stop()
 
     def test_an_os_choice_an_image_and_back_to_automatic(self):
-        self.server.set_vm_logos({"items": [{"ns": "lab", "name": "nas", "os": "truenas"},
+        self.server.VM_ROUTES.set_vm_logos({"items": [{"ns": "lab", "name": "nas", "os": "truenas"},
                                             {"ns": "lab", "name": "ha", "icon": "https://example.com/ha.png"},
                                             {"ns": "lab", "name": "web", "icon": "", "os": ""}]})
         (method, path, body), kwargs = self.sent[0]
@@ -98,7 +98,7 @@ class SaveVmLogoTests(unittest.TestCase):
         for items in ([], [{"ns": "lab", "name": "x", "os": "beos"}], [{"ns": "lab", "name": "../x", "os": "ubuntu"}],
                       [{"ns": "lab", "name": "x", "icon": "javascript:alert(1)"}]):
             with self.subTest(items=items), self.assertRaises(ValueError):
-                self.server.set_vm_logos({"items": items})
+                self.server.VM_ROUTES.set_vm_logos({"items": items})
         self.assertEqual([], self.sent)
 
 
