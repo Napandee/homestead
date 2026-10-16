@@ -191,7 +191,9 @@ def nad_lookup(kv=None):
     developer = ((((kv or {}).get("spec") or {}).get("configuration") or {}).get("developerConfiguration") or {})
     if "ExternalNetResourceInjection" in (developer.get("featureGates") or []):
         return False
-    return not version or version < (1, 8) or GATE in (developer.get("disabledFeatureGates") or [])
+    # No version is KubeVirt still deploying, and Add-ons installs 1.8 or
+    # later: the gate is taken as needed until the version says otherwise (#551).
+    return (version is not None and version < (1, 8)) or GATE in (developer.get("disabledFeatureGates") or [])
 
 
 GATE = "ExternalNetResourceInjection"
@@ -214,7 +216,8 @@ def register_binding():
         gates = list(developer.get("featureGates") or [])
         if "NetworkBindingPlugins" not in gates:
             changes["featureGates"] = gates + ["NetworkBindingPlugins"]
-    if version and version >= (1, 8):
+    if version is None or version >= (1, 8):
+        # An unknown version is one still deploying (see nad_lookup).
         gates = [g for g in developer.get("featureGates") or [] if g != GATE]
         if gates != list(developer.get("featureGates") or []):
             changes["featureGates"] = gates
