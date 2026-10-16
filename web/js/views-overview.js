@@ -251,7 +251,7 @@ window.nodeUptimePaint = async n => {
   const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${now}</div></div>`;
   if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
   const tone = uptimeTone;
-  const events = [...(u.outages || []).map(o => ({ t: o.start, kind: "down", o })), ...(u.reboots || []).map(t => ({ t, kind: "reboot" }))]
+  const events = [...(u.outages || []).map(o => ({ t: o.start, kind: "down", o })), ...(u.reboots || []).map(r => ({ t: r.t ?? r, kind: "reboot" }))]
     .sort((a, b) => b.t - a.t).slice(0, 12);
   const took = o => `${o.exact ? "" : "about "}${uptimeDuration(o.down_s)}`;
   host.innerHTML = `${head}
