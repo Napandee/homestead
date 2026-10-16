@@ -420,7 +420,8 @@ window.vmOpen = async (ns, name) => {
       ${v.disks.map(d => `<tr><td><b>${esc(d.name)}</b><div class="dim xs">${esc(d.bus)}</div></td><td>${esc(d.kind)}</td>
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
         <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table>`;
-  const network = `<div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
+  // The tab's one action is its own, above the table, not part of a note (#559).
+  const network = `<div class="between vm-net-head">${UI.lead("Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.")}
       <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.ns)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>

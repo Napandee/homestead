@@ -54,3 +54,12 @@ test("a VM's dialog uses the shared section tabs and closes from a footer",async
   assert.deepEqual(tabs.map(x=>x.split(" ·")[0]),["Overview","Disks","Network","Events"]);
   assert.match(html,/<button[^>]*data-dialog-dismiss="true"[^>]*>Close<\/button>/);
 });
+/* The Network tab's one action is its own, not part of a note (#559). */
+test("a VM's Network tab leads with Configure VIP / ports as its own action, not inside a note",async()=>{
+  const t=open(detail);await t.ctx.vmOpen("lab","guest");
+  const pane=t.body.innerHTML.match(/class="stepper-pane"[^>]*data-key="network"[^>]*>([\s\S]*?)<\/div>\s*<div class="stepper-pane"/);
+  assert.ok(pane,"a Network pane");
+  assert.doesNotMatch(pane[1],/class="note[^"]*"[^>]*>[^]*?Configure VIP/,"the button is not inside a note");
+  assert.match(pane[1],/class="ui-lead/,"the explanation is a lead");
+  assert.ok(pane[1].indexOf("Configure VIP / ports")<pane[1].indexOf("<table"),"the action comes before the table");
+});

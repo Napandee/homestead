@@ -3844,6 +3844,10 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .agent-command-block{display:grid;gap:6px;margin-top:12px}
 /* The VM dialog's state and its actions share a line, and wrap on a phone (#504). */
 .vm-head{flex-wrap:wrap;gap:10px}
+/* A VM's Network tab: its explanation, then its own action, wrapping on a phone (#559). */
+.vm-net-head{flex-wrap:wrap;gap:10px;align-items:flex-start;margin-bottom:10px}
+.vm-net-head>.ui-lead{flex:1 1 260px;margin:0}
+.vm-net-head>.btn{flex:0 0 auto}
 /* Remove container sits clear of the first field (#495). */
 .edit-container-remove{display:flex;justify-content:flex-end;margin-bottom:12px}
 /* Port links and movable tags are buttons (#487); they keep the text they sit in. */
