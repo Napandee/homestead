@@ -67,6 +67,16 @@ const UI = (() => {
     </div>`;
   };
 
+  /* Several concerns as one notice (design.md: one per dialog): the worst
+     tone, a line each. items: [[tone, text], ...]; "" when there are none. */
+  const notices = (items, title = "") => {
+    const rows = (items || []).filter(([, text]) => text);
+    if (!rows.length) return "";
+    const worst = ["bad", "warn", "info"].find(t => rows.some(([tone]) => tone === t)) || "info";
+    if (rows.length === 1) return callout(worst, title, `<p>${text(rows[0][1])}</p>`);
+    return callout(worst, title, `<ul class="ui-list">${rows.map(([, t]) => `<li>${text(t)}</li>`).join("")}</ul>`);
+  };
+
   const section = (title, bodyHtml, asideHtml = "") => `<section class="ui-section">
     ${title || asideHtml ? `<header><h4>${text(title)}</h4>${asideHtml ? `<div class="ui-section-aside">${asideHtml}</div>` : ""}</header>` : ""}
     ${bodyHtml}</section>`;
@@ -132,6 +142,16 @@ const UI = (() => {
     <input type="checkbox" id="${text(id)}"${onchange ? ` onchange="${text(onchange)}"` : ""}><span>${text(sentence)}</span></label>`;
 
   const fields = (...html) => `<div class="ui-fields">${html.join("")}</div>`;
+  /* The typed confirmation before an action that can't be undone (#489):
+     the exact text to type, and the button (by id, drawn disabled by the
+     dialog) enabled only when it matches; typedConfirmMatches(id) checks it
+     again on submit. */
+  // A dialog whose button waits on more than this field passes no button and
+  // its own oninput, and checks typedConfirmMatches(id) in its readiness.
+  const typedConfirm = ({ id, expect, button = "", oninput = "", help = "" }) => `<div class="f ui-typed">
+    <label for="${text(id)}">Type <b class="mono">${text(expect)}</b> to confirm</label>
+    <input id="${text(id)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${text(expect)}"
+      data-typed-expect="${text(expect)}"${button ? ` data-typed-button="${text(button)}"` : ""}${oninput ? ` oninput="${text(oninput)}"` : ""}>${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
   const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => {
     const [html, id] = withControlId(controlHtml);
     return `<div class="ui-field${wide ? " wide" : ""}">
@@ -231,7 +251,7 @@ const UI = (() => {
 
   /* A CPU or memory amount, in the units the rest of Homestead shows (#311):
      memory as a number with MiB or GiB, CPU as a percentage of one core or
-     cores. Typed amounts are understood ("390 MB", "1.5 GB", "1Gi", "50m"),
+     cores. Typed amounts are understood ("390M", "1.5G", "1Gi", "50m"),
      and the line under the field says what was understood, or why not. The
      Kubernetes quantity the form sends is kept in a hidden input with the
      id the form reads, so nothing that reads it changes. */
@@ -321,8 +341,8 @@ const UI = (() => {
     document.addEventListener("focusout", event => { const box = event.target.closest?.(".qty"); if (box) quantityUpdate(box); });
   }
 
-  return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
-    fields, field, chip, button, actions, cancel, error, empty, stats, guide,
+  return { lead, callout, notices, section, facts, checklist, steps, progress, meter, table, more, ack,
+    fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
@@ -479,7 +499,7 @@ function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtm
     ${noticeHtml ? `<div class="dialog-rail-notice">${noticeHtml}</div>` : ""}
     ${UI.actions((always ? finishHtml : `<span data-finish${list.length > 1 ? " hidden" : ""}>${finishHtml}</span>`) +
       (!always && list.length > 1 ? UI.button("Next", `stepGo(${jsArg(id)},1,true)`, {kind:"pri",attrs:"data-next"}) : ""),
-      cancelHtml + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs:"data-back hidden"})), {className:"stepper-foot"})}
+      cancelHtml + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs: 'data-dialog-dismiss="true" data-back hidden'})), {className:"stepper-foot"})}
   </div>`;
 }
 function selectDialogSection(id, key) {
@@ -627,7 +647,7 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
    Like UI.table, headings are text and values are already escaped HTML. */
 function comparisonTable(columns, rows, caption) {
   return `<div class="tblwrap comparison-scroll" role="region" aria-label="${esc(caption)}"${columns.length > 4 ? ' tabindex="0"' : ""}><table class="tbl stack comparison-table" style="--comparison-columns:${columns.length}">
-    <caption class="sr-only">${esc(caption)}</caption><thead><tr><th scope="col">Node</th>
+    <caption class="sr-only">${esc(caption)}</caption><thead><tr><th scope="col">Host</th>
     ${columns.map(c => `<th scope="col"${c.selected ? ' class="selected"' : ''}${c.attrs || ""}>${c.html}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(r => `<tr${r.phone === false ? ' class="comparison-extra"' : ''}><th scope="row">${esc(r.label)}</th>
       ${r.values.map((v, i) => `<td${columns[i].selected ? ' class="selected"' : ''}${columns[i].attrs || ""}>${v}</td>`).join("")}</tr>`).join("")}</tbody>
@@ -863,6 +883,62 @@ if (typeof document !== "undefined" && typeof MutationObserver === "function" &&
     queued = true;
     queueMicrotask(() => { queued = false; linkFieldLabels(document); });
   }).observe(document.documentElement, { childList: true, subtree: true });
+}
+
+// Looked up the way the dialogs' own code does, with core.js's $ when it is there.
+const typedField = id => typeof $ === "function" ? $(`#${id}`) : document.getElementById(id);
+const typedConfirmOk = input => !!input && input.value.trim() === input.dataset.typedExpect;
+function typedConfirmSync(input) {
+  const button = input.dataset.typedButton && typedField(input.dataset.typedButton);
+  if (button) button.disabled = !typedConfirmOk(input);
+}
+function typedConfirmKey(event) {
+  if (event.key === "Enter" && event.target?.dataset?.typedExpect !== undefined && !typedConfirmOk(event.target)) {
+    event.preventDefault(); event.stopPropagation();
+  }
+}
+const typedConfirmMatches = id => typedConfirmOk(typedField(id));
+if (typeof window !== "undefined") Object.assign(window, { typedConfirmSync, typedConfirmKey, typedConfirmMatches });
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("input", event => { if (event.target?.dataset?.typedExpect !== undefined) typedConfirmSync(event.target); });
+  document.addEventListener("keydown", typedConfirmKey, true);
+}
+
+/* Keyboard reach (#487). Older markup opens things from a tr, span, div or
+   a link without an href, which Tab skips: each gets a tab stop (and a
+   button role, except a table row, which stays a row) and Enter or Space
+   clicks it. An icon-only button takes its name from its tooltip. New
+   markup uses <button>; tests/keyboard-reach.test.js keeps the old kind
+   from growing. */
+const REACH_TAGS = new Set(["TR", "SPAN", "DIV", "LI", "TD", "B", "SECTION", "ARTICLE"]);
+function keyboardReach(el) {
+  const tag = el.tagName;
+  const clickOnly = el.hasAttribute("onclick") && (REACH_TAGS.has(tag) || (tag === "A" && !el.hasAttribute("href")));
+  if (clickOnly && !el.hasAttribute("tabindex")) {
+    el.setAttribute("tabindex", "0");
+    if (tag !== "TR" && !el.hasAttribute("role")) el.setAttribute("role", "button");
+  }
+  if ((tag === "BUTTON" || el.getAttribute("role") === "button") && !String(el.textContent || "").trim() && !el.hasAttribute("aria-label")) {
+    const name = el.getAttribute("data-tip") || el.getAttribute("title");
+    if (name) el.setAttribute("aria-label", name);
+  }
+}
+if (typeof window !== "undefined") window.keyboardReach = keyboardReach;
+if (typeof document !== "undefined" && typeof MutationObserver === "function" && document.documentElement) {
+  const reachAll = () => document.querySelectorAll("[onclick], button:not([aria-label])").forEach(keyboardReach);
+  let reachQueued = false;
+  new MutationObserver(() => {
+    if (reachQueued) return;
+    reachQueued = true;
+    queueMicrotask(() => { reachQueued = false; reachAll(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener("keydown", event => {
+    const el = event.target;
+    if ((event.key !== "Enter" && event.key !== " ") || !el?.hasAttribute?.("onclick")) return;
+    if (!REACH_TAGS.has(el.tagName) && !(el.tagName === "A" && !el.hasAttribute("href"))) return;
+    event.preventDefault();   // Space would scroll the page
+    el.click();
+  });
 }
 
 /* Back to top (#292): on any page, once it is scrolled more than a screen

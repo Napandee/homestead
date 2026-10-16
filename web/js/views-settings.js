@@ -1,8 +1,8 @@
 /* Full settings workspace: cluster policy, hardware, access, and installation info. */
 
 const ROLE_COPY = {
-  viewer: "Read-only access to dashboards, workloads, storage, events, and settings.",
-  operator: "Viewer access plus deploy, edit, move, start, and stop workloads and VMs.",
+  viewer: "Read-only access to dashboards, apps and VMs, storage, events, and settings.",
+  operator: "Viewer access plus deploy, edit, move, start, and stop apps and VMs and VMs.",
   admin: "Full access, including users, hosts, hardware mappings, imports, and cluster policy.",
 };
 // What each role adds, in a word or two, beside its name where it is chosen (#350).
@@ -167,17 +167,17 @@ async function viewSettings() {
           ${settingRow("Sign out", "This browser", '<button class="btn sm" onclick="doLogout()">Sign out</button>')}
         </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div>`, {tab:`you`})}
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone ${tip("Warning turns a bar amber, critical red. A node shows its worst result across CPU, memory, disk and temperature.")}`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Health thresholds`, `When bars and host cards turn amber and red, for everyone ${tip("Warning turns a bar amber, critical red. A host shows its worst result across CPU, memory, disk and temperature.")}`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
-          ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained node CPU pressure", thresholds.cpu)}
-          ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated node RAM pressure", thresholds.memory)}
-          ${thresholdEditor("disk", "Node disk utilisation", "%", "Local filesystem capacity", thresholds.disk)}
+          ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained host CPU pressure", thresholds.cpu)}
+          ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated host RAM pressure", thresholds.memory)}
+          ${thresholdEditor("disk", "Host disk utilisation", "%", "Local filesystem capacity", thresholds.disk)}
           ${thresholdEditor("temperature", "CPU temperature", "°C", "Host thermal warning", thresholds.temperature)}
         </div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Drive health`, `SMART warnings shown on node cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Drive health`, `SMART warnings shown on host cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
           <div class="threshold-card counters"><div><b>Media counters</b> ${tip("NVMe reports media errors; ATA disks report reallocated, pending and uncorrectable sectors. A counter a drive doesn't report shows as unsupported, not zero.")}<div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
@@ -187,7 +187,8 @@ async function viewSettings() {
               <label>Uncorrectable · critical ${tip("Sectors a drive scan could not recover. Check backups and SMART test results. Some drives retain historical counts.")} <input id="set_smart_uncorrectable" type="number" min="1" max="1000000" value="${smart.uncorrectable_critical}" ${can("admin") ? "" : "disabled"}></label>
             </div></div>
         </div>
-        <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
+        <div class="srows" style="margin-top:14px">${settingRow("Include SMART failures and threshold breaches in cluster health notifications", "",
+          `<label class="toggle"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}</div>
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
@@ -300,7 +301,7 @@ async function viewSettings() {
           <div><span>Default namespace</span><b class="mono">${esc(info.namespace || "lab")}</b></div>
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>
           <div><span>Cluster VIP</span><b class="mono">${esc(overview?.lb_ip || info.vip || "—")}</b></div>
-          <div><span>Nodes ready</span><b>${overview ? `${overview.nodes_ready}/${overview.nodes_total}` : "—"}</b></div>
+          <div><span>Hosts ready</span><b>${overview ? `${overview.nodes_ready}/${overview.nodes_total}` : "—"}</b></div>
           <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. Installation and removal live under Cluster → Add-ons because the SMART sidecar is privileged.")}</span>
             <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
           ${permissionsCell(info.permissions)}
@@ -356,7 +357,7 @@ async function viewSettings() {
    the leader lease (alerts, moves) moves within seconds. */
 /* Homestead's own data (homestead_housekeeping.py): its volume, what each
    store holds and for how long, and Clean up now. */
-const hdSize = bytes => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : bytes >= 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+const hdSize = bytes => bytesText(bytes);
 
 function homesteadDataHtml(d) {
   const v = d.volume || {}, last = d.last;
@@ -367,7 +368,7 @@ function homesteadDataHtml(d) {
     <table class="tbl dense stack hd-table"><thead><tr><th>Store</th><th>Size</th><th>Kept</th></tr></thead><tbody>
       ${(d.stores || []).map(s => `<tr><td><b>${esc(s.label)}</b>${s.files > 1 ? `<span class="dim xs"> · ${s.files} files</span>` : ""}</td>
         <td data-label="Size" class="mono small">${s.files ? hdSize(s.size) : '<span class="dim">—</span>'}</td><td data-label="Kept" class="small dim">${esc(s.kept)}</td></tr>`).join("")}</tbody></table>
-    ${last ? `<div class="dim xs" style="margin-top:8px">Last tidied ${esc(new Date(d.last_at * 1000).toLocaleString())}: ${last.notes?.length ? esc(last.notes.join("; ")) + ` (${hdSize(last.freed)} freed)` : "nothing needed doing"}.</div>` : ""}`;
+    ${last ? `<div class="dim xs" style="margin-top:8px">Last tidied ${esc(fmtAt(d.last_at))}: ${last.notes?.length ? esc(last.notes.join("; ")) + ` (${hdSize(last.freed)} freed)` : "nothing needed doing"}.</div>` : ""}`;
 }
 
 async function homesteadDataPaint() {
@@ -394,16 +395,16 @@ async function replicasPaint() {
   try { r = await api("/api/self/replicas"); } catch (e) { return; }
   const ready = r.pods.filter(p => p.ready && !p.terminating).length;
   const note = r.desired > 1 && r.spread_nodes < Math.min(r.desired, ready)
-    ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} node${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as nodes free up.</div>`
-    : r.desired === 1 ? `<div class="note">One copy: if its node fails, Homestead is away until Kubernetes starts it elsewhere - about a minute. Two copies on different nodes keep it answering.</div>` : "";
+    ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} host${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as hosts free up.</div>`
+    : r.desired === 1 ? `<div class="note">One copy: if its host fails, Homestead is away until Kubernetes starts it elsewhere - about a minute. Two copies on different hosts keep it answering.</div>` : "";
   STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count" aria-label="Copies of Homestead">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
         `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
         <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}`)}
-    ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every node can mount.</b> ${esc(r.data.reason)}.
-      ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
+    ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every host can mount.</b> ${esc(r.data.reason)}.
+      ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between hosts; create one under Volumes, without live migration.</div>"}</div>` : ""}
     ${r.data?.pvc ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px"><span class="small">Its data: <span class="mono">${esc(r.data.pvc)}</span> on <b>${esc(r.data.storage_class || "?")}</b></span>
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
-        <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every node" : " · one node"}</option>`).join("")}</select>
+        <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every host" : " · one host"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.
@@ -411,7 +412,7 @@ async function replicasPaint() {
         <div class="row" style="margin-top:6px">${r.data.kept.map(k => `<button class="btn sm" onclick="openOperation(${jsq("/volumes?find=" + k)})">Show ${esc(k)}</button>`).join("")}</div></div>` : ""}
       <div class="dim xs" style="margin-top:4px">Prepare a destination first, then review the move. Homestead must stop while its data is copied and verified.
         Both volumes are kept. Preparation alone does not move your data.</div>` : ""}
-    <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Node</th><th>State</th></tr></thead><tbody>
+    <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Host</th><th>State</th></tr></thead><tbody>
       ${r.pods.map(p => `<tr><td class="mono small">${esc(p.name)}${p.this ? ' <span class="tag">this page</span>' : ""}</td>
         <td data-label="Node">${esc(p.node || "unscheduled")}</td>
         <td data-label="State">${p.terminating ? '<span class="pill slim neutral">stopping</span>' : p.ready ? '<span class="pill slim ok">ready</span>' : '<span class="pill slim med">starting</span>'}
@@ -575,7 +576,7 @@ window.selfDataWatch = async index => {
         ${current.prepared ? UI.more("Hosts", UI.fields(
           UI.field("Move coordinator host", `<select aria-label="Move coordinator host" id="selfDataWorker" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Stays running while Homestead is stopped." }),
           UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Must be able to mount both volumes." }))) : ""}
-        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()")) +
+        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()", { attrs: 'data-dialog-dismiss="true"' })) +
           (current.archivable ? UI.button("Archive record", `selfDataArchiveReview(${jsArg(current.id)})`, {attrs:'data-need="admin"'}) : ""))}</div>`;
       if (!["succeeded", "failed", "cancelled"].includes(current.status)) setTimeout(paint, 3000);
     } catch (e) { if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`; }
@@ -686,7 +687,7 @@ async function namespacesPaint() {
     ${inv.namespaces.map(r => `<tr><td data-sort="${esc(r.name)}"><b class="mono">${esc(r.name)}</b>
         ${r.name === inv.default ? '<span class="tag ok">default for new apps</span>' : ""}${r.homestead ? '<span class="tag">made here</span>' : ""}</td>
       <td class="small">${esc(what(r))}</td>
-      <td class="dim xs">${r.created ? esc(new Date(r.created).toLocaleDateString()) : ""}</td>
+      <td class="dim xs">${r.created ? esc(fmtDay(r.created)) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs ns-kept">Kept: ${esc(r.protected)}</span>`
         : actionBar([{ label: "Delete", run: `namespaceDelete(${jsq(r.name)})`, danger: true, disabled: !r.empty,
             tip: r.empty ? "" : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
@@ -706,16 +707,16 @@ window.namespaceCreate = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.namespaceDelete = async name => {
-  const typed = (await askText(`Delete the namespace ${name}? It is empty, and this cannot be undone.
-
-Type its name to confirm:`));
-  if (typed === null) return;
+window.namespaceDelete = name => modal(`Delete namespace · ${name}`, `${UI.lead(`Deletes the empty namespace <b>${esc(name)}</b>. This can't be undone.`)}
+  ${UI.typedConfirm({ id: "ns_delete_confirm", expect: name, button: "ns_delete_go" })}
+  ${UI.actions(UI.cancel() + `<button class="btn danger" id="ns_delete_go" disabled onclick="namespaceDeleteGo(${jsq(name)})">Delete namespace</button>`)}`);
+window.namespaceDeleteGo = async name => {
+  if (!typedConfirmMatches("ns_delete_confirm")) return;
   try {
     await api("/api/namespaces/delete", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, confirm: typed.trim() }) });
+      body: JSON.stringify({ name, confirm: $("#ns_delete_confirm").value.trim() }) });
     toast(`${name} deleted`, "ok");
-    namespacesPaint();
+    closeModal(); namespacesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -876,7 +877,7 @@ window.placeModeChanged = () => {
 function rebalanceModeText(mode, maintenance) {
   return mode === "suggest" ? "An alert says how many containers would move back; nothing moves until someone reviews it."
     : mode === "window" ? `The same alert, then the moves run by themselves in the update window (${esc(updateWindowText(maintenance))}), apart from apps whose scheduled job runs then.`
-    : "Nothing moves back on its own. Balance hosts on Nodes, or Rebalance containers in Containers' menu, moves them when you choose.";
+    : "Nothing moves back on its own. Balance hosts on Hosts, or Rebalance containers in Containers' menu, moves them when you choose.";
 }
 
 async function settingsAppSave() {
@@ -1069,7 +1070,7 @@ async function selfHealthPaint() {
       ${h.loops.map(l => row(l.label, HEALTH_TONE[l.state] || "", l.state === "ok" ? "running" : l.state,
         l.state === "standby" ? "Runs on the leader copy." : `Last done ${esc(agoText(l.last_ok))}` + (l.error ? ` · <span class="badtext">${esc(l.error)}</span>` : ""))).join("")}
       ${row("Node probe", !probe.installed ? "neutral" : probe.ready < probe.desired || probe.reporting < probe.desired ? "warn" : "ok",
-        !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} nodes`,
+        !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} hosts`,
         !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
           : `${probe.reporting} reporting · drive health on ${probe.smart} · ${esc(probe.detail || "")}`,
         "")}
@@ -1098,10 +1099,10 @@ async function selfHealthPaint() {
 }
 window.selfHealthPaint = selfHealthPaint;
 
-window.sambaToggle = async box => {
-  const on = box.checked;
+/* The SMB and NFS servers are actions, not settings: Enable or Disable acts
+   at once, so they are buttons, not switches beside fields (#511). */
+window.sambaSet = async on => {
   if (on && !STATE.data.sambaInstalled) {
-    box.checked = false;
     if (nodeAddressesOnly()) return sambaInstallGo("");
     const choices = await vipChoices();
     const own = (choices.own || []).find(v => v.free);
@@ -1109,15 +1110,12 @@ window.sambaToggle = async box => {
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="sambaInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.", { title: "Stop Samba", ok: "Stop Samba", danger: true }))) {
-    box.checked = true; return;
-  }
-  box.disabled = true;
+  if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept.", { title: "Stop Samba", ok: "Stop Samba", danger: true }))) return;
   try {
     const r = await api("/api/self/samba", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(r.detail, "ok");
     setTimeout(() => { addonsPaint(); selfHealthPaint(); }, 1500);
-  } catch (e) { toast(e.message, "bad"); box.checked = !on; box.disabled = false; }
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.sambaInstallGo = async (selectedAddress = null) => {
@@ -1130,14 +1128,14 @@ window.sambaInstallGo = async (selectedAddress = null) => {
 };
 
 window.sambaRemove = () => {
-  modal("Remove SMB server", `<p>The SMB address and server workload will be removed. Network shares stop being served.</p>
+  modal("Remove SMB server", `<p>The SMB address and its server will be removed. Network shares stop being served.</p>
     <div class="note warn">Share definitions, passwords, all PVCs and their data remain. Re-enable SMB here to serve them again.</div>
-    <div class="f"><label>Type <b class="mono">homestead-smb</b> to confirm</label><input id="smb_remove_confirm" autocomplete="off"></div>
-    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="sambaRemoveGo()">Remove server</button>`)}`);
+    ${UI.typedConfirm({ id: "smb_remove_confirm", expect: "homestead-smb", button: "smb_remove_go" })}
+    ${UI.actions(UI.cancel() + `<button class="btn danger" id="smb_remove_go" disabled onclick="sambaRemoveGo()">Remove SMB server</button>`)}`);
 };
 window.sambaRemoveGo = async () => {
-  const confirm = $("#smb_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-smb") return toast("Type homestead-smb to confirm", "bad");
+  if (!typedConfirmMatches("smb_remove_confirm")) return;
+  const confirm = $("#smb_remove_confirm").value.trim();
   try {
     const r = await api("/api/addons/smb/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm }) });
@@ -1145,11 +1143,9 @@ window.sambaRemoveGo = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.nfsToggle = async box => {
-  const on = box.checked;
+window.nfsSet = async on => {
   const nfs = STATE.data.nfs || {};
   if (on && !nfs.installed) {
-    box.checked = false;
     if (!(nfs.exports || []).length) return modal("Set up NFS exports", `<p>Choose an RWX share and its allowed client IP or CIDR in Network Shares before installing the NFS server.</p>
       ${UI.actions(`<button class="btn pri" onclick="closeModal();go('shares')">Network Shares</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
     if (nodeAddressesOnly()) return modal("NFS needs a VIP", `<p>k3s ServiceLB cannot provide the dedicated address and preserved client IPs needed for this NFSv4 server. Install kube-vip under Cluster Add-ons, then try again.</p>
@@ -1165,14 +1161,11 @@ window.nfsToggle = async box => {
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
-  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.", { title: "Stop NFS", ok: "Stop NFS", danger: true }))) {
-    box.checked = true; return;
-  }
-  box.disabled = true;
+  if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept.", { title: "Stop NFS", ok: "Stop NFS", danger: true }))) return;
   try {
     const result = await api("/api/self/nfs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(result.detail, "ok"); setTimeout(() => { addonsPaint(); if (STATE.view === "shares") viewShares(); }, 1500);
-  } catch (e) { toast(e.message, "bad"); box.checked = !on; box.disabled = false; }
+  } catch (e) { toast(e.message, "bad"); }
 };
 window.nfsInstallGo = async () => {
   const address = ($("#nfs_lb_ip")?.value || "").trim();
@@ -1185,11 +1178,11 @@ window.nfsInstallGo = async () => {
 };
 window.nfsRemove = () => modal("Remove NFS server", `<p>The NFS container and its address will be removed. Clients will lose access to its exports.</p>
   <div class="note warn">Export settings, SMB shares, all PVCs and their data remain.</div>
-  <div class="f"><label>Type <b class="mono">homestead-nfs</b> to confirm</label><input id="nfs_remove_confirm" autocomplete="off"></div>
-  ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="nfsRemoveGo()">Remove server</button>`)}`);
+  ${UI.typedConfirm({ id: "nfs_remove_confirm", expect: "homestead-nfs", button: "nfs_remove_go" })}
+  ${UI.actions(UI.cancel() + `<button class="btn danger" id="nfs_remove_go" disabled onclick="nfsRemoveGo()">Remove NFS server</button>`)}`);
 window.nfsRemoveGo = async () => {
-  const confirm = $("#nfs_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-nfs") return toast("Type homestead-nfs to confirm", "bad");
+  if (!typedConfirmMatches("nfs_remove_confirm")) return;
+  const confirm = $("#nfs_remove_confirm").value.trim();
   try {
     const result = await api("/api/addons/nfs/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm }) });
     closeModal(); toast(result.detail, "ok"); addonsPaint();

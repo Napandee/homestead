@@ -99,10 +99,10 @@ function nodeDevicesRender(node, f, error = "", key = ptKey(node)) {
     UI.button(u.permitted ? "Stop offering" : "Offer to VMs",
       `ptUsb(${jsArg(node)},${jsArg(u.vendor)},${jsArg(u.product)},${!u.permitted},${jsArg(u.harvester_name || "")})`, { attrs: 'data-need="admin"' })]);
   body.innerHTML = `
-    <div class="between"><span class="dim xs">${f.inspected_at ? `Last inspected ${esc(new Date(f.inspected_at * 1000).toLocaleString())}` : "Last inspected devices"} · handoffs check the host again</span>
+    <div class="between"><span class="dim xs">${f.inspected_at ? `Last inspected ${esc(fmtAt(f.inspected_at))}` : "Last inspected devices"} · handoffs check the host again</span>
       ${UI.button("Refresh devices", `nodeDevicesLook(${jsArg(node)})`, { attrs: 'data-need="admin"' })}</div>
-    ${error ? UI.callout("bad", "Refresh failed; showing the last inspection.", esc(error)) : ""}
-    ${f.inventory_error ? UI.callout("warn", "This inspection could not be retained after a reload.", esc(f.inventory_error)) : ""}
+    ${UI.notices([["bad", error && `Refresh failed, so this is the last inspection: ${error}`],
+      ["warn", f.inventory_error && `This inspection could not be kept after a reload: ${f.inventory_error}`]])}
     ${f.harvester ? UI.lead("Harvester hands devices over with its own claims; this is the same as its Devices page.")
       : f.iommu ? `<div class="small">IOMMU ${UI.chip("on", "ok")} <span class="dim xs">${f.cmdline_iommu ? "" : "(by default)"}</span></div>`
       : UI.callout("warn", "IOMMU is off on this host.", `A device can only be handed to a VM with it on. Homestead can add it to the kernel command line;
@@ -184,14 +184,15 @@ function vmDevicesPane(v, res) {
         <td><label class="check xs"><input type="checkbox" class="pd_rm"> remove</label></td></tr>`).join("")}</tbody></table></div>`
       : UI.lead("Select a PCI or USB device offered by the cluster's hosts.")}
     <div id="pd_adds"></div>
-    ${res?.error ? UI.callout("bad", "Devices could not be loaded.", esc(res.error)) : ""}
-    ${res?.usage_error ? UI.callout("warn", "Device use unavailable", esc(res.usage_error)) : ""}
-    ${list.some(r => r.configured_vms?.length > 1) ? UI.callout("info", "Shared configurations", list.filter(r => r.configured_vms?.length > 1).map(r => `${esc(r.label || r.resource)}: ${r.configured_vms.map(esc).join(", ")}`).join("<br>")) : ""}
+    ${UI.notices([
+      ["bad", res?.error && `Devices could not be loaded: ${res.error}`],
+      ["warn", res?.usage_error && `Device use is unavailable: ${res.usage_error}`],
+      ...list.filter(r => r.configured_vms?.length > 1).map(r => ["info", `${r.label || r.resource} is set up on ${r.configured_vms.join(", ")}`])])}
     ${list.length ? `<div class="f" style="margin-top:10px"><label for="pd_pick">Add PCI or USB device</label><select id="pd_pick">${list.map(r => `<option value="${esc(r.resource)}">${esc(label(r))}</option>`).join("")}</select></div>
       ${UI.actions(UI.button("Add device", "vmAddHostDevice()"))}`
       : '<p class="dim small">No host devices are offered to VMs. Prepare a device on its host first.</p>'}
     <p class="dim small">Passthrough restricts this VM to hosts that offer its devices and prevents live migration. Configurations may overlap; Start checks that enough exclusive devices are free. Changes apply at its next start.</p>
-    ${UI.more("IOMMU and vBIOS setup", `<p>Open <a href="${esc(nodesUrl)}" target="_blank" rel="noopener">Nodes</a> in a new tab, select a host, then Hardware → Devices for VMs. Check IOMMU and offer its PCI or USB device there. Enabling IOMMU may require a host reboot.</p><p>A GPU can use its default ROM or a vBIOS file you supply. Files must start with 55 AA and be at most 640 KiB. Homestead enables the KubeVirt hook sidecar when a ROM is supplied.</p>`)}`;
+    ${UI.more("IOMMU and vBIOS setup", `<p>Open <a href="${esc(nodesUrl)}" target="_blank" rel="noopener">Hosts</a> in a new tab, select a host, then Hardware → Devices for VMs. Check IOMMU and offer its PCI or USB device there. Enabling IOMMU may require a host reboot.</p><p>A GPU can use its default ROM or a vBIOS file you supply. Files must start with 55 AA and be at most 640 KiB. Homestead enables the KubeVirt hook sidecar when a ROM is supplied.</p>`)}`;
 }
 window.vmDevicesPane = vmDevicesPane;
 window.vmAddHostDevice = () => {

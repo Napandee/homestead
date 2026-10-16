@@ -1,15 +1,15 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict"), fs=require("node:fs"), vm=require("node:vm");
 function setup(send) {
-  const fields={"#k_go":{disabled:false},"#k_capacity_confirm":{checked:true},"#k_review":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML+=html;}}};
+  const fields={"#k_go":{disabled:false},"#k_capacity_confirm":{checked:true},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   let calls=0,refreshes=0;
   const ctx={console,Date,Map,Promise,URLSearchParams,encodeURIComponent,STATE:{data:{}},document:{addEventListener(){}},
-    $:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),toast(){},go(){},closeModal(){},
+    $:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),toast(){},go(){},closeModal(){},modalBack(){},childModal:(_title,html)=>{fields["#mbody"].innerHTML=html;},
     refreshOperations(){refreshes++;},api:async(path)=>{
       if(path.endsWith("/plan"))return {config:{name:"test",review_id:"frozen"},capacity_token:"signed",ok:true,nodes:[],
         capacity:{blocked:false,warnings:[],nodes:[]}};
       calls++;return send();}};
-  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx);require("./helpers/load-ui")(ctx);vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   ctx.k3sBody=()=>({name:"test"});
   return {ctx,fields,calls:()=>calls,refreshes:()=>refreshes};
 }
@@ -18,8 +18,8 @@ test("uncertain bootstrap is not replayed and directs user to retained resources
   await t.ctx.k3sReview();
   await t.ctx.k3sCreate();await t.ctx.k3sCreate();
   assert.equal(t.calls(),1);assert.equal(t.fields["#k_go"].disabled,true);
-  assert.match(t.fields["#k_review"].innerHTML,/may already exist/);
-  assert.doesNotMatch(t.fields["#k_review"].innerHTML,/<uncertain>/);
+  assert.match(t.fields["#mbody"].innerHTML,/may already exist/);
+  assert.doesNotMatch(t.fields["#mbody"].innerHTML,/<uncertain>/);
   assert.equal(t.refreshes(),1);
 });
 test("a pending bootstrap cannot dispatch a duplicate even if button is re-enabled",async()=>{
@@ -32,7 +32,7 @@ test("a pending bootstrap cannot dispatch a duplicate even if button is re-enabl
 test("closing a form during an uncertain response still refreshes operation status",async()=>{
   let fail;const wait=new Promise((_resolve,reject)=>fail=reject),t=setup(()=>wait);
   await t.ctx.k3sReview();
-  const running=t.ctx.k3sCreate();delete t.fields["#k_review"];
+  const running=t.ctx.k3sCreate();delete t.fields["#mbody"];
   fail(new Error("connection lost"));await running;
   assert.equal(t.calls(),1);assert.equal(t.refreshes(),1);
 });

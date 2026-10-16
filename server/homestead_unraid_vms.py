@@ -541,9 +541,9 @@ def copy_output(source, disk):
         approximate = "~" if sample["coarse"] and sample["percent"] < 100 else ""
         parts = [f"{approximate}{sample['percent']:.1f}%"]
         if size:
-            parts.append(f"{approximate}{sample['bytes'] / 1e9:.1f} / {size / 1e9:.1f} GB")
+            parts.append(f"{approximate}{sample['bytes'] / 1024 ** 3:.1f} / {size / 1024 ** 3:.1f} GiB")
         if rate is not None:
-            parts.append(f"{rate / 1e6:.1f} MB/s")
+            parts.append(f"{rate / 1024 ** 2:.1f} MiB/s")
         if sample["percent"] >= 100:
             parts.append("Stream transferred; waiting for CDI to finish")
         elif eta is not None:
@@ -717,8 +717,8 @@ def status(item):
             return _fail(ref, f"Copying {ref['vm']} failed: {failed}", item)
         pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
         if done < len(ref["disks"]):
-            gb = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1e9
-            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gb:.1f} of {total / 1e9:.1f} GB"
+            gib = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1024 ** 3
+            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gib:.1f} of {total / 1024 ** 3:.1f} GiB"
         ref["phase"] = "convert"
         return "running", 95, "CDI is finishing the disk"
     if ref["phase"] == "convert":

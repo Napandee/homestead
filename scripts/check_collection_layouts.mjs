@@ -96,7 +96,7 @@ try {
     });
     await page.locator('.comparison-select').nth(1).click();
     const nodeAction=width<=560?page.locator('.node-comparison-detail[data-cluster="secondary-example"]'):page.locator('.comparison-table tbody tr').last().locator('td[data-cluster="secondary-example"]');
-    await nodeAction.getByRole('button',{name:'Open node',exact:true}).click();
+    await nodeAction.getByRole('button',{name:'Open host',exact:true}).click();
     assert.equal(await page.evaluate(()=>window.__nodeRoute.target),'secondary-example');
     await page.evaluate(()=>{window.nodeDetail=window.__nodeDetailOriginal;FLEET.target='';localStorage.removeItem('homestead.fleet.mode');window.__nodesFixture=window.__fourNodes;return go('dash')});
     await page.waitForFunction(()=>document.querySelectorAll('.node-compact-host').length===4);
@@ -213,6 +213,12 @@ try {
     await page.evaluate(()=>go('vms'));
     await page.locator('.vm-table').waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    // A VM's name, cluster tag and line under it stay inside the name cell (#495).
+    const spill=await page.evaluate(()=>[...document.querySelectorAll('.vm-table .vm-name-text')].flatMap(box=>{
+      const cell=box.closest('td').getBoundingClientRect();
+      return [...box.querySelectorAll(':scope>b, :scope>.tag, .vm-tags .tag, .vm-sub')].filter(el=>el.checkVisibility()&&el.getBoundingClientRect().right>cell.right+1).map(el=>el.textContent.trim().slice(0,30));
+    }));
+    assert.deepEqual(spill,[],`${width}px: name cells`);
     await page.screenshot({path:`${output}/vms-${width}-${theme}.png`,fullPage:true});
     if(width<=560) {
       const header=page.locator('.vms-page .collection-mobile-head');

@@ -200,9 +200,9 @@ class ChosenPortTests(unittest.TestCase):
         sent = []
         with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
              mock.patch.object(server, "cached", return_value=[{"ns": "lab", "name": "sonarr", **two_ports()}]):
-            result = server.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 9090})
+            result = server.OVERVIEW_ROUTES.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 9090})
             with self.assertRaises(ValueError):
-                server.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 7000})
+                server.OVERVIEW_ROUTES.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 7000})
         self.assertEqual("tcp:9090", sent[0][2]["metadata"]["annotations"]["homestead.io/uptime"])
         self.assertEqual("tcp:9090", result["value"])
 
@@ -210,7 +210,7 @@ class ChosenPortTests(unittest.TestCase):
         import server
         sent = []
         with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)):
-            server.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto", "port": 22})
+            server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto", "port": 22})
         self.assertIsNone(sent[0][2]["metadata"]["annotations"]["homestead.io/uptime"])
 
 
@@ -219,11 +219,11 @@ class VmSettingRouteTests(unittest.TestCase):
         import server
         sent = []
         with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)):
-            server.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "http", "port": 8123, "path": "/api/"})
-            server.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto"})
+            server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "http", "port": 8123, "path": "/api/"})
+            server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto"})
             for bad in ({"mode": "tcp"}, {"mode": "http", "path": "/x"}, {"mode": "tcp", "port": 99999}, {"name": "../x", "mode": "off"}):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
-                    server.set_vm_monitoring({"ns": "lab", "name": "ha", **bad})
+                    server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", **bad})
         (method, path, body) = sent[0]
         self.assertEqual(("PATCH", "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/ha"), (method, path))
         self.assertEqual({"metadata": {"annotations": {"homestead.io/uptime": "http:8123/api/"}}}, body,
@@ -383,7 +383,7 @@ class PortalTests(unittest.TestCase):
         with mock.patch.object(server.PORTAL, "status", return_value=tcp), \
                 mock.patch.object(server.PORTAL, "stored", return_value=links), \
                 mock.patch.object(server.UPTIME, "report", return_value=answers):
-            status = server.portal_status()
+            status = server.OVERVIEW_ROUTES.portal_status()
         self.assertEqual((False, "down", "monitoring", "HTTP 502"),
                          (status["a"]["up"], status["a"]["state"], status["a"]["source"], status["a"]["error"]),
                          "the port takes connections, but the app answers 502")

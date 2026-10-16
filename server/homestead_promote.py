@@ -577,7 +577,7 @@ def _start_route(body):
     if not node:
         raise ValueError("which host?")
     return {"ok": True, "operation": start(node, str(body.get("review_token") or "")),
-            "detail": f"Making {node} a server; follow it in the job tray"}
+            "detail": f"Making {node} a server; follow it under Jobs"}
 
 # The job's own, registered when homestead_routes loads this module at start
 # (server.py builds the route table before any job is looked at).

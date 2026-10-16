@@ -8,6 +8,7 @@ function context() {
     platformTag:()=>"",hardwareTags:()=>"",imageLabel:String, fmtUp:String, svcUrl:()=>"",fmtAgo:String,
     ratePair:()=>["0","Mb/s"],sizePair:()=>"0/10 GB",sizeText:()=>"10 GB",meter:()=>"",sev:()=>""};
   c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
+  require("./helpers/load-time")(c);
   vm.runInContext(core.slice(0,core.indexOf("/* Put text on the clipboard.")),c);
   for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
@@ -44,7 +45,7 @@ test("node comparison keeps one scrollable matrix and selection across refresh",
   const c=context(),nodes=Array.from({length:6},(_,i)=>({name:`compute-host-${i+1}`,status:"Ready",cpu_pct:0,cpu_cap:4,mem_pct:20,mem_used_gb:2,mem_cap_gb:10,workloads:[],disks:[]}));
   const html=c.nodeComparison(nodes,"test");
   assert.equal((html.match(/class="tbl stack comparison-table"/g)||[]).length,1);
-  assert.match(html,/6 nodes · scroll to compare/);
+  assert.match(html,/6 hosts · scroll to compare/);
   assert.equal(c.nodeComparisonLabel(nodes,nodes[3].name),"4");
   vm.runInContext(`STATE.nodeCompareSelections["test-0"]=${JSON.stringify(c.nodeComparisonKey(nodes[3]))}`,c);
   assert.match(c.nodeComparison(nodes,"test"),/aria-pressed="true"[^>]*aria-label="Select compute-host-4"/);

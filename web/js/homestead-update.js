@@ -80,10 +80,12 @@ function paintBell() {
   // AI agents' requests have a line of their own, which opens them, so
   // their alerts are not counted twice.
   const waitingAgents = window.PWA_ALERTS?.report?.agents?.pending || 0;
-  const alertCount=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged && a.category !== "agents").length;
+  const alerts=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged && a.category !== "agents"), alertCount=alerts.length;
+  // A waiting request needs a person but is not an error; alerts are red
+  // only while one of them is critical.
   const rows = [
-    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "danger") : "",
-    alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), "danger") : "",
+    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "warn") : "",
+    alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), alerts.some(a => a.severity === "critical") ? "danger" : "warn") : "",
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
     errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",
@@ -231,9 +233,13 @@ function homesteadUpdateBody(inCard = false) {
   return `${head}
     <div class="hs-clusters" role="group" aria-label="${picking ? "Clusters to update" : "This cluster"}">${rows}</div>
     ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes; this page reconnects. "}Nothing changes until you review it.</p>` : ""}
-    <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : ""}
-      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button></div>
-    <div class="hs-channel">${picker}</div>`;
+    ${(() => {
+      const main = label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : "";
+      const check = `<button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button>`;
+      // In the dialog the update is the footer's main action, so it stays in reach on a phone.
+      return inCard ? `<div class="row hs-actions">${main}${check}</div><div class="hs-channel">${picker}</div>`
+        : `<div class="row hs-actions">${check}</div><div class="hs-channel">${picker}</div>${UI.actions(UI.cancel("Close") + main)}`;
+    })()}`;
 }
 
 /* A dev build ahead of prod, or a prod release ahead of the last dev

@@ -61,7 +61,7 @@ test("breadcrumbs place a view under its section, not under the dashboard", () =
   ]);
   assert.deepEqual(router.breadcrumbs("nodes", "harvester-node1"), [
     { label: "Overview", url: "", current: false },
-    { label: "Nodes", url: "/nodes", current: false },
+    { label: "Hosts", url: "/nodes", current: false },
     { label: "harvester-node1", url: "", current: true },
   ]);
 });

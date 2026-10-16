@@ -316,7 +316,7 @@ def _choices(claims, volumes, kind):
             except (TypeError, ValueError):
                 raise ValueError(f"volume {claim['claim']}: its size is a whole number of GB")
             if not 1 <= size <= 16384:
-                raise ValueError(f"volume {claim['claim']}: a blank volume is between 1 and 16384 GB")
+                raise ValueError(f"volume {claim['claim']}: a blank volume is between 1 and 16384 GiB")
         out[claim["claim"]] = {"action": action, "storage_class": str(pick.get("storage_class") or "").strip(),
                                "size_gb": size}
     return out

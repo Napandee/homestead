@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),vm=require("node:vm");
 function setup({blocked=false,missing=false,fail=false}={}){
   const sent=[],jobs=[],fields={"#jobSummary":{},".modalbox":{scrollTop:400},"#powerRecoveryApply":{disabled:true},
-    "#powerRecoveryAck":{checked:false},"#powerRecoveryName":{value:""}};
+    "#powerRecoveryAck":{checked:false},"#powerRecoveryName":{value:"",get dataset(){return {typedExpect:fields["#mbody"]._html.match(/id="powerRecoveryName"[^>]*data-typed-expect="([^"]*)"/)?.[1]};}}};
   fields["#mbody"]={_html:"",get innerHTML(){return this._html;},set innerHTML(html){this._html=html;delete fields["#powerRecoveryLoading"];},
     insertAdjacentHTML(_where,html){this._html=html+this._html;}};
   const ctx={console,Date,URL,STATE:{data:{}},ME:null,$:key=>fields[key],$$:()=>[],

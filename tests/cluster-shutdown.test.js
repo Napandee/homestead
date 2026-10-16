@@ -4,7 +4,7 @@ const fs = require('node:fs'), vm = require('node:vm');
 
 function setup(warnings = []) {
   let html = '', lastTimer, lost = false;
-  const sent = [], fields = {'#shutdownConfirm': {value:''}, '#shutdownStart': {}, '#shutdownLive': {innerHTML:''}};
+  const sent = [], fields = {'#shutdownConfirm': {value:'', get dataset() { return {typedExpect: html.match(/id="shutdownConfirm"[^>]*data-typed-expect="([^"]*)"/)?.[1]}; }}, '#shutdownStart': {}, '#shutdownLive': {innerHTML:''}};
   const state = {run:'run', phase:'draining', progress:35, deadline:Date.now()/1000+1800, message:'Waiting for pods',
     plan:{own:['lab','homestead','uid'], own_node:'a', nodes:[{name:'a'}, {name:'b'}]}};
   const c = {console, Date, window:null, $:s=>fields[s], esc:s=>String(s??'').replaceAll('<','&lt;').replaceAll('>','&gt;'),

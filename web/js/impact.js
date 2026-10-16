@@ -48,7 +48,7 @@ window.nodeIfDown = async (node, back = null) => {
     ${section("Addresses", p.addresses, p.addresses.map(a => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(a.ip)}</b>
         <span class="small">Moves to another host within seconds${a.services?.length ? `; used by ${esc(a.services.slice(0, 3).join(", "))}` : ""}.</span></div><span class="pill slim info">moves</span></div>`).join(""))}
     <div id="ifDownRoom" data-node="${esc(node)}"></div>
-    ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A StatefulSet's pod is never started elsewhere while the old one might still run: it waits until it is deleted, by hand or by Longhorn's Pods on a failed node setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
+    ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A StatefulSet's pod is never started elsewhere while the old one might still run: it waits until it is deleted, by hand or by Longhorn's Pods on a failed host setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
     ${UI.actions(ifDownClose())}</div>`;
   ifDownRoom(node);
 };
@@ -86,7 +86,7 @@ async function ifDownRoom(node) {
 window.capacityRoomHtml = capacityRoomHtml;
 window.capacityVerdict = capacityVerdict;
 
-const ifDownClose = () => window.__ifDownBack ? UI.button("Back", "ifDownBack()") : UI.cancel("Close");
+const ifDownClose = () => window.__ifDownBack ? UI.button("Back", "ifDownBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel("Close");
 window.ifDownBack = () => { const back = window.__ifDownBack; window.__ifDownBack = null; back ? back() : closeModal(); };
 
 // Where Longhorn's "Pods on a failed node" is set: Settings → Hardware and

@@ -6,11 +6,7 @@
    may be secret only says that it changed. */
 const HISTORY = { ns: "", name: "" };
 
-function historyWhen(at) {
-  const d = new Date(at * 1000), today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
+const historyWhen = at => fmtAt(at);
 
 const historyWho = e => e.source === "outside" ? '<span class="tag warn" data-tip="kubectl, Helm, GitOps or another tool changed it, not Homestead">outside Homestead</span>'
   : `<span class="dim small">${esc(e.by ? e.by.replace(/^api-key:/, "API key ") : "Homestead")}</span>`;
@@ -46,7 +42,7 @@ window.historyUndo = async (ns, name, id) => {
   modal(`Undo · ${name}`, '<div class="empty"><span class="spin2"></span> Reviewing…</div>');
   let p;
   try { p = await api("/api/changes/undo/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name, id }) }); }
-  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It cannot be undone", esc(e.message)) + UI.actions(UI.button("Back", "historyBack()")); window.__historyBack = back; return; }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It cannot be undone", esc(e.message)) + UI.actions(UI.button("Back", "historyBack()", { attrs: 'data-dialog-dismiss="true"' })); window.__historyBack = back; return; }
   window.__historyBack = back;
   window.__historyUndo = { ns, name, id, capacity_token: p.capacity_token };
   const cap = p.capacity || {};
@@ -56,7 +52,7 @@ window.historyUndo = async (ns, name, id) => {
       <span class="history-values">${historyValue(r.before)}<span class="dim" aria-label="becomes"> → </span>${historyValue(r.after)}</span></div>`).join("")}</div>
     ${(cap.warnings || []).map(w => UI.callout("warn", "", esc(w))).join("")}
     ${cap.blocked ? UI.callout("bad", "There is not room for it", esc(cap.reason || "The cluster cannot place these pods now.")) : ""}
-    ${UI.actions(UI.button("Back", "historyBack()") + (cap.blocked ? "" : UI.button("Undo the change", "historyUndoApply()", { kind: "danger", id: "hu_go", attrs: 'data-need="operator"' })))}</div>`;
+    ${UI.actions(UI.button("Back", "historyBack()", { attrs: 'data-dialog-dismiss="true"' }) + (cap.blocked ? "" : UI.button("Undo the change", "historyUndoApply()", { kind: "danger", id: "hu_go", attrs: 'data-need="operator"' })))}</div>`;
 };
 
 window.historyBack = () => (window.__historyBack || closeModal)();

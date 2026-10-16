@@ -139,7 +139,7 @@ class RouteTests(Base):
         with mock.patch.object(server, "kget", side_effect=kget), mock.patch.object(server, "guard_managed_smb"), \
                 mock.patch.object(server, "CHANGES", CH):
             with self.assertRaisesRegex(ValueError, "sonarr-config, which no longer exists"):
-                server.change_undo_plan({"ns": "lab", "name": "sonarr", "id": entry_id})
+                server.OVERVIEW_ROUTES.change_undo_plan({"ns": "lab", "name": "sonarr", "id": entry_id})
 
     def test_writes_to_deployments_are_noted_with_the_requester(self):
         CH.REQUEST.user = "james"

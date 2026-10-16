@@ -14,7 +14,7 @@ function agentLeft(expires, now = Date.now() / 1000) {
 }
 window.agentLeft = agentLeft;
 
-const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : new Date(at * 1000).toLocaleString()) : "";
+const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : fmtAt(at)) : "";
 /* A request's field names as people write them; the rest lose their
    underscores. Ids, images and addresses are shown in mono. */
 const AGENT_LABELS = { uid: "UID", ip: "IP", vip: "VIP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",
@@ -23,8 +23,8 @@ const AGENT_MONO = /(^|_)(uid|id|ip|vip|image|mac|url|pvc|digest|address)$/;
 const agentLabel = key => AGENT_LABELS[key] || String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase())
   .replace(/\b(ip|vip|uid|url|mac|pvc)\b/g, word => word.toUpperCase());
 
-const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", "info"], done: ["done", "ok"],
-  denied: ["denied", "warn"], expired: ["expired", ""], failed: ["failed", "bad"] };
+const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", ""], done: ["done", "ok"],
+  denied: ["denied", ""], expired: ["expired", ""], failed: ["failed", "bad"] };
 const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, ""]));
 
 /* One value of a plan, as a person reads it. Lists of plain values are
@@ -67,7 +67,7 @@ function agentCard(r, target) {
     ${UI.more("Raw details", `<pre class="mono small agent-raw">${esc(rawDetails)}</pre>`, false, `agent-raw-${r.id}`)}
     ${pending ? `<div class="agent-req-actions">${why ? `<span class="dim small">${esc(why)}</span>` : ""}${actionBar([
       { label: "Deny", run: `agentDeny(${jsq(r.id)})`, disabled: !r.can_decide, tip: why },
-      { label: "Approve", run: `agentApprove(${jsq(r.id)})`, pri: true, disabled: !r.can_decide, tip: why }], { shown: 2 })}</div>` : ""}
+      { label: "Approve", run: `agentApprove(${jsq(r.id)})`, pri: !agentResult(r).risky, danger: agentResult(r).risky, disabled: !r.can_decide, tip: why }], { shown: 2 })}</div>` : ""}
   </section>`;
 }
 
@@ -109,14 +109,25 @@ window.viewAgents = viewAgents;
 
 const agentPost = (path, id) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
 
+/* A request that deletes or puts back data can't be undone: its button is a
+   danger one named from what it does, such as Delete lab/old-wiki (#500). */
+const AGENT_RISKY = /^(delete|remove|restore|revert|rollback|wipe)_/;
+function agentResult(r) {
+  if (!AGENT_RISKY.test(r.tool || "")) return { risky: false, label: "Run it" };
+  const verb = (r.tool.split("_")[0] || "").replace(/^./, c => c.toUpperCase());
+  const a = r.args || {}, target = a.namespace && a.name ? `${a.namespace}/${a.name}` : a.name || a.snapshot || a.volume || "";
+  return { risky: true, label: target ? `${verb} ${target}` : verb };
+}
+
 /* Approving runs the plan, as the person approving, so it asks first. */
 window.agentApprove = id => {
   const r = (STATE.data.agentRequests?.requests || []).find(x => x.id === id);
   if (!r) return;
-  modal("Approve this request", UI.callout("warn", r.action || r.title, `${esc(r.key)} asked for this. Approving runs it now, as you.`)
+  const result = agentResult(r);
+  modal(`Approve · ${r.title || "request"}`, UI.lead(`${esc(r.key)} asks to ${esc((r.action || r.title || "").replace(/^./, c => c.toLowerCase()))}. Approving runs it now, as you.`)
     + agentPlanHtml(r.summary)
-    + UI.ack("agentOk", "Run it now, as the plan above describes", { onchange: "$('#agentGo').disabled=!this.checked" })
-    + UI.actions(UI.cancel() + UI.button("Approve and run", `agentApproveRun(${jsArg(id)},this)`, { kind: "pri", id: "agentGo", disabled: true })));
+    + UI.ack("agentOk", result.risky ? `${result.label}, as planned` : "Run it as planned", { onchange: "$('#agentGo').disabled=!this.checked" })
+    + UI.actions(UI.cancel() + UI.button(result.label, `agentApproveRun(${jsArg(id)},this)`, { kind: result.risky ? "danger" : "pri", id: "agentGo", disabled: true })));
 };
 
 window.agentApproveRun = async (id, button) => {
@@ -136,7 +147,7 @@ window.agentDeny = async id => {
 };
 
 /* ---------------- Settings › Users and access ---------------- */
-const AGENT_OUTCOME = { ok: "ok", approved: "ok", pending: "info", denied: "warn", refused: "warn", error: "bad", expired: "" };
+const AGENT_OUTCOME = { ok: "ok", approved: "ok", pending: "warn", denied: "", refused: "warn", error: "bad", expired: "" };
 
 window.mcpCardPaint = async () => {
   const card = document.getElementById("mcpCard");
@@ -154,10 +165,11 @@ window.mcpCardPaint = async () => {
   const copy = (name, label = "Copy") => `<button type="button" class="btn sm" onclick="copyText(window.__mcpText.${name}).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">${label}</button>`;
   const waiting = requests.pending || 0;
   card.innerHTML = `${UI.moduleHeader("AI agents (MCP)", "Let an AI assistant such as Claude manage this cluster with an API key, through the Model Context Protocol")}
-    <div class="srows">${settingRow("Allow AI agents to connect", "Off, every request to the endpoint is refused. Each agent still needs an API key marked for AI agents.",
-      `<label class="toggle"><input type="checkbox" id="mcp_on" ${on ? "checked" : ""} onchange="mcpSwitch(this)"><span></span></label>`)}</div>
+    <div class="srows">${serviceRow("AI agents", on ? '<span class="pill ok">allowed</span>' : '<span class="pill low">refused</span>',
+      on ? "Agents with an API key marked for AI agents can connect." : "Every request to the endpoint is refused. Each agent also needs an API key marked for AI agents.",
+      actionBar([{ label: on ? "Disable" : "Enable", run: `mcpSet(${!on})`, need: "admin" }], { label: "AI agents" }))}</div>
     ${location.protocol === "http:" ? UI.callout("warn", "This page is not served over HTTPS", STATE.data.apiKeys?.you?.node_address
-      ? "An agent's key would travel unencrypted on the network. Set up HTTPS first. Limiting keys to a client's address does not work on this cluster: Homestead sees a node's address for every request (see API keys)."
+      ? "An agent's key would travel unencrypted on the network. Set up HTTPS first. Limiting keys to a client's address does not work on this cluster: Homestead sees a host's address for every request (see API keys)."
       : "An agent's key would travel unencrypted on the network. Set up HTTPS first, and limit each key to the address of the client that uses it.") : ""}
     ${UI.field("Endpoint", `<div class="row" style="gap:8px;flex-wrap:nowrap"><input class="mono" readonly value="${esc(url)}" onclick="this.select()">${copy("url")}</div>`,
       { help: "Make a key under API keys with Allow AI agents (MCP) ticked, then give it to the client." })}
@@ -172,9 +184,13 @@ window.mcpCardPaint = async () => {
       { empty: "No agent has called yet." }))}`;
 };
 
-window.mcpSwitch = async box => {
-  const enabled = box.checked;
-  box.disabled = true;
+/* An action, not a setting: it changes who can reach the cluster, so it
+   asks first and takes effect at once rather than waiting for Save (#511). */
+window.mcpSet = async enabled => {
+  if (!(await ask(enabled
+    ? "An agent with an API key marked for AI agents can then manage this cluster: reading and routine changes run at once, deletes and restores wait for approval."
+    : "Every agent's next request is refused until AI agents are allowed again. Their API keys are kept.",
+    { title: enabled ? "Allow AI agents" : "Refuse AI agents", ok: enabled ? "Allow AI agents" : "Refuse AI agents", danger: !enabled }))) return;
   try {
     const current = { ...(await loadHealthSettings()) };
     delete current.info;
@@ -183,6 +199,6 @@ window.mcpSwitch = async box => {
     STATE.data.appSettings = null;
     await loadHealthSettings(true);
     toast(enabled ? "AI agents may connect" : "AI agents are refused", "ok");
-  } catch (e) { box.checked = !enabled; toast(e.message, "bad"); }
-  finally { box.disabled = false; }
+  } catch (e) { toast(e.message, "bad"); }
+  mcpCardPaint();
 };

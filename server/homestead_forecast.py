@@ -18,6 +18,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 
 import homestead_shared as SHARED
 
@@ -173,6 +174,17 @@ def report(now=None):
     return sorted(out, key=lambda r: (r["days_left"] is None, r["days_left"] if r["days_left"] is not None else 0, r["label"]))
 
 
+def forecast_href(r):
+    """The page to review what fills: the volume, marked on Volumes; a disk
+    on its host's Storage section."""
+    if r.get("kind") == "volume":
+        name = r.get("label") or r.get("volume") or ""
+        return "/volumes" + (f"?find={urllib.parse.quote(name)}" if name else "")
+    if r.get("kind") == "disk" and r.get("node"):
+        return f"/nodes?node={urllib.parse.quote(r['node'])}&section=storage"
+    return "/volumes"
+
+
 def alert_facts(rows):
     """Something fills within WARN_DAYS: degraded; within CRIT_DAYS: critical."""
     facts = []
@@ -182,13 +194,13 @@ def alert_facts(rows):
             continue
         what = {"volume": f"Volume {r['label']}", "disk": f"Disk {r['label']}", "pool": "Longhorn storage"}.get(r["kind"], r["label"])
         when = "within a day" if left < 1 else f"in about {round(left)} day{'s' if round(left) != 1 else ''}"
-        rate = f"{r['per_day'] / 1024**3:.1f} GB a day" if r.get("per_day") else ""
+        rate = f"{r['per_day'] / 1024**3:.1f} GiB a day" if r.get("per_day") else ""
         facts.append({"key": f"forecast:{r['key']}", "category": "outage" if left <= CRIT_DAYS else "degraded",
                       "severity": "critical" if left <= CRIT_DAYS else "degraded",
                       "title": f"{what} fills up {when}",
                       "body": f"It is {r['pct']}% full and has grown {rate} over the last weeks; at that rate it is full by {r['full_on']}.",
                       "resolved": f"{what} is no longer forecast to fill within {WARN_DAYS} days",
-                      "href": "/storage" if r["kind"] == "volume" else "/nodes", "signals": {"days_left": round(left)}})
+                      "href": forecast_href(r), "signals": {"days_left": round(left)}})
     return facts
 
 

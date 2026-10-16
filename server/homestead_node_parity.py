@@ -175,7 +175,7 @@ def hosts(ready, state, longhorn=True):
             continue
         done[node] = {"at": int(time.time()), "steps": HOST_STEPS, "multipath": words.get("MULTIPATH", ""),
                       "iscsi": words.get("ISCSI", ""), "journal": words.get("JOURNAL", "")}
-        notes = ["journal capped at 1 GB"] if words.get("JOURNAL") == "capped" else []
+        notes = ["journal capped at 1 GiB"] if words.get("JOURNAL") == "capped" else []
         if words.get("MULTIPATH") == "set":
             notes.append("multipathd kept off Longhorn's devices")
         if words.get("ISCSI") == "started":

@@ -76,13 +76,13 @@ window.viewIpam = viewIpam;
 function ipamSeen(row) {
   const bits = [];
   if (row.scan && row.scan.up) bits.push(`<span class="pill slim ok" data-tip="Answered the last scan${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}">up</span>`);
-  if (row.unifi?.reserved) bits.push('<span class="pill slim info" data-tip="UniFi holds this address for this device">reserved</span>');
+  if (row.unifi?.reserved) bits.push('<span class="pill slim info" data-tip="UniFi holds this address for this device">DHCP reservation</span>');
   if (row.unifi) bits.push(`<span class="pill slim ${row.unifi.online === false ? "neutral" : "info"}" data-tip="${esc(row.unifi.type === "device" ? `UniFi device${row.unifi.model ? ` · ${row.unifi.model}` : ""}` : row.unifi.online === false ? "UniFi reservation; the client is offline" : `UniFi ${row.unifi.type || "client"}`)}">UniFi</span>`);
   return bits.join(" ") || '<span class="dim">—</span>';
 }
 
 function ipamKind(row) {
-  if (row.cluster === "node") return '<span class="tag info">cluster node</span>';
+  if (row.cluster === "node") return '<span class="tag info">cluster host</span>';
   if (row.cluster === "vip") return `<span class="tag info" data-tip="${esc((row.services || []).join(", "))}">cluster VIP</span>`;
   if (row.gateway) return '<span class="tag">gateway</span>';
   if (!row.kind) return row.pool ? `<span class="tag" data-tip="Inside Harvester's ${esc(row.pool)} VIP pool">VIP pool</span>` : '<span class="dim">undocumented</span>';
@@ -287,7 +287,7 @@ window.ipamEdit = (ip = "") => {
   const data = STATE.data.ipam, subnet = ipamSubnetPick(data.subnets);
   const row = ipamRows(subnet).find(r => r.ip === ip) || { ip: ip || subnet.next_free[0] || "", tags: [] };
   if (row.cluster) {
-    return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster node's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
+    return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster host's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
   }
   modal(ip ? `Address · ${ip}` : "Document an address", `
     <div class="f2"><div class="f"><label>Address</label><input id="ia_ip" class="mono" value="${esc(row.ip)}" ${ip ? "readonly" : "data-ipam"}></div>
@@ -344,7 +344,7 @@ window.ipamSubnets = (add = "") => {
   modal("Subnets", `<p class="muted small">Track subnets up to /22. Add DHCP ranges to flag address conflicts and suggest free addresses outside those ranges.</p>
     <div id="is_rows">${data.subnets.map(ipamSubnetRow).join("")}${add ? ipamSubnetRow({ cidr: add, name: "LAN", gateway: add.replace(/\.0\/24$/, ".1") }) : ""}</div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow())">＋ Subnet</button>
-      ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
+      ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster hosts)</span></button>`).join("")}
       ${(ipamUnifiOn() ? data.unifi_networks || [] : []).map((n, i) => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow(STATE.data.ipam.unifi_networks[${i}]))">＋ ${esc(n.name || n.cidr)} <span class="dim">(UniFi${n.vlan ? ` · VLAN ${n.vlan}` : ""})</span></button>`).join("")}</div>
     ${UI.actions(`<button class="btn pri" onclick="ipamSubnetsSave()">Save subnets</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };
@@ -368,10 +368,11 @@ window.ipamUnifi = async () => {
     <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles ship a self-signed certificate, so this is off unless yours has a real one.")}</label>
     ${u.last_sync ? `<div class="dim xs">Last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}${u.site_name ? ` from ${esc(u.site_name)}` : ""}${u.note ? ` · ${esc(u.note)}` : ""}</div>` : ""}
     ${u.last_error ? `<div class="note bad">${esc(u.last_error)}</div>` : ""}
-    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button>
-      ${u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : ""}
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+      <button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>`,
+      // Disconnecting is not this dialog's result: it sits on the left, away from Save.
+      u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : "")}`);
 };
 window.ipamUnifiSave = async sync => {
   try {
@@ -403,7 +404,7 @@ function ipamUnifiCard(now = Date.now() / 1000) {
   const stale = u.configured && (age === null || age > UNIFI_STALE);
   const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">sync failing</span>'
     : stale ? '<span class="pill warn">out of date</span>' : '<span class="pill ok">connected</span>';
-  const when = t => new Date(t * 1000).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const when = t => fmtAt(t, { weekday: true });
   const facts = u.configured ? UI.facts([
     ["Controller", `<span class="mono">${esc(u.url)}</span>${u.site_name ? ` <span class="dim xs">· ${esc(u.site_name)}</span>` : ""}`],
     ["Last sync", u.last_sync ? `<span data-tip="${esc(when(u.last_sync))}">${esc(fmtAgo(age))}</span> <span class="dim xs">· every hour while connected</span>` : "not yet"],

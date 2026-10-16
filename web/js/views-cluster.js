@@ -20,7 +20,7 @@ function clusterNodeCard(node) {
       <span><small>Disk</small><b>${clusterMetric(node.disk_pct)}</b></span>
       <span><small>Pods</small><b>${node.pods ?? "—"}</b></span>
     </div>
-    <div class="cluster-node-foot"><span>${node.schedulable ? "Accepting workloads" : "Cordoned"}</span>
+    <div class="cluster-node-foot"><span>${node.schedulable ? "Accepting apps and VMs" : "Cordoned"}</span>
       ${node.pressure?.length ? `<span class="warntext">${esc(node.pressure.join(", "))}</span>` : `<span>${esc(node.version || "version unavailable")}</span>`}</div>
   </article>`;
 }
@@ -80,9 +80,9 @@ async function viewCluster() {
 
   <section class="card flat" id="clusterHealth">${UI.moduleHeader("Health", "Prioritized suggestions across your cluster", UI.button("Refresh", "HealthInsights.load(true)"))}<div data-insight="full"><div class="empty small">Loading checks…</div></div></section>
   <div class="cluster-layout">
-    <section class="card flat cluster-wide">${UI.moduleHeader(`Nodes and capacity pressure`, `Roles, scheduling state, resource use, and Kubernetes pressure conditions`, `${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
+    <section class="card flat cluster-wide">${UI.moduleHeader(`Hosts and capacity pressure`, `Roles, scheduling state, resource use, and Kubernetes pressure conditions`, `${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
         `${(report.nodes || []).filter(node => node.ready).length}/${(report.nodes || []).length} ready`)}`)}
-      <div class="cluster-node-grid">${(report.nodes || []).map(clusterNodeCard).join("") || '<div class="empty">No nodes reported.</div>'}</div></section>
+      <div class="cluster-node-grid">${(report.nodes || []).map(clusterNodeCard).join("") || '<div class="empty">No hosts reported.</div>'}</div></section>
 
     <section class="card flat cluster-wide">${UI.moduleHeader(`Critical platform services`, `Observed system pods grouped by the job they perform`, ``)}
       <div class="cluster-service-grid">${serviceRows.map(clusterServiceCard).join("") || '<div class="empty">System service inventory unavailable.</div>'}</div>
@@ -187,15 +187,15 @@ function componentsCard(r, settings = false) {
 }
 
 const COMPONENT_EFFECT = {
-  cluster: (c, to) => `Each node is cordoned and restarted on ${to} in turn - the servers one at a time, then the agents.
-    Apps on a node wait or move while it restarts. On a one-node cluster everything, Homestead too, is away for a minute or two;
+  cluster: (c, to) => `Each host is cordoned and restarted on ${to} in turn - the servers one at a time, then the agents.
+    Apps on a host wait or move while it restarts. On a one-node cluster everything, Homestead too, is away for a minute or two;
     this page comes back by itself. The first time, Rancher's system-upgrade-controller is installed to do it.`,
   longhorn: (c, to) => `Upgrade Longhorn to ${to} after checking its V2 volumes and host requirements.`,
   kubevirt: (c, to) => `KubeVirt's operator rolls ${to} out. Running VMs carry on, and move to the new version as they restart or live-migrate.`,
   cdi: (c, to) => `CDI's operator rolls ${to} out. Disk imports under way may restart.`,
-  "kube-vip": (c, to) => `The kube-vip chart is upgraded to ${to} with its current values. The agent restarts on each node in turn;
-    each virtual IP is unavailable for a few seconds while it moves to another node.`,
-  multus: (c, to) => `The Multus chart is upgraded to ${to} with its current values. The agent restarts on each node. Running pods are not affected;
+  "kube-vip": (c, to) => `The kube-vip chart is upgraded to ${to} with its current values. The agent restarts on each host in turn;
+    each virtual IP is unavailable for a few seconds while it moves to another host.`,
+  multus: (c, to) => `The Multus chart is upgraded to ${to} with its current values. The agent restarts on each host. Running pods are not affected;
     pods scheduled during the restart may start a few seconds later.`,
 };
 
@@ -224,10 +224,10 @@ window.componentUpgradeGo = async (id, to) => {
 
 window.harvesterUpgradeStart = version => {
   modal(`Upgrade Harvester to ${version}`, `
-    <p>Harvester checks the cluster first, then downloads the release, prepares each node, upgrades its own services and then each node in turn -
-      moving VMs off a node before it restarts. It takes an hour or more, and cannot be undone from here.</p>
-    <div class="note">Before starting: every node Ready, no volume degraded, and a backup of anything precious. VMs that cannot live-migrate
-      (a passed-through device, or one node) are shut down while their node restarts.</div>
+    <p>Harvester checks the cluster first, then downloads the release, prepares each host, upgrades its own services and then each host in turn -
+      moving VMs off a host before it restarts. It takes an hour or more, and cannot be undone from here.</p>
+    <div class="note">Before starting: every host Ready, no volume degraded, and a backup of anything precious. VMs that cannot live-migrate
+      (a passed-through device, or one host) are shut down while their host restarts.</div>
     <div class="f"><label>Type <b class="mono">${esc(version)}</b> to start</label><input id="hv_up_confirm" class="mono" autocomplete="off"></div>
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn pri" onclick="harvesterUpgradeGo(${jsq(version)})">Start the upgrade</button>`)}`);
@@ -263,8 +263,7 @@ window.clusterUpgradesPaint = clusterUpgradesPaint;
 
 function releaseDate(value) {
   if (!value) return "";
-  const date = new Date(value);
-  return isNaN(date) ? "" : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return fmtDay(value);
 }
 
 function releaseRow(label, row, kind) {
@@ -286,7 +285,7 @@ function upgradeProgress(up) {
     <div class="upgrade-bar ${esc(up.state)}"><span style="width:${Math.max(0, Math.min(100, +up.progress || 0))}%"></span></div>
     ${up.message ? `<div class="note ${up.state === "failed" ? "bad" : ""}">${esc(up.message)}</div>` : ""}
     <div class="upgrade-steps">${up.steps.map(step => `<span class="upgrade-step ${esc(step.state)}" ${step.message ? `data-tip="${esc(step.message)}"` : ""}>${esc(step.label)}</span>`).join("")}</div>
-    ${up.nodes.length ? `<table class="tbl dense stack upgrade-nodes"><thead><tr><th>Node</th><th>State</th><th data-nosort>Detail</th></tr></thead><tbody>
+    ${up.nodes.length ? `<table class="tbl dense stack upgrade-nodes"><thead><tr><th>Host</th><th>State</th><th data-nosort>Detail</th></tr></thead><tbody>
       ${up.nodes.map(node => `<tr><td><b>${esc(node.name)}</b></td>
         <td data-label="State"><span class="pill slim ${/succeed/i.test(node.state) ? "ok" : /fail/i.test(node.state) ? "crit" : "med"}">${esc(node.state || "waiting")}</span></td>
         <td data-label="Detail" class="dim xs">${esc(node.message || node.reason || "")}</td></tr>`).join("")}</tbody></table>` : ""}</div>`;

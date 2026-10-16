@@ -4,7 +4,7 @@ function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
   const fields={"#vmEditLoading":{},"#vmEditApprove":{checked:false},"#vmEditApply":{},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[],restarts=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
-    document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
     toast(){},refresh(){},closeModal(){},modalBack(){},childModal:(_title,html)=>fields["#mbody"].innerHTML=html,
     deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,
     api:async(path,options)=>{
@@ -15,7 +15,7 @@ function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
       if(fail)throw new Error("connection lost");
       return {ok:true,detail:"saved"};
     }};
-  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   ctx.vmPowerReview=async config=>restarts.push(config);
   return {ctx,fields,sent,restarts};
 }
@@ -24,7 +24,7 @@ test("edit initialization consent is separate and submitted only for exact typed
   await t.ctx.vmEditReview({ns:"lab",name:"guest",memory:"6Gi"});
   assert.match(t.fields["#mbody"].innerHTML,/Fresh state is not recovery/);
   t.fields["#vmEditApprove"].checked=true;
-  t.fields["#vmEditStateAck"]={checked:false};t.fields["#vmEditStateName"]={value:"guest"};
+  t.fields["#vmEditStateAck"]={checked:false};t.fields["#vmEditStateName"]={value:"guest",dataset:{typedExpect:"guest"}};
   await t.ctx.vmEditReviewedApply();assert.equal(t.sent.length,1);
   t.fields["#vmEditStateAck"].checked=true;t.fields["#vmEditStateName"].value="wrong";
   assert.equal(t.ctx.vmEditReviewReady(),false);
@@ -132,7 +132,7 @@ test("isolation guards Add interface and save discards stale NIC rows",async()=>
 
 test("isolation change is explicit in the edit review",async()=>{
   const t=setup();await t.ctx.vmEditReview({name:'guest',ns:'lab',isolated:true});
-  assert.match(t.fields['#mbody'].innerHTML,/Isolated VM/);
-  assert.match(t.fields['#mbody'].innerHTML,/removes all virtual network cards/);
-  assert.match(t.fields['#mbody'].innerHTML,/at next start/);
+  assert.match(t.fields['#mbody'].innerHTML,/Isolated:/);
+  assert.match(t.fields['#mbody'].innerHTML,/all virtual network cards are removed/);
+  assert.match(t.fields['#mbody'].innerHTML,/at the next start/);
 });

@@ -72,13 +72,14 @@ window.resOpen = async (ns, name, reveal = false) => {
       <div class="row">${pod ? `<button class="btn sm" onclick="resLogs(${jsq(ns)},${jsq(name)})">${icon("log")}Logs</button>` : ""}
         ${o.secret_hidden ? `<button class="btn sm" data-need="admin" onclick="resOpen(${jsq(ns)},${jsq(name)},true)">Reveal values</button>` : ""}
         <button class="btn sm" data-need="admin" id="res_edit" onclick="resEdit()">${icon("edit")}Edit</button>
-        <button class="btn sm danger" data-need="admin" onclick="resDelete(${jsq(ns)},${jsq(name)})">${icon("trash")}Delete</button></div></div>
+        ${actionBar([{ label: "Delete", icon: "trash", run: `resDelete(${jsq(ns)},${jsq(name)})`, need: "admin", danger: true }], { shown: 0, label: `More actions for ${name}` })}</div></div>
     <div class="seg" style="margin:10px 0">${["YAML", "Events"].map((t, i) => `<button class="${i ? "" : "on"}" onclick="resTab(this,${jsq(t)})">${t}</button>`).join("")}</div>
     <div class="res-pane" data-pane="YAML"><textarea id="res_yaml" aria-label="YAML" class="mono helm-values res-yaml" spellcheck="false" readonly>${esc(o.yaml)}</textarea>
       ${UI.actions(`<button class="btn pri" onclick="resSave(${jsq(ns)},${jsq(name)})">Save</button>
         <button data-dialog-dismiss="true" class="btn" onclick="resOpen(${jsq(ns)},${jsq(name)},${reveal})">Cancel</button>
         <span class="dim xs">Saved as a replace; if someone changed it meanwhile, the save is refused rather than overwrite them.</span>`, "", {attrs:`id="res_save_row" hidden`})}</div>
-    <div class="res-pane" data-pane="Events" hidden><div id="res_events" class="dim small">loading</div></div>`;
+    <div class="res-pane" data-pane="Events" hidden><div id="res_events" class="dim small">loading</div></div>
+    ${UI.actions(UI.cancel("Close"), "", { attrs: 'id="res_close_row"' })}`;
   if (window.applyRole) applyRole();
   const uid = (o.object.metadata || {}).uid || "";
   api(`/api/resources/events?${new URLSearchParams({ ns, name, uid })}`).then(events => {
@@ -93,7 +94,7 @@ window.resTab = (button, pane) => {
   $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));
   $$("#mbody .res-pane").forEach(p => { p.hidden = p.dataset.pane !== pane; });
 };
-window.resEdit = () => { const t = $("#res_yaml"); t.readOnly = false; t.focus(); $("#res_save_row").hidden = false; $("#res_edit").hidden = true; };
+window.resEdit = () => { const t = $("#res_yaml"); t.readOnly = false; t.focus(); $("#res_save_row").hidden = false; $("#res_edit").hidden = true; if ($("#res_close_row")) $("#res_close_row").hidden = true; };
 const resPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 window.resSave = async (ns, name) => {
   const k = RES.pick;
@@ -102,10 +103,15 @@ window.resSave = async (ns, name) => {
     toast(r.detail, "ok"); resOpen(ns, name);
   } catch (e) { toast(e.message, "bad"); }
 };
-window.resDelete = async (ns, name) => {
+window.resDelete = (ns, name) => {
   const k = RES.pick;
-  const typed = (await askText(`Delete ${k.kind} ${name}${ns ? ` in ${ns}` : ""}? Whatever controls it may make it again; whatever depends on it may stop.\n\nType its name to delete it:`));
-  if (typed !== name) { if (typed !== null) toast("The name did not match; nothing was deleted", "bad"); return; }
+  childModal(`Delete ${k.kind} · ${name}`, `${UI.lead(`Deletes <b>${esc(name)}</b>${ns ? ` in ${esc(ns)}` : ""}. Whatever controls it may make it again; whatever depends on it may stop.`)}
+    ${UI.typedConfirm({ id: "res_delete_confirm", expect: name, button: "res_delete_go" })}
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn danger" id="res_delete_go" disabled onclick="resDeleteGo(${jsq(ns)},${jsq(name)})">Delete ${esc(k.kind)}</button>`)}`);
+};
+window.resDeleteGo = async (ns, name) => {
+  if (!typedConfirmMatches("res_delete_confirm")) return;
+  const k = RES.pick;
   try { const r = await resPost("/api/resources/delete", { group: k.group, version: k.version, resource: k.resource, ns, name });
     toast(r.detail, "ok"); closeModal(); viewResources(); } catch (e) { toast(e.message, "bad"); }
 };

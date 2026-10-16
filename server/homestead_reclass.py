@@ -340,8 +340,8 @@ def plan(ns, claim, target, *, capture=False):
             room = (cap.get("largest") or {}).get(str(min(replicas, 3)))
             space["room_gb"] = room
             if room is not None and room < space["size_gb"]:
-                blockers.append(f"there is room for a {room} GB volume with {replicas} cop{'y' if replicas == 1 else 'ies'} "
-                                f"on {target}, and this one is {space['size_gb']} GB; free some space or add a disk first")
+                blockers.append(f"there is room for a {room} GiB volume with {replicas} cop{'y' if replicas == 1 else 'ies'} "
+                                f"on {target}, and this one is {space['size_gb']} GiB; free some space or add a disk first")
         except Exception:
             warnings.append("Destination storage capacity could not be checked; free space is unknown")
         if space["room_gb"] is None and not any("free space is unknown" in w for w in warnings):
@@ -349,7 +349,7 @@ def plan(ns, claim, target, *, capture=False):
     elif space["longhorn"]:
         warnings.append("Destination storage capacity is unavailable; free space is unknown")
     elif not space["longhorn"]:
-        warnings.append(f"{target} is not Longhorn, so Homestead cannot check it has room for {space['size_gb']} GB")
+        warnings.append(f"{target} is not Longhorn, so Homestead cannot check it has room for {space['size_gb']} GiB")
     moving = space["used_gb"] if space["used_gb"] is not None else space["size_gb"]
     return {**({"_fences": fences, "_source_binding": source_binding} if capture else {}), "ok": not blockers, "blockers": blockers, "warnings": warnings, "namespace": ns, "claim": claim,
             "from_class": current, "to_class": target, "volume_mode": mode, "access_modes": modes,

@@ -95,7 +95,7 @@ window.hostOsCheck = async node => {
 window.hostOsUpgrade = async node => {
   const f = HOST_OS.cache[node]?.facts || {};
   const count = (f.updates || []).length;
-  const ok = await ask(`Install ${count} update${count === 1 ? "" : "s"} on ${node}? Its package manager (${f.package_manager || "the host's"}) refreshes its lists and upgrades everything waiting. Workloads keep running; ${f.reboot || (f.updates || []).some(u => /^linux-(image|modules)|^kernel/.test(u.name)) ? "a kernel update then needs a restart, from Host actions" : "a restart is only needed if an update asks for one"}.`,
+  const ok = await ask(`Install ${count} update${count === 1 ? "" : "s"} on ${node}? Its package manager (${f.package_manager || "the host's"}) refreshes its lists and upgrades everything waiting. Apps and VMs keep running; ${f.reboot || (f.updates || []).some(u => /^linux-(image|modules)|^kernel/.test(u.name)) ? "a kernel update then needs a restart, from Host actions" : "a restart is only needed if an update asks for one"}.`,
     { title: "Install updates", ok: "Install updates" });
   if (!ok) return;
   try {
@@ -321,7 +321,7 @@ window.osUpdatesSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.osUpdatesStart = async () => {
-  if (!(await ask("Update every host now, one at a time? Each installs what is waiting; a host whose update asks for a restart is drained and restarted before the next is touched. Workloads move off each host while it restarts.",
+  if (!(await ask("Update every host now, one at a time? Each installs what is waiting; a host whose update asks for a restart is drained and restarted before the next is touched. Apps and VMs move off each host while it restarts.",
     { title: "Update every host", ok: "Update every host" }))) return;
   try {
     const r = await api("/api/os-updates/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });

@@ -94,7 +94,12 @@ const LEGACY = [
   [/class="sec"/g, 66, "UI.section"],
   [/deployCapacityHtml\(/g, 14, "startReview or capacityHostTable for a new review"],
   [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],
-  [/I accept\b/g, 10, 'a short UI.ack sentence that names what is accepted ("Start it anyway")'],
+  // design.md, Reviews (#500): an acknowledgement names what is accepted in a
+  // few words, and a button names the result, never "…reviewed…".
+  [/I accept\b/g, 0, 'a short UI.ack sentence that names what is accepted ("Start it anyway")'],
+  [/I approve\b/g, 0, 'a short UI.ack sentence that names what is accepted ("Move it despite the downtime")'],
+  [/I understand\b/g, 0, 'a short UI.ack sentence that names what is accepted ("Power it off anyway")'],
+  [/\b[A-Z][a-z]+ reviewed [a-z]+/g, 0, 'a button that names the result ("Save changes", "Create workloads")'],
 ];
 test("older markup only shrinks", () => {
   for (const [pattern, limit, use] of LEGACY) {

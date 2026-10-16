@@ -42,7 +42,7 @@ function objectStoreCard(store, target) {
     if (target?.configured) return "";
     return `<div class="note between" style="margin-bottom:18px"><span>
       <b>No backup storage.</b> Longhorn writes volume backups to an S3 bucket, and nothing here
-      provides one — so backups, and moving a workload to another cluster, have nowhere to go.</span>
+      provides one — so backups, and moving an app to another cluster, have nowhere to go.</span>
       <button class="btn sm pri" data-need="admin" onclick="objectStoreSetup()">Set up storage</button></div>`;
   }
   const pointed = store.longhorn?.pointed === true;
@@ -55,7 +55,7 @@ function objectStoreCard(store, target) {
     <div class="about-grid" style="margin-top:12px">
       <div><span>Endpoint</span><b class="mono">${esc(store.endpoint || "—")}</b></div>
       <div><span>Bucket</span><b class="mono">${esc(store.bucket)}</b></div>
-      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GB" : "—"}</b></div>
+      <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GiB" : "—"}</b></div>
       <div><span>Longhorn target</span><b>${pointed ? "pointed here" : switching ? "switching" : "not pointed here"}</b></div>
     </div>
     ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
@@ -66,10 +66,10 @@ function objectStoreCard(store, target) {
         <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div></div>`}
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
-      restore from these backups. Give its Service an address to migrate workloads elsewhere.</div>`}
+      restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
     <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket lives on
-      the same Longhorn storage it protects, so it survives a lost workload or a bad upgrade, not a lost
-      cluster. It exists so a workload can be rebuilt somewhere else.</div>
+      the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
+      cluster. It exists so an app or VM can be rebuilt somewhere else.</div>
   </div>`;
 }
 
@@ -77,8 +77,8 @@ window.objectStoreSetup = () => {
   const store = STATE.data.objectStore || {};
   modal(store.deployed ? "Backup storage settings" : "Set up backup storage", `
   <p>Runs an S3 server (RustFS) on a Longhorn volume and points Longhorn's backups at it. Volume backups,
-    and moving a workload to another cluster, both read and write here.</p>
-  <div class="f2"><div class="f"><label>Size (GB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
+    and moving an app to another cluster, both read and write here.</p>
+  <div class="f2"><div class="f"><label>Size (GiB) ${tip("Holds every volume backup this cluster keeps. Longhorn backups are incremental, so this is usually far smaller than the volumes themselves.")}</label>
     <input id="os_size" type="number" min="5" max="16384" value="${store.size_gb || 100}" ${store.deployed ? "disabled" : ""}></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>
       <input id="os_ip" type="text" class="mono" value="${esc(store.reachable_off_cluster && store.endpoint ? new URL(store.endpoint).hostname : "")}" placeholder="Homestead's shared address" data-ipam></div>
@@ -242,7 +242,7 @@ async function viewProtect() {
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
       <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
-      <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
+      <td class="mono">${b.size_mb ? bytesText(b.size_mb * 1024 ** 2) : "—"}</td>
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
@@ -289,7 +289,7 @@ function protectFilterWrite() {
 function protectVolumeRow(v) {
   return `<tr>
     <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
-    <td class="mono">${v.size_gb} GB</td>
+    <td class="mono">${v.size_gb} GiB</td>
     <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
     <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
@@ -405,7 +405,7 @@ window.lhTaskChanged = () => { $("#lj_retain_f").hidden = !KEEPS($("#lj_task").v
 window.lhRun = async name => {
   try {
     await api("/api/lh/job/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    toast(`${name} started; follow it in the job tray`, "ok");
+    toast(`${name} started; follow it under Jobs`, "ok");
     setTimeout(() => { resetPaint(); viewProtect(); }, 1500);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -426,7 +426,7 @@ function planList(group, chosen) {
 }
 window.lhPlans = (group = "default") => {
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
-  modal("Protection plans", `<p class="muted small">A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.</p>
+  modal("Protection plans", `${UI.lead("A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.")}
     <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>
       `<option value="${esc(g)}" ${g === group ? "selected" : ""}>${esc(g)}${g === "default" ? " - volumes with no other group" : ""}</option>`).join("")}</select>
       <div class="dim xs" style="margin-top:6px">A plan for a group of its own needs the group first:
@@ -472,7 +472,7 @@ window.lhGroup = (name = "") => {
       <input type="text" id="lg_filter" placeholder="Filter by name or namespace" oninput="lhGroupFilter()" autocomplete="off">
       <div class="lg-list" id="lg_vols">${(d.volumes || []).map(v => `<label class="lg-row" data-q="${esc(`${v.pvc} ${v.namespace} ${v.name}`.toLowerCase())}">
         <input type="checkbox" value="${esc(v.name)}" ${row.volumes.includes(v.name) ? "checked" : ""}>
-        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GB</span></span>
+        <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GiB</span></span>
         <span class="lg-tags">${v.groups.filter(g => g !== name).map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("")}</span></label>`).join("")
         || '<div class="dim xs">No volumes.</div>'}</div>
       <div class="row" style="gap:10px;margin-top:6px"><button class="linkish xs" onclick="lhGroupAll(true)">Tick all shown</button>
@@ -585,8 +585,7 @@ window.lhAssign = (vol, label) => {
   const d = STATE.data.lh;
   const v = (d.volumes || []).find(x => x.name === vol) || { groups: [], jobs: [] };
   modal("Protect · " + label, `
-    <p class="muted small">Groups and jobs are labels on the volume. Ticking one takes effect
-    on the job's next run.</p>
+    ${UI.lead("Groups and jobs are labels on the volume. Ticking one takes effect on the job's next run.")}
     <div class="sec">Groups</div>
     <div id="pa_groups">${(d.groups || []).map(g => `<label class="switch" style="margin:0 0 8px">
       <input type="checkbox" class="pg" value="${esc(g)}" ${v.groups.includes(g) ? "checked" : ""}>
@@ -639,7 +638,7 @@ function snapshotTimeline(snaps, vol, label) {
     return `<article class="snapshot-point ${source === "system" ? "system" : ""}">
       <div class="snapshot-marker">${icon("snapshot")}</div><div class="snapshot-content">
       <div class="between"><b class="mono small">${esc(s.name)}</b><span class="tag ${source === "system" ? "info" : ""}">${title}</span></div>
-      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(date.toLocaleString(undefined, {day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"}))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
+      <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(fmtAt(date))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
       <div class="row small"><span class="dim">${esc(s.size_mb)} MiB</span>${s.deleting || s.removed ? '<span class="tag warn">cleanup pending</span>' : !s.ready ? '<span class="tag warn">not ready</span>' : ""}
       ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
       ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
@@ -656,9 +655,10 @@ function snapshotTimeline(snaps, vol, label) {
 
 let SNAPSHOT_REFRESH = 0, SNAPSHOT_TIMER = null;
 function snapshotCleanupHtml(p) {
-  if (!p || p.error) return `<div class="note warn">Cleanup progress unavailable${p?.error ? `: ${esc(p.error)}` : ""}. Retrying; no completion is assumed.</div>`;
-  if (p.errors?.length) return `<div class="note bad"><b>Longhorn cleanup error</b><p>${p.errors.map(esc).join("; ")}</p></div>`;
-  if (!p.active) return `<div class="dim small">${p.known ? "No active Longhorn purge reported. Marked snapshots may still be waiting for a new boundary or controller cleanup." : "No engine status available; the volume may be detached. Cleanup progress is unknown."}</div>`;
+  if (!p || p.error) return UI.callout("warn", "Cleanup progress unavailable", `${p?.error ? `${esc(p.error)}. ` : ""}Retrying; no completion is assumed.`);
+  if (p.errors?.length) return UI.callout("bad", "Longhorn cleanup error", p.errors.map(esc).join("; "));
+  // Nothing is being cleaned up: nothing to say (#501).
+  if (!p.active) return "";
   const pct = p.percent;
   return `<div class="note"><div class="between"><b>Longhorn cleanup ${pct == null ? "in progress" : `${+pct}%`}</b><span class="tag warn">Merging / purging</span></div>
     ${pct == null ? '<span class="spin2"></span>' : `<div class="meter" role="progressbar" aria-label="Longhorn volume cleanup" aria-valuenow="${+pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.max(0, Math.min(100, +pct))}%"></span></div>`}
@@ -677,7 +677,7 @@ async function refreshSnapshotDialog(token, vol, label) {
     host.innerHTML = snapshotCleanupHtml(progress) + `<div class="sec">Snapshots (${snaps.length})</div>` + snapshotTimeline(snaps, vol, label);
     if (window.applyRole) applyRole();
   } catch (e) {
-    if ($("#snapshot_live") === host) host.innerHTML = `<div class="note warn">Snapshot refresh failed: ${esc(e.message)}. Retrying; previous cleanup may still be running.</div>`;
+    if ($("#snapshot_live") === host) host.innerHTML = UI.callout("warn", "Snapshot refresh failed", `${esc(e.message)}. Retrying; previous cleanup may still be running.`);
   }
   if ($("#snapshot_live") === host) {
     clearTimeout(SNAPSHOT_TIMER);
@@ -694,17 +694,17 @@ window.lhSnaps = async (vol, label) => {
       api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(() => []),
     ]);
     if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
-    $("#mbody").innerHTML = `
-      <div class="row" style="margin-bottom:16px">
-        <button class="btn pri" data-need="operator" onclick="lhSnapNow(${jsq(vol)},${jsq(label)})">Take snapshot now</button>
-        <button class="btn" data-need="operator" onclick="lhBackupNow(${jsq(vol)},${jsq(label)})">Back up now</button>
-        <button class="btn" data-need="operator" data-tip="Give Longhorn back the space deleted files still hold. Every volume is also trimmed weekly." onclick="lhTrimNow(${jsq(vol)})">Trim now</button>
-        <button class="btn" onclick="lhSnaps(${jsq(vol)},${jsq(label)})">${icon("refresh")}Refresh</button>
-      </div>
-      <p class="dim small">Creation timeline, oldest first. Checkpoint ancestry can branch after rollback; this is not a dependency graph.</p>
+    // One lead, then the timeline; the volume's actions sit in the footer,
+    // the main one on the right and the rest in its ⋯ (#501).
+    $("#mbody").innerHTML = `${UI.lead("Oldest first. Restore or browse any snapshot or backup.")}
       <div id="snapshot_live" data-token="${token}"><div class="sec">Snapshots (${snaps.length})</div>${snapshotTimeline(snaps, vol, label)}</div>
       <div class="sec">Backups (${bks.length})</div>
-      ${backupTable(bks, vol, label)}`;
+      ${backupTable(bks, vol, label)}
+      ${UI.actions(actionBar([
+        { label: "Take snapshot now", run: `lhSnapNow(${jsq(vol)},${jsq(label)})`, need: "operator", pri: true },
+        { label: "Back up now", run: `lhBackupNow(${jsq(vol)},${jsq(label)})`, need: "operator" },
+        { label: "Trim now", run: `lhTrimNow(${jsq(vol)})`, need: "operator", tip: "Give Longhorn back the space deleted files still hold. Every volume is also trimmed weekly." },
+        { label: "Refresh", icon: "refresh", run: `lhSnaps(${jsq(vol)},${jsq(label)})` }], { shown: 1, label: `More for ${label}` }), UI.cancel("Close"))}`;
     if (window.applyRole) window.applyRole();
     refreshSnapshotDialog(token, vol, label);
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnaps(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
@@ -715,10 +715,10 @@ function backupTable(bks, vol, label) {
     ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
       <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
-      <td class="mono">${b.size_mb} MB</td>
+      <td class="mono">${b.size_mb} MiB</td>
       <td class="small dim">${fmtWhen(b.created)}</td>
       <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
-        b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
+        b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)},${jsq(label)})`, need: "admin" } : null,
         { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")
       || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
   </tbody></table></div></div>`;
@@ -729,9 +729,10 @@ window.lhBackupList = async (vol, label) => {
   try {
     const bks = await api("/api/lh/backups?volume=" + encodeURIComponent(vol));
     const live = ((STATE.data.lh || {}).volumes || []).some(v => v.name === vol);
-    $("#mbody").innerHTML = `${live ? "" : `<div class="note warn">The volume is gone. Restore makes a new volume from
-      one of these; point the app at it, or restore it under the old claim's name.</div>`}
-      ${backupTable(bks, vol, label)}`;
+    $("#mbody").innerHTML = `${UI.lead("Restore any of these into a new volume; the backup stays.")}
+      ${live ? "" : UI.callout("warn", "The volume is gone", "Restore makes a new volume from one of these; point the app at it, or restore it under the old claim's name.")}
+      ${backupTable(bks, vol, label)}
+      ${UI.actions("", UI.cancel("Close"))}`;
     if (window.applyRole) window.applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhBackupList(${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
@@ -770,8 +771,8 @@ window.lhBackupNow = async (vol, label) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 let restoreCheckTimer = 0;
-window.lhRestore = async backup => {
-  modal("Restore backup", `<div class="empty"><span class="spin2"></span>checking backup and namespaces</div>`, true);
+window.lhRestore = async (backup, label = "") => {
+  modal(`Restore backup${label ? ` · ${label}` : ""}`, `<div class="empty"><span class="spin2"></span>checking backup and namespaces</div>`, true);
   try {
     const [plan, namespaces] = await Promise.all([
       api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=&name=`),
@@ -779,18 +780,18 @@ window.lhRestore = async backup => {
     ]);
     const preferred = typeof defaultNamespace === "function" ? defaultNamespace() : "lab";
     const defaultNs = namespaces.includes(preferred) ? preferred : (namespaces[0] || "default");
-    $("#mbody").innerHTML = `
-      <div class="note"><b>This creates a new PVC.</b> The backup and its source volume stay unchanged.
-        Restore progress remains in the active-jobs tray if this dialog is closed or Homestead is refreshed.</div>
-      <div class="drow"><div class="dl">Backup</div><div class="dv mono small">${esc(plan.backup)}</div></div>
-      <div class="drow"><div class="dl">Source volume</div><div class="dv mono small">${esc(plan.source_volume)}</div></div>
-      <div class="drow"><div class="dl">Original capacity</div><div class="dv">${plan.minimum_size_gb} GiB</div></div>
+    if (!label) { const title = $("#mtitle"); if (title) title.textContent = `Restore backup · ${plan.source_volume}`; }
+    $("#mbody").innerHTML = `${UI.lead("This makes a new PVC from the backup; the backup and its source volume stay as they are. Restoring carries on under Jobs if this dialog is closed.")}
+      ${UI.facts([["Backup", `<span class="mono small">${esc(plan.backup)}</span>`],
+        ["Source volume", `<span class="mono small">${esc(plan.source_volume)}</span>`],
+        ["Original capacity", `${plan.minimum_size_gb} GiB`]])}
       <div class="f2" style="margin-top:16px">
         <div class="f"><label>Namespace ${tip("The Kubernetes namespace that will own the new PersistentVolumeClaim.")}</label>
           <select id="lr_ns" onchange="lhRestoreCheck()">${namespaces.map(ns =>
             `<option value="${esc(ns)}" ${ns === defaultNs ? "selected" : ""}>${esc(ns)}</option>`).join("")}</select></div>
         <div class="f"><label>New PVC name ${tip("Must be unique in the selected namespace. Existing claims are never overwritten.")}</label>
-          <input id="lr_name" value="${esc(plan.suggested_name)}" oninput="lhRestoreCheck()"></div>
+          <input id="lr_name" value="${esc(plan.suggested_name)}" oninput="lhRestoreCheck()">
+          <div id="lr_check" class="ui-help" aria-live="polite"><span class="spin2"></span> Checking the name…</div></div>
       </div>
       <div class="f2">
         <div class="f"><label>Capacity (GiB) ${tip("May be larger than the backup volume, but never smaller.")}</label>
@@ -802,13 +803,12 @@ window.lhRestore = async backup => {
       <div class="f"><label>Storage class ${tip("The restored PVC uses this configured class. Replica count, disk tags and other storage settings come from it.")}</label>
         <select id="lr_sc" onchange="lhRestoreCheck()">${(plan.storage_classes || []).map(name => `<option value="${esc(name)}" ${name === plan.storage_class ? "selected" : ""}>${esc(name)}</option>`).join("")}</select>
         <div class="dim small">The restored volume keeps this class and its storage settings.</div></div>
-      <div id="lr_check" class="note"><span class="spin2"></span> checking destination name</div>
       ${UI.actions(`<button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
           onclick="lhRestoreStart(this.dataset.backup)" disabled>${icon("rollback")}Start restore</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (window.applyRole) window.applyRole();
     lhRestoreCheck();
-  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRestore(${jsArg(backup)})`, dialog: true }); }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRestore(${jsArg(backup)},${jsArg(label)})`, dialog: true }); }
 };
 window.lhRestoreCheck = () => {
   clearTimeout(restoreCheckTimer);
@@ -818,14 +818,17 @@ window.lhRestoreCheck = () => {
     const backup = button.dataset.backup || "";
     const ns = $("#lr_ns").value, name = $("#lr_name").value.trim();
     button.disabled = true;
-    if (!name) { box.className = "note bad"; box.textContent = "Enter a PVC name."; return; }
-    if (!$("#lr_sc").value) { box.className = "note bad"; box.textContent = "Create a regular Longhorn storage class before restoring."; return; }
-    box.className = "note"; box.innerHTML = '<span class="spin2"></span> checking destination name';
+    // The answer sits under the name field: help while checking or when the
+    // name is free, the field's error when it is not (#501).
+    const say = (error, text) => { box.className = error ? "ui-field-error" : "ui-help"; box.textContent = text; };
+    if (!name) return say(true, "Enter a PVC name.");
+    if (!$("#lr_sc").value) return say(true, "Create a regular Longhorn storage class before restoring.");
+    box.className = "ui-help"; box.innerHTML = '<span class="spin2"></span> Checking the name…';
     try {
       const plan = await api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
-      if (plan.conflict) { box.className = "note bad"; box.textContent = plan.conflict.message; }
-      else { box.className = "note good"; box.textContent = `${ns}/${name} is available. Existing PVCs will not be changed.`; button.disabled = false; }
-    } catch (e) { box.className = "note bad"; box.textContent = e.message; }
+      if (plan.conflict) say(true, plan.conflict.message);
+      else { say(false, `${ns}/${name} is free; nothing existing changes.`); button.disabled = false; }
+    } catch (e) { say(true, e.message); }
   }, 250);
 };
 window.lhRestoreStart = async backup => {
@@ -855,7 +858,7 @@ window.lhRevert = async (vol, snap, label) => {
       ${users.length ? `<div class="note"><b>Stopped while it is done, then started again:</b>
         ${users.map(u => `<span class="tag">${esc(u.kind === "VirtualMachine" ? "VM" : u.kind)} ${esc(u.name)}</span>`).join(" ")}</div>`
         : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
-      ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
+      ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
         <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button>`)}`;
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRevert(${jsArg(vol)},${jsArg(snap)},${jsArg(label || "")})`, dialog: true }); }
@@ -880,16 +883,16 @@ window.lhSnapDel = async (name, vol, label) => {
     window.__snapshotDeletePlan = p;
     $("#mbody").innerHTML = `<div class="note"><b>${p.source === "system" ? "System checkpoint cleanup" : "Remove recovery point"}</b><p>${p.source === "system" ? "Longhorn created this checkpoint. Homestead requests cleanup through Longhorn's controller; it never removes active Volume Head or forces finalizers." : "This recovery point will no longer be usable for rollback. Current files and external backups are not deleted."}</p>
       Longhorn merges shared blocks and may also purge other already-removed or eligible system checkpoints on this volume. The displayed snapshot size is not a promise of space recovered.</div>
-      ${p.head_parent ? '<div class="note warn">This is the parent of Volume Head. Cleanup can wait until you take a fresh snapshot. Homestead will show that dependency in the job; it will not create snapshots automatically.</div>' : ""}
-      ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
+      ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)
+        : p.head_parent ? UI.callout("warn", "This is the parent of Volume Head", "Cleanup can wait until you take a fresh snapshot. Homestead will show that dependency in the job; it will not create snapshots automatically.") : ""}
       <p class="dim small">A persistent job tracks request, merge/purge and verified removal. Closing this dialog does not stop it. Removal cannot be undone or cancelled.</p>
-      <div class="f"><label>Type <b class="mono">${esc(p.name)}</b> to confirm</label><input id="sd_confirm" autocomplete="off" oninput="lhSnapDeleteGate()"></div>
+      ${UI.typedConfirm({ id: "sd_confirm", expect: p.name, oninput: "lhSnapDeleteGate()" })}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button id="sd_go" class="btn danger" data-need="admin" disabled onclick="lhSnapDeleteGo()">Start cleanup job</button>`)}`;
-  } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhSnapDel(${jsArg(name)},${jsArg(vol)},${jsArg(label || "")})`, dialog: true }); }
 };
 window.lhSnapDeleteGate = () => {
   const p = window.__snapshotDeletePlan;
-  $("#sd_go").disabled = !p?.ready || $("#sd_confirm").value.trim() !== p.name;
+  $("#sd_go").disabled = !p?.ready || !typedConfirmMatches("sd_confirm");
 };
 window.lhSnapDeleteGo = async () => {
   const p = window.__snapshotDeletePlan, confirmation = $("#sd_confirm").value.trim();
@@ -907,10 +910,7 @@ window.lhSnapDeleteGo = async () => {
 window.lhTarget = () => {
   const t = (STATE.data.lh || {}).target || {};
   modal("Backup target", `
-    <p class="muted small">Where Longhorn uploads backups. Snapshots do not need this —
-    they live on the volume. Backups do.</p>
-    ${t.harvester ? `<div class="note">On Harvester this is saved as Harvester's own <span class="mono">backup-target</span> setting,
-      which it passes to Longhorn and uses for VM backups too. Harvester takes NFS or S3, and writes to the top of an S3 bucket.</div>` : ""}
+    ${UI.lead("Where Longhorn uploads backups. Snapshots don't need this; they live on the volume. Backups do.")}
     <div class="f" style="margin-top:14px"><label>Target URL</label>
       <input type="text" id="bt_url" value="${esc(t.url || "")}"
         placeholder="nfs://192.0.2.177:/mnt/user/backups">
@@ -933,11 +933,10 @@ window.lhTarget = () => {
       <div class="f"><label>Poll interval</label>
         <input type="text" id="bt_poll" value="${esc(t.interval || "5m")}"></div>
     </div>
+    ${UI.more("NFS exports", `<p>The export must be reachable from every host and allow root writes, otherwise backups fail with a permission error that only shows up on the first scheduled run.</p>`)}
+    ${UI.more("On Harvester", `<p>${t.harvester ? "This" : "On Harvester this"} is saved as Harvester's own <span class="mono">backup-target</span> setting, which it passes to Longhorn and uses for VM backups too. Harvester takes NFS or S3, and writes to the top of an S3 bucket.</p>`)}
     ${UI.actions(`<button class="btn pri" onclick="lhTargetSave()">Save target</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">For NFS the export must be reachable from every node
-    and allow root writes, otherwise backups fail with a permission error that only shows up on the
-    first scheduled run.</div>`);
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   const s3 = () => { $("#bt_s3").hidden = !$("#bt_url").value.trim().startsWith("s3://"); };
   $("#bt_url").addEventListener("input", s3); s3();
 };
@@ -956,7 +955,7 @@ window.lhTargetSave = async () => {
 /* ---------------- restore tests (homestead_restore_test.py) ----------------
    Each app with Longhorn volumes: what a test restores, its last result, and
    Test now. Switched on, Homestead tests each app with backups monthly. */
-const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : new Date(at * 1000).toLocaleString()) : "";
+const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : fmtAt(at)) : "";
 
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");

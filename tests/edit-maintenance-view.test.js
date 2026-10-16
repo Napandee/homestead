@@ -6,7 +6,7 @@ function setup(review) {
   let html = "", fail = false;
   const sent = [], notices = [], fields = { "#editCapacityConfirm": { checked: false }, "#editGo": {},
     "#mbody": { insertAdjacentHTML(_where,body) { html += body; } } };
-  const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {} },
+  const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {}, getElementById: id => fields['#' + id] || null },
     $: s => fields[s], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
     childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
     api: async (path, options) => {
@@ -67,22 +67,22 @@ test("An uncertain edit requires fresh saved state instead of replaying addition
   assert.equal(t.fields["#editGo"].disabled, true);
   assert.equal(t.fields["#editGo"].onclick, null);
   assert.match(t.html(), /Some changes may already be saved/);
-  assert.match(t.html(), /Reload saved workload/);
+  assert.match(t.html(), /Reload saved app/);
   assert.match(t.html(), /does not need a new name/);
   await t.c.window.editReview({ns:"lab",name:"demo",containers:[{new:true,name:"helper"}]});
   await t.c.window.editSave("lab","demo");
   assert.equal(t.sent.length,1);
-  assert.match(t.notices.at(-1),/Reload the saved workload/);
+  assert.match(t.notices.at(-1),/Reload the saved app/);
 });
 
 test("Rename review explains a name-only outage and requires a separate acknowledgement", async () => {
   const t = setup({ ...review, capacity: { ...review.capacity, rename: { from: "<old>", to: "new" } } });
   await t.c.window.editReview({ ns: "lab", name: "old", workload_name: "new" });
   assert.match(t.html(), /&lt;old&gt;/);
-  assert.match(t.html(), /Only the workload name changes/);
+  assert.match(t.html(), /Only the app name changes/);
   assert.match(t.html(), /Save other edits separately/);
   assert.match(t.html(), /short outage/);
-  assert.match(t.html(), /Rename workload/);
+  assert.match(t.html(), /Rename app/);
   await t.c.window.confirmEdit();
   assert.equal(t.sent.length, 0);
   t.fields["#editCapacityConfirm"].checked = true;
@@ -121,7 +121,7 @@ test('forced review never promises a Longhorn drain wait', async () => {
   assert.doesNotMatch(t.html(), /waits for Longhorn during drain/);
 });
 function hostFields(t) {
-  t.fields['#pw_confirm']={value:'host1'}; t.fields['#pw_execute']={};
+  t.fields['#pw_confirm']={value:'host1',dataset:{typedExpect:'host1'}}; t.fields['#pw_execute']={};
 }
 test('host power consumes approval once and records the job',async()=>{
   const t=setup(hostReview), jobs=[];let refreshed=0;hostFields(t);
@@ -184,9 +184,9 @@ test("uncertain rename directs inspection of both names and never offers stale r
   await t.c.window.editReview({ns:'lab',name:'old',workload_name:'new'});
   t.fail();t.fields['#editCapacityConfirm'].checked=true;
   await t.c.window.confirmEdit();
-  assert.match(t.html(),/Inspect both workload names/);
-  assert.match(t.html(),/Inspect workloads/);
-  assert.doesNotMatch(t.html(),/Reload saved workload/);
+  assert.match(t.html(),/Inspect both app names/);
+  assert.match(t.html(),/Inspect apps/);
+  assert.doesNotMatch(t.html(),/Reload saved app/);
   assert.equal(t.fields['#editGo'].disabled,true);
 });
 
@@ -202,7 +202,7 @@ test('single-host shutdown and reboot need outage acknowledgement without force'
     assert.match(t.html(), /does not evict pods/);
     assert.match(t.html(), /id="pw_outage"/);
     assert.doesNotMatch(t.html(), /Override these checks|id="pw_allow"|waits for Longhorn during drain|host stays cordoned/);
-    if(action==='poweroff') assert.match(t.html(), /console or physical access to power this host on again/);
+    if(action==='poweroff') assert.match(t.html(), /powered on by hand/);
     await t.c.window.nodePower('host1',action);
     assert.equal(t.sent.length,0);
     t.fields['#pw_outage'].checked=true;

@@ -446,7 +446,7 @@ def report():
 def start_asked():
     rollout = start("asked")
     return {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
-            "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"}
+            "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it under Jobs"}
 
 
 # Its routes and who may use them (homestead_routes.py).

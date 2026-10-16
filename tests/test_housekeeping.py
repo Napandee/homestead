@@ -110,7 +110,7 @@ class AlertTests(Base):
                                                     {"label": "Logos", "size": 50 * 1024**2}]}
         fact = HK.alert_facts(rep)[0]
         self.assertEqual(("degraded", "Homestead's data volume is 86% full"), (fact["severity"], fact["title"]))
-        self.assertIn("Long-term stats (900 MB)", fact["body"])
+        self.assertIn("Long-term stats (900 MiB)", fact["body"])
         self.assertEqual("critical", HK.alert_facts({"volume": {"pct": 96.0}, "stores": []})[0]["severity"])
         self.assertEqual([], HK.alert_facts({"volume": {"pct": 50.0}, "stores": []}))
 

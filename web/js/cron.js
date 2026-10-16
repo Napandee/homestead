@@ -127,9 +127,7 @@
    is UTC unless it names another zone; CRON only works out UTC ones. */
 const UTC_ZONES = ["UTC", "Etc/UTC"];
 /* When a time on the cluster's clock is, for the person reading. */
-function localTime(date) {
-  return date.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
-}
+const localTime = date => fmtAt(date, { weekday: true });
 function nextRun(cron) {
   const at = CRON.next(cron, new Date(), 1)[0];
   if (!at) return '<span class="dim">never</span>';

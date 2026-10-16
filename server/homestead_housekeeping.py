@@ -110,7 +110,7 @@ def tidy_now():
     result = tidy_unused()
     mb = result["freed"] / 1024**2
     return {"ok": True, **result, "report": report(),
-            "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"}
+            "detail": (f"Freed {mb:.1f} MiB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"}
 
 
 def _all_files():
@@ -248,13 +248,13 @@ def alert_facts(rep):
     pct = vol.get("pct")
     if pct is None or pct < PRESSURE_PCT:
         return []
-    biggest = ", ".join(f"{s['label']} ({s['size'] / 1024**2:.0f} MB)" for s in (rep.get("stores") or [])[:3])
+    biggest = ", ".join(f"{s['label']} ({s['size'] / 1024**2:.0f} MiB)" for s in (rep.get("stores") or [])[:3])
     return [{"key": "housekeeping:volume", "category": "outage" if pct >= CRIT_PCT else "degraded",
              "severity": "critical" if pct >= CRIT_PCT else "degraded",
              "title": f"Homestead's data volume is {pct:.0f}% full",
              "body": f"The most is in {biggest}. Homestead now keeps less of its logs and logos; if it keeps filling, "
                      "make its data volume larger under Volumes.",
-             "resolved": "Homestead's data volume has room again", "href": "/settings#homestead-data",
+             "resolved": "Homestead's data volume has room again", "href": "/settings?tab=about#homestead-data",
              "signals": {"pct": round(pct)}}]
 
 

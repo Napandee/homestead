@@ -12,7 +12,7 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
   const content=page.locator('#notificationsDialogList');await content.waitFor();assert.equal(await page.locator('.actionmenu-portal .bellpop').count(),0);
   assert.match(await page.locator('#mtitle').textContent(),/Notifications/);
   const bounds=await page.locator('.modalbox').boundingBox();assert.ok(bounds.width>=width-32,'notifications use the phone width');
-  await page.waitForFunction(()=>document.querySelector('#notificationsDialogList>button.danger')?.getBoundingClientRect().height>=43.9);
+  await page.waitForFunction(()=>document.querySelector('#notificationsDialogList>button.warn')?.getBoundingClientRect().height>=43.9);
   await page.evaluate(()=>paintBell());assert.equal(await content.count(),1);
   await page.locator('.modalbox').screenshot({path:`${out}/notifications-${theme}-${width}.png`});
   await content.getByRole('button',{name:'1 active alert',exact:true}).click();await page.locator('#pwaAlertsDialog').waitFor();assert.equal(await content.count(),0);

@@ -722,7 +722,7 @@ def check_rom(data):
     if not raw:
         raise ValueError("the ROM file is empty")
     if len(raw) > ROM_LIMIT:
-        raise ValueError(f"the ROM is {len(raw) // 1024} KB; up to {ROM_LIMIT // 1024} KB fits (trim any dump header)")
+        raise ValueError(f"the ROM is {len(raw) // 1024} KiB; up to {ROM_LIMIT // 1024} KiB fits (trim any dump header)")
     if raw[:2] != b"\x55\xaa":
         raise ValueError("the file does not start with a PCI ROM signature (55 AA); a dump from GPU-Z or nvflash may "
                          "carry a header to trim first")

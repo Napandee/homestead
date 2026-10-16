@@ -43,8 +43,8 @@
     apps.forEach(a => { b += app(30, y, 162, a); y += 24; });
     // The rest are on the node's Workloads section: the link goes there (#367).
     if (more) {
-      b += `<a href="#" class="dg-more" role="button" aria-label="Show all ${(n.workloads || []).length} workloads on ${e(n.name)}"
-        onclick="window.nodeSectionGo?.('workloads');return false">${text(30, y + 14, `+${more} more · show all`, "dg-xs dg-link")}</a>`;
+      b += `<a href="#" class="dg-more" role="button" aria-label="Show all ${(n.workloads || []).length} apps on ${e(n.name)}"
+        onclick="window.nodeSectionGo?.('apps');return false">${text(30, y + 14, `+${more} more · show all`, "dg-xs dg-link")}</a>`;
       y += 24;
     }
     if (vms) { b += vm(30, y, 162, vms === 1 ? "1 virtual machine" : `${vms} virtual machines`); y += 24; }
@@ -56,12 +56,12 @@
       const usage = root.diskUsage(n, d), size = usage.physical, w = 180;
       const sys = usage.host, lh = usage.longhorn, room = usage.room;
       const px = gb => usage.capacity ? gb / usage.capacity * w : 0;
-      b += text(236, dy + 12, `${clip(d.name || d.device, 16)} · ${size >= 1000 ? (size / 1000).toFixed(1) + " TB" : Math.round(size) + " GB"}`, "dg-s dg-mono");
+      b += text(236, dy + 12, `${clip(d.name || d.device, 16)} · ${root.sizeText(size)}`, "dg-s dg-mono");
       if (d.role === "unused") b += box(236, dy + 18, w, 9, "dg-empty dg-dash", 3) + text(236, dy + 40, "unused", "dg-xs dg-dim");
       else if (usage.capacity) {
         b += box(236, dy + 18, w, 9, "dg-track", 3) + (sys ? box(236, dy + 18, px(sys), 9, "dg-sys", 0) : "")
           + (lh ? box(236 + px(sys), dy + 18, px(lh), 9, "dg-vol", 0) : "") + (room ? box(236 + px(sys) + px(lh), dy + 18, px(room), 9, "dg-vol-room", 0) : "");
-        b += text(236, dy + 40, `Filesystem ${Math.round(usage.used)}/${Math.round(usage.capacity)} GB · ${usage.pct}%`, "dg-xs dg-dim");
+        b += text(236, dy + 40, `Filesystem ${Math.round(usage.used)}/${Math.round(usage.capacity)} GiB · ${usage.pct}%`, "dg-xs dg-dim");
       } else b += text(236, dy + 40, "usage unavailable", "dg-xs dg-dim");
       dy += 52;
     });
@@ -174,13 +174,13 @@
     let b = "";
     for (let i = 0; i < cols; i++) {
       const x = 6 + i * (w + gap), has = i < names.length, held = has && i < want;
-      b += box(x, 8, w, 64, has ? "dg-node" : "dg-node dg-dash", 8) + text(x + 10, 26, has ? clip(names[i], 15) : "no node", has ? "dg-b" : "dg-dim");
+      b += box(x, 8, w, 64, has ? "dg-node" : "dg-node dg-dash", 8) + text(x + 10, 26, has ? clip(names[i], 15) : "no host", has ? "dg-b" : "dg-dim");
       if (i < want) b += box(x + 10, 38, w - 20, 22, held ? "dg-vol-box" : "dg-vol-box dg-dash", 5)
         + text(x + 18, 53, `copy ${i + 1}`, held ? "dg-xs" : "dg-xs dg-dim");
     }
     const placed = Math.min(want, names.length);
-    const said = placed < want ? `${want} copies wanted, ${names.length} node${names.length === 1 ? "" : "s"} to hold them: ${want - placed} never placed`
-      : `${want} cop${want === 1 ? "y" : "ies"} of each volume, each on a node of its own`;
+    const said = placed < want ? `${want} copies wanted, ${names.length} host${names.length === 1 ? "" : "s"} to hold them: ${want - placed} never placed`
+      : `${want} cop${want === 1 ? "y" : "ies"} of each volume, each on a host of its own`;
     return figure(svg(Math.max(320, cols * (w + gap) + 8), 96, b + text(6, 90, said, "dg-s"), said));
   }
 

@@ -190,9 +190,12 @@ window.openOperation = (href, id = "", savedOperation = null) => {
   const q = (url.searchParams.get("find") || url.searchParams.get("q") || "").trim();
   url.searchParams.delete("find");
   url.searchParams.delete("q");
-  go(route.view, { params: Object.fromEntries(url.searchParams) });
+  // #card names the card on the page; the name is then marked inside it.
+  let anchor = "";
+  try { anchor = decodeURIComponent(url.hash.slice(1)); } catch (_) { /* no card */ }
+  go(route.view, { params: Object.fromEntries(url.searchParams), anchor, mark: anchor ? q : "" });
   const opensItsOwn = ["reclass", "image-update", "image-rollback"].includes(operation?.kind);
-  if (q && !opensItsOwn) highlightInPage(q);
+  if (q && !opensItsOwn && !anchor) highlightInPage(q);
   // An image update or rollback opens its rollout, as it looked when it ran.
   const target = operation?.resource || {};
   if (operation?.kind === "vm-power" && target.name && window.vmOpen)
@@ -205,18 +208,47 @@ window.openOperation = (href, id = "", savedOperation = null) => {
 /* Bring the row or card that mentions this name into view and mark it for a
    moment, once the page has drawn. The name must match a whole word, so
    "frigate" does not land on "frigate-config". */
+const wholeWord = name => new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9-])`, "i");
+const flashFound = el => {
+  el.classList.add("flash-find");
+  setTimeout(() => el.classList.remove("flash-find"), 2600);
+};
 function highlightInPage(name, tries = 8) {
-  const words = new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9-])`, "i");
+  const words = wholeWord(name);
   const find = () => [...document.querySelectorAll("#views tr, #views .card, #views [data-vol], #views .wlcard, #views .row-item")]
     .filter(el => el.offsetParent !== null && words.test(el.innerText || ""))
     .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
   const el = find();
   if (!el) { if (tries > 0) setTimeout(() => highlightInPage(name, tries - 1), 400); return; }
   el.scrollIntoView({ block: "center", behavior: "smooth" });
-  el.classList.add("flash-find");
-  setTimeout(() => el.classList.remove("flash-find"), 2600);
+  flashFound(el);
 }
 window.highlightInPage = highlightInPage;
+/* A link can name the card to review as well as the page -
+   /settings?tab=updates#settingsHostUpdates. A card that reads its own data
+   draws a spinner first, and while a card above it is still loading it is not
+   yet where it will end up; so this waits for the card and every visible one
+   before it, then brings it under the header and marks it. A name as well
+   (?find=) marks that row in the card. Six seconds at most: a card that never
+   finishes loading still gets scrolled to. */
+function focusInPage(id, mark = "", tries = 24) {
+  const el = id ? document.getElementById(id) : null;
+  const shown = !!el && el.offsetParent !== null;
+  const loading = shown && [...document.querySelectorAll("#views .spin2")].some(spin => spin.offsetParent !== null
+    && (el.contains(spin) || !!(spin.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)));
+  if ((!shown || loading) && tries > 0) { setTimeout(() => focusInPage(id, mark, tries - 1), 250); return; }
+  if (!shown) { if (mark) highlightInPage(mark); return; }
+  el.classList.add("anchor-target");
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ block: "start" });
+  const words = mark ? wholeWord(mark) : null;
+  const row = words && [...el.querySelectorAll("tr, .row-item, .wlcard")]
+    .filter(item => item.offsetParent !== null && words.test(item.innerText || ""))
+    .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+  flashFound(row || el);
+}
+window.focusInPage = focusInPage;
 
 window.dismissFinishedOperations = async () => {
   try {
@@ -257,22 +289,22 @@ window.storageRecoveryReview = async id => {
         (p.can_continue && !tokens.continue) || (p.can_pause && !tokens.pause)) throw new Error("The review is incomplete. Refresh it before taking action.");
     const action = p.can_continue ? "continue" : p.can_pause ? "pause" : null;
     STORAGE_RECOVERY = {id, action, tokens, host};
-    const phases = {stop:"Stopping workloads",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting workloads",done:"Complete"};
-    const leads = {stop:"Continue stopping the affected workloads before copying their data.",
-      copy:"Continue copying and checking the data. Workloads remain stopped during the copy.",
-      cutover:"Switch the verified copy into place. Restarting workloads gets its own capacity review.",
-      restart:"Restart workloads on the copied volume after fresh capacity checks. The original data is retained."};
+    const phases = {stop:"Stopping apps and VMs",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting apps and VMs",done:"Complete"};
+    const leads = {stop:"Continue stopping the affected apps and VMs before copying their data.",
+      copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
+      cutover:"Switch the verified copy into place. Restarting apps and VMs gets its own capacity review.",
+      restart:"Restart apps and VMs on the copied volume after fresh capacity checks. The original data is retained."};
     const issues = p.blockers.length ? p.blockers : p.warnings;
     const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
     host.innerHTML = UI.lead(action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
       action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy job already running can still finish." :
-      "This move needs inspection before it can continue. Its workloads and data have been left in place.") +
+      "This move needs inspection before it can continue. Its apps and VMs and data have been left in place.") +
       (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Before you continue", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
       UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`]]) +
       UI.section("Current position", `<p>${esc(p.message || "Waiting for the next step")}</p>`) +
-      UI.more("Workloads and retained resources", UI.table(["Workload","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
+      UI.more("Apps and VMs and retained resources", UI.table(["App or VM","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
         UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
-      (action ? UI.ack("storageRecoveryAck", action === "continue" ? "I approve continuing with the warnings shown above." : "I understand that pausing does not stop an already running copy.", {onchange:"storageRecoveryReady()"}) : "") +
+      (action ? UI.ack("storageRecoveryAck", action === "continue" ? "Continue despite the warnings" : "Pause it; a copy already running still finishes", {onchange:"storageRecoveryReady()"}) : "") +
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +
         (action ? UI.button(action === "continue" ? "Continue move" : "Pause move", "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
   } catch (error) {
@@ -343,7 +375,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
           esc(writeName(row.last_write)), esc(row.relationship)]))) +
         UI.more("Identity checks and recovery limits", (p.warnings || []).map(w => `<p>${esc(w)}</p>`).join("") +
           (p.resources || []).map(row => `<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
-        (!p.blocked ? UI.field(`Type ${esc(p.confirm)} to stop tracking`, '<input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()">') +
+        (!p.blocked ? UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" }) +
           UI.ack("powerRecoveryAck", "I inspected the planned VMs; an earlier request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
         UI.actions(UI.cancel("Keep tracking") + UI.button("Stop tracking batch", "powerRecoveryResolve()", {kind:"pri", id:"powerRecoveryApply", disabled:true}));
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
@@ -360,8 +392,9 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         <p class="small">Queued power changes: ${esc(observed.queued_changes)} · Original VM: ${observed.same_vm ? "same identity" : "missing or replaced"}</p>
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
-      ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
-        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
+      ${!p.blocked ? `${UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" })}
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> Record it as unknown: I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and what it kept" : ""}</label>
+        <p class="ui-help">The old request may still take effect late. Recording it lets a new ${mutation ? "VM change" : "power action"} be reviewed.</p>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   } catch(error) {
@@ -371,7 +404,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
   }
 };
 window.powerRecoveryReady = () => {
-  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && (POWER_RECOVERY.importing || $("#powerRecoveryName")?.value===POWER_RECOVERY.plan.confirm));
+  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && (POWER_RECOVERY.importing || typedConfirmMatches("powerRecoveryName")));
   if ($("#powerRecoveryApply")) $("#powerRecoveryApply").disabled=!ready;
   return ready;
 };
@@ -425,8 +458,7 @@ window.cancelOperation = async id => {
       ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" && !plan.copy_recovery ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
       ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" onchange="cancelOperationGate()" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
-      ${plan.confirm ? `<div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(plan.confirm)}</b> to confirm</label>
-        <input id="oc_confirm" autocomplete="off" oninput="cancelOperationGate()"></div>` : ""}
+      ${plan.confirm ? UI.typedConfirm({ id: "oc_confirm", expect: plan.confirm, oninput: "cancelOperationGate()" }) : ""}
       ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
       ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup ? "Remove what it made" : plan.action)}</button>
@@ -438,7 +470,7 @@ window.cancelOperation = async id => {
 window.cancelOperationGate = () => {
   const plan = window.__cancelPlan || {};
   const go = $("#oc_go");
-  if (go) go.disabled = (!!plan.confirm && ($("#oc_confirm")?.value || "").trim() !== plan.confirm) ||
+  if (go) go.disabled = (!!plan.confirm && !typedConfirmMatches("oc_confirm")) ||
     (!!plan.copy_recovery && !$("[data-cancel-option='ack']")?.checked);
 };
 window.cancelOperationGo = async id => {
@@ -526,8 +558,8 @@ function operationCopyProgress(progress, active) {
   const percent = Math.max(0, Math.min(100, progress.percent));
   const approximate = progress.coarse && percent < 100 ? "~" : "";
   const size = Number.isFinite(progress.bytes) && progress.total_bytes > 0
-    ? `${approximate}${(progress.bytes / 1e9).toFixed(1)} / ${(progress.total_bytes / 1e9).toFixed(1)} GB` : "";
-  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1e6).toFixed(1)} MB/s` : "";
+    ? `${approximate}${(progress.bytes / 1024 ** 3).toFixed(1)} / ${(progress.total_bytes / 1024 ** 3).toFixed(1)} GiB` : "";
+  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1024 ** 2).toFixed(1)} MiB/s` : "";
   const remaining = progress.eta_seconds;
   const seconds = Math.ceil(remaining || 0), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
   const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");

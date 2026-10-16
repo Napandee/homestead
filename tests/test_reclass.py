@@ -152,7 +152,7 @@ class ReclassTests(unittest.TestCase):
     def test_no_room_or_a_shared_folder_on_a_migratable_class_is_refused(self):
         c = Cluster()
         RC.capacity = lambda: {"largest": {"3": 10}}
-        self.assertIn("room for a 10 GB", RC.plan("lab", "frigate-config", "longhorn-r3")["blockers"][0])
+        self.assertIn("room for a 10 GiB", RC.plan("lab", "frigate-config", "longhorn-r3")["blockers"][0])
         c.pvcs["frigate-config"]["spec"].update(storageClassName="longhorn-r3", accessModes=["ReadWriteMany"])
         self.assertIn("migratable", RC.plan("lab", "frigate-config", "longhorn-r2")["blockers"][0])
 

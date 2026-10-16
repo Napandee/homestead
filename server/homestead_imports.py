@@ -2462,7 +2462,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
             claim["metadata"]["annotations"]["harvesterhci.io/imageId"] = f"{image['namespace']}/{image['name']}"
             claim["spec"]["storageClassName"] = image["storage_class"]
             if image["size_gb"] and disk < image["size_gb"]:
-                raise ValueError(f"the disk must be at least as big as the image ({image['size_gb']} GB)")
+                raise ValueError(f"the disk must be at least as big as the image ({image['size_gb']} GiB)")
         elif sc:
             claim["spec"]["storageClassName"] = sc
         annotations["harvesterhci.io/volumeClaimTemplates"] = json.dumps([claim])

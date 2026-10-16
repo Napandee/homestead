@@ -1,8 +1,8 @@
 /* Virtual machines: each one's real state and the actions that fit it, a
    page per VM (disks, network, guest, events), editing and deleting. */
 
-const VM_TONE = { Running: "ok", Stopped: "low", Paused: "info", Migrating: "info", Starting: "med", Stopping: "med", Deleting: "med",
-  Provisioning: "med", WaitingForVolumeBinding: "med" };
+const VM_TONE = { Running: "ok", Stopped: "low", Paused: "low", Migrating: "low", Starting: "low", Stopping: "low", Deleting: "low",
+  Provisioning: "low", WaitingForVolumeBinding: "low" };
 const VM_ACTIONS = {
   // Shut down asks the guest to power off, as its own power button would;
   // Force off cuts it at once, like pulling the plug. Each has an icon of
@@ -67,8 +67,8 @@ window.vmStore = async (check = false) => {
   let s;
   try { s = await api("/api/vm/store" + (check ? "?check=1" : "")); } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmStore(${check ? "true" : "false"})`, dialog: true }); return; }
   STATE.data.vmStore = s;
-  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`) : "—";
-  const day = t => t ? new Date(t * 1000).toLocaleDateString() : "";
+  const mb = bytes => bytes ? (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB`) : "—";
+  const day = t => t ? fmtDay(t) : "";
   const state = r => {
     if (!s.harvester) return "";
     if (!r.kept) return '<span class="dim xs">not here</span>';
@@ -96,7 +96,7 @@ window.vmStore = async (check = false) => {
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
-        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
+        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
         <td>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
@@ -158,7 +158,7 @@ window.vmStoreNew = value => {
 function vmSpecs(v) {
   const disks = v.disks.filter(d => d.kind === "disk");
   const size = disks.map(d => d.size).filter(Boolean).join(" + ");
-  return [`${v.cores} core${v.cores === 1 ? "" : "s"}`, v.memory || "",
+  return [`${v.cores} vCPU${v.cores === 1 ? "" : "s"}`, v.memory || "",
     disks.length ? (size ? `${size} disk${disks.length > 1 ? "s" : ""}` : `${disks.length} disk${disks.length > 1 ? "s" : ""}`) : "no disk"]
     .filter(Boolean);
 }
@@ -175,7 +175,7 @@ function vmAddress(v, withNetwork = true) {
    the metrics API; disk traffic is KubeVirt's own count, as a rate over the
    last half minute. Anything not measured is left out, not guessed. */
 const vmBytes = b => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GiB` : b >= 1024 ** 2 ? `${Math.round(b / 1024 ** 2)} MiB` : `${Math.round(b / 1024)} KiB`;
-const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MB/s` : b >= 1024 ? `${Math.round(b / 1024)} KB/s` : `${Math.round(b || 0)} B/s`;
+const vmRate = b => b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MiB/s` : b >= 1024 ? `${Math.round(b / 1024)} KiB/s` : `${Math.round(b || 0)} B/s`;
 function vmIo(u) {
   if (!u || u.read_bps == null) return `<span class="dim" data-tip="${esc(u?.io_note || "Measured from the second reading, half a minute after Homestead starts")}">—</span>`;
   return `<span class="vm-io"><span class="mono" title="Read from its disks">↓ ${vmRate(u.read_bps)}</span><span class="mono" title="Written to its disks">↑ ${vmRate(u.write_bps)}</span></span>`;
@@ -191,31 +191,32 @@ function vmUsage(v) {
     ${cell("RAM", u.mem_pct, u.mem != null ? vmBytes(u.mem) : "—", "memory")}
     <div><span>DISK</span>${vmIo(u)}</div></div>`;
 }
-const vmClusterTag = v => v.cluster ? `<span class="tag info" data-tip="A node of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
+const vmClusterTag = v => v.cluster ? `<span class="tag cluster-tag" data-tip="A VM of the k3s cluster ${esc(v.cluster)}, made here">${esc(v.cluster)}${v.cluster_role ? ` · ${esc(v.cluster_role)}` : ""}</span>` : "";
 
 function vmActions(v, compact = false) {
+  // One power action beside Console, as a container card has Logs; the rest
+  // are in ⋯, the shared action bar, named for this VM (#487).
+  const ns = jsq(v.ns), name = jsq(v.name), run = a => `vmPower(${ns},${name},${jsq(a)})`;
   const main = v.actions.filter(a => ["start", "stop", "restart", "unpause"].includes(a));
-  // One power action beside Console, as a container card has Logs; the
-  // others are the first entries of ⋯.
-  const shown = main.slice(0, 1);
-  const later = [];
-  return `${shown.map((a, i) => vmActionButton(v, a, i === 0 && a === "start", compact, i > 0 ? "sm-more" : "")).join("")}
-      ${v.actions.includes("console") ? `<button class="btn sm ${compact ? "vm-iconbtn" : ""}" data-need="operator" title="Console" aria-label="Console" onclick="vmConsole(${jsq(v.ns)},${jsq(v.name)})">${icon("console")}${compact ? "" : "Console"}</button>` : ""}
-      <details class="actionmenu"><summary class="btn sm" title="More actions">⋯</summary><div class="actionmenu-pop">
-        ${later.map(a => `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button onclick="this.closest('details').open=false;vmOpen(${jsq(v.ns)},${jsq(v.name)})">${icon("list")}Details</button>
-        ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
-        <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
-        <button data-need="operator" onclick="this.closest('details').open=false;vmLogo(${jsq(v.ns)},${jsq(v.name)})">${icon("logo")}Logo</button>
-        <button onclick="this.closest('details').open=false;vmMonitoring(${jsq(v.ns)},${jsq(v.name)})">${icon("pulse")}Monitoring</button>
-        <button data-need="operator" onclick="this.closest('details').open=false;vmSchedule(${jsq(v.ns)},${jsq(v.name)})">${icon("clock")}Schedule</button>
-        ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
-        ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Keep the source VM and create a stopped copy on another linked cluster" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'copy',${jsq(v.ns)})">${icon("copy")}Copy to cluster</button>` : ""}
-        ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
-        <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete(${jsq(v.ns)},${jsq(v.name)})">${icon("trash")}Delete</button>
-      </div></details>`;
+  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"] : VM_ACTIONS[a];
+  const power = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start" });
+  const console = v.actions.includes("console");
+  return actionBar([
+    main[0] && power(main[0]),
+    console && { label: "Console", icon: "console", run: `vmConsole(${ns},${name})`, need: "operator", tip: "Console" },
+    { label: "Details", icon: "list", run: `vmOpen(${ns},${name})` },
+    ...main.slice(1).map(power),
+    { label: "Edit", icon: "edit", run: `vmEdit(${ns},${name})`, need: "operator" },
+    { label: "Logo", icon: "logo", run: `vmLogo(${ns},${name})`, need: "operator" },
+    { label: "Monitoring", icon: "pulse", run: `vmMonitoring(${ns},${name})` },
+    { label: "Schedule", icon: "clock", run: `vmSchedule(${ns},${name})`, need: "operator" },
+    v.actions.includes("pause") && { label: "Pause", icon: "pause", run: run("pause"), need: "operator" },
+    v.actions.includes("migrate") && { label: "Move to another host", icon: "move", run: `vmMove(${ns},${name})`, need: "operator" },
+    FLEET.view?.linked && { label: "Move to cluster", icon: "move", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'move',${ns})`, need: "admin", tip: "Move it to another linked cluster, disks and all" },
+    FLEET.view?.linked && { label: "Copy to cluster", icon: "copy", run: `moveToCluster('vm',${name},${jsq(v.site?.handle || "")},'copy',${ns})`, need: "admin", tip: "Keep the source VM and create a stopped copy on another linked cluster" },
+    v.actions.includes("force-stop") && { label: "Force off", icon: "plug", run: run("force-stop"), need: "operator", danger: true, tip: VM_ACTIONS["force-stop"][2] },
+    { label: "Delete", icon: "trash", run: `vmDelete(${ns},${name})`, need: "admin", danger: true },
+  ], { shown: (main.length ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}`, iconOnly: compact });
 }
 
 /* The same VMs as rows: everything a card says, one VM a line. */
@@ -230,20 +231,41 @@ function vmTable(rows) {
   return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms" data-sort-controls="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
     ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
-      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
+      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b title="${esc(v.name)}">${esc(v.name)}</b>
+        ${clusterTag(v) || vmClusterTag(v) ? `<div class="row vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></div></div></td>
       <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>${answerTag(v, true)}${scheduleTag(v)}
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
       <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
         ${v.network ? `<div class="dim xs">${esc(v.network)}</div>` : ""}</td>
-      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} core${v.cores === 1 ? "" : "s"}</span>`}</td>
+      <td data-label="CPU" class="nowrap vm-cell-use" data-sort="${v.usage?.cpu_pct ?? -1}">${v.usage?.cpu_pct != null ? `${meter(v.usage.cpu_pct, "", "cpu")}<div class="dim xs mono">${v.usage.cpu_pct}% of ${v.cores}</div>` : `<span class="dim xs">${v.cores} vCPU${v.cores === 1 ? "" : "s"}</span>`}</td>
       <td data-label="RAM" class="nowrap vm-cell-use" data-sort="${v.usage?.mem_pct ?? -1}">${v.usage?.mem_pct != null ? `${meter(v.usage.mem_pct, "", "memory")}<div class="dim xs mono">${vmBytes(v.usage.mem)} of ${esc(v.memory)}</div>` : `<span class="dim xs">${esc(v.memory || "—")}</span>`}</td>
       <td data-label="Disk IO" data-sm-hide class="nowrap small" data-sort="${(v.usage?.read_bps || 0) + (v.usage?.write_bps || 0)}">${v.running ? vmIo(v.usage) : '<span class="dim">—</span>'}</td>
       <td class="nowrap" data-actions><div class="row vm-actions" style="justify-content:flex-end">${vmActions(v, true)}</div></td></tr>`).join("")}
     </tbody></table></div></div>`;
 }
 window.viewVMs = viewVMs;
+
+/* The VM dialog's actions (#504): its state's main power action and Console
+   as buttons; the rest - other power actions, with Force off as danger, Edit,
+   Schedule and Delete - in ⋯, so a phone shows one row. */
+function vmDialogActions(v) {
+  const run = action => `vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(action)})`;
+  const power = v.actions.filter(a => VM_ACTIONS[a]);
+  const main = power.find(a => ["start", "unpause", "stop", "restart"].includes(a));
+  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"] : VM_ACTIONS[a];
+  const item = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start", danger: a === "force-stop" });
+  const console = v.actions.includes("console");
+  return actionBar([
+    main && item(main),
+    console && { label: "Console", icon: "console", run: `vmConsole(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    ...power.filter(a => a !== main).map(item),
+    { label: "Edit", icon: "edit", run: `vmEdit(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    { label: "Schedule", icon: "clock", run: `vmSchedule(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    { label: "Delete", icon: "trash", run: `vmDelete(${jsq(v.ns)},${jsq(v.name)})`, need: "operator", danger: true },
+  ], { shown: (main ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}` });
+}
 
 function vmActionButton(v, action, primary = false, iconOnly = false, extra = "") {
   const [label, iconName, title] = action === "stop" && v.stop_retries
@@ -287,13 +309,13 @@ window.vmStateInitHtml = (plan, prefix, changed) => {
   return `<div class="reviewbox vm-state-confirm"><b>Initialize fresh VM state?</b>
     <div class="note warn">${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.</div>
     <label class="check"><input type="checkbox" id="${prefix}StateAck" onchange="${changed}()"> I intend to initialize fresh state, not recover the original TPM/EFI or backup state</label>
-    <div class="f"><label for="${prefix}StateName">Type ${esc(state.name)} to confirm</label><input id="${prefix}StateName" autocomplete="off" spellcheck="false" oninput="${changed}()"></div></div>`;
+    ${UI.typedConfirm({ id: `${prefix}StateName`, expect: state.name, oninput: `${changed}()` })}</div>`;
 };
 window.vmStateInitReady = (plan, prefix) => !plan.vm?.state_initialization ||
-  ($(`#${prefix}StateAck`)?.checked === true && $(`#${prefix}StateName`)?.value === plan.vm.state_initialization.name);
+  ($(`#${prefix}StateAck`)?.checked === true && typedConfirmMatches(`${prefix}StateName`));
 window.vmStateInitBody = (plan, prefix) => plan.vm?.state_initialization ? {
   ack_state_initialization: $(`#${prefix}StateAck`)?.checked === true,
-  confirm_state_name: $(`#${prefix}StateName`)?.value || ""
+  confirm_state_name: ($(`#${prefix}StateName`)?.value || "").trim()
 } : {};
 let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
@@ -306,6 +328,7 @@ window.vmPower = async (ns, name, action) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+const VM_POWER_WHAT = { start: "Starts", restart: "Restarts", unpause: "Resumes" };
 window.vmPowerReview = async config => {
   if (VM_POWER_BUSY) return;
   VM_POWER_REVIEW = null;
@@ -322,7 +345,7 @@ window.vmPowerReview = async config => {
     const plan = review.capacity, facts = plan.vm || {};
     const policy = facts.policy_after && facts.policy_after !== facts.policy_before
       ? ` Its restart policy changes from ${esc(facts.policy_before || "unknown")} to <b>${esc(facts.policy_after)}</b>.` : "";
-    const what = frozen.action === "restart" ? "Restarts" : frozen.action === "unpause" ? "Resumes" : "Starts";
+    const what = VM_POWER_WHAT[frozen.action];
     const downtime = frozen.action === "restart" ? " The guest stops and starts again." : "";
     const guest = facts.guest_memory_gb != null ? ` <span class="ui-help">${esc(facts.guest_memory_gb)} GiB guest memory.</span>` : "";
     $("#mbody").innerHTML = startReview(plan, { what, name: frozen.name, extra: `${downtime}${policy}${guest}`,
@@ -348,7 +371,7 @@ window.vmPowerReviewReady = () => {
   return ready;
 };
 window.vmPowerReviewedApply = async () => {
-  if (!vmPowerReviewReady()) return toast("Tick Start it anyway to accept the warning", "bad");
+  if (!vmPowerReviewReady()) return toast(`Tick ${reviewAck(VM_POWER_WHAT[VM_POWER_REVIEW?.config?.action])} to accept the warning`, "bad");
   const review = VM_POWER_REVIEW, button = $("#vmPowerApply");
   VM_POWER_REVIEW = null; // one shot, including errors and lost responses
   VM_POWER_BUSY = true;
@@ -365,7 +388,7 @@ window.vmPowerReviewedApply = async () => {
     // lost. Inspect the current VM state before initiating a fresh review.
     if ($("#vmPowerApply") === button) {
       button.textContent = "Inspect VM before retrying";
-      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Stop and Force stop remain available.</div>`);
+      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>`);
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
     }
     toast(error.message, "bad");
@@ -378,16 +401,15 @@ window.vmOpen = async (ns, name) => {
   try { v = await api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`); }
   catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmOpen(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,${jsq(id)})">${label}</button>`;
-  $("#mbody").innerHTML = `<div class="between"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
+  $("#mbody").innerHTML = `<div class="between vm-head"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
       <span class="dim xs"> run strategy ${esc(v.run_strategy)}${v.node ? ` · on ${esc(v.node)}` : ""}</span></div>
-      <div class="row">${v.actions.filter(a => VM_ACTIONS[a]).map(a => vmActionButton(v, a, a === "start")).join("")}
-        <button class="btn sm" data-need="operator" onclick="vmEdit(${jsq(ns)},${jsq(name)})">${icon("edit")}Edit</button></div></div>
+      ${vmDialogActions(v)}</div>
     ${v.problem ? `<div class="note bad" style="margin-top:10px">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
     <div class="vm-pane" data-pane="overview">
       <div class="vm-facts wide">
-        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} cores`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
+        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} vCPUs`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
         <div><span>Guest OS</span><b>${esc(v.guest?.prettyName || v.os || "unknown")}</b></div>
         <div><span>Kernel</span><b class="mono xs">${esc(v.guest?.kernelRelease || "—")}</b></div>
         <div><span>Live migration</span><b>${v.migratable ? "possible" : "not possible"}</b></div>
@@ -474,7 +496,7 @@ function vmEditResourceFields(v) {
     ? `CPU and memory are managed by instance type ${profile.name}. This form keeps that profile; it does not replace it with manual values.`
     : v.preference_profile?.name ? `Defaults come from preference ${v.preference_profile.name}. Unchanged CPU and memory are left as they are.` : "");
   return `${explanation ? `<div class="note ${v.profile_error ? "warn" : "small"}">${esc(explanation)}</div>` : ""}
-    <div class="f2"><div class="f"><label>CPU cores</label>${locked
+    <div class="f2"><div class="f"><label>vCPUs</label>${locked
       ? `<div class="mono">${esc(v.cores ?? "Unavailable")}</div>`
       : `<input id="ve_cores" type="number" min="1" max="128" value="${esc(v.cores)}">`}</div>
       <div class="f"><label>Memory</label>${locked
@@ -501,11 +523,6 @@ window.vmEdit = async (ns, name) => {
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
       <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div>
-      <div class="f"><label>Logo</label><div class="row vm-edit-logo">${vmAvatar((STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || v)}
-        <button class="btn sm" type="button" data-need="operator" onclick="vmLogo(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button>
-        <span class="dim xs">Saved on its own, at once; the VM keeps running. Other changes here are not saved by it.</span></div></div>
-      <div class="f"><label>Monitoring</label><div class="row vm-edit-logo">${(() => { const a = answerOf({ ns, name }, true); return a ? `<span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span><span class="dim xs">${esc(answerDetail(a))}</span>` : '<span class="dim xs">Not checked yet</span>'; })()}
-        <button class="btn sm" type="button" data-need="operator" onclick="vmMonitoring(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button></div></div>
       ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsq(ns)},${jsq(name)})`, { attrs: 'data-need="admin"' }))}`},
     v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)},
     {key:"disks", title:`Disks · ${disks.length}`, html:`
@@ -538,6 +555,7 @@ window.vmEdit = async (ns, name) => {
   if (v.hardware) vmHardwareChanged();
   if (window.applyRole) applyRole();
   vmIsolationChanged();
+  window.__vmEdit.initial = JSON.stringify(vmEditBody());
 };
 window.vmIsolationChanged = () => {
   const isolated = !!$("#ve_isolated")?.checked;
@@ -572,11 +590,11 @@ window.vmAddNic = () => {
     <td><select class="vn_net">${vmJoinable(o).map(x => vmOpt(x, vmNetLabel(o, x), vmJoinable(o)[1] || "pod")).join("")}</select></td>
     <td class="dim xs">automatic</td><td><button class="btn sm" data-form-row aria-label="Remove this row" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
 };
-window.vmEditSave = async () => {
+/* What the edit form would send, without passthrough and hardware, which
+   report their own changes: compared with the form as it opened, it says
+   whether anything changed. */
+function vmEditBody() {
   const { ns, name, v } = window.__vmEdit;
-  const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
-    && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
-  if (badUrl) return toast("A disk's URL must start with http:// or https://", "bad");
   const sourceOf = (select, url) => select.value === "url" ? { url: url.value.trim() }
     : select.value.startsWith("image:") ? { image: select.value.slice(6) }
     : select.value.startsWith("iso:") ? { iso: select.value.slice(4) } : {};
@@ -607,11 +625,20 @@ window.vmEditSave = async () => {
   if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
   if ($("#ve_mem") && $("#ve_mem").value.trim() !== v.memory) body.memory = $("#ve_mem").value.trim();
   if ($("#ve_user")) body.cloud_init = { user_data: $("#ve_user").value, network_data: $("#ve_netdata").value };
+  return body;
+}
+window.vmEditSave = async () => {
+  const badUrl = $$("#mbody tr[data-disk], #mbody .vd-add").some(box => box.querySelector(".vd_src,.va_src")?.value === "url"
+    && !/^https?:\/\/[^/\s]+/i.test(box.querySelector(".vd_url,.va_url").value.trim()));
+  if (badUrl) return toast("A disk's URL must start with http:// or https://", "bad");
+  const body = vmEditBody(), v = window.__vmEdit.v;
+  let devices = null;
   try {
-    const devices = window.vmDevicesChanges ? await window.vmDevicesChanges() : null;
+    devices = window.vmDevicesChanges ? await window.vmDevicesChanges() : null;
     if (devices) body.host_devices = devices;
   } catch (e) { return toast(`The ROM file could not be read: ${e.message}`, "bad"); }
   const hardware = v.hardware ? vmHardwareChanges(v.hardware) : null;
+  if (!devices && !hardware && JSON.stringify(vmEditBody()) === window.__vmEdit.initial) return toast("No changes to save.", "ok");
   if (hardware) {
     body.hardware = hardware;
     // The topology sets the count: the General tab's figure is not sent too.
@@ -625,7 +652,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
   if (VM_EDIT_BUSY) return;
   VM_EDIT_REVIEW = null;
   const sequence = ++VM_EDIT_SEQUENCE, frozen = JSON.parse(JSON.stringify(config));
-  childModal(`Review changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
+  childModal(`Save changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
   try {
     const review = await api("/api/vm/edit/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
@@ -633,36 +660,43 @@ window.vmEditReview = async (config, restartAfter = false) => {
       throw new Error("VM edit review unavailable. Nothing was saved; go back and review again.");
     VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
     const plan = review.capacity, facts = plan.vm || {};
-    $("#mbody").innerHTML = `<div class="update-review">
-      <div class="reviewbox"><b>Save ${esc(frozen.name)}</b><p class="small">${esc(frozen.cores ?? "Unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}</p>
-        ${frozen.isolated ? '<p class="small"><b>Isolated VM</b> - removes all virtual network cards and disables automatic attachment at next start.</p>' : frozen.isolated === false ? '<p class="small">Virtual network cards are allowed. No automatic card is added when the last interface is removed.</p>' : ""}
-        <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after || "unknown")}</p>
-        <p class="small muted">${facts.admission_needed ? "Resource and policy changes may take effect immediately through KubeVirt. Host RAM estimates include launcher overhead but are not a configured memory limit." : "No new launcher capacity is needed for this metadata or stop/manual-policy edit."}</p></div>
-      ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
-      ${facts.admission_needed ? deployCapacityHtml(plan) : `<div class="note warn">${(plan.warnings || []).map(esc).join(" ")}</div>`}
-      ${vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady")}
-      ${review.volumes?.length ? `<div class="reviewbox"><b>New disks</b>${review.volumes.map(v => `<p class="small"><span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)} · ${esc(v.access_mode)}</p>`).join("")}</div>` : ""}
-      <p class="small muted">${restartAfter ? "After saving, a separate restart review checks the saved VM and current host capacity. Saving does not automatically send Restart." : "Save sends no Restart request. If needed, restart the VM through its power controls afterward."}</p>
-      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmEditApprove" onchange="vmEditReviewReady()"> Save these exact changes and accept the displayed memory, policy and partial-save risks</label>' : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save reviewed changes</button>`)}</div>`;
+    const changes = UI.facts([
+      frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} vCPUs · ${esc(frozen.memory || "unchanged memory")}`] : null,
+      frozen.isolated ? ["Network", "Isolated: all virtual network cards are removed at the next start"]
+        : frozen.isolated === false ? ["Network", "Virtual network cards are allowed"] : null,
+      facts.policy_after && facts.policy_after !== facts.policy_before ? ["Restart policy", `${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after)}`] : null,
+      review.volumes?.length ? ["New disks", review.volumes.map(v => `<span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)}`).join("<br>")] : null]);
+    const after = `<p class="ui-help">${restartAfter ? "After saving, a separate restart review checks the saved VM and host capacity; saving sends no restart." : "Saving sends no restart. Restart the VM from its power controls if a change needs it."}</p>`;
+    const warnings = plan.warnings || [];
+    $("#mbody").innerHTML = (facts.admission_needed
+      ? startReview(plan, { what: "Saves", name: frozen.name, objects: changes + vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), warnings,
+          ackId: "vmEditApprove", onAck: "vmEditReviewReady()",
+          details: `${after}<p class="ui-help">Resource and policy changes can take effect at once through KubeVirt. Host RAM estimates include launcher overhead; they are not a memory limit.</p>` })
+      : [UI.lead(`Saves <b>${esc(frozen.name)}</b>. It needs no new room on a host.`),
+        UI.notices([...(plan.blockers || []).map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], plan.blockers?.length ? "Can't save" : "Check first"),
+        changes, vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), UI.more("Details", after),
+        !plan.blocked && warnings.length ? UI.ack("vmEditApprove", reviewAck("Saves"), { onchange: "vmEditReviewReady()" }) : ""].join(""))
+      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save changes</button>`);
+    vmEditReviewReady();
   } catch (error) {
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
     VM_EDIT_REVIEW = null;
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="vmEditReviewBack()">Back to edit</button>`;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
   }
 };
 window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
 window.vmEditReviewReady = () => {
-  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && $("#vmEditApprove")?.checked && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
+  // The tickbox is there only when there is something to accept.
+  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && (!$("#vmEditApprove") || $("#vmEditApprove").checked) && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
   if ($("#vmEditApply")) $("#vmEditApply").disabled = !ready;
   return ready;
 };
 window.vmEditReviewedApply = async () => {
-  if (!vmEditReviewReady()) return toast("Review and acknowledge these VM changes first", "bad");
+  if (!vmEditReviewReady()) return toast(`Tick ${reviewAck("Saves")} to accept the warnings first`, "bad");
   const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
   VM_EDIT_REVIEW = null;
   VM_EDIT_BUSY = true;
-  button.disabled = true; button.textContent = "Saving reviewed changes…";
+  button.disabled = true; button.textContent = "Saving changes…";
   let saved = false;
   try {
     const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -684,16 +718,15 @@ window.vmDelete = (ns, name) => {
   const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || { disks: [] };
   const filling = v.filling || [], unfinished = new Set(filling.map(f => f.claim));
   const disks = v.disks.filter(d => (d.kind === "disk" || d.kind === "cd-rom") && d.claim && !unfinished.has(d.claim));
-  modal(`Delete · ${name}`, `<p>The VM is deleted${v.status === "Running" ? ", and stopped first" : ""}. It shows as Deleting until everything it owns is gone.</p>
-    ${filling.length ? `<div class="note warn">${filling.map(f => `<b class="mono">${esc(f.claim)}</b> is still being filled${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join("; ")}.
-      Deleting the VM stops that and removes the unfinished disk.</div>` : ""}
+  modal(`Delete VM · ${name}`, `${UI.lead(`Deletes <b>${esc(name)}</b>${v.status === "Running" ? ", stopping it first" : ""}. It shows as Deleting until everything it owns is gone.`)}
+    ${filling.length ? UI.callout("warn", "A disk is still being filled", `${filling.map(f => `<b class="mono">${esc(f.claim)}</b>${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join(", ")}: deleting the VM stops that and removes the unfinished disk.`) : ""}
     ${disks.length ? `<label class="switch"><input type="checkbox" id="vd_disks"> Delete its disks too: ${disks.map(d => `<span class="mono">${esc(d.claim)}</span>`).join(", ")}</label>
       <div class="dim xs">Left unticked, the disks are kept and can be attached to another VM or deleted from Volumes later.</div>` : ""}
-    <div class="f" style="margin-top:12px"><label>Type the VM's name to delete it</label><input id="vd_confirm" autocomplete="off"></div>
-    ${UI.actions(`<button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+    ${UI.typedConfirm({ id: "vd_confirm", expect: name, button: "vd_go" })}
+    ${UI.actions(UI.cancel() + `<button class="btn danger" id="vd_go" disabled onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete VM</button>`)}`);
 };
 window.vmDeleteGo = async (ns, name) => {
-  if ($("#vd_confirm").value.trim() !== name) return toast("Type the VM's name exactly", "bad");
+  if (!typedConfirmMatches("vd_confirm")) return;
   try { const r = await api("/api/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, disks: !!$("#vd_disks")?.checked }) });
     toast(r.detail, "ok"); closeModal(); refresh(true); } catch (e) { toast(e.message, "bad"); }
@@ -720,28 +753,25 @@ window.k3sCluster = async () => {
     <p class="small" style="margin-top:0">Create a k3s cluster from VMs, each with its own LAN address. The first VM is the server; the others join it.</p>
     ${lan.length ? "" : vmNetworkNote(opts, true)}
     <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
-      <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
+      <div class="f"><label>Install ${tip("What each VM sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one VM; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
     <label class="switch" style="margin:0 0 14px"><input type="checkbox" id="k_kubevirt" onchange="k3sCountChanged()">
       <span>Include KubeVirt, for VMs inside the cluster
-      ${tip("Installs KubeVirt and CDI on the new cluster, so its Homestead can run VMs. The nodes get this host's CPU as it is, so VMs inside run with hardware virtualisation where this host allows nesting; where it does not, they are emulated - slower, but they run. Give the nodes more memory for this.")}</span></label>
+      ${tip("Installs KubeVirt and CDI on the new cluster, so its Homestead can run VMs. The VMs get this host's CPU as it is, so VMs inside run with hardware virtualisation where this host allows nesting; where it does not, they are emulated - slower, but they run. Give the VMs more memory for this.")}</span></label>
     <div class="f2"><div class="f"><label>Servers ${tip("One is enough to try things. Three keep the cluster running if one fails.")}</label>
         <select id="k_servers" onchange="k3sCountChanged()"><option value="1">1</option><option value="3">3</option></select></div>
-      <div class="f"><label>Workers ${tip("Nodes that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
-    <div class="f2"><div class="f"><label>Cores each ${tip("CPU cores for every node. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
-      <div class="f"><label>Memory each ${tip("Memory for every node, like 4Gi. Longhorn and Homestead inside want at least 4Gi on the server.")}</label><input id="k_mem" value="4Gi"></div></div>
-    <div class="f2"><div class="f"><label>Disk each (GB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
-      <div class="f"><label>Login password ${tip("For the ubuntu user on every node, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
-    <div class="f"><label>Image ${tip("The operating system every node starts from. An Ubuntu cloud image works best: it runs cloud-init, which sets up the address, login and k3s.")}</label><select id="k_image">
+      <div class="f"><label>Workers ${tip("VMs that run apps but not the cluster's control plane. They join the first server. Zero is fine: a server runs apps too.")}</label><input id="k_agents" type="number" min="0" max="6" value="2" oninput="k3sCountChanged()"></div></div>
+    <div class="f2"><div class="f"><label>vCPUs each ${tip("vCPUs for every VM. Two is enough to try things; k3s itself needs little.")}</label><input id="k_cores" type="number" min="1" max="16" value="2"></div>
+      <div class="f"><label>Memory each ${tip("Memory for every VM, like 4Gi. Longhorn and Homestead inside want at least 4Gi on the server.")}</label><input id="k_mem" value="4Gi"></div></div>
+    <div class="f2"><div class="f"><label>Disk each (GiB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
+      <div class="f"><label>Login password ${tip("For the ubuntu user on every VM, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
+    <div class="f"><label>Image ${tip("The operating system every VM starts from. An Ubuntu cloud image works best: it runs cloud-init, which sets up the address, login and k3s.")}</label><select id="k_image">
       ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}">Harvester image · ${esc(i.display)}</option>`).join("")}
       <option value="url" selected>Ubuntu 26.04.1 LTS minimal cloud image (downloaded${opts.harvester ? " as a Harvester image" : ""})</option></select></div>
-    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class ${tip("The storage class for each node's disk on this cluster.")}</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
+    ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class ${tip("The storage class for each VM's disk on this cluster.")}</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
     <div class="sec">Network</div>
-    <div class="f"><label>LAN network ${tip("The network bridged to your LAN the nodes join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
+    <div class="f"><label>LAN network ${tip("The network bridged to your LAN the VMs join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
     ${vmAddressFields("k", opts, 3)}
-    <div id="k_review"></div>
-    ${UI.actions(`<button class="btn" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>
-      <button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
+    ${UI.actions(UI.cancel() + `<button class="btn pri" data-need="operator" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>`)}`;
   k3sCountChanged();
   $$("#mbody input, #mbody select").forEach(field => {
     field.addEventListener("input", k3sInvalidateReview);
@@ -772,13 +802,11 @@ function k3sBody() {
     addresses: $("#k_ip").value.split(",").map(x => x.trim()).filter(Boolean) });
 }
 let K3S_REVIEW = null, K3S_REVIEW_SEQUENCE = 0, K3S_CREATE_BUSY = false;
-window.k3sInvalidateReview = () => {
-  K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE;
-  if ($("#k_go")) { $("#k_go").disabled = true; $("#k_go").textContent = "Create reviewed cluster"; }
-  if ($("#k_review")) $("#k_review").innerHTML = "";
-};
+window.k3sInvalidateReview = () => { K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE; };
 window.k3sReviewReady = () => {
-  const ready = !!(K3S_REVIEW && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked && $("#k_capacity_confirm")?.checked);
+  // The tickbox is there only when there is a warning to accept.
+  const ready = !!(K3S_REVIEW && K3S_REVIEW.ok !== false && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked
+    && (!$("#k_capacity_confirm") || $("#k_capacity_confirm").checked));
   if ($("#k_go")) $("#k_go").disabled = !ready;
   return ready;
 };
@@ -788,37 +816,42 @@ window.k3sReview = async () => {
   const sequence = K3S_REVIEW_SEQUENCE, input = JSON.stringify(k3sBody());
   try {
     const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: input });
-    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    if (sequence !== K3S_REVIEW_SEQUENCE) return;
     if (!plan.config || !plan.capacity_token || typeof plan.capacity?.blocked !== "boolean" || !Array.isArray(plan.nodes))
       throw new Error("Complete VM batch review unavailable; nothing can be created yet.");
     K3S_REVIEW = {...plan, input};
-    $("#k_review").innerHTML = `<div class="sec">What it makes</div>
-      <table class="tbl dense stack"><thead><tr><th>VM</th><th>Role</th><th>Address</th></tr></thead><tbody>
-      ${plan.nodes.map(n => `<tr><td><b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div></td><td data-label="Role">${n.role === "server" ? '<span class="tag info">server</span>' : '<span class="tag">worker</span>'}</td>
-        <td data-label="Address" class="mono">${esc(n.address)}${n.problem ? `<div class="badtext xs">${esc(n.problem)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
-      <div class="note ${plan.ok ? "" : "bad"}" style="margin-top:10px">${plan.ok
-        ? `Each address is recorded under its VM in IP addresses. Allow 10-15 minutes: the VMs start, install ${esc(K3S_SETUPS[plan.setup])}${plan.kubevirt ? " and KubeVirt" : ""}, and join.
-           ${plan.url ? `Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""} The job tray follows it.`
-        : "The batch cannot proceed under the checked constraints. Resolve the issues below and review again."}</div>
-      <div class="reviewbox"><b>Whole-batch capacity · ${plan.capacity.vm_count ?? plan.nodes.length} VMs</b>
-        <p class="small">Each VM: ${esc(plan.config.cores || 2)} CPU cores · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk.</p>
-        <p class="small muted">All VMs share one capacity budget, including new VMs waiting for launcher pods. The example is not an enforced reservation.</p>
-        <div class="dependency-list">${(plan.capacity.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} → up to ${esc(n.upper_gb)} GiB (${esc(n.upper_percent)}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
-        ${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).length ? `<div class="note bad">${(plan.capacity.blockers || []).concat(plan.capacity.reasons || []).map(esc).join(" · ")}</div>` : ""}
-        <div class="note warn">${(plan.capacity.warnings || []).map(esc).join(" ")}</div>
-        ${(plan.capacity.example || []).length ? `<p class="small muted">Example placement: ${plan.capacity.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}</div>
-      ${!plan.capacity.blocked ? '<div class="note">Memory warnings can be overridden, even above 100%, but that may cause OOM restarts or downtime. Hardware, storage and checked scheduling blockers cannot be overridden.</div><label class="check"><input type="checkbox" id="k_capacity_confirm" onchange="k3sReviewReady()"> Create this exact batch and accept the capacity and partial-creation risks. If a step fails, keep all resources for inspection.</label>' : ""}`;
+    const cap = plan.capacity, name = JSON.parse(input).name || "k3s";
+    const blockers = [...(cap.blockers || []), ...(cap.reasons || []), ...plan.nodes.filter(n => n.problem).map(n => `${n.name}: ${n.problem}`)];
+    const warnings = cap.warnings || [];
+    const stopped = cap.blocked || plan.ok === false;
+    childModal(`Create cluster · ${name}`, [
+      UI.lead(stopped ? `<b>${esc(name)}</b> can't be created until what is below is resolved.`
+        : `Creates ${plan.nodes.length} VMs for <b>${esc(name)}</b>, which install ${esc(String(K3S_SETUPS[plan.setup] || plan.setup).split(" - ")[0])}${plan.kubevirt ? " and KubeVirt" : ""} and join in 10-15 minutes.${plan.url ? ` Its own Homestead then answers at <span class="mono">${esc(plan.url)}</span>.` : ""}`),
+      UI.notices([...blockers.map(b => ["bad", b]), ...(stopped && !blockers.length ? [["bad", "The batch can't go ahead under the checked constraints."]] : []),
+        ...warnings.map(w => ["warn", w])], stopped ? "Can't create" : "Check first"),
+      UI.table([{ label: "VM" }, { label: "Role" }, { label: "Address" }], plan.nodes.map(n => [
+        `<b>${esc(n.name)}</b><div class="mono xs dim">${esc(plan.config.macs?.[n.name] || "")}</div>`,
+        n.role === "server" ? UI.chip("server") : UI.chip("worker"), `<span class="mono">${esc(n.address)}</span>`])),
+      UI.facts([["Each VM", `${esc(plan.config.cores || 2)} vCPUs · ${esc(plan.config.memory || "4Gi")} memory · ${esc(plan.config.disk_gb || 40)} GiB disk`]]),
+      (cap.nodes || []).length ? UI.section("Hosts", `<div class="dependency-list">${cap.nodes.map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${esc(n.baseline_gb)} GiB now → up to ${esc(n.upper_gb)} GiB` : "memory use unknown"}</div></div>`).join("")}</div>`) : "",
+      UI.more("Details", `<p class="ui-help">Each address is recorded under its VM in IP addresses, and Jobs follows the VMs coming up.
+        All the VMs share one capacity budget, new VMs waiting for launcher pods included; the placement below is an example, not a reservation.</p>
+        ${(cap.example || []).length ? `<p class="ui-help">Example placement: ${cap.example.map(p => `${esc(p.service)} → ${esc(p.host)}`).join("; ")}</p>` : ""}
+        <p class="ui-help">Memory warnings can be accepted, even above 100%, at the risk of out-of-memory restarts. Hardware, storage and scheduling blockers can't.</p>`),
+      !stopped && warnings.length ? UI.ack("k_capacity_confirm", reviewAck("Creates"), { onchange: "k3sReviewReady()" }) : "",
+      UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="k3sReviewBack()">Back to configuration</button><button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>`),
+    ].join(""), true);
     k3sReviewReady();
   } catch (e) {
-    if (sequence !== K3S_REVIEW_SEQUENCE || !$("#k_go")) return;
+    if (sequence !== K3S_REVIEW_SEQUENCE) return;
     K3S_REVIEW = null;
-    $("#k_review").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; $("#k_go").disabled = true;
+    toast(e.message, "bad");
   }
 };
+window.k3sReviewBack = () => { if (!K3S_CREATE_BUSY) { k3sInvalidateReview(); modalBack(); } };
 window.k3sCreate = async () => {
   const button = $("#k_go");
   if (K3S_CREATE_BUSY || !button || !k3sReviewReady()) return;
-  if (JSON.stringify(k3sBody()) !== K3S_REVIEW.input) { k3sInvalidateReview(); return toast("Configuration changed; review the VM batch again", "bad"); }
   const review = K3S_REVIEW;
   K3S_REVIEW = null;
   K3S_CREATE_BUSY = true;
@@ -826,11 +859,11 @@ window.k3sCreate = async () => {
   try {
     await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
-    toast("Cluster VMs created - the job tray follows them coming up", "ok");
+    toast("Cluster VMs created - follow them coming up under Jobs", "ok");
     closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
   } catch (e) {
     toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-    $("#k_review")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Inspect the job tray and Virtual machines before a new review.</div>`);
+    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>`);
     if (window.refreshOperations) refreshOperations(true);
   } finally { K3S_CREATE_BUSY = false; }
 };
@@ -841,7 +874,7 @@ window.k3sCreate = async () => {
    same verified SSH login, the container import uses. Disk images from a web
    address live here too. A VM running on Unraid is shut down first (its power
    button), so its disk is copied as it was left. */
-const uvmSize = bytes => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(bytes >= 1e11 ? 0 : 1)} GB` : `${Math.max(1, Math.round((bytes || 0) / 1e6))} MB`;
+const uvmSize = bytes => bytesText(bytes);
 const uvmId = name => "uvm-" + String(name).replace(/[^a-z0-9-]/gi, "-");
 const uvmPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
@@ -911,14 +944,14 @@ window.uvmLoad = async name => {
   host.innerHTML = found.vms.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
       <th>VM</th><th>State</th><th>Machine</th><th>Disk</th><th></th></tr></thead><tbody>${found.vms.map(vm => {
     const off = vm.shut_off, disk = vm.disks[0];
-    const machine = [`${vm.cores} cores`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
+    const machine = [`${vm.cores} vCPUs`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
     const action = !vm.ready ? `<span class="dim small">${esc(vm.problem)}</span>`
       : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.name)})`, need: "admin", pri: true }
         : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.name)},this)`, need: "admin", tip: "Shut it down on Unraid, so its disk is copied as it was left" }]);
     return `<tr><td><b>${esc(vm.name)}</b>${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
-      <td data-label="State"><span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
+      <td data-label="State"><span class="pill ${off ? "low" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
       <td data-label="Machine" class="small">${machine}</td>
-      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
+      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GiB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
       <td>${action}</td></tr>`;
   }).join("")}</tbody></table></div>` : '<div class="dim small">No VMs on this server.</div>';
   if (window.applyRole) applyRole();
@@ -958,9 +991,9 @@ window.uvmImport = async (source, name) => {
     ${UI.field("Storage class", `<select id="uvm_sc">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
       { tipHtml: tip("The storage class for the disks. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
     ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
-      `${esc(d.size_gb)} GB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
+      `${esc(d.size_gb)} GiB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
       i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
-    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 100 MB/s on gigabit.</p>`;
+    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 110 MiB/s on gigabit.</p>`;
   const lan = (opts.network_details || []).filter(n => n.vms !== false);
   const network = `
     ${UI.field("Network", `<select id="uvm_net" onchange="uvmPicture()">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? " · LAN" : ""}</option>`).join("")}<option value="pod">Pod network - reached through a Service</option></select>`,
@@ -989,10 +1022,10 @@ window.uvmPicture = () => {
     if (!kept.has(d.index)) return { what: "Disk", from: d.path.split("/").pop(), drop: true };
     const dv = n ? `${name}-disk-${n + 1}` : `${name}-disk`;
     n += 1;
-    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GB`, to: `${dv} · ${d.size_gb} GiB` };
+    return { what: n > 1 ? `Disk ${n}` : "Disk", from: `${d.path.split("/").pop()} · ${d.size_gb} GiB`, to: `${dv} · ${d.size_gb} GiB` };
   };
   const rows = [
-    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} cores` },
+    { what: "CPU", from: `${vm.cores} vCPUs`, to: `${$("#uvm_cores")?.value || vm.cores} vCPUs` },
     { what: "Memory", from: vm.memory, to: $("#uvm_mem")?.value || vm.memory },
     { what: "Firmware", from: vm.firmware === "uefi" ? `OVMF${vm.tpm ? " · TPM" : ""}` : "SeaBIOS", to: vm.firmware === "uefi" ? `EFI · q35${vm.tpm ? " · TPM" : ""}` : "BIOS · q35" },
     ...vm.disks.map(diskRow),

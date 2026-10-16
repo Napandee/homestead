@@ -12,7 +12,7 @@ function setup({blocked=false, missing=false, fail=false, cpuEstimate=false, sta
   fields["#mbody"]=body;
   const open=(_title, html)=>{body.innerHTML=html;if(html.includes('id="vmPowerLoading"')) fields["#vmPowerLoading"]={};};
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
-    document:{addEventListener(){}}, STATE:{data:{}},
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null}, STATE:{data:{}},
     $:key=>fields[key], $$:()=>[], esc:v=>String(v).replaceAll("<","&lt;"),
     modal:open, childModal:open, modalBack(){}, refresh(){}, setTimeout:fn=>fn(), ask:async()=>true,
     toast:msg=>notices.push(msg), deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,
@@ -67,7 +67,7 @@ test("fresh state needs its own checkbox and exact typed VM name", async()=>{
   assert.match(t.fields["#mbody"].innerHTML,/Initialize fresh VM state/);
   assert.match(t.fields["#mbody"].innerHTML,/&lt;state>/);
   t.fields["#vmPowerApprove"].checked=true;
-  t.fields["#vmPowerStateAck"]={checked:false};t.fields["#vmPowerStateName"]={value:"guest"};
+  t.fields["#vmPowerStateAck"]={checked:false};t.fields["#vmPowerStateName"]={value:"guest",dataset:{typedExpect:"guest"}};
   assert.equal(t.ctx.vmPowerReviewReady(),false);
   t.fields["#vmPowerStateAck"].checked=true;t.fields["#vmPowerStateName"].value="other";
   await t.ctx.vmPowerReviewedApply();assert.equal(t.sent.length,1);

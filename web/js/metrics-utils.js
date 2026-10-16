@@ -10,8 +10,9 @@
     return `${percent >= 100 ? Math.round(percent) : Number(percent.toFixed(1))}%`;
   }
 
-  /* A reservation in the units its fields use - MiB and GiB, as Kubernetes
-     writes them - where workloadMemory is for live use, in MB. */
+  /* Sizes are IEC (#502): Homestead divides by 1024, as Kubernetes' 10Gi and
+     Longhorn do. A reservation in the units its fields use, MiB and GiB;
+     workloadMemory is the same for live use. */
   function reservedMemory(mib) {
     const value = Number(mib);
     if (!Number.isFinite(value) || value <= 0) return "0 MiB";
@@ -19,36 +20,44 @@
   }
   function workloadMemory(mb) {
     const value = Number(mb);
-    if (!Number.isFinite(value) || value <= 0) return "0 MB";
-    if (value < 1024) return `${Math.round(value)} MB`;
-    const gb = value / 1024;
-    return `${gb < 10 ? Number(gb.toFixed(1)) : Math.round(gb)} GB`;
+    if (!Number.isFinite(value) || value <= 0) return "0 MiB";
+    if (value < 1024) return `${Math.round(value)} MiB`;
+    const gib = value / 1024;
+    return `${gib < 10 ? Number(gib.toFixed(1)) : Math.round(gib)} GiB`;
   }
 
   // Figures on cards get a bigger unit rather than more digits, so a large
-  // cluster reads "12.1 TB" where it used to push "12345.6 GB" off the card.
+  // cluster reads "12.1 TiB" where it used to push "12345.6 GiB" off the card.
   function short(value) {
     const n = Number(value) || 0;
     return String(n >= 100 ? Math.round(n) : Number(n.toFixed(1)));
   }
 
-  // Four digits of GB still fit; five do not, and 0.5 TB reads worse than 486 GB.
+  // Four digits of GiB still fit; five do not, and 0.5 TiB reads worse than 486 GiB.
   const TB_FROM = 10240;
 
   function sizeParts(gb) {
     const n = Number(gb) || 0;
-    return n >= TB_FROM ? [short(n / 1024), "TB"] : [short(n), "GB"];
+    return n >= TB_FROM ? [short(n / 1024), "TiB"] : [short(n), "GiB"];
   }
 
   function sizeText(gb) {
     return sizeParts(gb).join(" ");
   }
 
-  // Both halves in the unit the larger one needs: "12.1/13.7 TB", never "12345.6/13.7".
+  // Both halves in the unit the larger one needs: "12.1/13.7 TiB", never "12345.6/13.7".
   function sizePair(used, cap) {
     const big = Math.max(Number(used) || 0, Number(cap) || 0) >= TB_FROM;
     const scale = n => short(big ? (Number(n) || 0) / 1024 : n);
-    return `${scale(used)}/${scale(cap)} ${big ? "TB" : "GB"}`;
+    return `${scale(used)}/${scale(cap)} ${big ? "TiB" : "GiB"}`;
+  }
+
+  // A raw byte count, in the largest IEC unit that keeps it short: "48.1 MiB".
+  function bytesText(bytes) {
+    let n = Number(bytes) || 0, unit = 0;
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    while (n >= 1024 && unit < units.length - 1) { n /= 1024; unit++; }
+    return `${unit ? short(n) : Math.round(n)} ${units[unit]}`;
   }
 
   function rateParts(mbps) {
@@ -98,6 +107,7 @@
   global.sizeParts = sizeParts;
   global.sizeText = sizeText;
   global.sizePair = sizePair;
+  global.bytesText = bytesText;
   global.rateParts = rateParts;
   global.ratePair = ratePair;
   global.workloadMemory = workloadMemory;

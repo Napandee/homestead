@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 5185
+MAX_LINES = 4433
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -38,16 +38,8 @@ INLINE_ROUTES = (
     ("GET", "/api/fleet/home", "connection-bound: cookies/session"),
     ("GET", "/api/fleet/all/", "connection-bound: fleet forwarding"),
     ("GET", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
-    ("GET", "/api/portal/status", "to move in Part 1"),
     ("GET", "/api/self/data/prepare", "to move in Part 7"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
-    ("GET", "/api/resources/list", "to move in Part 1"),
-    ("GET", "/api/resources/object", "to move in Part 1"),
-    ("GET", "/api/resources/reveal", "to move in Part 1"),
-    ("GET", "/api/mqtt/preview", "to move in Part 3"),
-    ("GET", "/api/onboard/guide", "to move in Part 2"),
-    ("GET", "/api/cluster/cleanup", "to move in Part 2"),
-    ("GET", "/api/cluster/removal", "to move in Part 2"),
     ("GET", "/api/snapshot-files/plan", "to move in Part 4"),
     ("GET", "/api/snapshot-files/status", "to move in Part 4"),
     ("GET", "/api/snapshot-files/list", "to move in Part 4"),
@@ -65,9 +57,6 @@ INLINE_ROUTES = (
     ("POST", "/api/auth/setup", "connection-bound: cookies/session"),
     ("POST", "/api/auth/login", "connection-bound: cookies/session"),
     ("POST", "/api/auth/logout", "connection-bound: cookies/session"),
-    ("POST", "/api/push/test", "to move in Part 1"),
-    ("POST", "/api/alerts/acknowledge", "to move in Part 1"),
-    ("POST", "/api/alerts/delivered", "to move in Part 1"),
     ("POST", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
     ("POST", "/api/auth/password", "connection-bound: cookies/session"),
     ("POST", "/api/auth/users", "connection-bound: sign-in history (address, User-Agent)"),
@@ -88,9 +77,6 @@ INLINE_ROUTES = (
     ("POST", "/api/helm/uninstall", "to move in Part 6"),
     ("POST", "/api/snapshot-files/start", "to move in Part 4"),
     ("POST", "/api/snapshot-files/close", "to move in Part 4"),
-    ("POST", "/api/cluster/remove-node", "to move in Part 2"),
-    ("POST", "/api/cluster/cleanup/run", "to move in Part 2"),
-    ("POST", "/api/cluster/shutdown", "to move in Part 2"),
     ("POST", "/api/self/samba", "to move in Part 4"),
     ("POST", "/api/self/nfs", "to move in Part 4"),
     ("POST", "/api/addons/smb/remove", "to move in Part 4"),

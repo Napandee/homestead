@@ -1,30 +1,32 @@
 /* Homestead — router, appearance, mobile nav, quiet refresh loop */
 
+/* Each page's sidebar section, how it is drawn and whether it refreshes
+   itself. Its title is ROUTES.label in router.js, the one source (#508). */
 const VIEWS = {
-  dash:      ["Dashboard",      "overview",  viewDash,      true],
-  flow:      ["Architecture",   "overview",  viewFlow,      true],
-  nodes:     ["Nodes",          "overview",  viewNodes,     true],
-  network:   ["Networking",     "system",    viewNetworking,true],
-  portal:    ["Portal",         "overview",  viewPortal,    true],
-  workloads: ["Containers",     "workloads", viewWorkloads, true],
-  vms:       ["Virtual Machines","workloads", viewVMs,       true],
-  vmimport:  ["Import",         "workloads", () => viewVmImport(), false],
-  deploy:    ["Deploy",         "workloads", () => viewDeploy(), false],
-  store:     ["App Store",      "workloads", viewStore,     false],
-  helm:      ["Helm",           "workloads", viewHelm,      true],
-  shares:    ["Network Shares", "storage",   viewShares,    false],
-  storage:   ["Volumes",        "storage",   viewStorage,   true],
-  images:    ["Image Cache",    "storage",   viewImages,    false],
-  protect:   ["Data Protection","storage",   viewProtect,   true],
-  schedules: ["Schedules",      "system",    viewSchedules, true],
-  monitoring: ["Monitoring",    "workloads", () => viewMonitoring(), true],
-  imports:   ["Import",         "system",    viewImport,    true],
-  events:    ["Events",         "system",    viewEvents,    true],
-  resources: ["Resources",      "system",    viewResources, true],
-  cluster:   ["Cluster",        "system",    viewCluster,   true],
-  settings:  ["Settings",       "system",    viewSettings,  false],
-  setup:     ["Setup",          "system",    () => viewSetup(), false],
-  agents:    ["AI agent requests", "system", () => viewAgents(), true],
+  dash:      ["overview",  viewDash,      true],
+  flow:      ["overview",  viewFlow,      true],
+  nodes:     ["overview",  viewNodes,     true],
+  network:   ["system",    viewNetworking,true],
+  portal:    ["overview",  viewPortal,    true],
+  workloads: ["workloads", viewWorkloads, true],
+  vms:       ["workloads", viewVMs,       true],
+  vmimport:  ["workloads", () => viewVmImport(), false],
+  deploy:    ["workloads", () => viewDeploy(), false],
+  store:     ["workloads", viewStore,     false],
+  helm:      ["workloads", viewHelm,      true],
+  shares:    ["storage",   viewShares,    false],
+  storage:   ["storage",   viewStorage,   true],
+  images:    ["storage",   viewImages,    false],
+  protect:   ["storage",   viewProtect,   true],
+  schedules: ["system",    viewSchedules, true],
+  monitoring: ["workloads", () => viewMonitoring(), true],
+  imports:   ["system",    viewImport,    true],
+  events:    ["system",    viewEvents,    true],
+  resources: ["system",    viewResources, true],
+  cluster:   ["system",    viewCluster,   true],
+  settings:  ["system",    viewSettings,  false],
+  setup:     ["system",    () => viewSetup(), false],
+  agents:    ["system", () => viewAgents(), true],
 };
 
 const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal", "helm"]);
@@ -84,9 +86,7 @@ async function applyDeepLink(v, params) {
     return window.openJob?.(params.job);
   }
   if(v === "cluster" && params.section === "health") {
-    const section=document.getElementById("clusterHealth");
-    section?.setAttribute("tabindex","-1");
-    section?.focus({preventScroll:true});section?.scrollIntoView({block:"start"});
+    window.focusInPage?.("clusterHealth");
     renderBreadcrumb(v,"Health");
     return;
   }
@@ -128,6 +128,10 @@ async function applyDeepLink(v, params) {
       detail = params.workload + " console";
       open = () => wlConsole(params.ns, params.workload, true);
     }
+  } else if (v === "workloads" && params.panel === "updates") {
+    // An image update's alert: the list of updates to review, not the page.
+    detail = "Image updates";
+    open = () => imageUpdateCenter();
   } else if (v === "storage" && params.panel === "edit" && params.ns && params.volume) {
     const volume = (STATE.data.vols || []).find(x =>
       (x.namespace || "lab") === params.ns && (x.pvc_name || x.name) === params.volume);
@@ -187,20 +191,26 @@ function go(v, options = {}) {
     $("#searchbtn")?.classList.remove("filtering");
   }
   const locationParams = options.fromLocation ? HomesteadRouter.queryParams(window.location.search) : null;
+  // The card a link names (#settingsHostUpdates), and a row to mark in it.
+  let anchor = options.anchor || "", mark = options.mark || "";
+  if (options.fromLocation && window.location.hash) {
+    try { anchor = decodeURIComponent(window.location.hash.slice(1)); } catch (_) { /* no card */ }
+  }
   if (locationParams) {
     STATE.q = typeof locationParams.q === "string" ? locationParams.q.trim() : "";
     $("#globalSearch").value = STATE.q;
     const find = typeof locationParams.find === "string" ? locationParams.find.trim() : "";
     if (find) {
       // Found and marked once, then dropped from the address, so a reload
-      // does not look for it again.
-      setTimeout(() => window.highlightInPage && highlightInPage(find), 300);
+      // does not look for it again. With a card named, it is marked in there.
+      if (anchor) mark = find;
+      else setTimeout(() => window.highlightInPage && highlightInPage(find), 300);
       const clean = new URL(window.location.href);
       clean.searchParams.delete("find");
       window.history.replaceState(window.history.state, "", clean.pathname + clean.search);
     }
   }
-  const [t, , fn] = VIEWS[v];
+  const [, fn] = VIEWS[v], t = HomesteadRouter.ROUTES[v].label;
   $("#title").textContent = t;
   renderBreadcrumb(v);
   pageTitle(t);
@@ -220,6 +230,7 @@ function go(v, options = {}) {
   // A new page starts at its top, not wherever the last one was scrolled to.
   window.scrollPageTop();
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
+    .then(() => { if (anchor && STATE.view === v) window.focusInPage?.(anchor, mark); })
     .catch(e => { resetPaint(); V().innerHTML = UI.error(e, { retry: `go(${jsArg(v)})` }); });
 }
 window.go = go;
@@ -228,7 +239,7 @@ window.go = go;
 async function refresh(force) {
   // Phone resume/visibility events also run while the sign-in gate is open.
   if (!$("#gate").classList.contains("hidden")) return false;
-  const [, , fn, live] = VIEWS[STATE.view];
+  const [, fn, live] = VIEWS[STATE.view];
   if (!live && !force) return false;
   // One at a time - on this page. A refresh of a page since left waits on
   // abandoned reads for ever, and must not hold up the next.

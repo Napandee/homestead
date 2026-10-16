@@ -49,7 +49,7 @@ window.moveWorkload = async (name, ns) => {
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);
   window.__moveStranded = !viable.length;
   $("#mbody").innerHTML = `
-    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no node")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
+    <div class="between"><p class="muted small">Currently on <b>${esc(here || "no host")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
       ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove(${jsq(plan.recommended)})">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
     ${(req.devices || []).length || (req.features || []).length || Object.keys(req.labels || {}).length ? `<div class="constraintbar"><b>Required</b>
       ${(req.devices || []).map(d => `<span class="tag hw">${esc(d.label)}</span>`).join("")}
@@ -66,7 +66,7 @@ window.moveWorkload = async (name, ns) => {
             <div class="row" style="gap:9px">
               <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
               <div><div style="font-weight:670">${esc(n.name)}</div>
-                <div class="dim xs">${n.pods_wl} workload${n.pods_wl === 1 ? "" : "s"} · score ${n.score}</div></div>
+                <div class="dim xs">${n.pods_wl} of your pods · score ${n.score}</div></div>
             </div>
             ${cur ? '<span class="pill low">current</span>'
               : blocked ? '<span class="pill crit">blocked</span>'
@@ -91,11 +91,11 @@ window.moveWorkload = async (name, ns) => {
 
     <div class="row" style="margin-top:16px"><label class="switch"><input type="checkbox" id="mv_unpin">
       Clear preference — let the scheduler choose${!viable.length ? " (no failover host currently exists)" : ""}</label>
-      <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the node fails.")}</label></div>
+      <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the host fails.")}</label></div>
 
     ${UI.actions(`<button class="btn pri" id="mv_go" onclick="doMoveNow(${jsq(wl.ns)},${jsq(name)})" disabled>Review move</button>
       <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">Expect downtime: the old pod must stop before its ReadWriteOnce volume can attach elsewhere. Termination or reattachment may fail. ${tip("Eligible hosts meet the workload’s hardware, device, label, readiness and scheduling requirements.")}</div>`;
+    <div class="note" style="margin-top:14px">Expect downtime: the old pod must stop before its ReadWriteOnce volume can attach elsewhere. Termination or reattachment may fail. ${tip("Eligible hosts meet the app’s hardware, device, label, readiness and scheduling requirements.")}</div>`;
 
   const un = $("#mv_unpin");
   un.onchange = () => {
@@ -132,11 +132,11 @@ window.hostMoveReview = async body => {
     if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
     HOST_MOVE_REVIEW = { config, ...review, submitting: false };
     childModal("Review move · " + config.name, `<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
-      <div class="note warn">This saves a Recreate strategy: all containers in this workload restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
+      <div class="note warn">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Proceed despite capacity warnings — I accept the downtime, data, placement and memory risks</label>` : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Apply reviewed placement</button>`)}`, true);
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Move it despite the warnings</label>` : ""}
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Move</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -212,22 +212,22 @@ function hostAppsHtml(impact) {
 window.hostAppsHtml = hostAppsHtml;
 
 window.evacuateNode = async node => {
-  modal("Evacuate · " + node, '<div class="empty"><span class="spin2"></span>checking workload dependencies…</div>', true);
+  modal("Evacuate · " + node, '<div class="empty"><span class="spin2"></span>checking app dependencies…</div>', true);
   let impact;
   try { await loadHardwareFeatures(); impact = await api(`/api/node/impact?node=${encodeURIComponent(node)}`); }
   catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not check dependencies</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   window.__nodeImpact = impact;
   const wls = impact.workloads || [];
   modal("Evacuate · " + node, `
-    <p class="muted small">Move every workload currently on <b>${esc(node)}</b> elsewhere.
+    <p class="muted small">Move every app currently on <b>${esc(node)}</b> elsewhere.
     The host is cordoned first so nothing lands back on it.</p>
     ${wls.length ? `<div class="dependency-list" style="margin-top:14px">${impactRows(impact)}</div>`
       : '<div class="empty">Nothing of yours is running here.</div>'}
-    ${impact.stranded.length ? `<div class="note dependency-danger" style="margin-top:14px"><b>${impact.stranded.length} workload${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.</b> Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.</div>
-      <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> I understand ${impact.stranded.map(w => esc(w.name)).join(", ")} will not come back up now</label>` : ""}
-    ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${plural(wls.length, "workload")}</button>
+    ${impact.stranded.length ? `<div class="note dependency-danger" style="margin-top:14px"><b>${impact.stranded.length} app${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.</b> Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.</div>
+      <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> Leave ${impact.stranded.map(w => esc(w.name)).join(", ")} down for now</label>` : ""}
+    ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${plural(wls.length, "app")}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="note" style="margin-top:14px">Each workload restarts on another host. With
+    <div class="note" style="margin-top:14px">Each app restarts on another host. With
     ReadWriteOnce volumes they restart one at a time, so this is not instant.</div>` : ""}`);
 };
 window.doEvacuate = async node => {

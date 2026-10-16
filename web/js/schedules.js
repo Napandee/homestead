@@ -7,7 +7,7 @@
 const SCHED_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const SCHED = { kind: "", ns: "", name: "", back: null };
 
-const schedZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
+const schedZone = () => yourZone();
 
 function schedWords(s) {
   if (!s) return "";
@@ -37,7 +37,7 @@ function schedNext(s, now = new Date(), count = 3) {
   return out.sort((a, b) => a.at - b.at).slice(0, count);
 }
 
-const schedWhen = at => new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+const schedWhen = at => fmtAt(at, { weekday: true });
 
 /* A small mark on a row that has a schedule, saying it in words. Phone rows
    leave it out: their status column has room for the state alone. */
@@ -82,16 +82,15 @@ function scheduleDialog(kind, ns, name, back = null) {
     : `${name} is stopped, as Stop does, and started again with the copies it had, after the same room check as Start.`;
   modal(`Schedule · ${name}`, `<div class="ui-stack">
     ${UI.lead(esc(`Stop ${name} and start it again at set times, on the days chosen. ${how} Starting it by hand in between is fine; it stops again at the next stop time.`))}
-    ${elsewhere ? UI.callout("info", "", esc(`These times were set in ${s.tz}. Saving here sets them in ${zone}.`)) : ""}
     ${UI.fields(
       UI.field("Stop at", `<input id="sc_stop" type="time" value="${esc(s?.stop ?? (s ? "" : "01:00"))}" oninput="schedPreview()">`, { help: "Leave empty to only start it." }),
       UI.field("Start at", `<input id="sc_start" type="time" value="${esc(s?.start ?? (s ? "" : "07:00"))}" oninput="schedPreview()">`, { help: "Leave empty to only stop it." }))}
     ${UI.field("Days", `<div class="sched-days">${SCHED_DAYS.map((d, i) => `<label class="sched-day"><input type="checkbox" name="sc_day" value="${i}"${days.includes(i) ? " checked" : ""} onchange="schedPreview()"><span>${d}</span></label>`).join("")}</div>
       <div class="sched-presets">${UI.button("Every day", "schedDays('all')")}${UI.button("Weekdays", "schedDays('week')")}${UI.button("Weekends", "schedDays('end')")}</div>`)}
     <div class="sched-preview" id="sc_next" aria-live="polite"></div>
-    <div class="dim xs">Times in ${esc(zone)}. A time missed while Homestead was not running is skipped, not done late.</div>
+    <div class="dim xs">${esc(zoneLine())}.${elsewhere ? ` These times were set in ${esc(s.tz)}; saving sets them in ${esc(zone)}.` : ""} A time missed while Homestead was not running is skipped, not done late.</div>
     <div id="sc_last"></div>
-    ${UI.actions((back ? UI.button("Back", "schedBack()") : UI.cancel()) + UI.button("Save", "schedSave()", { kind: "pri", id: "sc_go", attrs: 'data-need="operator"' }),
+    ${UI.actions((back ? UI.button("Back", "schedBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Save", "schedSave()", { kind: "pri", id: "sc_go", attrs: 'data-need="operator"' }),
       s ? UI.button("No schedule", "schedSave(true)", { attrs: 'data-need="operator"' }) : "")}</div>`);
   schedPreview();
   if (s) api("/api/power-schedules").then(d => {

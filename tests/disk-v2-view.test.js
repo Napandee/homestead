@@ -6,8 +6,8 @@ function setup() {
   const item={id:'task-1',node:'node-1',device:'/dev/sdb',phase:'awaiting-erase',status:'running',progress:70,message:'Ready for review',remaining:0,volumes:[],needs_erase_review:true,cancellable:true};
   const prep={operation_id:'task-1',device:'/dev/sdb',node:'node-1',size_bytes:plan.size_bytes,request_id:'b'.repeat(24),capacity_token:'erase-token'};
   function register(body) {
-    for(const [,id] of body.matchAll(/id="([^"]+)"/g)) {
-      let value='';const el={checked:false,disabled:false,value:''};
+    for(const [tag,id] of body.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)) {
+      let value='';const el={checked:false,disabled:false,value:'',dataset:{typedExpect:tag.match(/data-typed-expect="([^"]*)"/)?.[1]}};
       Object.defineProperty(el,'innerHTML',{get:()=>value,set:s=>{value=s;register(s);}});fields['#'+id]=el;
     }
   }
@@ -69,4 +69,11 @@ test('a direct node visit offers preparation without cached engine settings and 
   assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],true),/Prepare for V2/);
   Object.assign(disk,{role:'unused',longhorn:[],v2_preparation:{id:'task-1',phase:'preparing'}});
   const active=t.c.diskRowsHtml('node-1',[disk],false);assert.match(active,/V2 preparation/);assert.doesNotMatch(active,/diskSetup/);
+});
+
+test('the system drive shows one system tag',()=>{
+  const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=()=>'';t.c.meter=()=>'';
+  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  const html=t.c.diskRowsHtml('node-1',[{device:'nvme0n1',mounts:['/'],system:true,role:'system',longhorn:[]}],false);
+  assert.equal((html.match(/>system</g)||[]).length,1);
 });

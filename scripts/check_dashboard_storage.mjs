@@ -31,7 +31,7 @@ try {
     }
   };
   await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
-  await page.locator(".node-compact-grid").waitFor();
+  await page.locator(".node-compact-grid").waitFor({state:"attached"});
   await page.evaluate(async()=>{
     const prefs=await api('/api/auth/preferences/dashboard');
     const items=Dashboard.defaults().map(item=>item.id==='nodes'?{...item,display:'detailed'}:item);
@@ -64,9 +64,9 @@ try {
     await page.evaluate(()=>go("dash"));
     await page.locator(".consumer-row").first().waitFor();
     const card=size.width>560 ? page.locator(".comparison-disk").first() : page.locator(".node-comparison-detail").first();
-    assert.match(await card.innerText(),/40%\s+40\/100 GB/);
-    assert.match(await card.innerText(),/Filesystem use · 500 GB disk/);
-    assert.match(await card.locator(".meter.split").getAttribute("data-tip"),/Longhorn allowance left 30 GB/);
+    assert.match(await card.innerText(),/40%\s+40\/100 GiB/);
+    assert.match(await card.innerText(),/Filesystem use · 500 GiB disk/);
+    assert.match(await card.locator(".meter.split").getAttribute("data-tip"),/Longhorn allowance left 30 GiB/);
     const widths=await card.locator(".meter.split>span").evaluateAll(spans=>spans.map(s=>Number.parseFloat(s.style.width)));
     assert.deepEqual(widths,[30,10,30]);
     for(const group of await page.locator(".node-comparison-detail .about-grid>div").all()) {
@@ -104,4 +104,14 @@ try {
   }
   assert.deepEqual(errors,[]);
   await context.close();
+  // On a phone in the critical scenario, with the default dashboard (#495):
+  // one host per Node health row, and the nearly-full tag keeps its size
+  // inside the Storage card.
+  const fresh=await browser.newContext({...devices["Pixel 7"]}), phone=await fresh.newPage();
+  await phone.goto(`${base}/?demo=1&demo-scenario=critical`,{waitUntil:"networkidle"});
+  await phone.locator(".node-compact-grid").waitFor({state:"attached"});
+  assert.equal(await phone.evaluate(()=>getComputedStyle(document.querySelector(".node-compact-grid")).gridTemplateColumns.split(" ").length),1,"one host per row on a phone");
+  const tight=phone.locator(".lh-tight");
+  if(await tight.count()) assert.equal(await tight.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,"the nearly-full tag fits");
+  await fresh.close();
 } finally {await browser.close();}

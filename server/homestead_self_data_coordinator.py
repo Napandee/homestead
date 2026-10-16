@@ -183,6 +183,33 @@ class Coordinator:
         return COPY.job(self.ns, self.job_name, self.state["source"]["name"], self.state["destination"],
                         self.plan["copy_image"], self.state["operation"], self.plan["copy_node"])
 
+    def _copy_admitted(self, job, pod):
+        """The finished pod passes the check its dry run passed (#467): admitted()
+        on the reviewed template, so its security contexts, priority, service
+        account and tolerations are what was reviewed. The Job controller's
+        additions are the only allowance: the generated name, its owner, the
+        controller-uid and job-name labels, which must be this Job's, and its
+        tracking finalizer, which stays on the pod until the controller has
+        counted it. The pod comes from a list, so it names no kind itself."""
+        import homestead_self_data_bootstrap as B
+        from homestead_self_data_preflight import copy_pod
+        meta, job_uid = pod.get("metadata", {}), identity(job)["uid"]
+        owners = meta.get("ownerReferences", [])
+        if len(owners) != 1 or owners[0].get("kind") != "Job" or owners[0].get("uid") != job_uid:
+            raise Held("The copy pod is not owned by this data copy Job alone")
+        added = {"controller-uid": job_uid, "job-name": job["metadata"]["name"],
+                 "batch.kubernetes.io/controller-uid": job_uid, "batch.kubernetes.io/job-name": job["metadata"]["name"]}
+        labels = dict(meta.get("labels", {}))
+        if any(labels.pop(key, value) != value for key, value in added.items()):
+            raise Held("The copy pod's Job labels are not this Job's")
+        body = copy_pod(self._copy_manifest())
+        body["metadata"].update(name=meta.get("name"), ownerReferences=copy.deepcopy(owners))
+        real = {"apiVersion": "v1", "kind": "Pod", **copy.deepcopy(pod)}
+        real["metadata"]["labels"] = labels
+        real["metadata"]["finalizers"] = [f for f in meta.get("finalizers", []) if f != "batch.kubernetes.io/job-tracking"]
+        B.admitted(body, real, {"apiVersion": "v1", "kind": "Pod", "namespace": self.ns, "name": meta.get("name")},
+                   default=B.default_priority(self.read))
+
     def _copy_receipt(self, job, pods):
         if any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):
             raise Held("The data copy Job failed; both volumes are retained")
@@ -201,6 +228,7 @@ class Coordinator:
                 or any(spec["containers"][0].get(k) != wanted["containers"][0].get(k)
                        for k in ("name", "image", "command", "volumeMounts", "env", "envFrom"))):
             raise Held("The copy pod differs from its reviewed image, mounts or command")
+        self._copy_admitted(job, pod)
         statuses = pod.get("status", {}).get("containerStatuses", [])
         if (len(statuses) != 1 or statuses[0].get("name") != "copy"
                 or not statuses[0].get("containerID") or statuses[0].get("restartCount") != 0

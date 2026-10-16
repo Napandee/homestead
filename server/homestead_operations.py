@@ -405,7 +405,7 @@ def _finish(item, status, progress, message):
 
 def _mb(size):
     size = int(size or 0)
-    return f"{size / 1024 ** 3:.1f} GB" if size >= 1024 ** 3 else f"{max(1, round(size / 1024 ** 2))} MB"
+    return f"{size / 1024 ** 3:.1f} GiB" if size >= 1024 ** 3 else f"{max(1, round(size / 1024 ** 2))} MiB"
 
 
 def _elapsed(seconds):

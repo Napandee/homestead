@@ -14,11 +14,7 @@ const monitorOpen = (w, vm = false) => `${vm ? "vmMonitoring" : "wlMonitoring"}(
 
 const answerShare = value => value === null || value === undefined ? "—" : `${value >= 99.995 ? "100" : value.toFixed(value >= 99 ? 2 : 1)}%`;
 
-function answerSince(at) {
-  if (!at) return "";
-  const d = new Date(at * 1000), today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
+const answerSince = at => fmtAt(at);
 
 function answerDetail(a) {
   const last = a.last || {};
@@ -206,7 +202,7 @@ window.vmMonitoring = (ns, name, back = null) => {
         <div class="f vm-mon-path"${c.mode === "http" ? "" : " hidden"}><label for="vm_mon_path">Path</label><input id="vm_mon_path" value="${esc(c.path)}" placeholder="/"></div></div>
       ${option("off", "Not monitored", "No checks and no alerts for this VM.")}</div>`)}
     ${outageSectionHtml("vm", v)}
-    ${UI.actions((back ? UI.button("Back", "vmMonitorBack()") : UI.cancel())
+    ${UI.actions((back ? UI.button("Back", "vmMonitorBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel())
       + UI.button("Save", "vmMonitorSave()", { kind: "pri", id: "vm_mon_go", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}"` }))}</div>`);
 };
 
@@ -334,7 +330,7 @@ function renderMonitoring() {
   const head = `<tr><th>App or VM</th><th>State</th><th class="mon-bars">${range === "day" ? "Last 24 hours" : "Last 30 days"}</th>
     <th data-nosort>${range === "day" ? "24 h" : "30 days"}</th><th class="mon-target">Asked</th><th data-nosort></th></tr>`;
   const row = ({ w, a, vm }) => `<tr class="clickable" onclick="if(!event.target.closest('button,a'))${monitorOpen(w, vm)}">
-      <td class="cell-name" data-sort="${esc(w.name)}"><div class="vm-name-cell">${vm && typeof vmAvatar === "function" ? vmAvatar(w) : appAvatar(w.name, w.icon)}<div class="vm-name-text"><b>${esc(w.name)}</b><div class="dim xs">${esc(vm ? `${w.ns} · VM` : w.ns)}</div></div></div></td>
+      <td class="cell-name" data-sort="${esc(w.name)}"><div class="vm-name-cell">${vm && typeof vmAvatar === "function" ? vmAvatar(w) : appAvatar(w.name, w.icon)}<div class="vm-name-text"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(vm ? `${w.ns} · VM` : w.ns)}</div></div></div></td>
       <td data-label="State" data-sort="${monitorRank[a.state] ?? 5}"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
         <div class="dim xs">${esc(answerDetail(a))}</div></td>
       <td data-label="${range === "day" ? "24 hours" : "30 days"}" class="mon-bars">${a.state === "off" ? '<span class="dim xs">—</span>' : answerStrip(range === "day" ? a.strip : a.days, "wide mon", range)}</td>

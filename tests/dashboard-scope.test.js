@@ -19,11 +19,11 @@ function scope(all, nodes = 3) {
 test("with All clusters picked, the dashboard says it shows this cluster only", () => {
   const text = scope(true);
   assert.match(text, /Main site only/);
-  assert.match(text, /3 nodes/);
-  assert.match(text, /go\('nodes'\)/, "it links to Nodes, which shows every cluster");
+  assert.match(text, /3 hosts/);
+  assert.match(text, /go\('nodes'\)/, "it links to Hosts, which shows every cluster");
 });
 
 test("on one cluster the subtitle is as before", () => {
-  assert.equal(scope(false), "Live health, capacity and placement across 3 nodes");
-  assert.equal(scope(false, 1), "Live health, capacity and placement across 1 node");
+  assert.equal(scope(false), "Live health, capacity and placement across 3 hosts");
+  assert.equal(scope(false, 1), "Live health, capacity and placement across 1 host");
 });

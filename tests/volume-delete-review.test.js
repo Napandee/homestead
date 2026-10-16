@@ -41,7 +41,7 @@ test("incomplete inventory reports detached but unverified and keeps deletion bl
   const r = review(async () => plan(true));
   await r.context.volumeDelete(target);
   assert.match(r.html(), /Longhorn reports detached; safety checks are incomplete/);
-  assert.match(r.html(), /No workload references found in the available inventory/);
+  assert.match(r.html(), /No app or VM references found in the available inventory/);
   assert.doesNotMatch(r.html(), /Stop and unmount this claim first/);
   assert.match(r.html(), /Refresh review/);
   r.confirm();

@@ -4,7 +4,7 @@ function setup() {
   const fields = {"#vh": {}, "#vh_boot_output": {value: "console"}, "#vh_firmware": {value: "bios"},
     "#vh_secure": {checked: false}, "#vh_serial": {checked: true}, "#vh_notes": {innerHTML: ""}};
   const ctx = {console, Intl, Set, $: key => fields[key], $$: () => [], esc: String, tip: () => "", toast(){}};
-  ctx.window = ctx; vm.createContext(ctx);
+  ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   vm.runInContext(fs.readFileSync("web/js/vm-hardware.js", "utf8"), ctx);
   return {ctx, fields};
 }

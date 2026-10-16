@@ -13,7 +13,7 @@ window.clusterShutdown = async () => {
     const plan = await api('/api/cluster/shutdown/plan');
     if (sequence !== shutdownSequence) return;
     shutdownReview = plan;
-    modal('Shut down cluster', UI.lead(`Stop workloads on all <b>${esc(plan.nodes.length)}</b> hosts, then shut down the hosts. Homestead is the last application to stop.`) +
+    modal('Shut down cluster', UI.lead(`Stop apps and VMs on all <b>${esc(plan.nodes.length)}</b> hosts, then shut down the hosts. Homestead is the last application to stop.`) +
       UI.callout(plan.ready ? 'warn' : 'bad', plan.ready ? 'The entire cluster will be offline' : 'Resolve these before shutdown', plan.ready
         ? 'Applications and storage become unavailable. You will need console or physical access to power hosts on and restore scheduling.'
         : `<ul class="ui-list">${(plan.blockers || []).map(p => `<li>${esc(p)}</li>`).join('')}</ul>`) +
@@ -28,13 +28,13 @@ window.clusterShutdown = async () => {
       ])) + UI.more('Hosts and recovery', UI.table([{label:'Host'}, {label:'Scheduling now'}], plan.nodes.map(n => [esc(n.name), n.cordoned ? 'Cordoned' : 'Allowed'])) +
         '<p class="ui-help">Kubernetes infrastructure, admission webhooks, Longhorn, DaemonSets and static pods stay until host shutdown. Running VMs must be stopped first. Draining removes emptyDir data; controllers and persistent volumes are retained. If a drain fails, original scheduling is restored where possible. Power the hosts on and Homestead comes back by itself once every one is Ready: scheduling, VMs and apps return as they were. If a host stays off, uncordon another from its console so Homestead can start, then recover here. A lost connection does not confirm physical power-off.</p>' +
         (plan.local_storage?.length ? UI.table([{label:'Pod'}, {label:'Local or external storage'}], plan.local_storage.map(v => [esc(v.pod), esc(v.kind)])) : '')) +
-      (plan.ready ? UI.field(`Type ${plan.confirm} to confirm`, '<input id="shutdownConfirm" autocomplete="off" spellcheck="false">') : '') +
-      UI.actions(UI.cancel('Close') + UI.button('Check again', 'clusterShutdown()') + (plan.ready ? UI.button('Shut down cluster', 'clusterShutdownStart()', {kind:'danger', id:'shutdownStart'}) : '')), true, 'cluster-shutdown');
+      (plan.ready ? UI.typedConfirm({ id: 'shutdownConfirm', expect: plan.confirm, button: 'shutdownStart' }) : '') +
+      UI.actions(UI.cancel('Close') + UI.button('Check again', 'clusterShutdown()') + (plan.ready ? UI.button('Shut down cluster', 'clusterShutdownStart()', {kind:'danger', id:'shutdownStart', disabled:true}) : '')), true, 'cluster-shutdown');
   } catch (error) { toast(error.message, 'bad'); }
 };
 window.clusterShutdownStart = async () => {
   const plan = shutdownReview;
-  if (!plan?.ready || $('#shutdownConfirm')?.value !== plan.confirm) return toast('Type SHUT DOWN CLUSTER exactly to confirm', 'bad');
+  if (!plan?.ready || !typedConfirmMatches('shutdownConfirm')) return;
   shutdownReview = null;
   const button = $('#shutdownStart');
   if (button) button.disabled = true;
@@ -108,7 +108,7 @@ window.clusterShutdownCancel = async () => {
 window.clusterShutdownRecover = async run => {
   try {
     await api('/api/cluster/shutdown/recover', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({run})});
-    toast('Scheduling restored. Check workload and storage health.', 'ok');
+    toast('Scheduling restored. Check app or VM and storage health.', 'ok');
     clusterShutdown();
   } catch (error) { toast(error.message, 'bad'); }
 };

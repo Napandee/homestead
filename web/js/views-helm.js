@@ -2,8 +2,8 @@
    cluster's Helm controller (k3s's or RKE2's). Releases made some other way
    are shown, not changed. */
 
-const HELM_MANAGED = { homestead: ["installed here", "ok", "Installed from Homestead as a HelmChart: it can be upgraded and uninstalled here"],
-  helmchart: ["HelmChart", "info", "Managed by a HelmChart object, which Homestead can change"] };
+const HELM_MANAGED = { homestead: ["installed here", "", "Installed from Homestead as a HelmChart: it can be upgraded and uninstalled here"],
+  helmchart: ["HelmChart", "", "Managed by a HelmChart object, which Homestead can change"] };
 
 function helmStatus(status) {
   const tone = status === "deployed" ? "ok" : /pending/.test(status) ? "med" : status === "superseded" ? "neutral" : "crit";
@@ -86,7 +86,8 @@ window.helmRelease = async (ns, name) => {
         ${r.history.map(h => `<tr><td class="mono">${h.revision}</td><td>${helmStatus(h.status)}</td><td class="mono small">${esc(h.chart_version)}</td>
           <td class="small dim">${fmtWhen(h.updated)}</td><td class="small">${esc(h.description)}</td></tr>`).join("")}</tbody></table></div>
       <div class="helm-pane" data-pane="objects" hidden><table class="tbl dense stack"><thead><tr><th>Kind</th><th>Name</th><th>Namespace</th></tr></thead><tbody>
-        ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table></div>`;
+        ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table></div>
+      ${UI.actions(UI.cancel("Close"))}`;
     if (window.applyRole) applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `helmRelease(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
 };
@@ -137,7 +138,7 @@ async function helmSearch() {
     const rows = STATE.data.helmResults = await api(`/api/helm/search?q=${encodeURIComponent(q)}`);
     host.innerHTML = rows.map((r, i) => `<button type="button" class="helm-hit card flat" onclick="helmPick(${i})">
         ${r.logo ? `<img src="${esc(r.logo)}" alt="" loading="lazy">` : `<span class="helm-hit-blank">${esc(r.name.slice(0, 2).toUpperCase())}</span>`}
-        <span><b>${esc(r.name)}</b> <span class="dim xs">${esc(r.version)}</span> ${r.official ? '<span class="tag ok">official</span>' : r.verified ? '<span class="tag info">verified</span>' : ""}
+        <span><b>${esc(r.name)}</b> <span class="dim xs">${esc(r.version)}</span> ${r.official ? '<span class="tag">official</span>' : r.verified ? '<span class="tag">verified</span>' : ""}
           <span class="dim xs"> · ${esc(r.publisher || r.repo_name)}</span><div class="dim xs">${esc(r.description)}</div></span></button>`).join("")
       || '<div class="dim small">No charts found.</div>';
   } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }

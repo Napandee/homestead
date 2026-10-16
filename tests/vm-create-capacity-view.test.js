@@ -14,7 +14,7 @@ function setup({blocked=false,missing=false,fail=false,routine=false}={}) {
       if(fail)throw new Error("connection lost");
       return {ok:true};
     }};
-  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx); const notes=ctx.capacityNotes;require("./helpers/load-ui")(ctx);vm.runInContext(fs.readFileSync("web/js/views-workloads.js","utf8"),ctx);ctx.capacityNotes=notes;ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
   return {ctx,fields,sent,exposed};
 }
 test("create review freezes generated MAC and user input, with explicit consent",async()=>{
@@ -86,7 +86,7 @@ test("isolated create review needs no MAC and never opens VIP setup",async()=>{
     return result;
   };
   await t.ctx.vmCreateReview({name:'offline',namespace:'lab',isolated:true},{serviceMode:'manual',selectedVip:'192.0.2.10'});
-  assert.match(t.fields['#mbody'].innerHTML,/Isolated VM - no virtual network cards/);
+  assert.match(t.fields['#mbody'].innerHTML,/Isolated: no virtual network cards/);
   assert.doesNotMatch(t.fields['#mbody'].innerHTML,/MAC undefined/);
   t.fields['#vmCreateApprove'].checked=true;
   await t.ctx.vmCreateReviewedApply();

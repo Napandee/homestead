@@ -374,7 +374,7 @@ def status(item, now=None):
 def _apply_route(request):
     op = apply(request.body, OPS, node_probes())
     homestead_routes.forget("ports", "network")
-    return {"ok": True, "operation": op, "detail": "Sent to Harvester; follow each host in the job tray"}
+    return {"ok": True, "operation": op, "detail": "Sent to Harvester; follow each host under Jobs"}
 
 
 # Its routes and who may use them (homestead_routes.py).

@@ -99,12 +99,12 @@ function workloadHierarchy(w) {
       ${p.unplaced ? `<div class="tree-why unplaced" title="${esc(p.unplaced)}">Cannot be placed: ${esc(p.unplaced)}</div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
-        <b>${esc(c.name)}</b><span class="pill ${c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : c.state === "running" ? "med" : "low"}">${esc(c.state || "pending")}</span>
+        <b>${esc(c.name)}</b><span class="pill ${c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "low"}">${esc(c.state || "pending")}</span>
         ${c.restarts ? `<span class="tag warn">${c.restarts} restart${c.restarts === 1 ? "" : "s"}</span>` : ""}
         <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
       </div>${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
         ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
-    </div>`).join("") || `<div class="dim xs">No pods exist yet. The workload controller will create them when the instance count is above zero.</div>`}</div>
+    </div>`).join("") || `<div class="dim xs">No pods exist yet. Kubernetes creates them once the instance count is above zero.</div>`}</div>
   </details>`;
 }
 
@@ -300,7 +300,7 @@ function workloadGroupHead(group, rows, folded) {
   const running = rows.filter(w => w.desired > 0 && w.ready === w.desired).length;
   const head = `<button type="button" class="wgroup-head" aria-expanded="${!folded}" onclick="foldWorkloadGroup(${groupKeyIndex(group || NO_GROUP)})">
     <span class="wgroup-chevron">›</span><b>${esc(group || "Ungrouped")}</b>
-    <span class="dim xs">${rows.length} workload${rows.length === 1 ? "" : "s"}${running < rows.length ? ` · ${running} running` : ""}</span></button>`;
+    <span class="dim xs">${rows.length} app${rows.length === 1 ? "" : "s"}${running < rows.length ? ` · ${running} running` : ""}</span></button>`;
   // Homestead's own group looks after its own tier (#429); Ungrouped isn't a group.
   if (!group || rows.every(w => w.homestead || w.platform)) return `<div class="wgroup-headrow">${head}</div>`;
   const tier = rows.find(w => w.group_tier)?.group_tier || "";
@@ -358,7 +358,7 @@ window.wlGroup = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
   const names = workloadGroupNames(STATE.data.wl || []);
   window.__groupTarget = [{ ns, name }];
-  modal("Group · " + name, `<p class="muted small">Groups gather workloads under a divider on Containers, and each gets a chip to show it alone.</p>
+  modal("Group · " + name, `<p class="muted small">Groups gather apps under a divider on Containers, and each gets a chip to show it alone.</p>
     <div class="f" style="margin-top:12px"><label>Group</label><input id="wg_name" list="wg_names" maxlength="40" value="${esc(w.group || "")}" placeholder="e.g. Media">
       <datalist id="wg_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
     <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px">
@@ -474,7 +474,7 @@ window.wgRename = i => {
   modal(`Rename ${g}`, `<div class="ui-stack">
     ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} move to the new name. A name another group has merges the two.`))}
     ${UI.field("New name", `<input id="wg_rename" maxlength="40" value="${esc(g)}" list="wg_rename_names"><datalist id="wg_rename_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`)}
-    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)") + UI.button("Rename", "wgRenameApply()", { kind: "pri", attrs: 'data-need="operator"' }))}</div>`);
+    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Rename", "wgRenameApply()", { kind: "pri", attrs: 'data-need="operator"' }))}</div>`);
   setTimeout(() => { const input = $("#wg_rename"); input?.focus(); input?.select(); }, 30);
 };
 window.wgRenameApply = () => {
@@ -491,7 +491,7 @@ window.wgUngroupAll = i => {
   window.__wgGroup = { items: wgItems(members), from: g };
   modal(`Ungroup ${g}`, `<div class="ui-stack">
     ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} leave the group, and ${g} is gone: a group lasts while something is in it. Nothing restarts.`))}
-    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)") + UI.button("Ungroup all", "wgUngroupApply()", { kind: "danger", attrs: 'data-need="operator"' }))}</div>`);
+    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Ungroup all", "wgUngroupApply()", { kind: "danger", attrs: 'data-need="operator"' }))}</div>`);
 };
 window.wgUngroupApply = () => {
   const { items, from } = window.__wgGroup || {};
@@ -715,7 +715,7 @@ function renderWorkloads() {
   const layout = viewLayout("containers");
   const items = [{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
     { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
-    { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
+    { label: "If a host fails", icon: "node", run: "wlFailover()", tip: "What each container does when its host fails: move, or wait for the host" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
     { label: "Move several…", icon: "move", run: "moveSeveral()", need: "operator", tip: "Tick containers and move them to a host you choose, reviewed together" },
     { label: "Set reservations from use…", icon: "sliders", run: "reservationsReview()", need: "operator", tip: "Reserve CPU and memory for apps from what they used over the last week" },
@@ -728,7 +728,7 @@ function renderWorkloads() {
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
-  paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`, `${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
+  paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`, `${rows.length} app${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}${logoless ? ` · <a class="linkish" data-need="operator" onclick="logoFixup()">${logoless} without a logo</a>` : ""}`, `<span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
@@ -874,7 +874,7 @@ function workloadTable(rows, sections = null, folded = new Set()) {
       <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
   }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
   return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers" data-sort-controls="containers"><thead><tr>
-    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th class="wl-uptime">Uptime</th><th data-nosort>Actions</th></tr></thead>
+    <th>App</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th class="wl-uptime">Uptime</th><th data-nosort>Actions</th></tr></thead>
     ${bodies}</table></div>`;
 }
 
@@ -964,7 +964,7 @@ function accessPorts(ports) {
   const more = (from, kind) => rows.length > from
     ? `<span class="tag more ${kind}" data-tip="Also listening on ${esc(rows.slice(from).map(p => p.port).join(", "))}">+${rows.length - from}</span>` : "";
   return shown.map((p, i) => (p.ip
-    ? `<span class="plink${i ? " second" : ""}" title="Open ${esc(svcUrl(p.ip, p.port))}" onclick="openSvc(${jsq(p.ip)},${p.port})">${p.port}<svg class="ext" width="9" height="9"><use href="#i-ext"/></svg></span>`
+    ? `<button type="button" class="plink${i ? " second" : ""}" title="Open ${esc(svcUrl(p.ip, p.port))}" aria-label="Open port ${p.port}" onclick="openSvc(${jsq(p.ip)},${p.port})">${p.port}<svg class="ext" width="9" height="9" aria-hidden="true"><use href="#i-ext"/></svg></button>`
     : `<span class="tag${i ? " second" : ""}">${p.port}</span>`)).join("") +
     more(1, "more-narrow") + more(2, "more-wide");
 }
@@ -981,7 +981,7 @@ function capacityPlacementHtml(plan) {
     detail = "The paused VM keeps its current host.";
   } else if (placement.pinned) {
     title = `Required host: ${placement.pinned}`;
-    detail = "This workload is pinned to this host. It cannot launch on another host.";
+    detail = "This app is pinned to this host. It cannot launch on another host.";
   } else if (placement.preferred) {
     const available = hosts.some(host => host.name === placement.preferred);
     title = `${available ? "Preferred host" : "Preferred host currently unavailable"}: ${placement.preferred}`;
@@ -991,7 +991,7 @@ function capacityPlacementHtml(plan) {
     detail = "Kubernetes can schedule it here if these constraints still hold at launch.";
   } else {
     title = hosts.length ? "Host selected at launch" : "Launch host not determined";
-    detail = hosts.length ? "Kubernetes chooses from the eligible hosts below when the workload starts." : "No eligible host has been confirmed by this review.";
+    detail = hosts.length ? "Kubernetes chooses from the eligible hosts below when the app starts." : "No eligible host has been confirmed by this review.";
   }
   if (plan.blocked) detail += " Launch is blocked until the issues below are resolved.";
   const names = hosts.length > 1 || placement.preferred ? `<p>Eligible hosts: <b>${hosts.map(host => esc(host.name)).join(", ") || "none"}</b>.</p>` : "";
@@ -1047,7 +1047,11 @@ function capacityHostTable(plan) {
 }
 window.capacityHostTable = capacityHostTable;
 
-function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "" }) {
+/* The acknowledgement a review asks for, from what it does: "Restarts" asks
+   "Restart it anyway", never "Start it anyway". */
+const reviewAck = what => `${String(what || "Starts").split(" ")[0].replace(/s$/, "")} it anyway`;
+window.reviewAck = reviewAck;
+function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "", objects = "", warnings = [] }) {
   const { concerns, caveats } = capacityNotes(plan);
   const placement = plan.placement || {}, hosts = plan.candidates || [];
   const ok = hosts.filter(host => host.eligible), out = hosts.filter(host => !host.eligible);
@@ -1058,19 +1062,21 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
     : ok.length ? ` on one of ${ok.length} hosts` : "";
   const topology = plan.topology_status === "blocked" ? "Its affinity and spread rules cannot fit all requested replicas."
     : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its affinity and spread placement remains unverified." : "";
-  const problems = [...(plan.blockers || []), ...concerns,
+  const problems = [...new Set([...(plan.blockers || []), ...concerns,
     ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
-    ...(topology ? [topology] : [])];
+    ...(topology ? [topology] : []), ...warnings])];
+  const verb = reviewAck(what).split(" ")[0].toLowerCase();
   const list = problems.length ? `<ul class="ui-list">${problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
   const rows = hosts.length;
   const reservations = ok.filter(host => host.reservations_known).map(host =>
     `<li>${esc(host.name)}: Already reserved: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb ?? "?")} GiB RAM · ${esc(host.reserved_cpu_percent ?? "?")}% CPU${host.request_slots != null ? ` · room for ${esc(host.request_slots)} more` : ""}</li>`)
     .concat(ok.filter(host => !host.reservations_known).map(host => `<li>${esc(host.name)}: Scheduler reservations unavailable</li>`));
   return [
-    UI.lead(plan.blocked ? `<b>${esc(name)}</b> can't start until what is below is resolved.`
+    UI.lead(plan.blocked ? `<b>${esc(name)}</b> can't ${verb} until what is below is resolved.`
       : `${what} <b>${esc(name)}</b>${where}.${extra}`),
-    plan.blocked ? UI.callout("bad", "Can't start", list || "No host that may run it has room for it.")
+    plan.blocked ? UI.callout("bad", `Can't ${verb}`, list || "No host that may run it has room for it.")
       : problems.length ? UI.callout("warn", "Check first", list) : "",
+    objects,
     rows ? UI.section("Hosts with room", capacityHostTable(plan)) : "",
     UI.more("Details", `${UI.facts([
         [plan.vm ? "VM reserves" : `Each pod reserves`, `${esc(plan.pod_request_gb ?? "?")} GiB RAM${plan.vm?.request_is_lower_bound ? " at least" : ""} · ${esc(plan.pod_cpu_request_percent ?? "?")}% CPU`],
@@ -1080,7 +1086,7 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
       ${caveats.length ? `<ul class="ui-list">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
       ${details}
       <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`),
-    !plan.blocked && problems.length ? UI.ack(ackId, "Start it anyway", { onchange: onAck }) : "",
+    !plan.blocked && problems.length ? UI.ack(ackId, reviewAck(what), { onchange: onAck }) : "",
   ].join("");
 }
 window.startReview = startReview;
@@ -1096,7 +1102,7 @@ window.wlScale = async (ns, name, n) => {
             : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},true)`, { kind: "pri" })));
         return;
       }
-    } catch (e) { return toast(`Could not check node memory: ${e.message}`, "bad"); }
+    } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }
   }
   return wlScaleGo(ns, name, n, false);
 };
@@ -1162,7 +1168,7 @@ function balanceContainersHtml(b) {
   const rows = (plan.apps || []).map((id, i) => {
     const m = moves.find(x => x.id === id), off = b.exclude.has(id);
     return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">stays where it is</span>'
-      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GB${m.near ? " · its volumes have a copy there" : ""}</span>`];
+      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}</span>`];
   });
   return [
     balanceSwitch("containers", b, "Balance containers"),
@@ -1180,7 +1186,7 @@ function balanceContainersHtml(b) {
 }
 
 function balanceVolumesHtml(b) {
-  const plan = b.plan, moves = plan.moves || [], gb = n => `${n} GB`;
+  const plan = b.plan, moves = plan.moves || [], gb = n => `${n} GiB`;
   const hosts = UI.table([{ label: "Host" }, { label: "Copies held", className: "grow" }], (plan.hosts || []).map(h => {
     const after = b.on ? h.after_gb : h.before_gb;
     return [`<span class="mono">${esc(h.name)}</span>${h.takes ? "" : ` ${UI.chip("takes no new copies", "warn")}`}`,
@@ -1452,7 +1458,7 @@ window.wlStopSelf = (ns, name) => {
       <pre class="mono xs" style="white-space:pre-wrap;margin:8px 0">kubectl -n ${esc(ns)} scale deployment/${esc(name)} --replicas=1</pre>
       Your apps keep running; jobs in the tray, alerts and moves pause until it is back.</div>
     <p class="small">If it needs a fresh start, <b>Restart</b> brings it straight back.</p>
-    <label class="switch"><input type="checkbox" id="ss_ok"> I understand - stop it</label>
+    <label class="switch"><input type="checkbox" id="ss_ok"> Stop it anyway</label>
     ${UI.actions(`<button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
       <button class="btn danger" onclick="wlStopSelfGo(${jsq(ns)},${jsq(name)})">Stop Homestead</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -1470,7 +1476,7 @@ window.wlStopSelfGo = async (ns, name) => {
    decides whether a moved container's single-node volume can follow it, so
    its policy is shown here too. */
 window.wlFailover = async () => {
-  modal("If a node fails", '<div class="empty"><span class="spin2"></span></div>', true);
+  modal("If a host fails", '<div class="empty"><span class="spin2"></span></div>', true);
   const [rows, lh] = await Promise.all([api("/api/workloads").catch(() => STATE.data.wl || []),
     api("/api/longhorn/capacity").catch(() => null)]);
   const policy = lh?.node_down || "";
@@ -1478,14 +1484,14 @@ window.wlFailover = async () => {
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
     ${lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
-      ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another node takes its volume with it.`
+      ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another host takes its volume with it.`
       : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
     <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
       ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value=${jsq(v)})">${esc(l)}</button>`).join("")}</div>
-    <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>
+    <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its host fails</th></tr></thead><tbody>
       ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
           ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
-        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s node fails`)}</td></tr>`).join("")}
+        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s host fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
@@ -1504,7 +1510,7 @@ window.wlFailoverSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlFailoverPolicy = async () => {
-  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Node is Down\" set to delete-both-statefulset-and-deployment-pod.", { title: "Pod deletion when a node is down", ok: "Allow" }))) return;
+  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Host is Down\" set to delete-both-statefulset-and-deployment-pod.", { title: "Pod deletion when a host is down", ok: "Allow" }))) return;
   try {
     await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });
@@ -1567,7 +1573,7 @@ window.wlDelete = async (ns, name) => {
     .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
   const claims = (vols || []).filter(vol => (vol.attached || []).includes(name));
   $("#mbody").innerHTML = `
-    <div class="note dependency-danger"><b>This removes the workload, not its data.</b>
+    <div class="note dependency-danger"><b>This removes the app, not its data.</b>
       The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
       removed afterwards from Volumes.</div>
     <div class="dependency-list" style="margin-top:12px">
@@ -1580,18 +1586,14 @@ window.wlDelete = async (ns, name) => {
       <div class="dependency-row"><span>Volumes kept</span>
         <b>${claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
     </div>
-    <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
-      <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate(${jsq(name)})"></div>
+    ${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
-      onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete workload</button>
+      onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete app</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
-window.wlDeleteGate = name => {
-  const button = $("#wd_go"), input = $("#wd_confirm");
-  if (button && input) button.disabled = input.value.trim() !== name;
-};
 window.wlDeleteNow = async (ns, name, button) => {
+  if (!typedConfirmMatches("wd_confirm")) return;
   if (button) { button.disabled = true; button.textContent = "Deleting…"; }
   try {
     const result = await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });
@@ -1600,7 +1602,7 @@ window.wlDeleteNow = async (ns, name, button) => {
     toast(`${name} deleted${freed ? ` with ${freed} service${freed === 1 ? "" : "s"}` : ""}`, "ok");
     setTimeout(() => refresh(true), 900);
   } catch (e) {
-    if (button) { button.disabled = false; button.textContent = "Delete workload"; }
+    if (button) { button.disabled = false; button.textContent = "Delete app"; }
     toast(e.message, "bad");
   }
 };
@@ -1903,7 +1905,7 @@ window.imageReviewedApply = async () => {
             continue;
           }
           states[key] = state; paint();
-          if (rolloutChanged(result, state)) throw new Error("Workload changed during monitoring; review remaining updates again");
+          if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
           if (state.phase === "failed") throw new Error("Rollout failed");
           if (state.phase === "ready") { refreshAfterRollout(); break; }
           if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
@@ -2055,7 +2057,7 @@ function pullDetail(s) {
   return `${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created`;
 }
 
-function pullSize(b) { return b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`; }
+function pullSize(b) { return bytesText(b); }
 
 function rolloutProgress(s) {
   const ready=s.phase === "ready", failed=s.phase === "failed", pull=s.pull || {};
@@ -2115,7 +2117,7 @@ window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(n
 /* ---------------- interactive container console ---------------- */
 window.wlConsole = (ns, name, fromRoute = false) => {
   const workload = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name);
-  if (!workload) return toast("Workload details are not available yet", "bad");
+  if (!workload) return toast("App details are not available yet", "bad");
   const pods = (workload.pods || []).filter(p => p.phase === "Running" && (p.containers || []).some(c => c.kind === "app"));
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "console", ns, workload: name }, name + " console");
   window.__consoleWorkload = workload;
@@ -2132,7 +2134,7 @@ window.wlConsole = (ns, name, fromRoute = false) => {
     ${pods.length ? `<div class="console-security">Operator-only · session start and stop are audited; commands and output are not recorded.</div>
       <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
       <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
-      : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the workload and wait until its pod is running.</span></div>`}`, true);
+      : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the app and wait until its pod is running.</span></div>`}`, true);
   if (pods.length) consolePodChanged();
 };
 
@@ -2339,21 +2341,21 @@ async function viewDeploy(pre) {
   const sharedVip = vips.shared || "";
   resetPaint();
   const sections = [
-    {key:"basics", title:"Basics", lead:"Name the workload and its first container.", html:`
+    {key:"basics", title:"Basics", lead:"Name the app and its first container.", html:`
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "low"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
         ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
-      <div class="f"><label>Deployment model ${tip("A new workload gets its own pod and lifecycle. Adding to an existing workload creates a sidecar container; Kubernetes restarts that workload's pods to apply it.")}</label>
-        <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>New workload · independent pod</option>
-          <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>Add container to existing workload · shared pod</option></select></div>
+      <div class="f"><label>Deployment model ${tip("A new app gets its own pod and lifecycle. Adding to an existing app creates a sidecar container; Kubernetes restarts that app's pods to apply it.")}</label>
+        <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>New app · independent pod</option>
+          <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>Add container to existing app · shared pod</option></select></div>
       <div id="d_join_wrap" class="joinbox">
-        <div class="f"><label>Existing workload</label><select id="d_target_workload"></select></div>
+        <div class="f"><label>Existing app</label><select id="d_target_workload"></select></div>
         <div id="d_join_note" class="note"></div>
       </div>
-      <div class="f" id="d_workload_name_wrap"><label>Workload name ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
-      <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the workload name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
+      <div class="f" id="d_workload_name_wrap"><label>App name ${tip("The stable name for this app. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
+      <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the app name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
       <div class="f"><label>Image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
       <div class="row" id="d_add_container"><button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button>
         <button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button>
@@ -2361,7 +2363,7 @@ async function viewDeploy(pre) {
       ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>`)}
       <div class="f2 compact-fields">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
+        <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this app run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
       <div id="d_priority_wrap">${UI.more("Optional settings", deployTierField(DCFG.priority))}</div>
     `},
@@ -2371,7 +2373,7 @@ async function viewDeploy(pre) {
         <div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "d_mem", DCFG.memory, { placeholder: "128", label: "Memory reserved" })}</div>
       </div>
       <div class="f"><label>Memory max (optional) ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", "d_mem_limit", DCFG.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "d_mem" })}</div>
-      <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
+      <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto hosts marked as having that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
@@ -2385,10 +2387,10 @@ async function viewDeploy(pre) {
     `},
     {key:"storage", title:"Storage", lead:"Choose where the first container stores its data.", html:`
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
-      ${UI.more("Choose a storage type", "RWO suits a single workload. RWX allows sharing across nodes. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
+      ${UI.more("Choose a storage type", "RWO suits a single app. RWX allows sharing across hosts. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
     `},
-    {key:"address", title:"Address", lead:"Choose how clients reach the workload.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
+    {key:"address", title:"Address", lead:"Choose how clients reach the app.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
         lanHtml: '<div id="d_lan_box" hidden></div>',
         portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>${monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : "")}`})}
     `},
@@ -2396,16 +2398,16 @@ async function viewDeploy(pre) {
       <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
         <div id="d_extra_containers"></div>
         <button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button></div>
-      <div id="d_extra_join" class="empty small" hidden>Add one container to the existing workload at a time.</div>
+      <div id="d_extra_join" class="empty small" hidden>Add one container to the existing app at a time.</div>
     `},
     {key:"summary", title:"Summary", lead:"Check the configuration, then review capacity and rollout impact.", html:`
       <div id="d_summary" class="deploy-summary"></div>
     `}
   ];
-  paint(`${UI.pageHeader("Deploy a container", "Configure the workload, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
+  paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
       UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
-      {page:true,cancelHtml:UI.button("Cancel", "go('workloads')")})}</div>`);
+      {page:true,cancelHtml:UI.button("Cancel", "go('workloads')", { attrs: 'data-dialog-dismiss="true"' })})}</div>`);
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
   DRENDERING = false; syncSummary();
@@ -2435,7 +2437,7 @@ function updateJoinNote() {
   const target = selectedTarget(), note = $("#d_join_note"); if (!note) return;
   note.innerHTML = target
     ? `<b>Shared lifecycle:</b> Adding this container updates <span class="mono">${esc(target.name)}</span> and may restart all ${target.containers.length} existing containers. Network and placement are shared; review shows the rollout impact.`
-    : `<b>No existing workload is available.</b> Select another namespace or create a new workload.`;
+    : `<b>No existing app is available.</b> Select another namespace or create a new app.`;
 }
 async function refreshDeployOptions() {
   collect();
@@ -2491,11 +2493,11 @@ function syncSummary() {
   const imageNote = $("#d_image_note"); if (imageNote) imageNote.innerHTML = imagePullNote(c.image);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
-    (c.target_mode === "existing" ? "" : row("◈", "Workload / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
+    (c.target_mode === "existing" ? "" : row("◈", "App / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
     (c.additional_containers?.length ? row("▣", "Containers in each pod", [c.container_name, ...c.additional_containers.map(item => item.name)].map(esc).join(", ")) : "") +
     row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
-    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
+    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins app" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
     row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
@@ -2523,9 +2525,9 @@ function deployVolumePicker() {
     podVolumes: () => selectedTarget()?.volumes || [],
     allowPod: () => $("#d_target_mode")?.value === "existing",
     podLabel: "Existing volume in selected pod",
-    podEmpty: "Choose a volume from the selected workload…",
-    podUnavailable: "No reusable volumes in the selected workload",
-    podHelp: "Mounts a volume already defined on the selected workload into this sidecar.",
+    podEmpty: "Choose a volume from the selected app…",
+    podUnavailable: "No reusable volumes in the selected app",
+    podHelp: "Mounts a volume already defined on the selected app into this sidecar.",
     onChange: () => { if (!DRENDERING) syncSummary(); },
   });
 }
@@ -2624,7 +2626,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
     ${UI.more("How this is estimated", `${rollout}
       ${caveats.length ? `<p>Estimate assumptions:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
-      <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
+      <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the app or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
   </div>`;
 }
@@ -2651,8 +2653,8 @@ window.doDeploy = async () => {
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");
-  if (c.target_mode === "new" && !c.workload_name) return deployInvalid("Workload name is required.", "#d_workload_name");
-  if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing workload.", "#d_target_workload");
+  if (c.target_mode === "new" && !c.workload_name) return deployInvalid("App name is required.", "#d_workload_name");
+  if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing app.", "#d_target_workload");
   const extra = c.additional_containers || [];
   if (extra.some(container => !container.name || !container.image)) return deployInvalid("Every container needs a name and image.", "#d_extra_containers input");
   if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return deployInvalid("Container names must be unique in this pod.", "#d_container_name");
@@ -2661,7 +2663,7 @@ window.doDeploy = async () => {
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
-    if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this workload needs a Kubernetes-specific design", "bad");
+    if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this app needs a Kubernetes-specific design", "bad");
     const joining = c.target_mode === "existing";
     if (!plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
     DEPLOY_REVIEW = { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token };
@@ -2673,10 +2675,10 @@ window.doDeploy = async () => {
           <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
       </div>
       ${deployCapacityHtml(plan.capacity)}
-      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "I understand this saves a paused template; capacity must be reviewed again before resuming" : plan.capacity.rollout?.replicas === 0 ? "I understand this changes the stopped workload's pod template without starting it" : `I understand every container in ${esc(c.target_workload)} restarts as its pods roll out, with the downtime or overlap shown above`}</label>` : ""}
-      ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Proceed despite capacity warnings — I accept the placement, memory and provisioning risks</label>` : ""}
+      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again" : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${esc(c.target_workload)} as its pods roll out`}</label>` : ""}
+      ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Deploy it despite the warnings</label>` : ""}
       <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button>`)}</div>`, true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}</div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmDeploy = async () => {
@@ -2706,7 +2708,7 @@ async function vipChoices(networkData) {
   // controller's) and addresses other software owns are never offered: an app
   // sharing the management VIP is how host joining breaks.
   const closed = { ...(net?.platform_addresses || {}), ...(net?.foreign_addresses || {}) };
-  for (const ip of net?.node_ips || []) closed[ip] = "Cluster node address";
+  for (const ip of net?.node_ips || []) closed[ip] = "Cluster host address";
   for (const service of net?.services || []) {
     if (service.exclusive_vip) for (const ip of service.external_ips || []) closed[ip] = service.name;
   }
@@ -2727,7 +2729,7 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
   const mode = value => cfg.network_mode === value ? "selected" : "";
   const vip = value => cfg.vip_mode === value ? "selected" : "";
   return `
-      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
+      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other apps that must own common ports.")}</div>
       <div class="f2"><div class="f"><label>Access mode</label><select id="${prefix}_net"${change}${editing && host ? " disabled" : ""}>
         <option value="loadbalancer" ${mode("loadbalancer")}>LAN access (VIP)</option>
         <option value="internal" ${mode("internal")}>Cluster only</option>
@@ -2742,8 +2744,8 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
       <div class="f" id="${prefix}_vip_wrap"><label>Specific VIP</label>${vipPicker(prefix, cfg.lb_ip || "", vips, editing)}</div>
       ${lanHtml}
       ${UI.more("How addresses work", nodeAddressesOnly()
-        ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
-        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the workload another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
+        ? "Host addresses expose each port on every host. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
+        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the app another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div>${portsHtml}`;
 }
 window.addressStepHtml = addressStepHtml;
@@ -2800,8 +2802,7 @@ function storeCount(value) {
 }
 
 const storeKey = app => `${app.name}|${app.repo}`;
-const storeDate = seconds => seconds ? new Date(seconds * 1000).toLocaleDateString(undefined,
-  { month: "short", day: "numeric", year: "numeric" }) : "";
+const storeDate = seconds => seconds ? fmtDay(seconds) : "";
 
 function storeMetric(app, mode) {
   if (mode === "spotlight" && app.spotlight) return `${icon("clock")} Spotlight · ${esc(app.spotlight.month)}`;
@@ -2828,7 +2829,7 @@ function storeCard(app, mode) {
       <div style="min-width:0"><div class="nm">${esc(app.name)}</div>
         <div class="dim xs store-by">${esc(app.maintainer || "")}${app.official ? ' · <span class="store-official">official</span>' : ""}</div></div></div>
     <div class="row store-tags">${label ? `<span class="tag">${esc(label)}</span>` : ""}
-      ${app.deploy?.app_profile ? `<span class="tag ${app.deploy.app_profile.level === "dependency" ? "warn" : "info"}">${esc(app.deploy.app_profile.label)}</span>` : ""}
+      ${app.deploy?.app_profile ? `<span class="tag${app.deploy.app_profile.level === "dependency" ? " warn" : ""}">${esc(app.deploy.app_profile.label)}</span>` : ""}
       ${app.beta ? '<span class="tag warn">beta</span>' : ""}</div>
     <div class="store-metric">${storeMetric(app, mode)}</div>
     ${mode === "spotlight" && app.spotlight?.reason ? `<div class="store-why">“${esc(app.spotlight.reason)}”</div>` : ""}
