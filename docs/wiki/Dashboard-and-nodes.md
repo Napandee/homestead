@@ -118,6 +118,34 @@ even if the node was never seen as down. The host's own uptime comes from the
 [node probe](#the-node-probe); without the probe, the card shows how long the
 node has been Ready.
 
+#### Planned maintenance
+
+Downtime Homestead causes itself is recorded as **maintenance**, apart from
+outages:
+
+- a **Reboot** or **Shut down** from Host actions, from the moment power is
+  sent (the cordon and drain before it are not counted: the host is still up);
+- an **OS update**'s restart, which goes through the same steps;
+- a planned **cluster shutdown**, for every host, until the cluster is back;
+- time a Harvester host spends in **Harvester's maintenance mode**.
+
+The node card shows the share of the last 30 days outside maintenance and,
+when there was some, how much ("100% · 6m maintenance"), so a 100% never
+hides it; its tip gives the share the host was Ready. A node's page shows both
+shares for each window, paints a day with maintenance striped grey, and its
+log says "maintenance: OS update" with how long it took. A reboot inside
+maintenance shows as **rebooted (planned)**; one Homestead didn't cause shows
+as **unexpected reboot**. While a host is in maintenance, its "not ready"
+alert waits.
+
+Maintenance ends when the host is back on a new boot. If it isn't back within
+the job's own limit (ten minutes for a reboot), the rest is an outage and the
+alert is raised straight away. A host still not back half an hour after
+Homestead is running again after a cluster shutdown counts as down from then
+on, and an open maintenance whose job is gone (after restoring a backup, say)
+ends six hours after it started. Nothing is recorded for downtime before this
+was added, and the share the host was Ready is never changed.
+
 From a node you can:
 
 - **Cordon** it (no new pods) and **drain** it (move what runs there elsewhere),
