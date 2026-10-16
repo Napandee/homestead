@@ -137,22 +137,33 @@
   const demoUptime = (() => {
     const now = Math.floor(Date.now() / 1000), today = now - now % 86400;
     const plan = {
-      "harvester-node1": { outages: [], reboots: [now - nodes[0].uptime_s] },
+      // Its last boot was an OS update: six minutes of maintenance, the reboot inside it (#535).
+      "harvester-node1": { outages: [{ back: nodes[0].uptime_s + 240, down: 360, exact: true, maintenance: "OS update" }],
+                           reboots: [{ t: now - nodes[0].uptime_s, planned: true }],
+                           maintenance: [{ back: nodes[0].uptime_s + 240, length: 360, reason: "OS update" }] },
       "harvester-node2": { outages: [{ back: 9 * 86400 + 2 * 3600, down: 780, exact: true }, { back: 52 * 86400, down: 3 * 3600, exact: false }],
-                           reboots: [now - nodes[1].uptime_s] },
+                           reboots: [{ t: now - nodes[1].uptime_s, planned: false }] },
       "harvester-node3": { outages: [{ back: 2 * 86400 + 7 * 3600 + 1500, down: 1500, exact: true }, { back: 23 * 86400, down: 600, exact: true }],
-                           reboots: [now - nodes[2].uptime_s, now - 23 * 86400 + 600] },
+                           reboots: [{ t: now - nodes[2].uptime_s, planned: false }, { t: now - 23 * 86400 + 600, planned: false }] },
     };
     const out = {};
     for (const [name, p] of Object.entries(plan)) {
-      const outages = p.outages.map(o => ({ start: now - o.back, end: now - o.back + o.down, down_s: o.down, exact: o.exact, ongoing: false }))
-        .sort((a, b) => a.start - b.start);
-      const downIn = (from, to) => outages.reduce((s, o) => s + Math.max(0, Math.min(to, o.end) - Math.max(from, o.start)), 0);
+      const outages = p.outages.map(o => ({ start: now - o.back, end: now - o.back + o.down, down_s: o.down, exact: o.exact, ongoing: false,
+        ...(o.maintenance ? { maintenance: o.maintenance } : {}) })).sort((a, b) => a.start - b.start);
+      const maintenance = (p.maintenance || []).map(m => ({ start: now - m.back, end: now - m.back + m.length, reason: m.reason, job: "demo", ongoing: false }));
+      const inside = (from, to) => maintenance.reduce((s, m) => s + Math.max(0, Math.min(to, m.end) - Math.max(from, m.start)), 0);
+      const downIn = (from, to, plain) => outages.filter(o => !plain || !o.maintenance)
+        .reduce((s, o) => s + Math.max(0, Math.min(to, o.end) - Math.max(from, o.start)), 0);
       const pct = (from, to) => Math.round(1e5 * (1 - downIn(from, to) / (to - from))) / 1e3;
+      const outside = (from, to) => Math.round(1e5 * (1 - downIn(from, to, true) / (to - from - inside(from, to)))) / 1e3;
+      const spans = { "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400 };
+      const each = f => Object.fromEntries(Object.entries(spans).map(([k, span]) => [k, f(now - span, now)]));
       out[name] = {
-        windows: { "24h": pct(now - 86400, now), "7d": pct(now - 7 * 86400, now), "30d": pct(now - 30 * 86400, now), "90d": pct(now - 90 * 86400, now) },
-        days: Array.from({ length: 90 }, (_, i) => { const day = today - (89 - i) * 86400; return { day, up: pct(day, Math.min(now, day + 86400)) }; }),
-        outages, reboots: p.reboots.sort((a, b) => a - b), since: now - 90 * 86400,
+        windows: each(pct), windows_excluding_maintenance: each(outside), maintenance_s: each(inside),
+        days: Array.from({ length: 90 }, (_, i) => { const day = today - (89 - i) * 86400;
+          return { day, up: pct(day, Math.min(now, day + 86400)), up_excluding_maintenance: outside(day, Math.min(now, day + 86400)),
+                   maintenance: inside(day, day + 86400) > 0 }; }),
+        outages, reboots: p.reboots.sort((a, b) => a.t - b.t), maintenance, since: now - 90 * 86400,
       };
     }
     return { nodes: out, step: 300 };
