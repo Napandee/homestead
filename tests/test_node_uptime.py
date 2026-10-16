@@ -12,7 +12,7 @@ def overview(ready, boot="boot-1"):
                        "boot_id": boot}]}
 
 
-class NodeUptimeTests(unittest.TestCase):
+class UptimeCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = H.DATA_DIR
@@ -30,6 +30,8 @@ class NodeUptimeTests(unittest.TestCase):
             H.record(overview(not (down_between and down_between[0] <= i < down_between[1]), boot), now=t)
         return self.start + minutes * 60
 
+
+class NodeUptimeTests(UptimeCase):
     def test_an_outage_is_found_to_the_five_minutes(self):
         now = self.run_for(180, down_between=(60, 90))
         node = H.uptime(now)["nodes"]["node1"]
@@ -54,7 +56,7 @@ class NodeUptimeTests(unittest.TestCase):
         self.assertEqual(90, len(node["days"]))
 
 
-class MaintenanceTests(NodeUptimeTests):
+class MaintenanceTests(UptimeCase):
     """Downtime Homestead caused, recorded apart from the samples (#535)."""
 
     def at(self, minute):
@@ -183,5 +185,48 @@ class MaintenanceTests(NodeUptimeTests):
         H.maintenance_close("harvester:node1:x", now=self.at(90))
         node = H.uptime(self.run_for(180, down_between=(60, 90)))["nodes"]["node1"]
         self.assertEqual({"OS update, Harvester maintenance"}, {o["maintenance"] for o in node["outages"] if o.get("maintenance")})
+
+
+class HarvesterMaintenanceTests(UptimeCase):
+    """Harvester's own maintenance mode counts as maintenance (#535)."""
+
+    def test_harvester_maintenance_reads_the_annotation_and_the_condition(self):
+        import homestead_nodes as NODES
+        def node(annotations=None, conditions=()):
+            return {"metadata": {"annotations": annotations or {}}, "status": {"conditions": list(conditions)}}
+        # Harvester up to v1.6: an annotation; later releases: a node condition.
+        for value in ("running", "completed"):
+            self.assertTrue(NODES.harvester_maintenance(node({"harvesterhci.io/maintain-status": value})))
+        self.assertFalse(NODES.harvester_maintenance(node({"harvesterhci.io/maintain-status": "other"})))
+        self.assertFalse(NODES.harvester_maintenance(node()))
+        self.assertTrue(NODES.harvester_maintenance(node(conditions=[{"type": "MaintenanceMode", "status": "True", "reason": "Draining"}])))
+        self.assertFalse(NODES.harvester_maintenance(node(conditions=[{"type": "MaintenanceMode", "status": "False", "reason": "Error"}])))
+
+    def test_harvester_mode_opens_and_closes_with_the_samples(self):
+        def sample(minute, maintenance):
+            o = overview(True)
+            o["nodes"][0]["maintenance"] = maintenance
+            H.record(o, now=self.start + minute * 60)
+        sample(0, False)
+        sample(5, True)
+        sample(10, True)
+        sample(15, False)
+        events = H.maintenance_events("node1")
+        self.assertEqual([("Harvester maintenance", f"harvester:node1:{self.start + 300}", self.start + 300, self.start + 900, "ended")],
+                         [(e["reason"], e["job"], e["start"], e["end"], e["outcome"]) for e in events])
+
+    def test_a_harvester_host_that_disappears_is_closed_when_last_seen(self):
+        def sample(minute, nodes):
+            H.record({"nodes": nodes}, now=self.start + minute * 60)
+        host = lambda m: [{"name": "node1", "status": "Ready", "boot_id": "b1", "maintenance": m}]
+        sample(0, host(True))
+        sample(5, host(True))
+        sample(10, [])
+        self.assertIsNotNone(H.maintenance_open_for("node1", now=self.start + 600), "gone from one sample: still open")
+        sample(5 + H.MISSING_CLOSE // 60 + 5, [])
+        event = H.maintenance_events("node1")[0]
+        self.assertEqual((self.start + 300, "ended"), (event["end"], event["outcome"]), "closed when it was last seen")
+
+
 if __name__ == "__main__":
     unittest.main()

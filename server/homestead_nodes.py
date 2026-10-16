@@ -323,6 +323,17 @@ def _owner_name(meta):
     return name
 
 
+def harvester_maintenance(node):
+    """Whether Harvester has this host in its maintenance mode (#535): up to
+    Harvester v1.6 an annotation, running while entering and completed once
+    in; later releases a MaintenanceMode node condition, True throughout."""
+    annotations = ((node or {}).get("metadata") or {}).get("annotations") or {}
+    if annotations.get("harvesterhci.io/maintain-status") in ("running", "completed"):
+        return True
+    return any(c.get("type") == "MaintenanceMode" and c.get("status") == "True"
+               for c in ((node or {}).get("status") or {}).get("conditions") or [])
+
+
 def get_nodes():
     nodes = kget("/api/v1/nodes")
     try:
@@ -382,6 +393,7 @@ def get_nodes():
         out.append({
             "name": name,
             "uid": n["metadata"].get("uid"),
+            "maintenance": harvester_maintenance(n),
             "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
             "roles": roles or ["worker"],
             "cpu_pct": round(ucpu / ccpu * 100, 1) if ccpu else 0,

@@ -166,7 +166,8 @@ def record(overview, now=None):
                 events.append({"t": now, "node": node["name"], "kind": "reboot"})
                 rebooted.add(node["name"])
             boots[node["name"]] = boot
-        maintenance = _cluster_returns(_expire(data["maintenance"], now), rebooted, now)
+        maintenance = _harvester(_cluster_returns(_expire(data["maintenance"], now), rebooted, now),
+                                 overview.get("nodes") or [], now)
         data = {"fine": [s for s in fine if s["t"] > now - FINE_KEEP],
                 "coarse": [c for c in coarse if c["t"] > now - COARSE_KEEP],
                 "boots": boots, "events": [e for e in events if e["t"] > now - COARSE_KEEP][-500:],
@@ -210,6 +211,31 @@ def _cluster_returns(events, rebooted, now):
             event.setdefault("resumed", now)
             if now - event["resumed"] > RETURN_GRACE:
                 event.update(end=now, outcome="limit")
+    return events
+
+
+# A host gone from the samples (its node deleted) while Harvester had it in
+# maintenance: its entry ends where it was last seen once it has been gone this long.
+MISSING_CLOSE = 30 * 60
+
+
+def _harvester(events, nodes, now):
+    """Harvester's maintenance mode, as the samples see it: opened on the first
+    that shows a host in it, closed on the first that doesn't."""
+    inside = {n["name"] for n in nodes if n.get("maintenance")}
+    present = {n["name"] for n in nodes}
+    open_for = {e["node"]: e for e in events if e["end"] is None and e["reason"] == "Harvester maintenance"}
+    for name in inside - set(open_for):
+        job = f"harvester:{name}:{now}"
+        events.append({"id": job, "node": name, "start": now, "end": None, "reason": "Harvester maintenance",
+                       "job": job, "outcome": None, "seen": now})
+    for name, event in open_for.items():
+        if name in inside:
+            event["seen"] = now
+        elif name in present:
+            event.update(end=now, outcome="ended")
+        elif now - event.get("seen", event["start"]) > MISSING_CLOSE:
+            event.update(end=max(event["start"], event.get("seen", event["start"])), outcome="ended")
     return events
 
 
