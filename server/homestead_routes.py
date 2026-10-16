@@ -48,6 +48,7 @@ MODULES = (
     "homestead_capacity",
     "homestead_changes",
     "homestead_cluster",
+    "homestead_cluster_server",
     "homestead_cluster_shutdown",
     "homestead_components",
     "homestead_config_backup",

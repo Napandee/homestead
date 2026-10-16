@@ -29,7 +29,6 @@ import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_volume_usage as VOLUME_USAGE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_allocation_probe as ALLOCATION_PROBE
-import homestead_allocation_capacity as ALLOCATION_CAPACITY
 import homestead_allocation_evidence as ALLOCATION_EVIDENCE
 import homestead_rename as RENAME
 import homestead_copy_job as COPY_JOB
@@ -122,6 +121,13 @@ from homestead_overview_server import (
     change_undo_plan, set_uptime_setting, set_vm_monitoring,
 )
 OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in OVERVIEW_ROUTES.VALUES})
+import homestead_cluster_server as CLUSTER_ROUTES
+from homestead_cluster_server import (
+    _autoupdate_loop, _baseline_loop, _detached_copies_loop, _hardware_loop, _host_console_loop,
+    _housekeeping_loop, _os_updates_loop, _power_jobs_loop, _upgrade_node_probe, allocation_probe_capacity,
+    cluster_shutdown, image_update_capacity_plan, pod_container_rows, preview_image_update, set_update_mode,
+)
+CLUSTER_ROUTES.bind_routes(_late(*CLUSTER_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in CLUSTER_ROUTES.VALUES})
 
 
 def _heartbeats():
@@ -489,21 +495,6 @@ def app_settings_payload():
 APP_SETTINGS.bind(lambda: app_settings_payload(), lambda value: save_app_settings(value))
 
 
-# ---------------------------------------------------------------- collectors
-def _hardware_loop():
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    NODES.reconcile_hardware()
-                    PORTS.observe(NODES.node_temps())
-                beat("hardware", 30, leader_only=True)
-            except Exception as error:
-                beat("hardware", 30, error, leader_only=True)
-                print(f"hardware: {str(error)[:160]}", flush=True)
-        time.sleep(30)
-
-
 def _unifi_loop():
     """Hourly on the leader, while UniFi is connected: its clients and names
     as they are now, rather than as they were when someone last pressed Sync."""
@@ -529,20 +520,6 @@ def logsearch_read(ns, pod, container, since, limit):
                                  headers={"Authorization": f"Bearer {TOKEN}"})
     with urllib.request.urlopen(req, context=CTX, timeout=20) as r:
         return r.read(int(limit) + 1).decode("utf-8", "replace")
-
-
-def _housekeeping_loop():
-    """Once a day on the leader, ten minutes after start: keep the data volume in bounds."""
-    time.sleep(600)
-    while True:
-        if LEADER.is_leader():
-            try:
-                HOUSEKEEPING.tidy_unused()
-                beat("housekeeping", 86400, leader_only=True)
-            except Exception as error:
-                beat("housekeeping", 86400, error, leader_only=True)
-                print(f"housekeeping: {str(error)[:160]}", flush=True)
-        time.sleep(86400)
 
 
 def set_schedule(b):
@@ -631,48 +608,6 @@ def schedule_act(item, action):
     except API_V1.ApiError as error:
         raise ValueError(error.message) from None
     return f"starting {name}"
-
-
-def pod_container_rows(pod):
-    """Return an explicit, UI-safe view of init and app containers in a pod."""
-    spec = pod.get("spec", {}) or {}
-    status = pod.get("status", {}) or {}
-    groups = [
-        ("init", spec.get("initContainers", []) or [], status.get("initContainerStatuses", []) or []),
-        ("app", spec.get("containers", []) or [], status.get("containerStatuses", []) or []),
-    ]
-    rows = []
-    for kind, containers, statuses in groups:
-        by_name = {x.get("name", ""): x for x in statuses}
-        for container in containers:
-            name = container.get("name", "")
-            cs = by_name.get(name, {})
-            state_obj = cs.get("state", {}) or {}
-            waiting = state_obj.get("waiting") or {}
-            terminated = state_obj.get("terminated") or {}
-            if waiting:
-                state = waiting.get("reason") or "waiting"
-                message = waiting.get("message") or ""
-            elif terminated:
-                state = terminated.get("reason") or "terminated"
-                message = terminated.get("message") or ""
-            elif state_obj.get("running"):
-                state, message = "running", ""
-            else:
-                state, message = "pending", ""
-            rows.append({
-                "name": name,
-                "kind": kind,
-                "image": container.get("image", ""),
-                "ready": bool(cs.get("ready", False)),
-                "state": state,
-                # Why, in a sentence, where it is a pull that failed; the
-                # whole message beside it - its cause is at the end.
-                "message": (UPDATES.explain_pull(message) or str(message))[:220],
-                "detail": str(message)[:1200],
-                "restarts": int(cs.get("restartCount", 0) or 0),
-            })
-    return rows
 
 
 OWN_GROUP = "Homestead"
@@ -1213,65 +1148,6 @@ def reviewed_import(body):
     return IMPORT_JOB.dispatch(body, prepared, context, kget, ksend, OPS, create_pvc, copy_admission)
 
 
-def image_update_capacity_plan(body, action):
-    """Resolve immutable images and review the whole rollout without writes."""
-    if action not in ("update", "rollback"):
-        raise ValueError("image action must be update or rollback")
-    ns = _dns_name(body.get("ns"), "namespace")
-    name = _dns_name(body.get("name"), "workload name")
-    guard_managed_smb(ns, name)
-    if action == "update":
-        enforce_update_policy(body)
-    prepared = (UPDATES.prepare_update if action == "update" else UPDATES.prepare_rollback)(ns, name)
-    current, proposed = prepared["current"], prepared["proposed"]
-    if current["spec"].get("paused"):
-        raise ValueError("resume this paused workload before reviewing an image rollout")
-    context = {"action": "image-" + action, **rollout_review_context(current),
-               "proposed_spec": proposed["spec"], "before": prepared["before"],
-               "annotations": proposed["metadata"].get("annotations", {})}
-    cache = {f"/apis/apps/v1/namespaces/{ns}/deployments/{name}": current}
-    def read(path):
-        if path not in cache:
-            cache[path] = kget(path)
-        return copy.deepcopy(cache[path])
-    def planner(*args, **kwargs):
-        return PLACE.manifest_plan(*args, **kwargs, read=read)
-    capacity = ROLLOUT_CAPACITY.plan(
-        current, proposed, ns, read, PLACE.get_nodes, planner,
-        get_app_settings()["thresholds"]["memory"]["critical"])
-    # Every image change needs a fresh review, even when it comfortably fits.
-    capacity["requires_confirmation"] = True
-    if int(current["spec"].get("replicas", 1) or 0) == 0:
-        capacity["warnings"].append("Stopped workloads have no current running image. Recovery uses a recorded digest where known; otherwise the old template tag is resolved now, not claimed to be a previously running image.")
-    return prepared, capacity, context
-
-
-def release_tag(dep, container_name, image=""):
-    """The release a container follows: the tag Homestead tracks for it, else
-    the tag in its image. An update pins the image to its digest, which drops
-    the tag, so the tracked one is what says 2.8.215 rather than sha256:..."""
-    tracked = UPDATES._annotation_json(dep, UPDATES.TRACKED).get(container_name, "")
-    for ref in (tracked, image):
-        tail = str(ref or "").split("@", 1)[0].rsplit("/", 1)[-1]
-        if ":" in tail:
-            return tail.rsplit(":", 1)[1]
-    return ""
-
-
-def preview_image_update(body):
-    action = body.get("action", "update")
-    prepared, capacity, context = image_update_capacity_plan(body, action)
-    old = {c["name"]: c.get("image", "") for c in UPDATES._pod_containers(prepared["current"])}
-    images = [{"container": c["name"], "before": old.get(c["name"], ""), "after": c.get("image", ""),
-               "before_tag": release_tag(prepared["current"], c["name"], old.get(c["name"], "")),
-               "after_tag": release_tag(prepared["proposed"], c["name"], c.get("image", "")),
-               "rollback": prepared["before"].get(c["name"], "")}
-              for c in UPDATES._pod_containers(prepared["proposed"])
-              if c.get("image", "") != old.get(c["name"], "")]
-    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context),
-            "images": images, "action": action}
-
-
 def reviewed_image_update(body, action):
     if body.get("action", "update") != action:
         raise ValueError("image action changed; review again")
@@ -1810,35 +1686,6 @@ def homestead_running_on():
 # that very replica; the job then says which pod to look for, and the leader
 # carries it on from another replica (homestead_power_jobs).
 POD_NAME = os.environ.get("HOSTNAME", "")
-def _power_jobs_loop():
-    """The leader looks after host power jobs itself: a job's resolver runs
-    when someone lists jobs, and that may be another replica, or nobody."""
-    while True:
-        time.sleep(15)
-        try:
-            if not LEADER.is_leader():
-                continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
-                      and i.get("status") not in OPS.TERMINAL]
-            if active:
-                OPS.list_operations()   # runs each job's resolver, which resumes it if needed
-        except Exception as error:
-            print(f"host power jobs not checked: {str(error)[:160]}", flush=True)
-
-
-def _detached_copies_loop():
-    """Offline rebuilding on by default, and Homestead's stand-in for it on
-    Longhorn without one; the leader only."""
-    while True:
-        time.sleep(60)
-        try:
-            if LEADER.is_leader() and (cluster_shutdown().state() or {}).get("phase") in (None, "released"):
-                LHREBUILD.tick()
-                _cache.pop("lhrebuild", None)
-        except Exception as error:
-            print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
-
-
 def operation_item(operation_id):
     """A job-tray item as it stands now, or None."""
     return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
@@ -2124,14 +1971,6 @@ import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
 PROBE.bind(kget, ksend, DEFAULT_NS, AUTH.smart_signing_key, version=HOMESTEAD_VERSION)
-def allocation_probe_capacity(obj, template):
-    listing = kget("/api/v1/pods")
-    if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
-        raise ValueError("Complete workload inventory is unavailable; nothing was changed")
-    return ALLOCATION_CAPACITY.plan(obj, template, PLACE.get_nodes(), listing["items"],
-                                    get_app_settings()["thresholds"]["memory"]["critical"])
-
-
 ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity, version=HOMESTEAD_VERSION,
                       current_hosts=lambda: PLACE.get_nodes(), inspect=ALLOCATION_EVIDENCE.inspect)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
@@ -2669,36 +2508,6 @@ def autoupdate_tick():
     return chosen
 
 
-def _autoupdate_loop():
-    while True:
-        if LEADER.is_leader():
-            try:
-                autoupdate_tick()
-                beat("auto-updates", 60, leader_only=True)
-            except Exception as error:
-                beat("auto-updates", 60, error, leader_only=True)
-                print(f"auto-updates: {str(error)[:160]}", flush=True)
-        time.sleep(60)
-
-
-def set_update_mode(b):
-    """Whether an app updates itself inside the maintenance window. An annotation, so nothing restarts."""
-    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-    guard_managed_smb(ns, name)
-    chosen = str(b.get("mode") or "")
-    if chosen not in ("auto", "manual"):
-        raise ValueError("choose auto or manual")
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    if chosen == "auto" and UPDATES.managed_by(dep):
-        raise ValueError(UPDATES.managed_message(ns, name, UPDATES.managed_by(dep)))
-    if chosen == "auto" and is_self(ns, name):
-        raise ValueError("Homestead updates itself from Settings › Updates")
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-          {"metadata": {"annotations": {NAMES.key(AUTOUPDATE.MODE): "auto" if chosen == "auto" else None}}},
-          ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
-    return {"ok": True, "mode": chosen,
-            "detail": f"{name} updates itself in the maintenance window" if chosen == "auto" else f"{name} waits for you to update it"}
 DISKS.setup_module = DISK_SETUP
 DISK_SETUP.longhorn_block_paths = DISKS.longhorn_block_paths
 PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
@@ -2827,29 +2636,6 @@ def _vip_loop():
         time.sleep(VIP_QUICK)
 
 
-def _baseline_loop():
-    """What the installer asked Homestead to put under it - kube-vip and
-    Multus on k3s and RKE2 - installed by the leader once the cluster can
-    say what it has (homestead_baseline.py). Asked for once: nothing to do
-    after that, so it checks rarely."""
-    time.sleep(20)
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    for row in BASELINE.tick():
-                        if row["ok"] and row.get("job"):
-                            BASELINE.operation(row, "Install")
-                        with _lock:
-                            for key in ("helm", "platform", "baseline", "components"):
-                                _cache.pop(key, None)
-                beat("baseline", 300, leader_only=True)
-            except Exception as error:
-                beat("baseline", 300, error, leader_only=True)
-                print(f"platform: {str(error)[:160]}", flush=True)
-        time.sleep(60)
-
-
 def weekly_trim():
     """Homestead's weekly trim job kept in place (homestead_longhorn), made
     once: remembered here, so one someone deleted is not made again."""
@@ -2917,22 +2703,6 @@ def _files_loop():
             except Exception as error:
                 beat("volume-files", 30, error, leader_only=True)
         time.sleep(15)
-
-
-def _host_console_loop():
-    """On the leader, the host console add-on brought to its setting, a host
-    or two at a time. Its own loop: each host can take minutes, and the
-    host fixes (the root filesystem's guard among them) do not wait for it."""
-    time.sleep(90)
-    while True:
-        if LEADER.is_leader():
-            try:
-                for node, change in HOST_CONSOLE.tick():
-                    print(f"platform: {node}: {change}", flush=True)
-                beat("host-console", 600, leader_only=True)
-            except Exception as error:
-                beat("host-console", 600, error, leader_only=True)
-        time.sleep(600)
 
 
 def _longhorn_copies_loop():
@@ -3010,26 +2780,6 @@ def _host_fix_loop():
                 beat("host-fixes", 600, error, leader_only=True)
                 print(f"platform: {str(error)[:200]}", flush=True)
         time.sleep(600)
-
-
-def _os_updates_loop():
-    """OS updates across the hosts (homestead_os_rollout.py), on the leader:
-    Ubuntu's automatic updates held off or let go as the settings say, the
-    weekly window opened, and a running update moved on a step. Its state is
-    on disk, so a new leader carries on where the last one was."""
-    time.sleep(45)
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    moved = OS_ROLLOUT.tick()
-                if moved:
-                    print(f"OS updates: {moved.get('message', '')[:200]}", flush=True)
-                beat("os-updates", 20, leader_only=True)
-            except Exception as error:
-                beat("os-updates", 20, error, leader_only=True)
-                print(f"OS updates: {str(error)[:200]}", flush=True)
-        time.sleep(20)
 
 
 def _history_loop():
@@ -3244,16 +2994,6 @@ def abandon_self_data_preparation(body):
     if not _self_data_boot_pending:
         threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()
     return {"ok": True, "message": "Preparation abandoned. Both volumes are retained."}
-
-
-def cluster_shutdown(review=False):
-    image = _self_data_helper_image(kget, SELF.NS)[1] if review else ""
-    def busy():
-        with OPS._lock:
-            return ["Finish or recover job: " + j["title"] for j in SELF_DATA_PREPARE.blocking_jobs(OPS)
-                    if j["kind"] != "cluster-shutdown"]
-    return CLUSTER_SHUTDOWN.Shutdown(kget, lambda *a, **kw: _ksend(*a, **kw, shutdown_bypass=True), SELF.NS, SELF.POD, image,
-                                      enabled=LC.NODE_POWER_ENABLED, busy=busy)
 
 
 CLUSTER_SHUTDOWN.bind(cluster_shutdown)
@@ -3970,21 +3710,6 @@ class H(HTTP.LimitedHandler):
                 ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; "
                                f"SameSite=Strict{secure}; Max-Age={age}"))
 
-    def _move(self, call):
-        """Run a move step, answering a refusal with 409 rather than 500.
-
-        The Homestead on the other end waits out a 5xx and stops on a 4xx, so
-        "no, it is still running" has to arrive as the second kind.
-        """
-        try:
-            return self._send(200, call())
-        except MOVE_SOURCE.PendingRecovery as error:
-            return self._send(503, {"error": str(error)})
-        except (ValueError, PermissionError) as error:
-            return self._send(409, {"error": str(error)})
-        except MOVE.Unreachable as error:
-            return self._send(502, {"error": str(error)})
-
     def _who(self):
         if FLEET.signed(self.headers):
             return self._fleet_identity()
@@ -4470,13 +4195,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()
                 return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
-            # What this cluster offers another one. Read-only.
-            if p == "/api/onboard/guide":
-                return self._move(ONBOARD.guide)
-            if p == "/api/cluster/cleanup":
-                return self._move(ONBOARD.cleanup_report)
-            if p == "/api/cluster/removal":
-                return self._move(lambda: ONBOARD.removal_plan((q.get("node") or [""])[0]))
             if p == "/api/snapshot-files/plan":
                 return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
@@ -4676,13 +4394,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
                 return self._send(200, SNAPSHOT_FILES.close(b.get("namespace"), b.get("session")))
-            if p == "/api/cluster/remove-node":
-                return self._move(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")),
-                                                              bool(b.get("gone"))))
-            if p == "/api/cluster/cleanup/run":
-                return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
-            if p == "/api/cluster/shutdown":
-                return self._send(202, cluster_shutdown(review=True).start(b, OPS))
             if p == "/api/self/samba":
                 return self._send(200, SHARE_SERVERS.set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/self/nfs":
@@ -4751,35 +4462,6 @@ def _reconcile_permissions():
             print(f"moved {adopted['changed']} objects' keys to {NAMES.DOMAIN}", flush=True)
     except Exception as error:
         print(f"old keys: not moved ({str(error)[:120]})", flush=True)
-
-
-def _upgrade_node_probe():
-    """Finish the upgrade the image cannot finish by itself.
-
-    Deliberately not fatal and deliberately quiet: a cluster where the probe
-    is absent, or where Homestead lacks the rights to touch it, is a cluster
-    that simply has no probe - not a reason to refuse to start.
-    """
-    try:
-        with self_data_activity():
-            result = PROBE.reconcile(HOMESTEAD_VERSION)
-    except Exception as error:
-        print(f"node probe: not updated ({str(error)[:120]})", flush=True)
-        return
-    if result["state"] in ("updated", "error"):
-        print(f"node probe: {result['detail']}", flush=True)
-    try:
-        for attempt in range(7):
-            with self_data_activity():
-                result = ALLOCATION_PROBE.reconcile(HOMESTEAD_VERSION)
-            if result["state"] != "waiting" or attempt == 6:
-                break
-            # Background read-only waiting, never retry an uncertain PATCH.
-            time.sleep(10)
-        if result["state"] in ("updated", "review", "waiting"):
-            print(f"VM placement checks: {result['detail']}", flush=True)
-    except Exception:
-        print("VM placement helper not updated; review its settings in Cluster > Add-ons", flush=True)
 
 
 def _samba_loop():

@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 4938
+MAX_LINES = 4620
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -41,9 +41,6 @@ INLINE_ROUTES = (
     ("GET", "/api/self/data/prepare", "to move in Part 7"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
     ("GET", "/api/mqtt/preview", "to move in Part 3"),
-    ("GET", "/api/onboard/guide", "to move in Part 2"),
-    ("GET", "/api/cluster/cleanup", "to move in Part 2"),
-    ("GET", "/api/cluster/removal", "to move in Part 2"),
     ("GET", "/api/snapshot-files/plan", "to move in Part 4"),
     ("GET", "/api/snapshot-files/status", "to move in Part 4"),
     ("GET", "/api/snapshot-files/list", "to move in Part 4"),
@@ -81,9 +78,6 @@ INLINE_ROUTES = (
     ("POST", "/api/helm/uninstall", "to move in Part 6"),
     ("POST", "/api/snapshot-files/start", "to move in Part 4"),
     ("POST", "/api/snapshot-files/close", "to move in Part 4"),
-    ("POST", "/api/cluster/remove-node", "to move in Part 2"),
-    ("POST", "/api/cluster/cleanup/run", "to move in Part 2"),
-    ("POST", "/api/cluster/shutdown", "to move in Part 2"),
     ("POST", "/api/self/samba", "to move in Part 4"),
     ("POST", "/api/self/nfs", "to move in Part 4"),
     ("POST", "/api/addons/smb/remove", "to move in Part 4"),
