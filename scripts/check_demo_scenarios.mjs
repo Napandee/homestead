@@ -55,13 +55,15 @@ try {
         assert.equal(await page.locator(selector).evaluateAll(elements => elements.every(el =>
           el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== "ellipsis")), true, `${selector} names remain readable at ${width}px`);
       }
-      if (width > 560) assert.equal(await page.locator(".ipam-row").first().evaluate(row =>
+      // Columns or the short cards follow the table's own box, not the screen (#559).
+      const cards = await page.locator(".ipam-row").first().evaluate(row => getComputedStyle(row).display === "grid");
+      if (!cards) assert.equal(await page.locator(".ipam-row").first().evaluate(row =>
         row.querySelector(".ip-name").offsetWidth > row.querySelector(".ip-addr").offsetWidth), true);
       else assert.equal(await page.locator(".ipam-row").evaluateAll(rows => rows.every(row => {
         const name = row.querySelector(".ip-name").getBoundingClientRect();
         const seen = row.querySelector(".ip-seen").getBoundingClientRect();
         return name.right <= seen.left;
-      })), true, "names do not overlap status badges on phones");
+      })), true, "names do not overlap status badges in the short cards");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await page.screenshot({ path: `release-assets/scenarios/ipam-${width}.png`, fullPage: true });
     }

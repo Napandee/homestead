@@ -1670,25 +1670,10 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .ipam-stats .ctitle{font-size:12px}
   .ipam-stats .bignum{font-size:24px;margin-top:4px}
   .ipam-stats .csub{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
-    grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
-  .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
-  .tbl.stack.ipam-table tr.ipam-row>td::before{content:none}
-  .tbl.stack.ipam-table tr.ipam-row>td:empty{display:none}
-  .tbl.stack.ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
+  /* The cards themselves are the container rule below; a phone only gets
+     bigger ticks and smaller tags. */
   .ipam-table .ip-pick input{width:20px;height:20px}
-  .ipam-table .ip-addr{grid-area:addr;font-size:14px;font-weight:650}
-  .ipam-table .ip-kind{grid-area:kind;justify-self:end}
-  .tbl.stack.ipam-table .ip-name{grid-area:name}
-  .ipam-table .ip-name .ipam-line{white-space:normal;overflow:visible}
-  .ipam-table .ip-seen{grid-area:seen;justify-self:end}
-  .ipam-table .ip-mac{grid-area:mac;color:var(--mut)}
-  .ipam-table .ip-notes{grid-area:notes;max-width:100%;overflow:hidden}
-  .ipam-table .ip-notes .ipam-line{flex-wrap:nowrap;gap:4px;min-width:0;max-width:100%;width:100%}
-  .ipam-table .ip-notes .ipam-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--mut)}
   .ipam-table .ip-seen .tag,.ipam-table .ip-kind .tag{font-size:10.5px;padding:2px 7px}
-  .tbl.stack.ipam-table tbody.ipam-gap tr{padding:3px 12px}
-  .tbl.stack.ipam-table tbody.ipam-gap td{padding:0}
   .ipam-bulk select,.ipam-bulk input{flex:1 1 40%;min-width:0}
 }
 
@@ -1985,7 +1970,7 @@ div.ipam-line.dim{display:block}
 @media(min-width:561px){
   .ipam-table .ip-addr{width:1%;padding-right:8px}
   .ipam-table .ip-addr>.dim{display:block}
-  .ipam-table .ipam-name{min-width:clamp(160px,24vw,340px)}
+  .ipam-table .ipam-name{min-width:180px}
 }
 /* Notes take what width is left: no width of their own, all of the cell's. */
 .ipam-table td.ipam-notes{width:100%}
@@ -2002,6 +1987,43 @@ div.ipam-line.dim{display:block}
   .ipam-gap tr,.ipam-gap td{display:block}
   .ipam-gap td::before{display:none}
   .ipam-name,.ipam-notes{max-width:none}
+}
+/* IP addresses fit their box (#559). Beside the sidebar and the Networking
+   rail the box can be under 800 px on a desktop, too narrow for seven
+   columns: there each address is the phone's short card. Wider, Seen's chips
+   wrap and the name keeps 180 px, so the table never scrolls sideways. */
+.ipam-box{container:ipam/inline-size}
+.ipam-all-cards{display:none}
+.ipam-table td.ip-seen{white-space:normal}
+.ipam-table .ip-seen .pill{white-space:nowrap;margin:1px 0}
+@container ipam (max-width:800px){
+  /* The cards keep what the hidden headings gave: sorting and Select all. */
+  .ipam-box>.sortbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;font-size:12px;color:var(--mut)}
+  .ipam-box>.sortbar select{margin-left:6px;padding:5px 8px;font-size:12px;width:auto}
+  .ipam-box>.ipam-all-cards{display:flex;align-items:center;gap:8px;margin:0 0 8px;color:var(--mut)}
+  .tbl.ipam-table,.tbl.ipam-table tbody,.tbl.ipam-table tr,.tbl.ipam-table td{display:block;width:100%}
+  .tbl.ipam-table thead{display:none}
+  .tbl.ipam-table tr{border-bottom:1px solid var(--line)}
+  .tbl.ipam-table tbody tr:last-child{border-bottom:0}
+  .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
+    grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
+  .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
+  .tbl.stack.ipam-table tr.ipam-row>td::before{content:none}
+  .tbl.stack.ipam-table tr.ipam-row>td:empty{display:none}
+  .tbl.stack.ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
+  .ipam-table .ip-addr{grid-area:addr;font-size:14px;font-weight:650}
+  .ipam-table .ip-kind{grid-area:kind;justify-self:end}
+  .tbl.stack.ipam-table .ip-name{grid-area:name}
+  .ipam-table .ip-name .ipam-line{white-space:normal;overflow:visible}
+  .ipam-table .ip-seen{grid-area:seen;justify-self:end;text-align:right}
+  .ipam-table .ip-mac{grid-area:mac;color:var(--mut)}
+  .ipam-table .ip-notes{grid-area:notes;max-width:100%;overflow:hidden}
+  .ipam-table .ip-notes .ipam-line{flex-wrap:nowrap;gap:4px;min-width:0;max-width:100%;width:100%}
+  .ipam-table .ip-notes .ipam-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--mut)}
+  .tbl.ipam-table tr.ipam-row>td{border:0}
+  .tbl.stack.ipam-table tbody.ipam-gap tr{padding:3px 12px}
+  .tbl.stack.ipam-table tbody.ipam-gap td{padding:0;border:0}
+  .ipam-gap td::before{display:none}
 }
 .ipam-doc{cursor:pointer;font-size:12px;color:var(--mut)}
 .ipam-doc:hover{color:var(--tx);text-decoration:underline}
