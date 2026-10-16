@@ -279,6 +279,25 @@ def maintenance_open_for(node, now=None):
     return None
 
 
+# How long after maintenance overran its job's limit the host's alert skips
+# the usual hold: it has waited for the maintenance already.
+OVERRAN_RECENT = 15 * 60
+
+
+def maintenance_view(now=None):
+    """The hosts in maintenance now, and those whose maintenance just ended at
+    its job's limit, from one read of the history."""
+    now = int(time.time() if now is None else now)
+    events = _expire(_read()["maintenance"], now)
+    open_nodes = {e["node"] for e in events if e["end"] is None}
+    latest = {}
+    for e in events:
+        if e["end"] is not None and e["end"] >= latest.get(e["node"], {"end": -1})["end"]:
+            latest[e["node"]] = e
+    overran = {n for n, e in latest.items() if e["outcome"] == "limit" and now - e["end"] <= OVERRAN_RECENT}
+    return open_nodes, overran
+
+
 def maintenance_events(node):
     return sorted((e for e in _read()["maintenance"] if e["node"] == node), key=lambda e: e["start"])
 

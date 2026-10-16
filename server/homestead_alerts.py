@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import time
+import homestead_history as HISTORY
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -255,6 +256,10 @@ def health_facts(overview):
         row = grouped.setdefault(key, {"kind": kind, "name": name, "issues": []})
         row["issues"].append(issue)
     facts = []
+    try:
+        in_maintenance, overran = HISTORY.maintenance_view()
+    except Exception:
+        in_maintenance, overran = set(), set()   # with no way to tell, every host is reported
     for key, row in grouped.items():
         kind, name, issues = row["kind"], row["name"], row["issues"]
         critical = any(i.get("severity") == "critical" for i in issues)
@@ -268,7 +273,15 @@ def health_facts(overview):
                     "Disk": f"Drive warnings cleared: {name}", "Backup": f"Backup warning cleared: {name}"}.get(kind)
         signals = {i.get("metric") or "condition": i.get("value", 1) for i in issues}
         signals.update({"device:" + i["device_identity"]: 1 for i in issues if i.get("device_identity")})
-        facts.append({"key": key, "category": "outage" if critical else "degraded",
+        extra = {}
+        if kind == "Node":
+            # A host in maintenance Homestead caused is not news (#535); one
+            # whose maintenance overran its job's limit has waited enough.
+            if name in in_maintenance:
+                continue
+            if name in overran:
+                extra["urgent"] = True
+        facts.append({**extra, "key": key, "category": "outage" if critical else "degraded",
                       "severity": "critical" if critical else "degraded", "title": title,
                       "resolved": resolved, "body": "; ".join(dict.fromkeys(i.get("reason", "") for i in issues)),
                       "signals": signals, "href": href})
