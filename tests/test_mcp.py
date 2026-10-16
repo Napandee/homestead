@@ -426,6 +426,8 @@ class CatalogueTests(unittest.TestCase):
         "/api/logo-fit/keep": "the browser resizes logos", "/api/logo-fit/resized": "the browser resizes logos",
         "/api/hardware/rescan": "hosts are read-only to agents",
         "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
+        "/api/push/test": "a browser's push subscription", "/api/alerts/acknowledge": "the app's own bell",
+        "/api/alerts/delivered": "the app's own bell",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):

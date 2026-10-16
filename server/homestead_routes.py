@@ -92,6 +92,7 @@ MODULES = (
     "homestead_operations",
     "homestead_os_rollout",
     "homestead_outage",
+    "homestead_overview_server",
     "homestead_passthrough",
     "homestead_place",
     "homestead_placement_mode",
