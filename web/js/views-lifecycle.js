@@ -558,7 +558,7 @@ function storageCopyReview(config, capacity) {
     UI.more("Capacity and placement details", UI.section("After the move",deployCapacityHtml(capacity)) +
       UI.section("Temporary copy helper",deployCapacityHtml(capacity.copy_helper)), capacity.blocked) +
     (!capacity.blocked ? UI.ack("editCapacityConfirm","Move its storage despite the outage and warnings") : "") +
-    UI.actions(UI.button("Back to edit","modalBack()") + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
+    UI.actions(UI.button("Back to edit","modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
 }
 window.editReview = async body => {
   if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
@@ -816,7 +816,7 @@ window.nodePowerReview = async (node, action, force = false) => {
   ];
   // The confirmation stays in view whichever section is open.
   const confirm = plan.ready ? [
-    UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`),
+    UI.typedConfirm({ id: "pw_confirm", expect: node, button: "pw_execute" }),
     outage ? UI.ack("pw_outage", action === "reboot"
       ? "Reboot anyway: the whole cluster, Homestead too, is offline until it returns"
       : "Power off anyway: the whole cluster stays offline until it is powered on by hand") : "",
@@ -824,14 +824,14 @@ window.nodePowerReview = async (node, action, force = false) => {
     plan.requires_data_ack ? UI.ack("pw_data", "Go ahead despite the risk to volume copies") : "",
   ].join("") : "";
   childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, UI.sectionForm("hostPower", sections,
-    plan.ready ? UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute" }) : "",
+    plan.ready ? UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute", disabled: true }) : "",
     { always: true, noticeHtml: confirm, cancelHtml: UI.cancel(plan.ready ? "Cancel" : "Close") }), true);
 };
 window.nodePower = async (node, action) => {
   const plan = window.__nodePowerPlan;
   if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("Review the host impact again", "bad");
-  const c = $("#pw_confirm")?.value.trim();
-  if (c !== node) return toast("Type the host name exactly to confirm", "bad");
+  if (!typedConfirmMatches("pw_confirm")) return;
+  const c = $("#pw_confirm").value.trim();
   if (plan.planned_outage && !$("#pw_outage")?.checked)
     return toast("Acknowledge the whole-cluster outage", "bad");
   const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
@@ -1410,10 +1410,11 @@ window.vmImageDelete = (namespace, name) => {
   if (!i) return;
   modal(`Delete · ${i.display}`, `<p>The image is deleted, with its copies on ${i.nodes.length} host${i.nodes.length === 1 ? "" : "s"}
       (${esc(i.nodes.join(", ") || "none")}). No disk was made from it. A VM made from the same download address later downloads it again.</p>
-    <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(i.display)}</b> to confirm</label><input id="vmi_confirm" autocomplete="off"></div>
-    ${UI.actions(`<button class="btn danger" onclick="vmImageDeleteGo(${jsq(namespace)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+    ${UI.typedConfirm({ id: "vmi_confirm", expect: i.display, button: "vmi_go" })}
+    ${UI.actions(UI.cancel() + `<button class="btn danger" id="vmi_go" disabled onclick="vmImageDeleteGo(${jsq(namespace)},${jsq(name)})">Delete image</button>`)}`);
 };
 window.vmImageDeleteGo = async (namespace, name) => {
+  if (!typedConfirmMatches("vmi_confirm")) return;
   try {
     const r = await api("/api/images/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name, confirm: $("#vmi_confirm").value.trim() }) });
@@ -1834,14 +1835,14 @@ window.imageCleanupReview = digest => {
       <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per host</span><code>${esc(perNode)}</code></div></div>
     <div class="f"><label>Remove from hosts</label><div class="cleanup-nodes">${image.nodes.map(node =>
       `<label class="switch"><input class="cleanup-node" type="checkbox" value="${esc(node)}" checked onchange="imageCleanupGate()"> ${esc(node)}</label>`).join("")}</div></div>
-    <div class="f"><label>Type CLEAN to confirm</label><input id="cleanupConfirm" autocomplete="off" oninput="imageCleanupGate()" placeholder="CLEAN"></div>
+    ${UI.typedConfirm({ id: "cleanupConfirm", expect: "CLEAN", oninput: "imageCleanupGate()" })}
     ${UI.actions(`<button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply(${jsq(digest)})">Remove cached image</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}</div>`, true);
   if (window.applyRole) window.applyRole();
 };
 window.imageCleanupGate = () => {
   const button = $("#cleanupGo");
-  if (button) button.disabled = $("#cleanupConfirm")?.value !== "CLEAN" || !$(".cleanup-node:checked");
+  if (button) button.disabled = !typedConfirmMatches("cleanupConfirm") || !$(".cleanup-node:checked");
 };
 window.imageCleanupApply = async digest => {
   const nodes = $$(".cleanup-node:checked").map(input => input.value);
@@ -2368,7 +2369,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
       addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
         { help: "Blank keeps the existing port or uses 9000. The console uses the next port; both must be available." }))}
     ${UI.more("Whose address this is", `<p>This address serves ${esc(name)}'s backup store. The destination reads backups from it without taking the address. The store shares the source cluster's disks; keep an independent backup.</p>`)}
-    ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
+    ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
   </div>`);
 };
 window.clusterStorageGo = async name => {

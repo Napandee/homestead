@@ -474,7 +474,7 @@ window.wgRename = i => {
   modal(`Rename ${g}`, `<div class="ui-stack">
     ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} move to the new name. A name another group has merges the two.`))}
     ${UI.field("New name", `<input id="wg_rename" maxlength="40" value="${esc(g)}" list="wg_rename_names"><datalist id="wg_rename_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`)}
-    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)") + UI.button("Rename", "wgRenameApply()", { kind: "pri", attrs: 'data-need="operator"' }))}</div>`);
+    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Rename", "wgRenameApply()", { kind: "pri", attrs: 'data-need="operator"' }))}</div>`);
   setTimeout(() => { const input = $("#wg_rename"); input?.focus(); input?.select(); }, 30);
 };
 window.wgRenameApply = () => {
@@ -491,7 +491,7 @@ window.wgUngroupAll = i => {
   window.__wgGroup = { items: wgItems(members), from: g };
   modal(`Ungroup ${g}`, `<div class="ui-stack">
     ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} leave the group, and ${g} is gone: a group lasts while something is in it. Nothing restarts.`))}
-    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)") + UI.button("Ungroup all", "wgUngroupApply()", { kind: "danger", attrs: 'data-need="operator"' }))}</div>`);
+    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Ungroup all", "wgUngroupApply()", { kind: "danger", attrs: 'data-need="operator"' }))}</div>`);
 };
 window.wgUngroupApply = () => {
   const { items, from } = window.__wgGroup || {};
@@ -1586,18 +1586,14 @@ window.wlDelete = async (ns, name) => {
       <div class="dependency-row"><span>Volumes kept</span>
         <b>${claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
     </div>
-    <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
-      <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate(${jsq(name)})"></div>
+    ${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
       onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete app</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
-window.wlDeleteGate = name => {
-  const button = $("#wd_go"), input = $("#wd_confirm");
-  if (button && input) button.disabled = input.value.trim() !== name;
-};
 window.wlDeleteNow = async (ns, name, button) => {
+  if (!typedConfirmMatches("wd_confirm")) return;
   if (button) { button.disabled = true; button.textContent = "Deleting…"; }
   try {
     const result = await api(`/api/workload/${ns}/${name}`, { method: "DELETE" });
@@ -2411,7 +2407,7 @@ async function viewDeploy(pre) {
   paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
       UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
-      {page:true,cancelHtml:UI.button("Cancel", "go('workloads')")})}</div>`);
+      {page:true,cancelHtml:UI.button("Cancel", "go('workloads')", { attrs: 'data-dialog-dismiss="true"' })})}</div>`);
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
   DRENDERING = false; syncSummary();

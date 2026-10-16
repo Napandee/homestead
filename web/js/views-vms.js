@@ -245,6 +245,26 @@ function vmTable(rows) {
 }
 window.viewVMs = viewVMs;
 
+/* The VM dialog's actions (#504): its state's main power action and Console
+   as buttons; the rest - other power actions, with Force off as danger, Edit,
+   Schedule and Delete - in ⋯, so a phone shows one row. */
+function vmDialogActions(v) {
+  const run = action => `vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(action)})`;
+  const power = v.actions.filter(a => VM_ACTIONS[a]);
+  const main = power.find(a => ["start", "unpause", "stop", "restart"].includes(a));
+  const words = a => a === "stop" && v.stop_retries ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"] : VM_ACTIONS[a];
+  const item = a => ({ label: words(a)[0], icon: words(a)[1], tip: words(a)[2], run: run(a), need: "operator", pri: a === "start", danger: a === "force-stop" });
+  const console = v.actions.includes("console");
+  return actionBar([
+    main && item(main),
+    console && { label: "Console", icon: "console", run: `vmConsole(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    ...power.filter(a => a !== main).map(item),
+    { label: "Edit", icon: "edit", run: `vmEdit(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    { label: "Schedule", icon: "clock", run: `vmSchedule(${jsq(v.ns)},${jsq(v.name)})`, need: "operator" },
+    { label: "Delete", icon: "trash", run: `vmDelete(${jsq(v.ns)},${jsq(v.name)})`, need: "operator", danger: true },
+  ], { shown: (main ? 1 : 0) + (console ? 1 : 0), label: `More actions for ${v.name}` });
+}
+
 function vmActionButton(v, action, primary = false, iconOnly = false, extra = "") {
   const [label, iconName, title] = action === "stop" && v.stop_retries
     ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"]
@@ -287,13 +307,13 @@ window.vmStateInitHtml = (plan, prefix, changed) => {
   return `<div class="reviewbox vm-state-confirm"><b>Initialize fresh VM state?</b>
     <div class="note warn">${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.</div>
     <label class="check"><input type="checkbox" id="${prefix}StateAck" onchange="${changed}()"> I intend to initialize fresh state, not recover the original TPM/EFI or backup state</label>
-    <div class="f"><label for="${prefix}StateName">Type ${esc(state.name)} to confirm</label><input id="${prefix}StateName" autocomplete="off" spellcheck="false" oninput="${changed}()"></div></div>`;
+    ${UI.typedConfirm({ id: `${prefix}StateName`, expect: state.name, oninput: `${changed}()` })}</div>`;
 };
 window.vmStateInitReady = (plan, prefix) => !plan.vm?.state_initialization ||
-  ($(`#${prefix}StateAck`)?.checked === true && $(`#${prefix}StateName`)?.value === plan.vm.state_initialization.name);
+  ($(`#${prefix}StateAck`)?.checked === true && typedConfirmMatches(`${prefix}StateName`));
 window.vmStateInitBody = (plan, prefix) => plan.vm?.state_initialization ? {
   ack_state_initialization: $(`#${prefix}StateAck`)?.checked === true,
-  confirm_state_name: $(`#${prefix}StateName`)?.value || ""
+  confirm_state_name: ($(`#${prefix}StateName`)?.value || "").trim()
 } : {};
 let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
@@ -379,10 +399,9 @@ window.vmOpen = async (ns, name) => {
   try { v = await api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`); }
   catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmOpen(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,${jsq(id)})">${label}</button>`;
-  $("#mbody").innerHTML = `<div class="between"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
+  $("#mbody").innerHTML = `<div class="between vm-head"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
       <span class="dim xs"> run strategy ${esc(v.run_strategy)}${v.node ? ` · on ${esc(v.node)}` : ""}</span></div>
-      <div class="row">${v.actions.filter(a => VM_ACTIONS[a]).map(a => vmActionButton(v, a, a === "start")).join("")}
-        <button class="btn sm" data-need="operator" onclick="vmEdit(${jsq(ns)},${jsq(name)})">${icon("edit")}Edit</button></div></div>
+      ${vmDialogActions(v)}</div>
     ${v.problem ? `<div class="note bad" style="margin-top:10px">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
@@ -665,7 +684,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
   } catch (error) {
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
     VM_EDIT_REVIEW = null;
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="vmEditReviewBack()">Back to edit</button>`;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
   }
 };
 window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
@@ -702,16 +721,15 @@ window.vmDelete = (ns, name) => {
   const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || { disks: [] };
   const filling = v.filling || [], unfinished = new Set(filling.map(f => f.claim));
   const disks = v.disks.filter(d => (d.kind === "disk" || d.kind === "cd-rom") && d.claim && !unfinished.has(d.claim));
-  modal(`Delete · ${name}`, `<p>The VM is deleted${v.status === "Running" ? ", and stopped first" : ""}. It shows as Deleting until everything it owns is gone.</p>
-    ${filling.length ? `<div class="note warn">${filling.map(f => `<b class="mono">${esc(f.claim)}</b> is still being filled${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join("; ")}.
-      Deleting the VM stops that and removes the unfinished disk.</div>` : ""}
+  modal(`Delete VM · ${name}`, `${UI.lead(`Deletes <b>${esc(name)}</b>${v.status === "Running" ? ", stopping it first" : ""}. It shows as Deleting until everything it owns is gone.`)}
+    ${filling.length ? UI.callout("warn", "A disk is still being filled", `${filling.map(f => `<b class="mono">${esc(f.claim)}</b>${f.progress != null ? ` (${f.progress.toFixed(0)}%)` : ""}`).join(", ")}: deleting the VM stops that and removes the unfinished disk.`) : ""}
     ${disks.length ? `<label class="switch"><input type="checkbox" id="vd_disks"> Delete its disks too: ${disks.map(d => `<span class="mono">${esc(d.claim)}</span>`).join(", ")}</label>
       <div class="dim xs">Left unticked, the disks are kept and can be attached to another VM or deleted from Volumes later.</div>` : ""}
-    <div class="f" style="margin-top:12px"><label>Type the VM's name to delete it</label><input id="vd_confirm" autocomplete="off"></div>
-    ${UI.actions(`<button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+    ${UI.typedConfirm({ id: "vd_confirm", expect: name, button: "vd_go" })}
+    ${UI.actions(UI.cancel() + `<button class="btn danger" id="vd_go" disabled onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete VM</button>`)}`);
 };
 window.vmDeleteGo = async (ns, name) => {
-  if ($("#vd_confirm").value.trim() !== name) return toast("Type the VM's name exactly", "bad");
+  if (!typedConfirmMatches("vd_confirm")) return;
   try { const r = await api("/api/vm/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, disks: !!$("#vd_disks")?.checked }) });
     toast(r.detail, "ok"); closeModal(); refresh(true); } catch (e) { toast(e.message, "bad"); }

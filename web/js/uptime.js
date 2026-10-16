@@ -202,7 +202,7 @@ window.vmMonitoring = (ns, name, back = null) => {
         <div class="f vm-mon-path"${c.mode === "http" ? "" : " hidden"}><label for="vm_mon_path">Path</label><input id="vm_mon_path" value="${esc(c.path)}" placeholder="/"></div></div>
       ${option("off", "Not monitored", "No checks and no alerts for this VM.")}</div>`)}
     ${outageSectionHtml("vm", v)}
-    ${UI.actions((back ? UI.button("Back", "vmMonitorBack()") : UI.cancel())
+    ${UI.actions((back ? UI.button("Back", "vmMonitorBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel())
       + UI.button("Save", "vmMonitorSave()", { kind: "pri", id: "vm_mon_go", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}"` }))}</div>`);
 };
 

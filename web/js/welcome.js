@@ -606,7 +606,7 @@ function setupCloudflareHtml(state) {
     ${UI.sectionNavigation("cloudflare-guide", steps, {current:stage, guide:true, onSelect:key => `setupCloudflareOpen(${Number(key)})`, onChange:"setupCloudflareOpen(Number(this.value))"})}
     ${UI.lead(current.lead)}<div class="setup-body small">${current.body}</div>
     <p class="small dim">These steps guide changes in Cloudflare. Homestead does not verify or mark them complete when you select Next.</p>
-    ${UI.actions((current.action || "") + (stage > 0 ? UI.button("Back", `setupCloudflareOpen(${stage - 1})`) : "") + (stage < steps.length - 1 ? UI.button(`Next: ${steps[stage + 1].title}`, `setupCloudflareOpen(${stage + 1})`) : ""), UI.button("Back to HTTPS options", "setupCloudflareOpen(null)"))}
+    ${UI.actions((current.action || "") + (stage > 0 ? UI.button("Back", `setupCloudflareOpen(${stage - 1})`, { attrs: 'data-dialog-dismiss="true"' }) : "") + (stage < steps.length - 1 ? UI.button(`Next: ${steps[stage + 1].title}`, `setupCloudflareOpen(${stage + 1})`) : ""), UI.button("Back to HTTPS options", "setupCloudflareOpen(null)"))}
   </section>`;
 }
 

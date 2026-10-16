@@ -90,7 +90,7 @@ function logoDialog(name, lead, removeButton, search = name) {
     <div id="lg_tiles"></div>
     ${UI.more("Use an address instead", `<div class="f"><label for="lg_url">Image or site address</label><input id="lg_url" type="url" placeholder="https://…/logo.png or https://example.com" oninput="logoSyncSave()">
       <div class="ui-help">A site's own logo is used if it is an SVG or at least 64 px.</div></div>`)}
-    ${UI.actions((LOGO.back ? UI.button("Back", "logoBack()") : UI.cancel()) + removeButton
+    ${UI.actions((LOGO.back ? UI.button("Back", "logoBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + removeButton
       + UI.button("Use this logo", "logoSave()", { kind: "pri", id: "lg_go", disabled: true, attrs: 'data-need="operator"' }))}</div>`);
   logoLoad(null, "#lg_tiles", "logoPick");
 }

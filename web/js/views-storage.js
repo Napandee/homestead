@@ -658,8 +658,7 @@ window.volumeDelete = async x => {
       ["Persistent volume", `<span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy ${esc(pv.reclaim_policy || "unknown")}`],
       ["Longhorn volume", `<span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}`],
     ])),
-    UI.section("3. Confirm", UI.field(`Type ${name} to confirm`,
-      `<input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()">`)),
+    UI.section("3. Confirm", UI.typedConfirm({ id: "vd_confirm", expect: name, oninput: "volumeDeleteGate()" })),
     UI.actions(UI.cancel() + (blocked || p.inventory_complete === false ? UI.button("Refresh review", "volumeDeleteRefresh()") : "") +
       UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
@@ -679,7 +678,7 @@ window.volumeDeleteGate = () => {
 window.volumeDeleteNow = async (namespace, name, uid) => {
   const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
   const confirmation = $("#vd_confirm").value.trim();
-  if (!volumeDeleteConfirmationValid(name, confirmation)) return toast("Type the volume name exactly to confirm", "bad");
+  if (!volumeDeleteConfirmationValid(name, confirmation)) return;
   if (!action) return toast("Choose whether to retain or permanently delete the backing data", "bad");
   const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
   try {
@@ -843,8 +842,8 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
       <div class="row sc-tags" id="sc_nodetags"></div>
       <div class="dim xs" id="sc_reach" style="margin-top:6px"></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
-    <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
-    <div class="note" id="sc_hint">Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).</div>
+    <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks ${tip("Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).")}</label>
+    <div id="sc_hint" hidden></div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -915,11 +914,11 @@ window.storageClassEngine = async () => {
       : `${v2.ready_nodes} of ${v2.total_nodes} hosts are ready for V2 volumes.`;
 };
 window.storageClassHint = () => {
+  // Nothing to say until it is ticked; then it is the dialog's one notice (#501).
   const on = $("#sc_migratable").checked, hint = $("#sc_hint");
-  hint.classList.toggle("bad", on);
-  hint.innerHTML = on
-    ? "<b>Volumes from this class can't be shared between hosts.</b> One pod on one host can use them; a ReadWriteMany claim on it never attaches to a second host's pod."
-    : "Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).";
+  hint.hidden = !on;
+  hint.innerHTML = on ? UI.callout("warn", "Volumes from this class can't be shared between hosts",
+    "One pod on one host can use them; a ReadWriteMany claim on it never attaches to a second host's pod.") : "";
 };
 window.storageClassSave = async button => {
   const name = $("#sc_name").value.trim();
@@ -1393,7 +1392,7 @@ window.smbUserEdit = (name = "") => {
     + (user?.shares.length ? UI.callout("warn", "SMB connections will restart", `This changes access to ${esc(user.shares.join(", "))}. Reconnect clients with the new password.`) : "")
     + UI.fields(UI.field("Username", `<input id="su_user" value="${esc(name)}" ${name ? "readonly" : ""} autocomplete="username" maxlength="32">`)
       + UI.field("New password", '<input id="su_password" type="password" autocomplete="new-password">'))
-    + UI.actions(UI.button("Back", "smbUsers()") + UI.button(name ? "Change password" : "Add user", `smbUserSave(${jsArg(name ? "password" : "create")},this)`, { kind: "pri" })), false, "smb-access");
+    + UI.actions(UI.button("Back", "smbUsers()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button(name ? "Change password" : "Add user", `smbUserSave(${jsArg(name ? "password" : "create")},this)`, { kind: "pri" })), false, "smb-access");
 };
 window.smbUserSave = async (action, button) => {
   const user = $("#su_user").value.trim(), password = $("#su_password").value;
@@ -1409,7 +1408,7 @@ window.smbUserSave = async (action, button) => {
 };
 window.smbUserRemove = name => {
   modal(`Remove SMB user · ${esc(name)}`, UI.lead("Remove this unused account and its saved password. Shares and their data are kept.")
-    + UI.actions(UI.button("Back", "smbUsers()") + UI.button("Remove user", `smbUserDelete(${jsArg(name)},this)`, { kind: "danger" })), false, "smb-access");
+    + UI.actions(UI.button("Back", "smbUsers()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Remove user", `smbUserDelete(${jsArg(name)},this)`, { kind: "danger" })), false, "smb-access");
 };
 window.smbUserDelete = async (user, button) => {
   button.disabled = true;
@@ -1988,7 +1987,7 @@ window.diskSetup = async (node, device) => {
   let f;
   try {
     f = await api("/api/disks/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, device }) });
-  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disk could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disk could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })); return; }
   STATE.data.diskFacts = f;
   const what = {
     blank: "It is blank.",
@@ -2017,12 +2016,12 @@ window.diskSetup = async (node, device) => {
         ${modes.includes("wipe") ? choice("wipe", "Wipe and prepare it", "Switches its old volume groups off and removes them, wipes the LVM labels, filesystem signatures and partition table, has the host re-read the disk, checks it is blank, then formats it. Everything on it is destroyed.", true) : ""}
         ${modes.includes("erase") ? choice("erase", "Erase it and format", "Everything on it is destroyed.", !modes.includes("import")) : ""}</div>
       <div class="f" id="ds_fs_row"><label>Filesystem</label><select id="ds_fs"><option value="ext4">ext4</option><option value="xfs">XFS</option></select></div>
-      <div class="f" id="ds_confirm_row"><label>Type <span class="mono">${esc(device)}</span> to confirm - this erases it</label><input id="ds_confirm" class="mono" autocomplete="off"></div>
+      <div id="ds_confirm_row">${UI.typedConfirm({ id: "ds_confirm", expect: device, oninput: "diskSetupChanged()", help: "This erases it." })}</div>
       <p class="dim xs">Mounted the safe way: the empty folder is locked so nothing lands on the system disk if the drive dies, fstab names it
         by UUID with <span class="mono">nofail</span> so the host still starts without it (a copy of fstab is kept first), and the mount is checked
         before Longhorn is told. New disks are tagged <span class="mono">ssd</span> or <span class="mono">hdd</span>.</p>
-      ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Set it up", `diskSetupGo(${jsArg(node)},${jsArg(device)})`, { kind: "pri", id: "ds_go", attrs: 'data-need="admin"' }))}`
-      : UI.actions(UI.button("Back", "modalBack()"))}</div>`;
+      ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Set it up", `diskSetupGo(${jsArg(node)},${jsArg(device)})`, { kind: "pri", id: "ds_go", attrs: 'data-need="admin"' }))}`
+      : UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }))}</div>`;
   diskSetupChanged();
   if (window.applyRole) applyRole();
 };
@@ -2037,7 +2036,7 @@ window.diskOsSpace = async node => {
   let f;
   try {
     f = await api("/api/disks/os-space", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
-  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disks could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()")); return; }
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The disks could not be looked at.", esc(e.message)) + UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })); return; }
   STATE.data.osSpace = f;
   const v2 = !!STATE.data.lhcap?.v2?.enabled;
   const lvmFree = f.vg && !f.error && f.usable_gb >= 5;
@@ -2052,7 +2051,7 @@ window.diskOsSpace = async node => {
       ${UI.more("What Homestead will and will not do", `<p class="small">It uses space nothing else does: free space in the
         system's LVM volume group, or space past a GPT disk's last partition. It never shrinks or moves a partition or
         filesystem of a running system - ext4 cannot shrink while mounted and XFS not at all; that needs a rescue boot.</p>`)}
-      ${UI.actions(UI.button("Back", "modalBack()"))}</div>`;
+      ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }))}</div>`;
     return;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
@@ -2063,9 +2062,9 @@ window.diskOsSpace = async node => {
       <option value="v1">V1 - a filesystem of its own, mounted</option><option value="v2">V2 (SPDK) - the raw volume or partition</option></select></div>` : ""}
     <div class="f"><label>Size (GiB)</label><input id="os_size" type="number" min="5"></div>
     <p class="small" id="os_what"></p>
-    <div class="f" id="os_confirm_row" hidden><label id="os_confirm_label"></label><input id="os_confirm" class="mono" autocomplete="off"></div>
+    <div id="os_confirm_row" hidden></div>
     <p class="dim xs">On the system's drive it shares a drive with the system, so a copy here and one on another folder of that drive are not two drives.</p>
-    ${UI.actions(UI.button("Back", "modalBack()") + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}</div>`;
+    ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Create and add", `diskOsSpaceGo(${jsArg(node)})`, { kind: "pri", id: "os_go", attrs: 'data-need="admin"' }))}</div>`;
   window.__osSources = Object.fromEntries(sources.map(([value, , max]) => [value, max]));
   diskOsSpaceChanged(true);
   if (window.applyRole) applyRole();
@@ -2084,8 +2083,15 @@ window.diskOsSpaceChanged = (first = false) => {
     : `A logical volume of its own, <span class="mono">${esc(f.vg)}/${engine === "v2" ? "longhorn-v2" : "longhorn"}</span>, ${engine === "v2"
       ? "given raw to the V2 engine" : `formatted ext4 and mounted at <span class="mono">${esc(f.mount_point)}</span> the safe way`}. Nothing existing is resized.`;
   $("#os_confirm_row").hidden = !part;
-  if (part) $("#os_confirm_label").innerHTML = `Type <span class="mono">/dev/${esc(disk)}</span> to confirm - its partition table gets a new entry`;
-  if ($("#os_go")) $("#os_go").disabled = !!taken;
+  // Drawn again only when the disk changes, so a half-typed name stays.
+  if (part && $("#os_confirm")?.dataset.typedExpect !== `/dev/${disk}`)
+    $("#os_confirm_row").innerHTML = UI.typedConfirm({ id: "os_confirm", expect: `/dev/${disk}`, oninput: "diskOsSpaceGate()", help: "Its partition table gets a new entry." });
+  window.__osTaken = !!taken;
+  diskOsSpaceGate();
+};
+window.diskOsSpaceGate = () => {
+  const part = !$("#os_confirm_row")?.hidden;
+  if ($("#os_go")) $("#os_go").disabled = !!window.__osTaken || (part && !typedConfirmMatches("os_confirm"));
 };
 window.diskOsSpaceGo = async node => {
   const go = $("#os_go");
@@ -2093,7 +2099,7 @@ window.diskOsSpaceGo = async node => {
   try {
     const r = await api("/api/disks/os-space/use", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, size_gb: +$("#os_size").value, source: $("#os_source").value,
-        engine: $("#os_engine")?.value || "v1", confirm: $("#os_confirm")?.value || "" }) });
+        engine: $("#os_engine")?.value || "v1", confirm: ($("#os_confirm")?.value || "").trim() }) });
     toast(r.detail, "ok"); STATE.data.disks = null; modalBack(); setTimeout(() => disksRepaint(node), 800);
   } catch (e) {
     toast(e.message, "bad");
@@ -2109,12 +2115,15 @@ window.diskSetupChanged = () => {
   if ($("#ds_fs_row")) $("#ds_fs_row").hidden = v2 || mode === "import";
   // Formatting a blank disk still asks for the device: it is a format all the same.
   if ($("#ds_confirm_row")) $("#ds_confirm_row").hidden = v2 ? f.state === "blank" : mode === "import";
+  // Erasing waits for the device's name; importing what is on it does not.
+  if ($("#ds_go")) $("#ds_go").disabled = !$("#ds_confirm_row")?.hidden && !typedConfirmMatches("ds_confirm");
 };
 
 window.diskSetupGo = async (node, device) => {
   const v2 = $("#ds_engine")?.value === "v2";
   const body = { node, device, engine: v2 ? "v2" : "v1", mode: $("input[name=ds_mode]:checked")?.value || "",
-    fstype: $("#ds_fs")?.value || "ext4", confirm: $("#ds_confirm")?.value || "" };
+    fstype: $("#ds_fs")?.value || "ext4", confirm: ($("#ds_confirm")?.value || "").trim() };
+  if (!$("#ds_confirm_row")?.hidden && !typedConfirmMatches("ds_confirm")) return;
   const go = $("#ds_go");
   if (go) { go.disabled = true; go.textContent = "Setting it up…"; }
   try {
@@ -2170,14 +2179,19 @@ window.diskRetire = async (node, disk) => {
       If the drive is only unplugged, reconnect it instead: the data comes back with it. Otherwise restore
       ${p.only_copies === 1 ? "it" : "them"} from a backup (Data protection). Carrying on leaves ${p.only_copies === 1 ? "it" : "them"} alone and keeps the disk,
       unless you give ${p.only_copies === 1 ? "it" : "them"} up:
-      <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
-      <div id="dr_confirm_row" hidden class="f" style="margin-top:8px"><label>Type <span class="mono">${esc(disk)}</span> to confirm</label><input id="dr_confirm" class="mono"></div></div>` : ""}
-    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
+      <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked;diskRetireGate()"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
+      <div id="dr_confirm_row" hidden>${UI.typedConfirm({ id: "dr_confirm", expect: disk, oninput: "diskRetireGate()" })}</div></div>` : ""}
+    ${UI.actions(`<button class="btn pri" id="dr_go" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
       <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();
 };
+/* Giving up the only copies waits for the disk's name to be typed. */
+window.diskRetireGate = () => {
+  if ($("#dr_go")) $("#dr_go").disabled = !!$("#dr_force")?.checked && !typedConfirmMatches("dr_confirm");
+};
 window.diskRetireGo = async (node, disk) => {
   const force = !!$("#dr_force")?.checked;
+  if (force && !typedConfirmMatches("dr_confirm")) return;
   try {
     await api("/api/disks/retire", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, disk, force, confirm: force ? $("#dr_confirm").value.trim() : "" }) });

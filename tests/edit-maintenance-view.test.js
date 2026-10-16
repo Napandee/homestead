@@ -6,7 +6,7 @@ function setup(review) {
   let html = "", fail = false;
   const sent = [], notices = [], fields = { "#editCapacityConfirm": { checked: false }, "#editGo": {},
     "#mbody": { insertAdjacentHTML(_where,body) { html += body; } } };
-  const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {} },
+  const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {}, getElementById: id => fields['#' + id] || null },
     $: s => fields[s], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
     childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
     api: async (path, options) => {
@@ -121,7 +121,7 @@ test('forced review never promises a Longhorn drain wait', async () => {
   assert.doesNotMatch(t.html(), /waits for Longhorn during drain/);
 });
 function hostFields(t) {
-  t.fields['#pw_confirm']={value:'host1'}; t.fields['#pw_execute']={};
+  t.fields['#pw_confirm']={value:'host1',dataset:{typedExpect:'host1'}}; t.fields['#pw_execute']={};
 }
 test('host power consumes approval once and records the job',async()=>{
   const t=setup(hostReview), jobs=[];let refreshed=0;hostFields(t);

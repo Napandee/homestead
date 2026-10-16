@@ -3,7 +3,7 @@ const test=require('node:test'), assert=require('node:assert/strict');
 const fs=require('node:fs'), vm=require('node:vm'), {webcrypto}=require('node:crypto');
 function setup(){
   let html='',timer,postResolve,closed=false;
-  const sent=[], fields={'#lhV2Setup':{innerHTML:''},'#lhV2Confirm':{checked:false},'#lhV2Apply':{},'#modal':{classList:{contains:()=>closed}}};
+  const sent=[], fields={'#lhV2Setup':{innerHTML:''},'#lhV2Foot':{outerHTML:''},'#lhV2Confirm':{checked:false},'#lhV2Apply':{},'#modal':{classList:{contains:()=>closed}}};
   const plan={namespace:'lab',nodes:[{node:'k3s-test',required_mib:2048,target_pages:1024,capacity_mib:0,can_prepare:true,review_token:'host-token',problems:['Capacity is zero']}],required_mib:2048,blockers:['k3s-test: capacity is zero'],can_enable:false,review_token:'enable-token'};
   const c={window:null,console,crypto:webcrypto,Uint8Array, $:s=>fields[s],esc:s=>String(s??'').replaceAll('<','&lt;').replaceAll('>','&gt;'),jsq:s=>JSON.stringify(s).replaceAll('"','&quot;'),
     modal:(title,body)=>{html=body;closed=false;},childModal:(title,body)=>{html=body;},toast(){},
@@ -16,7 +16,9 @@ function setup(){
 test('zero hugepage capacity offers host preparation and disables enabling',async()=>{
   const t=setup();await t.c.lhV2Setup();
   assert.match(t.fields['#lhV2Setup'].innerHTML,/Prepare host/);
-  assert.match(t.fields['#lhV2Setup'].innerHTML,/lhV2ReviewEnable\(\)[^>]*disabled/);
+  // The action is the footer's, and the body says why it can't be taken yet (#504).
+  assert.match(t.fields['#lhV2Foot'].outerHTML,/class="ui-actions-end"[\s\S]*lhV2ReviewEnable\(\)[^>]*disabled/);
+  assert.match(t.fields['#lhV2Setup'].innerHTML,/V2 can be enabled once what still needs attention is resolved/);
   t.c.lhV2ReviewEnable();assert.doesNotMatch(t.html(),/id="lhV2Confirm"/);
 });
 test('host preparation requires acknowledgement and consumes confirmation before awaiting',async()=>{

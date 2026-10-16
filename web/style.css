@@ -3815,3 +3815,5 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .agent-req-detail{margin:0;overflow-wrap:anywhere}
 .agent-req-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap}
 .agent-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}
+/* The VM dialog's state and its actions share a line, and wrap on a phone (#504). */
+.vm-head{flex-wrap:wrap;gap:10px}

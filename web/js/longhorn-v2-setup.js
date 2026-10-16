@@ -1,12 +1,13 @@
 /* Explicit host preparation, reviewed maintenance, then engine enablement. */
 let lhV2Plan=null, lhV2Approval=null, lhV2Timer=null, lhV2Sequence=0;
+const lhV2Footer = main => UI.actions(UI.cancel('Close') + main, UI.button('Check again','lhV2Setup()'), { attrs: 'id="lhV2Foot"' });
 window.lhV2Setup = async () => {
   const sequence=++lhV2Sequence;
   if(window.__logTimer) {clearInterval(window.__logTimer);window.__logTimer=null;}
   clearTimeout(lhV2Timer); lhV2Approval=null;
   // Setup is a resumable root dialog; discard completed child reviews.
   if(typeof MODAL_STACK!=='undefined') MODAL_STACK.length=0;
-  modal('Set up Longhorn V2', '<div id="lhV2Setup"><div class="empty"><span class="spin2"></span>Checking hosts</div></div>' + UI.actions(UI.cancel('Close'),UI.button('Check again','lhV2Setup()')), true, 'longhorn-v2');
+  modal('Set up Longhorn V2', '<div id="lhV2Setup"><div class="empty"><span class="spin2"></span>Checking hosts</div></div>' + lhV2Footer(''), true, 'longhorn-v2');
   try {
     const plan=await api('/api/longhorn/v2/plan');
     if(sequence!==lhV2Sequence || !$('#lhV2Setup')) return;
@@ -38,7 +39,11 @@ function lhV2Paint(plan) {
     (preparing ? UI.progress(null,{label:'Host preparation',detail:'Tasks continue if you close this dialog. Check again to follow them; logs show the current host step.'}) : '') +
     (plan.blockers.length ? UI.more('What still needs attention',`<ul class="ui-list">${plan.blockers.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>`) : '') +
     UI.more('What changes', '<p class="ui-help">Preparation installs nvme-cli if missing, loads and persists the V2 kernel modules, and reserves the required 2 MiB hugepages without reducing existing reservations. Ubuntu may need the extra modules package for its running kernel. Package repositories must be reachable. A host task does not reboot or change disks. Any reboot uses the normal app, quorum and storage checks, one host at a time. A single-node reboot interrupts Homestead and its apps; reopen this setup when it returns. After reboot, the host stays cordoned until you allow scheduling from its host page.</p>') +
-    (plan.engine_ready ? UI.button('Create V2 storage class',"storageClassCreate({engine:'v2'})",{attrs:'data-need="admin"'}) : UI.button(plan.harvester?'Review Harvester enablement':'Review enabling V2','lhV2ReviewEnable()',{kind:'pri',disabled:!plan.can_enable,attrs:'data-need="admin"'}));
+    (!plan.engine_ready && !plan.can_enable ? `<p class="ui-help">${plan.blockers.length ? 'V2 can be enabled once what still needs attention is resolved.' : 'Prepare a host first; V2 can be enabled once one is ready.'}</p>` : '');
+  // The main action is the footer's, where it stays in reach (#504).
+  const foot = $('#lhV2Foot');
+  if (foot) foot.outerHTML = lhV2Footer(plan.engine_ready ? UI.button('Create V2 storage class',"storageClassCreate({engine:'v2'})",{kind:'pri',attrs:'data-need="admin"'})
+    : UI.button(plan.harvester?'Review Harvester enablement':'Review enabling V2','lhV2ReviewEnable()',{kind:'pri',disabled:!plan.can_enable,attrs:'data-need="admin"'}));
   window.applyRole?.();
 }
 async function lhV2Poll() {
@@ -62,7 +67,7 @@ window.lhV2ReviewHost = node => {
       {title:row.required_mib ? `Reserve at least ${Math.max(row.required_mib,row.target_pages*2)} MiB of hugepages; preserve larger existing pools` : 'Keep Longhorn’s ordinary-memory configuration',state:'todo'}]) +
     UI.callout('warn',row.required_mib?'Host memory will be reserved':'Host packages and modules will change',row.required_mib?'Hugepages reduce the RAM available to ordinary apps and VMs. The task checks memory headroom before reserving hugepages. A separate reviewed reboot may be required before Kubernetes reports the new capacity.':'Longhorn is configured to use ordinary RAM. This task installs and verifies its host tools and kernel modules.') +
     UI.ack('lhV2Confirm','Apply these package, kernel-module and memory changes to this host',{onchange:"$('#lhV2Apply').disabled=!this.checked"}) +
-    UI.actions(UI.button('Back to setup','lhV2Setup()') + UI.button('Prepare host','lhV2Apply()',{kind:'pri',id:'lhV2Apply',disabled:true})),true,'longhorn-v2');
+    UI.actions(UI.button('Back to setup','lhV2Setup()', { attrs: 'data-dialog-dismiss="true"' }) + UI.button('Prepare host','lhV2Apply()',{kind:'pri',id:'lhV2Apply',disabled:true})),true,'longhorn-v2');
   lhV2ReturnToSetup();
 };
 window.lhV2ReviewEnable = () => {
@@ -73,7 +78,7 @@ window.lhV2ReviewEnable = () => {
     UI.callout('warn','CPU and memory stay allocated','V2 consumes CPU and memory even before you create a V2 volume.' + (lhV2Plan.harvester?' Harvester may restart hosts to apply its configuration.':'') +
       (lhV2Plan.cpu_mask_fix ? ` V2 will poll with ${lhV2Plan.cpu_mask_fix.cores} CPU core${lhV2Plan.cpu_mask_fix.cores === 1 ? '' : 's'} on each host instead of Longhorn's ${lhV2Plan.cpu_mask_fix.was}: the smallest host has ${lhV2Plan.cpu_mask_fix.host_cpus}, and V2 keeps its cores to itself.` : '')) +
     UI.ack('lhV2Confirm','Enable V2 with these host resource costs' + (lhV2Plan.harvester?' and Harvester-managed host changes and restarts':''),{onchange:"$('#lhV2Apply').disabled=!this.checked"}) +
-    UI.actions(UI.button('Back to setup','lhV2Setup()') + UI.button('Enable V2','lhV2Apply()',{kind:'pri',id:'lhV2Apply',disabled:true})),true,'longhorn-v2');
+    UI.actions(UI.button('Back to setup','lhV2Setup()', { attrs: 'data-dialog-dismiss="true"' }) + UI.button('Enable V2','lhV2Apply()',{kind:'pri',id:'lhV2Apply',disabled:true})),true,'longhorn-v2');
   lhV2ReturnToSetup();
 };
 window.lhV2Apply = async () => {

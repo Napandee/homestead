@@ -231,9 +231,13 @@ function homesteadUpdateBody(inCard = false) {
   return `${head}
     <div class="hs-clusters" role="group" aria-label="${picking ? "Clusters to update" : "This cluster"}">${rows}</div>
     ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes; this page reconnects. "}Nothing changes until you review it.</p>` : ""}
-    <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : ""}
-      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button></div>
-    <div class="hs-channel">${picker}</div>`;
+    ${(() => {
+      const main = label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : "";
+      const check = `<button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button>`;
+      // In the dialog the update is the footer's main action, so it stays in reach on a phone.
+      return inCard ? `<div class="row hs-actions">${main}${check}</div><div class="hs-channel">${picker}</div>`
+        : `<div class="row hs-actions">${check}</div><div class="hs-channel">${picker}</div>${UI.actions(UI.cancel("Close") + main)}`;
+    })()}`;
 }
 
 /* A dev build ahead of prod, or a prod release ahead of the last dev

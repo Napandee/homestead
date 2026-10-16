@@ -575,7 +575,7 @@ window.selfDataWatch = async index => {
         ${current.prepared ? UI.more("Hosts", UI.fields(
           UI.field("Move coordinator host", `<select aria-label="Move coordinator host" id="selfDataWorker" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Stays running while Homestead is stopped." }),
           UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Must be able to mount both volumes." }))) : ""}
-        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()")) +
+        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()", { attrs: 'data-dialog-dismiss="true"' })) +
           (current.archivable ? UI.button("Archive record", `selfDataArchiveReview(${jsArg(current.id)})`, {attrs:'data-need="admin"'}) : ""))}</div>`;
       if (!["succeeded", "failed", "cancelled"].includes(current.status)) setTimeout(paint, 3000);
     } catch (e) { if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`; }
@@ -706,16 +706,16 @@ window.namespaceCreate = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.namespaceDelete = async name => {
-  const typed = (await askText(`Delete the namespace ${name}? It is empty, and this cannot be undone.
-
-Type its name to confirm:`));
-  if (typed === null) return;
+window.namespaceDelete = name => modal(`Delete namespace · ${name}`, `${UI.lead(`Deletes the empty namespace <b>${esc(name)}</b>. This can't be undone.`)}
+  ${UI.typedConfirm({ id: "ns_delete_confirm", expect: name, button: "ns_delete_go" })}
+  ${UI.actions(UI.cancel() + `<button class="btn danger" id="ns_delete_go" disabled onclick="namespaceDeleteGo(${jsq(name)})">Delete namespace</button>`)}`);
+window.namespaceDeleteGo = async name => {
+  if (!typedConfirmMatches("ns_delete_confirm")) return;
   try {
     await api("/api/namespaces/delete", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, confirm: typed.trim() }) });
+      body: JSON.stringify({ name, confirm: $("#ns_delete_confirm").value.trim() }) });
     toast(`${name} deleted`, "ok");
-    namespacesPaint();
+    closeModal(); namespacesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -1132,12 +1132,12 @@ window.sambaInstallGo = async (selectedAddress = null) => {
 window.sambaRemove = () => {
   modal("Remove SMB server", `<p>The SMB address and its server will be removed. Network shares stop being served.</p>
     <div class="note warn">Share definitions, passwords, all PVCs and their data remain. Re-enable SMB here to serve them again.</div>
-    <div class="f"><label>Type <b class="mono">homestead-smb</b> to confirm</label><input id="smb_remove_confirm" autocomplete="off"></div>
-    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="sambaRemoveGo()">Remove server</button>`)}`);
+    ${UI.typedConfirm({ id: "smb_remove_confirm", expect: "homestead-smb", button: "smb_remove_go" })}
+    ${UI.actions(UI.cancel() + `<button class="btn danger" id="smb_remove_go" disabled onclick="sambaRemoveGo()">Remove SMB server</button>`)}`);
 };
 window.sambaRemoveGo = async () => {
-  const confirm = $("#smb_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-smb") return toast("Type homestead-smb to confirm", "bad");
+  if (!typedConfirmMatches("smb_remove_confirm")) return;
+  const confirm = $("#smb_remove_confirm").value.trim();
   try {
     const r = await api("/api/addons/smb/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm }) });
@@ -1185,11 +1185,11 @@ window.nfsInstallGo = async () => {
 };
 window.nfsRemove = () => modal("Remove NFS server", `<p>The NFS container and its address will be removed. Clients will lose access to its exports.</p>
   <div class="note warn">Export settings, SMB shares, all PVCs and their data remain.</div>
-  <div class="f"><label>Type <b class="mono">homestead-nfs</b> to confirm</label><input id="nfs_remove_confirm" autocomplete="off"></div>
-  ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="nfsRemoveGo()">Remove server</button>`)}`);
+  ${UI.typedConfirm({ id: "nfs_remove_confirm", expect: "homestead-nfs", button: "nfs_remove_go" })}
+  ${UI.actions(UI.cancel() + `<button class="btn danger" id="nfs_remove_go" disabled onclick="nfsRemoveGo()">Remove NFS server</button>`)}`);
 window.nfsRemoveGo = async () => {
-  const confirm = $("#nfs_remove_confirm")?.value.trim();
-  if (confirm !== "homestead-nfs") return toast("Type homestead-nfs to confirm", "bad");
+  if (!typedConfirmMatches("nfs_remove_confirm")) return;
+  const confirm = $("#nfs_remove_confirm").value.trim();
   try {
     const result = await api("/api/addons/nfs/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm }) });
     closeModal(); toast(result.detail, "ok"); addonsPaint();

@@ -368,10 +368,11 @@ window.ipamUnifi = async () => {
     <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles ship a self-signed certificate, so this is off unless yours has a real one.")}</label>
     ${u.last_sync ? `<div class="dim xs">Last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}${u.site_name ? ` from ${esc(u.site_name)}` : ""}${u.note ? ` · ${esc(u.note)}` : ""}</div>` : ""}
     ${u.last_error ? `<div class="note bad">${esc(u.last_error)}</div>` : ""}
-    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button>
-      ${u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : ""}
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+      <button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>`,
+      // Disconnecting is not this dialog's result: it sits on the left, away from Save.
+      u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : "")}`);
 };
 window.ipamUnifiSave = async sync => {
   try {

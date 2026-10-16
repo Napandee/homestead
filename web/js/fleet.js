@@ -265,7 +265,7 @@ window.fleetMigration = async id => {
         ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
       ${problems.map(([tone, title, detail, fix]) => UI.callout(tone, title, `${detail ? `<p>${esc(detail)}</p>` : ""}${fix}`)).join("")}
       ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn backs up here too.`, "Disabling migration pauses those backups until it is enabled again.") : ""}
-      ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { kind: "danger", id: "fm_go", attrs: 'data-need="admin"' }))}`;
+      ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { id: "fm_go", attrs: 'data-need="admin"' }))}`;
   } else if (state.deployed) {
     body = `${lead}
       ${UI.callout("info", "Its backup storage is stopped.", "Enabling migration starts it again as it was, with the backups on it.")}
@@ -457,7 +457,7 @@ window.fleetLink = () => {
       UI.field("This Homestead's address", `<input id="fl_own" value="${esc(suggested)}" autocomplete="off">`, { wide: true,
         help: "How that cluster reaches this one." }))}
     ${UI.more("What is kept", "<p>The password signs in once to exchange a shared key, and is not stored. From then on the clusters sign their requests to each other with that key.</p>")}
-    ${UI.actions((open ? UI.button("Back", "modalBack()") : UI.cancel()) + UI.button("Link", "fleetLinkSave()", { kind: "pri", id: "fl_go" }))}
+    ${UI.actions((open ? UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Link", "fleetLinkSave()", { kind: "pri", id: "fl_go" }))}
   </div>`);
   setTimeout(() => $("#fl_url")?.focus(), 30);
 };

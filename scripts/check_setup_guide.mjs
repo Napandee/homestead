@@ -52,7 +52,7 @@ try {
     await page.locator("#netVmNets .vip-own").waitFor();
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
     assert.match(await page.locator("#setupReturn").innerText(), /LAN networks/);
-    await page.locator("#lanNetworks").getByRole("button", { name: /LAN network/ }).click();
+    await page.locator("#views .phead").getByRole("button", { name: /LAN network/ }).click();
     await page.getByText("New LAN network", { exact: true }).waitFor();
     await page.evaluate(() => closeModal());
     await page.reload({ waitUntil: "networkidle" });

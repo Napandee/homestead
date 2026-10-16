@@ -342,8 +342,19 @@ async function audit([label, width, height, mobile], items) {
           && ![...(e.labels || [])].some((l) => l.textContent.trim())
           && !(e.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => document.getElementById(id)?.textContent.trim()))
           .map((e) => e.id ? `#${e.id}` : `${e.tagName.toLowerCase()}${e.name ? `[name=${e.name}]` : ""}.${[...e.classList].slice(0, 2).join(".")}`);
+        // The footer (design.md): Cancel, Close or Back on the left, the result on the right, and a
+        // danger button there only when the dialog is about that action ("Delete VM · x").
+        const end = [...body.querySelectorAll(".ui-actions-end > button, .ui-actions-end > .btn, .ui-actions-end .actionbar > button")].filter((b) => b.checkVisibility());
+        const dialogTitle = document.querySelector("#mtitle").textContent.trim();
+        const last = end.at(-1), verb = (last?.textContent.trim().split(/\s+/)[0] || "").toLowerCase();
+        const footer = [
+          ...end.filter((b) => /^(back( to .+)?|cancel|close)$/i.test(b.textContent.trim().replace(/^‹\s*/, ""))).map((b) => `"${b.textContent.trim()}" sits on the right`),
+          // Cancelling an operation that is running is that dialog's main action.
+          ...(last?.classList.contains("danger") && verb && verb !== "cancel" && !dialogTitle.toLowerCase().startsWith(verb) ? [`the main slot is a danger "${last.textContent.trim()}"`] : []),
+        ];
         return {
           unnamed: [...new Set(unnamed)].slice(0, 8),
+          footer,
           title: document.querySelector("#mtitle").textContent,
           copy: body.innerText,
           explanations: [...body.querySelectorAll("p, .ui-lead, .ui-help, .note, .ui-callout-body")].filter(e => e.offsetParent && !e.querySelector("p, .ui-lead, .ui-help, .note, .ui-callout-body")).map(e=>e.innerText.trim()).filter(Boolean),
@@ -381,6 +392,7 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
       if (metrics.squeezed.length) failures.push(`${name} (${label}): text squeezed into a narrow column: ${metrics.squeezed.join(", ")}`);
       if (metrics.unnamed.length) failures.push(`${name} (${label}): fields with no name: ${metrics.unnamed.join(", ")}`);
+      if (metrics.footer.length) failures.push(`${name} (${label}): footer: ${metrics.footer.join("; ")}`);
       // design.md, Verbosity budget: what a dialog shows before Details is opened.
       const limit = REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS;
       if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);

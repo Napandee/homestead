@@ -86,7 +86,7 @@ async function ifDownRoom(node) {
 window.capacityRoomHtml = capacityRoomHtml;
 window.capacityVerdict = capacityVerdict;
 
-const ifDownClose = () => window.__ifDownBack ? UI.button("Back", "ifDownBack()") : UI.cancel("Close");
+const ifDownClose = () => window.__ifDownBack ? UI.button("Back", "ifDownBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel("Close");
 window.ifDownBack = () => { const back = window.__ifDownBack; window.__ifDownBack = null; back ? back() : closeModal(); };
 
 // Where Longhorn's "Pods on a failed node" is set: Settings → Hardware and

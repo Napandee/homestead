@@ -87,18 +87,18 @@ window.diskV2EraseReview = async id => {
     childModal('Erase and prepare device',UI.lead(`V1 replicas have moved off <b class="mono">${esc(plan.device)}</b>. Review the device before preparing it for V2.`) +
       UI.facts([['Host',esc(plan.node)],['Device',`<span class="mono">${esc(plan.device)}</span>`],['Size',esc(diskV2GiB(plan.size_bytes))],['Result','Longhorn V2 block disk']]) +
       UI.callout('warn','The filesystem will be erased','Remove the V1 entry, unmount this filesystem, remove its mount from fstab and erase its signatures. Its old replica files become inaccessible. The blank device will be registered with V2.') +
-      UI.field(`Type ${plan.device} to confirm`,`<input id="diskV2Device" autocomplete="off" spellcheck="false" oninput="diskV2EraseReady()" aria-label="Confirm device to erase">`) +
+      UI.typedConfirm({ id: 'diskV2Device', expect: plan.device, oninput: 'diskV2EraseReady()' }) +
       UI.ack('diskV2EraseConfirm','Erase this evacuated device and use it for V2',{onchange:'diskV2EraseReady()'}) +
-      UI.actions(UI.button('Back to task',`diskV2Watch(${jsq(id)})`) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
+      UI.actions(UI.button('Back to task',`diskV2Watch(${jsq(id)})`, { attrs: 'data-dialog-dismiss="true"' }) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
     if(typeof MODAL_STACK!=='undefined' && MODAL_STACK.length) MODAL_STACK[MODAL_STACK.length-1].onReturn=()=>diskV2Watch(id);
     window.applyRole?.();
   } catch(e) {toast(e.message,'bad');if(sequence===diskV2Sequence && $('#diskV2Status') && !$('#modal')?.classList.contains('hidden')) await diskV2Watch(id);}
 };
 window.diskV2EraseReady = () => {
-  const button=$('#diskV2Erase');if(button) button.disabled=diskV2Busy || !diskV2Approval || !$('#diskV2EraseConfirm')?.checked || $('#diskV2Device')?.value!==diskV2Approval.device;
+  const button=$('#diskV2Erase');if(button) button.disabled=diskV2Busy || !diskV2Approval || !$('#diskV2EraseConfirm')?.checked || !typedConfirmMatches('diskV2Device');
 };
 window.diskV2Erase = async () => {
-  if(diskV2Busy || !diskV2Approval || !$('#diskV2EraseConfirm')?.checked || $('#diskV2Device')?.value!==diskV2Approval.device || $('#modal')?.classList.contains('hidden')) return;
+  if(diskV2Busy || !diskV2Approval || !$('#diskV2EraseConfirm')?.checked || !typedConfirmMatches('diskV2Device') || $('#modal')?.classList.contains('hidden')) return;
   const approval=diskV2Approval,sequence=diskV2Sequence;diskV2Approval=null;diskV2Busy=true;$('#diskV2Erase').disabled=true;
   try {
     const item=await diskV2Post('prepare',{operation_id:approval.operation_id,request_id:approval.request_id,capacity_token:approval.capacity_token,confirm_device:approval.device,confirm_capacity:true});
