@@ -244,9 +244,9 @@ def execute(cfg, user):
     CONSOLE.audit(WORKLOADS.DATA_DIR, {**audit, "event": "command-start"})
     try:
         result = capture(normalized["ns"], normalized["pod"], normalized["container"], normalized["argv"], normalized["timeout_seconds"])
-    except Exception:
+    except Exception as error:
         CONSOLE.audit(WORKLOADS.DATA_DIR, {**audit, "event": "command-failed"})
-        raise
+        raise ValueError("Command connection failed; inspect the app before retrying: " + clean(str(error), 500)) from None
     CONSOLE.audit(WORKLOADS.DATA_DIR, {**audit, "event": "command-end", "exit_code": result["exit_code"], "timed_out": result["timed_out"]})
     return {"ns": normalized["ns"], "name": normalized["name"], "pod": normalized["pod"], "container": normalized["container"], **result}
 

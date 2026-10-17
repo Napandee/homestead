@@ -267,13 +267,13 @@ def _plan_container_command(args, ctx):
     body = {"ns": _name(args.get("namespace"), "namespace"), "name": _name(args.get("name"), "name"),
             **{k: args[k] for k in ("pod", "container", "argv", "timeout_seconds") if k in args}}
     review = call("POST", "/api/container/command/preview", body=body, **_as(ctx))
-    return review["summary"], review["settings"]
+    return review["summary"], {**review["settings"], "review_token": review["review_token"]}
 
 
 def _container_command(body, ctx):
-    review = call("POST", "/api/container/command/preview", body=body, **_as(ctx))
-    return call("POST", "/api/container/command", body={**review["settings"],
-                "review_token": review["review_token"], "confirm": True}, **_as(ctx))
+    # Use the review made by the approval replan. A second preview here could
+    # silently approve a replacement target between comparison and execution.
+    return call("POST", "/api/container/command", body={**body, "confirm": True}, **_as(ctx))
 
 
 def _appstore(args, ctx):
