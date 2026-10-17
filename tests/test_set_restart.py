@@ -349,19 +349,25 @@ class SetRestartRouteTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.objects, self.sent, self.err = {}, [], None
+        self.objects, self.sent, self.err, self.errs = {}, [], None, {}
         OPS.bind(lambda path: self.objects[path], self.tmp.name, lambda ns, name: None)
         self.state = good_state()
         self.now = NOW
         self.enterContext(mock.patch.object(sr, "read_state", lambda ns, name, node: copy.deepcopy(self.state)))
         self.enterContext(mock.patch.object(sr, "clock", lambda: self.now))
-        sr.bind(lambda path: self.objects[path], self.send)
+        sr.bind(self.get, self.send)
         self.token = sr.plan(good_state(), NOW)["review_token"]
+
+    def get(self, path):
+        if path not in self.objects:
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        return self.objects[path]
 
     def send(self, method, path, body=None, *a, **k):
         self.sent.append((method, path, body))
-        if self.err:
-            raise urllib.error.HTTPError(path, self.err, "x", {}, None)
+        code = self.errs.get(path.rsplit("/", 1)[-1], self.err)
+        if code:
+            raise urllib.error.HTTPError(path, code, "boom", {}, None)
         return {}
 
     def run_req(self, **over):
@@ -441,11 +447,50 @@ class SetRestartRouteTests(unittest.TestCase):
             self.assertEqual(202, r.code)
             self.assertEqual(1, len(self.sent), "no retry")
             self.assertEqual("already replaced", r.body["set_restart"]["stage"])
+            item = OPS._read()[0]
+            self.assertEqual("web-0 was already replaced; waiting for it to be Ready on another host", item["message"])
 
-    def test_other_delete_error_with_nothing_deleted_raises(self):
-        self.err = 500
-        with self.assertRaises(ValueError):
-            self.run_req()
+    def two_pods(self):
+        self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": []})
+        self.token = sr.plan(self.state, NOW)["review_token"]
+
+    def test_all_deletes_failed_starts_no_job(self):
+        self.two_pods(); self.err = 500
+        r = self.run_req()
+        self.assertEqual(502, r.code)
+        self.assertIn("could not delete any of the pods", r.body["error"])
+        self.assertEqual(["web-0", "web-1"], [x["name"] for x in r.body["not_deleted"]])
+        self.assertIn("boom", r.body["not_deleted"][0]["error"])
+        self.assertEqual([], OPS._read())
+
+    def test_mixed_deleted_and_failed_follows_only_the_deleted(self):
+        self.two_pods(); self.errs = {"web-1": 500}
+        r = self.run_req()
+        self.assertEqual(202, r.code)
+        self.assertEqual(["web-1"], [x["name"] for x in r.body["not_deleted"]])
+        item = OPS._read()[0]
+        self.assertEqual(["web-0"], [p["name"] for p in item["ref"]["pods"]])
+        self.assertEqual("Deleted web-0; could not delete web-1: HTTP Error 500: boom; nothing was changed for it; "
+                         "waiting for a replacement on another host", item["message"])
+        self.now = NOW + 60
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-2", True)
+        self.assertEqual("succeeded", sr.status(item)[0])
+
+    def test_replaced_and_deleted_are_both_followed(self):
+        self.two_pods(); self.errs = {"web-0": 404}
+        r = self.run_req()
+        self.assertEqual(202, r.code)
+        item = OPS._read()[0]
+        self.assertEqual(["web-0", "web-1"], [p["name"] for p in item["ref"]["pods"]])
+        self.assertEqual("Deleted web-1; web-0 was already replaced; waiting for a replacement on another host", item["message"])
+        self.assertEqual("deleted", r.body["set_restart"]["stage"])
+
+    def test_start_refused_after_a_delete_says_pods_were_deleted(self):
+        with mock.patch.object(OPS, "start", side_effect=ValueError("already active")):
+            r = self.run_req()
+        self.assertEqual(409, r.code)
+        self.assertIn("Pods were deleted", r.body["error"])
+        self.assertEqual(["web-0"], [x["name"] for x in r.body["deleted"]])
 
     def item(self):
         r = self.run_req()

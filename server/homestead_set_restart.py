@@ -299,21 +299,32 @@ def _run(request):
             if e.code in (404, 409):
                 replaced.append(pod)  # gone or already replaced: never retried
             else:
-                failed.append(f"{pod['name']} ({e})")
+                failed.append({"name": pod["name"], "error": str(e)})
         except Exception as e:
-            failed.append(f"{pod['name']} ({e})")
+            failed.append({"name": pod["name"], "error": str(e)})
     if failed and not deleted and not replaced:
-        raise ValueError("Kubernetes did not delete " + ", ".join(failed))
-    stage = "deleted" if deleted else "already replaced"
+        return ROUTER.Reply(502, {"error": "Homestead could not delete any of the pods: "
+                                  + "; ".join(f"{f['name']}: {f['error']}" for f in failed), "not_deleted": failed})
+    followed = [p for p in reviewed["pods"] if p in deleted or p in replaced]
     ref = {"ns": ns, "name": name, "node": reviewed["node"], "started": now, "started_by": request.user,
-           "stage": stage, "pods": [{"name": p["name"], "uid": p["uid"]} for p in reviewed["pods"] if p not in failed]}
-    message = "Deleted " + ", ".join(p["name"] for p in deleted) + "; waiting for a replacement on another host"
-    if replaced:
-        message += ("; " if deleted else "") + ", ".join(p["name"] for p in replaced) + " already replaced"
+           "stage": "deleted" if deleted else "already replaced",
+           "pods": [{"name": p["name"], "uid": p["uid"]} for p in followed]}
+    names = lambda rows: ", ".join(p["name"] for p in rows)  # noqa: E731
+    parts = ([f"Deleted {names(deleted)}"] if deleted else []) + [
+        f"{names(replaced)} {'was' if len(replaced) == 1 else 'were'} already replaced"] * bool(replaced)
+    parts += [f"could not delete {f['name']}: {f['error']}; nothing was changed for it" for f in failed]
+    parts.append("waiting for a replacement on another host" if deleted else
+                 ("waiting for it to be Ready on another host" if len(replaced) == 1 else "waiting for them to be Ready on another host"))
+    try:
+        op = OPS.start(KIND, f"Start {name} on another host", {"kind": "StatefulSet", "name": name, "namespace": ns},
+                       "/nodes", ref, message="; ".join(parts))
+    except ValueError:
+        if not deleted:
+            raise
+        return ROUTER.Reply(409, {"error": "Pods were deleted, but another restart of this set is already being followed",
+                                  "deleted": [{"name": p["name"]} for p in deleted], "operation": _active(ns, name)})
     if failed:
-        message += "; could not delete " + ", ".join(failed)
-    op = OPS.start(KIND, f"Start {name} on another host", {"kind": "StatefulSet", "name": name, "namespace": ns},
-                   "/nodes", ref, message=message)
+        op = dict(op, not_deleted=failed)
     return ROUTER.Reply(202, op)
 
 
@@ -350,7 +361,8 @@ def status(item):
             unread = e
     if rows and not unread:
         low = min(rows, key=lambda r: r[1])
-        ref["stage"] = low[2]
+        if low[1] or ref.get("stage") != "already replaced":
+            ref["stage"] = low[2]  # "already replaced" stays until a new pod is seen
         if low[1] == 3:
             return "succeeded", 100, "Ready on another host: " + ", ".join(r[0] for r in rows)
     if waited > LIMIT:
