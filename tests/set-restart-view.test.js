@@ -17,6 +17,7 @@ function setup({ plan = PLAN, post = null } = {}) {
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
     jsArg: value => JSON.stringify(String(value)),
     modal: (title, html) => { fields["#mbody"].innerHTML = html; fields["#mtitle"].textContent = title; },
+    applyRole: () => calls.push(["applyRole", fields["#mbody"].innerHTML, fields["#sr_run"].textContent]),
     closeModal: () => calls.push(["closeModal"]), refresh: () => calls.push(["refresh"]),
     noteOperation: op => calls.push(["noteOperation", op.id]), refreshOperations: () => {},
     api: async (url, opts) => {
@@ -109,4 +110,34 @@ test("a 409 that names a running operation follows it instead", async () => {
   await t.ctx.setRestartReview("data", "postgres", "node2");
   await t.ctx.setRestartRun("data", "postgres", "node2");
   assert.ok(t.calls.some(c => c[0] === "noteOperation" && c[1] === "op9"));
+});
+
+test("the role is applied after the review is drawn, so only admins see the run button", async () => {
+  const t = setup();
+  await t.ctx.setRestartReview("data", "postgres", "node2");
+  const applied = t.calls.filter(c => c[0] === "applyRole");
+  assert.equal(applied.length, 1);
+  assert.match(applied[0][1], /id="sr_run"[^>]*data-need="admin"/);
+});
+
+test("the role is applied again when the button becomes Review again", async () => {
+  const err = Object.assign(new Error("The review changed"), { status: 409, body: { error: "x", plan: PLAN } });
+  const t = setup({ post: err });
+  await t.ctx.setRestartReview("data", "postgres", "node2");
+  await t.ctx.setRestartRun("data", "postgres", "node2");
+  const applied = t.calls.filter(c => c[0] === "applyRole");
+  assert.equal(applied.length, 2);
+  assert.equal(applied[1][2], "Review again");
+});
+
+test("a 502 names the pods that could not be deleted and offers Review again", async () => {
+  const err = Object.assign(new Error("Nothing could be deleted"), { status: 502,
+    body: { error: "Nothing could be deleted", not_deleted: [{ name: "postgres-0", error: "forbidden" }] } });
+  const t = setup({ post: err });
+  await t.ctx.setRestartReview("data", "postgres", "node2");
+  await t.ctx.setRestartRun("data", "postgres", "node2");
+  const [message, kind] = t.toasts.at(-1);
+  assert.equal(kind, "bad");
+  assert.match(message, /postgres-0 \(forbidden\)/);
+  assert.equal(t.fields["#sr_run"].textContent, "Review again");
 });

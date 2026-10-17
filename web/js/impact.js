@@ -56,6 +56,7 @@ window.nodeIfDown = async (node, back = null) => {
     <div id="ifDownRoom" data-node="${esc(node)}"></div>
     ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A StatefulSet's pod is never started elsewhere while the old one might still run: it waits until it is deleted, by hand or by Longhorn's Pods on a failed host setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
     ${UI.actions(ifDownClose())}</div>`;
+  window.applyRole?.();   // hides what this role may not use (data-need)
   ifDownRoom(node);
 };
 

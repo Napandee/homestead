@@ -50,6 +50,7 @@ window.setRestartReview = async (ns, name, node) => {
   if (plan.ready && (!plan.review_token || !plan.set)) return toast("The review is incomplete; try again", "bad");
   if (plan.ready) SET_RESTART_PLAN = { ...plan, set: { ...plan.set, ns, name } };
   modal(`Start ${name} on another host`, setRestartBody(plan.ready ? SET_RESTART_PLAN : plan, node), true);
+  window.applyRole?.();
 };
 
 window.setRestartRun = async (ns, name, node) => {
@@ -77,6 +78,7 @@ window.setRestartRun = async (ns, name, node) => {
     if (button) {
       button.disabled = false; button.textContent = "Review again";
       button.onclick = () => window.setRestartReview(ns, name, node);
+      window.applyRole?.();
     }
   } finally { window.refreshOperations?.(true); }
 };

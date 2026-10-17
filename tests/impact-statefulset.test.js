@@ -9,6 +9,7 @@ function setup(payload = {}, state = {}) {
     $: key => fields[key], $$: () => [], can: () => true, tip: t => t, toast: () => {}, jsArg: v => JSON.stringify(String(v)),
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
     appAvatar: () => '<span class="av"></span>', modal: () => {},
+    applyRole: () => calls.push(["applyRole", fields["#mbody"].innerHTML]),
     closeModal: () => calls.push(["closeModal"]), settingsTab: tab => calls.push(["settingsTab", tab]), go: view => calls.push(["go", view]),
     api: async url => (String(url).startsWith("/api/nodes/impact") ? payload : { hosts: [] }) };
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
@@ -105,4 +106,13 @@ test("not offered on Harvester, which handles it itself", () => {
   const html = setup({}, down("NotReady", { platform: { harvester: true } })).impactApp(waits, "node2");
   assert.doesNotMatch(html, /setRestartReview/);
   assert.match(html, /Harvester restarts these itself; see its VM force reset policy\./);
+});
+
+test("the impact dialog applies the role after drawing the button, so viewers don't see it", async () => {
+  const t = setup({ node: "node2", others_ready: ["node1"], at_risk: [], fewer_copies: [], addresses: [], unread: [],
+    counts: { stops: 0, waits: 1, unknown: 0, moves: 0, at_risk: 0, fewer_copies: 0, addresses: 0 }, apps: [waits] }, down("NotReady"));
+  await t.ctx.nodeIfDown("node2");
+  const applied = t.calls.filter(c => c[0] === "applyRole");
+  assert.equal(applied.length, 1);
+  assert.match(applied[0][1], /data-need="admin"[^>]*>Start on another host…/);
 });
