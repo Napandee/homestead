@@ -82,7 +82,7 @@ class Routes(unittest.TestCase):
         for method, path in (("POST", "/api/logo-fit/keep"), ("GET", "/api/logo-fit/source"),
                              ("POST", "/api/logo-fit/resized")):
             self.assertEqual("operator", POLICY.role(path, method))
-            self.assertFalse(server.is_public_path(path), path)
+            self.assertFalse(server.WEB_PATHS.is_public_path(path), path)
 
     def test_the_picture_is_sent_as_itself_not_as_json(self):
         handler = object.__new__(server.H)

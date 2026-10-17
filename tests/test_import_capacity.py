@@ -246,7 +246,7 @@ class ImportCapacityTests(unittest.TestCase):
              mock.patch.object(imports, "ksend") as writes, \
              mock.patch.object(imports, "create_pvc") as pvc:
             with self.assertRaises(server.CAPACITY_REVIEW.Rejected):
-                server.reviewed_import(body)
+                server.DEPLOY_ROUTES.reviewed_import(body)
         writes.assert_not_called()
         pvc.assert_not_called()
 
@@ -256,7 +256,7 @@ class ImportCapacityTests(unittest.TestCase):
             cfg["icon"] = "/api/icons/persisted.svg"
         with mock.patch.object(server, "persist_icon_config", side_effect=icon), \
              mock.patch.object(server.IMPORT_JOB, "dispatch", return_value={"ok": True}) as dispatch:
-            server.reviewed_import(body)
+            server.DEPLOY_ROUTES.reviewed_import(body)
         submitted, prepared, context = dispatch.call_args.args[:3]
         self.assertTrue(server.CAPACITY_REVIEW.valid(submitted, context))
         self.assertEqual("/api/icons/persisted.svg", prepared["deployment"]["metadata"]["annotations"]["homestead.io/icon"])

@@ -108,11 +108,11 @@ class ProtectionHealthTests(unittest.TestCase):
         jobs = [{"name": "daily-backup", "task": "backup", "covers": 3, "last_failed": True},
                 {"name": "weekly-trim", "task": "filesystem-trim", "covers": 3, "last_failed": True},
                 {"name": "daily-snapshot", "task": "snapshot", "covers": 0, "last_failed": True}]
-        issues = server.protection_issues(jobs, {"configured": True, "available": False, "url": "nfs://nas:/b",
+        issues = server.OVERVIEW_ROUTES.protection_issues(jobs, {"configured": True, "available": False, "url": "nfs://nas:/b",
                                                  "reason": "connection refused"})
         self.assertEqual(["daily-backup", "backup target"], [i["name"] for i in issues])
         self.assertIn("connection refused", issues[1]["reason"])
-        self.assertIn("no backup target", server.protection_issues(jobs[:1], {"configured": False})[1]["reason"])
+        self.assertIn("no backup target", server.OVERVIEW_ROUTES.protection_issues(jobs[:1], {"configured": False})[1]["reason"])
         result = server.CLUSTER.classify_cluster_health([], [], [], protection=issues)
         self.assertEqual("degraded", result["health"])
 

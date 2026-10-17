@@ -12,23 +12,23 @@ import server
 
 class SpaRouteTests(unittest.TestCase):
     def test_known_routes_and_trailing_slashes_serve_the_app(self):
-        for path in server.SPA_ROUTES:
-            self.assertTrue(server.is_spa_route(path), path)
+        for path in server.WEB_PATHS.SPA_ROUTES:
+            self.assertTrue(server.WEB_PATHS.is_spa_route(path), path)
             if path != "/":
-                self.assertTrue(server.is_spa_route(path + "/"), path)
+                self.assertTrue(server.WEB_PATHS.is_spa_route(path + "/"), path)
 
     def test_api_and_unknown_paths_are_not_spa_routes(self):
         for path in ("/api/overview", "/api/not-found", "/unknown", "/style.css"):
-            self.assertFalse(server.is_spa_route(path), path)
+            self.assertFalse(server.WEB_PATHS.is_spa_route(path), path)
 
     def test_a_mistyped_page_address_gets_the_app_to_say_so(self):
         """A typo used to answer with raw JSON; the app now lands on the dashboard."""
         for path in ("/protection", "/containers/extra", "/Volumes"):
-            self.assertTrue(server.is_page_path(path), path)
+            self.assertTrue(server.WEB_PATHS.is_page_path(path), path)
 
     def test_api_and_file_paths_keep_their_plain_not_found(self):
         for path in ("/api/not-found", "/api", "/missing.js", "/js/nope.js", "/favicon.ico", "/../etc/passwd"):
-            self.assertFalse(server.is_page_path(path), path)
+            self.assertFalse(server.WEB_PATHS.is_page_path(path), path)
 
     def test_an_unknown_page_serves_the_app_before_authentication(self):
         handler = object.__new__(server.H)
@@ -43,7 +43,7 @@ class SpaRouteTests(unittest.TestCase):
     def test_browser_and_server_route_allowlists_match(self):
         source = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
         browser_paths = set(re.findall(r'path:\s*"([^"]+)"', source))
-        self.assertEqual(set(server.SPA_ROUTES), browser_paths)
+        self.assertEqual(set(server.WEB_PATHS.SPA_ROUTES), browser_paths)
 
     def test_sidebar_links_use_canonical_routes(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
@@ -52,18 +52,18 @@ class SpaRouteTests(unittest.TestCase):
         hrefs = set(re.findall(r'<a href="([^"]+)" data-view=', html))
         router = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
         routed = set(re.findall(r'path: "([^"]+)"', router))
-        self.assertLessEqual(hrefs, set(server.SPA_ROUTES))
-        self.assertEqual(set(server.SPA_ROUTES), routed)
+        self.assertLessEqual(hrefs, set(server.WEB_PATHS.SPA_ROUTES))
+        self.assertEqual(set(server.WEB_PATHS.SPA_ROUTES), routed)
         tabbed = {path for path in routed - hrefs if re.search(r'path: "%s",[^\n]*parent: "' % re.escape(path), router)}
         self.assertEqual(routed - hrefs, tabbed, "every page is in the sidebar or a tab of a page that is")
         self.assertRegex(html, r'<script src="/js/router\.js\?v=\d+\.\d+\.\d+(?:-dev\.\d+)?"></script>')
 
     def test_bundled_svg_assets_are_public_without_allowing_traversal(self):
-        self.assertTrue(server.is_asset_path("/assets/homestead-mark.svg"))
-        self.assertTrue(server.is_public_path("/assets/homestead-mark.svg"))
+        self.assertTrue(server.WEB_PATHS.is_asset_path("/assets/homestead-mark.svg"))
+        self.assertTrue(server.WEB_PATHS.is_public_path("/assets/homestead-mark.svg"))
         for path in ("/assets/../server.py", "/assets/nested/mark.svg", "/assets/mark.png"):
-            self.assertFalse(server.is_asset_path(path), path)
-            self.assertFalse(server.is_public_path(path), path)
+            self.assertFalse(server.WEB_PATHS.is_asset_path(path), path)
+            self.assertFalse(server.WEB_PATHS.is_public_path(path), path)
 
     def test_bundled_svg_asset_is_served_with_svg_mime_type(self):
         handler = object.__new__(server.H)

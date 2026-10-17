@@ -113,7 +113,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         with mock.patch.object(server, "enforce_update_policy", side_effect=[{}, PermissionError("window closed")]), \
                 mock.patch.object(updates, "ksend") as send:
             with self.assertRaisesRegex(PermissionError, "window closed"):
-                server.reviewed_image_update(body, "update")
+                server.CLUSTER_ROUTES.reviewed_image_update(body, "update")
         send.assert_not_called()
 
     def test_rollback_uses_same_review_and_capacity_guard(self):
@@ -197,7 +197,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         with mock.patch.object(updates, "ksend", side_effect=urllib.error.HTTPError("put", 409, "conflict", {}, None)), \
                 mock.patch.object(server.OPS, "start") as job:
             with self.assertRaises(urllib.error.HTTPError):
-                server.reviewed_image_update(body, "update")
+                server.CLUSTER_ROUTES.reviewed_image_update(body, "update")
         updates._history.assert_not_called()
         job.assert_not_called()
 

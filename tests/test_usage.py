@@ -33,8 +33,8 @@ class UsageTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.folder = Path(folder.name)
-        usage.bind(folder.name, server.parse_cpu, server.parse_mem)
-        self.addCleanup(usage.bind, "/data", server.parse_cpu, server.parse_mem)
+        usage.bind(folder.name, server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
+        self.addCleanup(usage.bind, "/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
 
     def week(self, cpu_m=100, mem_mi=400, days=7, spikes=0, container="web"):
         """A reading every five minutes for days, the last few of them spikes."""
@@ -187,9 +187,9 @@ class UsageTests(unittest.TestCase):
 class LoopTests(unittest.TestCase):
     def run_rounds(self, read, rounds=3):
         beats, now = [], [1000.0]
-        usage.bind("/data", server.parse_cpu, server.parse_mem, read, server.FLOW._flow_owner, (), lambda: True,
+        usage.bind("/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem, read, server.FLOW._flow_owner, (), lambda: True,
                    lambda *args, **kwargs: beats.append(args))
-        self.addCleanup(usage.bind, "/data", server.parse_cpu, server.parse_mem)
+        self.addCleanup(usage.bind, "/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
 
         class Stop(Exception):
             pass

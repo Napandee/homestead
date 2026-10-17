@@ -43,7 +43,7 @@ class AlertLinkTests(unittest.TestCase):
             if "{" in path or path.startswith("/api/"):
                 continue
             checked += 1
-            self.assertIn(path, server.SPA_ROUTES, f"{name}: {link}")
+            self.assertIn(path, server.WEB_PATHS.SPA_ROUTES, f"{name}: {link}")
         self.assertGreater(checked, 10)
 
     def test_every_card_a_link_names_is_drawn(self):

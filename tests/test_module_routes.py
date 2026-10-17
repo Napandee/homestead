@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 3215
+MAX_LINES = 2584
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -44,9 +44,6 @@ INLINE_ROUTES = (
     ("POST", "/api/auth/keys/revoke", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/auth/keys/edit", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/fleet/", "connection-bound: fleet forwarding"),
-    ("POST", "/api/config/backup", "to move in Part 8"),
-    ("POST", "/api/config/inspect", "to move in Part 8"),
-    ("POST", "/api/config/restore", "to move in Part 8"),
     ("POST", "/api/auth/setup", "connection-bound: cookies/session"),
     ("POST", "/api/auth/login", "connection-bound: cookies/session"),
     ("POST", "/api/auth/logout", "connection-bound: cookies/session"),

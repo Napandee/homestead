@@ -1,8 +1,9 @@
-"""The cluster code that lived in server.py (track 1, part 2): the leader's
-background loops for hardware, housekeeping, power jobs, baselines, host
-consoles and OS updates; image updates and their capacity plan; the
-allocation probe's capacity; the shutdown review; and the onboarding,
-clean-up, node-removal and shutdown routes server.py's handler answered.
+"""The cluster code that lived in server.py (track 1, parts 2 and 8): the
+leader's background loops for hardware, housekeeping, power jobs, baselines,
+host consoles and OS updates; image updates, their review and capacity plan,
+and the auto-update tick; the Harvester upgrade status; the allocation
+probe's capacity; the shutdown review; and the onboarding, clean-up,
+node-removal and shutdown routes server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
 ROUTE_NEEDS is looked up in server.py when it is called, so a test that
@@ -10,6 +11,7 @@ patches server.kget patches it here too; each name in VALUES is server.py's
 own value (the same object, for _cache and _lock)."""
 import copy
 import time
+import urllib.request, urllib.parse, urllib.error
 import homestead_allocation_capacity as ALLOCATION_CAPACITY
 import homestead_allocation_probe as ALLOCATION_PROBE
 import homestead_autoupdate as AUTOUPDATE
@@ -40,8 +42,11 @@ import homestead_routes as MODULE_ROUTES
 import homestead_self as SELF
 import homestead_self_data_prepare as SELF_DATA_PREPARE
 import homestead_updates as UPDATES
+import homestead_upgrades as UPGRADES
+import homestead_uptime as UPTIME
+import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_dns_name", "_ksend", "_self_data_helper_image", "autoupdate_tick", "beat", "enforce_update_policy", "get_app_settings", "guard_managed_smb", "is_self", "kget", "ksend", "rollout_review_context", "self_data_activity")
+ROUTE_NEEDS = ("_dns_name", "_ksend", "_self_data_helper_image", "beat", "cached", "enforce_update_policy", "get_app_settings", "guard_managed_smb", "is_self", "kget", "ksend", "rollout_review_context", "self_data_activity", "update_policy_status")
 VALUES = ("HOMESTEAD_VERSION", "_cache", "_lock")
 
 
@@ -350,6 +355,52 @@ def _upgrade_node_probe():
             print(f"VM placement checks: {result['detail']}", flush=True)
     except Exception:
         print("VM placement helper not updated; review its settings in Cluster > Add-ons", flush=True)
+
+
+def reviewed_image_update(body, action):
+    if body.get("action", "update") != action:
+        raise ValueError("image action changed; review again")
+    prepared, capacity, context = image_update_capacity_plan(body, action)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    if action == "update":
+        enforce_update_policy(body)  # Registry/preflight reads may cross a window boundary.
+    return UPDATES.commit_prepared(prepared)
+
+
+def _harvester_upgrade_status(item):
+    """A Harvester upgrade Homestead started, followed as the Cluster page
+    follows any: Harvester's own steps, then each node."""
+    name = item["ref"].get("upgrade", "")
+    row = next((row for row in UPGRADES.upgrades() if row["name"] == name), None)
+    if not row:
+        return "running", 1, "Waiting for Harvester to take the upgrade"
+    step = next((s["label"] for s in row["steps"] if s["state"] in ("running", "failed")), "")
+    message = row["message"] or (f"{step}" if step else f"Harvester {row['version']}")
+    return row["state"], row["progress"], message
+
+
+def autoupdate_tick():
+    """On the leader: start the next automatic update if the window is open,
+    and tidy old snapshots after ones that worked. Returns the app started."""
+    status = update_policy_status()
+    operations = OPS.list_operations()
+    AUTOUPDATE.tidy(operations)
+    report = UPDATES._LATEST.get("report") or {}
+    chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,
+                             status["window_open"], status["policy"], (CREBALANCE.KIND,))
+    if not chosen:
+        return None
+    try:
+        # Refused under the job list's lock if a rebalance started since the look.
+        OPS.start(AUTOUPDATE.KIND, f"Update {chosen['name']} automatically",
+                  {"kind": "Deployment", "name": chosen["name"], "namespace": chosen["ns"]},
+                  "/containers?" + urllib.parse.urlencode({"find": chosen["name"]}),
+                  {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
+                  "Snapshotting its volumes before the update", unless=(CREBALANCE.KIND,))
+    except ValueError:
+        return None
+    _cache.pop("wl", None)
+    return chosen
 
 
 # The routes server.py's handler answered for this code.

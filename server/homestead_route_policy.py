@@ -30,8 +30,6 @@ POLICY = {
     ('POST', '/api/auth/signout-everywhere'): 'viewer',
     ('POST', '/api/auth/users'): 'admin',
     ('POST', '/api/auth/users/delete'): 'admin',
-    ('POST', '/api/config/backup'): 'admin',
-    ('POST', '/api/config/restore'): 'admin',
     ('POST', '/api/self/data/move'): 'admin',
 }
 
@@ -68,11 +66,9 @@ POLICY.update({
     ('GET', '/api/cluster/remove-node'): "admin",
     ('GET', '/api/cluster/upgrades/start'): "admin",
     ('GET', '/api/config/backup'): "admin",
-    ('POST', '/api/config/backup'): "admin",
     ('GET', '/api/config/inspect'): "admin",
     ('POST', '/api/config/parts'): "admin",
     ('GET', '/api/config/restore'): "admin",
-    ('POST', '/api/config/restore'): "admin",
     ('GET', '/api/fleet/accept'): "admin",
     ('POST', '/api/fleet/accept'): "admin",
     ('GET', '/api/fleet/address'): "admin",
