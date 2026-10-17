@@ -12,8 +12,6 @@ POLICY = {
     ('GET', '/api/auth/preferences/dashboard'): 'viewer',
     ('POST', '/api/auth/preferences/dashboard'): 'viewer',
     ('GET', '/api/diagnostics/download'): 'admin',
-    ('GET', '/api/logos'): 'viewer',
-    ('GET', '/api/logos/missing'): 'viewer',
     ('GET', '/api/auth/state'): 'viewer',
     ('GET', '/api/console'): 'operator',
     ('GET', '/api/fleet'): 'viewer',
@@ -22,8 +20,6 @@ POLICY = {
     ('GET', '/api/node/shell'): 'admin',
     ('GET', '/api/self/data/prepare'): 'viewer',
     ('GET', '/api/vm/console'): 'operator',
-    ('POST', '/api/addons/nfs/remove'): 'admin',
-    ('POST', '/api/addons/smb/remove'): 'admin',
     ('POST', '/api/auth/keys'): 'admin',
     ('POST', '/api/auth/keys/revoke'): 'admin',
     ('POST', '/api/auth/keys/edit'): 'admin',
@@ -37,16 +33,11 @@ POLICY = {
     ('POST', '/api/auth/users/delete'): 'admin',
     ('POST', '/api/config/backup'): 'admin',
     ('POST', '/api/config/restore'): 'admin',
-    ('POST', '/api/helm/install'): 'admin',
-    ('POST', '/api/helm/uninstall'): 'admin',
-    ('POST', '/api/helm/upgrade'): 'admin',
     ('POST', '/api/self/data/abandon'): 'admin',
     ('POST', '/api/self/data/move'): 'admin',
     ('POST', '/api/self/data/move/preview'): 'admin',
     ('POST', '/api/self/data/prepare'): 'admin',
     ('POST', '/api/self/data/prepare/preview'): 'admin',
-    ('POST', '/api/self/nfs'): 'admin',
-    ('POST', '/api/self/samba'): 'admin',
 }
 
 POLICY.update({
@@ -65,9 +56,7 @@ POLICY.update({
     ('GET', '/api/addons/multus'): "admin",
     ('GET', '/api/addons/multus/repair'): "admin",
     ('GET', '/api/addons/nfs/remove'): "admin",
-    ('POST', '/api/addons/nfs/remove'): "admin",
     ('GET', '/api/addons/smb/remove'): "admin",
-    ('POST', '/api/addons/smb/remove'): "admin",
     ('POST', '/api/auth/history'): "admin",
     ('POST', '/api/auth/keys'): "admin",
     ('GET', '/api/auth/keys/revoke'): "admin",
@@ -164,10 +153,8 @@ POLICY.update({
     ('GET', '/api/operations/vm-recovery/resolve'): "admin",
     ('GET', '/api/platform/baseline/install'): "admin",
     ('GET', '/api/self/nfs'): "admin",
-    ('POST', '/api/self/nfs'): "admin",
     ('GET', '/api/self/permissions'): "admin",
     ('GET', '/api/self/samba'): "admin",
-    ('POST', '/api/self/samba'): "admin",
     ('GET', '/api/setup/https-check'): "admin",
     ('GET', '/api/setup/opened'): "admin",
     ('GET', '/api/shares/delete'): "admin",
@@ -226,7 +213,3 @@ POLICY.update({
     ('POST', '/api/self/data/handoff/close/preview'): 'admin',
     ('POST', '/api/self/data/prepare/archive/preview'): 'admin',
 })
-
-POLICY.update({(method, '/api/snapshot-files/' + action): 'admin'
-               for method, actions in (("GET", ("plan", "status", "list", "download")),
-                                       ("POST", ("start", "close"))) for action in actions})

@@ -80,11 +80,13 @@ window.vmStore = async (check = false) => {
       + (r.versions.length > 1 ? ` <span class="dim xs" data-tip="Older builds stay while a disk was made from them">+${r.versions.length - 1} older</span>` : "")
       + (r.update ? ' <span class="pill slim warn" data-tip="The publisher has a newer build; it downloads on the next check if this keeps itself current">newer build out</span>' : "");
   };
-  const actions = r => `<div class="row nowrap" style="gap:6px;justify-content:flex-end">
-      ${s.harvester && !r.kept ? `<button class="btn sm" data-need="admin" onclick="vmStoreKeep(${jsq(r.id)})" data-tip="Download it now as a Harvester image, so VMs start from a local copy">Keep</button>` : ""}
-      ${s.harvester && r.kept ? `<label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto(${jsq(r.id)}, this.checked)"> current</label>` : ""}
-      <button class="btn sm pri" data-need="operator" onclick="vmStoreNew(${jsq("store:" + r.id)})">New VM</button>
-      ${s.harvester && r.kept ? `<button class="btn sm danger" data-need="admin" title="Stop keeping it; builds a disk came from stay" onclick="vmStoreForget(${jsq(r.id)})">${icon("trash")}</button>` : ""}</div>`;
+  // Keeping current is a setting of a kept image, so it sits with its state.
+  const current = r => s.harvester && r.kept ? ` <label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto(${jsq(r.id)}, this.checked)"> current</label>` : "";
+  const actions = r => actionBar([
+    s.harvester && !r.kept ? { label: "Keep", run: `vmStoreKeep(${jsq(r.id)})`, need: "admin", tip: "Download it now as a Harvester image, so VMs start from a local copy" } : null,
+    { label: "New VM", run: `vmStoreNew(${jsq("store:" + r.id)})`, need: "operator", pri: true },
+    s.harvester && r.kept ? { label: "Stop keeping", icon: "trash", run: `vmStoreForget(${jsq(r.id)})`, need: "admin", danger: true, tip: "Stop keeping it; builds a disk came from stay" } : null,
+  ], { shown: s.harvester && r.kept ? 1 : 2, label: `Actions for ${r.name}` });
   const rows = s.images.filter(r => r.available);
   const distros = [...new Set(rows.map(r => r.distro))];
   const filter = (STATE.vmStoreFilter || "").toLowerCase();
@@ -112,7 +114,7 @@ window.vmStore = async (check = false) => {
             <td data-label="Variant"><span class="tag" data-tip="${esc(r.about)}">${esc(r.variant)}</span></td>
             <td class="mono small" data-label="Download">${mb(r.size)}</td>
             <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
-            ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
+            ${s.harvester ? `<td data-label="Here">${state(r)}${current(r)}</td>` : ""}<td data-actions>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
       }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
     <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
       <span class="dim xs">Import your own disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
@@ -400,42 +402,42 @@ window.vmOpen = async (ns, name) => {
   let v;
   try { v = await api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`); }
   catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmOpen(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
-  const tab = (id, label) => `<button class="${id === "overview" ? "on" : ""}" onclick="vmTab(this,${jsq(id)})">${label}</button>`;
-  $("#mbody").innerHTML = `<div class="between vm-head"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span>
-      <span class="dim xs"> run strategy ${esc(v.run_strategy)}${v.node ? ` · on ${esc(v.node)}` : ""}</span></div>
-      ${vmDialogActions(v)}</div>
-    ${v.problem ? `<div class="note bad" style="margin-top:10px">${esc(v.problem)}</div>` : ""}
-    ${vmFilling(v)}
-    <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
-    <div class="vm-pane" data-pane="overview">
-      <div class="vm-facts wide">
-        <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} vCPUs`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
-        <div><span>Guest OS</span><b>${esc(v.guest?.prettyName || v.os || "unknown")}</b></div>
-        <div><span>Kernel</span><b class="mono xs">${esc(v.guest?.kernelRelease || "—")}</b></div>
-        <div><span>Live migration</span><b>${v.migratable ? "possible" : "not possible"}</b></div>
-        <div><span>Created</span><b>${esc((v.created || "").slice(0, 10))}</b></div></div>
-      ${v.profile_error ? `<div class="note warn">${esc(v.profile_error)}</div>` : ""}
+  // Where it is first, then its figures; the rest in the shared section tabs (#506).
+  const ips = v.ips?.length ? v.ips : v.ip ? [v.ip] : [];
+  const overview = `${UI.facts([
+      ["Address", ips.length ? ips.map(ip => `<span class="mono">${esc(ip)}</span>`).join(", ") : '<span class="dim">none yet</span>'],
+      ["Host", v.node ? esc(v.node) : '<span class="dim">not running</span>'],
+      ["CPU", v.cores == null ? "Unavailable" : `${esc(v.cores)} vCPUs`], ["Memory", esc(v.memory || "—")],
+      ["Guest OS", esc(v.guest?.prettyName || v.os || "unknown")], ["Kernel", `<span class="mono xs">${esc(v.guest?.kernelRelease || "—")}</span>`],
+      ["Live migration", v.migratable ? "possible" : "not possible"], ["Run strategy", esc(v.run_strategy || "—")],
+      ["Created", esc((v.created || "").slice(0, 10) || "—")]])}
+      ${v.profile_error ? UI.callout("warn", "", `<p>${esc(v.profile_error)}</p>`) : ""}
       ${v.description ? `<p class="small" style="margin-top:10px">${esc(v.description)}</p>` : ""}
       ${v.guest?.prettyName ? "" : '<p class="dim xs" style="margin-top:8px">The guest reports its OS and addresses through the QEMU guest agent, when it runs one.</p>'}
-      <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Condition</th><th>Status</th><th>Detail</th></tr></thead><tbody>
-        ${v.conditions.map(c => `<tr><td>${esc(c.type)}</td><td><span class="pill slim ${c.status === "True" ? "ok" : "neutral"}">${esc(c.status)}</span></td><td class="small">${esc(c.message || c.reason)}</td></tr>`).join("")}</tbody></table></div>
-    <div class="vm-pane" data-pane="disks" hidden><table class="tbl dense stack"><thead><tr><th>Disk</th><th>Kind</th><th>Volume</th><th>Size</th><th>Boot</th></tr></thead><tbody>
+      ${v.conditions.length ? UI.more("Conditions", `<table class="tbl dense stack"><thead><tr><th>Condition</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+        ${v.conditions.map(c => `<tr><td>${esc(c.type)}</td><td><span class="pill slim ${c.status === "True" ? "ok" : "neutral"}">${esc(c.status)}</span></td><td class="small">${esc(c.message || c.reason)}</td></tr>`).join("")}</tbody></table>`) : ""}`;
+  const disks = `<table class="tbl dense stack"><thead><tr><th>Disk</th><th>Kind</th><th>Volume</th><th>Size</th><th>Boot</th></tr></thead><tbody>
       ${v.disks.map(d => `<tr><td><b>${esc(d.name)}</b><div class="dim xs">${esc(d.bus)}</div></td><td>${esc(d.kind)}</td>
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
-        <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table></div>
-    <div class="vm-pane" data-pane="network" hidden><div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
+        <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table>`;
+  const network = `<div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
       <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.ns)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
-        <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table></div>
-    <div class="vm-pane" data-pane="events" hidden>${v.events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Last</th></tr></thead><tbody>
+        <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table>`;
+  const events = v.events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Last</th></tr></thead><tbody>
       ${v.events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
-        <td class="small">${esc(e.message)}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>'}</div>`;
+        <td class="small">${esc(e.message)}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>';
+  $("#mbody").innerHTML = `<div class="between vm-head"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span></div>
+      ${vmDialogActions(v)}</div>
+    ${v.problem ? UI.callout("bad", "", `<p>${esc(v.problem)}</p>`) : ""}
+    ${vmFilling(v)}
+    ${UI.sectionForm("vm_detail", [
+      { key: "overview", title: "Overview", html: overview },
+      { key: "disks", title: `Disks · ${v.disks.length}`, html: disks },
+      { key: "network", title: `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`, html: network },
+      { key: "events", title: "Events", html: events }], "", { always: true, cancelHtml: UI.cancel("Close") })}`;
   if (window.applyRole) applyRole();
-};
-window.vmTab = (button, pane) => {
-  $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));
-  $$("#mbody .vm-pane").forEach(p => { p.hidden = p.dataset.pane !== pane; });
 };
 
 /* ---- editing: everything the VM is made of ---- */

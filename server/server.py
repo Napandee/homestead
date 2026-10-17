@@ -134,6 +134,29 @@ from homestead_network_server import (
     record_lan, vm_network_details, vm_networks, vm_subnets,
 )
 NETWORK_ROUTES.bind_routes(_late(*NETWORK_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in NETWORK_ROUTES.VALUES})
+import homestead_storage_server as STORAGE_ROUTES
+from homestead_storage_server import (
+    _files_loop, _host_fix_loop, _longhorn_copies_loop, _prune_snapshot, _restore_tests_loop,
+    _restore_then_tidy, _samba_loop, _snapshot_files_loop, _storage_pending_loop,
+    _storage_runtime_loop, guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb,
+    longhorn_state_by_pvc, share_storage_options, shared_storage_classes, storage_class_facts,
+    storage_legacy_cancel, storage_move_progress, storage_runtime_check, storage_volume_action,
+)
+STORAGE_ROUTES.bind_routes(_late(*STORAGE_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in STORAGE_ROUTES.VALUES})
+import homestead_vm_server as VM_ROUTES
+from homestead_vm_server import (
+    _remove_cluster_vm, _vm_image_disks, _vmstore_loop, api_vm_power, create_vm_with_address,
+    set_vm_logos, vm_create_options,
+)
+VM_ROUTES.bind_routes(_late(*VM_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in VM_ROUTES.VALUES})
+import homestead_deploy_server as DEPLOY_ROUTES
+from homestead_deploy_server import (
+    _moves_loop, additional_container_configs, apply_deploy_bindings, compose_apply,
+    compose_preview, compose_report, delete_workload, deploy_capacity_plan, deploy_options,
+    deployment_volumes, import_capacity_plan, operation_item, prepare_deploy_network,
+    rebalance_move, redact_deployment_preview, reviewed_deploy,
+)
+DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 
 
 def _heartbeats():
@@ -645,48 +668,12 @@ def is_self(ns, name):
     return (ns, name) == (SELF.NS, NAMES.BRAND)
 
 
-def is_managed_smb(ns, name):
-    return (ns, name) in ((SMB_NAMESPACE, NAMES.object_name("smb")), (SMB_NAMESPACE, "samba"))
-
-
-def is_managed_nfs(ns, name):
-    return (ns, name) == (SMB_NAMESPACE, NFS.NAME)
-
-
-def homestead_part(ns, name):
-    """Which part of Homestead a Deployment is - itself, or a helper it runs
-    and keeps in step: the SMB and NFS servers, the object store moves use.
-    Empty for anything else. The Containers page hides these with the
-    platform, and their updates are Homestead's, not an app's."""
-    if is_self(ns, name):
-        return "self"
-    if is_managed_smb(ns, name):
-        return "smb"
-    if is_managed_nfs(ns, name):
-        return "nfs"
-    if (ns, name) == (OBJECTS.NS, OBJECTS.NAME):
-        return "objectstore"
-    return ""
-
-
 def guard_managed_smb(ns, name):
     if is_managed_smb(ns, name):
         raise ValueError("Homestead manages SMB and its mounts from Network Shares. "
                          "Change shares or SMB settings there.")
     if is_managed_nfs(ns, name):
         raise ValueError("Homestead manages NFS and its mounts from Network Shares and Settings > Cluster > Add-ons.")
-
-
-def guard_smb_object(kind, ns, name):
-    """Keep the general Kubernetes editor from bypassing Network Shares."""
-    if ns != SMB_NAMESPACE:
-        return
-    kind = str(kind or "").lower()
-    if kind in ("deployment", "deployments", "service", "services"):
-        guard_managed_smb(ns, name)
-    if (kind in ("configmap", "configmaps") and name == SHARES.CONFIGMAP()) or (
-            kind in ("secret", "secrets") and name == SHARES.SECRET()):
-        raise ValueError("Homestead manages SMB share settings from Network Shares.")
 
 
 def workload_start_plan(ns, name, replicas=1):
@@ -771,63 +758,6 @@ def own_group(ns, name):
     return OWN_GROUP if (ns, name) in own or ns in PLATFORM_NS else ""
 
 
-def set_vm_logos(b):
-    """Gives VMs a logo: an image (kept like a workload's), one of the OS
-    logos, or neither - back to the OS the VM reports. Only the VM's own
-    annotations change, so it does not restart."""
-    items = b.get("items") or []
-    if not items:
-        raise ValueError("choose at least one VM")
-    if len(items) > 200:
-        raise ValueError("at most 200 VMs at a time")
-    plans = []
-    for item in items:
-        ns, name = _dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "VM name")
-        source, os_key = str(item.get("icon") or "").strip(), str(item.get("os") or "").strip()
-        if source and not source.startswith(("https://", "http://")):
-            raise ValueError("a logo is a public http:// or https:// address")
-        if os_key and os_key not in LOGOS.OS_KEYS:
-            raise ValueError(f"there is no OS logo {os_key[:40]}")
-        plans.append((ns, name, source, os_key))
-    done, failed = 0, []
-    for ns, name, source, os_key in plans:
-        try:
-            cached_ref = ICONS.persist(source, DATA_DIR) if source else ""
-            ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
-                  {"metadata": {"annotations": {NAMES.key("icon"): cached_ref or None,
-                                                NAMES.key("icon-source"): source or None,
-                                                NAMES.key("logo-os"): os_key or None}}},
-                  ctype="application/merge-patch+json")
-            done += 1
-        except Exception as e:
-            failed.append(f"{name}: {e}")
-    _cache.pop("vms", None)
-    detail = (f"{done} logo{'s' if done != 1 else ''} saved" if any(s or o for *_, s, o in plans)
-              else "back to its OS's logo") + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")
-    return {"ok": not failed, "done": done, "failed": failed, "detail": detail}
-
-
-def helm_chart_logos():
-    """{(namespace, release): {name, icon}} for every Helm release whose chart names a logo."""
-    try:
-        rows = cached("helm-logos", 60, HELM.releases)
-    except Exception:
-        return {}
-    return {(r["namespace"], r["name"]): {"name": r.get("chart") or r["name"], "icon": r.get("icon", "")}
-            for r in rows if r.get("icon")}
-
-
-def logo_choices(ns, name, term, kind="workload"):
-    """The picker's tiles for one workload: its chart's logo and its image's
-    match, then a search. A VM has no image, so it is the search alone."""
-    workload = None if kind == "vm" else next(
-        (w for w in cached("wl", 5, WORKLOADS.get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
-    images = (workload or {}).get("images") or []
-    chart = helm_chart_logos().get((ns, (workload or {}).get("helm_release"))) if workload else None
-    return {"tiles": LOGOS.suggest(DEPLOY.fetch_appstore(), images, term if term is not None else name, DEPLOY.search_appstore,
-                                   chart=chart), "images": images}
-
-
 def protection_issues(jobs, target):
     """Protection that has quietly stopped working: a snapshot or backup job
     whose last run failed, or backup jobs with nowhere they can write to.
@@ -909,49 +839,6 @@ def new_claims(volumes):
 
 
 
-def additional_container_configs(cfg):
-    """Explicit extra definitions in a new pod; the original deploy stays compatible."""
-    rows = cfg.get("additional_containers") or []
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise ValueError("additional containers must be a list of definitions")
-    if rows and cfg.get("target_mode", "new") != "new":
-        raise ValueError("add containers to an existing workload from its editor")
-    if len(rows) > 31:
-        raise ValueError("a new workload supports up to 32 containers")
-    result = []
-    for row in rows:
-        allowed = {"name", "image", "env", "ports", "volumes", "hardware", "cpu", "memory", "memory_limit",
-                   "privileges", "privileged", "cap_add", "tun", "volume_owners", "new", "container_name"}
-        if set(row) - allowed - {"namespace", "workload_name", "network_mode", "target_mode", "app_profile", "env_bindings"}:
-            raise ValueError("additional containers use their own image, resources, ports, environment, hardware and storage; pod settings are shared")
-        item = {key: copy.deepcopy(value) for key, value in row.items() if key in allowed}
-        item.update(namespace=cfg.get("namespace") or DEFAULT_NS,
-                    workload_name=cfg.get("workload_name") or cfg.get("name"),
-                    container_name=row.get("name"), name=row.get("name"),
-                    network_mode=cfg.get("network_mode"), target_mode="new")
-        privileges = item.pop("privileges", {}) or {}
-        if not isinstance(privileges, dict) or set(privileges) - {"privileged", "cap_add", "tun"}:
-            raise ValueError("invalid additional container privileges")
-        item.update(privileges)
-        item = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(item))
-        result.append(item)
-    return result
-
-
-def deployment_volumes(cfg):
-    return [volume for item in [cfg, *additional_container_configs(cfg)]
-            for volume in item.get("volumes") or []]
-
-
-def prepare_deploy_network(cfg):
-    extras = additional_container_configs(cfg)
-    if not extras:
-        return NETWORK.prepare_deploy(cfg)
-    combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
-    planned = NETWORK.prepare_deploy(combined)
-    return dict(planned, ports=cfg.get("ports") or [])
-
-
 def prepare_lan(cfg):
     """A container's own LAN address, checked as free and its network made,
     before the Deployment that joins it."""
@@ -970,36 +857,6 @@ def _dns_name(value, label="name"):
     if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", value):
         raise ValueError(f"{label} must use lowercase letters, numbers and dashes")
     return value
-
-
-def longhorn_state_by_pvc(namespace):
-    """Longhorn's live view of each claim: health, and where it is attached.
-
-    A claim that is Bound tells you nothing about whether a second pod on
-    another node can mount it, which is exactly the question a storage picker
-    is asking.
-    """
-    try:
-        volumes = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        return {}
-    state = {}
-    for volume in volumes:
-        status = volume.get("status", {}) or {}
-        kubernetes = status.get("kubernetesStatus", {}) or {}
-        if kubernetes.get("namespace") != namespace or not kubernetes.get("pvcName"):
-            continue
-        workloads = sorted({row.get("workloadName") or row.get("podName") or ""
-                            for row in kubernetes.get("workloadsStatus") or []
-                            if row.get("workloadName") or row.get("podName")})
-        state[kubernetes["pvcName"]] = {
-            "robustness": status.get("robustness", ""),
-            "node": status.get("currentNodeID", ""),
-            "migratable": bool((volume.get("spec", {}) or {}).get("migratable")),
-            "migrating_to": (volume.get("spec", {}) or {}).get("migrationNodeID", ""),
-            "workloads": workloads,
-        }
-    return state
 
 
 def _pvc_rows(namespace):
@@ -1036,48 +893,6 @@ def rollout_review_context(current):
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
 
 
-def import_namespace(value):
-    """Where an import goes: the default, or an app namespace that exists."""
-    ns = str(value or DEFAULT_NS).strip()
-    if ns == DEFAULT_NS:
-        return ns
-    ns = _dns_name(ns, "namespace")
-    if ns in SYS_NS or ns not in NSMOD.names(False):
-        raise ValueError(f"namespace {ns} is not one an app can be imported into; create it under Namespaces first")
-    return ns
-
-
-def import_capacity_plan(body):
-    """Review both sequential phases before an import creates any resources."""
-    cfg = copy.deepcopy(body)
-    ns = cfg["namespace"] = import_namespace(body.get("namespace"))
-    guard_managed_smb(ns, cfg.get("name"))
-    cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
-    prepared = IMP.prepare_import(cfg)
-    if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
-        raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
-    inventory, pods = IMP.import_inventory(prepared, kget)
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}
-    nodes = PLACE.get_nodes()
-    phases = []
-    for kind, title in (("job", "Copy files"), ("deployment", "Imported application")):
-        manifest = prepared[kind]
-        if manifest:
-            plan = PLACE.manifest_plan(manifest, ns, manifest["metadata"]["name"], 1,
-                                       threshold, planned_claims=claims, pod_snapshot=pods,
-                                       nodes_snapshot=nodes)
-            phases.append({"title": title, "capacity": plan})
-    warnings = ["No resources are created until you confirm. Copy and application are reviewed separately, not as concurrent workloads.",
-                "Imported files can replace files with the same names in existing volumes. Source consistency is not guaranteed; stop the source app or use a consistent backup.",
-                "Storage provisioning, actual free filesystem space and future placement are not guaranteed by this review.",
-                "The application stays stopped while copying. Starting it later requires a fresh capacity check."]
-    capacity = {"blocked": any(row["capacity"]["blocked"] for row in phases),
-                "requires_confirmation": True, "warnings": warnings}
-    context = {"action": "import", "namespace": ns, **inventory, "prepared": prepared}
-    return cfg, prepared, phases, capacity, context
-
-
 def preview_import(body):
     _, prepared, phases, capacity, context = import_capacity_plan(body)
     return {"phases": phases, "capacity": capacity, "volumes": prepared["volumes"],
@@ -1110,48 +925,6 @@ def reviewed_image_update(body, action):
     if action == "update":
         enforce_update_policy(body)  # Registry/preflight reads may cross a window boundary.
     return UPDATES.commit_prepared(prepared)
-
-
-def capacity_manifest(config, existing=None):
-    """Construct a read-only manifest and planned claims without provisioning."""
-    cfg = DEPLOY.analyze_deploy_intent(copy.deepcopy(config))
-    ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
-    cfg["namespace"] = ns
-    joining = cfg.get("target_mode") == "existing"
-    if joining:
-        target = _dns_name(cfg.get("target_workload"), "existing workload")
-        if existing is None:
-            existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, _ = DEPLOY.build_sidecar_deployment(cfg, existing)
-    elif cfg.get("target_mode", "new") == "new":
-        dep, _ = DEPLOY.build_deployment(cfg)
-    else:
-        raise ValueError("deployment target must be new or existing")
-    claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
-    for row in claims.values():
-        if row["access_mode"] not in ("ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"):
-            raise ValueError("invalid volume access mode")
-        # StorageClass names may contain dots, unlike our workload names.
-        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", row["storage_class"]):
-            raise ValueError("invalid storage class name")
-    pspec = dep["spec"]["template"]["spec"]
-    if not joining and claims and not pspec.get("initContainers"):
-        # Owner discovery reads the image later and may add this init stage.
-        # Include its request now without fetching layers or writing a helper.
-        pspec["initContainers"] = [VOLOWNER.init_container([])]
-    return cfg, dep, claims, existing
-
-
-def deploy_capacity_plan(config, existing=None):
-    """Read-only new-workload or shared-pod rollout preview."""
-    cfg, dep, claims, existing = capacity_manifest(config, existing)
-    ns = cfg["namespace"]
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    if cfg.get("target_mode") == "existing":
-        return ROLLOUT_CAPACITY.plan(existing, dep, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
-                                     threshold, planned_claims=claims)
-    return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
-                               threshold, planned_claims=claims)
 
 
 def hardware_device_paths():
@@ -1204,167 +977,6 @@ def copy_admission(dep):
     return PLACE.manifest_plan(dep, dep["metadata"]["namespace"], dep["metadata"]["name"], dep["spec"]["replicas"],
         get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
         nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
-
-
-def reviewed_deploy(b):
-    """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
-    b = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(b)))
-    HOSTACCESS.require_cfg([b, *additional_container_configs(b)])
-    if b.get("target_mode", "new") not in ("new", "existing"):
-        raise ValueError("deployment target must be new or existing")
-    current = None
-    context = None
-    if b.get("target_mode") == "existing":
-        ns = _dns_name(b.get("namespace") or DEFAULT_NS, "namespace")
-        target = _dns_name(b.get("target_workload"), "existing workload")
-        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        context = rollout_review_context(current)
-    # Bind the original input and, for a shared pod, the fresh controller
-    # version. The final PUT keeps this resourceVersion for optimistic locking.
-    plan = deploy_capacity_plan(b, existing=current)
-    CAPACITY_REVIEW.enforce(b, plan, context)
-    return DEPLOY.run_deploy(b, reviewed_current=current) if current is not None else DEPLOY.run_deploy(b)
-
-
-def compose_report(b):
-    """Read a pasted Compose file against what this namespace already holds."""
-    ns = str(b.get("namespace") or DEFAULT_NS)
-    _dns_name(ns, "namespace")
-    text = str(b.get("text") or "")
-    if len(text) > 256 * 1024:
-        raise ValueError("a Compose file over 256 KiB is more than Homestead will read")
-    workloads = {d["metadata"]["name"] for d in
-                 ROLLOUT_CAPACITY.items(kget, f"/apis/apps/v1/namespaces/{ns}/deployments")}
-    claims = {c["metadata"]["name"] for c in
-              ROLLOUT_CAPACITY.items(kget, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")}
-    vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto", "nodes") else "shared"
-    if NETWORK.node_addresses_only():
-        # On k3s every service shares the nodes' addresses, so ports must differ.
-        vip_mode = "shared"
-    return COMPOSE.convert(text, b.get("variables") or "", ns, workloads, claims,
-                           HW.features(), vip_mode)
-
-
-def compose_preparation(b):
-    """Resolve the selected batch without provisioning or persisting inputs."""
-    report = compose_report(b)
-    chosen = set(b.get("services") or [row["name"] for row in report["services"]])
-    if chosen - {row["name"] for row in report["services"]}:
-        raise ValueError("selected Compose service no longer exists; review again")
-    rows = {row["name"]: row for row in report["services"] if row["name"] in chosen}
-    if not rows:
-        raise ValueError("choose at least one service to create")
-    problems = report["errors"] + [dict(e, service=name) for name, row in rows.items() for e in row["errors"]]
-    if problems:
-        first = problems[0]
-        where = f"{first['service']}: " if first.get("service") else ""
-        raise ValueError(f"fix the file first: {where}{first['message']}"
-                         + (f" (line {first['line']})" if first.get("line") else ""))
-    configs, entries, claims = [], [], {}
-    for name in report["order"]:
-        if name not in rows:
-            continue
-        cfg = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
-        guard_managed_smb(cfg.get("namespace") or DEFAULT_NS, cfg.get("workload_name") or cfg.get("name"))
-        cfg, dep, pending, _ = capacity_manifest(cfg)
-        for claim, descriptor in pending.items():
-            if claim in claims and claims[claim] != descriptor:
-                raise ValueError("inconsistent shared PVC settings: " + claim)
-            claims[claim] = descriptor
-        configs.append(cfg)
-        entries.append({"name": name, "deployment": dep, "replicas": dep["spec"]["replicas"]})
-    return configs, entries, claims
-
-
-def compose_preview(b):
-    configs, entries, claims = compose_preparation(b)
-    HOSTACCESS.require_cfg(configs)
-    return {"capacity": DEPLOY.compose_capacity(entries, claims),
-            "capacity_token": CAPACITY_REVIEW.issue(b, {"action": "compose", "configs": configs})}
-
-
-def compose_apply(b):
-    """Guard the entire batch before any writes, then recheck its remainder."""
-    configs, entries, claims = compose_preparation(b)
-    HOSTACCESS.require_cfg(configs)
-    plan = DEPLOY.compose_capacity(entries, claims)
-    if plan["status"] == "unknown":
-        raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
-    CAPACITY_REVIEW.enforce(b, plan, {"action": "compose", "configs": configs})
-    created, controllers = [], {}
-    for cfg, entry in zip(configs, entries):
-        name = entry["name"]
-        try:
-            if created:
-                fresh = DEPLOY.compose_capacity(entries, claims, controllers)
-                if fresh["blocked"]:
-                    return {"ok": False, "created": created, "failed": name,
-                            "error": "Remaining batch no longer fits the checked capacity; review again", "capacity": fresh}
-            result = DEPLOY.run_deploy(copy.deepcopy(cfg))
-            created.append(result["name"])
-            # Never assume the Deployment has pods just because POST returned.
-            ns = cfg["namespace"]
-            controller = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{result['name']}")
-            if not controller.get("metadata", {}).get("uid"):
-                raise ValueError("created workload identity is unavailable; stopped before the next service")
-            controllers[name] = controller
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", "replace")[:300]
-            return {"ok": False, "created": created, "failed": name, "error": f"HTTP {error.code}: {detail}"}
-        except Exception as error:
-            return {"ok": False, "created": created, "failed": name, "error": str(error)}
-    return {"ok": True, "created": created}
-
-
-def deploy_options(ns):
-    """Return the live choices needed by the deployment editor."""
-    deployments = []
-    for item in kget(f"/apis/apps/v1/namespaces/{ns}/deployments").get("items", []):
-        pspec = item.get("spec", {}).get("template", {}).get("spec", {})
-        volumes = []
-        for volume in pspec.get("volumes", []) or []:
-            row = {"name": volume.get("name", ""), "kind": "other", "source": ""}
-            if volume.get("persistentVolumeClaim"):
-                row.update({"kind": "pvc", "source": volume["persistentVolumeClaim"].get("claimName", "")})
-            elif volume.get("hostPath"):
-                row.update({"kind": "host", "source": volume["hostPath"].get("path", "")})
-            elif volume.get("emptyDir") is not None:
-                row["kind"] = "emptyDir"
-            elif volume.get("configMap"):
-                row.update({"kind": "configMap", "source": volume["configMap"].get("name", "")})
-            elif volume.get("secret"):
-                row.update({"kind": "secret", "source": volume["secret"].get("secretName", "")})
-            volumes.append(row)
-        deployments.append({
-            "name": item["metadata"]["name"],
-            "containers": [c.get("name", "") for c in pspec.get("containers", []) or []],
-            "volumes": volumes,
-        })
-    classes = storage_classes()
-    return {"deployments": sorted(deployments, key=lambda x: x["name"]),
-            "pvcs": _pvc_rows(ns),
-            "storage_classes": selectable_storage_classes(classes),
-            "shared_storage_classes": shared_storage_classes(classes),
-            "storage_class_facts": storage_class_facts(classes)}
-
-
-def share_storage_options():
-    """Volumes a new share can be created on, in the namespace Samba runs in."""
-    ns = SMB_NAMESPACE
-    classes = storage_classes()
-    node = ""
-    try:
-        node = SHARES._samba_node()
-    except Exception:
-        node = ""
-    try:
-        samba = bool(SHARES._deployment_state()[2])
-    except Exception:
-        samba = False
-    return {"namespace": ns, "node": node, "pvcs": _pvc_rows(ns), "samba_installed": samba,
-            "storage_classes": selectable_storage_classes(classes),
-            "shared_storage_classes": shared_storage_classes(classes),
-            "storage_class_facts": storage_class_facts(classes)}
 
 
 # Harvester keeps these for VM images and VM state; they are not general
@@ -1475,43 +1087,6 @@ def vm_default_class(rows=None):
     return next((name for name in ("longhorn-r2", "harvester-longhorn", "longhorn") if name in names), "")
 
 
-def vm_create_options():
-    """What the New VM form can offer on this cluster."""
-    platform = PLATFORM.detect()
-    rows = storage_classes()
-    nodes = kget("/api/v1/nodes").get("items", [])
-    return {"harvester": platform.get("harvester", False), "cdi": platform.get("cdi", False),
-            "distribution": platform.get("distribution", ""),
-            "storage_classes": selectable_storage_classes(rows),
-            "storage_class_facts": storage_class_facts(rows),
-            "default_class": vm_default_class(rows),
-            "images": IMP.list_vm_images() if platform.get("harvester") else [],
-            "store": VMSTORE.choices() if (platform.get("harvester") or platform.get("cdi")) else [],
-            "networks": vm_networks(),
-            "network_details": vm_network_details(),
-            "vm_network_options": NETWORK.vm_network_options(NODES.node_temps()),
-            "subnets": vm_subnets(),
-            "nodes": sorted(n["metadata"]["name"] for n in nodes),
-            # The Hardware tab: CPU models every node offers, and KubeVirt's features.
-            "cpu_models": VM_HARDWARE.cpu_models(nodes),
-            "kubevirt_gates": kubevirt_gates(),
-            # A new VM's hardware as the form starts it: a plain VM, as made here.
-            "hardware_base": VM_HARDWARE.read({"spec": {"template": {"spec": {
-                "domain": {"cpu": {"cores": 1}},
-                **({"evictionStrategy": "LiveMigrate"} if platform.get("harvester") else {})}}}}),
-            # ISOs a CD-ROM can hold now.
-            "isos": [{"name": v["name"], "file": v["file"]} for v in ISOS.volumes() if v["state"] == "ready"]}
-
-
-def kubevirt_gates():
-    try:
-        kv = (kget("/apis/kubevirt.io/v1/kubevirts").get("items") or [{}])[0]
-    except Exception:
-        return []
-    return sorted(((((kv.get("spec") or {}).get("configuration") or {}).get("developerConfiguration") or {})
-                   .get("featureGates") or []))
-
-
 def vm_address_problem(ip):
     """Why a VM cannot have this address, or "": something already has it."""
     import ipaddress
@@ -1546,26 +1121,6 @@ def vm_address_problem(ip):
     return ""
 
 
-def create_vm_with_address(cfg):
-    """A VM, and - when it has an address of its own - that address checked
-    as free first and recorded in IP addresses after, under the VM's name."""
-    static = cfg.get("static_ip") or None
-    if static:
-        problem = vm_address_problem(str(static.get("address") or "").strip())
-        if problem:
-            raise ValueError(problem)
-    result = IMP.create_vm(cfg, PLATFORM.detect(), vm_default_class())
-    if result.get("address"):
-        try:
-            IPAM.save_record({"ip": result["address"], "name": cfg.get("name", ""), "kind": "static",
-                              "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
-                              "note": f"VM {cfg.get('namespace') or 'lab'}/{cfg.get('name', '')}"
-                                      + (f" · {cfg['ipam_note']}" if cfg.get("ipam_note") else "")})
-        except Exception:
-            pass
-    return result
-
-
 def homestead_running_on():
     """The claim Homestead's own Deployment mounts for its data, and whether
     it is ready on it now - read live, never from a cache."""
@@ -1585,45 +1140,12 @@ def homestead_running_on():
 # that very replica; the job then says which pod to look for, and the leader
 # carries it on from another replica (homestead_power_jobs).
 POD_NAME = os.environ.get("HOSTNAME", "")
-def operation_item(operation_id):
-    """A job-tray item as it stands now, or None."""
-    return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
-
-
 def own_node():
     """The node this Homestead pod runs on."""
     try:
         return kget(f"/api/v1/namespaces/{SELF.NS}/pods/{os.environ.get('HOSTNAME', '')}")["spec"]["nodeName"]
     except Exception:
         return ""
-
-
-def api_vm_power(ns, name, action):
-    """Start, stop or restart a VM for /api/v1: stop as the app does; start and
-    restart through the same capacity review, taken as acknowledged when it
-    is not blocked - the key's scope is the consent the app asks a person for.
-    A start that needs a person (missing TPM or EFI state) is refused."""
-    if action not in ("start", "stop", "restart"):
-        raise ValueError("start, stop or restart")
-    body = {"ns": _dns_name(ns, "namespace"), "name": _dns_name(name, "VM name"), "action": action}
-    if action == "stop":
-        result = VM_REVIEW.reviewed_vm_power(body)
-        _cache.pop("vms", None)
-        return {"warnings": [], "job": ((result or {}).get("operation") or {}).get("id") if isinstance(result, dict) else None}
-    # As the app's route does before a review: an older VM's read-only ISO
-    # would stop KubeVirt starting it.
-    ISOS.unlock(body["ns"])
-    preview = VM_REVIEW.preview_vm_power(body)
-    plan = preview["capacity"]
-    if plan.get("blocked"):
-        raise API_V1.ApiError(409, "it cannot start: " + "; ".join(plan.get("blockers") or ["not enough room"]),
-                              blockers=list(plan.get("blockers") or []))
-    if (plan.get("vm") or {}).get("state_initialization"):
-        raise API_V1.ApiError(409, "starting it needs its TPM or EFI state set up first; do that in the app")
-    result = VM_REVIEW.reviewed_vm_power({**body, "capacity_token": preview["capacity_token"], "confirm_capacity": True})
-    _cache.pop("vms", None)
-    job = (result.get("operation") or {}).get("id") if isinstance(result, dict) else None
-    return {"warnings": list(plan.get("warnings") or []), "job": job}
 
 
 def api_scale(ns, name, n):
@@ -1641,14 +1163,6 @@ def selectable_storage_classes(rows=None):
     return [row["name"] for row in sorted(rows, key=lambda row: (row["name"] != STORAGE_CLASS, row["name"]))]
 
 
-def storage_class_facts(rows=None):
-    """The handful of class facts worth showing next to a class picker."""
-    return {row["name"]: {"replicas": row["replicas"], "engine": row["engine"], "migratable": row["migratable"],
-                          "encrypted": row["encrypted"], "expandable": row["expandable"],
-                          "reclaim": row["reclaim"], "default": row["default"]}
-            for row in (rows if rows is not None else storage_classes()) if class_selectable(row)}
-
-
 # Provisioners that can serve one volume to pods on several nodes at once.
 # k3s's local-path and most block CSI drivers cannot: a ReadWriteMany claim on
 # them stays Pending for good.
@@ -1658,12 +1172,6 @@ SHARED_DRIVERS = {"driver.longhorn.io", "nfs.csi.k8s.io", "efs.csi.aws.com", "fi
 def serves_many(row):
     provisioner = str(row.get("provisioner") or "")
     return provisioner in SHARED_DRIVERS or provisioner.endswith(".cephfs.csi.ceph.com")
-
-
-def shared_storage_classes(rows=None):
-    """Classes that can actually serve ReadWriteMany to a pod."""
-    return [row["name"] for row in (rows if rows is not None else storage_classes())
-            if class_selectable(row) and not row["migratable"] and serves_many(row)]
 
 
 def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=None):
@@ -1717,22 +1225,6 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
     return name
 
 
-def apply_deploy_bindings(cfg):
-    """Resolve values that depend on the reviewed cluster-side network plan."""
-    bindings = cfg.get("env_bindings") or {}
-    if not bindings:
-        return cfg
-    updated = dict(cfg)
-    updated["env"] = dict(cfg.get("env") or {})
-    for key, binding in bindings.items():
-        if binding == "vip":
-            vip = cfg.get("lb_ip") or ""
-            if not vip:
-                raise ValueError(f"{key} requires a dedicated Service VIP")
-            updated["env"][key] = vip
-    return updated
-
-
 def apply_generated_secrets(cfg):
     """Fill catalogue password defaults without trusting a public feed value."""
     generate = {item.get("key") for item in (cfg.get("env_meta") or [])
@@ -1754,23 +1246,6 @@ def ensure_profile_compatible(cfg):
     return cfg
 
 
-def redact_deployment_preview(deployment, cfg=None):
-    """Return a manifest safe to display, including for existing shared pods."""
-    if not deployment:
-        return deployment
-    sensitive = {item.get("key") for item in ((cfg or {}).get("env_meta") or [])
-                 if item.get("masked") and item.get("key")}
-    safe = copy.deepcopy(deployment)
-    containers = safe.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
-    for container in containers:
-        for item in container.get("env") or []:
-            key = str(item.get("name") or "")
-            if key in sensitive or re.search(r"(?:PASSWORD|PASS|TOKEN|SECRET|API_?KEY|PRIVATE_?KEY)$", key, re.I):
-                if "value" in item:
-                    item["value"] = "••••••"
-    return safe
-
-
 def raw_get(path, timeout=20):
     """Plain-text GET against the API (pod logs and similar)."""
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {TOKEN}"})
@@ -1785,7 +1260,6 @@ _shim.raw_get = raw_get
 sys.modules["homestead_shim"] = _shim
 
 import homestead_lifecycle as LC
-import homestead_env_secrets as ENVSEC
 import homestead_stale_mount as STALE_MOUNT
 import homestead_imports as IMP
 import homestead_auth as AUTH
@@ -1803,7 +1277,6 @@ import homestead_files as FILES
 import homestead_snapshot_files as SNAPSHOT_FILES
 import homestead_icons as ICONS
 ICONS.bind(DATA_DIR)
-import homestead_logos as LOGOS
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
 import homestead_shares as SHARES
@@ -1824,7 +1297,6 @@ import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
-import homestead_compose as COMPOSE
 import homestead_deploy as DEPLOY
 import homestead_workloads as WORKLOADS
 import homestead_onboard as ONBOARD
@@ -1859,7 +1331,6 @@ import homestead_resources as RESOURCES
 import homestead_vms as VMS
 import homestead_vm_review as VM_REVIEW
 import homestead_isos as ISOS
-import homestead_vm_hardware as VM_HARDWARE
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_power_hold as HOLD
@@ -1920,18 +1391,6 @@ POWER_JOBS.bind(kget, ksend, lambda read, ns: _self_data_helper_image(read, ns),
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
 
 
-def rebalance_move(ns, name, node):
-    """One container of a rebalance: the manual move's capacity check and
-    placement - a preference, not a pin - or a reason to leave it."""
-    body = {"ns": ns, "name": name, "node": node, "pin": False}
-    proposed, capacity, _ = WORKLOADS.move_capacity_plan(body)
-    if capacity.get("blocked"):
-        raise ValueError("; ".join(capacity.get("blockers") or []) or f"{node} cannot take it now")
-    meta = proposed["metadata"]
-    ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
-    PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
-
-
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
                 PLACE.get_nodes, HOSTACCESS.require_target_as, OPS, lambda: PLACEMODE.standby_hosts())
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
@@ -1956,13 +1415,6 @@ def _pull_progress(node, image):
 
 
 UPDATES.pull_progress = _pull_progress
-def _remove_cluster_vm(ns, node):
-    """One VM of a k3s cluster whose build stopped part-way: gone with its
-    disks, and its address free again."""
-    VMS.delete(ns, node["name"], with_disks=True)
-    CANCEL.forget_addresses({node["address"]: node["name"]})
-
-
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
@@ -1995,42 +1447,6 @@ def cleanup_restores():
 MOVE_ENGINE.after_finish = cleanup_restores
 
 
-def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
-    """Resume snapshot setup after a restart and retain the selected class."""
-    ref = item["ref"]
-    cfg = ref.get("restore_config")
-    if cfg and not ref.get("restore_started"):
-        if item.get("status") == "queued":
-            cfg["snapshot_wait_started"] = time.time()
-        since = cfg.setdefault("snapshot_wait_started", time.time())
-        if time.time() - float(since) > 15 * 60:
-            raise ValueError("CSI snapshot setup did not become ready; repair snapshot support, then resume this restore")
-        existing = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
-        if existing:
-            annotation = (existing.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id")
-            if annotation != cfg["restore_id"]:
-                raise ValueError("The destination PVC was created by another operation")
-            ref["restore_started"] = True
-        else:
-            created = LH.restore_backup(cfg)
-            if not created["created"]:
-                return "running", 2, created["message"]
-            ref["restore_started"] = True
-    pvc = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
-    if pvc:
-        if cfg and (pvc.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id") != cfg["restore_id"]:
-            raise ValueError("The destination PVC was replaced by another operation")
-        problem = LH.restore_problem(pvc)
-        if problem:
-            return "failed", 8, f"CSI restore snapshot failed: {problem}"
-    result = _resolve(item)
-    if result and result[0] == "succeeded" and cfg and pvc:
-        result = LH.finish_restore_resize(pvc, cfg) or result
-    if result and result[0] in ("succeeded", "failed"):
-        cleanup_restores()
-    return result
-
-
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
@@ -2046,7 +1462,6 @@ OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run
 import homestead_reclass as RECLASS
 import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_recovery as STORAGE_RECOVERY
-import homestead_storage_workflow as STORAGE_WORKFLOW
 import homestead_storage_runtime as STORAGE_RUNTIME
 
 
@@ -2065,52 +1480,7 @@ def _bind_recovery():
                       lambda *a: storage_restart_admission(*a), lambda: storage_runtime_check())
 
 
-def storage_runtime_check():
-    try:
-        return STORAGE_RUNTIME.require(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
-    except STORAGE_WORKFLOW.JOURNAL.Held:
-        raise
-    except Exception:
-        raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead replica compatibility could not be verified; restore cluster and shared-data access before moving storage") from None
-
-
 _bind_recovery()
-
-
-def _storage_runtime_loop():
-    # Every replica reports, not only the leader. No capability is inferred on
-    # behalf of an older binary that does not understand the new journal.
-    while True:
-        try:
-            STORAGE_RUNTIME.report(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR, self_data=True)
-            beat("storage-runtime", 20)
-        except Exception as error:
-            beat("storage-runtime", 20, error)
-        time.sleep(20)
-
-
-def storage_move_progress(item):
-    if "storage_protocol" in item.get("ref", {}):
-        return STORAGE_WORKFLOW.resolve(item, OPS.checkpoint, storage_helper_admission, storage_restart_admission,
-                                        runtime_check=storage_runtime_check)
-    # Keep pre-upgrade jobs on their existing steps; never infer receipts for
-    # mutations made by an older engine. Exempt only this job from its own fence.
-    with STORAGE_GUARD.dispatching(item):
-        return RECLASS.resolve(item)
-
-
-def storage_volume_action(volume, action):
-    # Snapshot rollback also stops/restarts workloads and writes through the
-    # Longhorn REST API, not just ksend. Hold the fence around the entire step.
-    with STORAGE_GUARD.volume(OPS, kget, volume):
-        return action()
-
-
-def storage_legacy_cancel(item, options):
-    if "storage_protocol" in item.get("ref", {}):
-        raise ValueError("Use the storage move recovery review; legacy rollback is not supported for this job")
-    with OPS._lock, STORAGE_GUARD.dispatching(item):
-        return CANCEL.reclass_cancel(item, options)
 
 
 import homestead_vmstore as VMSTORE
@@ -2331,41 +1701,6 @@ RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.rest
                   lambda: cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 
-def _storage_classes():
-    return {c["metadata"]["name"]: c.get("parameters") or {}
-            for c in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])}
-
-
-def restore_tests_tick():
-    """On the leader, hourly: test the app longest untested, when switched on."""
-    settings = get_app_settings()
-    chosen = RESTORE_TEST.pick(cached("wl", 5, WORKLOADS.get_workloads), OPS.list_operations(),
-                               settings.get("restore_tests", {}).get("enabled", False),
-                               update_policy_status(settings)["window_open"], time.time(), _storage_classes())
-    if chosen:
-        RESTORE_TEST.start_test(chosen["ns"], chosen["name"], "monthly")
-    return chosen
-
-
-def _restore_tests_loop():
-    while True:
-        if LEADER.is_leader():
-            try:
-                restore_tests_tick()
-                beat("restore-tests", 3600, leader_only=True)
-            except Exception as error:
-                beat("restore-tests", 3600, error, leader_only=True)
-                print(f"restore-tests: {str(error)[:160]}", flush=True)
-        time.sleep(3600)
-
-
-def _prune_snapshot(volume, name):
-    """Remove one old before-update snapshot, as Data Protection would."""
-    plan = SNAPSHOT_DELETE.plan(volume, name)
-    if not plan["blockers"] and not plan["deleting"] and not plan["removed"]:
-        SNAPSHOT_DELETE.start({**plan, "confirmation": name}, OPS)
-
-
 AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
                 lambda volume, name, annotations: LH.create_snapshot(volume, name, annotations),
                 lambda volume: LH.snapshots(volume), _prune_snapshot, NAMES)
@@ -2401,34 +1736,12 @@ PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
 DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 
-def _vm_image_disks():
-    try:
-        return {f"{row['namespace']}/{row['name']}": row.get("disks") or [] for row in IMP.vm_image_cache()["images"]}
-    except Exception:
-        return {}
-
-
 VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
              lambda url, display, reuse: HVIMAGE.download(kget, ksend, DEFAULT_NS, url, "", None, display, reuse),
              IMP.list_vm_images, _vm_image_disks,
              lambda ns, name: ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
 
 
-def _vmstore_loop():
-    """Kept VM images brought up to date, on the leader only; each image is
-    asked about at most twice a day."""
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    VMSTORE.refresh()
-                    # ISO copies no VM has used for a while (homestead_isos.py).
-                    for name in ISOS.tidy():
-                        print(f"ISO library: removed {name}, unused for {ISOS.keep_days()} days", flush=True)
-                beat("vmstore", 3600, leader_only=True)
-            except Exception as error:
-                beat("vmstore", 3600, error, leader_only=True)
-        time.sleep(3600)
 OPS.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
 SNAPSHOT_DELETE.bind(kget, ksend)
 OPS.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
@@ -2448,41 +1761,6 @@ OPS.RESOLVERS["helm"] = HELM.job_status
 OPS.RESOLVERS["multus"] = ADDONS.multus_progress
 
 
-def delete_workload(ns, name):
-    """A workload deleted, with every Service that points at it and its own
-    LAN network; the Services removed are returned."""
-    require_workload_target(ns, name)
-    guard_self(ns, name, deleting=True)
-    guard_managed_smb(ns, name)
-    try:
-        LAN.remove_nad(ns, name)       # its own LAN network, if it had one
-    except Exception:
-        pass
-    # Every Service selecting these pods, not just the one sharing the
-    # workload's name: a sidecar or a hand-made listener is named
-    # differently and would otherwise keep its VIP port forever.
-    services = set(NETWORK.workload_service_names(ns, name)) | {name}
-    try:
-        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    except Exception:
-        current = None
-    ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    if current:
-        try:
-            ENVSEC.remove(ns, current, kget, ksend)  # its variables' Secret goes with it
-        except Exception:
-            pass
-    removed = []
-    for service in sorted(services):
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{ns}/services/{service}")
-            removed.append(service)
-        except urllib.error.HTTPError:
-            pass
-    _cache.pop("wl", None); _cache.pop("ov", None); _cache.pop("network", None)
-    return removed
-
-
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: STORAGE_CLASSES.cleanup_restore_classes())
 CANCEL.register(OPS)
@@ -2494,150 +1772,8 @@ NSMOD.bind(kget, ksend, DEFAULT_NS, _own_namespace())
 ALERTS.bind(DATA_DIR)
 
 
-def weekly_trim():
-    """Homestead's weekly trim job kept in place (homestead_longhorn), made
-    once: remembered here, so one someone deleted is not made again."""
-    path = os.path.join(DATA_DIR, "weekly-trim.json")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            state = json.load(handle)
-    except (OSError, ValueError):
-        state = {}
-    try:
-        result = LH.ensure_weekly_trim(bool(state.get("created")), state.get("groups"))
-    except Exception as error:
-        return f"weekly trim not checked: {str(error)[:160]}"
-    if result is None:
-        return ""
-    made, change, groups = result
-    # Once someone has chosen its groups (groups is None), the last ones
-    # Homestead wrote stay recorded, so it keeps telling theirs apart.
-    if made or (groups is not None and groups != state.get("groups")):
-        SHARED.write_json(path, {**state, "created": True, "groups": groups,
-                                 "at": state.get("at") or int(time.time())}, durable=True)
-    return change
-
-
 import homestead_storage_pending as STORAGE_PENDING
 STORAGE_PENDING.bind(kget, ksend)
-
-
-def _storage_pending_loop():
-    """On the leader, a node that has just joined is steered clear of until
-    Longhorn is ready on it. Often, and cheap: the gap is a minute or two."""
-    time.sleep(20)
-    while True:
-        if LEADER.is_leader():
-            try:
-                for node, change in STORAGE_PENDING.tick():
-                    print(f"platform: {node}: {change}", flush=True)
-                beat("storage-pending", 15, leader_only=True)
-            except Exception as error:
-                beat("storage-pending", 15, error, leader_only=True)
-        time.sleep(15)
-
-
-def _snapshot_files_loop():
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    require_self_data_write()
-                    SNAPSHOT_FILES.cleanup()
-                beat("snapshot-files", 30, leader_only=True)
-            except Exception as error:
-                beat("snapshot-files", 30, error, leader_only=True)
-        time.sleep(30)
-
-
-def _files_loop():
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    require_self_data_write()
-                    FILES.cleanup()
-                beat("volume-files", 30, leader_only=True)
-            except Exception as error:
-                beat("volume-files", 30, error, leader_only=True)
-        time.sleep(15)
-
-
-def _longhorn_copies_loop():
-    """On the leader, every minute: Longhorn's default copies follow the
-    number of Ready nodes as they join (homestead_node_parity.copies_tick),
-    before apps made right after are given one copy."""
-    time.sleep(30)
-    while True:
-        if LEADER.is_leader():
-            try:
-                note = NODE_PARITY.copies_tick()
-                if note:
-                    print(f"platform: {note}", flush=True)
-            except Exception as error:
-                print(f"platform: Longhorn copies not checked: {str(error)[:160]}", flush=True)
-        time.sleep(60)
-
-
-def _host_fix_loop():
-    """On the leader, what k3s and RKE2 hosts need or undo at each start: inotify
-    limits a busy node outgrows (homestead_host_limits.py), what a node that
-    joined later needs to match the others (homestead_node_parity.py), the installer's
-    auto-deploy files (homestead_manifests.py), and a second default storage
-    class; and VMs still holding an ISO read-only. Checked a minute after
-    starting, then every ten minutes."""
-    time.sleep(60)
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    for node, change in HOST_LIMITS.tick().items():
-                        print(f"platform: {node}: inotify limits raised ({change})", flush=True)
-                    # A node that joined later, set up as the others are.
-                    for node, change in NODE_PARITY.tick():
-                        print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
-                    # Each host's OS - updates, restarts, failed services - every six hours.
-                    HOST_OS.tick()
-                    # Restored volumes whose class an older release removed.
-                    try:
-                        repaired = STORAGE_CLASSES.repair_restore_classes()
-                        if repaired:
-                            print(f"storage: restore classes put back for resizing: {', '.join(repaired)}", flush=True)
-                    except Exception as error:
-                        print(f"storage: restore classes not checked: {str(error)[:160]}", flush=True)
-                    # Linked clusters told this Homestead's address, once it is on its VIP.
-                    try:
-                        moved = FLEET.follow_address()
-                        if moved:
-                            print(f"linked clusters: told this Homestead is at {moved}", flush=True)
-                    except Exception as error:
-                        print(f"linked clusters: address not checked: {str(error)[:160]}", flush=True)
-                    # A weekly trim for every Longhorn volume, unless someone removed it.
-                    trimmed = weekly_trim()
-                    if trimmed:
-                        print(f"storage: {trimmed}", flush=True)
-                    # Longhorn kept from filling a host's root filesystem.
-                    for node, change in ROOT_GUARD.tick():
-                        print(f"storage: {node}: {change}", flush=True)
-                    for node, marked in MANIFESTS.tick().items():
-                        print(f"platform: {node}: k3s no longer re-applies "
-                              f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
-                    for node, disk, tags in DISKS.auto_tag():
-                        print(f"storage: {node} {disk} tagged {', '.join(tags)}", flush=True)
-                    # VMs made before 2.8.228 hold their ISO read-only and cannot start.
-                    for name in ISOS.unlock():
-                        print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)
-                    fixed = STORAGE_CLASSES.reconcile_default_class()
-                    if fixed:
-                        print(f"storage: {fixed[0]} kept as the default class; "
-                              f"{', '.join(fixed[1])} no longer default", flush=True)
-                        with _lock:
-                            _cache.pop("classes", None)
-                beat("host-fixes", 600, leader_only=True)
-            except Exception as error:
-                beat("host-fixes", 600, error, leader_only=True)
-                print(f"platform: {str(error)[:200]}", flush=True)
-        time.sleep(600)
 
 
 def _history_loop():
@@ -2665,18 +1801,6 @@ class Query(dict):
     given gets a 400 naming it, not a 500 from a bare KeyError."""
     def __missing__(self, key):
         raise MissingParameter(f"missing parameter: {key}")
-
-
-def _moves_loop():
-    """The move engine, on the leader only: a move's next step is taken once."""
-    while True:
-        if LEADER.is_leader():
-            try:
-                MOVE_ENGINE.tick_all()
-                beat("moves", MOVE_ENGINE.TICK_SECONDS, leader_only=True)
-            except Exception as error:
-                beat("moves", MOVE_ENGINE.TICK_SECONDS, error, leader_only=True)
-        time.sleep(MOVE_ENGINE.TICK_SECONDS)
 
 
 def homestead_data_volume(dep=None):
@@ -4008,28 +3132,6 @@ class H(HTTP.LimitedHandler):
                 if status is None:
                     return self._send(404, {"error": "No recorded data move with this identity"})
                 return self._send(503 if status["status"] == "unknown" else 200, status)
-            if p == "/api/snapshot-files/plan":
-                return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
-            if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
-                ns, session = (q.get("namespace") or [""])[0], (q.get("session") or [""])[0]
-                if p.endswith("/status"):
-                    return self._send(200, SNAPSHOT_FILES.status(ns, session))
-                path = (q.get("path") or [""])[0]
-                if p.endswith("/download"):
-                    return self._send_stream(SNAPSHOT_FILES.download(ns, session, path))
-                return self._send(200, SNAPSHOT_FILES.read(ns, session, "list", path))
-            if p == "/api/logos":
-                try:
-                    return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
-                                                        (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
-                except Exception as e:
-                    return self._send(502, {"error": f"app feed unavailable: {e}"})
-            if p == "/api/logos/missing":
-                try:
-                    apps = DEPLOY.fetch_appstore()
-                except Exception as e:
-                    return self._send(502, {"error": f"app feed unavailable: {e}"})
-                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, WORKLOADS.get_workloads), apps, helm_chart_logos())})
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
@@ -4190,35 +3292,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, self_data_preparation(b, self.user, start=p == "/api/self/data/prepare"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
-            if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
-                action = p.rsplit("/", 1)[1]
-                result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
-                          else HELM.uninstall(b.get("namespace", ""), b.get("name", "")))
-                _cache.pop("helm", None)
-                name = result.get("name") or b.get("name", "")
-                job = f"helm-{'delete' if action == 'uninstall' else 'install'}-{name}"
-                result["operation"] = OPS.start("helm", f"Helm {action} {name}",
-                                                {"kind": "HelmChart", "name": name, "namespace": HELM.CONTROLLER_NS},
-                                                "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job,
-                                                          "action": action},
-                                                "Waiting for the Helm controller")
-                return self._send(200, result)
-            if p == "/api/snapshot-files/start":
-                return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
-            if p == "/api/snapshot-files/close":
-                return self._send(200, SNAPSHOT_FILES.close(b.get("namespace"), b.get("session")))
-            if p == "/api/self/samba":
-                return self._send(200, SHARE_SERVERS.set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
-            if p == "/api/self/nfs":
-                return self._send(200, SHARE_SERVERS.set_nfs(bool(b.get("enabled")), str(b.get("address") or "").strip()))
-            if p == "/api/addons/smb/remove":
-                if b.get("confirm") != SMB_NAME:
-                    raise ValueError(f"type {SMB_NAME} to remove the SMB server")
-                return self._send(200, SHARE_SERVERS.remove_samba())
-            if p == "/api/addons/nfs/remove":
-                if b.get("confirm") != NFS.NAME:
-                    raise ValueError(f"type {NFS.NAME} to remove the NFS server")
-                return self._send(200, SHARE_SERVERS.remove_nfs())
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
@@ -4275,40 +3348,6 @@ def _reconcile_permissions():
             print(f"moved {adopted['changed']} objects' keys to {NAMES.DOMAIN}", flush=True)
     except Exception as error:
         print(f"old keys: not moved ({str(error)[:120]})", flush=True)
-
-
-def _samba_loop():
-    """One leader keeps SMB's mounts and image aligned with saved settings."""
-    while True:
-        if LEADER.is_leader():
-            try:
-                with self_data_activity():
-                    state = SHARE_SERVERS.samba_state()
-                    if state.get("name") == "samba" and state.get("installed"):
-                        SHARE_SERVERS.install_samba()
-                    result = SHARES.reconcile_samba(SHARE_SERVERS.SAMBA_IMAGE)
-                beat("samba", 60, leader_only=True)
-                if result.get("state") == "repaired":
-                    print("network shares: restored SMB settings from the share inventory", flush=True)
-            except Exception as error:
-                beat("samba", 60, error, leader_only=True)
-                print(f"network shares: {str(error)[:180]}", flush=True)
-            try:
-                with self_data_activity():
-                    nfs_result = SHARE_SERVERS.reconcile_nfs()
-                if nfs_result.get("state") == "updated":
-                    print("network shares: restored NFS exports from the share inventory", flush=True)
-            except Exception as error:
-                print(f"NFS exports: {str(error)[:180]}", flush=True)
-            try:
-                with self_data_activity():
-                    moved = OBJECTS.keep_in_step()
-                    OBJECTS.reconcile_target()
-                if moved:
-                    print(f"object store: reconciled {moved}", flush=True)
-            except Exception as error:
-                print(f"object store: {str(error)[:180]}", flush=True)
-        time.sleep(60)
 
 
 def start_background_tasks():

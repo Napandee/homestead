@@ -191,6 +191,12 @@ html{scrollbar-color:var(--scroll-thumb) transparent}
 .navbadge.hidden{display:none}
 .sidefoot{padding:16px 18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
 .clusteralert{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:-5px 0 18px;padding:12px 14px;border:1px solid rgba(255,176,32,.3);border-radius:13px;background:rgba(255,176,32,.08)}
+/* The Dashboard's one warning (#506): a UI.callout. Once every health issue
+   in it is acknowledged it goes quiet. */
+.dash-alert{margin:-5px 0 18px}
+.dash-alert .ui-callout-body ul{margin:6px 0 0;padding-left:18px}
+.dash-alert-actions{margin-top:10px}
+.dash-alert.acknowledged .ui-callout{border-color:var(--line);background:transparent}
 .clusteralert.critical{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.08)}
 .clusteralert.acknowledged{border-color:var(--line);background:transparent}.clusteralert>div{display:flex;flex-direction:column;gap:2px}.clusteralert b{font-size:12px}.clusteralert span{color:var(--mut);font-size:11px}
 
@@ -361,6 +367,8 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .uptime-strip{display:grid;grid-template-columns:repeat(90,minmax(0,1fr));gap:1px;height:26px}
 .uptime-strip i{border-radius:1px;background:var(--line)}
 .uptime-strip i.uptime-ok{background:var(--ok)}.uptime-strip i.uptime-warn{background:var(--med)}.uptime-strip i.uptime-bad{background:var(--crit)}
+/* Maintenance Homestead caused: neither health nor attention, so neutral, striped (#535). */
+.uptime-strip i.uptime-maint{background:repeating-linear-gradient(135deg,var(--line2) 0 2px,transparent 2px 4px),var(--line)}
 .uptime-events{display:grid;gap:5px;margin-top:6px;max-height:200px;overflow:auto}
 .uptime-events>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .v2list{display:grid;gap:8px;margin:6px 0}
@@ -1077,10 +1085,6 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
 .voltable .volusage .mono{font-size:10px;white-space:normal;overflow-wrap:anywhere}
 .voltable td{vertical-align:middle}
 .voltable .volactions{width:1%;white-space:nowrap}
-.voltable .volactions .row{gap:4px;flex-wrap:nowrap;justify-content:flex-end}
-.voltable .iconbtn{width:28px;height:28px}
-.voltable .iconbtn.danger{color:var(--red);border-color:rgba(255,95,115,.28)}
-.voltable .iconbtn.danger:hover{background:rgba(255,95,115,.1)}
 .snapshot-timeline{position:relative;display:flex;flex-direction:column;gap:14px;padding:12px 0}
 .snapshot-timeline::before{content:"";position:absolute;top:30px;bottom:40px;left:19px;width:2px;background:var(--line)}
 .snapshot-point{position:relative;display:flex;gap:14px;align-items:flex-start;min-width:0}
@@ -1628,7 +1632,6 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .voltable .volname{flex:0 1 auto;order:0;margin-right:2px}
   .voltable .volname b{font-size:12.5px}
   .voltable .volactions{flex:0 0 auto;order:1;margin-left:auto;width:auto}
-  .voltable .iconbtn{width:26px;height:26px}
   /* A flex item of its own, full width and no height: it ends the first line
      so the name keeps the actions company and nothing else joins them. */
   .voltable tr::after{content:"";flex:1 1 100%;order:2;height:0}
@@ -1652,16 +1655,15 @@ html[data-theme="light"] .compose-editor{background:#fff}
    kind, its name, then its MAC and what has seen it - with the tick at the
    side, instead of six labelled lines, most of them empty, per address. */
 .ipam-narrow{display:none}
+.ipam-stats .linkish{padding:0}
 @media(max-width:560px){
   .ipam-wide{display:none}.ipam-narrow{display:inline-block}
   .ipam-head-acts{flex-wrap:nowrap}
-  .ipam-stats{gap:8px!important;margin:10px 0 12px!important}
-  .ipam-stats>.card{padding:11px 12px}
+  .ipam-stats .ui-stats{gap:8px;margin:10px 0 12px}
+  .ipam-stats .ui-stat{padding:11px 12px}
   .ipam-stats .ctitle{font-size:12px}
-  .ipam-stats .bignum{font-size:24px!important;margin-top:4px!important}
+  .ipam-stats .bignum{font-size:24px;margin-top:4px}
   .ipam-stats .csub{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .ipam-stats .csub:has(.btn){white-space:normal;display:flex;flex-wrap:wrap;gap:4px}
-  .ipam-stats .csub .btn{margin-top:4px;padding:4px 8px;font-size:11.5px}
   .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
     grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
   .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
@@ -1931,6 +1933,10 @@ tr.clickable{cursor:pointer}
 .history-card{margin-top:18px}
 .hist-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:12px}
 .hist-chart .spark{width:100%;height:56px;margin-top:4px}
+/* These charts stretch a 300-unit drawing across a wide card, so the line
+   keeps its own width, as the dashboard's cards do, and the glow is smaller:
+   it is drawn in the chart's units and widens with the stretch. */
+.hist-chart .spark .ln{vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 3px rgba(255,255,255,.35))}
 .hist-nodes{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px}
 .hist-node{display:flex;gap:8px;align-items:center}
 @media(max-width:900px){.mqtt-grid,.hist-grid{grid-template-columns:1fr 1fr}}
@@ -1999,11 +2005,6 @@ div.ipam-line.dim{display:block}
 .vm-desc{margin-top:-4px}
 .vm-problem{margin:0;font-size:12px}
 .vm-restart{color:var(--med)}
-.vm-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px}
-.vm-facts.wide{grid-template-columns:repeat(3,1fr)}
-.vm-facts>div{display:grid;gap:2px;min-width:0}
-.vm-facts span{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
-.vm-facts b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vm-actions{flex-wrap:wrap;gap:6px;margin-top:auto}
 .vm-actions>.actionmenu{margin-left:auto}
 .vm-name{min-width:0}.vm-name>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2034,7 +2035,7 @@ div.ipam-line.dim{display:block}
 .vm-table .vm-addr{flex-wrap:nowrap}
 .vm-table .vm-actions{flex-wrap:nowrap}
 .vm-iconbtn{padding-left:9px;padding-right:9px}.vm-iconbtn .btnicon{margin:0}
-@media(max-width:560px){.vm-grid{grid-template-columns:1fr}.vm-facts,.vm-facts.wide{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.vm-grid{grid-template-columns:1fr}}
 
 /* A pill that opens something: the update count beside the layout switch. */
 .pillbtn{cursor:pointer;font:inherit;font-size:11px;font-weight:650;border-style:solid}.pillbtn:hover{filter:brightness(1.15)}
@@ -2240,14 +2241,20 @@ div.ipam-line.dim{display:block}
   .ui-fields{grid-template-columns:1fr}
   .volume-delete-grid{grid-template-columns:1fr}
   .ui-facts{grid-template-columns:1fr 1fr}
-  /* Tables become cards: each cell on its own line, with its column's label. */
+  /* Tables fold as a stack table does (#506): the first cell is the card's
+     title, short values sit two to a line with their label above, and a long
+     value (data-wide, from labelStackTables) or the actions take the whole
+     line. An empty cell is left out rather than shown as a lone label. */
   .ui-table thead{display:none}
-  .ui-table,.ui-table tbody,.ui-table tr,.ui-table td{display:block;width:auto!important}
-  .ui-table tr{padding:10px 13px;border-bottom:1px solid var(--line)}
+  .ui-table,.ui-table tbody{display:block;width:auto!important}
+  .ui-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 14px;padding:12px 13px;border-bottom:1px solid var(--line)}
   .ui-table tr:last-child{border-bottom:0}
-  .ui-table td{padding:3px 0;border:0;text-align:left!important}
+  .ui-table td{display:block;width:auto!important;min-width:0;padding:0;border:0;text-align:left!important;white-space:normal;overflow-wrap:anywhere}
   .ui-table td[data-label]:not([data-label=""]):not(:first-child)::before{content:attr(data-label);display:block;font:500 11px "Inter Tight",sans-serif;color:var(--mut);margin-bottom:2px}
-  .ui-table td:first-child{font-weight:600;padding-bottom:6px}
+  .ui-table td:first-child{grid-column:1/-1;order:-1;font-weight:600;padding-bottom:2px}
+  .ui-table td[data-wide],.ui-table td[data-label=""],.ui-table td[colspan]{grid-column:1/-1}
+  .ui-table td[data-wide]{order:1}.ui-table td[data-label=""]{order:2}
+  .ui-table td:empty{display:none}
 }
 html[data-theme="light"] .ui-facts>div{background:var(--surf)}
 html[data-theme="light"] .ui-callout.warn b{color:#8a5200}html[data-theme="light"] .ui-callout.bad b{color:#a1242a}
@@ -2628,9 +2635,6 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 
 /* ISO library */
 .iso-lib .iso-folders,.iso-lib .iso-files{display:flex;flex-direction:column;gap:6px}
-.iso-folder,.iso-file{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);min-width:0}
-.iso-file>div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
-.iso-file>div:first-child span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iso-dirs{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
 .iso-crumb{font-size:12px;color:var(--mut)}
 .iso-lib{grid-template-columns:minmax(0,1fr)}

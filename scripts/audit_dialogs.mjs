@@ -25,6 +25,8 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["container-diagnostics", "workloads", "wlDiagnostics('lab','example-server')"],
+  ["container-command-review", "workloads", "wlDiagnostics('lab','example-server')", "document.querySelector('#diagnosticCommand').value='uname -a';diagnosticReview({disabled:false})"],
   ["firewall-create", "network", "firewallEdit()"],
   ["firewall-review", "network", "firewallEdit()", "firewallReview()"],
   ["active-alerts", "dash", "pwaAlertsDialog()"],

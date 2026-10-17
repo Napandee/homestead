@@ -219,7 +219,7 @@ class CleanupLoopTests(unittest.TestCase):
                     patch.object(server, "beat") as beat, \
                     patch.object(server.time, "sleep", side_effect=StopLoop):
                 with self.assertRaises(StopLoop):
-                    server._files_loop()
+                    server.STORAGE_ROUTES._files_loop()
                 self.assertEqual(int(leader and writable), cleanup.call_count)
                 self.assertEqual(int(leader), beat.call_count)
 

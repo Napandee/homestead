@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_history as HISTORY
 import homestead_leader as LEADER
 import homestead_lifecycle as LC
 import homestead_names as NAMES
@@ -79,6 +80,14 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
     def power_progress(phase, percent, message, **details):
         updated = OPS.record_phase(operation_id, phase, percent, message, owner=POD_NAME or None, **details)
         phase_state["phase"] = phase
+        if phase == "sending":
+            # From here the host's downtime is maintenance this job caused (#535).
+            # Bookkeeping: a history that can't be written never stops the job.
+            try:
+                HISTORY.maintenance_open(node, power_plan.get("reason") or
+                                         {"reboot": "host reboot", "poweroff": "host shutdown"}[action], operation_id)
+            except Exception:
+                pass
         return updated
 
     def hold():
@@ -413,6 +422,7 @@ def rollout_reboot(node, allow_single_copy=False):
             reasons.append("Longhorn's volumes could not be read")
         if reasons:
             raise ValueError("; ".join(reasons) + " (the settings do not accept that)")
+    power_plan["reason"] = "OS update"
     try:
         return send_reviewed_power(power_plan)["operation"]["id"]
     except PowerNotSent as e:

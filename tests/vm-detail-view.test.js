@@ -25,3 +25,32 @@ test("a VM's Configure VIP / ports button names the VM's namespace",async()=>{
   vm.runInContext(call[1].replaceAll("&quot;",'"'),Object.assign(t.ctx,{networkManage:(...a)=>args.push(...a)}));
   assert.deepEqual(args,["lab","guest","VirtualMachine"]);
 });
+/* The dialog takes the shared parts (#506): where the VM is, then its figures,
+   as one facts panel; conditions in UI.more; the shared section tabs; a Close footer. */
+const shown={...detail,ip:"192.0.2.60",ips:["192.0.2.60","192.0.2.61"],
+  conditions:[{type:"Ready",status:"True",reason:"",message:""}]};
+const facts=html=>[...(html.match(/<dl class="ui-facts">[\s\S]*?<\/dl>/)||[""])[0].matchAll(/<dt>([^<]*)<\/dt><dd>([\s\S]*?)<\/dd>/g)].map(m=>[m[1],m[2]]);
+test("a VM's dialog leads with its address and host, then its figures, as one facts panel",async()=>{
+  const t=open(shown);await t.ctx.vmOpen("lab","guest");
+  const pairs=facts(t.body.innerHTML);
+  assert.deepEqual(pairs.slice(0,2).map(p=>p[0]),["Address","Host"]);
+  assert.match(pairs[0][1],/192\.0\.2\.60/);assert.match(pairs[0][1],/192\.0\.2\.61/);
+  assert.match(pairs[1][1],/node-a/);
+  for(const label of ["CPU","Memory","Guest OS","Live migration"])assert.ok(pairs.some(p=>p[0]===label),`${label} is a fact`);
+  assert.doesNotMatch(t.body.innerHTML,/vm-facts/,"no hand-built figure grid");
+});
+test("a VM's conditions sit in UI.more",async()=>{
+  const t=open(shown);await t.ctx.vmOpen("lab","guest");
+  const more=t.body.innerHTML.match(/<details class="ui-more"[^>]*>\s*<summary>Conditions<\/summary>[\s\S]*?<\/details>/);
+  assert.ok(more,"a Conditions disclosure");
+  assert.match(more[0],/Ready/);
+});
+test("a VM's dialog uses the shared section tabs and closes from a footer",async()=>{
+  const t=open(shown);await t.ctx.vmOpen("lab","guest");
+  const html=t.body.innerHTML;
+  assert.doesNotMatch(html,/class="seg"/,"no hand-built tab strip");
+  assert.match(html,/role="tablist"/);
+  const tabs=[...html.matchAll(/role="tab"[^>]*>([^<]*)<\/button>/g)].map(m=>m[1]);
+  assert.deepEqual(tabs.map(x=>x.split(" ·")[0]),["Overview","Disks","Network","Events"]);
+  assert.match(html,/<button[^>]*data-dialog-dismiss="true"[^>]*>Close<\/button>/);
+});

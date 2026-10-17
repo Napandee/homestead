@@ -58,7 +58,7 @@ class StorageClassTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def test_only_non_migratable_classes_can_serve_rwx(self):
-        self.assertEqual(["longhorn"], server.shared_storage_classes())
+        self.assertEqual(["longhorn"], server.STORAGE_ROUTES.shared_storage_classes())
 
     def test_rwx_claim_on_a_migratable_class_is_refused_with_the_alternative(self):
         with self.assertRaisesRegex(ValueError, "longhorn"):

@@ -15,7 +15,7 @@ try {
     await page.waitForFunction(() => document.querySelector("#healthPill")?.textContent?.trim());
     const expected = scenario === "incidents" ? "DEGRADED" : scenario.toUpperCase();
     assert.equal((await page.locator("#healthPill").innerText()).trim(), expected);
-    assert.equal(await page.locator("#views .clusteralert").count(), scenario === "healthy" ? 0 : 1);
+    assert.equal(await page.locator("#views .dash-alert[data-health]").count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-${width}.png`, fullPage: true });
     await page.evaluate(() => go("workloads"));
@@ -32,12 +32,12 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-vms-${width}.png`, fullPage: true });
     await page.evaluate(() => vmOpen("lab", "ubuntu-test"));
-    await page.locator("#mbody .vm-facts").waitFor();
-    assert.equal(await page.locator("#mbody .note.bad").count(), scenario === "healthy" ? 0 : 1);
+    await page.locator("#mbody .ui-facts").waitFor();
+    assert.equal(await page.locator("#mbody .ui-callout.bad").count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.locator("#mbody").getByText("ErrorUnschedulable", { exact: true }).count(), scenario === "healthy" ? 0 : 1);
     if (scenario === "healthy") {
       await page.locator("#mbody").getByText("Stopped", { exact: true }).waitFor();
-      await page.locator("#mbody .vm-facts").getByText("4Gi", { exact: true }).waitFor();
+      await page.locator("#mbody .ui-facts").getByText("4Gi", { exact: true }).waitFor();
     }
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-vm-detail-${width}.png`, fullPage: true });
     await page.evaluate(() => closeModal());

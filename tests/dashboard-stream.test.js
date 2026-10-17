@@ -106,3 +106,14 @@ test("a timed out history request retains existing charts and shows an error",as
   assert.equal(ctx.STATE.data.historyHtml,"saved charts");assert.match(host.note.textContent,/could not refresh/);
   assert.equal(cleared,true);
 });
+
+test("history that fails before any chart is drawn is the Over time card's error state (#506)",async()=>{
+  const host={querySelector:()=>null,appendChild:()=>{throw new Error("no page warning is added")}};
+  const ctx={AbortController,setTimeout:()=>1,clearTimeout:()=>{},STATE:{data:{}},historyRange:()=>"24h",$:()=>host,
+    UI:{error:(e,{title,retry})=>`<div class="ui-error">${title}: ${e.message} [${retry}]</div>`},
+    document:{createElement:()=>({})},api:()=>Promise.reject(new Error("store unreachable"))};
+  vm.createContext(ctx);const code=fs.readFileSync("web/js/views-stats.js","utf8");
+  vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  await ctx.historyPaint();
+  assert.match(host.innerHTML,/ui-error">Over time could not load: store unreachable \[historyPaint\(\)\]/);
+});

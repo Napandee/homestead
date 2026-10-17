@@ -214,7 +214,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         dhcp = next(x for x in cfg["ports"] if x["container"] == 67)
         self.assertFalse(dhcp["expose"])
         cfg["lb_ip"] = "192.0.2.243"
-        self.assertEqual("192.0.2.243", server.apply_deploy_bindings(cfg)["env"]["ServerIP"])
+        self.assertEqual("192.0.2.243", server.DEPLOY_ROUTES.apply_deploy_bindings(cfg)["env"]["ServerIP"])
 
     def test_paths_classify_config_media_cache_and_infer_web_port(self):
         cfg = server.DEPLOY.template_to_cfg({
@@ -272,7 +272,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "WEBPASSWORD", "value": generated["env"]["WEBPASSWORD"]},
             {"name": "MODE", "value": "normal"},
         ]}]}}}}
-        safe = server.redact_deployment_preview(dep, cfg)
+        safe = server.DEPLOY_ROUTES.redact_deployment_preview(dep, cfg)
         self.assertEqual("••••••", safe["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
         self.assertEqual("normal", safe["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"])
         self.assertNotEqual("••••••", dep["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
@@ -390,7 +390,7 @@ class DeployOptionsTests(unittest.TestCase):
             raise AssertionError(path)
 
         with mock.patch.object(server, "kget", side_effect=get):
-            options = server.deploy_options("lab")
+            options = server.DEPLOY_ROUTES.deploy_options("lab")
         self.assertEqual(["ReadWriteMany"], options["pvcs"][0]["access_modes"])
         self.assertEqual("pvc", options["deployments"][0]["volumes"][0]["kind"])
 
@@ -455,7 +455,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/homestead-lab/homestead:2.8.328",
+        self.assertIn("- name: homestead\n          image: ghcr.io/homestead-lab/homestead:2.8.329-dev.2",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 
