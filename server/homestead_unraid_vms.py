@@ -60,7 +60,7 @@ def bind(imports, _kget, _ksend, ops, _platform=None):
 # One line per VM (name, state, XML, each base64 so nothing in them can break
 # the listing), then one per file disk with what qemu-img says of it.
 LIST_SCRIPT = r"""
-command -v virsh >/dev/null 2>&1 || { echo NOVIRSH; exit 0; }
+command -v virsh >/dev/null 2>&1 || { echo NOVIRSH; command -v qm >/dev/null 2>&1 && echo HASQM; exit 0; }
 virsh list --all --name 2>/dev/null | while IFS= read -r vm; do
   [ -n "$vm" ] || continue
   state=$(virsh domstate --domain "$vm" 2>/dev/null | head -n 1)
@@ -87,11 +87,14 @@ def _b64(value):
 
 def parse_listing(lines):
     """[(name, state, xml)] and {path: facts} from what LIST_SCRIPT printed."""
-    domains, disks, complete, virsh = [], {}, False, True
+    domains, disks, complete, virsh, qm = [], {}, False, True, False
     for line in lines:
         parts = line.split(" ")
         if parts[0] == "NOVIRSH":
             virsh = False
+        elif parts[0] == "HASQM":
+            # A Proxmox host added as Unraid: the page says to add it as Proxmox.
+            qm = True
         elif parts[0] == "END":
             complete = True
         elif parts[0] == "VM" and len(parts) == 4:
@@ -107,7 +110,7 @@ def parse_listing(lines):
                 "format": str(info.get("format") or ""),
                 "virtual": int(info.get("virtual-size") or size or 0),
                 "size": size, "used": int(parts[3]) if parts[3].isdigit() else 0}
-    return {"virsh": virsh, "complete": complete, "domains": domains, "disks": disks}
+    return {"virsh": virsh, "qm": qm, "complete": complete, "domains": domains, "disks": disks}
 
 
 def _kib(element, default=0):
@@ -288,7 +291,7 @@ def listing(source):
     lines = IMP.run_probe(f"vms-{source}", IMP._ssh_script(src, LIST_SCRIPT), src, timeout=120)
     found = parse_listing(lines)
     if not found["virsh"]:
-        return {"source": source, "kind": src.get("kind"), "virsh": False, "vms": []}
+        return {"source": source, "kind": src.get("kind"), "virsh": False, "proxmox": found["qm"], "vms": []}
     if not found["complete"]:
         raise ValueError("Unraid's VM list was cut short; try again")
     vms = []

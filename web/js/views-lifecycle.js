@@ -1728,20 +1728,38 @@ window.doVmDiskImport = async () => {
     toast(result.message, "ok"); closeModal(); importRepaint();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.srcAdd = () => modal("Add an Unraid or Docker server", UI.lead("Homestead reaches the server over SSH, lists its Docker containers, and copies each one's appdata. Save it, then verify its SSH fingerprint: no login is attempted until you trust it.") +
-  UI.fields(UI.field("Name", '<input id="sc_name" placeholder="unraid">'), UI.field("Address", '<input id="sc_host" placeholder="192.0.2.10">'),
+/* What each type of server is for, in the dialog's lead. */
+const SOURCE_LEADS = {
+  unraid: "Homestead reaches the server over SSH, lists its Docker containers and VMs, and copies each one's data.",
+  ssh: "Homestead reaches the host over SSH, lists its Docker containers, and copies each one's appdata.",
+  proxmox: "Homestead reaches the Proxmox host over SSH (root, or a user that may run qm), lists its VMs, and copies each one's disks.",
+};
+/* Add a server: its type first, since it decides the rest. kind is the type to
+   start on: Proxmox from the VM import page, Unraid elsewhere. */
+window.srcAdd = (kind = STATE.view === "vmimport" ? "proxmox" : "unraid") => {
+  const option = (value, label) => `<option value="${value}"${value === kind ? " selected" : ""}>${label}</option>`;
+  modal("Add a server", `<p class="ui-lead" id="sc_lead">${esc(SOURCE_LEADS[kind] || SOURCE_LEADS.unraid)} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.</p>` +
+  UI.field("Type", `<select id="sc_kind" onchange="srcKindChanged()">${option("unraid", "Unraid")}${option("proxmox", "Proxmox VE")}${option("ssh", "Other Docker host")}</select>`) +
+  UI.fields(UI.field("Name", `<input id="sc_name" placeholder="${kind === "proxmox" ? "proxmox" : "unraid"}">`), UI.field("Address", '<input id="sc_host" placeholder="192.0.2.10">'),
     UI.field("Username", '<input id="sc_user" value="root" autocomplete="off">'), UI.field("Password", '<input type="password" id="sc_pass" autocomplete="new-password">'),
-    UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">'),
-    UI.field("Type", '<select id="sc_kind"><option value="unraid">Unraid</option><option value="ssh">Other Docker host</option><option value="proxmox">Proxmox</option></select>')) +
-  UI.field("Appdata folder", '<input id="sc_path" value="/mnt/user/appdata">') +
+    UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">')) +
+  `<div id="sc_path_field"${kind === "proxmox" ? " hidden" : ""}>${UI.field("Appdata folder", '<input id="sc_path" value="/mnt/user/appdata">')}</div>` +
   UI.more("Credentials and source ownership", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a source does not revoke credentials already used by copy Jobs.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
   UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})), false, "operation-review");
+};
+/* The lead and the appdata folder follow the type: a Proxmox host has no appdata. */
+window.srcKindChanged = () => {
+  const kind = $("#sc_kind").value;
+  $("#sc_lead").textContent = `${SOURCE_LEADS[kind] || SOURCE_LEADS.unraid} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.`;
+  $("#sc_path_field").hidden = kind === "proxmox";
+  $("#sc_name").placeholder = kind === "proxmox" ? "proxmox" : "unraid";
+};
 window.doSrcAdd = async () => {
   const save = $("#sc_save"), password = $("#sc_pass");
   if (!save || save.disabled) return;
   const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
     user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
-    kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim(), port: +$("#sc_port").value };
+    kind: $("#sc_kind").value, base_path: $("#sc_kind").value === "proxmox" ? "/" : $("#sc_path").value.trim(), port: +$("#sc_port").value };
   if (!body.name || !body.host) return toast("Name and host are required", "bad");
   try {
     save.disabled = true;

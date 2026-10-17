@@ -96,3 +96,28 @@ test("every import server on the VM page can be removed", () => {
   assert.match(page, /label: "Remove server", icon: "trash", run: `srcDel\(\$\{jsq\(s\.name\)\}\)`, need: "admin", danger: true/);
   assert.doesNotMatch(page, /kind !== "proxmox"/, "Proxmox hosts are listed too");
 });
+
+test("a Proxmox host added as Unraid says so, with Remove and Add as Proxmox", async () => {
+  const hosts = {}, actions = [];
+  const ctx = { STATE: { data: { srcs: [{ name: "pve", kind: "unraid" }], uvms: {} } }, SOURCE_KINDS: { unraid: "Unraid", proxmox: "Proxmox" },
+    document: { getElementById: id => hosts[id] ||= {} }, esc: String, jsq: JSON.stringify,
+    serviceRow: (title, state, detail, bar) => `${title}|${state}|${detail}|${bar}`,
+    actionBar: rows => { actions.push(...rows); return rows.map(r => r.label).join(","); },
+    api: async () => ({ source: "pve", kind: "unraid", virsh: false, proxmox: true, vms: [] }) };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
+  await ctx.uvmLoad("pve");
+  assert.match(hosts["uvm-pve"].innerHTML, /This is a Proxmox host/);
+  assert.match(hosts["uvm-pve"].innerHTML, /was added as Unraid/);
+  assert.deepEqual(actions.map(a => a.run), ['srcDel("pve")', "srcAdd('proxmox')"]);
+});
+
+test("the Add server dialog asks the type first and starts on Proxmox from the VM import page", () => {
+  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const dialog = src.slice(src.indexOf("window.srcAdd = "), src.indexOf("window.doSrcAdd"));
+  assert.match(dialog, /modal\("Add a server"/);
+  assert.ok(dialog.indexOf('UI.field("Type"') < dialog.indexOf('UI.field("Name"'), "the type comes first");
+  assert.match(dialog, /STATE\.view === "vmimport" \? "proxmox"/);
+  assert.match(dialog, /\$\("#sc_path_field"\)\.hidden = kind === "proxmox"/, "a Proxmox host has no appdata folder");
+});

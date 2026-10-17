@@ -217,3 +217,19 @@ class ImportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WrongTypeTests(unittest.TestCase):
+    """A Proxmox host added as Unraid: libvirt isn't there, but qm is."""
+    def test_the_unraid_listing_notices_qm_and_says_proxmox(self):
+        imp = mock.Mock()
+        imp._source.return_value = {"name": "pve", "kind": "unraid", "host": "192.0.2.10"}
+        imp._ssh_script.side_effect = lambda src, cmd: cmd
+        imp.run_probe.return_value = ["NOVIRSH", "HASQM"]
+        UVMS.bind(imp, mock.Mock(), mock.Mock(), mock.Mock())
+        found = UVMS.listing("pve")
+        self.assertEqual((False, True), (found["virsh"], found["proxmox"]))
+        self.assertIn("command -v qm", imp._ssh_script.call_args[0][1])
+
+    def test_a_server_with_neither_is_no_proxmox(self):
+        self.assertFalse(UVMS.parse_listing(["NOVIRSH"])["qm"])
