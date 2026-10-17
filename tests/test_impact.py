@@ -229,6 +229,16 @@ class StatefulSetTests(unittest.TestCase):
         self.assertNotIn("setting", r)
         self.assertNotIn("to", r)
 
+    def test_set_row_marks_chosen_wait_mode(self):
+        # Only a set that chose to wait carries the flag; one that waits for
+        # Longhorn's setting does not (starting it elsewhere is still offered).
+        forever = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute"}]}
+        chosen = self.row(self.preview([sts(spec=forever)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
+        self.assertEqual("wait", chosen["mode"])
+        unset = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down="do-nothing"))
+        self.assertEqual("waits", unset["outcome"])
+        self.assertNotIn("mode", unset)
+
     def test_a_set_set_to_move_moves_after_its_own_delay(self):
         fast = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15}]}
         r = self.row(self.preview([sts(spec=fast)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))

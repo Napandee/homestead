@@ -3,10 +3,10 @@
 // here, the link to Longhorn's setting - and rows that couldn't be checked.
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
 
-function setup(payload = {}) {
+function setup(payload = {}, state = {}) {
   const fields = { "#mbody": { innerHTML: "" } }, calls = [];
-  const ctx = { console, Map, Set, Promise, encodeURIComponent, document: { addEventListener() {} }, STATE: { data: {} },
-    $: key => fields[key], $$: () => [], can: () => true, tip: t => t, toast: () => {},
+  const ctx = { console, Map, Set, Promise, encodeURIComponent, document: { addEventListener() {} }, STATE: { data: {}, ...state },
+    $: key => fields[key], $$: () => [], can: () => true, tip: t => t, toast: () => {}, jsArg: v => JSON.stringify(String(v)),
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
     appAvatar: () => '<span class="av"></span>', modal: () => {},
     closeModal: () => calls.push(["closeModal"]), settingsTab: tab => calls.push(["settingsTab", tab]), go: view => calls.push(["go", view]),
@@ -79,4 +79,30 @@ test("one heading fits apps waiting for their host and StatefulSets waiting for 
   const html = t.fields["#mbody"].innerHTML;
   assert.doesNotMatch(html, /Waits for it/);
   assert.match(html, />Waits<\/h4>[^]*postgres[^]*zigbee/);
+});
+
+// Start on another host (#441): only for a set that waits, on a host that is down.
+const chosen = { ...waits, mode: "wait", setting: undefined, why: "set to wait for its host to come back" };
+const down = (status, extra = {}) => ({ data: { nodes: [{ name: "node2", status }] }, ...extra });
+
+test("a waiting set on a NotReady host offers Start on another host to admins", () => {
+  const t = setup({}, down("NotReady"));
+  for (const row of [waits, chosen]) {
+    const html = t.impactApp(row, "node2");
+    assert.match(html, /data-need="admin"/);
+    assert.match(html, /setRestartReview\(&quot;data&quot;,&quot;postgres&quot;,&quot;node2&quot;\)/);
+    assert.match(html, /Start on another host…/);
+  }
+});
+
+test("not offered while the host is Ready, or for a row that does not wait", () => {
+  assert.doesNotMatch(setup({}, down("Ready")).impactApp(waits, "node2"), /setRestartReview/);
+  assert.doesNotMatch(setup({}, down("NotReady")).impactApp({ ...waits, outcome: "stops" }, "node2"), /setRestartReview/);
+  assert.doesNotMatch(setup({}, down("NotReady")).impactApp({ ...waits, kind: "app" }, "node2"), /setRestartReview/);
+});
+
+test("not offered on Harvester, which handles it itself", () => {
+  const html = setup({}, down("NotReady", { platform: { harvester: true } })).impactApp(waits, "node2");
+  assert.doesNotMatch(html, /setRestartReview/);
+  assert.match(html, /Harvester restarts these itself; see its VM force reset policy\./);
 });
