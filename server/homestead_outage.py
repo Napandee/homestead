@@ -27,6 +27,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
 import homestead_routes as ROUTER
 import homestead_shared as SHARED
@@ -248,6 +249,7 @@ def _send_later(url, body):
         except Exception as error:
             result = {"at": round(time.time()), "ok": False, "event": body.get("event"), "error": str(error)[:200]}
         _last_webhook[f"{body['kind']}:{body['namespace']}/{body['name']}"] = result
+        LEADER_STATE.put("outage-webhooks", dict(_last_webhook))
     threading.Thread(target=run, name="outage-webhook", daemon=True).start()
 
 
@@ -255,13 +257,20 @@ _last_webhook = {}
 
 
 def report():
-    """Each item's restarts and last webhook, for the Monitoring dialogs."""
+    """Each item's restarts and last webhook, for the Monitoring dialogs.
+    Webhooks go out from the leader: the newer of its shared calls and this
+    replica's own."""
     with _lock:
         data = _load().get("items") or {}
+    shared, _ = LEADER_STATE.get("outage-webhooks")
+    hooks = dict(shared) if isinstance(shared, dict) else {}
+    for key, hook in list(_last_webhook.items()):
+        if (hook or {}).get("at", 0) >= ((hooks.get(key) or {}).get("at", 0)):
+            hooks[key] = hook
     return {key: {"restarts": s.get("restarts", 0), "gave_up": bool(s.get("gave_up")), "last_restart": s.get("last_restart"),
-                  "last_error": s.get("last_error", ""), "webhook": _last_webhook.get(key)}
+                  "last_error": s.get("last_error", ""), "webhook": hooks.get(key)}
             for key, s in data.items()} | {key: {"restarts": 0, "webhook": hook}
-                                            for key, hook in _last_webhook.items() if key not in data}
+                                            for key, hook in hooks.items() if key not in data}
 
 
 def alert_facts(scheduled_report=None):

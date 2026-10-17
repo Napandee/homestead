@@ -66,8 +66,12 @@ class HeartbeatTests(unittest.TestCase):
                 mock.patch.object(server.NODES, "node_temps", lambda: {}), \
                 mock.patch.object(SERVERS, "samba_state", lambda: {}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
-            standby = {r["name"]: r["state"] for r in server.SELF_HEALTH.report()["loops"]}
+            with mock.patch.object(server.SELF_HEALTH.HEARTBEATS, "leader_beats", lambda: {}):
+                standby = {r["name"]: r["state"] for r in server.SELF_HEALTH.report()["loops"]}
+            # The leader shares its beats: another copy shows them rather than standby.
+            shared = {r["name"]: r["state"] for r in server.SELF_HEALTH.report()["loops"]}
         self.assertEqual("standby", standby["alerts"], "the leader's work is not this copy's to do")
+        self.assertEqual(("ok", "failing"), (shared["alerts"], shared["hardware"]))
 
 
 if __name__ == "__main__":

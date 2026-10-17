@@ -22,6 +22,7 @@ import re
 import time
 import urllib.error
 
+import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
 import homestead_shared as SHARED
 import homestead_routes
@@ -157,8 +158,11 @@ def report():
     other = [p for p in everything if p not in claimed]
     rows.append({"label": "Settings and other state", "size": _size(other), "files": len(other), "kept": "as long as it is needed"})
     rows.sort(key=lambda r: -r["size"])
+    # The tidy runs on the leader: another replica shows the leader's.
+    shared, _ = LEADER_STATE.get("housekeeping")
+    last = shared if isinstance(shared, dict) and shared.get("at", 0) > _last["at"] else _last
     return {"volume": volume(), "stores": rows, "total": sum(r["size"] for r in rows),
-            "last": _last["result"], "last_at": _last["at"], "pressure_pct": PRESSURE_PCT}
+            "last": last["result"], "last_at": last["at"], "pressure_pct": PRESSURE_PCT}
 
 
 def _trim_log(path, days, lines, now):
@@ -239,6 +243,7 @@ def tidy(referenced_icons, now=None):
         notes.append(f"removed {temps} file{'s' if temps != 1 else ''} an interrupted write left")
     result = {"freed": freed, "notes": notes, "pressure": pressure}
     _last.update(at=round(now), result=result)
+    LEADER_STATE.put("housekeeping", dict(_last))
     return result
 
 

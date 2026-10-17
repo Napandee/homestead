@@ -5,6 +5,7 @@ where. Settings shows it; server.py runs the tasks and keeps their beats.
 import time
 import urllib.parse
 
+import homestead_heartbeats as HEARTBEATS
 import homestead_leader as LEADER
 import homestead_mqtt as MQTT
 import homestead_names as NAMES
@@ -33,24 +34,16 @@ LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "h
               "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "recovery": "Rebalance after a host returns", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
-def report():
-    """Homestead's own health: the API it depends on, its copies and leader,
-    each background task, the node probe, Samba and its permissions."""
-    started = time.time()
-    try:
-        kget("/version")
-        api = {"ok": True, "ms": int((time.time() - started) * 1000)}
-    except Exception as error:
-        api = {"ok": False, "ms": int((time.time() - started) * 1000), "error": str(error)[:160]}
-    leading = LEADER.is_leader()
-    now = time.time()
+def loop_states(rows, shared, leading, now):
+    """Each background task's state: ok, late, failing, starting, or standby
+    for a task only the leader runs when the leader has shared nothing."""
+    rows = {**rows, **{name: {**row, "shared": True} for name, row in shared.items()}}
     loops = []
-    rows = heartbeats()
     for name, word in LOOP_WORDS.items():
         row = rows.get(name)
         if not row:
             state = "standby" if name != "sampler" and not leading else "starting"
-        elif row["leader_only"] and not leading:
+        elif row["leader_only"] and not leading and not row.get("shared"):
             state = "standby"
         elif row["error"] and row["error_at"] >= row["last_ok"]:
             state = "failing"
@@ -61,6 +54,21 @@ def report():
         loops.append({"name": name, "label": word, "state": state,
                       "last_ok": int(row["last_ok"]) if row and row["last_ok"] else 0,
                       "error": (row or {}).get("error", ""), "every": (row or {}).get("every", 0)})
+    return loops
+
+
+def report():
+    """Homestead's own health: the API it depends on, its copies and leader,
+    each background task, the node probe, Samba and its permissions."""
+    started = time.time()
+    try:
+        kget("/version")
+        api = {"ok": True, "ms": int((time.time() - started) * 1000)}
+    except Exception as error:
+        api = {"ok": False, "ms": int((time.time() - started) * 1000), "error": str(error)[:160]}
+    leading = LEADER.is_leader()
+    # Not leading: the leader's own beats for the tasks only it runs, while it shares them.
+    loops = loop_states(heartbeats(), {} if leading else HEARTBEATS.leader_beats(), leading, time.time())
     try:
         replicas = replicas_now()
     except Exception as error:
