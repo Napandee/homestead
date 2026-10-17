@@ -1077,10 +1077,6 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
 .voltable .volusage .mono{font-size:10px;white-space:normal;overflow-wrap:anywhere}
 .voltable td{vertical-align:middle}
 .voltable .volactions{width:1%;white-space:nowrap}
-.voltable .volactions .row{gap:4px;flex-wrap:nowrap;justify-content:flex-end}
-.voltable .iconbtn{width:28px;height:28px}
-.voltable .iconbtn.danger{color:var(--red);border-color:rgba(255,95,115,.28)}
-.voltable .iconbtn.danger:hover{background:rgba(255,95,115,.1)}
 .snapshot-timeline{position:relative;display:flex;flex-direction:column;gap:14px;padding:12px 0}
 .snapshot-timeline::before{content:"";position:absolute;top:30px;bottom:40px;left:19px;width:2px;background:var(--line)}
 .snapshot-point{position:relative;display:flex;gap:14px;align-items:flex-start;min-width:0}
@@ -1628,7 +1624,6 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .voltable .volname{flex:0 1 auto;order:0;margin-right:2px}
   .voltable .volname b{font-size:12.5px}
   .voltable .volactions{flex:0 0 auto;order:1;margin-left:auto;width:auto}
-  .voltable .iconbtn{width:26px;height:26px}
   /* A flex item of its own, full width and no height: it ends the first line
      so the name keeps the actions company and nothing else joins them. */
   .voltable tr::after{content:"";flex:1 1 100%;order:2;height:0}
@@ -2632,9 +2627,6 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 
 /* ISO library */
 .iso-lib .iso-folders,.iso-lib .iso-files{display:flex;flex-direction:column;gap:6px}
-.iso-folder,.iso-file{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);min-width:0}
-.iso-file>div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
-.iso-file>div:first-child span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iso-dirs{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
 .iso-crumb{font-size:12px;color:var(--mut)}
 .iso-lib{grid-template-columns:minmax(0,1fr)}

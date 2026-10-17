@@ -1360,17 +1360,21 @@ async function viewImages() {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
         const retained = i.retained_by || [];
         const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${IMAGE_REASONS[r.reason]?.tone ?? "ok"}"
-          data-tip="${esc(`${r.namespace} · ${r.workload} · ${r.container}`)}${IMAGE_REASONS[r.reason]?.tip ? esc(" - " + IMAGE_REASONS[r.reason].tip) : ""}">${esc(r.reason)} · ${esc(r.workload)}</span>${r.reason === "rollback"
-          ? `<button class="btn sm" data-need="admin" data-tip="Stop keeping this image for ${esc(r.workload)}'s Roll back, so it can be cleaned up" onclick="forgetRollback(${jsq(r.namespace)},${jsq(r.workload)})">Forget</button>` : ""}`).join("") +
+          data-tip="${esc(`${r.namespace} · ${r.workload} · ${r.container}`)}${IMAGE_REASONS[r.reason]?.tip ? esc(" - " + IMAGE_REASONS[r.reason].tip) : ""}">${esc(r.reason)} · ${esc(r.workload)}</span>`).join("") +
           (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>
         <td class="mono">${bytesText(i.size_mb * 1024 ** 2)}</td>
         <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
-            ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
+            ${missing.map(n => `<span class="tag dim" data-tip="Not cached on this host">${esc(n.replace("harvester-", ""))}</span>`).join("")}
+            ${missing.length ? "" : '<span class="dim xs">everywhere</span>'}</td>
         <td><div class="row" style="gap:5px">${retention}</div></td>
-        <td>${missing.length ? "" : '<span class="dim xs">everywhere</span> '}${actionBar([
-          missing.length ? { label: "Pre-pull", run: `prepull(${jsq(i.name)})` } : null,
-          !i.protected && !i.system && i.digest ? { label: "Clean up", run: `imageCleanupReview(${jsq(i.digest)})`, need: "admin", danger: true } : null])}</td></tr>`;
+        <td data-actions>${actionBar([
+          missing.length ? { label: "Pre-pull", run: `prepull(${jsq(i.name)})`, tip: "Pull it onto the hosts that do not have it" } : null,
+          // Forget lets a kept Roll back image go, so it can be cleaned up.
+          ...retained.filter(r => r.reason === "rollback").map(r => ({ label: `Forget ${r.workload}'s roll back`, run: `forgetRollback(${jsq(r.namespace)},${jsq(r.workload)})`,
+            need: "admin", tip: `Stop keeping this image for ${r.workload}'s Roll back, so it can be cleaned up` })),
+          !i.protected && !i.system && i.digest ? { label: "Clean up", run: `imageCleanupReview(${jsq(i.digest)})`, need: "admin", danger: true } : null],
+          { shown: missing.length ? 1 : 0, label: `Actions for ${i.name}` })}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No cached images to show.</td></tr>`}
     </tbody></table></div></div>
     ${vmImagesSection(vm, d.node_names)}`);
@@ -1404,7 +1408,7 @@ function vmImagesSection(vm, nodeNames) {
             <div class="dim xs mono">${esc(i.namespace)}${i.source ? ` · from ${esc(i.source)}` : ""}${i.virtual_size_gb ? ` · ${i.virtual_size_gb} GiB disk` : ""}</div></td>
           <td class="mono nowrap" data-sort="${i.size_mb}">${i.size_mb ? size(i.size_mb) : '<span class="dim">—</span>'}</td>
           <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
-            ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
+            ${missing.map(n => `<span class="tag dim" data-tip="Not cached on this host">${esc(n.replace("harvester-", ""))}</span>`).join("")}</td>
           <td><div class="row" style="gap:5px">${used}</div></td>
           <td>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}

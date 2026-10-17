@@ -26,8 +26,49 @@ test("a row's buttons are an actionBar, never loose buttons in a cell", () => {
   // button that edits a form table (removing a row being typed) says so with
   // data-form-row.
   const found = offences(/<td\b[^>]*>([\s\S]*?)<\/td>/g,
-    match => /<button class="btn\b(?![^>]*\bdata-form-row\b)/.test(match[1]));
+    match => /<button class="(?:btn|iconbtn)\b(?![^>]*\bdata-form-row\b)|UI\.button\(|<details class="actionmenu"/.test(match[1]));
   assert.deepStrictEqual(found, [], "use actionBar([{ label, run, need, danger }]) in these cells");
+});
+
+// A function's hand-built buttons, by label: <button class="btn…">, an icon
+// button, UI.button(…) and a raw ⋯ menu. A function runs from its opening
+// line to the first line that closes it at the start of a line.
+function handBuiltButtons(file, start) {
+  const text = FILES.find(f => f.name === file).text;
+  const from = text.search(start);
+  assert.ok(from >= 0, `${file} has ${start}`);
+  const end = text.slice(from).search(/\n\};?\n/);
+  const body = text.slice(from, from + end);
+  const label = html => html.replace(/\$\{icon\([^)]*\)\}/g, "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  return [...body.matchAll(/<button\b(?=[^>]*\bclass="(?:btn|iconbtn)\b)(?![^>]*\bdata-form-row\b)[^>]*>([\s\S]*?)<\/button>|UI\.button\(\s*(["'`])((?:(?!\2).)*)\2|<details class="actionmenu"/g)]
+    .map(m => m[0].startsWith("<details") ? "⋯" : m[3] !== undefined ? m[3] : label(m[1]) || "(icon)");
+}
+
+test("lists' rows put their buttons in an actionBar, not loose in the row (#506)", () => {
+  // design.md, Collections: a table's last column is "always an actionBar()".
+  // What is left is the list's own heading, note or footer buttons.
+  const lists = [
+    ["web/js/views-storage.js", /function volumeShortCell\(/, []],
+    ["web/js/views-lifecycle.js", /async function viewImages\(/, ["Scan every host", "Stop"]],
+    ["web/js/views-vms.js", /window\.vmStore = /, ["Check for newer builds"]],
+    ["web/js/vm-hardware.js", /window\.vmIsoLibrary = /, ["＋ Folder", "Save", "↻ Refresh"]],
+    ["web/js/views-helm.js", /function renderHelm\(/, ["＋ Install chart"]],
+  ];
+  for (const [file, start, allowed] of lists) {
+    assert.deepStrictEqual(handBuiltButtons(file, start), allowed, `${file} ${start}: give its rows an actionBar([{ label, run, need, danger }])`);
+  }
+});
+
+test("Helm releases have row actions and say their state in words (#506)", () => {
+  const helm = FILES.find(f => f.name === "web/js/views-helm.js").text;
+  const render = helm.slice(helm.search(/function renderHelm\(/));
+  assert.match(render.slice(0, render.search(/\n\}\n/)), /<td data-actions>\$\{(?:actionBar|helmActions)\(/, "each release row ends in an actionBar");
+  if (!/actionBar\(/.test(render.slice(0, render.search(/\n\}\n/)))) assert.match(helm, /function helmActions\([^)]*\) \{[\s\S]*?return actionBar\(/, "helmActions returns an actionBar");
+  const source = helm.match(/const HELM_WORDS = [\s\S]*?\n\};?\n|function helmStatus\([\s\S]*?\n\}\n/g).join("\n");
+  const helmStatus = new Function("esc", `${source}; return helmStatus;`)(s => String(s));
+  for (const [status, words] of [["deployed", "Deployed"], ["pending-install", "Installing…"], ["pending-upgrade", "Upgrading…"], ["failed", "Failed"]]) {
+    assert.match(helmStatus(status), new RegExp(`>${words}<`), `${status} reads "${words}"`);
+  }
 });
 
 test("a list of like things is a table, not service rows", () => {
