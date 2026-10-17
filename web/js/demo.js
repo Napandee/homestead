@@ -832,6 +832,15 @@
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, message: `Asked ${body.source} to shut ${body.vm} down; it shows as shut off once the guest has stopped` };
     },
+    "/api/vms/import-unraid/room": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const needed = Math.round((body.disks || []).reduce((t, d) => t + Math.max(d.virtual / 2 ** 30 * 1.06, d.virtual / 2 ** 30 + 0.25), 0) * 10) / 10;
+      const free = 412.6, sc = body.storage_class || "longhorn-r2";
+      return needed > free
+        ? { storage_class: sc, needed_gb: needed, free_gb: free, copies: 2, level: "bad", warnings: [],
+            blockers: [`Not enough room on ${sc}: these disks need ${needed} GiB (${Math.round(needed * 20) / 10} GiB with its 2 copies), and it can still place ${free} GiB. Free some space, add a disk, or leave a disk out`] }
+        : { storage_class: sc, needed_gb: needed, free_gb: free, copies: 2, level: "ok", blockers: [], warnings: [] };
+    },
     "/api/vms/import-unraid": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, operation: { id: "demo-uvm", kind: "unraid-vm-import", title: `Import ${body.vm} from ${body.source}`,

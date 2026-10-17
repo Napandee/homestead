@@ -185,6 +185,7 @@ POLICY.update({
     ('GET', '/api/vm/store/keep'): "admin",
     ('GET', '/api/vm/store/refresh'): "admin",
     ('GET', '/api/vms/import-unraid'): "admin",
+    ('GET', '/api/vms/import-unraid/room'): "admin",
     ('GET', '/api/volumes/chown'): "admin",
     ('GET', '/api/volumes/delete'): "admin",
     ('GET', '/api/volumes/old-copies/remove'): "admin",
