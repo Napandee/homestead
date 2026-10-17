@@ -472,7 +472,7 @@ class SetRestartRouteTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.objects, self.sent, self.err, self.errs = {}, [], None, {}
+        self.objects, self.sent, self.err, self.errs, self.get_err = {}, [], None, {}, None
         OPS.bind(lambda path: self.objects[path], self.tmp.name, lambda ns, name: None)
         self.state = good_state()
         self.now = NOW
@@ -482,6 +482,8 @@ class SetRestartRouteTests(unittest.TestCase):
         self.token = sr.plan(good_state(), NOW)["review_token"]
 
     def get(self, path):
+        if self.get_err:
+            raise urllib.error.HTTPError(path, self.get_err, "unavailable", {}, None)
         if path not in self.objects:
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         return self.objects[path]
@@ -515,7 +517,7 @@ class SetRestartRouteTests(unittest.TestCase):
         self.assertEqual(202, first.code)
         again = self.run_req()
         self.assertEqual(409, again.code)
-        self.assertEqual(first.body["id"], again.body["operation"])
+        self.assertEqual({"id": first.body["id"]}, again.body["operation"])
 
     def test_run_replans_and_refuses_blockers(self):
         self.state["node"]["ready"] = True
@@ -571,7 +573,8 @@ class SetRestartRouteTests(unittest.TestCase):
             self.assertEqual(1, len(self.sent), "no retry")
             self.assertEqual("already replaced", r.body["set_restart"]["stage"])
             item = OPS._read()[0]
-            self.assertEqual("web-0 was already replaced; waiting for it to be Ready on another host", item["message"])
+            self.assertEqual("web-0 was already replaced; nothing was deleted; waiting for it to be Ready on another host",
+                             item["message"])
 
     def two_pods(self):
         self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": [], "unchecked": []})
@@ -609,11 +612,15 @@ class SetRestartRouteTests(unittest.TestCase):
         self.assertEqual("deleted", r.body["set_restart"]["stage"])
 
     def test_start_refused_after_a_delete_says_pods_were_deleted(self):
-        with mock.patch.object(OPS, "start", side_effect=ValueError("already active")):
+        self.two_pods(); self.errs = {"web-1": 500}
+        with mock.patch.object(OPS, "start", side_effect=ValueError("already active")), \
+                mock.patch.object(sr, "_active", side_effect=["", "op-other"]):
             r = self.run_req()
         self.assertEqual(409, r.code)
         self.assertIn("Pods were deleted", r.body["error"])
         self.assertEqual(["web-0"], [x["name"] for x in r.body["deleted"]])
+        self.assertEqual({"id": "op-other"}, r.body["operation"])
+        self.assertEqual(["web-1"], [x["name"] for x in r.body["not_deleted"]])
 
     def item(self):
         r = self.run_req()
@@ -627,7 +634,7 @@ class SetRestartRouteTests(unittest.TestCase):
         item = self.item()
         path = "/api/v1/namespaces/lab/pods/web-0"
         self.now = NOW + 30
-        self.assertEqual("running", sr.status(item)[0])  # no replacement yet: the read is a KeyError here
+        self.assertEqual("running", sr.status(item)[0])  # no replacement yet: the read is a 404
         self.objects[path] = self.new_pod("", False)
         self.assertEqual("running", sr.status(item)[0])
         self.assertEqual("deleted", item["ref"]["stage"])
@@ -644,18 +651,53 @@ class SetRestartRouteTests(unittest.TestCase):
         self.assertEqual("succeeded", sr.status(item)[0])
         self.assertEqual("ready", item["ref"]["stage"])
 
-    def test_status_old_pod_or_same_host_does_not_succeed(self):
+    def test_status_old_pod_never_succeeds(self):
         item = self.item()
         path = "/api/v1/namespaces/lab/pods/web-0"
-        self.objects[path] = self.new_pod("host-2", True, uid="u0")  # the pod that was deleted, still terminating
+        for node in ("host-2", "host-1"):
+            self.objects[path] = self.new_pod(node, True, uid="u0")  # the pod that was deleted
+            self.assertEqual("running", sr.status(item)[0])
+
+    def test_status_new_pod_ready_on_the_host_that_came_back_succeeds(self):
+        item = self.item()
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-1", True)
+        status, progress, message = sr.status(item)
+        self.assertEqual(("succeeded", 100), (status, progress))
+        self.assertEqual("web-0 is Ready on host-1, which came back", message)
+
+    def test_status_new_pod_not_ready_on_the_host_that_came_back_is_scheduled(self):
+        item = self.item()
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-1", False)
         self.assertEqual("running", sr.status(item)[0])
-        self.objects[path] = self.new_pod("host-1", True)
-        self.assertEqual("running", sr.status(item)[0])
+        self.assertEqual("scheduled on host-1", item["ref"]["stage"])
+
+    def test_status_mixed_hosts_names_each(self):
+        self.two_pods()
+        item = self.item()
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-1", True)
+        self.objects["/api/v1/namespaces/lab/pods/web-1"] = dict(self.new_pod("host-2", True), metadata={"name": "web-1", "uid": "u8"})
+        status, _, message = sr.status(item)
+        self.assertEqual("succeeded", status)
+        self.assertEqual("Ready on another host: web-1; web-0 is Ready on host-1, which came back", message)
+
+    def test_status_gives_the_attach_note_while_deleted_or_attaching(self):
+        item = self.item()
+        note = "Kubernetes can take about 6 minutes to release the volume from host-1"
+        _, _, message = sr.status(item)
+        self.assertEqual(f"web-0: deleted; {note}", message)
+        pod = self.new_pod("host-2", False)
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = pod
+        self.assertNotIn("6 minutes", sr.status(item)[2])
+        pod["status"]["containerStatuses"] = [{"state": {"waiting": {"reason": "ContainerCreating"}}}]
+        self.assertEqual(f"web-0: attaching volume; {note}", sr.status(item)[2])
 
     def test_status_read_error_keeps_running_until_limit(self):
-        item = self.item()  # no pod object: kget raises KeyError
+        item = self.item()
+        self.get_err = 503  # not a 404: the pod could not be read at all
         self.now = NOW + 60
-        self.assertEqual("running", sr.status(item)[0])
+        status, _, message = sr.status(item)
+        self.assertEqual("running", status)
+        self.assertIn("Waiting to read the pods again", message)
         self.now = NOW + 901
         self.assertEqual("failed", sr.status(item)[0])
 

@@ -69,11 +69,12 @@ window.setRestartRun = async (ns, name, node) => {
     return window.setRestartFollow(r.id, name);
   } catch (e) {
     // A job already going for this set (or one following a restart): follow it.
+    // The reply names the job by id only; Recent jobs fills in the rest.
+    const left = (e.body?.not_deleted || []).map(p => `${p.name} (${p.error})`);
     if (e.body?.operation?.id) {
-      window.noteOperation?.(e.body.operation);
+      if (left.length) toast(`Not removed: ${left.join(", ")}.`, "warn");
       return window.setRestartFollow(e.body.operation.id, name);
     }
-    const left = (e.body?.not_deleted || []).map(p => `${p.name} (${p.error})`);
     toast(e.message + (left.length ? ` Not removed: ${left.join(", ")}.` : "") + " Review it again before trying once more.", "bad");
     if (button) {
       button.disabled = false; button.textContent = "Review again";

@@ -347,7 +347,7 @@ def _run(request):
     running = _active(ns, name)
     if running:
         return ROUTER.Reply(409, {"error": "A restart for this StatefulSet is still running; follow it instead of sending another",
-                                  "operation": running})
+                                  "operation": {"id": running}})
     try:
         now = clock()
         reviewed = plan(read_state(ns, name, node), now)
@@ -381,6 +381,8 @@ def _run(request):
     parts = ([f"Deleted {names(deleted)}"] if deleted else []) + [
         f"{names(replaced)} {'was' if len(replaced) == 1 else 'were'} already replaced"] * bool(replaced)
     parts += [f"could not delete {f['name']}: {f['error']}; nothing was changed for it" for f in failed]
+    if not deleted:
+        parts.append("nothing was deleted")
     parts.append("waiting for a replacement on another host" if deleted else
                  ("waiting for it to be Ready on another host" if len(replaced) == 1 else "waiting for them to be Ready on another host"))
     try:
@@ -390,39 +392,43 @@ def _run(request):
         if not deleted:
             raise
         return ROUTER.Reply(409, {"error": "Pods were deleted, but another restart of this set is already being followed",
-                                  "deleted": [{"name": p["name"]} for p in deleted], "operation": _active(ns, name)})
+                                  "deleted": [{"name": p["name"]} for p in deleted], "operation": {"id": _active(ns, name)},
+                                  "not_deleted": failed})
     if failed:
         op = dict(op, not_deleted=failed)
     return ROUTER.Reply(202, op)
 
 
-def _pod_stage(pod, uid, node):
-    """How far one replacement has got: (rank into STAGES, text)."""
+def _pod_stage(pod, uid):
+    """How far one replacement has got: (rank into STAGES, text, its host).
+    The deleted pod (its old uid) never counts; a new one counts on any host,
+    the one that went down included, should it have come back."""
     meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}
     where = spec.get("nodeName")
-    if meta.get("uid") == uid or not where or where == node:
-        return 0, STAGES[0]
+    if meta.get("uid") == uid or not where:
+        return 0, STAGES[0], None
     if _ready(pod)[0]:
-        return 3, "ready"
+        return 3, "ready", where
     status = pod.get("status") or {}
     started = status.get("containerStatuses") or any(
         c.get("type") == "Initialized" and c.get("status") == "True" for c in status.get("conditions") or [])
-    return (2, "attaching volume") if started else (1, f"scheduled on {where}")
+    return (2, "attaching volume", where) if started else (1, f"scheduled on {where}", where)
 
 
 def status(item):
     """(status, progress, message): succeeded when every reviewed pod has a
-    new Ready pod on another host; failed after LIMIT seconds."""
+    new Ready pod (on another host, or on its own should it come back);
+    failed after LIMIT seconds."""
     ref = item["ref"]
     waited = clock() - float(ref.get("started") or 0)
     rows, unread = [], None
     for p in ref.get("pods") or []:
         try:
             pod = kget(f"/api/v1/namespaces/{_q(ref['ns'])}/pods/{_q(p['name'])}")
-            rows.append((p["name"],) + _pod_stage(pod, p["uid"], ref["node"]))
+            rows.append((p["name"],) + _pod_stage(pod, p["uid"]))
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                rows.append((p["name"], 0, STAGES[0]))  # not recreated yet
+                rows.append((p["name"], 0, STAGES[0], None))  # not recreated yet
             else:
                 unread = e
         except Exception as e:
@@ -432,7 +438,9 @@ def status(item):
         if low[1] or ref.get("stage") != "already replaced":
             ref["stage"] = low[2]  # "already replaced" stays until a new pod is seen
         if low[1] == 3:
-            return "succeeded", 100, "Ready on another host: " + ", ".join(r[0] for r in rows)
+            moved = [r[0] for r in rows if r[3] != ref["node"]]
+            back = [f"{r[0]} is Ready on {r[3]}, which came back" for r in rows if r[3] == ref["node"]]
+            return "succeeded", 100, "; ".join((["Ready on another host: " + ", ".join(moved)] if moved else []) + back)
     if waited > LIMIT:
         return "failed", 100, (f"No replacement was Ready on another host within 15 minutes; "
                                f"the last stage reached was {ref.get('stage') or STAGES[0]}")
@@ -440,7 +448,9 @@ def status(item):
         return "running", item.get("progress") or 10, f"Waiting to read the pods again ({unread}); last stage: {ref.get('stage')}"
     rank = min(r[1] for r in rows) if rows else 0
     names = ", ".join(r[0] for r in rows if r[1] == rank)
-    return "running", (10, 40, 70)[rank], f"{names}: {ref['stage']}"
+    note = (f"; Kubernetes can take about 6 minutes to release the volume from {ref['node']}"
+            if ref["stage"] in ("deleted", "attaching volume") else "")
+    return "running", (10, 40, 70)[rank], f"{names}: {ref['stage']}{note}"
 
 
 # The job's own, registered at import like homestead_promote's. Nothing to

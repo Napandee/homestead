@@ -104,12 +104,25 @@ test("a 409 turns the button into Review again, which reopens the review", async
   assert.equal(t.requests.filter(([, o]) => !o).length, 2);
 });
 
+// The server's 409 replies carry the job as {"id": ...} only (set_restart._run).
 test("a 409 that names a running operation follows it instead", async () => {
   const err = Object.assign(new Error("already running"), { status: 409, body: { error: "already running", operation: { id: "op9" } } });
   const t = setup({ post: err });
   await t.ctx.setRestartReview("data", "postgres", "node2");
   await t.ctx.setRestartRun("data", "postgres", "node2");
-  assert.ok(t.calls.some(c => c[0] === "noteOperation" && c[1] === "op9"));
+  assert.equal(t.fields["#mtitle"].textContent, "Starting postgres elsewhere");
+  assert.ok(!t.calls.some(c => c[0] === "noteOperation"), "a bare id is not put into Recent jobs as if it were a job");
+  assert.notEqual(t.fields["#sr_run"].textContent, "Review again");
+});
+
+test("a 409 after deletes follows the other job and names the pods not deleted", async () => {
+  const err = Object.assign(new Error("Pods were deleted"), { status: 409, body: { error: "Pods were deleted",
+    deleted: [{ name: "postgres-0" }], operation: { id: "op7" }, not_deleted: [{ name: "postgres-1", error: "forbidden" }] } });
+  const t = setup({ post: err });
+  await t.ctx.setRestartReview("data", "postgres", "node2");
+  await t.ctx.setRestartRun("data", "postgres", "node2");
+  assert.equal(t.fields["#mtitle"].textContent, "Starting postgres elsewhere");
+  assert.ok(t.toasts.some(([m, k]) => k === "warn" && /postgres-1 \(forbidden\)/.test(m)), "names the pod not deleted");
 });
 
 test("the role is applied after the review is drawn, so only admins see the run button", async () => {
