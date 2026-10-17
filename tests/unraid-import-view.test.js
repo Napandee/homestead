@@ -7,6 +7,7 @@ test("finished imports offer dismissal while active and recovery records keep th
   const ctx = { STATE: { data: { operations: [
     { id: "failed-copy", kind: "unraid-vm-import", title: "Import desktop", status: "failed", progress: 100, message: "Upload refused" },
     { id: "running-copy", kind: "unraid-vm-import", title: "Import server", status: "running", progress: 10 },
+    { id: "stuck-copy", kind: "unraid-vm-import", title: "Import test", status: "running", progress: 2, cancellable: true, message: "Import paused: Import claim was replaced" },
     { id: "protected-copy", kind: "unraid-vm-import", title: "Inspect partial copy", status: "failed", dismissible: false },
     { id: "finished-copy", kind: "unraid-vm-import", title: "Import completed", status: "succeeded" },
     { id: "cancelled-copy", kind: "unraid-vm-import", title: "Import cancelled", status: "cancelled" },
@@ -21,6 +22,10 @@ test("finished imports offer dismissal while active and recovery records keep th
   ctx.uvmCopiesPaint();
   assert.match(host.innerHTML, /Recent imports/);
   assert.match(host.innerHTML, /Upload refused/);
+  // A stuck import offers Cancel, which opens the cancel review; a running one that cannot be cancelled does not.
+  const cancel = actions.filter(row => row.label === "Cancel");
+  assert.deepEqual(cancel.map(row => [row.run, row.need]), [['cancelOperation("stuck-copy")', "operator"]]);
+  actions.splice(actions.indexOf(cancel[0]) - 1, 2);
   assert.equal(actions.length, 8);
   assert.equal(actions[0].label, "Job details");
   vm.runInContext(actions[0].run, ctx);

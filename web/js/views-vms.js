@@ -929,6 +929,9 @@ function uvmCopiesPaint() {
       <td data-label="Progress" style="min-width:200px"><div class="small">${esc(op.message || "")}</div>
         <span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></td>
       <td>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` },
+        // A cancel is reviewed first: what it removes, and that the source VM is kept.
+        ...(operationActive(op) && op.cancellable ? [{ label: "Cancel", need: "operator", danger: true,
+          run: `cancelOperation(${jsq(op.id)})`, tip: "Stop the import and remove the disks it was making. The source VM is unchanged." }] : []),
         ...(!operationActive(op) && op.dismissible !== false ? [{ label: "Dismiss", need: "operator",
           run: `dismissOperation(${jsq(op.id)})`, tip: "Remove this job from history. VMs and disk data are kept." }] : [])])}</td></tr>`).join("")}</tbody></table></div></div>` : "";
   if (window.applyRole) applyRole();

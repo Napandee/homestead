@@ -64,6 +64,52 @@ def bind(imports, _kget, _ksend, ops, _platform=None, storage=None):
         platform = _platform
     if storage:
         storage_classes, lh_capacity, default_class = storage
+    if isinstance(getattr(OPS, "CANCELLERS", None), dict):     # not a test's stand-in
+        OPS.CANCELLERS[KIND] = (cancel_plan, cancel_run)
+        OPS.CDI_CANCELLABLE.add(KIND)
+
+
+# ------------------------------------------------------------ cancelling
+# An import can stop where it cannot go on by itself - paused because a
+# claim it made was replaced, or its cleanup stopped by the same check - and
+# its job then never ends. Cancel removes what it made, and only that: each
+# object must carry the stamp its receipt was written with. Deleting a
+# DataVolume takes its claim, CDI's staging claim and upload pod with it.
+def cancel_plan(item):
+    ref = item.get("ref") or {}
+    work = ref.get("cdi_cleanup") or {}
+    if not work.get("id"):
+        return {"can": False, "why_not": "This older import kept no record of what it made: review its volumes under Volumes"}
+    where = _where(ref)
+    disks = ", ".join(d["dv"] for d in ref.get("disks") or [])
+    return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
+            "undo": [f"Stops the copy from {where}", f"Removes the disks it was making ({disks}) and their temporary storage"],
+            "keeps": [f"The VM on {where} is unchanged",
+                      "A volume on a class that keeps released data (Retain) stays under Volumes until you remove it"]}
+
+
+def cancel_run(item, _options):
+    ref = item["ref"]
+    ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
+    paths = []
+    for disk in ref.get("disks") or []:
+        if disk.get("job"):
+            paths += [f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}",
+                      f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload"]
+        paths.append(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
+    removed, foreign = 0, []
+    for path in paths:
+        found = CDI_CLEANUP.RESOURCES.optional(kget, path)
+        if not found:
+            continue
+        if ((found.get("metadata") or {}).get("annotations") or {}).get(CDI_CLEANUP.STAMP) != stamp:
+            foreign.append(path.rsplit("/", 1)[-1])
+            continue
+        CDI_CLEANUP.RESOURCES.delete(kget, ksend, path, found)
+        removed += 1
+    ref.update(phase="failed", retain_resources=False)
+    note = (f"; {', '.join(foreign)} belong to another import and were left" if foreign else "")
+    return f"Stopped; removed {removed} of the import's objects and their temporary storage{note}. The VM on {_where(ref)} is unchanged"
 
 
 # ------------------------------------------------------------ reading Unraid
