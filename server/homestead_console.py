@@ -170,7 +170,11 @@ class ConsoleProxy:
         sock.sendall(request.encode())
         response = bytearray()
         while not response.endswith(b"\r\n\r\n") and len(response) < 65536:
-            response.extend(sock.recv(1))
+            part = sock.recv(1)
+            if not part:
+                sock.close()
+                raise ConnectionError("Kubernetes closed the connection before accepting exec")
+            response.extend(part)
         status = response.split(b"\r\n", 1)[0]
         if b" 101 " not in status:
             sock.close()

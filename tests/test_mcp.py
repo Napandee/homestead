@@ -124,9 +124,12 @@ class ListTests(Base):
         self.assertIn("list_containers", reader)
         self.assertNotIn("deploy_container", reader)
         self.assertNotIn("get_container_logs", reader, "logs need their own scope")
+        self.assertNotIn("get_container_diagnostics", reader)
+        self.assertNotIn("run_container_command", reader)
         self.assertIn("get_agent_request", reader)
         manager = self.names(key(["read", "containers:manage", "logs:read"], role="operator"))
         self.assertTrue({"deploy_container", "delete_container", "get_container_logs"} <= manager)
+        self.assertTrue({"get_container_diagnostics", "run_container_command"} <= manager)
         self.assertNotIn("delete_volume", manager)
 
     def test_each_tool_says_whether_it_reads_changes_or_destroys(self):
@@ -143,6 +146,27 @@ class ListTests(Base):
 
 
 class CallTests(Base):
+    def test_container_command_waits_for_admin_and_runs_only_the_reviewed_arguments(self):
+        k = key(["read", "containers:manage"], role="operator")
+        args = {"namespace": "apps", "name": "game", "container": "server", "argv": ["uname", "-a"]}
+        settings = {"ns": "apps", "name": "game", "container": "server", "argv": args["argv"]}
+        def route(method, path, query=None, body=None, **kw):
+            if path.endswith("/preview"):
+                return {"settings": settings, "summary": {"action": "Run a command", "argv": args["argv"], "pod_uid": "p1"}, "review_token": "fresh"}
+            self.assertEqual("admin", kw["role"])
+            self.assertEqual({**settings, "review_token": "fresh", "confirm": True}, body)
+            return {"exit_code": 0, "stdout": "Linux"}
+        with mock.patch.object(TOOLS, "call", side_effect=route) as call:
+            answer = self.call("run_container_command", args, k)["structuredContent"]
+            self.assertEqual("pending_approval", answer["status"])
+            self.assertEqual("admin", REQUESTS.get(answer["request"])["role"])
+            self.assertTrue(all(c.args[1].endswith("/preview") for c in call.call_args_list))
+            with self.assertRaises(PermissionError):
+                REQUESTS.approve(answer["request"], "olly", "operator")
+            done = REQUESTS.approve(answer["request"], "ada", "admin")
+            self.assertEqual("done", done["status"])
+            self.assertEqual("Linux", done["result"]["stdout"])
+
     def test_a_read_runs_as_the_key_and_is_audited(self):
         with mock.patch.object(TOOLS, "call", return_value=[{"namespace": "lab", "name": "data"}]) as call:
             result = self.call("list_volumes", {"namespace": "lab"}, key())
@@ -370,6 +394,12 @@ class WiderCatalogueTests(Base):
 
 
 class AuditTests(Base):
+    def test_command_arguments_are_fingerprinted_not_copied_into_the_general_audit(self):
+        AUDIT.record(key(), "mcp", "run_container_command", {"argv": ["sh", "-c", "echo private-value"]})
+        text = json.dumps(AUDIT.recent()[0])
+        self.assertNotIn("private-value", text)
+        self.assertIn("sha256", text)
+
     def test_secrets_and_every_variables_value_are_hidden(self):
         AUDIT.record(key(), "mcp", "deploy_container", {"settings": {"image": "x", "env": {"DB_PASSWORD": "hunter2", "TZ": "UTC"},
                                                                     "api_token": "abc", "name": "web"}})
