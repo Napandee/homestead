@@ -41,10 +41,34 @@ test("a command to approve reads as one shell command in a block that wraps, not
   const raw = (shown.html.match(/<pre class="mono small agent-command">([^<]*)<\/pre>/) || [])[1] || "";
   const block = raw.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
   assert.ok(block, "the command is a block of its own");
-  assert.match(block, /^sh -c '/, "plain words as they are, the script quoted");
+  assert.match(block, /^sh -c\nfor f in/, "a shell's script is shown as written, under the shell's name");
   assert.doesNotMatch(block, /sh, -c/);
-  assert.match(block, /'\\''/, "a quote inside the script is quoted for the shell");
+  assert.match(block, /cat '\/data\/it''s\.log'/, "its own quotes are left as they are");
+  assert.equal(c.shellWords(["ls", "-la", "/data/my files", "it's"]), "ls -la '/data/my files' 'it'\\''s'",
+    "any other command is quoted for a shell");
   assert.match(shown.html, /title="a{64}">a{12}…</, "the fingerprint is shortened, whole on hover");
+});
+
+test("a long command starts folded to its first lines, and opens to all of it on a click", () => {
+  const long = { ...command, summary: { ...command.summary, argv: ["sh", "-c", "echo step; ".repeat(80)] } };
+  const { c, shown } = context([long]);
+  c.agentApprove("c3");
+  assert.match(shown.html, /class="agent-command-wrap clamped"/, "folded at first");
+  assert.match(shown.html, /aria-expanded="false" onclick="agentCommandToggle\(this\)">Show the whole command \(/);
+  const wrap = { classes: new Set(["agent-command-wrap", "clamped"]) };
+  wrap.classList = { toggle: name => (wrap.classes.has(name) ? (wrap.classes.delete(name), false) : (wrap.classes.add(name), true)) };
+  wrap.querySelector = () => ({ textContent: "x".repeat(900) });
+  const button = { attrs: {}, closest: () => wrap, setAttribute(k, v) { this.attrs[k] = v; } };
+  c.agentCommandToggle(button);
+  assert.equal(wrap.classes.has("clamped"), false, "a click opens all of it");
+  assert.equal(button.attrs["aria-expanded"], "true");
+  assert.equal(button.textContent, "Show less");
+  c.agentCommandToggle(button);
+  assert.equal(wrap.classes.has("clamped"), true, "and folds it again");
+  // A short command is shown whole, with nothing to open.
+  const { c: c2, shown: shown2 } = context([command]);
+  c2.agentApprove("c3");
+  assert.doesNotMatch(shown2.html, /agent-command-wrap/);
 });
 
 test("approving closes the dialog at once and says the result when the command finishes", async () => {

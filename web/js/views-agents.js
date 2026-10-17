@@ -30,9 +30,21 @@ const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, "
 /* A command's arguments as a shell would take them: plain words as they
    are, anything else single-quoted, so what runs reads as one command. */
 function shellWords(argv) {
+  // A script for a shell (sh -c, bash -c) is shown as written, under the
+  // shell's name: quoting it again buries every quote in it under '\''.
+  if (argv.length === 3 && /^(\/(usr\/)?bin\/)?(ba|da|z)?sh$/.test(argv[0]) && argv[1] === "-c") return `${argv[0]} -c\n${argv[2]}`;
   return argv.map(a => /^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, `'\\''`)}'`).join(" ");
 }
 window.shellWords = shellWords;
+/* A command this long or longer starts folded to its first lines. */
+const AGENT_COMMAND_SHORT = 320;
+const agentCommandMore = text => `Show the whole command (${text.length.toLocaleString()} characters)`;
+window.agentCommandToggle = button => {
+  const wrap = button.closest(".agent-command-wrap");
+  const folded = wrap.classList.toggle("clamped");
+  button.setAttribute("aria-expanded", String(!folded));
+  button.textContent = folded ? agentCommandMore(wrap.querySelector("pre").textContent) : "Show less";
+};
 /* A hash is for comparing, not reading: its start, with the whole on hover. */
 const AGENT_HASH = /(^|_)(fingerprint|sha256)$/;
 
@@ -41,9 +53,15 @@ const AGENT_HASH = /(^|_)(fingerprint|sha256)$/;
 function agentValue(value, key = "") {
   if (value === null || value === undefined || value === "") return '<span class="dim">none</span>';
   if (typeof value === "boolean") return value ? "yes" : "no";
-  // A command, however long, wraps in a block of its own rather than one comma-joined line.
-  if (key === "argv" && Array.isArray(value) && value.every(v => typeof v === "string"))
-    return `<pre class="mono small agent-command">${esc(shellWords(value))}</pre>`;
+  // A command wraps in a block of its own rather than one comma-joined line.
+  // A long one shows its first lines, and opens to all of it on a click.
+  if (key === "argv" && Array.isArray(value) && value.every(v => typeof v === "string")) {
+    const text = shellWords(value), block = `<pre class="mono small agent-command">${esc(text)}</pre>`;
+    const lines = text.split("\n").length;
+    if (text.length <= AGENT_COMMAND_SHORT && lines <= 6) return block;
+    return `<div class="agent-command-wrap clamped">${block}<button type="button" class="linkish small"
+      aria-expanded="false" onclick="agentCommandToggle(this)">${agentCommandMore(text)}</button></div>`;
+  }
   if (typeof value === "string" && AGENT_HASH.test(key) && value.length > 16)
     return `<span class="mono" title="${esc(value)}">${esc(value.slice(0, 12))}…</span>`;
   if (typeof value === "number" || typeof value === "string")
