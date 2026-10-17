@@ -206,6 +206,21 @@ def slug(name):
     return value or "imported-vm"
 
 
+# The disk image is written into a filesystem on the volume, and the
+# filesystem takes room of its own: a volume exactly the disk's size is
+# refused by CDI ("virtual image size ... is larger than the reported
+# available storage"). So a volume is the disk plus 6%, and at least 256 MiB
+# more, in MiB.
+FS_OVERHEAD_PCT = 6
+FS_MINIMUM = 256 * 1024 ** 2
+
+
+def volume_request(disk):
+    virtual = int(disk.get("virtual") or 0) or int(disk["size_gb"]) * 1024 ** 3
+    total = virtual + max(-(-virtual * FS_OVERHEAD_PCT // 100), FS_MINIMUM)
+    return f"{-(-total // 1024 ** 2)}Mi"
+
+
 def plan(dom, facts):
     """How one Unraid VM maps to a Homestead VM, and what stays behind."""
     gib = 1024 ** 3
@@ -404,7 +419,7 @@ def start(body, actor=""):
     for dv, disk in zip(names, disks):
         # Filesystem mode avoids raw block-device ownership requirements.
         storage = {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
-                   "resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
+                   "resources": {"requests": {"storage": volume_request(disk)}}}
         if storage_class:
             storage["storageClassName"] = storage_class
         bodies.append({

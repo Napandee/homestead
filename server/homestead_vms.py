@@ -327,6 +327,15 @@ def _filling(vm, dvs, explain=False):
     return out
 
 
+def _display(devices):
+    """virtual: the console's screen shows it. gpu: no virtual display, and a
+    GPU passed through - its picture is on the GPU's own outputs. none:
+    neither, so only the serial console reaches it."""
+    if devices.get("autoattachGraphicsDevice") is not False:
+        return "virtual"
+    return "gpu" if devices.get("gpus") or devices.get("hostDevices") else "none"
+
+
 def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
     meta, spec = vm.get("metadata") or {}, vm.get("spec") or {}
     tspec = (spec.get("template") or {}).get("spec") or {}
@@ -373,6 +382,7 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             "ip": next((ip for n in nics for ip in n["ips"] if ":" not in ip), ""), "nics": nics, "disks": disks,
             "isolated": VMNETWORK.isolated(vm),
             "implicit_network": not nics and not networks and (dom.get("devices") or {}).get("autoattachPodInterface") is not False,
+            "display": _display(dom.get("devices") or {}),
             # Every IPv4 address, first first, and the network the VM is on.
             "ips": list(dict.fromkeys(ip for n in nics for ip in n["ips"] if ":" not in ip)),
             "network": next((n["network"] for n in nics if n["network"]), ""),

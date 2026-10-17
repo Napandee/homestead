@@ -215,6 +215,12 @@ class VmTests(unittest.TestCase):
         ]}
         self.assertEqual("0/2 nodes are available: 2 Insufficient memory.", VMS._problem(vm, {}))
 
+    def test_display_says_where_the_picture_goes(self):
+        self.assertEqual("virtual", VMS._display({}))
+        self.assertEqual("gpu", VMS._display({"autoattachGraphicsDevice": False, "gpus": [{"name": "gpu1"}]}))
+        self.assertEqual("gpu", VMS._display({"autoattachGraphicsDevice": False, "hostDevices": [{"name": "hd1"}]}))
+        self.assertEqual("none", VMS._display({"autoattachGraphicsDevice": False}))
+
     def test_power_uses_subresources_without_fallback_policy_mutation(self):
         c = self.use()
         VMS.power("default", "win11", "start")
