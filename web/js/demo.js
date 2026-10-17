@@ -1666,7 +1666,7 @@ ssh_pwauth: true
       const body = JSON.parse(init?.body || "{}");
       const op = { id: "demo-set-restart-" + Date.now(), kind: "statefulset-restart", title: `Start ${body.name} elsewhere`, status: "running",
         progress: 10, message: `${body.name}-0: deleted`, started_at: new Date().toISOString(), finished_at: "",
-        href: "/workloads", resource: { kind: "StatefulSet", name: body.name, namespace: body.ns } };
+        href: "/nodes", resource: { kind: "StatefulSet", name: body.name, namespace: body.ns } };
       (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
       [[40, "scheduled on harvester-node1"], [70, "attaching volume"]].forEach(([progress, message], i) =>
         setTimeout(() => Object.assign(op, { progress, message: `${body.name}-0: ${message}` }), (i + 1) * 2500));
