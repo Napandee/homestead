@@ -262,7 +262,7 @@ window.mcpCardPaint = async () => {
       <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}.</p>
     ${UI.section("Recent calls", audit.error ? `<div class="dim small">${esc(audit.error)}</div>` : UI.table(
       [{ label: "When" }, { label: "Key" }, { label: "Tool or action" }, { label: "Outcome" }],
-      (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : ""}`,
+      (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : c.via === "mqtt" ? ' <span class="dim xs">MQTT</span>' : ""}`,
         `<span title="${esc(c.detail || "")}">${UI.chip(c.outcome, AGENT_OUTCOME[c.outcome] || "")}</span>`]),
       { empty: "No agent has called yet." }))}`;
 };

@@ -54,8 +54,8 @@ def vm_power_capacity_plan(body):
     ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
     name = _dns_name(body.get("name"), "VM name")
     action = body.get("action")
-    if action not in ("start", "restart", "unpause"):
-        raise ValueError("Only Start, Restart and Resume need a VM capacity review")
+    if action not in ("start", "restart", "reset", "unpause"):
+        raise ValueError("Only Start, Restart, Reset and Resume need a VM capacity review")
     current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
     rollout_review_context(current)  # require identity/version, not a name-only approval
     expanded_spec = None
@@ -75,12 +75,13 @@ def vm_power_capacity_plan(body):
             dependencies[path] = VM_CAPACITY.VMRES.identity(value)
         return value
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action=action, current=current,
+    # A reset replaces the instance as a restart does, only without waiting for the guest.
+    plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action="restart" if action == "reset" else action, current=current,
                             warning_percent=threshold, expanded_spec=expanded_spec, power_intents=OPS._read())
     strategy = VMS._strategy(current)
     policy_after = "Always" if action == "start" and strategy == "Halted" else strategy
     plan["vm"]["policy_before"], plan["vm"]["policy_after"] = strategy, policy_after
-    if strategy == "Once" and action in ("start", "restart"):
+    if strategy == "Once" and action in ("start", "restart", "reset"):
         plan["blockers"].append("This VM uses the Once run strategy. Edit its run strategy and review that change before starting it again.")
         plan["blocked"] = True
     if policy_after != strategy:
@@ -501,7 +502,7 @@ def reviewed_vm_cluster(body):
 
 def _power_preview_route(request):
     b = request.body
-    if b.get("action") in ("start", "restart"):
+    if b.get("action") in ("start", "restart", "reset"):
         ISOS.unlock(b.get("ns") or DEFAULT_NS)      # before it is reviewed, so the review sees it
     return preview_vm_power(b)
 

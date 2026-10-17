@@ -1,4 +1,4 @@
-/* Stats beyond the browser: MQTT publishing (Settings > Monitoring) and the
+/* Stats beyond the browser: MQTT publishing and power control (Settings > Connections) and the
    long-term history card on the Dashboard. */
 
 /* ---------------- MQTT ---------------- */
@@ -8,16 +8,38 @@ async function mqttPaint() {
   let m;
   try { m = await api("/api/mqtt"); } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   STATE.data.mqtt = m;
-  const s = m.status || {}, admin = can("admin");
-  const state = { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["crit", "error"], off: ["low", "off"] }[s.state] || ["low", s.state || "off"];
-  host.innerHTML = `${UI.moduleHeader(`Publish`, `Cluster and host stats to other systems`, ``)}
-    ${serviceRow("MQTT and Home Assistant", `<span class="pill ${state[0]}">${esc(state[1])}</span>`,
-      s.state === "publishing" ? `${esc(s.detail)} · ${m.sensors.cluster + m.sensors.node} sensors · last ${Date.now() / 1000 - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(Date.now() / 1000 - s.last_publish))}`
-        : m.enabled ? esc(s.detail || "starting") : `Off · ${m.sensors.cluster} cluster sensors and ${m.sensors.node} for each host, with Home Assistant discovery`,
-      actionBar([admin ? { label: "Configure", run: "mqttConfigure()" } : null, { label: "What is published", run: "mqttPreview()" }].filter(Boolean)))}
-    ${s.error ? `<div class="note bad">${esc(s.error)}</div>` : ""}
+  host.innerHTML = mqttCardHtml(m);
+}
+/* Laid out as UniFi is beside it: the broker, its facts, then power control. */
+function mqttCardHtml(m, now = Date.now() / 1000) {
+  const s = m.status || {}, set = !!m.host;
+  const state = !set ? ["neutral", "not connected"] : { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["crit", "failing"],
+    off: ["low", "off"] }[s.state] || ["low", s.state || "off"];
+  const sensors = `${m.sensors?.cluster ?? 0} cluster sensors and ${m.sensors?.node ?? 0} for each host`;
+  const facts = set ? UI.facts([
+    ["Broker", `<span class="mono">${esc(m.host)}:${esc(m.port)}</span> <span class="dim xs">· ${m.tls ? "TLS" : "no TLS"}${m.username ? ` · as ${esc(m.username)}` : " · no sign-in"}</span>`],
+    ["Topics", `<span class="mono">${esc(m.base)}/…</span> <span class="dim xs">· discovery under ${esc(m.discovery)}</span>`],
+    ["Last publish", s.last_publish ? `${now - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(now - s.last_publish))} <span class="dim xs">· every ${esc(m.interval)}s · ${esc(sensors)}</span>` : "not yet"]]) : "";
+  const count = (m.controlled || []).length;
+  const control = set ? serviceRow("Power control from Home Assistant",
+    m.control ? `<span class="pill ok">on · ${count}</span>` : '<span class="pill neutral">off</span>',
+    m.control ? `${count === 1 ? "One container or VM" : `${count} containers and VMs`} with a Power switch and Restart; VMs also Force off and Reset`
+      : "Optional: start, stop and restart the containers and VMs you pick from Home Assistant",
+    actionBar([{ label: m.control ? "Choose" : "Turn on", run: "mqttControl()", need: "admin", pri: !m.control },
+      m.control ? { label: "Turn off", run: "mqttControlOff()", need: "admin" } : null])) : "";
+  return `${UI.moduleHeader(`MQTT and Home Assistant`, `Cluster and host stats to an MQTT broker, with Home Assistant discovery, and power control if you turn it on`, ``)}
+    ${serviceRow(set ? "MQTT broker" : "No broker", `<span class="pill ${state[0]}">${esc(state[1])}</span>`,
+      set ? (m.enabled ? esc(s.state === "publishing" ? "" : s.detail || "starting") : "Publishing is switched off") : `Optional: ${esc(sensors)}, for Home Assistant or anything else on MQTT`,
+      actionBar([{ label: set ? "Edit" : "Connect MQTT", run: "mqttConfigure()", need: "admin", pri: !set },
+        set ? { label: "What is published", run: "mqttPreview()" } : null]))}
+    ${facts}
+    ${s.error ? UI.callout("bad", "Publishing is failing", esc(s.error)) : ""}
+    ${control}
+    ${m.control && !(m.tls && m.username) ? UI.callout("warn", "Anyone who can publish to this broker can switch these",
+      `Give the broker ${m.username ? "" : "a username and password, "}${m.tls ? "" : "TLS, "}and an ACL so only Home Assistant may publish to <span class="mono">${esc(m.base)}/control/#</span>.`) : ""}
     <pre class="mono helm-values" id="mqttPreview" hidden></pre>`;
 }
+window.mqttCardHtml = mqttCardHtml;
 /* Its fields, in a dialog: broker, sign-in, topics, how often. */
 window.mqttConfigure = () => {
   const m = STATE.data.mqtt || {};
@@ -57,6 +79,56 @@ window.mqttPreview = async () => {
     pre.textContent = r.states.map(s => `${s.topic}\n  ${JSON.stringify(s.payload)}`).join("\n\n");
     pre.hidden = false;
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Power control: an action an admin takes, not a setting in the save bar -
+   it lets whatever can publish to the broker start and stop things - so
+   turning it on or off asks first and takes effect at once (#511). */
+function mqttControlList(items, picked) {
+  const group = (kind, title) => {
+    const rows = items.filter(i => i.kind === kind).sort((a, b) => `${a.ns}/${a.name}`.localeCompare(`${b.ns}/${b.name}`));
+    return rows.length ? `<div class="mqtt-pick-group"><b class="small">${title}</b>${rows.map(i => `<label class="mqtt-pick${i.refused ? " dim" : ""}" data-q="${esc(`${i.ns}/${i.name}`.toLowerCase())}">
+      <input type="checkbox" value="${esc(i.id)}" ${picked.has(i.id) && !i.refused ? "checked" : ""} ${i.refused ? "disabled" : ""}>
+      <span class="mono">${esc(i.ns)}/${esc(i.name)}</span>${i.refused ? ` <span class="dim xs">· ${esc(i.refused)}</span>` : ""}</label>`).join("")}</div>` : "";
+  };
+  return group("vm", "Virtual machines") + group("app", "Containers") || '<div class="empty small">No containers or VMs yet.</div>';
+}
+window.mqttControlList = mqttControlList;
+window.mqttControl = async () => {
+  let c;
+  try { c = await api("/api/mqtt/control"); } catch (e) { toast(e.message, "bad"); return; }
+  STATE.data.mqttControl = c;
+  modal("Power control from Home Assistant", UI.lead("Each one you pick becomes a device in Home Assistant with a Power switch and a Restart button; a VM also gets Force off and Reset. A command is made as an operator would make it, through the same checks, and listed under AI agents' recent calls as Home Assistant's.")
+    + `<input id="mqc_q" class="mqtt-pick-filter" placeholder="Filter" aria-label="Filter containers and VMs" oninput="mqttControlFilter(this.value)">
+    <div class="mqtt-pick-list" id="mqc_list">${mqttControlList(c.items || [], new Set(c.controlled || []))}</div>`
+    + UI.actions(UI.cancel() + UI.button(c.control ? "Save" : "Turn on power control", "mqttControlSave()", { kind: "pri" })));
+};
+window.mqttControlFilter = q => {
+  q = String(q || "").trim().toLowerCase();
+  document.querySelectorAll("#mqc_list .mqtt-pick").forEach(row => { row.hidden = !!q && !row.dataset.q.includes(q); });
+};
+const mqttControlPost = body => mqttPost("/api/mqtt/control", body);
+window.mqttControlSave = async () => {
+  const ids = [...document.querySelectorAll("#mqc_list input:checked")].map(i => i.value);
+  if (!ids.length) { toast("Pick at least one container or VM", "bad"); return; }
+  const m = STATE.data.mqtt || {};
+  if (!STATE.data.mqttControl?.control && !(await ask(
+    `Home Assistant, and anything else that can publish to ${m.host || "the broker"}, can then start, stop and restart ${ids.length === 1 ? "it" : `these ${ids.length}`}. Homestead's own containers never can be.`,
+    { title: "Turn on power control", ok: "Turn on" }))) return;
+  try {
+    await mqttControlPost({ control: true, controlled: ids });
+    toast(`Power control covers ${ids.length === 1 ? "one container or VM" : `${ids.length} containers and VMs`}`, "ok");
+    closeModal();
+  } catch (e) { toast(e.message, "bad"); return; }
+  setTimeout(mqttPaint, 800);
+};
+window.mqttControlOff = async () => {
+  const m = STATE.data.mqtt || {};
+  if (!(await ask("Home Assistant's Power switches and buttons for them are removed, and commands are no longer listened for. What is picked is kept for next time.",
+    { title: "Turn off power control", ok: "Turn off", danger: true }))) return;
+  try { await mqttControlPost({ control: false, controlled: m.controlled || [] }); toast("Power control is off", "ok"); }
+  catch (e) { toast(e.message, "bad"); }
+  setTimeout(mqttPaint, 800);
 };
 
 /* ---------------- long-term history ---------------- */

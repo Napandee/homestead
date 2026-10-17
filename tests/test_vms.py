@@ -223,6 +223,10 @@ class VmTests(unittest.TestCase):
         self.assertTrue(c.sent[-1][1].endswith("/virtualmachineinstances/win11/pause"))
         VMS.power("default", "win11", "force-stop")
         self.assertEqual({"gracePeriod": 0}, c.sent[-1][2])
+        # Reset: a restart that does not wait for the guest.
+        self.assertEqual("win11 is being reset", VMS.power("default", "win11", "reset")["detail"])
+        self.assertTrue(c.sent[-1][1].endswith("/virtualmachines/win11/restart"))
+        self.assertEqual({"gracePeriodSeconds": 0}, c.sent[-1][2])
         c = self.use(refuse_start=True)
         with self.assertRaisesRegex(ValueError, "does not support manual start"):
             VMS.power("default", "win11", "start")

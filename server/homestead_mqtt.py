@@ -14,7 +14,21 @@ keeps the entities it has, with their history, when one replaces the other:
 MQTT is spoken directly - 3.1.1, QoS 0, retained messages, a last will -
 which is all a stats publisher needs and keeps Homestead free of libraries.
 Only the leading replica publishes. The password lives in a Secret.
+
+Power control is a second, separate switch: an admin turns it on and picks
+the containers and VMs Home Assistant may start, stop and restart (and, for a
+VM, force off and reset). Each one gets a device with a Power switch and its
+buttons, and Homestead listens on
+
+  harvester/control/<app|vm>/<namespace>/<name>/<power|restart|force_off|reset>
+  harvester/control/<app|vm>/<namespace>/<name>/state   ON / OFF, retained
+
+A command is carried out as an operator would, through the same checks the
+app makes, and written to the agent audit log as Home Assistant's. Only the
+items picked are listened to; Homestead's own containers and the platform's
+never can be.
 """
+import queue
 import json
 import re
 import socket
@@ -24,6 +38,7 @@ import threading
 import time
 import urllib.error
 
+import homestead_agent_audit as AUDIT
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -31,7 +46,10 @@ NAMESPACE = "default"
 snapshot = lambda: None          # server supplies: the numbers to publish
 is_leader = lambda: True
 DEFAULTS = {"enabled": False, "host": "", "port": 1883, "tls": False, "username": "", "base": "harvester",
-            "discovery": "homeassistant", "interval": 60, "device_name": "Harvester Cluster", "model": "Harvester"}
+            "discovery": "homeassistant", "interval": 60, "device_name": "Harvester Cluster", "model": "Harvester",
+            "control": False, "controlled": [], "retire": []}
+# Kept by their own route: saving the broker's settings leaves them as they are.
+CONTROL_KEYS = ("control", "controlled", "retire")
 STATUS = {"state": "off", "detail": "", "last_publish": 0, "published": 0, "error": ""}
 _lock = threading.Lock()
 
@@ -68,6 +86,13 @@ NODE_SENSORS = [
 def bind(_kget, _ksend, namespace, _snapshot, _is_leader):
     global kget, ksend, NAMESPACE, snapshot, is_leader
     kget, ksend, NAMESPACE, snapshot, is_leader = _kget, _ksend, namespace, _snapshot, _is_leader
+
+
+def bind_control(items, act):
+    """In place of the API's own (a test's): items() -> [{id, kind, ns, name,
+    on, refused}]; act(kind, ns, name, action) -> detail."""
+    global control_items, control_act
+    control_items, control_act = items, act
 
 
 # ------------------------------------------------------------------ MQTT
@@ -107,6 +132,44 @@ def publish_packet(topic, message, retain=True):
     return bytes([0x30 | (0x01 if retain else 0)]) + _remaining(len(body)) + body
 
 
+def subscribe_packet(packet_id, topic):
+    body = struct.pack("!H", packet_id) + _string(topic) + b"\x00"   # QoS 0
+    return bytes([0x82]) + _remaining(len(body)) + body
+
+
+def read_packet(recv):
+    """(first byte, body) of one packet; recv(n) returns up to n bytes, b"" when closed."""
+    def exactly(n):
+        out = b""
+        while len(out) < n:
+            chunk = recv(n - len(out))
+            if not chunk:
+                raise ConnectionError("the broker closed the connection")
+            out += chunk
+        return out
+    first = exactly(1)[0]
+    length, shift = 0, 0
+    for _ in range(4):
+        byte = exactly(1)[0]
+        length |= (byte & 0x7f) << shift
+        shift += 7
+        if not byte & 0x80:
+            break
+    else:
+        raise ConnectionError("the broker sent a malformed packet")
+    return first, exactly(length) if length else b""
+
+
+def parse_publish(first, body):
+    """(topic, payload, retained) of a PUBLISH packet."""
+    (size,) = struct.unpack("!H", body[:2])
+    topic = body[2:2 + size].decode("utf-8", "replace")
+    rest = body[2 + size:]
+    if (first >> 1) & 0x03:    # QoS 1 or 2: a packet id comes first
+        rest = rest[2:]
+    return topic, rest, bool(first & 0x01)
+
+
 CONNACK_REASONS = {1: "the broker does not speak MQTT 3.1.1", 2: "the broker refused the client id",
                    3: "the broker is unavailable", 4: "the username or password was refused",
                    5: "the broker needs a username and password"}
@@ -116,6 +179,8 @@ class Client:
     def __init__(self, cfg, password, client_id, will_topic=""):
         self.cfg, self.password, self.client_id, self.will_topic = cfg, password, client_id, will_topic
         self.sock = None
+        self._send = threading.Lock()
+        self.lost = threading.Event()
 
     def connect(self, timeout=10):
         raw = socket.create_connection((self.cfg["host"], int(self.cfg["port"])), timeout=timeout)
@@ -134,25 +199,59 @@ class Client:
         self.sock = raw
         return self
 
+    def _sendall(self, data):
+        with self._send:
+            if not self.sock:
+                raise ConnectionError("not connected")
+            self.sock.sendall(data)
+
     def publish(self, topic, message, retain=True):
-        self.sock.sendall(publish_packet(topic, message, retain))
+        self._sendall(publish_packet(topic, message, retain))
 
     def ping(self):
-        self.sock.sendall(b"\xc0\x00")
+        self._sendall(b"\xc0\x00")
+
+    def listen(self, topic, on_message):
+        """Subscribes, then hands each message to on_message(topic, payload,
+        retained) from a thread of its own until the connection goes."""
+        self._sendall(subscribe_packet(1, topic))
+        sock = self.sock
+
+        def recv(n):
+            while True:
+                try:
+                    return sock.recv(n)
+                except socket.timeout:
+                    if self.sock is not sock:
+                        return b""
+
+        def reader():
+            try:
+                while self.sock is sock:
+                    first, body = read_packet(recv)
+                    if first >> 4 == 3:
+                        on_message(*parse_publish(first, body))
+            except (OSError, ConnectionError, ValueError, struct.error):
+                pass
+            if self.sock is sock:
+                self.lost.set()
+                _restart.set()
+        threading.Thread(target=reader, daemon=True, name="mqtt-listen").start()
 
     def close(self, gracefully=True):
-        if not self.sock:
+        with self._send:
+            sock, self.sock = self.sock, None   # first, so the reader knows it was asked to go
+        if not sock:
             return
         try:
             if gracefully:
-                self.sock.sendall(b"\xe0\x00")
+                sock.sendall(b"\xe0\x00")
         except OSError:
             pass
         try:
-            self.sock.close()
+            sock.close()
         except OSError:
             pass
-        self.sock = None
 
 
 # ------------------------------------------------------------------ settings
@@ -219,6 +318,8 @@ def clean(cfg):
 def save(cfg):
     current = load()
     clean_cfg = clean(cfg)
+    for key in CONTROL_KEYS:
+        clean_cfg[key] = current.get(key, DEFAULTS[key])
     password = cfg.get("password")
     if password is not None and str(password) != "":
         import base64
@@ -239,6 +340,12 @@ def save(cfg):
                 ksend("DELETE", f"/api/v1/namespaces/{NAMESPACE}/secrets/{_secret()}")
             except urllib.error.HTTPError:
                 pass
+    _store(clean_cfg)
+    _restart.set()
+    return {"ok": True, "config": public(clean_cfg)}
+
+
+def _store(clean_cfg):
     body = {"apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": _map(), "namespace": NAMESPACE, "labels": {NAMES.key("managed"): "true"}},
             "data": {"mqtt.json": json.dumps(clean_cfg, indent=1)}}
@@ -250,8 +357,6 @@ def save(cfg):
         if error.code != 404:
             raise
         ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
-    _restart.set()
-    return {"ok": True, "config": public(clean_cfg)}
 
 
 def public(cfg=None):
@@ -299,19 +404,292 @@ def states(cfg, snap):
     return out
 
 
-def publish_once(cfg, client, snap, announced):
-    """Discovery for nodes not yet announced, then availability and state."""
+def publish_once(cfg, client, snap, announced, items=None):
+    """Discovery for nodes not yet announced, then availability and state;
+    with power control, the same for the items it covers, after retiring the
+    ones it no longer does."""
     names = tuple(sorted(n["name"] for n in snap.get("nodes") or []))
     if announced.get("nodes") != names:
         for topic, payload in discovery(cfg, snap):
             client.publish(topic, json.dumps(payload, separators=(",", ":")))
         announced["nodes"] = names
+    items = items or []
+    ids = tuple(sorted(item["id"] for item in items))
+    if "retired" not in announced:
+        for topic in retire_topics(cfg, [i for i in cfg.get("retire") or [] if i not in ids]):
+            client.publish(topic, "")
+        announced["retired"] = True
+    if announced.get("control") != ids:
+        for topic, payload in control_discovery(cfg, items):
+            client.publish(topic, json.dumps(payload, separators=(",", ":")))
+        announced["control"] = ids
     client.publish(f"{cfg['base']}/cluster/availability", "online")
     count = 0
     for topic, payload in states(cfg, snap):
         client.publish(topic, json.dumps(payload, separators=(",", ":")))
         count += 1
+    for topic, word in control_states(cfg, items):
+        client.publish(topic, word)
+        count += 1
     return count
+
+
+# ------------------------------------------------------------------ power control
+KINDS = {"app": "Container", "vm": "Virtual machine"}
+# What each kind answers to: a Power switch, then its buttons.
+ACTIONS = {"app": ("power", "restart"), "vm": ("power", "restart", "force_off", "reset")}
+BUTTONS = {"restart": ("Restart", "mdi:restart"), "force_off": ("Force off", "mdi:power-plug-off"),
+           "reset": ("Reset", "mdi:restore-alert")}
+ITEM = re.compile(r"(app|vm):([a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)/([a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?)")
+MAX_CONTROLLED = 100
+MAX_RETIRE = 200
+COMMAND_GAP = 10            # seconds between two commands to one item
+COMMANDS_PER_MINUTE = 20    # for them all
+AUDIT_KEY = {"id": "mqtt", "name": "Home Assistant (MQTT)", "owner": ""}
+
+
+def control_items():
+    """What power control may be given, each with whether it is on, from the
+    lists the API reads (homestead_api_v1); Homestead's own containers, and
+    anything in the platform's namespaces, never."""
+    import homestead_api_v1 as API_V1
+    import homestead_workloads as WORKLOADS
+    out = []
+    for w in API_V1.ctx["workloads"]():
+        refused = ("it is part of Homestead" if w.get("self") or w.get("homestead")
+                   else "it runs in a system namespace" if w["ns"] in WORKLOADS.SYS_NS else "")
+        out.append({"id": f"app:{w['ns']}/{w['name']}", "kind": "app", "ns": w["ns"], "name": w["name"],
+                    "on": int(w.get("desired") or 0) > 0, "refused": refused})
+    for v in API_V1.ctx["vms"]():
+        out.append({"id": f"vm:{v['ns']}/{v['name']}", "kind": "vm", "ns": v["ns"], "name": v["name"],
+                    "on": bool(v.get("running")),
+                    "refused": "it runs in a system namespace" if v["ns"] in WORKLOADS.SYS_NS else ""})
+    return out
+
+
+def control_act(kind, ns, name, action):
+    """One command, made as an operator would make it, through what /api/v1
+    calls: start, stop, restart, and for a VM force-off and reset."""
+    import homestead_api_v1 as API_V1
+    import homestead_host_access as HOSTACCESS
+    with HOSTACCESS.acting_as("operator"):
+        if kind == "vm":
+            result = API_V1.ctx["vm_power"](ns, name, action)
+        elif action == "restart":
+            API_V1.ctx["restart"](ns, name)
+            result = {}
+        elif action in ("start", "stop"):
+            result = API_V1.ctx["scale"](ns, name, 1 if action == "start" else 0)
+        else:
+            raise ValueError(f"a container cannot {action}")
+    return "; ".join(result.get("warnings") or [])[:300]
+
+
+def split_id(item_id):
+    """("app" or "vm", namespace, name) of an id like vm:lab/win11."""
+    found = ITEM.fullmatch(str(item_id or ""))
+    if not found:
+        raise ValueError(f"{item_id} is not a container or VM, like app:lab/frigate or vm:lab/win11")
+    return found.group(1), found.group(2), found.group(3)
+
+
+def _item_topic(cfg, kind, ns, name):
+    return f"{cfg['base']}/control/{kind}/{ns}/{name}"
+
+
+def _uid(kind, ns, name):
+    return f"hs_{kind}_{slug(ns)}_{slug(name)}"
+
+
+def controlled(cfg):
+    """The items power control covers now: picked, still there, and allowed."""
+    if not cfg.get("control"):
+        return []
+    picked = set(cfg.get("controlled") or [])
+    return [item for item in control_items() if item["id"] in picked and not item.get("refused")]
+
+
+def control_discovery(cfg, items):
+    """A device per item: a Power switch, Restart, and for a VM Force off and Reset."""
+    prefix, availability = cfg["discovery"], f"{cfg['base']}/cluster/availability"
+    out = []
+    for item in items:
+        kind, ns, name = item["kind"], item["ns"], item["name"]
+        uid, topic = _uid(kind, ns, name), _item_topic(cfg, kind, ns, name)
+        device = {"identifiers": [uid], "name": name, "manufacturer": "Homestead",
+                  "model": f"{KINDS[kind]} in {ns}", "via_device": "harvester_cluster"}
+        out.append((f"{prefix}/switch/{uid}/config",
+                    {"name": "Power", "unique_id": f"{uid}_power", "command_topic": f"{topic}/power",
+                     "state_topic": f"{topic}/state", "payload_on": "ON", "payload_off": "OFF",
+                     "availability_topic": availability, "icon": "mdi:power", "device": device}))
+        for action in ACTIONS[kind][1:]:
+            label, icon = BUTTONS[action]
+            out.append((f"{prefix}/button/{uid}_{action}/config",
+                        {"name": label, "unique_id": f"{uid}_{action}", "command_topic": f"{topic}/{action}",
+                         "payload_press": "PRESS", "availability_topic": availability, "icon": icon,
+                         "device": device}))
+    return out
+
+
+def control_states(cfg, items):
+    return [(f"{_item_topic(cfg, item['kind'], item['ns'], item['name'])}/state", "ON" if item.get("on") else "OFF")
+            for item in items]
+
+
+def retire_topics(cfg, ids):
+    """Each retained topic an item had, emptied so Home Assistant drops it."""
+    out = []
+    for item_id in ids:
+        try:
+            kind, ns, name = split_id(item_id)
+        except ValueError:
+            continue
+        uid = _uid(kind, ns, name)
+        out.append(f"{cfg['discovery']}/switch/{uid}/config")
+        out += [f"{cfg['discovery']}/button/{uid}_{action}/config" for action in BUTTONS]
+        out.append(f"{_item_topic(cfg, kind, ns, name)}/state")
+    return out
+
+
+def control_public(cfg=None):
+    cfg = cfg or load()
+    return {"control": bool(cfg.get("control")), "controlled": list(cfg.get("controlled") or []),
+            "base": cfg["base"], "items": control_items()}
+
+
+def save_control(body):
+    """Power control on or off, and what it covers: an admin's action on its own."""
+    current = load()
+    picked = body.get("controlled", current.get("controlled") or [])
+    if not isinstance(picked, list):
+        raise ValueError("controlled is a list, like [\"vm:lab/win11\"]")
+    known = {item["id"]: item for item in control_items()}
+    ids = []
+    for item_id in picked:
+        kind, ns, name = split_id(item_id)
+        found = known.get(item_id)
+        if found and found.get("refused"):
+            raise ValueError(f"{ns}/{name} cannot be controlled from Home Assistant: {found['refused']}")
+        if found and item_id not in ids:
+            ids.append(item_id)
+    if len(ids) > MAX_CONTROLLED:
+        raise ValueError(f"at most {MAX_CONTROLLED} containers and VMs")
+    on = bool(body.get("control"))
+    was = set(current.get("controlled") or []) if current.get("control") else set()
+    now = set(ids) if on else set()
+    retire = [i for i in current.get("retire") or [] if i not in now] + sorted(was - now)
+    retire = list(dict.fromkeys(retire))[-MAX_RETIRE:]
+    cfg = {**current, "control": on, "controlled": ids, "retire": retire}
+    _store(cfg)
+    _restart.set()
+    return {"ok": True, **control_public(cfg)}
+
+
+def parse_command(cfg, topic, payload):
+    """(kind, ns, name, action) a command asks for, None for a state topic,
+    ValueError for anything else. Actions: start, stop, restart, force-off, reset."""
+    prefix = f"{cfg['base']}/control/"
+    if not topic.startswith(prefix):
+        raise ValueError(f"{topic} is not a control topic")
+    parts = topic[len(prefix):].split("/")
+    if len(parts) != 4:
+        raise ValueError(f"{topic} is not <kind>/<namespace>/<name>/<action>")
+    kind, ns, name, action = parts
+    if action == "state":
+        return None
+    split_id(f"{kind}:{ns}/{name}")
+    if action not in ACTIONS[kind]:
+        raise ValueError(f"a {KINDS[kind].lower()} has no {action}")
+    word = (payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload)).strip().upper()
+    if action == "power":
+        if word not in ("ON", "OFF"):
+            raise ValueError("power takes ON or OFF")
+        return kind, ns, name, "start" if word == "ON" else "stop"
+    if word != "PRESS":
+        raise ValueError(f"{action} takes PRESS")
+    return kind, ns, name, action.replace("_", "-")
+
+
+_commands = queue.Queue(maxsize=20)
+_recent = {}        # item id -> when its last command came
+_minute = []        # when each command of the last minute came
+_live = {}          # the connected client and its settings, for a state published after a command
+
+
+def _audit(action, args, outcome, detail=""):
+    AUDIT.record(AUDIT_KEY, "mqtt", action, args, outcome, detail)
+    return outcome
+
+
+def handle(cfg, topic, payload, now=None):
+    """One command: checked, held to the rate limits, carried out, written
+    down. Returns how it ended (ok, refused, error), None for a state."""
+    now = now or time.time()
+    try:
+        parsed = parse_command(cfg, topic, payload)
+    except ValueError as error:
+        return _audit("mqtt_command", {"topic": topic[:200]}, "refused", str(error))
+    if parsed is None:
+        return None
+    kind, ns, name, action = parsed
+    item_id, label = f"{kind}:{ns}/{name}", f"mqtt_{kind}_{action.replace('-', '_')}"
+    args = {"namespace": ns, "name": name}
+    if not cfg.get("control") or item_id not in (cfg.get("controlled") or []):
+        return _audit(label, args, "refused", "power control from Home Assistant is not on for it")
+    found = next((item for item in control_items() if item["id"] == item_id), None)
+    if not found:
+        return _audit(label, args, "refused", f"there is no {KINDS[kind].lower()} {ns}/{name}")
+    if found.get("refused"):
+        return _audit(label, args, "refused", found["refused"])
+    with _lock:
+        _minute[:] = [t for t in _minute if now - t < 60]
+        if len(_minute) >= COMMANDS_PER_MINUTE:
+            return _audit(label, args, "refused", f"at most {COMMANDS_PER_MINUTE} commands a minute")
+        if now - _recent.get(item_id, 0) < COMMAND_GAP:
+            return _audit(label, args, "refused", f"one command every {COMMAND_GAP} seconds for each item")
+        _minute.append(now)
+        _recent[item_id] = now
+    try:
+        detail = control_act(kind, ns, name, action) or ""
+    except Exception as error:
+        return _audit(label, args, "error", getattr(error, "message", "") or str(error) or type(error).__name__)
+    return _audit(label, args, "ok", str(detail))
+
+
+def _on_message(topic, payload, retained):
+    # A retained command is an old one the broker kept: never acted on.
+    if retained:
+        return
+    try:
+        _commands.put_nowait((topic, payload))
+    except queue.Full:
+        pass
+
+
+def _publish_control_states():
+    client, cfg = _live.get("client"), _live.get("cfg")
+    if not client or not cfg:
+        return
+    try:
+        for topic, word in control_states(cfg, controlled(cfg)):
+            client.publish(topic, word)
+    except Exception:
+        pass
+
+
+def _command_worker():
+    while True:
+        topic, payload = _commands.get()
+        try:
+            if not is_leader():
+                continue
+            if handle(load(), topic, payload) == "ok":
+                # The new state soon, and again once a VM has had time to boot.
+                time.sleep(3)
+                _publish_control_states()
+                threading.Timer(20, _publish_control_states).start()
+        except Exception as error:
+            print(f"mqtt control: {str(error)[:160]}", flush=True)
 
 
 def test(cfg_in):
@@ -339,6 +717,7 @@ _restart = threading.Event()
 def run():
     """Publishes while enabled and leading; reconnects after any failure."""
     client, announced, backoff = None, {}, 5
+    threading.Thread(target=_command_worker, daemon=True, name="mqtt-control").start()
     while True:
         cfg = load()
         if not cfg["enabled"] or not cfg["host"]:
@@ -361,9 +740,12 @@ def run():
             if client is None:
                 client = Client(cfg, _password(), "homestead-stats", f"{cfg['base']}/cluster/availability").connect()
                 announced = {}
+                if cfg.get("control"):
+                    client.listen(f"{cfg['base']}/control/+/+/+/+", _on_message)
+                _live.update(client=client, cfg=cfg)
             snap = snapshot()
             if snap:
-                count = publish_once(cfg, client, snap, announced)
+                count = publish_once(cfg, client, snap, announced, controlled(cfg))
                 with _lock:
                     STATUS.update(state="publishing", error="", last_publish=int(time.time()),
                                   published=STATUS["published"] + count,
@@ -396,5 +778,7 @@ def run():
 ROUTES = {
     ("POST", "/api/mqtt"): ("admin", lambda request: save(request.body)),
     ("POST", "/api/mqtt/test"): ("admin", lambda request: test(request.body)),
+    ("GET", "/api/mqtt/control"): ("admin", lambda request: control_public()),
+    ("POST", "/api/mqtt/control"): ("admin", lambda request: save_control(request.body)),
     ("GET", "/api/mqtt"): ("viewer", lambda request: {**public(), "sensors": {"cluster": len(CLUSTER_SENSORS), "node": len(NODE_SENSORS)}}),
 }

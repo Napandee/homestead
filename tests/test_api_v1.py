@@ -71,6 +71,14 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(403, self.call("POST", "/api/v1/vms/lab/win11/start", auth=CONTROL)[0], "containers is not VMs")
         self.assertEqual([("scale", "lab", "wiki", 1)], self.calls)
 
+    def test_a_vm_can_be_forced_off_and_reset(self):
+        vms = {"name": "ha", "kind": "key", "scopes": ["read", "vms:control"], "expires": 1}
+        for action in ("start", "stop", "restart", "force-off", "reset"):
+            code, answer = self.call("POST", f"/api/v1/vms/lab/win11/{action}", auth=vms)
+            self.assertEqual((200, action, "j1"), (code, answer["action"], answer["job"]), action)
+        self.assertEqual([("vm", "lab", "win11", a) for a in ("start", "stop", "restart", "force-off", "reset")], self.calls)
+        self.assertEqual(404, self.call("POST", "/api/v1/vms/lab/win11/pause", auth=vms)[0])
+
     def test_bad_paths_names_and_methods(self):
         self.assertEqual(404, self.call("GET", "/api/v1/nothing")[0])
         self.assertEqual(405, self.call("GET", "/api/v1/containers/lab/photos/stop")[0])

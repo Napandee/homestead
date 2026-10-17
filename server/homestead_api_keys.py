@@ -46,7 +46,7 @@ SCOPES = {
     "logs:read": ("viewer", "Read containers' logs, which can hold passwords and tokens apps print"),
     "containers:control": ("operator", "Start, stop and restart containers"),
     "containers:manage": ("operator", "Deploy, edit, scale and move containers (MCP); deleting one waits for a person"),
-    "vms:control": ("operator", "Start, stop and restart virtual machines"),
+    "vms:control": ("operator", "Start, stop, restart, force off and reset virtual machines"),
     "vms:manage": ("operator", "Create, edit and migrate virtual machines (MCP); deleting one waits for a person"),
     "storage:manage": ("operator", "Create and resize volumes, snapshot and back them up (MCP); deleting, "
                                    "reverting or restoring waits for a person"),

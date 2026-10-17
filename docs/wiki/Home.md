@@ -68,7 +68,7 @@ probe - and your first sign-in.
 - [Helm and Resources](Helm-and-resources) - charts, and every Kubernetes object
 - [API](API) - scoped, expiring API keys for Home Assistant, scripts and AI agents
 - [AI agents](AI-agents) - let Claude or another MCP client look after the cluster, with a person approving anything destructive
-- [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health, and how hosts share the work
+- [Settings](Settings) - cluster add-ons, hardware, users, MQTT and Home Assistant power control, Homestead updates and health, and how hosts share the work
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 
 The [reference](https://github.com/homestead-lab/homestead/blob/main/docs/reference.md) covers every feature in depth; this wiki is the guided

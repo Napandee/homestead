@@ -159,14 +159,17 @@ def create_vm_with_address(cfg):
 
 
 def api_vm_power(ns, name, action):
-    """Start, stop or restart a VM for /api/v1: stop as the app does; start and
-    restart through the same capacity review, taken as acknowledged when it
+    """Start, stop, restart, force off or reset a VM for /api/v1 (and MQTT): stop
+    and force off as the app does; start, restart and reset through the same
+    capacity review, taken as acknowledged when it
     is not blocked - the key's scope is the consent the app asks a person for.
     A start that needs a person (missing TPM or EFI state) is refused."""
-    if action not in ("start", "stop", "restart"):
-        raise ValueError("start, stop or restart")
+    if action not in ("start", "stop", "restart", "force-off", "reset"):
+        raise ValueError("start, stop, restart, force-off or reset")
+    # The API says force-off; the app and KubeVirt call it force-stop.
+    action = "force-stop" if action == "force-off" else action
     body = {"ns": _dns_name(ns, "namespace"), "name": _dns_name(name, "VM name"), "action": action}
-    if action == "stop":
+    if action in ("stop", "force-stop"):
         result = VM_REVIEW.reviewed_vm_power(body)
         _cache.pop("vms", None)
         return {"warnings": [], "job": ((result or {}).get("operation") or {}).get("id") if isinstance(result, dict) else None}
