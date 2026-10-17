@@ -27,27 +27,6 @@ const AGENT_STATUS = { pending: ["waiting", "warn"], running: ["running", ""], d
   denied: ["denied", ""], expired: ["expired", ""], failed: ["failed", "bad"] };
 const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, ""]));
 
-/* A command's arguments as a shell would take them: plain words as they
-   are, anything else single-quoted, so what runs reads as one command. */
-function shellWords(argv) {
-  // A script for a shell (sh -c, bash -c) is shown as written, under the
-  // shell's name: quoting it again buries every quote in it under '\''.
-  if (argv.length === 3 && /^(\/(usr\/)?bin\/)?(ba|da|z)?sh$/.test(argv[0]) && argv[1] === "-c") return `${argv[0]} -c\n${argv[2]}`;
-  return argv.map(a => /^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, `'\\''`)}'`).join(" ");
-}
-window.shellWords = shellWords;
-/* A command this long or longer starts folded to its first lines. */
-const AGENT_COMMAND_SHORT = 320;
-const agentCommandMore = text => `Show the whole command (${text.length.toLocaleString()} characters)`;
-window.agentCommandToggle = button => {
-  const wrap = button.closest(".agent-command-wrap");
-  const folded = wrap.classList.toggle("clamped");
-  button.setAttribute("aria-expanded", String(!folded));
-  button.textContent = folded ? agentCommandMore(wrap.querySelector("pre").textContent) : "Show less";
-};
-/* A hash is for comparing, not reading: its start, with the whole on hover. */
-const AGENT_HASH = /(^|_)(fingerprint|sha256)$/;
-
 /* One value of a plan, as a person reads it. Lists of plain values are
    joined; anything nested is shown as compact text rather than guessed at. */
 function agentValue(value, key = "") {
@@ -74,6 +53,20 @@ function agentValue(value, key = "") {
   return `<span class="mono xs">${esc(JSON.stringify(value))}</span>`;
 }
 
+/* A command's arguments as a shell would take them: plain words as they
+   are, anything else single-quoted, so what runs reads as one command. */
+function shellWords(argv) {
+  // A script for a shell (sh -c, bash -c) is shown as written, under the
+  // shell's name: quoting it again buries every quote in it under '\''.
+  if (argv.length === 3 && /^(\/(usr\/)?bin\/)?(ba|da|z)?sh$/.test(argv[0]) && argv[1] === "-c") return `${argv[0]} -c\n${argv[2]}`;
+  return argv.map(a => /^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, `'\\''`)}'`).join(" ");
+}
+/* A command this long or longer starts folded to its first lines. */
+const AGENT_COMMAND_SHORT = 320;
+const agentCommandMore = text => `Show the whole command (${text.length} characters)`;
+/* A hash is for comparing, not reading: its start, with the whole on hover. */
+const AGENT_HASH = /(^|_)(fingerprint|sha256)$/;
+
 /* Parts of a plan too long for a cell of the facts grid: a command, which
    would wrap into one narrow, very tall column, and sentences that say what
    it does. They follow the grid at full width. */
@@ -88,6 +81,13 @@ function agentPlanHtml(summary) {
     ${wide.argv ? `<div class="agent-command-block"><div class="dim xs">Command</div>${agentValue(wide.argv, "argv")}</div>` : ""}
     ${["effect", "limit"].filter(key => wide[key]).map(key => `<p class="small agent-req-detail"><b>${agentLabel(key)}:</b> ${esc(String(wide[key]))}</p>`).join("")}`;
 }
+window.shellWords = shellWords;
+window.agentCommandToggle = button => {
+  const wrap = button.closest(".agent-command-wrap");
+  const folded = wrap.classList.toggle("clamped");
+  button.setAttribute("aria-expanded", String(!folded));
+  button.textContent = folded ? agentCommandMore(wrap.querySelector("pre").textContent) : "Show less";
+};
 
 /* What a finished container command printed, on its request: the exit code,
    then its output in blocks that wrap. The output is the app's, never
