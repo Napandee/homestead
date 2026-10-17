@@ -121,3 +121,25 @@ test("the Add server dialog asks the type first and starts on Proxmox from the V
   assert.match(dialog, /STATE\.view === "vmimport" \? "proxmox"/);
   assert.match(dialog, /\$\("#sc_path_field"\)\.hidden = kind === "proxmox"/, "a Proxmox host has no appdata folder");
 });
+
+test("a refused Add server can be corrected and saved again; the name is sent lower case", async () => {
+  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const code = src.slice(src.indexOf("window.doSrcAdd = "), src.indexOf("let SOURCE_KEY_REVIEW"));
+  const fields = { "#sc_save": { disabled: false }, "#sc_name": { value: " Proxmox " }, "#sc_host": { value: "192.0.2.10" },
+    "#sc_user": { value: "root" }, "#sc_pass": { value: "pw" }, "#sc_kind": { value: "proxmox" }, "#sc_path": { value: "" }, "#sc_port": { value: "22" } };
+  const sent = [], toasts = [];
+  let answer = { status: 400, message: "the name is lower case letters, numbers and -" };
+  const ctx = { $: s => fields[s], toast: (m, k) => toasts.push([m, k]), STATE: { data: {} }, srcVerify: async () => {},
+    api: async (path, init) => { sent.push(JSON.parse(init.body)); if (answer) throw Object.assign(new Error(answer.message), { status: answer.status }); return { sources: [] }; } };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(code, ctx);
+  await ctx.doSrcAdd();
+  assert.equal(sent[0].name, "proxmox");
+  assert.equal(fields["#sc_save"].disabled, false, "a refusal saved nothing: Save comes back");
+  assert.deepEqual(toasts.at(-1), ["the name is lower case letters, numbers and -", "bad"]);
+  answer = { status: 502, message: "Bad Gateway" };
+  await ctx.doSrcAdd();
+  assert.equal(fields["#sc_save"].disabled, true, "an uncertain save stays locked until Sources is refreshed");
+  assert.match(toasts.at(-1)[0], /refresh Sources/);
+});
