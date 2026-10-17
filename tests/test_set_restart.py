@@ -124,8 +124,6 @@ class SetRestartReadTests(unittest.TestCase):
             sr.read_state("lab", "web", "host-1")
         self.assertIn("can't read", str(ctx.exception))
 
-    def test_replica_without_spec_is_unread(self):
-        self.unreadable("replicas", {"metadata": {"name": "r"}})
 
     def test_unscheduled_replica_is_skipped(self):
         self.objects[f"{LH}/replicas"]["items"].append({"spec": {"volumeName": "pv-a", "nodeID": "", "healthyAt": ""}})
@@ -136,8 +134,122 @@ class SetRestartReadTests(unittest.TestCase):
     def test_engine_without_volume_name_is_unread(self):
         self.unreadable("engines", {"spec": {"nodeID": "host-1"}, "status": {"currentState": "running"}})
 
-    def test_engine_without_node_id_is_unread(self):
-        self.unreadable("engines", {"spec": {"volumeName": "pv-a"}, "status": {"currentState": "running"}})
+    def test_reviewed_engine_without_node_id_is_skipped(self):
+        # A detached engine has no host: it can't be running on the down one.
+        self.objects[f"{LH}/engines"]["items"] += [
+            {"metadata": {"name": "pv-a-e-1"}, "spec": {"volumeName": "pv-a", "nodeID": ""}, "status": {"currentState": "stopped"}},
+            {"metadata": {"name": "pv-a-e-2"}, "spec": {"volumeName": "pv-a"}, "status": {"currentState": "stopped"}}]
+        self.assertEqual({"pv-a": [{"node": "host-1", "state": "running"}]}, sr.read_state("lab", "web", "host-1")["engines"])
+
+    def test_other_volumes_are_ignored_even_when_malformed(self):
+        # Detached volumes elsewhere in the cluster (empty nodeID, odd status)
+        # must not block a set that doesn't use them.
+        self.objects[f"{LH}/engines"]["items"] += [
+            {"metadata": {"name": "pv-z-e-0"}, "spec": {"volumeName": "pv-z", "nodeID": ""}, "status": {"currentState": "stopped"}},
+            {"metadata": {"name": "pv-y-e-0"}, "spec": {"volumeName": "pv-y"}, "status": "garbage"}]
+        self.objects[f"{LH}/replicas"]["items"].append(
+            {"metadata": {"name": "pv-z-r-0"}, "spec": {"volumeName": "pv-z", "nodeID": "host-2", "failedAt": None}, "status": "x"})
+        self.objects["/apis/longhorn.io/v1beta2/volumes"]["items"] += [
+            {"metadata": {"name": "pv-z"}, "status": "garbage"}, {"metadata": {"name": "pv-y"}}]
+        st = sr.read_state("lab", "web", "host-1")
+        self.assertEqual(["pv-a"], sorted(st["engines"]))
+        self.assertEqual(["pv-a"], sorted(st["replicas"]))
+        self.assertEqual({"pv-a": "degraded"}, st["robustness"])
+
+    def test_engine_without_volume_name_names_the_engine(self):
+        self.objects[f"{LH}/engines"]["items"].append(
+            {"metadata": {"name": "pvc-x-e-0"}, "spec": {"nodeID": "host-1"}, "status": {"currentState": "running"}})
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("Longhorn engine pvc-x-e-0 has no spec.volumeName", str(ctx.exception))
+
+    def test_replica_without_spec_names_the_replica(self):
+        self.objects[f"{LH}/replicas"]["items"].append({"metadata": {"name": "pvc-x-r-0"}})
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("Longhorn replica pvc-x-r-0 has no spec", str(ctx.exception))
+        self.assertNotIn("KeyError", str(ctx.exception))
+
+    def test_malformed_reviewed_volume_names_it(self):
+        self.objects["/apis/longhorn.io/v1beta2/volumes"]["items"][0]["status"] = "garbage"
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("Longhorn volume pv-a", str(ctx.exception))
+        self.assertNotIn("AttributeError", str(ctx.exception))
+
+    def test_pod_without_uid_is_unread(self):
+        del self.objects[PODS]["items"][0]["metadata"]["uid"]
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("web-0", str(ctx.exception))
+        self.assertIn("uid", str(ctx.exception))
+
+    def test_lease_read_error_other_than_404_is_unread(self):
+        get = self.get
+        def failing(path, *a, **k):
+            if "/leases/" in path:
+                raise urllib.error.HTTPError(path, 500, "boom", {}, None)
+            return get(path)
+        sr.bind(failing, None)
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("lease of host host-1", str(ctx.exception))
+
+    def test_host_missing_from_the_host_list_is_unread(self):
+        self.objects["/api/v1/nodes"]["items"].pop(0)
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("not in the cluster's host list", str(ctx.exception))
+
+    def test_statefulset_without_selector_is_unread(self):
+        self.objects["/apis/apps/v1/namespaces/lab/statefulsets/web"]["spec"]["selector"] = {}
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("no label selector", str(ctx.exception))
+
+    def test_unreadable_statefulset_pods_hosts_and_volumes_refuse(self):
+        for path, words in (("/apis/apps/v1/namespaces/lab/statefulsets/web", "StatefulSet lab/web"),
+                            (PODS, "the pods of lab/web"), ("/api/v1/nodes", "the hosts"),
+                            ("/apis/longhorn.io/v1beta2/volumes", "the Longhorn volumes")):
+            with self.subTest(path=path):
+                self.setUp()
+                self.refuses(path, words)
+
+    def pod_volumes(self, *volumes):
+        self.objects[PODS]["items"][0]["spec"]["volumes"] += list(volumes)
+
+    def test_volumes_with_nothing_to_protect_pass(self):
+        self.pod_volumes({"name": "c", "configMap": {"name": "x"}}, {"name": "s", "secret": {"secretName": "x"}},
+                         {"name": "t", "emptyDir": {}}, {"name": "p", "projected": {"sources": []}},
+                         {"name": "w", "downwardAPI": {"items": []}})
+        st = sr.read_state("lab", "web", "host-1")
+        self.assertEqual([], st["pods"][0]["unchecked"])
+        self.assertEqual(["data-web-0"], st["pods"][0]["claims"])
+
+    def test_host_path_and_inline_csi_volumes_block(self):
+        self.pod_volumes({"name": "logs", "hostPath": {"path": "/var/log"}}, {"name": "nfs", "csi": {"driver": "x"}})
+        st = sr.read_state("lab", "web", "host-1")
+        self.assertEqual([{"name": "logs", "type": "hostPath"}, {"name": "nfs", "type": "csi"}], st["pods"][0]["unchecked"])
+        blockers = sr.plan(st, NOW)["blockers"]
+        self.assertIn("web-0: volume logs is hostPath, which Homestead can't check", blockers)
+        self.assertIn("web-0: volume nfs is csi, which Homestead can't check", blockers)
+
+    def test_generic_ephemeral_volume_is_checked_as_its_claim(self):
+        self.pod_volumes({"name": "scratch", "ephemeral": {"volumeClaimTemplate": {"spec": {}}}})
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/web-0-scratch"] = {
+            "spec": {"accessModes": ["ReadWriteOnce"], "volumeName": "pv-e"}}
+        st = sr.read_state("lab", "web", "host-1")
+        self.assertEqual(["data-web-0", "web-0-scratch"], st["pods"][0]["claims"])
+        self.assertEqual({"access": ["ReadWriteOnce"], "volume": "pv-e", "longhorn": False}, st["claims"]["web-0-scratch"])
+        self.assertTrue(any(b.startswith("web-0-scratch: it is not a bound Longhorn volume") for b in sr.plan(st, NOW)["blockers"]))
+
+    def test_claim_on_a_local_volume_blocks_through_its_volume(self):
+        # A `local` volume is a PersistentVolume, so it arrives as a claim whose
+        # volume Longhorn doesn't know.
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/data-web-0"]["spec"]["volumeName"] = "local-pv-1"
+        st = sr.read_state("lab", "web", "host-1")
+        self.assertFalse(st["claims"]["data-web-0"]["longhorn"])
+        self.assertTrue(any(b.startswith("data-web-0: it is not a bound Longhorn volume") for b in sr.plan(st, NOW)["blockers"]))
 
     def test_longhorn_node_without_ready_condition_is_none(self):
         self.objects[f"{LH}/nodes"]["items"][0]["status"] = {"conditions": []}
@@ -156,7 +268,7 @@ DOWN_SINCE = "2026-10-17T09:30:00Z"  # 1800 s before NOW
 def good_state():
     return {"node": {"ready": False, "status": "Unknown", "since": DOWN_SINCE, "lease": "2026-10-17T09:29:00.000000Z"},
             "harvester": False, "set": {"ns": "lab", "name": "web", "wait_mode": False},
-            "pods": [{"name": "web-0", "uid": "u0", "node": "host-1", "terminating": False, "claims": ["data-web-0"]}],
+            "pods": [{"name": "web-0", "uid": "u0", "node": "host-1", "terminating": False, "claims": ["data-web-0"], "unchecked": []}],
             "claims": {"data-web-0": {"access": ["ReadWriteOnce"], "volume": "pv-a", "longhorn": True}},
             "lh_nodes": {"host-1": False, "host-2": True, "host-3": True},
             "replicas": {"pv-a": [{"node": "host-1", "failed": False, "healthy_at": True},
@@ -252,7 +364,7 @@ class SetRestartPlanTests(unittest.TestCase):
 
     def test_ready_plan_lists_every_pod_and_volume(self):
         st = good_state()
-        st["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": True, "claims": ["data-web-1"]})
+        st["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": True, "claims": ["data-web-1"], "unchecked": []})
         st["claims"]["data-web-1"] = {"access": ["ReadWriteOnce"], "volume": "pv-b", "longhorn": True}
         st["replicas"]["pv-b"] = [{"node": "host-1", "failed": False, "healthy_at": True},
                                   {"node": "host-3", "failed": False, "healthy_at": True}]
@@ -273,7 +385,7 @@ class SetRestartPlanTests(unittest.TestCase):
 
     def test_second_pods_bad_volume_blocks_whole_plan(self):
         st = good_state()
-        st["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": ["data-web-1"]})
+        st["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": ["data-web-1"], "unchecked": []})
         st["claims"]["data-web-1"] = {"access": ["ReadWriteOnce"], "volume": "pv-b", "longhorn": False}
         self.refused(st, "data-web-1")
 
@@ -332,6 +444,17 @@ class SetRestartPlanTests(unittest.TestCase):
         self.refused(st, "went down")
         st = good_state(); st["node"]["lease"] = "garbage"
         self.refused(st, "last heard")
+
+    def test_set_without_claims_is_allowed(self):
+        # Nothing on the host holds data Homestead must protect: no blocker for it.
+        st = good_state(); st["pods"][0]["claims"] = []; st["claims"] = {}
+        p = sr.plan(st, NOW)
+        self.assertTrue(p["ready"], p["blockers"])
+        self.assertEqual([], p["volumes"])
+
+    def test_unchecked_volume_blocks(self):
+        st = good_state(); st["pods"][0]["unchecked"] = [{"name": "logs", "type": "hostPath"}]
+        self.refused(st, "web-0: volume logs is hostPath, which Homestead can't check")
 
     def test_wait_mode_carried(self):
         st = good_state(); st["set"]["wait_mode"] = True
@@ -415,7 +538,7 @@ class SetRestartRouteTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def test_run_deletes_each_reviewed_pod_with_uid_precondition(self):
-        self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": []})
+        self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": [], "unchecked": []})
         self.token = sr.plan(self.state, NOW)["review_token"]
         r = self.run_req()
         self.assertEqual(202, r.code)
@@ -451,7 +574,7 @@ class SetRestartRouteTests(unittest.TestCase):
             self.assertEqual("web-0 was already replaced; waiting for it to be Ready on another host", item["message"])
 
     def two_pods(self):
-        self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": []})
+        self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": [], "unchecked": []})
         self.token = sr.plan(self.state, NOW)["review_token"]
 
     def test_all_deletes_failed_starts_no_job(self):

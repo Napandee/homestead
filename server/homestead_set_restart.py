@@ -82,12 +82,65 @@ def read_state(ns, name, node):
     except Unread:
         raise
     except (KeyError, TypeError, AttributeError, IndexError, ValueError) as e:
-        raise Unread(f"Kubernetes or Longhorn answered in a form Homestead can't read: {type(e).__name__} {e}") from e
+        raise Unread("Kubernetes or Longhorn answered in a form Homestead can't read, so Homestead cannot tell "
+                     "whether starting the pod elsewhere is safe.") from e
+
+
+def _named(item):
+    meta = item.get("metadata") if isinstance(item, dict) else None
+    return (meta.get("name") if isinstance(meta, dict) else None) or "(without a name)"
+
+
+def _each(items, kind, parse):
+    """parse(item) for every item; a malformed one raises Unread naming its kind and name."""
+    if not isinstance(items, list):
+        raise Unread(f"The list of {kind}s is in a form Homestead can't read.")
+    out = []
+    for item in items:
+        try:
+            out.append(parse(item))
+        except Unread:
+            raise
+        except (KeyError, TypeError, AttributeError, IndexError, ValueError) as e:
+            raise Unread(f"{kind[0].upper()}{kind[1:]} {_named(item)} is in a form Homestead can't read, "
+                         "so Homestead cannot tell whether starting the pod elsewhere is safe.") from e
+    return out
+
+
+def _lh_spec(item, kind):
+    """(spec, volumeName) of a Longhorn replica or engine. Without them Homestead
+    can't tell which volume the item belongs to, so it can't be skipped."""
+    spec = item.get("spec") if isinstance(item, dict) else None
+    if not isinstance(spec, dict):
+        raise Unread(f"Longhorn {kind} {_named(item)} has no spec, so Homestead can't read which volume it belongs to.")
+    if not spec.get("volumeName"):
+        raise Unread(f"Longhorn {kind} {_named(item)} has no spec.volumeName, so Homestead can't read which volume it belongs to.")
+    return spec, spec["volumeName"]
+
+
+# Volume types that hold no data of the app's own: nothing to protect.
+PLAIN_VOLUMES = ("configMap", "secret", "emptyDir", "projected", "downwardAPI")
+
+
+def _pod_volumes(pod_name, volumes):
+    """(claim names, volumes Homestead can't check) of one pod. A generic
+    ephemeral volume is the claim Kubernetes made for it, `{pod}-{volume}`."""
+    claims, unchecked = [], []
+    for v in volumes or []:
+        kinds = [k for k in v if k != "name"]
+        kind = kinds[0] if len(kinds) == 1 else (" and ".join(sorted(kinds)) or "of no type")
+        if kind == "persistentVolumeClaim":
+            claims.append(_need(v["persistentVolumeClaim"]["claimName"]))
+        elif kind == "ephemeral":
+            claims.append(f"{pod_name}-{_need(v['name'])}")
+        elif kind not in PLAIN_VOLUMES:
+            unchecked.append({"name": v.get("name"), "type": kind})
+    return list(dict.fromkeys(claims)), unchecked
 
 
 def _read_state(ns, name, node):
     nodes = _read("/api/v1/nodes", "the hosts").get("items", [])
-    ready = {n["metadata"]["name"]: _ready(n) for n in nodes}
+    ready = dict(_each(nodes, "host", lambda n: (n["metadata"]["name"], _ready(n))))
     if node not in ready:
         raise Unread(f"Host {node} is not in the cluster's host list, so Homestead cannot tell its state.")
     status = next((_cond(n)[0] for n in nodes if n["metadata"]["name"] == node), None)
@@ -104,42 +157,55 @@ def _read_state(ns, name, node):
         raise Unread(f"StatefulSet {ns}/{name} has no label selector, so Homestead cannot find its pods.")
     selector = urllib.parse.quote(",".join(f"{k}={v}" for k, v in sorted(labels.items())))
     items = _read(f"/api/v1/namespaces/{_q(ns)}/pods?labelSelector={selector}", f"the pods of {ns}/{name}").get("items", [])
-    pods, claim_names = [], []
-    for p in items:
+
+    def one_pod(p):
         meta = p.get("metadata") or {}
         owned = any(o.get("kind") == "StatefulSet" and o.get("name") == name for o in meta.get("ownerReferences") or [])
         if not owned or (p.get("spec") or {}).get("nodeName") != node:
-            continue
-        claims = [v["persistentVolumeClaim"]["claimName"] for v in (p["spec"].get("volumes") or [])
-                  if v.get("persistentVolumeClaim")]
-        claim_names += [c for c in claims if c not in claim_names]
-        pods.append({"name": meta.get("name"), "uid": meta.get("uid"), "node": node,
-                     "terminating": bool(meta.get("deletionTimestamp")), "claims": claims})
+            return None
+        pod_name = _need(meta["name"])
+        if not meta.get("uid"):
+            # The delete is made exact by the uid: without one nothing may go out.
+            raise Unread(f"Pod {pod_name} has no metadata.uid, so Homestead cannot delete exactly that pod.")
+        claims, unchecked = _pod_volumes(pod_name, p["spec"].get("volumes"))
+        return {"name": pod_name, "uid": meta["uid"], "node": node,
+                "terminating": bool(meta.get("deletionTimestamp")), "claims": claims, "unchecked": unchecked}
+    pods = [p for p in _each(items, "pod", one_pod) if p]
+    claim_names = list(dict.fromkeys(c for p in pods for c in p["claims"]))
 
     pvcs = {}
     for c in claim_names:
         pvc = _read(f"/api/v1/namespaces/{_q(ns)}/persistentvolumeclaims/{_q(c)}", f"claim {c}")
         s = pvc.get("spec") or {}
         pvcs[c] = {"access": list(s.get("accessModes") or []), "volume": s.get("volumeName") or None}
+    # Only the volumes under review count: Longhorn objects of every other
+    # volume (detached ones have no host) are left alone, malformed or not.
+    reviewed = {row["volume"] for row in pvcs.values() if row["volume"]}
 
-    lh_nodes = {}
-    for n in _read(f"{LH}/nodes", "the Longhorn nodes").get("items", []):
+    def one_lh_node(n):
         st = _cond(n)[0]
-        lh_nodes[n["metadata"]["name"]] = None if st is None else st == "True"
+        return n["metadata"]["name"], None if st is None else st == "True"
+    lh_nodes = dict(_each(_read(f"{LH}/nodes", "the Longhorn nodes").get("items", []), "Longhorn node", one_lh_node))
     replicas, engines, robustness = {}, {}, {}
-    for r in _read(f"{LH}/replicas", "the Longhorn replicas").get("items", []):
-        s = r["spec"]  # a missing field raises, which read_state turns into Unread
-        vol = _need(s["volumeName"])
-        if not s.get("nodeID"):
-            continue  # a replacement Longhorn has not placed yet: never a copy, never on the host
-        replicas.setdefault(vol, []).append(
-            {"node": s["nodeID"], "failed": bool(s.get("failedAt")), "healthy_at": bool(s.get("healthyAt"))})
-    for e in _read(f"{LH}/engines", "the Longhorn engines").get("items", []):
-        s = e["spec"]
-        engines.setdefault(_need(s["volumeName"]), []).append(
-            {"node": _need(s["nodeID"]), "state": (e.get("status") or {}).get("currentState")})
-    for v in _read("/apis/longhorn.io/v1beta2/volumes", "the Longhorn volumes").get("items", []):
-        robustness[v["metadata"]["name"]] = (v.get("status") or {}).get("robustness")
+
+    def one_replica(r):
+        s, vol = _lh_spec(r, "replica")
+        if vol in reviewed and s.get("nodeID"):  # no nodeID: not placed yet, never a copy
+            replicas.setdefault(vol, []).append(
+                {"node": s["nodeID"], "failed": bool(s.get("failedAt")), "healthy_at": bool(s.get("healthyAt"))})
+
+    def one_engine(e):
+        s, vol = _lh_spec(e, "engine")
+        if vol in reviewed and s.get("nodeID"):  # no nodeID: detached, so not running on the down host
+            engines.setdefault(vol, []).append({"node": s["nodeID"], "state": (e.get("status") or {}).get("currentState")})
+
+    def one_volume(v):
+        vol = _need(v["metadata"]["name"])
+        if vol in reviewed:
+            robustness[vol] = (v.get("status") or {}).get("robustness")
+    _each(_read(f"{LH}/replicas", "the Longhorn replicas").get("items", []), "Longhorn replica", one_replica)
+    _each(_read(f"{LH}/engines", "the Longhorn engines").get("items", []), "Longhorn engine", one_engine)
+    _each(_read("/apis/longhorn.io/v1beta2/volumes", "the Longhorn volumes").get("items", []), "Longhorn volume", one_volume)
     claims = {c: dict(row, longhorn=row["volume"] in robustness) for c, row in pvcs.items()}
 
     return {"node": host, "harvester": harvester, "set": {"ns": ns, "name": name, "wait_mode": wait},
@@ -209,6 +275,8 @@ def plan(state, now):
             blockers.append(f"Longhorn still sees {node} as Ready, so its volumes may still be in use.")
     seen = set()
     for pod in pods:
+        for v in pod["unchecked"]:
+            blockers.append(f"{pod['name']}: volume {v['name']} is {v['type']}, which Homestead can't check")
         for pvc in pod["claims"]:
             if pvc in seen:
                 continue
