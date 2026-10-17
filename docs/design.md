@@ -33,6 +33,8 @@ purple the hardware an app or VM takes from its host (an iGPU, a Coral). Every
 other tag, chip, avatar, role badge and progress bar is neutral, so a healthy
 page is calm and the one red thing stands out. If everything is amber,
 nothing is.
+A day of planned maintenance in an uptime strip is neutral and striped:
+it is neither health nor something that needs a person.
 
 **One line of buttons.** A header, a card or a row keeps its buttons on one
 line at any width: the main one or two as buttons, the rest in a `⋯` menu

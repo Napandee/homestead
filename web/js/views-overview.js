@@ -266,18 +266,33 @@ window.nodeUptimePaint = async n => {
   const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${now}</div></div>`;
   if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
   const tone = uptimeTone;
-  const events = [...(u.outages || []).map(o => ({ t: o.start, kind: "down", o })), ...(u.reboots || []).map(t => ({ t, kind: "reboot" }))]
+  // Maintenance Homestead caused, or Harvester's maintenance mode, is listed
+  // as itself; an outage inside it is not listed again (#535).
+  const maintenance = u.maintenance || [];
+  const events = [...(u.outages || []).filter(o => !o.maintenance).map(o => ({ t: o.start, kind: "down", o })),
+    ...maintenance.map(m => ({ t: m.start, kind: "maint", m })),
+    ...(u.reboots || []).map(r => ({ t: r.t ?? r, kind: "reboot", planned: !!r.planned }))]
     .sort((a, b) => b.t - a.t).slice(0, 12);
   const took = o => `${o.exact ? "" : "about "}${uptimeDuration(o.down_s)}`;
+  const outside = u.windows_excluding_maintenance || {};
+  const dayReasons = d => [...new Set(maintenance.filter(m => m.start < d.day + 86400 && (m.end ?? Infinity) > d.day).map(m => m.reason))];
   host.innerHTML = `${head}
     <div class="uptime-windows">${Object.entries(u.windows).map(([label, v]) => `<div><span class="dim xs">LAST ${label.toUpperCase()}</span>
-      <b class="mono uptime-${tone(v)}">${uptimePct(v)}</b></div>`).join("")}</div>
-    <div class="uptime-strip" aria-label="Each of the last 90 days">${u.days.map(d => `<i class="uptime-${tone(d.up)}"
-      data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")}</div>
+      <b class="mono uptime-${tone(v)}">${uptimePct(v)}</b>${outside[label] != null && uptimePct(outside[label]) !== uptimePct(v)
+        ? `<span class="dim xs">· ${uptimePct(outside[label])} outside maintenance</span>` : ""}</div>`).join("")}</div>
+    <div class="uptime-strip" aria-label="Each of the last 90 days">${u.days.map(d => uptimeDayStriped(d)
+      ? `<i class="uptime-maint" data-tip="${esc(fmtDay(d.day))} · maintenance: ${esc(dayReasons(d).join(", ") || "planned")}"></i>`
+      : `<i class="uptime-${tone(uptimeDayShare(d))}"
+      data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(uptimeDayShare(d)) + " up"}${d.maintenance ? " outside maintenance" : ""}"></i>`).join("")}</div>
     <div class="between dim xs" style="margin-top:3px"><span>90 days ago</span><span>today</span></div>
-    <div class="dim xs uptime-loghead">OUTAGES AND REBOOTS</div>
+    <div class="dim xs uptime-loghead">OUTAGES, MAINTENANCE AND REBOOTS</div>
     ${events.length ? `<div class="uptime-events">${events.map(e => e.kind === "reboot"
-      ? `<div><span class="tag">rebooted</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`
+      ? (e.planned ? `<div><span class="tag">rebooted (planned)</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`
+        : `<div><span class="tag warn">unexpected reboot</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`)
+      : e.kind === "maint"
+        ? (e.m.ongoing ? `<div><span class="tag">maintenance: ${esc(e.m.reason)}, since ${esc(uptimeWhen(e.m.start))}</span></div>`
+          : `<div><span class="tag">maintenance: ${esc(e.m.reason)}</span><span class="mono xs">${esc(uptimeWhen(e.m.start))}</span>
+            <span class="dim xs">for ${uptimeDuration(e.m.end - e.m.start)}</span></div>`)
       : e.o.ongoing
         ? `<div><span class="tag bad">down now</span><span class="mono xs">since ${esc(uptimeWhen(e.o.start))}</span>
             <span class="dim xs">${took(e.o)} so far</span></div>`
@@ -485,19 +500,30 @@ window.nodeCompareSelect = (id, key) => {
    row is there on every card - saying why when there is nothing yet - so
    the cards stay the same shape. */
 const uptimeTone = v => v == null ? "none" : v >= 99.9 ? "ok" : v >= 99 ? "warn" : "bad";
+// A day is painted by its share outside planned maintenance, and striped as
+// maintenance only when that share is fine: an outage the same day still shows.
+const uptimeDayShare = d => d.up_excluding_maintenance ?? d.up;
+const uptimeDayStriped = d => d.maintenance && uptimeTone(uptimeDayShare(d)) === "ok";
 function nodeUptimeStrip(n) {
   const remote = remoteRow(n);
   const u = remote ? null : STATE.data.uptime?.nodes?.[n.name];
   const days = (u?.days || []).slice(-30);
-  const month = u?.windows?.["30d"], outs = (u?.outages || []).length;
-  const tip = remote ? "Open this host to view its cluster’s uptime history" : u ? (outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the host for when` : "No outage recorded")
+  // The share outside maintenance Homestead caused (#535), saying when there
+  // was some, so a 100% never hides it; the share Ready in the tip.
+  const raw = u?.windows?.["30d"], month = u?.windows_excluding_maintenance?.["30d"] ?? raw;
+  const kept = u?.maintenance_s?.["30d"] || 0, outs = (u?.outages || []).filter(o => !o.maintenance).length;
+  const tip = remote ? "Open this host to view its cluster’s uptime history" : u
+    ? [kept ? `Ready ${uptimePct(raw)} of the last 30 days; ${uptimeDuration(kept)} of planned maintenance left out` : "",
+       outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the host for when` : "No outage recorded"].filter(Boolean).join(". ")
     : "No samples yet: Homestead records one every five minutes";
   return `<div class="node-upstrip" data-tip="${esc(tip)}">
     <span class="dim xs">UPTIME</span>
     <div class="uptime-strip mini" aria-label="Each of the last 30 days">${days.length
-      ? days.map(d => `<i class="uptime-${uptimeTone(d.up)}" data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(d.up) + " up"}"></i>`).join("")
+      ? days.map(d => uptimeDayStriped(d) ? `<i class="uptime-maint" data-tip="${esc(fmtDay(d.day))} · maintenance"></i>`
+        : `<i class="uptime-${uptimeTone(uptimeDayShare(d))}" data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(uptimeDayShare(d)) + " up"}"></i>`).join("")
       : "<i></i>".repeat(30)}</div>
-    <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d</span></div>`;
+    <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d${kept
+      ? ` · ${uptimeDuration(kept)} maintenance` : ""}</span></div>`;
 }
 
 /* A line per disk: its name, or its device; what it is - the system drive,

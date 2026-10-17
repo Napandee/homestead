@@ -137,3 +137,19 @@ test("demo history refresh preserves existing buckets and only advances at the s
       assert.deepEqual(after[field].slice(0, -1), before[field].slice(1));
   }
 });
+
+test("the demo's uptime agrees with itself: a planned reboot is inside maintenance, and the last reboot is the host's boot", async () => {
+  const api = await fixture();
+  const [nodes, uptime] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime")]);
+  const now = Math.floor(Date.now() / 1000);
+  for (const n of nodes) {
+    const u = uptime.nodes[n.name];
+    const last = Math.max(...u.reboots.map(r => r.t));
+    assert.ok(Math.abs(now - n.uptime_s - last) < 120, `${n.name}: the last reboot is when it booted`);
+    for (const r of u.reboots) {
+      const inside = u.maintenance.some(m => m.start <= r.t && r.t <= (m.end ?? now) + 300);
+      assert.equal(r.planned, inside, `${n.name}: a reboot is planned only inside maintenance`);
+    }
+  }
+  assert.ok(Object.values(uptime.nodes).some(u => u.maintenance.length), "the demo shows a maintenance");
+});

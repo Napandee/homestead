@@ -411,6 +411,8 @@ class Shutdown:
             current.update(phase="released", message="Scheduling restored; inspect workload and storage health", progress=100)
             data["state"] = encode(current)
         self.change(release, journal["metadata"]["uid"])
+        _maintenance(lambda HISTORY: [HISTORY.maintenance_close(f"cs:{run}:{n['name']}", outcome="returned")
+                                      for n in state["plan"]["nodes"]])
         return {"ok": True}
 
     def release_holds(self, plan, run):
@@ -460,16 +462,49 @@ class Shutdown:
                           for i, n in enumerate(state["plan"]["nodes"])]
         return state
 
+    def record_maintenance(self, state):
+        """The hosts' maintenance entries, written by Homestead itself once it is
+        running again (#535): the coordinator and the recovery are helper pods
+        without Homestead's data. Each opens at the commit; a host back on a new
+        boot closes now, and every one closes when the run is released."""
+        journal = self.read()
+        if not journal or "commit" not in journal["data"]:
+            return
+        commit = json.loads(journal["data"]["commit"])
+        if commit.get("run") != state["run"]:
+            return
+        at = int(commit.get("at") or commit["until"] - 30)
+        def write(HISTORY):
+            for n in state["plan"]["nodes"]:
+                job = f"cs:{state['run']}:{n['name']}"
+                HISTORY.maintenance_open(n["name"], "cluster shutdown", job, now=at)
+                live = node_row(self.get("/api/v1/nodes/" + n["name"])) if state["phase"] != "released" else None
+                if live is None or (live["ready"] and live["boot_id"] and live["boot_id"] != n["boot_id"]):
+                    HISTORY.maintenance_close(job, now=self.clock(), outcome="returned")
+        _maintenance(write)
+
     def progress(self, item):
         state = self.state()
         if not state or state["run"] != item["ref"]["run"]:
             return "failed", 0, "Shutdown journal changed; inspect cluster and host power state"
+        self.record_maintenance(state)
         phase = state["phase"]
         status = "succeeded" if phase == "released" else "failed" if phase == "failed" or self.clock() > state["deadline"] else "running"
         message = state["message"]
         if self.clock() > state["deadline"] and phase not in ("released", "failed"):
             message = "Shutdown observation ended. Check physical host power; open Cluster → Shut down cluster for recovery"
         return status, state["progress"], message
+
+
+def _maintenance(write):
+    """The hosts' maintenance entries in Homestead's history (#535): only
+    where Homestead's own modules are present, and never what decides the
+    shutdown - the helpers on the hosts run without them."""
+    try:
+        import homestead_history as HISTORY
+        write(HISTORY)
+    except Exception:
+        pass
 
 
 class Coordinator:
@@ -501,7 +536,8 @@ class Coordinator:
                 state["drain"] = drain
             data["state"] = encode(state)
             if commit:
-                data["commit"] = encode({"run": self.run, "until": min(state["deadline"], self.s.clock() + 30)})
+                data["commit"] = encode({"run": self.run, "until": min(state["deadline"], self.s.clock() + 30),
+                                         "at": int(self.s.clock())})
         self.s.change(update, self.uid)
 
     def nodes_unchanged(self):
