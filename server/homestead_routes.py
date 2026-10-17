@@ -130,6 +130,7 @@ MODULES = (
     "homestead_uplinks",
     "homestead_uptime",
     "homestead_vm_review",
+    "homestead_vm_server",
     "homestead_vms",
     "homestead_vmstore",
     "homestead_volumes",
