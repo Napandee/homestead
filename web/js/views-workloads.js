@@ -1106,6 +1106,8 @@ window.wlScale = async (ns, name, n) => {
       }
     } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }
   }
+  // Stopping is asked first: whatever it serves goes away until it is started.
+  if (!n && !(await ask(`Stop ${name}? Its pods stop and what it serves goes away until you start it again. Its data and settings are kept.`, { title: "Stop", ok: "Stop" }))) return;
   return wlScaleGo(ns, name, n, false);
 };
 window.wlScaleGo = async (ns, name, n, confirmed = false) => {
@@ -1554,6 +1556,7 @@ window.deployLanChanged = async () => {
 };
 
 window.wlRestart = async (ns, name) => {
+  if (!(await ask(`Restart ${name}? Its pods are replaced with fresh ones; what it serves may be away for a moment.`, { title: "Restart", ok: "Restart" }))) return;
   try {
     await api("/api/restart", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name }) });
