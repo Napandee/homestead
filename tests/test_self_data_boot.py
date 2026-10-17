@@ -96,7 +96,7 @@ class BootTests(unittest.TestCase):
             thread.assert_not_called()
 
     def test_normal_health_endpoint_is_json_not_the_application_shell(self):
-        self.assertFalse(server.is_page_path("/healthz"))
+        self.assertFalse(server.WEB_PATHS.is_page_path("/healthz"))
         self.fence.require_write.side_effect = None
         with mock.patch.object(server, "_self_data_boot_pending", False):
             h, result = self.handler("/healthz")

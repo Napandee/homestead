@@ -72,14 +72,14 @@ window.resOpen = async (ns, name, reveal = false) => {
       <div class="row">${pod ? `<button class="btn sm" onclick="resLogs(${jsq(ns)},${jsq(name)})">${icon("log")}Logs</button>` : ""}
         ${o.secret_hidden ? `<button class="btn sm" data-need="admin" onclick="resOpen(${jsq(ns)},${jsq(name)},true)">Reveal values</button>` : ""}
         <button class="btn sm" data-need="admin" id="res_edit" onclick="resEdit()">${icon("edit")}Edit</button>
-        ${actionBar([{ label: "Delete", icon: "trash", run: `resDelete(${jsq(ns)},${jsq(name)})`, need: "admin", danger: true }], { shown: 0, label: `More actions for ${name}` })}</div></div>
-    <div class="seg" style="margin:10px 0">${["YAML", "Events"].map((t, i) => `<button class="${i ? "" : "on"}" onclick="resTab(this,${jsq(t)})">${t}</button>`).join("")}</div>
-    <div class="res-pane" data-pane="YAML"><textarea id="res_yaml" aria-label="YAML" class="mono helm-values res-yaml" spellcheck="false" readonly>${esc(o.yaml)}</textarea>
-      ${UI.actions(`<button class="btn pri" onclick="resSave(${jsq(ns)},${jsq(name)})">Save</button>
-        <button data-dialog-dismiss="true" class="btn" onclick="resOpen(${jsq(ns)},${jsq(name)},${reveal})">Cancel</button>
-        <span class="dim xs">Saved as a replace; if someone changed it meanwhile, the save is refused rather than overwrite them.</span>`, "", {attrs:`id="res_save_row" hidden`})}</div>
-    <div class="res-pane" data-pane="Events" hidden><div id="res_events" class="dim small">loading</div></div>
-    ${UI.actions(UI.cancel("Close"), "", { attrs: 'id="res_close_row"' })}`;
+        <span data-need="admin">${actionBar([{ label: "Delete", icon: "trash", run: `resDelete(${jsq(ns)},${jsq(name)})`, need: "admin", danger: true }], { shown: 0, label: `More actions for ${name}` })}</span></div></div>
+    ${UI.sectionForm("res_obj", [
+      // YAML and Events are the shared section tabs, as a VM's details are (#559).
+      { key: "yaml", title: "YAML", html: `<textarea id="res_yaml" aria-label="YAML" class="mono helm-values res-yaml" spellcheck="false" readonly>${esc(o.yaml)}</textarea>
+        ${UI.actions(`<button class="btn pri" onclick="resSave(${jsq(ns)},${jsq(name)})">Save</button>
+          <button data-dialog-dismiss="true" class="btn" onclick="resOpen(${jsq(ns)},${jsq(name)},${reveal})">Cancel</button>
+          <span class="dim xs">Saved as a replace; if someone changed it meanwhile, the save is refused rather than overwrite them.</span>`, "", {attrs:`id="res_save_row" hidden`})}` },
+      { key: "events", title: "Events", html: '<div id="res_events" class="dim small">loading</div>' }], "", { always: true, cancelHtml: UI.cancel("Close") })}`;
   if (window.applyRole) applyRole();
   const uid = (o.object.metadata || {}).uid || "";
   api(`/api/resources/events?${new URLSearchParams({ ns, name, uid })}`).then(events => {
@@ -90,11 +90,7 @@ window.resOpen = async (ns, name, reveal = false) => {
       : "No recent events.";
   }).catch(() => {});
 };
-window.resTab = (button, pane) => {
-  $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));
-  $$("#mbody .res-pane").forEach(p => { p.hidden = p.dataset.pane !== pane; });
-};
-window.resEdit = () => { const t = $("#res_yaml"); t.readOnly = false; t.focus(); $("#res_save_row").hidden = false; $("#res_edit").hidden = true; if ($("#res_close_row")) $("#res_close_row").hidden = true; };
+window.resEdit = () => { const t = $("#res_yaml"); t.readOnly = false; t.focus(); $("#res_save_row").hidden = false; $("#res_edit").hidden = true; const foot = $("#res_obj > .stepper-foot"); if (foot) foot.hidden = true; };
 const resPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 window.resSave = async (ns, name) => {
   const k = RES.pick;

@@ -57,8 +57,12 @@ try{for(const theme of ['dark','light']){
  assert.equal(await page.locator('#dashboardPortal .portal-tile').count(),1,'saved sections restore');
  for(const width of [1440,390,320]){
   await page.setViewportSize({width,height:1000});
-  await page.evaluate(()=>{document.body.classList.remove('nav-open');document.querySelector('#toast')?.remove();});
-  await page.addStyleTag({content:'*,*::before,*::after{transition:none!important}'});
+  await page.evaluate(()=>{document.body.classList.remove('nav-open');});
+  // Hidden for the screenshots, not removed: toast() still needs #toast.
+  await page.addStyleTag({content:'*,*::before,*::after{transition:none!important}#toast{visibility:hidden!important}'});
+  // The page keeps running while the screenshots are taken: a background
+  // check's late toast (here the image-update check's) must still land (#576).
+  await page.evaluate(()=>{setTimeout(()=>toast('Image update check failed','bad'));});await page.waitForTimeout(200);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   if(width<900){const cells=await page.locator('.dashboard-widget').evaluateAll(els=>els.map(el=>({x:el.getBoundingClientRect().x,w:el.getBoundingClientRect().width})));assert.ok(cells.every(c=>c.x===cells[0].x && c.w===cells[0].w),'phone ignores desktop gaps');}
   await page.screenshot({path:`${out}/saved-${theme}-${width}.png`,fullPage:true});

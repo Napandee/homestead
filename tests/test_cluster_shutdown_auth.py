@@ -18,7 +18,7 @@ class ShutdownAuthenticationTests(unittest.TestCase):
                 (self.auth, "NS", "lab"), (self.auth, "SECRET_NAME", lambda: "homestead-auth"),
                 (self.auth, "ITERATIONS", 1000), (self.auth, "_attempts", {}),
                 (self.auth, "_store_cache", {"at": 0, "data": None}),
-                (self.auth, "ksend", server._auth_ksend),
+                (self.auth, "ksend", server.KUBE_HELPERS._auth_ksend),
                 (server, "_self_data_fence", None), (server, "_self_data_barrier", None)):
             self.enterContext(mock.patch.object(target, name, value))
         self.store = {"users": {"admin": {"salt": "test-salt", "hash": self.auth._hash("test-password", "test-salt"),
@@ -116,12 +116,12 @@ class ShutdownAuthenticationTests(unittest.TestCase):
                 ("PUT", path, {"data": {"other": "value"}}),
                 ("PUT", path, {"stringData": {"other": "value"}})):
             with self.subTest(method=method, target=target, changes=changes), self.assertRaises(ValueError):
-                server._auth_ksend(method, target, {**self.body(), **changes})
+                server.KUBE_HELPERS._auth_ksend(method, target, {**self.body(), **changes})
         self.network.assert_not_called()
 
     def test_auth_secret_creation_is_allowed_only_through_internal_binding(self):
         with mock.patch.object(server, "_ksend", return_value={}) as transport:
-            server._auth_ksend("POST", "/api/v1/namespaces/lab/secrets", self.body())
+            server.KUBE_HELPERS._auth_ksend("POST", "/api/v1/namespaces/lab/secrets", self.body())
         self.assertTrue(transport.call_args.kwargs["shutdown_bypass"])
 
     def test_auth_bypass_preserves_data_move_and_storage_guards(self):

@@ -12,14 +12,14 @@ class VendorAssetTests(unittest.TestCase):
                      "/vendor/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf",
                      "/vendor/monaco/vs/language/json/jsonWorker.js"):
             with self.subTest(path=path):
-                self.assertTrue(server.is_vendor_path(path))
+                self.assertTrue(server.WEB_PATHS.is_vendor_path(path))
 
     def test_traversal_and_odd_types_are_refused(self):
         for path in ("/vendor/../server/server.py", "/vendor/monaco/../../etc/passwd",
                      "/vendor/monaco/vs/loader.py", "/vendor/monaco/secrets.env",
                      "/vendors/monaco/vs/loader.js", "/vendor/", "/vendor/monaco/vs/loader"):
             with self.subTest(path=path):
-                self.assertFalse(server.is_vendor_path(path))
+                self.assertFalse(server.WEB_PATHS.is_vendor_path(path))
 
     def test_every_vendored_file_the_editor_needs_is_present(self):
         root = Path(__file__).resolve().parents[1] / "web" / "vendor" / "monaco"

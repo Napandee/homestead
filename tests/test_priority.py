@@ -519,7 +519,7 @@ class PriorityTests(unittest.TestCase):
 class HeadroomTests(unittest.TestCase):
     def test_a_critical_app_reserves_more_memory_than_a_normal_one(self):
         with tempfile.TemporaryDirectory() as folder:
-            usage.bind(folder, server.parse_cpu, server.parse_mem)
+            usage.bind(folder, server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
             try:
                 for i in range(usage.MIN_ROUNDS):
                     usage.record([("lab", "ha", "ha", 100, 400)], now=1_760_000_000 + i * usage.STEP)
@@ -527,7 +527,7 @@ class HeadroomTests(unittest.TestCase):
                 normal = int(usage.summary("lab", "ha", "ha", now=now)["suggest"]["memory"][:-2])
                 critical = int(usage.summary("lab", "ha", "ha", now=now, tier="critical")["suggest"]["memory"][:-2])
             finally:
-                usage.bind("/data", server.parse_cpu, server.parse_mem)
+                usage.bind("/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
         self.assertGreater(critical, normal)
         self.assertTrue(592 <= critical <= 640, critical)          # 400Mi x 1.5, within half a bucket
 

@@ -295,7 +295,7 @@ class PreparationTests(unittest.TestCase):
         import server
         item = {**self.item, "progress": 15}
         with mock.patch.object(server.SELF_DATA_PREPARE, "resolve", side_effect=Held("Admission changed")):
-            self.assertEqual(("failed", 15, "Admission changed"), server.self_data_preparation_progress(item))
+            self.assertEqual(("failed", 15, "Admission changed"), server.SELF_DATA_ROUTES.self_data_preparation_progress(item))
             self.assertTrue(item["ref"]["retain_resources"])
 
     def test_lost_deletion_reply_is_not_repeated_even_when_pod_disappeared(self):
@@ -326,7 +326,7 @@ class PreparationTests(unittest.TestCase):
         with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "kget", side_effect=self.f.read), \
              mock.patch.object(server, "homestead_data_volume", return_value={"pvc": "different"}), \
              mock.patch.object(server.OPS, "_read", return_value=[item, foreign]):
-            state = server.self_data_preparation_state()
+            state = server.SELF_DATA_ROUTES.self_data_preparation_state()
         self.assertEqual(1, len(state["preparations"]))
         self.assertFalse(state["preparations"][0]["prepared"])
         self.assertTrue(state["execution_ready"])
@@ -334,7 +334,7 @@ class PreparationTests(unittest.TestCase):
     def test_status_error_is_safe_and_never_mutates(self):
         with mock.patch.object(server, "homestead_data_volume", side_effect=RuntimeError("private-secret")), \
              mock.patch.object(server, "ksend") as send:
-            with self.assertRaises(Held) as error: server.self_data_preparation_state()
+            with self.assertRaises(Held) as error: server.SELF_DATA_ROUTES.self_data_preparation_state()
             self.assertNotIn("private-secret", str(error.exception)); send.assert_not_called()
 
 
