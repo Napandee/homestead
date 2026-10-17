@@ -220,6 +220,7 @@ const DIALOGS = [
   ["log-search-results", "workloads", "logSearch();document.querySelector('#ls_q').value='error';logSearchRun()"],
   ["history-undo", "workloads", "historyUndo('lab','paperless','c2')"],
   ["node-if-down", "nodes", "nodeIfDown('harvester-node2')"],
+  ["set-restart-review", "nodes", "STATE.platform.harvester=false", "setRestartReview('data','postgres','harvester-node3')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
