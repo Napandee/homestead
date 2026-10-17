@@ -128,7 +128,7 @@ window.ptCaptureVbios = async (node, address, button) => {
     const link = document.createElement("a");
     link.href = url; link.download = result.filename; document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast("vBIOS downloaded. Add it beside the GPU in VM → Edit → Passthrough.", "ok");
+    toast("vBIOS downloaded. To use it, capture or upload it beside the GPU in VM → Edit → Passthrough.", "ok");
   } catch (error) { toast(error.message, "bad"); }
   finally { if (button) { button.disabled = false; button.textContent = "Capture vBIOS"; } }
 };
@@ -180,7 +180,7 @@ function vmDevicesPane(v, res) {
       ${have.map(d => `<tr data-hostdev="${esc(d.name)}" data-resource="${esc(d.resource)}"><td data-label="Device"><label for="pd_device_${esc(d.name)}">${esc(d.name)}</label><select id="pd_device_${esc(d.name)}" class="pd_resource" aria-label="Device for ${esc(d.name)}">
         ${!list.some(r => r.resource === d.resource) ? `<option value="${esc(d.resource)}">${esc(d.resource)} · unavailable</option>` : ""}${list.filter(r => !d.gpu || r.kind === "pci").map(r => `<option value="${esc(r.resource)}" ${r.resource === d.resource ? "selected" : ""}>${esc(label(r))}</option>`).join("")}</select></td>
         <td data-label="ROM (vBIOS)">${d.rom ? `${UI.chip("its own ROM", "info")} <label class="check xs"><input type="checkbox" class="pd_clear"> clear</label>` : ""}
-          <input type="file" class="pd_rom" aria-label="vBIOS file for ${esc(d.name)}" accept=".rom,.bin,application/octet-stream"></td>
+          ${((r) => vmRomControls(d.name, r, d.gpu || r?.gpu, d.rom))(list.find(r => r.resource === d.resource))}</td>
         <td><label class="check xs"><input type="checkbox" class="pd_rm"> remove</label></td></tr>`).join("")}</tbody></table></div>`
       : UI.lead("Select a PCI or USB device offered by the cluster's hosts.")}
     <div id="pd_adds"></div>
@@ -192,7 +192,7 @@ function vmDevicesPane(v, res) {
       ${UI.actions(UI.button("Add device", "vmAddHostDevice()"))}`
       : '<p class="dim small">No host devices are offered to VMs. Prepare a device on its host first.</p>'}
     <p class="dim small">Passthrough restricts this VM to hosts that offer its devices and prevents live migration. Configurations may overlap; Start checks that enough exclusive devices are free. Changes apply at its next start.</p>
-    ${UI.more("IOMMU and vBIOS setup", `<p>Open <a href="${esc(nodesUrl)}" target="_blank" rel="noopener">Hosts</a> in a new tab, select a host, then Hardware → Devices for VMs. Check IOMMU and offer its PCI or USB device there. Enabling IOMMU may require a host reboot.</p><p>A GPU can use its default ROM or a vBIOS file you supply. Files must start with 55 AA and be at most 640 KiB. Homestead enables the KubeVirt hook sidecar when a ROM is supplied.</p>`)}`;
+    ${UI.more("IOMMU and vBIOS setup", `<p>Open <a href="${esc(nodesUrl)}" target="_blank" rel="noopener">Hosts</a> in a new tab, select a host, then Hardware → Devices for VMs. Check IOMMU and offer its PCI or USB device there. Enabling IOMMU may require a host reboot.</p><p>A GPU uses its own ROM unless you give it a vBIOS. Some cards need one for a picture - a GPU that was the host's boot display, and many NVIDIA cards. <b>Capture from host</b>, beside the GPU, reads it on the host that offers the GPU (given to VMs, with no VM using it) and saves it with this VM; or choose a file. A file must start with 55 AA and be at most 640 KiB. Homestead turns on KubeVirt's hook sidecar when a vBIOS is used.</p>`)}`;
 }
 window.vmDevicesPane = vmDevicesPane;
 window.vmAddHostDevice = () => {
@@ -205,7 +205,45 @@ window.vmAddHostDevice = () => {
   $("#pd_adds").insertAdjacentHTML("beforeend", `<div class="pd-add reviewbox" data-hostdev="${name}" data-resource="${esc(pick.value)}">
     <div class="between"><b>${esc(resource ? vmHostDeviceLabel(resource) : pick.value)}</b><button type="button" class="btn sm" onclick="this.closest('.pd-add').remove()" aria-label="Remove ${name}">Remove</button></div>
     <p class="dim xs">${esc(name)} · ${esc((resource?.nodes || []).join(", ") || "No host currently offers this device")}</p>
-    ${resource?.kind !== "usb" ? `<div class="f"><label for="pd_rom_${name}">vBIOS file <span class="dim">optional</span></label><input id="pd_rom_${name}" type="file" class="pd_rom" accept=".rom,.bin,application/octet-stream"></div>` : ""}</div>`);
+    ${resource?.kind !== "usb" ? `<div class="f"><label for="pd_rom_${name}">vBIOS <span class="dim">optional</span></label>${vmRomControls(name, resource, resource?.gpu)}</div>` : ""}</div>`);
+};
+
+/* A GPU's vBIOS, in Edit: captured from the host that offers the GPU, or
+   a file. Most cards need neither - the card's own ROM is used - but some
+   (a GPU that was the host's boot display, many laptops' and some NVIDIA
+   cards) give a black screen without a clean copy. The capture reads the
+   ROM there and keeps it with this row, so it is saved with the VM. */
+function vmRomControls(name, resource, gpu, hasRom = false) {
+  const sources = gpu ? (resource?.devices || []).filter(d => d.node && d.address) : [];
+  const file = `<input id="pd_rom_${esc(name)}" type="file" class="pd_rom" aria-label="vBIOS file for ${esc(name)}" accept=".rom,.bin,application/octet-stream">`;
+  if (!sources.length) return file;
+  const from = sources.length > 1
+    ? `<select class="pd_rom_from" aria-label="Capture the vBIOS from">${sources.map((d, i) => `<option value="${i}">${esc(d.node)} · ${esc(d.address)}</option>`).join("")}</select>`
+    : `<span class="dim xs">from ${esc(sources[0].node)} · ${esc(sources[0].address)}</span>`;
+  return `<div class="pd-rom" data-rom-for="${esc(name)}">
+      <div class="row">${UI.button("Capture from host", `vmCaptureRom(this,${jsArg(name)})`, { kind: "sm", attrs: 'data-need="admin"' })} ${from}</div>
+      <div class="dim xs pd_rom_state">${hasRom ? "Uses the vBIOS saved with this VM." : "Uses the card's own ROM."} Capture needs the GPU given to VMs and no running VM using it; or choose a file:</div>
+      ${file}</div>`;
+}
+window.vmRomControls = vmRomControls;
+window.vmCaptureRom = async (button, name) => {
+  const box = button.closest(".pd-rom"), row = button.closest("[data-hostdev]");
+  const resource = row?.querySelector(".pd_resource")?.value || row?.dataset.resource;
+  const found = (window.__vmDeviceResources || []).find(r => r.resource === resource);
+  const sources = (found?.devices || []).filter(d => d.node && d.address);
+  const source = sources[+(box.querySelector(".pd_rom_from")?.value || 0)];
+  const state = box.querySelector(".pd_rom_state");
+  if (!source) { state.textContent = "No host offers this GPU right now, so there is nothing to capture."; return; }
+  button.disabled = true; state.textContent = `Reading the vBIOS on ${source.node}…`;
+  try {
+    const result = await api("/api/passthrough/vbios/capture", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node: source.node, address: source.address }) });
+    box.dataset.captured = result.data;
+    state.textContent = `Captured from ${source.node} · ${source.address} (${Math.round(result.size / 1024)} KiB). It is saved with the VM when you review and save.`;
+  } catch (error) {
+    delete box.dataset.captured;
+    state.textContent = `Not captured: ${error.message}`;
+  } finally { button.disabled = false; }
 };
 async function readRom(file) {
   const buffer = await file.arrayBuffer();
@@ -226,7 +264,9 @@ window.vmDevicesChanges = async () => {
     const selected = row.querySelector(".pd_resource")?.value;
     if (selected && selected !== row.dataset.resource) out.map[name] = selected;
     const file = row.querySelector(".pd_rom")?.files?.[0];
+    const captured = row.querySelector(".pd-rom")?.dataset?.captured;
     if (file) out.roms[name] = await readRom(file);
+    else if (captured) out.roms[name] = captured;
     else if (row.querySelector(".pd_clear")?.checked) out.roms[name] = "";
   }
   return out.add.length || out.remove.length || Object.keys(out.map).length || Object.keys(out.roms).length ? out : null;
