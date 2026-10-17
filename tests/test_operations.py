@@ -44,6 +44,17 @@ class OperationTests(unittest.TestCase):
                                                          {"kind": "Deployment", "name": "web"}, "/containers", {},
                                                          unless=("os-rollout",))["kind"])
 
+    def test_set_restart_one_per_set(self):
+        def start(ns, name):
+            return operations.start("set-restart", f"Start {name} on another host", {"kind": "StatefulSet", "name": name, "namespace": ns},
+                                    "/nodes", {"ns": ns, "name": name, "node": "host-1", "stage": "deleted"})
+        first = start("lab", "web")
+        start("lab", "db")
+        start("other", "web")
+        with self.assertRaisesRegex(ValueError, "already"):
+            start("lab", "web")
+        self.assertEqual({"node": "host-1", "set": "web", "started_by": "", "stage": "deleted"}, first["set_restart"])
+
     def test_started_operation_is_persisted_without_private_ref(self):
         item = operations.start(
             "image-pull", "Pull example/image:1", {"kind": "Image", "name": "example/image:1"},

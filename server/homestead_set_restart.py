@@ -1,16 +1,19 @@
-"""Start a StatefulSet's stuck pod on another host (#441): the reads.
+"""Start a StatefulSet's stuck pod on another host (#441): the reads, the plan, the routes and the job.
 
 Every read here is strict. The check that decides whether a pod may be
 started elsewhere is fail-closed, so a read that fails raises Unread with a
 reason a person can act on, rather than being treated as "nothing there"."""
 import hashlib
 import json
+import time
 import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
 
 import homestead_failover as FAILOVER
 import homestead_hostrun as HOSTRUN
+import homestead_operations as OPS
+import homestead_routes as ROUTER
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 LEASES = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/"
@@ -18,6 +21,9 @@ LEASES = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/"
 # Wired like homestead_promote: server.py is at its line cap.
 kget = lambda path, *a, **k: HOSTRUN.kget(path, *a, **k)  # noqa: E731
 ksend = lambda *a, **k: HOSTRUN.ksend(*a, **k)  # noqa: E731
+
+
+clock = time.time  # tests replace it
 
 
 def bind(_kget, _ksend):
@@ -237,3 +243,131 @@ def plan(state, now):
             "down_seconds": down_seconds, "last_heard": st["lease"], "set": dict(state["set"]),
             "pods": [{"name": p["name"], "uid": p["uid"], "terminating": p["terminating"]} for p in pods],
             "volumes": volumes, "review_token": token}
+
+
+KIND = "set-restart"
+LIMIT = 900  # seconds the job follows the replacement pods
+STAGES = ("deleted", "scheduled", "attaching volume", "ready")
+
+
+def _plan(request):
+    q = request.query
+    arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+    try:
+        return plan(read_state(arg("ns"), arg("name"), arg("node")), clock())
+    except Unread as e:
+        return {"ready": False, "blockers": [str(e)]}
+
+
+def _active(ns, name):
+    # The stored records: the public list leaves each job's ref out.
+    for item in OPS._read():
+        ref = item.get("ref") or {}
+        if item.get("kind") == KIND and (ref.get("ns"), ref.get("name")) == (ns, name) and item.get("status") not in OPS.TERMINAL:
+            return item["id"]
+    return ""
+
+
+def _run(request):
+    """Refused (409) whenever the review it carries no longer holds, so the
+    browser shows the plan again. Order as node power: confirm, running job,
+    re-plan, blockers, token, then act."""
+    b = request.body
+    ns, name, node = str(b.get("ns") or ""), str(b.get("name") or ""), str(b.get("node") or "")
+    if not name or b.get("confirm") != name:
+        raise ValueError("confirmation must repeat the StatefulSet name")
+    running = _active(ns, name)
+    if running:
+        return ROUTER.Reply(409, {"error": "A restart for this StatefulSet is still running; follow it instead of sending another",
+                                  "operation": running})
+    try:
+        now = clock()
+        reviewed = plan(read_state(ns, name, node), now)
+    except Unread as e:
+        return ROUTER.Reply(409, {"error": str(e), "plan": {"ready": False, "blockers": [str(e)]}})
+    if not reviewed["ready"]:
+        return ROUTER.Reply(409, {"error": "; ".join(reviewed["blockers"]), "plan": reviewed})
+    if b.get("review_token") != reviewed["review_token"]:
+        return ROUTER.Reply(409, {"error": "what the host holds changed; review the plan again", "plan": reviewed})
+    deleted, replaced, failed = [], [], []
+    for pod in reviewed["pods"]:
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod['name'])}",
+                  {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0, "preconditions": {"uid": pod["uid"]}})
+            deleted.append(pod)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 409):
+                replaced.append(pod)  # gone or already replaced: never retried
+            else:
+                failed.append(f"{pod['name']} ({e})")
+        except Exception as e:
+            failed.append(f"{pod['name']} ({e})")
+    if failed and not deleted and not replaced:
+        raise ValueError("Kubernetes did not delete " + ", ".join(failed))
+    stage = "deleted" if deleted else "already replaced"
+    ref = {"ns": ns, "name": name, "node": reviewed["node"], "started": now, "started_by": request.user,
+           "stage": stage, "pods": [{"name": p["name"], "uid": p["uid"]} for p in reviewed["pods"] if p not in failed]}
+    message = "Deleted " + ", ".join(p["name"] for p in deleted) + "; waiting for a replacement on another host"
+    if replaced:
+        message += ("; " if deleted else "") + ", ".join(p["name"] for p in replaced) + " already replaced"
+    if failed:
+        message += "; could not delete " + ", ".join(failed)
+    op = OPS.start(KIND, f"Start {name} on another host", {"kind": "StatefulSet", "name": name, "namespace": ns},
+                   "/nodes", ref, message=message)
+    return ROUTER.Reply(202, op)
+
+
+def _pod_stage(pod, uid, node):
+    """How far one replacement has got: (rank into STAGES, text)."""
+    meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}
+    where = spec.get("nodeName")
+    if meta.get("uid") == uid or not where or where == node:
+        return 0, STAGES[0]
+    if _ready(pod)[0]:
+        return 3, "ready"
+    status = pod.get("status") or {}
+    started = status.get("containerStatuses") or any(
+        c.get("type") == "Initialized" and c.get("status") == "True" for c in status.get("conditions") or [])
+    return (2, "attaching volume") if started else (1, f"scheduled on {where}")
+
+
+def status(item):
+    """(status, progress, message): succeeded when every reviewed pod has a
+    new Ready pod on another host; failed after LIMIT seconds."""
+    ref = item["ref"]
+    waited = clock() - float(ref.get("started") or 0)
+    rows, unread = [], None
+    for p in ref.get("pods") or []:
+        try:
+            pod = kget(f"/api/v1/namespaces/{_q(ref['ns'])}/pods/{_q(p['name'])}")
+            rows.append((p["name"],) + _pod_stage(pod, p["uid"], ref["node"]))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                rows.append((p["name"], 0, STAGES[0]))  # not recreated yet
+            else:
+                unread = e
+        except Exception as e:
+            unread = e
+    if rows and not unread:
+        low = min(rows, key=lambda r: r[1])
+        ref["stage"] = low[2]
+        if low[1] == 3:
+            return "succeeded", 100, "Ready on another host: " + ", ".join(r[0] for r in rows)
+    if waited > LIMIT:
+        return "failed", 100, (f"No replacement was Ready on another host within 15 minutes; "
+                               f"the last stage reached was {ref.get('stage') or STAGES[0]}")
+    if unread:
+        return "running", item.get("progress") or 10, f"Waiting to read the pods again ({unread}); last stage: {ref.get('stage')}"
+    rank = min(r[1] for r in rows) if rows else 0
+    names = ", ".join(r[0] for r in rows if r[1] == rank)
+    return "running", (10, 40, 70)[rank], f"{names}: {ref['stage']}"
+
+
+# The job's own, registered at import like homestead_promote's. Nothing to
+# cancel: the delete is done when the job starts.
+OPS.RESOLVERS[KIND] = status
+
+ROUTES = {
+    ("GET", "/api/statefulset/restart-elsewhere/plan"): ("viewer", _plan),
+    ("POST", "/api/statefulset/restart-elsewhere"): ("admin", _run),
+}

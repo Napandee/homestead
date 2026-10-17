@@ -1,10 +1,15 @@
 import copy
 import sys
+import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_operations as OPS
+import homestead_route_policy as POLICY
+import homestead_routes as ROUTER
 import homestead_set_restart as sr
 
 LH = sr.LH
@@ -333,6 +338,178 @@ class SetRestartPlanTests(unittest.TestCase):
         p = sr.plan(st, NOW)
         self.assertTrue(p["ready"])
         self.assertEqual({"ns": "lab", "name": "web", "wait_mode": True}, p["set"])
+
+
+def req(method="POST", user="alice", **body):
+    q = {k: [v] for k, v in body.items()}
+    return ROUTER.Request(method, "/x", q if method == "GET" else {}, body if method != "GET" else {}, user, "admin", "")
+
+
+class SetRestartRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.objects, self.sent, self.err = {}, [], None
+        OPS.bind(lambda path: self.objects[path], self.tmp.name, lambda ns, name: None)
+        self.state = good_state()
+        self.now = NOW
+        self.enterContext(mock.patch.object(sr, "read_state", lambda ns, name, node: copy.deepcopy(self.state)))
+        self.enterContext(mock.patch.object(sr, "clock", lambda: self.now))
+        sr.bind(lambda path: self.objects[path], self.send)
+        self.token = sr.plan(good_state(), NOW)["review_token"]
+
+    def send(self, method, path, body=None, *a, **k):
+        self.sent.append((method, path, body))
+        if self.err:
+            raise urllib.error.HTTPError(path, self.err, "x", {}, None)
+        return {}
+
+    def run_req(self, **over):
+        b = {"ns": "lab", "name": "web", "node": "host-1", "confirm": "web", "review_token": self.token}
+        b.update(over)
+        return sr._run(req(user=b.pop("user", "alice"), **b))
+
+    def test_run_needs_typed_name(self):
+        with self.assertRaises(ValueError):
+            self.run_req(confirm="wrong")
+        self.assertEqual([], self.sent)
+
+    def test_plan_route_reports_unread_as_blocker(self):
+        with mock.patch.object(sr, "read_state", side_effect=sr.Unread("no lease")):
+            p = sr._plan(req("GET", ns="lab", name="web", node="host-1"))
+        self.assertFalse(p["ready"])
+        self.assertEqual(["no lease"], p["blockers"])
+        self.assertTrue(sr._plan(req("GET", ns="lab", name="web", node="host-1"))["ready"])
+
+    def test_run_refuses_while_one_runs_for_same_set(self):
+        first = self.run_req()
+        self.assertEqual(202, first.code)
+        again = self.run_req()
+        self.assertEqual(409, again.code)
+        self.assertEqual(first.body["id"], again.body["operation"])
+
+    def test_run_replans_and_refuses_blockers(self):
+        self.state["node"]["ready"] = True
+        r = self.run_req()
+        self.assertEqual(409, r.code)
+        self.assertIn("plan", r.body)
+        self.assertEqual([], self.sent)
+
+    def test_run_refuses_unread(self):
+        with mock.patch.object(sr, "read_state", side_effect=sr.Unread("no lease")):
+            r = self.run_req()
+        self.assertEqual(409, r.code)
+        self.assertEqual(["no lease"], r.body["plan"]["blockers"])
+
+    def test_run_refuses_changed_review(self):
+        r = self.run_req(review_token="stale")
+        self.assertEqual(409, r.code)
+        self.assertIn("review the plan again", r.body["error"])
+        self.assertIn("plan", r.body)
+        self.assertEqual([], self.sent)
+
+    def test_run_deletes_each_reviewed_pod_with_uid_precondition(self):
+        self.state["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": []})
+        self.token = sr.plan(self.state, NOW)["review_token"]
+        r = self.run_req()
+        self.assertEqual(202, r.code)
+        body = lambda uid: {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0, "preconditions": {"uid": uid}}
+        self.assertEqual([("DELETE", "/api/v1/namespaces/lab/pods/web-0", body("u0")),
+                          ("DELETE", "/api/v1/namespaces/lab/pods/web-1", body("u1"))], self.sent)
+
+    def test_run_records_who(self):
+        for user in ("alice", "api-key:ops"):
+            self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory()
+            OPS.bind(lambda path: self.objects[path], self.tmp.name, lambda ns, name: None)
+            r = self.run_req(user=user)
+            self.assertEqual(user, r.body["set_restart"]["started_by"])
+            self.assertEqual({"node": "host-1", "set": "web", "started_by": user, "stage": "deleted"}, r.body["set_restart"])
+            self.assertNotIn("ref", r.body)
+
+    def test_host_back_at_send_time_refuses(self):
+        self.state["node"].update(ready=True, status="True", since=None)
+        r = self.run_req()
+        self.assertEqual(409, r.code)
+        self.assertEqual([], self.sent)
+
+    def test_pod_already_replaced(self):
+        for code in (404, 409):
+            self.sent.clear(); self.err = code
+            self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory()
+            OPS.bind(lambda path: self.objects[path], self.tmp.name, lambda ns, name: None)
+            r = self.run_req()
+            self.assertEqual(202, r.code)
+            self.assertEqual(1, len(self.sent), "no retry")
+            self.assertEqual("already replaced", r.body["set_restart"]["stage"])
+
+    def test_other_delete_error_with_nothing_deleted_raises(self):
+        self.err = 500
+        with self.assertRaises(ValueError):
+            self.run_req()
+
+    def item(self):
+        r = self.run_req()
+        return next(i for i in OPS._read() if i["id"] == r.body["id"])
+
+    def new_pod(self, node, ready, uid="u9"):
+        conds = [{"type": "Ready", "status": "True" if ready else "False"}]
+        return {"metadata": {"name": "web-0", "uid": uid}, "spec": {"nodeName": node}, "status": {"conditions": conds}}
+
+    def test_status_follows_stages(self):
+        item = self.item()
+        path = "/api/v1/namespaces/lab/pods/web-0"
+        self.now = NOW + 30
+        self.assertEqual("running", sr.status(item)[0])  # no replacement yet: the read is a KeyError here
+        self.objects[path] = self.new_pod("", False)
+        self.assertEqual("running", sr.status(item)[0])
+        self.assertEqual("deleted", item["ref"]["stage"])
+        self.objects[path] = self.new_pod("host-2", False)
+        self.assertEqual("running", sr.status(item)[0])
+        self.assertEqual("scheduled on host-2", item["ref"]["stage"])
+        self.objects[path]["status"]["containerStatuses"] = [{"state": {"waiting": {"reason": "ContainerCreating"}}}]
+        sr.status(item)
+        self.assertEqual("attaching volume", item["ref"]["stage"])
+
+    def test_status_ready_elsewhere_succeeds(self):
+        item = self.item()
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-2", True)
+        self.assertEqual("succeeded", sr.status(item)[0])
+        self.assertEqual("ready", item["ref"]["stage"])
+
+    def test_status_old_pod_or_same_host_does_not_succeed(self):
+        item = self.item()
+        path = "/api/v1/namespaces/lab/pods/web-0"
+        self.objects[path] = self.new_pod("host-2", True, uid="u0")  # the pod that was deleted, still terminating
+        self.assertEqual("running", sr.status(item)[0])
+        self.objects[path] = self.new_pod("host-1", True)
+        self.assertEqual("running", sr.status(item)[0])
+
+    def test_status_read_error_keeps_running_until_limit(self):
+        item = self.item()  # no pod object: kget raises KeyError
+        self.now = NOW + 60
+        self.assertEqual("running", sr.status(item)[0])
+        self.now = NOW + 901
+        self.assertEqual("failed", sr.status(item)[0])
+
+    def test_status_times_out_after_900s(self):
+        item = self.item()
+        self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-2", False)
+        self.now = NOW + 899
+        self.assertEqual("running", sr.status(item)[0])
+        self.now = NOW + 901
+        status, _, message = sr.status(item)
+        self.assertEqual("failed", status)
+        self.assertIn("within 15 minutes", message)
+        self.assertIn("Ready on another host", message)
+        self.assertIn("scheduled on host-2", message)
+
+    def test_routes_roles(self):
+        for key, role in ((("GET", "/api/statefulset/restart-elsewhere/plan"), "viewer"),
+                          (("POST", "/api/statefulset/restart-elsewhere"), "admin")):
+            self.assertEqual(role, sr.ROUTES[key][0])
+            self.assertEqual(role, POLICY.role(key[1], key[0]))
+        self.assertIn("homestead_set_restart", ROUTER.MODULES)
+        self.assertIs(sr.status, OPS.RESOLVERS[sr.KIND])
 
 
 if __name__ == "__main__":
