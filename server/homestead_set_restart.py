@@ -196,8 +196,13 @@ def _read_state(ns, name, node):
 
     def one_engine(e):
         s, vol = _lh_spec(e, "engine")
-        if vol in reviewed and s.get("nodeID"):  # no nodeID: detached, so not running on the down host
-            engines.setdefault(vol, []).append({"node": s["nodeID"], "state": (e.get("status") or {}).get("currentState")})
+        if vol not in reviewed:
+            return
+        state = (e.get("status") or {}).get("currentState")
+        # Without a nodeID only a stopped engine is known to be detached; any
+        # other is kept with no host, which blocks its volume.
+        if s.get("nodeID") or state != "stopped":
+            engines.setdefault(vol, []).append({"node": s.get("nodeID") or None, "state": state})
 
     def one_volume(v):
         vol = _need(v["metadata"]["name"])
@@ -289,6 +294,9 @@ def plan(state, now):
             if "ReadWriteMany" in c["access"]:
                 blockers.append(f"{pvc}: it is ReadWriteMany (shared), which this action does not handle.")
             for e in state["engines"].get(vol) or []:
+                if e["node"] is None:
+                    blockers.append(f"{pvc}: Longhorn can't say where the engine of {vol} runs (state: {e['state']}).")
+                    break
                 if e["node"] == node and e["state"] != "stopped":
                     blockers.append(f"{pvc}: Longhorn can't confirm the engine of {vol} on {node} has stopped (state: {e['state']}).")
                     break

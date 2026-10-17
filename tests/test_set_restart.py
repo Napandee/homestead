@@ -141,6 +141,20 @@ class SetRestartReadTests(unittest.TestCase):
             {"metadata": {"name": "pv-a-e-2"}, "spec": {"volumeName": "pv-a"}, "status": {"currentState": "stopped"}}]
         self.assertEqual({"pv-a": [{"node": "host-1", "state": "running"}]}, sr.read_state("lab", "web", "host-1")["engines"])
 
+    def test_reviewed_engine_without_node_id_not_stopped_blocks(self):
+        # Without a host and not stopped, Longhorn can't say it isn't running on the down host.
+        for state in ("running", "unknown", None):
+            with self.subTest(state=state):
+                self.setUp()
+                self.objects[f"{LH}/engines"]["items"][0]["status"]["currentState"] = "stopped"
+                status = {} if state is None else {"currentState": state}
+                self.objects[f"{LH}/engines"]["items"].append(
+                    {"metadata": {"name": "pv-a-e-1"}, "spec": {"volumeName": "pv-a", "nodeID": ""}, "status": status})
+                st = sr.read_state("lab", "web", "host-1")
+                self.assertIn({"node": None, "state": state}, st["engines"]["pv-a"])
+                self.assertIn(f"data-web-0: Longhorn can't say where the engine of pv-a runs (state: {state}).",
+                              sr.plan(st, NOW)["blockers"])
+
     def test_other_volumes_are_ignored_even_when_malformed(self):
         # Detached volumes elsewhere in the cluster (empty nodeID, odd status)
         # must not block a set that doesn't use them.
@@ -411,6 +425,10 @@ class SetRestartPlanTests(unittest.TestCase):
         st = good_state(); del st["lh_nodes"]["host-1"]
         self.refused(st, "Longhorn")
         self.assertTrue(sr.plan(good_state(), NOW)["ready"])
+
+    def test_engine_without_host_blocks_unless_stopped(self):
+        st = good_state(); st["engines"]["pv-a"].append({"node": None, "state": "running"})
+        self.refused(st, "data-web-0: Longhorn can't say where the engine of pv-a runs (state: running)")
 
     def test_engine_must_be_stopped(self):
         for state in ("running", "unknown", "error", None, "starting"):
