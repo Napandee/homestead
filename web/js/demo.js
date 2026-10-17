@@ -1655,8 +1655,13 @@ ssh_pwauth: true
       return { operation: op, steps: [], background: true };
     },
     // Starting a StatefulSet's stuck pod elsewhere (#441): a ready review, then a job that walks the real stages.
+    // A blocked review: ?set-restart=blocked, or window.__demoSetRestartBlocked (the dialog audit).
     "/api/statefulset/restart-elsewhere/plan": url => {
       const q = url.searchParams, since = Math.floor(Date.now() / 1000) - 1800;
+      if (window.__demoSetRestartBlocked || new URLSearchParams(location.search).get("set-restart") === "blocked")
+        return { ready: false, blockers: [
+          `data-${q.get("name")}-0: its volume pvc-demo-set-data has no healthy copy on another host.`,
+          `${q.get("name")}-0: volume logs is hostPath, which Homestead can't check`] };
       return { ready: true, blockers: [], node: q.get("node"), down_since: new Date((since - 60) * 1000).toISOString(), down_seconds: 1860,
         last_heard: new Date(since * 1000).toISOString(), set: { ns: q.get("ns"), name: q.get("name"), wait_mode: true },
         pods: [{ name: `${q.get("name")}-0`, uid: "demo-pod-uid", terminating: false }],
@@ -1664,11 +1669,12 @@ ssh_pwauth: true
     },
     "/api/statefulset/restart-elsewhere": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      const op = { id: "demo-set-restart-" + Date.now(), kind: "statefulset-restart", title: `Start ${body.name} elsewhere`, status: "running",
-        progress: 10, message: `${body.name}-0: deleted`, started_at: new Date().toISOString(), finished_at: "",
+      const note = `; Kubernetes can take about 6 minutes to release the volume from ${body.node}`;
+      const op = { id: "demo-set-restart-" + Date.now(), kind: "set-restart", title: `Start ${body.name} on another host`, status: "running",
+        progress: 10, message: `${body.name}-0: deleted${note}`, started_at: new Date().toISOString(), finished_at: "",
         href: "/nodes", resource: { kind: "StatefulSet", name: body.name, namespace: body.ns } };
       (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
-      [[40, "scheduled on harvester-node1"], [70, "attaching volume"]].forEach(([progress, message], i) =>
+      [[40, "scheduled on harvester-node1"], [70, `attaching volume${note}`]].forEach(([progress, message], i) =>
         setTimeout(() => Object.assign(op, { progress, message: `${body.name}-0: ${message}` }), (i + 1) * 2500));
       setTimeout(() => Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(),
         message: `Ready on another host: ${body.name}-0 on harvester-node1` }), 7500);

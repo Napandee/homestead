@@ -154,3 +154,32 @@ test("a 502 names the pods that could not be deleted and offers Review again", a
   assert.match(message, /postgres-0 \(forbidden\)/);
   assert.equal(t.fields["#sr_run"].textContent, "Review again");
 });
+
+// The demo's own routes (web/js/demo.js) for this action.
+async function demoApi(search = "", flags = {}) {
+  const ctx = { URL, URLSearchParams, Response, Date, console, setTimeout: () => 0,
+    location: { search: `?demo=1&demo-scenario=critical${search}`, origin: "https://demo.example.com" },
+    document: { body: null, addEventListener() {} }, ...flags,
+    fetch: async () => { throw new Error("demo must never reach a real cluster"); } };
+  ctx.window = ctx; vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/demo.js", "utf8"), ctx);
+  return async (path, body) => (await ctx.fetch(path, body ? { method: "POST", body: JSON.stringify(body) } : undefined)).json();
+}
+
+test("the demo job matches the server's kind and title, with the attach note", async () => {
+  const api = await demoApi();
+  const op = await api("/api/statefulset/restart-elsewhere", { ns: "data", name: "postgres", node: "harvester-node3", confirm: "postgres", review_token: "demo-set-restart" });
+  assert.equal(op.kind, "set-restart");
+  assert.equal(op.title, "Start postgres on another host");
+  assert.match(op.message, /postgres-0: deleted; Kubernetes can take about 6 minutes to release the volume from harvester-node3/);
+});
+
+test("the demo can show a blocked review, by URL or by flag", async () => {
+  for (const api of [await demoApi("&set-restart=blocked"), await demoApi("", { __demoSetRestartBlocked: true })]) {
+    const plan = await api("/api/statefulset/restart-elsewhere/plan?ns=data&name=postgres&node=harvester-node3");
+    assert.equal(plan.ready, false);
+    assert.ok(plan.blockers.length >= 1);
+    assert.equal(plan.review_token, undefined);
+  }
+  assert.equal((await (await demoApi())("/api/statefulset/restart-elsewhere/plan?ns=data&name=postgres&node=harvester-node3")).ready, true);
+});

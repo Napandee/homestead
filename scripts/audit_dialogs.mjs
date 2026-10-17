@@ -221,6 +221,7 @@ const DIALOGS = [
   ["history-undo", "workloads", "historyUndo('lab','paperless','c2')"],
   ["node-if-down", "nodes", "nodeIfDown('harvester-node2')"],
   ["set-restart-review", "nodes", "STATE.platform.harvester=false", "setRestartReview('data','postgres','harvester-node3')"],
+  ["set-restart-blocked", "nodes", "STATE.platform.harvester=false;window.__demoSetRestartBlocked=true", "setRestartReview('data','postgres','harvester-node3')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
@@ -288,7 +289,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; STATE.operationsStale = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; STATE.operationsStale = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);
