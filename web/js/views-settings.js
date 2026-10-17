@@ -829,7 +829,7 @@ async function capacityForecastLoad() {
     const [tone, word] = capacityVerdict(f.verdict);
     return `<tr><td><b class="mono">${esc(f.node)}</b> <span class="pill slim ${tone}">${esc(word)}</span></td>
       <td class="small">${esc(f.sentence)}</td>
-      <td class="right">${actionBar([{ label: "Details", run: `nodeIfDown(${jsq(f.node)})`, ariaLabel: `What happens if ${f.node} fails` }])}</td></tr>`;
+      <td data-actions>${actionBar([{ label: "Details", run: `nodeIfDown(${jsq(f.node)})`, ariaLabel: `What happens if ${f.node} fails` }])}</td></tr>`;
   });
   const notes = [
     all.unreserved ? `${all.unreserved} app${all.unreserved === 1 ? " reserves" : "s reserve"} nothing and fit${all.unreserved === 1 ? "s" : ""} anywhere on paper, so the figures are a floor.${can("operator")

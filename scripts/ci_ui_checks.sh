@@ -37,6 +37,7 @@ case "${1:-}" in
     PORTAL_COLUMN_SCREENSHOTS=release-assets/pages/portal-columns node tests/integration/portal-widget-columns.mjs
     RESTORE_LINES_SCREENSHOTS=release-assets/pages/restore-lines node tests/integration/restore-tests-lines.mjs
     IPAM_FIT_SCREENSHOTS=release-assets/pages/ipam-fit node tests/integration/ipam-table-fits.mjs
+    ROW_ACTIONS_SCREENSHOTS=release-assets/pages/row-actions node tests/integration/row-actions-edge.mjs
     UI_TABLE_SCREENSHOTS=release-assets/pages/ui-table node tests/integration/ui-table-phone.mjs
     IPAM_FIGURES_SCREENSHOTS=release-assets/pages/ipam-figures node tests/integration/ipam-figures.mjs
     ;;

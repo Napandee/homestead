@@ -445,7 +445,7 @@ window.apiKeysPaint = async () => {
       <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ' <span class="tag" title="A host\'s address inside the cluster, not the client\'s">host</span>' : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
-      <td>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
+      <td data-actions>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
         { label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 2 })}</td></tr>`).join("");
   card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
         <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}

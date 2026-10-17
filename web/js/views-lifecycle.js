@@ -1412,7 +1412,7 @@ function vmImagesSection(vm, nodeNames) {
           <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag dim" data-tip="Not cached on this host">${esc(n.replace("harvester-", ""))}</span>`).join("")}</td>
           <td><div class="row" style="gap:5px">${used}</div></td>
-          <td>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
+          <td data-actions>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}
     </tbody></table></div></div>`;
 }
@@ -1498,7 +1498,7 @@ async function viewSchedules() {
         <td class="small dim">${fmtWhen(j.last)}</td>
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill low">running</span>' : '<span class="pill ok">active</span>'}</td>
-        <td>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
+        <td data-actions>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
           { label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
           { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
@@ -1586,7 +1586,7 @@ async function viewImport() {
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "low"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${fmtWhen(j.start)}</td>
-        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
+        <td data-actions>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
           { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || defaultNamespace())})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
