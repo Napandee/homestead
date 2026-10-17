@@ -122,6 +122,12 @@ class SetRestartReadTests(unittest.TestCase):
     def test_replica_without_spec_is_unread(self):
         self.unreadable("replicas", {"metadata": {"name": "r"}})
 
+    def test_unscheduled_replica_is_skipped(self):
+        self.objects[f"{LH}/replicas"]["items"].append({"spec": {"volumeName": "pv-a", "nodeID": "", "healthyAt": ""}})
+        self.objects[f"{LH}/replicas"]["items"].append({"spec": {"volumeName": "pv-a"}})
+        reps = sr.read_state("lab", "web", "host-1")["replicas"]["pv-a"]
+        self.assertEqual(["host-1", "host-2"], [r["node"] for r in reps])
+
     def test_engine_without_volume_name_is_unread(self):
         self.unreadable("engines", {"spec": {"nodeID": "host-1"}, "status": {"currentState": "running"}})
 
@@ -253,6 +259,12 @@ class SetRestartPlanTests(unittest.TestCase):
                          [(x["name"], x["uid"], x["terminating"]) for x in p["pods"]])
         self.assertEqual([{"pvc": "data-web-0", "volume": "pv-a", "copy_on": "host-2"},
                           {"pvc": "data-web-1", "volume": "pv-b", "copy_on": "host-3"}], p["volumes"])
+
+    def test_unscheduled_replica_is_skipped_not_a_copy(self):
+        st = good_state()
+        st["replicas"]["pv-a"] = [{"node": "host-1", "failed": False, "healthy_at": True}]
+        p = self.refused(st, "no healthy copy")
+        self.assertIsNone(p["volumes"][0]["copy_on"])
 
     def test_second_pods_bad_volume_blocks_whole_plan(self):
         st = good_state()

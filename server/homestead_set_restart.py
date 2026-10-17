@@ -123,8 +123,11 @@ def _read_state(ns, name, node):
     replicas, engines, robustness = {}, {}, {}
     for r in _read(f"{LH}/replicas", "the Longhorn replicas").get("items", []):
         s = r["spec"]  # a missing field raises, which read_state turns into Unread
-        replicas.setdefault(_need(s["volumeName"]), []).append(
-            {"node": _need(s["nodeID"]), "failed": bool(s.get("failedAt")), "healthy_at": bool(s.get("healthyAt"))})
+        vol = _need(s["volumeName"])
+        if not s.get("nodeID"):
+            continue  # a replacement Longhorn has not placed yet: never a copy, never on the host
+        replicas.setdefault(vol, []).append(
+            {"node": s["nodeID"], "failed": bool(s.get("failedAt")), "healthy_at": bool(s.get("healthyAt"))})
     for e in _read(f"{LH}/engines", "the Longhorn engines").get("items", []):
         s = e["spec"]
         engines.setdefault(_need(s["volumeName"]), []).append(
