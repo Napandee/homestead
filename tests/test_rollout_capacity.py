@@ -62,7 +62,7 @@ class RolloutCapacityTests(unittest.TestCase):
 
     def plan(self):
         with mock.patch.object(server, "ksend") as send:
-            result = server.deploy_capacity_plan(self.cfg)
+            result = server.DEPLOY_ROUTES.deploy_capacity_plan(self.cfg)
         send.assert_not_called()
         return result
 
@@ -242,7 +242,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.current["metadata"]["resourceVersion"] = "11"
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
-                server.reviewed_deploy(cfg)
+                server.DEPLOY_ROUTES.reviewed_deploy(cfg)
         deploy.assert_not_called()
 
     def test_replaced_deployment_with_same_name_invalidates_review(self):
@@ -250,19 +250,19 @@ class RolloutCapacityTests(unittest.TestCase):
         self.current["metadata"]["uid"] = "replacement"
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
-                server.reviewed_deploy(cfg)
+                server.DEPLOY_ROUTES.reviewed_deploy(cfg)
         deploy.assert_not_called()
 
     def test_ack_cannot_override_rolling_deadlock(self):
         self.rolling()
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
-                server.reviewed_deploy(self.reviewed())
+                server.DEPLOY_ROUTES.reviewed_deploy(self.reviewed())
         deploy.assert_not_called()
 
     def test_success_passes_exact_fresh_controller_to_mutation(self):
         with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
-            self.assertTrue(server.reviewed_deploy(self.reviewed())["ok"])
+            self.assertTrue(server.DEPLOY_ROUTES.reviewed_deploy(self.reviewed())["ok"])
         self.assertEqual(self.current, deploy.call_args.kwargs["reviewed_current"])
 
     def test_http_preview_and_join_share_the_same_version_bound_review(self):
@@ -279,7 +279,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.assertEqual("Recreate", body["capacity"]["rollout"]["strategy"])
         cfg = {**self.cfg, "confirm_capacity": True, "capacity_token": body["capacity_token"]}
         with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
-            self.assertTrue(server.reviewed_deploy(cfg)["ok"])
+            self.assertTrue(server.DEPLOY_ROUTES.reviewed_deploy(cfg)["ok"])
         deploy.assert_called_once()
 
     def test_full_pod_preview_preserves_the_current_controller(self):

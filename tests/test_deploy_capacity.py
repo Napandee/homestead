@@ -47,7 +47,7 @@ class DeployCapacityTests(unittest.TestCase):
                                 "access_mode": "ReadWriteOnce", "storage_class": "test-class", "size_gb": 10, **kwargs}]
 
     def plan(self):
-        result = server.deploy_capacity_plan(self.cfg)
+        result = server.DEPLOY_ROUTES.deploy_capacity_plan(self.cfg)
         self.send.assert_not_called()
         return result
 
@@ -145,7 +145,7 @@ class DeployCapacityTests(unittest.TestCase):
         cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
-                server.reviewed_deploy(cfg)
+                server.DEPLOY_ROUTES.reviewed_deploy(cfg)
         deploy.assert_not_called()
         self.send.assert_not_called()
 
@@ -154,11 +154,11 @@ class DeployCapacityTests(unittest.TestCase):
         with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
             for cfg in (self.cfg, {**self.cfg, "confirm_capacity": True}):
                 with self.assertRaises(review.Rejected):
-                    server.reviewed_deploy(cfg)
+                    server.DEPLOY_ROUTES.reviewed_deploy(cfg)
             deploy.assert_not_called()
             cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
             cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
-            self.assertTrue(server.reviewed_deploy(cfg)["ok"])
+            self.assertTrue(server.DEPLOY_ROUTES.reviewed_deploy(cfg)["ok"])
 
     def test_fresh_recheck_blocks_previously_reviewed_capacity(self):
         cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
@@ -167,7 +167,7 @@ class DeployCapacityTests(unittest.TestCase):
             "spec": {"nodeName": "a", "containers": [{"resources": {"requests": {"memory": "8Gi"}}}]}}]
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
-                server.reviewed_deploy(cfg)
+                server.DEPLOY_ROUTES.reviewed_deploy(cfg)
         deploy.assert_not_called()
 
     def test_invalid_count_rejected_before_any_writes(self):
@@ -175,7 +175,7 @@ class DeployCapacityTests(unittest.TestCase):
             self.cfg["replicas"] = count
             with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
                 with self.assertRaises(ValueError):
-                    server.reviewed_deploy(self.cfg)
+                    server.DEPLOY_ROUTES.reviewed_deploy(self.cfg)
             deploy.assert_not_called()
 
     def test_shared_pod_requires_existing_workload_selection(self):
@@ -212,7 +212,7 @@ class DeployCapacityTests(unittest.TestCase):
         self.assertTrue(body["capacity"]["requires_confirmation"])
         cfg = {**self.cfg, "capacity_token": body["capacity_token"], "confirm_capacity": True}
         with mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True}) as deploy:
-            self.assertTrue(server.reviewed_deploy(cfg)["ok"])
+            self.assertTrue(server.DEPLOY_ROUTES.reviewed_deploy(cfg)["ok"])
         deploy.assert_called_once()
 
     def legacy_install(self, body):

@@ -118,11 +118,11 @@ class ContainerSetTests(unittest.TestCase):
         self.assertEqual(2, dep["spec"]["replicas"])
         self.assertEqual(before, config)
         self.assertEqual({"app": "media"}, svc["spec"]["selector"])
-        safe = server.redact_deployment_preview(dep, config)
+        safe = server.DEPLOY_ROUTES.redact_deployment_preview(dep, config)
         self.assertEqual("••••••", safe["spec"]["template"]["spec"]["containers"][1]["env"][0]["value"])
 
     def test_capacity_manifest_plans_additional_claims_before_provisioning(self):
-        _, dep, claims, _ = server.capacity_manifest(self.config())
+        _, dep, claims, _ = server.DEPLOY_ROUTES.capacity_manifest(self.config())
         self.assertEqual(3, claims["metrics-data"]["size_gb"])
         self.assertEqual(2, len(dep["spec"]["template"]["spec"]["containers"]))
         self.assertTrue(dep["spec"]["template"]["spec"]["initContainers"])
@@ -142,12 +142,12 @@ class ContainerSetTests(unittest.TestCase):
     def test_batch_of_additional_containers_cannot_silently_join_existing_workload(self):
         config = self.config(); config["target_mode"] = "existing"
         with self.assertRaisesRegex(ValueError, "editor"):
-            server.additional_container_configs(config)
+            server.DEPLOY_ROUTES.additional_container_configs(config)
 
     def test_network_preparation_checks_additional_listeners_but_keeps_primary_ports(self):
         config = self.config()
         with mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: dict(cfg, lb_ip="192.0.2.1")) as network:
-            prepared = server.prepare_deploy_network(config)
+            prepared = server.DEPLOY_ROUTES.prepare_deploy_network(config)
         self.assertEqual([8080, 9090], [p["container"] for p in network.call_args.args[0]["ports"]])
         self.assertEqual(config["ports"], prepared["ports"])
         self.assertEqual("192.0.2.1", prepared["lb_ip"])
