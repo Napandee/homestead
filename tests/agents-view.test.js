@@ -17,7 +17,7 @@ function setup(requests) {
   const painted = [], toasts = [], modals = [], posts = [], fields = {};
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const c = { console, esc, jsq: s => esc(JSON.stringify(String(s))), jsArg: s => JSON.stringify(String(s ?? "")), icon: name => `<i data-icon="${name}"></i>`, document: { getElementById: () => null },
-    STATE: { data: {} }, location: { search: "" }, URLSearchParams, JSON, Date, Math,
+    STATE: { data: {} }, location: { search: "" }, URLSearchParams, JSON, Date, Math, setTimeout: () => 0, clearTimeout() {},
     HomesteadRouter: { urlFor: v => "/" + v }, agoText: at => "ago " + at,
     paint: html => painted.push(html), toast: (m, k) => toasts.push([m, k]), modal: (t, b) => modals.push([t, b]), closeModal() {},
     $: s => fields[s] || (fields[s] = { disabled: false, checked: false }),
@@ -70,12 +70,14 @@ test("approving asks first, and runs only after the acknowledgement", async () =
   assert.match(t.modals[0][1], /onclick="agentApproveRun\(&quot;p1&quot;,this\)"/, "the id is escaped once, so the click runs");
   await t.c.agentApproveRun("p1", null);
   assert.deepEqual(t.posts[0], ["/api/agents/requests/approve", { id: "p1" }]);
-  assert.deepEqual(t.toasts[0], ["Deleted", "ok"]);
+  // The dialog closes at once and says it is running; the result comes when it has finished.
+  assert.deepEqual(t.toasts[0], ["Running it", "ok"]);
+  assert.deepEqual(t.toasts.at(-1), ["Deleted", "ok"]);
 });
 
 test("an approval the server could not run is reported as a failure", async () => {
   const t = setup([request("p1")]);
   t.c.api = async () => ({ id: "p1", status: "failed", detail: "The cluster changed since you reviewed this" });
   await t.c.agentApproveRun("p1", null);
-  assert.deepEqual(t.toasts[0], ["The cluster changed since you reviewed this", "bad"]);
+  assert.deepEqual(t.toasts.at(-1), ["The cluster changed since you reviewed this", "bad"]);
 });
