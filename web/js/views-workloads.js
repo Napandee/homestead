@@ -798,7 +798,8 @@ function workloadActions(w, update, off, compact = false) {
   return bar([
     update?.available && !updateOwner(update) && item("Update", `imageUpdateReview(${ns},${name})`, "update", {pri:true,need:"operator"}),
     logs,
-    item("Diagnostics", `wlDiagnostics(${ns},${name})`, "search", {tip:"Exit details, previous logs and reviewed commands"}),
+    // Not the magnifying glass: Search logs has that, in the same menu.
+    item("Diagnostics", `wlDiagnostics(${ns},${name})`, "bug", {tip:"Exit details, previous logs and reviewed commands"}),
     off ? item("Start", `wlScale(${ns},${name},1)`, "play", {need:"operator"}) : restart,
     !off && item("Stop", w.self ? `wlStopSelf(${ns},${name})` : `wlScale(${ns},${name},0)`, "stop", {need:"operator"}),
     item("Console", `wlConsole(${ns},${name})`, "console", {need:"operator",tip:"Open an audited shell in a running container"}),
