@@ -136,7 +136,16 @@ def listing(role):
     with _lock:
         rows = _settle(_load(), time.time())
     ordered = sorted(rows.values(), key=lambda r: (r["status"] != "pending", -r["created"]))
-    return {"requests": [{**public(r, full=True), "can_decide": AUTH.allows(role, r["role"])} for r in ordered[:100]],
+    def visible(row):
+        details = public(row, full=True)
+        # A reviewed command may read credentials that ordinary log viewers
+        # cannot access. Only its requesting key and administrators get that
+        # output or the exact arguments, not everyone viewing the requests page.
+        if row.get("tool") == "run_container_command" and not AUTH.allows(role, "admin"):
+            for field in ("summary", "args", "result"):
+                details.pop(field, None)
+        return {**details, "can_decide": AUTH.allows(role, row["role"])}
+    return {"requests": [visible(r) for r in ordered[:100]],
             "pending": sum(1 for r in rows.values() if r["status"] == "pending")}
 
 

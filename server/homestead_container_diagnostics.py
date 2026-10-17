@@ -123,6 +123,8 @@ def report(cfg):
 def command_plan(cfg):
     dep, pods = target(cfg)
     ns, name = cfg["ns"], cfg["name"]
+    if WORKLOADS.homestead_part(ns, name):
+        raise ValueError("commands in Homestead's own workloads are not available here")
     WORKLOADS.guard_self(ns, name)
     WORKLOADS.guard_managed_smb(ns, name)
     if ns in WORKLOADS.SYS_NS:

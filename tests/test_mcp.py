@@ -168,6 +168,11 @@ class CallTests(Base):
             self.assertEqual("Linux", done["result"]["stdout"])
             self.assertEqual(2, sum(c.args[1].endswith("/preview") for c in call.call_args_list),
                              "execution must use the approval replan's token, never reapprove a changed target")
+            viewer = REQUESTS.listing("viewer")["requests"][0]
+            self.assertNotIn("result", viewer)
+            self.assertNotIn("summary", viewer)
+            self.assertNotIn("args", viewer)
+            self.assertEqual("Linux", REQUESTS.listing("admin")["requests"][0]["result"]["stdout"])
 
     def test_a_read_runs_as_the_key_and_is_audited(self):
         with mock.patch.object(TOOLS, "call", return_value=[{"namespace": "lab", "name": "data"}]) as call:

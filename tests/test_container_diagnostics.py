@@ -31,6 +31,7 @@ class DiagnosticsTests(unittest.TestCase):
                 return copy.deepcopy(self.dep)
             return {"items": copy.deepcopy([self.rs] if "/replicasets?" in path else self.pods)}
         patches = [mock.patch.object(D.WORKLOADS, "kget", get, create=True),
+                   mock.patch.object(D.WORKLOADS, "homestead_part", return_value="", create=True),
                    mock.patch.object(D.WORKLOADS, "guard_self", create=True),
                    mock.patch.object(D.WORKLOADS, "guard_managed_smb", create=True),
                    mock.patch.object(D.WORKLOADS, "DATA_DIR", self.temp.name),
@@ -88,6 +89,12 @@ class DiagnosticsTests(unittest.TestCase):
         self.pod["status"]["containerStatuses"][0]["state"] = {"waiting": {"reason": "CrashLoopBackOff"}}
         with self.assertRaisesRegex(ValueError, "not running"):
             D.execute(cfg, "ada")
+
+    def test_homestead_workloads_are_excluded_even_for_admins(self):
+        for part in ("self", "smb", "nfs", "objectstore"):
+            D.WORKLOADS.homestead_part.return_value = part
+            with self.assertRaisesRegex(ValueError, "Homestead's own workloads"):
+                D.preview(self.cfg, "admin")
 
     def test_explicit_confirmation_and_single_use_are_required(self):
         cfg = self.approved()
