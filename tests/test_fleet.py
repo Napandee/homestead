@@ -401,6 +401,23 @@ class RelayTests(unittest.TestCase):
         self.assertIn(f"Origin: http://127.0.0.1:{port}", received["head"])
         self.assertNotIn("homestead.example", received["head"].split("Host:")[0])
 
+    def test_a_console_through_a_proxy_is_checked_as_a_local_one(self):
+        """Behind a tunnel that rewrites Host, a local console passes on
+        X-Forwarded-Host; a console relayed to a linked cluster must too."""
+        class Handler:
+            command, path = "GET", "/api/vm/console?vm=x&hs_cluster=b"
+            headers = {"Upgrade": "websocket", "Origin": "https://homestead.example.com",
+                       "Host": "127.0.0.1:8080", "X-Forwarded-Host": "homestead.example.com"}
+            wfile = io.BytesIO()
+        # Past the origin check, it only fails to reach the (unanswering) member.
+        with self.assertRaises(self.a.fleet.Unreachable):
+            self.a.fleet.forward(Handler(), "shed", b"")
+
+        class Elsewhere(Handler):
+            headers = {**Handler.headers, "Origin": "https://evil.example"}
+        with self.assertRaises(PermissionError):
+            self.a.fleet.forward(Elsewhere(), "shed", b"")
+
     def test_a_console_from_another_site_is_refused_before_relaying(self):
         class Handler:
             command, path = "GET", "/api/console?pod=x"
