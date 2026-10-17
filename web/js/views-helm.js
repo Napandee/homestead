@@ -63,7 +63,7 @@ function renderHelm() {
         <td data-label="Updated" class="small dim">${r.updated ? esc(fmtAgo(Math.max(0, (Date.now() - Date.parse(r.updated)) / 1000))) : "—"}</td>
         <td data-actions>${helmActions(r)}</td></tr>`).join("")}
       </tbody></table></div></div>`
-      : `<div class="empty">${q ? "Nothing matches that search." : `No Helm releases${hidden ? " outside the platform's own" : ""} yet. <a style="cursor:pointer;text-decoration:underline" onclick="helmInstall()">Install a chart</a> from Artifact Hub.`}</div>`}`);
+      : `<div class="empty">${q ? "Nothing matches that search." : `No Helm releases${HELM_VIEW.show === "mine" && all.some(r => r.system) ? " outside the platform's own" : ""} yet. <a style="cursor:pointer;text-decoration:underline" onclick="helmInstall()">Install a chart</a> from Artifact Hub.`}</div>`}`);
   loadAppIcons(V());
 }
 
