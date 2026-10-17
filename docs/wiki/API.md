@@ -24,7 +24,7 @@ an agent's tool list.
   |---|---|
   | `read` | Read status: the cluster, nodes, containers, VMs, alerts and jobs |
   | `containers:control` | Start, stop and restart containers |
-  | `vms:control` | Start, stop and restart virtual machines |
+  | `vms:control` | Start, stop, restart, force off and reset virtual machines |
   | `logs:read` | Read containers' logs (AI agents, over MCP) |
   | `containers:manage` | Deploy, edit, scale and move containers (AI agents, over MCP) |
   | `vms:manage` | Create, edit and migrate virtual machines (AI agents, over MCP) |
@@ -107,6 +107,8 @@ curl -X POST -H "Authorization: Bearer hsk_…" \
 | POST | `/api/v1/vms/{namespace}/{name}/start` | `vms:control` | Start it |
 | POST | `/api/v1/vms/{namespace}/{name}/stop` | `vms:control` | Shut it down (its power button) |
 | POST | `/api/v1/vms/{namespace}/{name}/restart` | `vms:control` | Restart it |
+| POST | `/api/v1/vms/{namespace}/{name}/force-off` | `vms:control` | Stop it at once (pulling its power), for a guest that does not shut down |
+| POST | `/api/v1/vms/{namespace}/{name}/reset` | `vms:control` | Reset it at once (its reset switch), without waiting for the guest |
 | GET | `/api/v1/jobs/{id}` | `read` | A background job an action started |
 | GET | `/api/v1/openapi.json` | any key | This API's own description |
 

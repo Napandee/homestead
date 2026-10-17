@@ -38,7 +38,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "hsk_<id>_<secret>",
-        "description": "Scopes: `read` - Read status: the cluster, nodes, containers, VMs, volumes, alerts and jobs; `logs:read` - Read containers' logs, which can hold passwords and tokens apps print; `containers:control` - Start, stop and restart containers; `containers:manage` - Deploy, edit, scale and move containers (MCP); deleting one waits for a person; `vms:control` - Start, stop and restart virtual machines; `vms:manage` - Create, edit and migrate virtual machines (MCP); deleting one waits for a person; `storage:manage` - Create and resize volumes, snapshot and back them up (MCP); deleting, reverting or restoring waits for a person; `network:manage` - Expose apps and keep the IP address plan (MCP); `cluster:manage` - Namespaces and raw Kubernetes objects (MCP); every change waits for an admin to approve it"
+        "description": "Scopes: `read` - Read status: the cluster, nodes, containers, VMs, volumes, alerts and jobs; `logs:read` - Read containers' logs, which can hold passwords and tokens apps print; `containers:control` - Start, stop and restart containers; `containers:manage` - Deploy, edit, scale and move containers (MCP); deleting one waits for a person; `vms:control` - Start, stop, restart, force off and reset virtual machines; `vms:manage` - Create, edit and migrate virtual machines (MCP); deleting one waits for a person; `storage:manage` - Create and resize volumes, snapshot and back them up (MCP); deleting, reverting or restoring waits for a person; `network:manage` - Expose apps and keep the IP address plan (MCP); `cluster:manage` - Namespaces and raw Kubernetes objects (MCP); every change waits for an admin to approve it"
       }
     },
     "schemas": {
@@ -1516,6 +1516,222 @@
           }
         ],
         "x-homestead-scope": "read",
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/vms/{namespace}/{name}/force-off": {
+      "post": {
+        "operationId": "vm_force_off",
+        "summary": "Force a virtual machine off",
+        "tags": [
+          "Virtual machines"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No API key, or one that is not valid, has expired, or is used from a network it is not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key does not have the scope this needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such thing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: it cannot be done now (not enough room, Homestead itself, needs a person)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Stops it at once, as pulling its power would, for a guest that does not shut down. Anything it had not written is lost.",
+        "security": [
+          {
+            "apiKey": [
+              "vms:control"
+            ]
+          }
+        ],
+        "x-homestead-scope": "vms:control",
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/vms/{namespace}/{name}/reset": {
+      "post": {
+        "operationId": "vm_reset",
+        "summary": "Reset a virtual machine",
+        "tags": [
+          "Virtual machines"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No API key, or one that is not valid, has expired, or is used from a network it is not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key does not have the scope this needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such thing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: it cannot be done now (not enough room, Homestead itself, needs a person)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many refused keys from this address (a valid key is never refused this way)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Replaces its running instance at once, as a reset switch would, without waiting for the guest. Anything it had not written is lost. Homestead checks there is room first, as the app does. A start that cannot fit is refused (409) with the reasons; one that fits with warnings goes ahead, the warnings in the answer - the key's control scope is the acknowledgement the app asks a person for.",
+        "security": [
+          {
+            "apiKey": [
+              "vms:control"
+            ]
+          }
+        ],
+        "x-homestead-scope": "vms:control",
         "parameters": [
           {
             "name": "namespace",

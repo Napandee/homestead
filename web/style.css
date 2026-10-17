@@ -1706,7 +1706,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-grid[data-tab="placement"]>section[data-tab="placement"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="monitoring"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="health"],
-.settings-grid[data-tab="monitoring"]>section[data-tab="mqtt"],
+.settings-grid[data-tab="connections"]>section[data-tab="mqtt"],
 .settings-grid[data-tab="hardware"]>section[data-tab="hardware"],
 .settings-grid[data-tab="hardware"]>section[data-tab="cluster"],
 .settings-grid[data-tab="hardware"]>section[data-tab="namespaces"],
@@ -1939,6 +1939,11 @@ tr.clickable{cursor:pointer}
 
 /* MQTT settings and the long-term history card. */
 .mqtt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.mqtt-pick-filter{width:100%;margin:4px 0 8px}
+.mqtt-pick-list{max-height:min(46vh,420px);overflow:auto;display:grid;gap:10px;padding-right:4px}
+.mqtt-pick-group{display:grid;gap:2px}
+.mqtt-pick{display:flex;align-items:center;gap:8px;padding:4px 2px;min-width:0;overflow-wrap:anywhere}
+.mqtt-pick[hidden]{display:none}
 .history-card{margin-top:18px}
 .hist-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:12px}
 .hist-chart .spark{width:100%;height:56px;margin-top:4px}

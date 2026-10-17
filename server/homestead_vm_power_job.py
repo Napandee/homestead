@@ -17,8 +17,8 @@ def worker_lock(ident, ops, timeout=10):
 
 def dispatch(body, context, ops, send, before_send):
     action = body["action"]
-    if action not in ("start", "restart", "unpause"):
-        raise ValueError("Only reviewed start, restart and resume use this dispatch journal")
+    if action not in ("start", "restart", "reset", "unpause"):
+        raise ValueError("Only reviewed start, restart, reset and resume use this dispatch journal")
     observations = context["observations"]
     vm, vmi = observations["vm"], observations.get("vmi") or {}
     ref = {"namespace": vm["namespace"], "name": vm["name"], "uid": vm["uid"],
@@ -105,7 +105,7 @@ def status(item, read):
     previous = ref.get("previous_vmi_uid")
     if ref["action"] == "unpause" and imeta["uid"] != previous:
         return "running", 35, "The instance changed; this job cannot confirm resuming the reviewed guest"
-    if ref["action"] in ("start", "restart") and imeta["uid"] == previous:
+    if ref["action"] in ("start", "restart", "reset") and imeta["uid"] == previous:
         return "running", 40, "Waiting for the old VM instance to be replaced"
     conditions = state.get("conditions") or []
     paused = any(row.get("type") == "Paused" and row.get("status") == "True" for row in conditions)

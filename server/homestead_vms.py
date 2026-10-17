@@ -983,7 +983,9 @@ def _halt_crash_retries(ns, name):
 
 
 def power(ns, name, action, *, raw_errors=False):
-    """start, stop, force-stop, restart, pause, unpause."""
+    """start, stop, force-stop, restart, reset, pause, unpause. Reset is a restart
+    that does not wait for the guest: its instance is replaced at once, as a
+    reset switch would."""
     _name(ns, "namespace"), _name(name, "VM name")
     try:
         if action in ("stop", "force-stop"):
@@ -994,17 +996,19 @@ def power(ns, name, action, *, raw_errors=False):
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachineinstances/{name}/{action}", {})
         elif action == "force-stop":
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/stop", {"gracePeriod": 0})
+        elif action == "reset":
+            ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/restart", {"gracePeriodSeconds": 0})
         elif action in ("start", "stop", "restart"):
             # A validation/conflict response is not authority to rewrite the
             # VM's restart policy. Any strategy change needs its own review.
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/{action}", {})
         else:
-            raise ValueError("the action is start, stop, force-stop, restart, pause or unpause")
+            raise ValueError("the action is start, stop, force-stop, restart, reset, pause or unpause")
     except urllib.error.HTTPError as error:
         if raw_errors:
             raise
         raise ValueError(f"KubeVirt refused to {action} {name}: {_refusal(error)}")
-    words = {"start": "starting", "stop": "stopping", "force-stop": "being stopped at once", "restart": "restarting",
+    words = {"start": "starting", "stop": "stopping", "force-stop": "being stopped at once", "restart": "restarting", "reset": "being reset",
              "pause": "paused", "unpause": "resumed"}
     return {"ok": True, "detail": f"{name} is {words[action]}"}
 

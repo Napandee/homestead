@@ -1879,9 +1879,19 @@ ssh_pwauth: true
     "/api/mqtt": (url, init) => init?.method === "POST" ? { ok: true } : {
       enabled: true, host: "192.0.2.177", port: 1883, tls: false, username: "", has_password: false, base: "harvester",
       discovery: "homeassistant", interval: 60, device_name: "Harvester Cluster", model: "Harvester",
+      control: true, controlled: ["vm:vms/win11", "app:lab/frigate"],
       sensors: { cluster: 15, node: 9 },
       status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
     "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
+    "/api/mqtt/control": (url, init) => init?.method === "POST" ? { ok: true } : {
+      control: true, controlled: ["vm:vms/win11", "app:lab/frigate"], base: "harvester", items: [
+        { id: "vm:vms/win11", kind: "vm", ns: "vms", name: "win11", on: true, refused: "" },
+        { id: "vm:vms/gpu-desktop", kind: "vm", ns: "vms", name: "gpu-desktop", on: false, refused: "" },
+        { id: "vm:default/home-assistant-os", kind: "vm", ns: "default", name: "home-assistant-os", on: true, refused: "" },
+        { id: "app:lab/frigate", kind: "app", ns: "lab", name: "frigate", on: true, refused: "" },
+        { id: "app:lab/jellyfin", kind: "app", ns: "lab", name: "jellyfin", on: true, refused: "" },
+        { id: "app:lab/plex", kind: "app", ns: "lab", name: "plex", on: false, refused: "" },
+        { id: "app:lab/homestead", kind: "app", ns: "lab", name: "homestead", on: true, refused: "it is part of Homestead" }] },
     "/api/mqtt/preview": { states: [
       { topic: "harvester/cluster/state", payload: { nodes_ready: 3, nodes_total: 3, nodes_notready: 0, vol_total: 8, vol_degraded: 1, vol_faulted: 0,
         pods_system: 96, pods_workload: 12, pods_sys_bad: 0, pods_wl_bad: 0, vms_running: 1, health: "degraded", wl_summary: "lab:12", cpu_pct: 18.2, mem_pct: 41.7 } },
