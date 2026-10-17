@@ -76,15 +76,15 @@ class HealIconTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = (server.DATA_DIR, ENGINE.DATA_DIR, ENGINE.CLIENT)
-        server.DATA_DIR = ENGINE.DATA_DIR = self.tmp.name
-        server._ICON_HEALED.clear()
-        server._ICON_TRIED.clear()
+        self.saved = (server.NAMES_HELPERS.DATA_DIR, ENGINE.DATA_DIR, ENGINE.CLIENT)
+        server.NAMES_HELPERS.DATA_DIR = ENGINE.DATA_DIR = self.tmp.name
+        server.NAMES_HELPERS._ICON_HEALED.clear()
+        server.NAMES_HELPERS._ICON_TRIED.clear()
 
     def tearDown(self):
-        server.DATA_DIR, ENGINE.DATA_DIR, ENGINE.CLIENT = self.saved
-        server._ICON_HEALED.clear()
-        server._ICON_TRIED.clear()
+        server.NAMES_HELPERS.DATA_DIR, ENGINE.DATA_DIR, ENGINE.CLIENT = self.saved
+        server.NAMES_HELPERS._ICON_HEALED.clear()
+        server.NAMES_HELPERS._ICON_TRIED.clear()
         self.tmp.cleanup()
 
     def test_a_moved_workload_fetches_its_logo_from_where_it_came_from(self):
@@ -93,11 +93,11 @@ class HealIconTests(unittest.TestCase):
 
         # As if the background attempt had just been started, so this test
         # runs the heal itself rather than racing a thread.
-        server._ICON_TRIED[REFERENCE] = server.time.time()
-        self.assertEqual("", server.display_icon(annotations))
-        server._heal_icon(REFERENCE, annotations)
+        server.NAMES_HELPERS._ICON_TRIED[REFERENCE] = server.time.time()
+        self.assertEqual("", server.NAMES_HELPERS.display_icon(annotations))
+        server.NAMES_HELPERS._heal_icon(REFERENCE, annotations)
 
-        self.assertTrue(server.display_icon(annotations).startswith("data:image/png;base64,"))
+        self.assertTrue(server.NAMES_HELPERS.display_icon(annotations).startswith("data:image/png;base64,"))
         self.assertEqual([("oldcluster", REFERENCE)], ENGINE.CLIENT.asked)
 
     def test_a_missing_logo_is_tried_once_then_left_a_while(self):
@@ -106,8 +106,8 @@ class HealIconTests(unittest.TestCase):
         server.threading.Thread = lambda **kw: type("T", (), {"start": lambda self: started.append(kw)})()
         try:
             annotations = {NAMES.key("icon"): REFERENCE}
-            server.display_icon(annotations)
-            server.display_icon(annotations)
+            server.NAMES_HELPERS.display_icon(annotations)
+            server.NAMES_HELPERS.display_icon(annotations)
         finally:
             server.threading.Thread = saved
 

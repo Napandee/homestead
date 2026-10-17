@@ -115,7 +115,7 @@ class IsoClassTests(unittest.TestCase):
         method, path, body = sent[0]
         self.assertEqual(("POST", "homestead-isos"), (method, body["metadata"]["name"]))
         self.assertEqual({"numberOfReplicas": "1", "dataLocality": "disabled", "staleReplicaTimeout": "30"}, body["parameters"])
-        self.assertEqual("iso", server._class_made_for("homestead-isos", {}))
+        self.assertEqual("iso", server.STORAGE_ROUTES._class_made_for("homestead-isos", {}))
         made = dict(LONGHORN, name="homestead-isos", made_for="iso")
         sent.clear()
         with mock.patch.object(server, "storage_classes", return_value=[dict(LONGHORN), made]), \

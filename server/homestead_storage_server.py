@@ -43,7 +43,7 @@ import homestead_storage_runtime as STORAGE_RUNTIME
 import homestead_storage_workflow as STORAGE_WORKFLOW
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_pvc_rows", "beat", "cached", "class_selectable", "cleanup_restores", "get_app_settings", "guard_managed_smb", "is_self", "kget", "require_self_data_write", "selectable_storage_classes", "self_data_activity", "serves_many", "storage_classes", "storage_helper_admission", "storage_restart_admission", "update_policy_status")
+ROUTE_NEEDS = ("beat", "cached", "cleanup_restores", "get_app_settings", "guard_managed_smb", "is_self", "kget", "require_self_data_write", "selectable_storage_classes", "self_data_activity", "storage_classes", "storage_helper_admission", "storage_restart_admission", "update_policy_status")
 VALUES = ("DATA_DIR", "HOMESTEAD_VERSION", "SMB_NAMESPACE", "_cache", "_lock")
 
 
@@ -446,6 +446,70 @@ def _samba_loop():
             except Exception as error:
                 print(f"object store: {str(error)[:180]}", flush=True)
         time.sleep(60)
+
+
+def _pvc_rows(namespace):
+    """Every claim in a namespace, with the Longhorn facts a picker needs."""
+    live = longhorn_state_by_pvc(namespace)
+    rows = []
+    for item in kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims").get("items", []):
+        spec, status = item.get("spec", {}), item.get("status", {})
+        name = item["metadata"]["name"]
+        facts = live.get(name, {})
+        rows.append({
+            "name": name,
+            "size": (status.get("capacity", {}) or {}).get("storage") or
+                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
+            "status": status.get("phase", "Unknown"),
+            "access_modes": spec.get("accessModes", []) or [],
+            "storage_class": spec.get("storageClassName", ""),
+            "robustness": facts.get("robustness", ""),
+            "node": facts.get("node", ""),
+            "migratable": facts.get("migratable", False),
+            "workloads": facts.get("workloads", []),
+        })
+    return sorted(rows, key=lambda row: row["name"])
+
+
+# Harvester keeps these for VM images and VM state; they are not general
+# purpose storage and Harvester's own UI marks them internal.
+INTERNAL_STORAGE_CLASSES = {"longhorn-static", "vmstate-persistence"}
+
+
+def _internal_class(meta):
+    annotations = meta.get("annotations", {}) or {}
+    return (meta.get("name", "") in INTERNAL_STORAGE_CLASSES or
+            str(annotations.get("harvesterhci.io/is-reserved-storageclass", "")).lower() == "true")
+
+
+def _class_made_for(name, parameters):
+    """A class made for one thing, not for choosing: a Harvester image's
+    (its disks start as that image - named longhorn-image-* or lh-<uuid>,
+    with the image as its backing image) or a restore's (Homestead's
+    homestead-restore-*, reading one backup). Neither belongs in a picker."""
+    if name.startswith("homestead-restore-") or parameters.get("fromBackup"):
+        return "restore"
+    if parameters.get("backingImage") or name.startswith("longhorn-image-"):
+        return "image"
+    if name == NAMES.object_name("isos"):
+        # Homestead's ISO copies: one replica, not a class to put data on.
+        return "iso"
+    return ""
+
+
+def class_selectable(row):
+    return not row.get("internal") and not row.get("made_for")
+
+
+# Provisioners that can serve one volume to pods on several nodes at once.
+# k3s's local-path and most block CSI drivers cannot: a ReadWriteMany claim on
+# them stays Pending for good.
+SHARED_DRIVERS = {"driver.longhorn.io", "nfs.csi.k8s.io", "efs.csi.aws.com", "file.csi.azure.com", "smb.csi.k8s.io"}
+
+
+def serves_many(row):
+    provisioner = str(row.get("provisioner") or "")
+    return provisioner in SHARED_DRIVERS or provisioner.endswith(".cephfs.csi.ceph.com")
 
 
 # The routes server.py's handler answered for this code.

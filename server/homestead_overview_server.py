@@ -1,7 +1,9 @@
 """The overview, alerts, diagnostics and uptime code that lived in server.py
-(track 1, part 1): the dashboard sampler, the alert sources and their loop,
-uptime and schedule settings, the change-undo plan and the portal's status,
-with the routes server.py's handler answered for them.
+(track 1, parts 1 and 8): the dashboard sampler, the alert sources and their
+loop, uptime settings, schedules (their settings, the scheduled items, a
+schedule's action and the outage tick), protection issues, the history loop,
+the change-undo plan and the portal's status, with the routes server.py's
+handler answered for them.
 
 server.py binds what it still owns through bind_routes(): each helper in
 ROUTE_NEEDS is looked up in server.py when it is called, so a test that
@@ -12,6 +14,7 @@ import json
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_alerts as ALERTS
+import homestead_api_v1 as API_V1
 import homestead_auth as AUTH
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
@@ -48,7 +51,7 @@ import homestead_vms as VMS
 import homestead_vmusage as VMUSAGE
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_dns_name", "api_path", "beat", "cached", "get_app_settings", "get_overview", "guard_managed_smb", "is_self", "kget", "ksend", "outage_tick", "rollout_review_context", "schedule_act", "scheduled_items", "self_data_activity")
+ROUTE_NEEDS = ("_dns_name", "api_path", "api_scale", "api_vm_power", "beat", "cached", "get_app_settings", "get_overview", "guard_managed_smb", "is_self", "kget", "ksend", "require_workload_target", "restart_workload", "rollout_review_context", "self_data_activity")
 VALUES = ("API", "CTX", "TOKEN", "_cache")
 
 
@@ -283,6 +286,133 @@ def _alerts_loop():
                 beat("alerts", 20, error, leader_only=True)
                 print(f"alerts: {str(error)[:160]}", flush=True)
         time.sleep(20)
+
+
+def set_schedule(b):
+    """Stop and start an app or VM on a schedule, or no longer. An annotation,
+    so nothing restarts."""
+    kind = b.get("kind")
+    ns = _dns_name(b.get("ns"), "namespace")
+    if kind == "app":
+        name = _dns_name(b.get("name"), "workload name")
+        guard_managed_smb(ns, name)
+        require_workload_target(ns, name)
+        if is_self(ns, name):
+            raise ValueError("Homestead cannot be put on a schedule: it is what runs the schedules")
+        path = f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
+    elif kind == "vm":
+        name = _dns_name(b.get("name"), "VM name")
+        path = f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"
+    else:
+        raise ValueError("a schedule is for an app or a VM")
+    schedule = SCHEDULES.clean(b.get("schedule"))
+    ksend("PATCH", path, {"metadata": {"annotations": {
+        NAMES.key(SCHEDULES.KEY): json.dumps(schedule, separators=(",", ":")) if schedule else None}}},
+        ctype="application/merge-patch+json")
+    _cache.pop("wl" if kind == "app" else "vms", None)
+    return {"ok": True, "schedule": schedule,
+            "detail": f"{name}: {SCHEDULES.describe(schedule).lower()}" if schedule else f"{name} is no longer on a schedule"}
+
+
+def outage_tick():
+    """After a monitoring round, on the leader: any outage action that is due."""
+    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
+    if not found:
+        return []
+    operations = OPS.list_operations()
+    working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
+               for o in operations if o.get("status") in ("queued", "running")}
+
+    def restart(item):
+        if item["kind"] == "app":
+            restart_workload(item["ns"], item["name"])
+        else:
+            api_vm_power(item["ns"], item["name"], "restart")
+        _cache.pop("wl" if item["kind"] == "app" else "vms", None)
+
+    return OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+
+
+def scheduled_items():
+    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
+
+
+def schedule_act(item, action):
+    """Do a scheduled stop or start as the buttons do, with their checks."""
+    ns, name = item["ns"], item["name"]
+    if item["kind"] == "app":
+        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        current = int((dep.get("spec") or {}).get("replicas") or 0)
+        if action == "stop":
+            if not current:
+                return f"{name} was already stopped"
+            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+                  {"metadata": {"annotations": {NAMES.key(SCHEDULES.REPLICAS_KEY): str(current)}}},
+                  ctype="application/merge-patch+json")
+            api_scale(ns, name, 0)
+            return f"stopped {name}"
+        if current:
+            return f"{name} was already running"
+        try:
+            copies = int(NAMES.read((dep.get("metadata") or {}).get("annotations") or {}, SCHEDULES.REPLICAS_KEY) or 1)
+        except ValueError:
+            copies = 1
+        try:
+            api_scale(ns, name, max(1, min(copies, 100)))
+        except API_V1.ApiError as error:
+            raise ValueError(error.message) from None
+        return f"started {name}" + (f" with {copies} copies" if copies > 1 else "")
+    if action == "stop":
+        if not item["running"]:
+            return f"{name} was already stopped"
+        api_vm_power(ns, name, "stop")
+        return f"shutting {name} down"
+    if item["running"]:
+        return f"{name} was already running"
+    try:
+        api_vm_power(ns, name, "start")
+    except API_V1.ApiError as error:
+        raise ValueError(error.message) from None
+    return f"starting {name}"
+
+
+def protection_issues(jobs, target):
+    """Protection that has quietly stopped working: a snapshot or backup job
+    whose last run failed, or backup jobs with nowhere they can write to.
+    Nothing else says so until the copy is needed."""
+    issues = []
+    guarding = [j for j in jobs or [] if str(j.get("task", "")).split("-")[0] in ("snapshot", "backup")
+                and j.get("task") not in ("snapshot-cleanup", "snapshot-delete") and j.get("covers")]
+    for job in guarding:
+        if job.get("last_failed"):
+            issues.append({"severity": "degraded", "kind": "Backup", "name": job["name"],
+                           "reason": f"The last {job['task'].split('-')[0]} run failed. Review its job log."})
+    if any(j["task"].startswith("backup") for j in guarding):
+        target = target or {}
+        if not target.get("configured"):
+            issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
+                           "reason": "Backup jobs have no backup target. Configure a destination."})
+        elif not target.get("available"):
+            issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
+                           "reason": f"{target.get('url', 'the backup target')} cannot be reached"
+                                     + (f": {target['reason']}" if target.get("reason") else "")})
+    return issues
+
+
+def _history_loop():
+    """Long-term stats, on the leader, every five minutes, browser or not."""
+    last = 0
+    while True:
+        # Checked often, recorded every STEP: a new leader starts at once.
+        if LEADER.is_leader() and time.time() - last >= HISTORY.STEP:
+            try:
+                HISTORY.record(cached("ov", 10, get_overview))
+                last = time.time()
+                beat("history", HISTORY.STEP, leader_only=True)
+            except Exception as error:
+                beat("history", HISTORY.STEP, error, leader_only=True)
+                print(f"history: {str(error)[:160]}", flush=True)
+        time.sleep(30)
 
 
 # The routes server.py's handler answered for this code.

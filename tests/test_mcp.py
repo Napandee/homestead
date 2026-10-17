@@ -530,7 +530,7 @@ class ServerDoorTests(unittest.TestCase):
 
     def test_mcp_is_never_mistaken_for_a_page_of_the_app(self):
         import server
-        self.assertFalse(server.is_page_path("/mcp") or server.is_spa_route("/mcp"))
+        self.assertFalse(server.WEB_PATHS.is_page_path("/mcp") or server.WEB_PATHS.is_spa_route("/mcp"))
 
     def test_a_key_is_let_through_to_mcp_with_its_role(self):
         h, server = self.handler("/mcp", headers={"Authorization": "Bearer hsk_x"})

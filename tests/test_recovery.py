@@ -286,7 +286,7 @@ class AutoUpdateTests(unittest.TestCase):
                 mock.patch.object(server.AUTOUPDATE, "tidy"), \
                 mock.patch.object(server.AUTOUPDATE, "candidates", return_value=[{"ns": "lab", "name": "web"}]), \
                 mock.patch.object(server.OPS, "start") as start:
-            self.assertIsNone(server.autoupdate_tick())
+            self.assertIsNone(server.CLUSTER_ROUTES.autoupdate_tick())
         start.assert_not_called()
 
     def test_an_update_waits_for_a_rebalance_but_not_for_a_finished_one(self):

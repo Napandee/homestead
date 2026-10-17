@@ -80,7 +80,7 @@ class DataMoveTests(unittest.TestCase):
     def test_legacy_live_copy_is_disabled_without_cluster_writes(self):
         self.use(Cluster())
         with self.assertRaisesRegex(ValueError, "live-copy mover was retired"):
-            server.move_homestead_data("longhorn")
+            server.SELF_DATA_ROUTES.move_homestead_data("longhorn")
         self.assertEqual([], self.c.sent)
 
     def test_local_path_and_unknown_destination_classes_are_not_assumed_rwx(self):
@@ -97,7 +97,7 @@ class DataMoveTests(unittest.TestCase):
         self.use(Cluster())
         self.c.jobs["old-job"] = {"status": {"succeeded": 1}}
         item = {"ref": {"namespace": server.SELF.NS, "job": "old-job", "old": "homestead-data", "new": "target"}}
-        self.assertEqual("failed", server._data_move_status(item)[0])
+        self.assertEqual("failed", server.SELF_DATA_ROUTES._data_move_status(item)[0])
         self.assertTrue(item["ref"]["retain_resources"])
         self.assertEqual([], self.c.sent)
 

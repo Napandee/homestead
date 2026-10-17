@@ -18,7 +18,6 @@ POLICY = {
     ('GET', '/api/fleet/home'): 'viewer',
     ('GET', '/api/fleet/state'): 'viewer',
     ('GET', '/api/node/shell'): 'admin',
-    ('GET', '/api/self/data/prepare'): 'viewer',
     ('GET', '/api/vm/console'): 'operator',
     ('POST', '/api/auth/keys'): 'admin',
     ('POST', '/api/auth/keys/revoke'): 'admin',
@@ -31,13 +30,7 @@ POLICY = {
     ('POST', '/api/auth/signout-everywhere'): 'viewer',
     ('POST', '/api/auth/users'): 'admin',
     ('POST', '/api/auth/users/delete'): 'admin',
-    ('POST', '/api/config/backup'): 'admin',
-    ('POST', '/api/config/restore'): 'admin',
-    ('POST', '/api/self/data/abandon'): 'admin',
     ('POST', '/api/self/data/move'): 'admin',
-    ('POST', '/api/self/data/move/preview'): 'admin',
-    ('POST', '/api/self/data/prepare'): 'admin',
-    ('POST', '/api/self/data/prepare/preview'): 'admin',
 }
 
 POLICY.update({
@@ -73,11 +66,9 @@ POLICY.update({
     ('GET', '/api/cluster/remove-node'): "admin",
     ('GET', '/api/cluster/upgrades/start'): "admin",
     ('GET', '/api/config/backup'): "admin",
-    ('POST', '/api/config/backup'): "admin",
     ('GET', '/api/config/inspect'): "admin",
     ('POST', '/api/config/parts'): "admin",
     ('GET', '/api/config/restore'): "admin",
-    ('POST', '/api/config/restore'): "admin",
     ('GET', '/api/fleet/accept'): "admin",
     ('POST', '/api/fleet/accept'): "admin",
     ('GET', '/api/fleet/address'): "admin",
@@ -206,11 +197,3 @@ def role(path, method):
         return "viewer"
     declared = POLICY.get((method, path))
     return declared if declared is not None else MODULE_ROUTES.role(path, method)
-
-
-POLICY.update({
-    ('POST', '/api/self/data/prepare/archive'): 'admin',
-    ('POST', '/api/self/data/handoff/close'): 'admin',
-    ('POST', '/api/self/data/handoff/close/preview'): 'admin',
-    ('POST', '/api/self/data/prepare/archive/preview'): 'admin',
-})

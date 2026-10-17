@@ -82,7 +82,7 @@ class RolloutCapacityTests(unittest.TestCase):
 
     def reviewed(self):
         cfg = server.DEPLOY.analyze_deploy_intent(copy.deepcopy(self.cfg))
-        cfg["capacity_token"] = review.issue(cfg, server.rollout_review_context(self.current))
+        cfg["capacity_token"] = review.issue(cfg, server.DEPLOY_ROUTES.rollout_review_context(self.current))
         cfg["confirm_capacity"] = True
         return cfg
 

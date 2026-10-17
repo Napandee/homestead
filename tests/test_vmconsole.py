@@ -55,7 +55,7 @@ class VmConsoleTests(unittest.TestCase):
         for relative in ("core/rfb.js", "core/websock.js", "core/display.js", "vendor/pako/lib/zlib/inflate.js", "LICENSE.txt"):
             with self.subTest(relative=relative):
                 self.assertTrue((root / relative).is_file())
-        self.assertTrue(server.is_vendor_path("/vendor/novnc/core/rfb.js"))
+        self.assertTrue(server.WEB_PATHS.is_vendor_path("/vendor/novnc/core/rfb.js"))
 
 
 if __name__ == "__main__":

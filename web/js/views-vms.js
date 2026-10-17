@@ -99,7 +99,7 @@ window.vmStore = async (check = false) => {
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
         <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
-        <td>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
+        <td data-actions>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
@@ -422,7 +422,8 @@ window.vmOpen = async (ns, name) => {
       ${v.disks.map(d => `<tr><td><b>${esc(d.name)}</b><div class="dim xs">${esc(d.bus)}</div></td><td>${esc(d.kind)}</td>
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
         <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table>`;
-  const network = `<div class="note small">Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.
+  // The tab's one action is its own, above the table, not part of a note (#559).
+  const network = `<div class="between vm-net-head">${UI.lead("Pod-network VMs can use a default or custom Service VIP with port mappings. Bridged interfaces use DHCP or a static guest address.")}
       <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.ns)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
@@ -940,7 +941,7 @@ async function viewVmImport() {
         <td data-label="State"><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase())}</span>${failed && d.message ? `<div class="dim xs">${esc(d.message)}</div>` : ""}</td>
         <td class="mono" data-label="Size">${esc(d.capacity || "—")}</td>
         <td data-label="Attached to">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
-        <td>${done && !d.in_use ? actionBar([{ label: "Create VM", run: `vmNew(${jsq(d.name)},${jsq(d.namespace)})`, need: "operator" }]) : ""}</td></tr>`;
+        <td data-actions>${done && !d.in_use ? actionBar([{ label: "Create VM", run: `vmNew(${jsq(d.name)},${jsq(d.namespace)})`, need: "operator" }]) : ""}</td></tr>`;
     }).join("")}</tbody></table></div></div>` : '<div class="dim small">None yet. ＋ Import brings one from a web address: qcow2, vmdk, raw, vdi, vhd or vhdx.</div>'}`);
   uvmCopiesPaint();
   servers.filter(s => s.ssh_trust).forEach(s => uvmLoad(s.name));
@@ -956,7 +957,7 @@ function uvmCopiesPaint() {
     <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b><div><span class="pill ${operationTone(op.status)}">${esc(op.status)}</span></div></td>
       <td data-label="Progress" style="min-width:200px"><div class="small">${esc(op.message || "")}</div>
         <span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></td>
-      <td>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` },
+      <td data-actions>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` },
         // A cancel is reviewed first: what it removes, and that the source VM is kept.
         ...(operationActive(op) && op.cancellable ? [{ label: "Cancel", need: "operator", danger: true,
           run: `cancelOperation(${jsq(op.id)})`, tip: "Stop the import and remove the disks it was making. The source VM is unchanged." }] : []),

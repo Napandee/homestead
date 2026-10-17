@@ -14,7 +14,7 @@ class ApiPathTests(unittest.TestCase):
                      "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/home-assistant-os",
                      "/api/v1/events?limit=160", "/api/v1/pods?labelSelector=app%3Dfrigate",
                      "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-1.2"):
-            self.assertEqual(path, server.api_path(path))
+            self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
 
     def test_a_name_that_walks_out_is_refused(self):
         for path in ("/api/v1/namespaces/lab/pods/../secrets/homestead-auth",
@@ -24,7 +24,7 @@ class ApiPathTests(unittest.TestCase):
                      "/api/v1/namespaces/lab/pods/a\\b", "/api/v1/namespaces/lab/pods/a b",
                      "/api/v1/namespaces/lab/pods/a#b", "/api/v1/namespaces/lab/pods/a\r\nHost: evil"):
             with self.assertRaises(ValueError, msg=path):
-                server.api_path(path)
+                server.KUBE_HELPERS.api_path(path)
 
     def test_nothing_is_asked_of_the_api_server_for_a_refused_path(self):
         with mock.patch.object(server.urllib.request, "urlopen") as opened:
