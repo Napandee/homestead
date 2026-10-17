@@ -782,7 +782,7 @@ window.smartDisk = async (node, disk) => {
         <span class="dim xs">Measured against the drive-health policy in Settings.</span></div>`
       : s.available ? `<div class="note good"><b>No defects reported.</b> Every counter is within the
           thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.</div>` : ""}
-      ${active ? `<div class="clusteralert"><div><b>Self-test running</b><span>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</span></div></div>` : ""}
+      ${active ? UI.callout("info", "Self-test running", `<p>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</p>`) : ""}
       ${health.stale_probe ? `<div class="note warn"><b>The node probe predates this release.</b>
         Wear and life figures come from the probe, which has not picked up the current scripts yet.
         Homestead updates it when it starts; if this persists, check Settings → Homestead.</div>` : ""}
