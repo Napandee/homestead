@@ -82,9 +82,9 @@ try {
     let overflow = await page.evaluate(() => document.querySelector('#mbody').scrollWidth > document.querySelector('#mbody').clientWidth + 1);
     assert.equal(overflow, false, 'VM device card fits the dialog');
     await page.evaluate(async () => { closeModal(); await vmEdit('default', 'home-assistant-os'); });
-    if(await page.locator('#ve_section').isVisible()) await page.locator('#ve_section').selectOption('hardware');
-    else await page.locator('#ve-tab-hardware').click();
-    await page.locator('#vh details[data-sec="devices"] summary').click();
+    // The display is a section of its own, beside Disks and Passthrough.
+    if(await page.locator('#ve_section').isVisible()) await page.locator('#ve_section').selectOption('display');
+    else await page.locator('#ve-tab-display').click();
     await page.locator('#vh_boot_output').selectOption('gpu');
     assert.equal(await page.locator('#vh_firmware').inputValue(), 'uefi');
     const hardware = await page.evaluate(() => vmHardwareChanges(window.__vhBase));
