@@ -808,7 +808,8 @@
       const disk = (path, gb, format, bus, usedGb) => ({ index: 0, path, target: "hdc", unraid_bus: bus, bus: bus === "ide" ? "sata" : bus,
         format, virtual: gb * 2 ** 30, size: format === "raw" ? gb * 2 ** 30 : usedGb * 2 ** 30, used: usedGb * 2 ** 30, size_gb: gb, found: true });
       const vm = (name, state, os, cores, memory, firmware, disks, nic, extra = {}) => ({
-        name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), state, shut_off: state === "shut off", os, cores, memory, firmware,
+        // A VM is picked by its id: its name on Unraid, as the server's plan says.
+        id: name, name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), state, shut_off: state === "shut off", os, cores, memory, firmware,
         secure_boot: false, tpm: false, hyperv: false, cpu_model: "host-passthrough", machine: "pc-q35-9.2",
         disks: disks.map((d, index) => ({ ...d, index })), nic: { bridge: "br0", model: "virtio-net", nic_model: "virtio", ...nic },
         dropped: [], notes: [], ready: true, problem: "", ...extra });

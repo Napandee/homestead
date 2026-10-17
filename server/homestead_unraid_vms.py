@@ -13,6 +13,10 @@ CDI turns raw or qcow2 into a VM disk as it arrives. An upload token lasts a
 few minutes, so every disk has its own Job, all started together. Once every
 disk has arrived the VM is made, stopped, for its owner to start.
 
+A Proxmox VE host comes across the same way: homestead_proxmox_vms reads
+and maps its VMs (qm config) into the same plan, and the copy, the job and
+the page below are shared, with only the stopped check and shut down its own.
+
 Nothing on Unraid is changed, but for one thing its owner asks for: a VM still
 running there can be shut down (virsh shutdown - its power button), because a
 disk copied while its VM writes to it may not boot.
@@ -27,6 +31,7 @@ import xml.etree.ElementTree as ET
 
 import homestead_names as NAMES
 import homestead_cdi_cleanup as CDI_CLEANUP
+import homestead_proxmox_vms as PROXMOX
 
 IMP = kget = ksend = OPS = None
 platform = lambda: {}
@@ -239,7 +244,7 @@ def plan(dom, facts):
     nic = dom["nics"][0] if dom["nics"] else {}
     unraid_state = dom.get("state", "")
     return {
-        "name": dom["name"], "slug": slug(dom["name"]), "state": unraid_state,
+        "id": dom["name"], "name": dom["name"], "slug": slug(dom["name"]), "state": unraid_state,
         "shut_off": unraid_state == "shut off", "os": dom["os"],
         "cores": max(1, min(128, dom["vcpus"])),
         "memory": f"{dom['memory_kib'] // 1024 ** 2}Gi" if dom["memory_kib"] >= 1024 ** 2 and not dom["memory_kib"] % 1024 ** 2
@@ -259,18 +264,31 @@ def plan(dom, facts):
 
 def _source(name):
     src = IMP._source(name)
-    if src.get("kind") not in ("unraid", "ssh"):
-        raise ValueError("VMs are imported from an Unraid server")
+    if src.get("kind") not in ("unraid", "ssh", "proxmox"):
+        raise ValueError("VMs are imported from an Unraid server or a Proxmox host")
     return src
 
 
+KIND_NAMES = {"unraid": "Unraid", "ssh": "Unraid", "proxmox": "Proxmox"}
+
+
+def _where(ref):
+    """What the import came from, in words: "Proxmox" or "Unraid"."""
+    return KIND_NAMES.get(ref.get("kind", "unraid"), "the source")
+
+
 def listing(source):
-    """Every VM on one Unraid server, mapped."""
+    """Every VM on one Unraid server or Proxmox host, mapped."""
     src = _source(source)
+    if src.get("kind") == "proxmox":
+        lines = IMP.run_probe(f"vms-{source}", IMP._ssh_script(src, PROXMOX.LIST_SCRIPT), src, timeout=120)
+        found = PROXMOX.listing(lines)
+        # "virsh" is what the page asks: whether the host runs VMs at all.
+        return {"source": source, "kind": "proxmox", "virsh": found["hypervisor"], "vms": found["vms"]}
     lines = IMP.run_probe(f"vms-{source}", IMP._ssh_script(src, LIST_SCRIPT), src, timeout=120)
     found = parse_listing(lines)
     if not found["virsh"]:
-        return {"source": source, "virsh": False, "vms": []}
+        return {"source": source, "kind": src.get("kind"), "virsh": False, "vms": []}
     if not found["complete"]:
         raise ValueError("Unraid's VM list was cut short; try again")
     vms = []
@@ -281,16 +299,18 @@ def listing(source):
             continue
         dom["state"] = state
         vms.append(plan(dom, found["disks"]))
-    return {"source": source, "virsh": True, "vms": sorted(vms, key=lambda v: v["name"].lower())}
+    return {"source": source, "kind": src.get("kind"), "virsh": True, "vms": sorted(vms, key=lambda v: v["name"].lower())}
 
 
 def _one(source, vm):
+    """One VM by its id: its name on Unraid, its VMID on Proxmox."""
     vm = str(vm or "")
-    if not UNRAID_NAME.fullmatch(vm) or vm.startswith("-"):
+    proxmox = _source(source).get("kind") == "proxmox"
+    if not (vm.isdigit() if proxmox else UNRAID_NAME.fullmatch(vm) and not vm.startswith("-")):
         raise ValueError("which VM?")
-    found = next((v for v in listing(source)["vms"] if v["name"] == vm), None)
+    found = next((v for v in listing(source)["vms"] if v["id"] == vm), None)
     if not found:
-        raise ValueError(f"{source} has no VM named {vm}")
+        raise ValueError(f"{source} has no VM {vm}" if proxmox else f"{source} has no VM named {vm}")
     return found
 
 
@@ -300,6 +320,9 @@ def shutdown(source, vm):
     if found["shut_off"]:
         return {"ok": True, "message": f"{vm} is already shut off"}
     src = _source(source)
+    if src.get("kind") == "proxmox":
+        IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, PROXMOX.shutdown_command(found["vmid"])), src, timeout=70)
+        return {"ok": True, "message": f"Asked {source} to shut {found['name']} down; it shows as stopped once the guest has stopped"}
     IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, "virsh shutdown --domain " + shlex.quote(vm)), src, timeout=60)
     return {"ok": True, "message": f"Asked {source} to shut {vm} down; it shows as shut off once the guest has stopped"}
 
@@ -325,6 +348,7 @@ def disk_names(name, count):
 def start(body, actor=""):
     """Check, make the empty disks, and start the job that fills them."""
     source = str(body.get("source") or "")
+    kind = _source(source).get("kind", "unraid")
     found = _one(source, body.get("vm"))
     if not found["shut_off"]:
         raise ValueError(f"{found['name']} is {found['state'] or 'running'} on {source}: shut it down first, "
@@ -384,10 +408,11 @@ def start(body, actor=""):
             "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
             "metadata": {"name": dv, "namespace": ns,
                          "labels": {NAMES.key("managed"): "true", IMP.VM_DISK_LABEL: "true"},
-                         "annotations": {"homestead.io/import-source": "unraid",
+                         "annotations": {"homestead.io/import-source": "proxmox" if kind == "proxmox" else "unraid",
                                          "homestead.io/disk-format": disk["format"]}},
             "spec": {"source": {"upload": {}}, "contentType": "kubevirt", "storage": storage}})
-    ref = {"source": source, "vm": found["name"], "namespace": ns, "name": name, "url": url,
+    # vm is what the copy checks is still off: Unraid's name, Proxmox's VMID.
+    ref = {"source": source, "kind": kind, "vm": found["id"], "vm_name": found["name"], "namespace": ns, "name": name, "url": url,
            "disks": [{"dv": dv, "path": d["path"], "bytes": d["size"], "job": ""} for dv, d in zip(names, disks)],
            "vm_cfg": vm_cfg, "by": actor}
     return CDI_CLEANUP.dispatch(kget, ksend, OPS, KIND, f"Import {found['name']} from {source}",
@@ -395,16 +420,23 @@ def start(body, actor=""):
 
 
 def copy_script(src, vm, path, size):
-    """Read one vdisk over SSH into the upload, the VM checked still off first."""
+    """Read one disk over SSH into the upload, the VM checked still off first.
+    vm is Unraid's VM name or Proxmox's VMID; path is a file, or on Proxmox a
+    block device (an LVM-thin or ZFS volume), which reads the same way."""
     ssh = lambda remote: IMP._ssh_script(src, remote)
+    if src.get("kind") == "proxmox":
+        check = [f"state=$({ssh(PROXMOX.status_command(vm))})",
+                 "[ \"$state\" = 'stopped' ] || { echo \"HSVM-FAILED VM $vm is ${state:-unknown} on Proxmox again; its disk was not copied\"; exit 5; }"]
+    else:
+        check = [f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
+                 "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }"]
     return "\n".join([
         "set -eu", "set -o pipefail",
         # The name is Unraid's free text: a shell variable, never part of a command.
-        f"vm={shlex.quote(vm)}",
+        f"vm={shlex.quote(str(vm))}",
         "apk add --no-cache openssh-client sshpass curl pv >/dev/null 2>&1 || apk add --no-cache openssh-client sshpass curl >/dev/null",
         IMP.SOURCE_SSH.setup(src).rstrip("\n"),
-        f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
-        "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }",
+        *check,
         "meter() { if command -v pv >/dev/null 2>&1; then pv -n -t -b -i 10 -s " + str(int(size)) + "; else cat; fi; }",
         # Compressed on the wire: a raw vdisk is mostly empty space, which
         # crosses as almost nothing; pv counts the disk's own bytes after SSH
@@ -648,12 +680,12 @@ def _fail(ref, message, item=None):
     ref["diagnostics"] = saved
     if ref.get("cdi_cleanup"):
         ref.update(phase="cleanup", cleanup_outcome="failed",
-                   cleanup_detail=message + "; the VM on Unraid is unchanged")
+                   cleanup_detail=message + f"; the VM on {_where(ref)} is unchanged")
         return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
     # Older jobs lack identity receipts. Never delete a retry's disks by name.
     ref["phase"] = "failed"
     return "failed", 100, (message + "; this older import has no cleanup receipt; review its disconnected volumes. "
-                           "The VM on Unraid is unchanged")
+                           f"The VM on {_where(ref)} is unchanged")
 
 
 def status(item):
@@ -714,7 +746,7 @@ def status(item):
                 disk["pct"] = progress(_job_logs(ns, disk["job"]), disk["bytes"])
                 running += 1
         if failed:
-            return _fail(ref, f"Copying {ref['vm']} failed: {failed}", item)
+            return _fail(ref, f"Copying {ref.get('vm_name', ref['vm'])} failed: {failed}", item)
         pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
         if done < len(ref["disks"]):
             gib = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1024 ** 3
@@ -739,7 +771,7 @@ def status(item):
             return "failed", 100, detail
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
-                         f"{ref['vm']} on {ref['source']} is untouched")
+                         f"{ref.get('vm_name', ref['vm'])} on {ref['source']} is untouched")
         if ref.get("cdi_cleanup"):
             ref.update(phase="cleanup", cleanup_outcome="succeeded", cleanup_detail=ref["detail"])
             return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
