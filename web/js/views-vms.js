@@ -946,6 +946,15 @@ window.uvmLoad = async name => {
     return;
   }
   STATE.data.uvms[name] = found;
+  if (!found.virsh && found.proxmox) {
+    // A Proxmox host saved as Unraid or a Docker host: its type can't be changed, so it is added again.
+    host.innerHTML = serviceRow("This is a Proxmox host", '<span class="pill warn">wrong type</span>',
+      `${esc(name)} was added as ${esc(SOURCE_KINDS[STATE.data.srcs?.find(s => s.name === name)?.kind] || "Unraid")}. Remove it, then add it again with the type Proxmox VE to import its VMs.`,
+      actionBar([{ label: "Remove server", run: `srcDel(${jsq(name)})`, need: "admin", danger: true },
+        { label: "Add as Proxmox", run: "srcAdd('proxmox')", need: "admin", pri: true }]));
+    if (window.applyRole) applyRole();
+    return;
+  }
   if (!found.virsh) { host.innerHTML = `<div class="dim small">This server runs no VMs: its VM manager (${found.kind === "proxmox" ? "qm" : "libvirt"}) is not there.</div>`; return; }
   // A list of like things: a stacked table, each row's buttons an actionBar.
   host.innerHTML = found.vms.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
