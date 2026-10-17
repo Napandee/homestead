@@ -97,9 +97,15 @@ async function historyLoad(host, range, request, abort) {
   try { h = await api(`/api/history/long?range=${range}`, { signal: abort.signal }); }
   catch (e) {
     if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
+    // The Over time card's own error state, not a page warning (#506):
+    // with charts already drawn they stay, with a quiet line saying so.
+    if (!STATE.data.historyHtml) {
+      host.innerHTML = UI.error(e, { title: "Over time could not load", retry: "historyPaint()" });
+      return;
+    }
     let note = host.querySelector(".history-error");
-    if (!note) { note = document.createElement("div"); note.className = "note warn history-error"; host.appendChild(note); }
-    note.textContent = "Saved history could not refresh; existing charts are kept. Retrying on the next dashboard refresh.";
+    if (!note) { note = document.createElement("div"); note.className = "csub history-error"; note.setAttribute?.("role", "status"); host.appendChild(note); }
+    note.textContent = "Saved history could not refresh; these charts are from before. Retrying on the next dashboard refresh.";
     return;
   } finally {
     clearTimeout(timeout);

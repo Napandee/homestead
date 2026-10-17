@@ -129,7 +129,7 @@ const UI = (() => {
   /* columns: [{ label, className }]; rows: [[cellHtml, ...]]. Each cell
      carries its column's label, which a phone shows beside it. */
   const table = (columns, rows, { empty = "Nothing to show." } = {}) => rows.length
-    ? `<div class="ui-table-wrap"><table class="ui-table"><thead><tr>${columns.map(c => `<th class="${c.className || ""}">${text(c.label)}</th>`).join("")}</tr></thead>
+    ? `<div class="ui-table-wrap"><table class="ui-table stack"><thead><tr>${columns.map(c => `<th class="${c.className || ""}">${text(c.label)}</th>`).join("")}</tr></thead>
       <tbody>${rows.map(row => `<tr>${row.map((cell, i) => `<td class="${columns[i]?.className || ""}" data-label="${text(columns[i]?.label || "")}">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
     : `<div class="ui-empty">${text(empty)}</div>`;
 

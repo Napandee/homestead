@@ -110,10 +110,18 @@ function ipamFiltered(rows) {
 
 function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
+  const subnet = data.subnets.length ? ipamSubnetPick(data.subnets) : null;
+  const scanning = subnet?.scan.state === "running";
+  const u = data.unifi || {};
+  // Scanning and syncing act on the whole page, so they sit in its header
+  // rather than inside a figure (#506). On a phone Sync UniFi joins ⋯.
   const actions = `<button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
-      ${data.subnets.length ? `<button class="btn ipam-wide" data-need="operator" onclick="ipamImport()">Import CSV</button>
+      ${subnet ? `<button class="btn" data-need="operator" onclick="ipamScan(${jsq(subnet.id)})" ${scanning ? "disabled" : ""}>${scanning ? "Scanning…" : "Scan now"}</button>
+      ${u.configured ? `<button class="btn ipam-wide" data-need="operator" onclick="ipamSync()">Sync UniFi</button>` : ""}
+      <button class="btn ipam-wide" data-need="operator" onclick="ipamImport()">Import CSV</button>
       <button class="btn ipam-wide" onclick="ipamExport()">Export CSV</button>
-      <details class="actionmenu ipam-narrow"><summary class="btn" title="Import or export">⋯</summary><div class="actionmenu-pop">
+      <details class="actionmenu ipam-narrow"><summary class="btn" title="More actions" aria-label="More actions">⋯</summary><div class="actionmenu-pop">
+        ${u.configured ? `<button data-need="operator" onclick="this.closest('details').open=false;ipamSync()">${icon("refresh")}Sync UniFi</button>` : ""}
         <button data-need="operator" onclick="this.closest('details').open=false;ipamImport()">${icon("import")}Import CSV</button>
         <button onclick="this.closest('details').open=false;ipamExport()">${icon("ext")}Export CSV</button></div></details>
       <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}`;
@@ -123,24 +131,20 @@ function renderIpam() {
         `<button class="btn pri" data-need="operator" onclick="ipamSubnets(${jsq(cidr)})">Add ${esc(cidr)}</button>`).join("")}
         <button class="btn" data-need="operator" onclick="ipamSubnets()">Add a subnet</button></div></div>`, { actions, actionsClass: "ipam-head-acts" });
   }
-  const subnet = ipamSubnetPick(data.subnets);
   const rows = ipamFiltered(ipamRows(subnet));
   const flagged = subnet.rows.filter(r => r.flags.length).length;
-  const scanning = subnet.scan.state === "running";
-  const u = data.unifi || {};
   networkPage("ip", `
     ${data.subnets.length > 1 ? `<div class="seg ipam-subnets">${data.subnets.map(s => `<button class="${s.id === subnet.id ? "on" : ""}" onclick="ipamPickSubnet(${jsq(s.id)})">${esc(s.name || s.cidr)} <span class="dim">${s.used}</span></button>`).join("")}</div>` : ""}
-    <div class="grid g4 statgrid ipam-stats" style="margin:12px 0 16px">
-      <div class="card flat"><div class="ctitle">${esc(subnet.name || "Subnet")}</div><div class="bignum" style="margin-top:8px">${subnet.used}<span class="unit">/${subnet.usable}</span></div>
-        <div class="csub mono">${esc(subnet.cidr)}${subnet.vlan ? ` · VLAN ${subnet.vlan}` : ""}${subnet.gateway ? ` · gw ${esc(subnet.gateway)}` : ""}</div></div>
-      <div class="card flat"><div class="ctitle">DHCP range</div><div class="bignum" style="margin-top:8px">${subnet.dhcp_size || "—"}</div>
-        <div class="csub mono">${subnet.dhcp_start ? `${esc(subnet.dhcp_start)} – ${esc(subnet.dhcp_end)}` : "not set: add it under Subnets"}</div></div>
-      <div class="card flat"><div class="ctitle">Free for static use</div><div class="bignum" style="margin-top:8px">${subnet.free_static}</div>
-        <div class="csub">${subnet.next_free.length ? `next: ${subnet.next_free.slice(0, 3).map(ip => `<a class="mono" style="cursor:pointer" onclick="ipamCopy(${jsq(ip)})" title="Copy">${esc(ip)}</a>`).join(", ")}` : "none outside DHCP and the VIP pools"}</div></div>
-      <div class="card flat"><div class="ctitle">Last scan</div><div class="bignum" style="margin-top:8px;font-size:20px">${scanning ? `${subnet.scan.progress}%` : subnet.scan.at ? esc(fmtAgo(Date.now() / 1000 - subnet.scan.at)) : "never"}</div>
-        <div class="csub"><button class="btn sm" data-need="operator" onclick="ipamScan(${jsq(subnet.id)})" ${scanning ? "disabled" : ""}>${scanning ? "Scanning…" : "Scan now"}</button>
-          ${u.configured ? `<button class="btn sm" data-need="operator" onclick="ipamSync()">Sync UniFi</button>` : ""}</div></div>
-    </div>
+    <div class="ipam-stats">${UI.stats([
+      { title: subnet.name || "Subnet", value: subnet.used, unit: `/${subnet.usable}`,
+        bodyHtml: `<div class="csub mono">${esc(subnet.cidr)}${subnet.vlan ? ` · VLAN ${subnet.vlan}` : ""}${subnet.gateway ? ` · gw ${esc(subnet.gateway)}` : ""}</div>` },
+      { title: "DHCP range", value: subnet.dhcp_size || "—",
+        bodyHtml: `<div class="csub mono">${subnet.dhcp_start ? `${esc(subnet.dhcp_start)} – ${esc(subnet.dhcp_end)}` : "not set: add it under Subnets"}</div>` },
+      { title: "Free for static use", value: subnet.free_static,
+        bodyHtml: `<div class="csub">${subnet.next_free.length ? `next: ${subnet.next_free.slice(0, 3).map(ip => `<button type="button" class="linkish mono" onclick="ipamCopy(${jsq(ip)})" title="Copy">${esc(ip)}</button>`).join(", ")}` : "none outside DHCP and the VIP pools"}</div>` },
+      { title: "Last scan", value: scanning ? `${subnet.scan.progress}%` : subnet.scan.at ? fmtAgo(Date.now() / 1000 - subnet.scan.at) : "never",
+        sub: u.configured && u.last_sync ? `UniFi synced ${fmtAgo(Date.now() / 1000 - u.last_sync)}` : "" },
+    ])}</div>
     ${(subnet.pool_clash || []).length ? `<div class="note bad"><b>Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.</b> A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.</div>` : ""}
     ${u.configured && u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
     <div class="between ipam-tools"><div class="row">

@@ -15,7 +15,7 @@ try {
     await page.waitForFunction(() => document.querySelector("#healthPill")?.textContent?.trim());
     const expected = scenario === "incidents" ? "DEGRADED" : scenario.toUpperCase();
     assert.equal((await page.locator("#healthPill").innerText()).trim(), expected);
-    assert.equal(await page.locator("#views .clusteralert").count(), scenario === "healthy" ? 0 : 1);
+    assert.equal(await page.locator("#views .dash-alert[data-health]").count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-${width}.png`, fullPage: true });
     await page.evaluate(() => go("workloads"));

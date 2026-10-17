@@ -191,6 +191,12 @@ html{scrollbar-color:var(--scroll-thumb) transparent}
 .navbadge.hidden{display:none}
 .sidefoot{padding:16px 18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
 .clusteralert{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:-5px 0 18px;padding:12px 14px;border:1px solid rgba(255,176,32,.3);border-radius:13px;background:rgba(255,176,32,.08)}
+/* The Dashboard's one warning (#506): a UI.callout. Once every health issue
+   in it is acknowledged it goes quiet. */
+.dash-alert{margin:-5px 0 18px}
+.dash-alert .ui-callout-body ul{margin:6px 0 0;padding-left:18px}
+.dash-alert-actions{margin-top:10px}
+.dash-alert.acknowledged .ui-callout{border-color:var(--line);background:transparent}
 .clusteralert.critical{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.08)}
 .clusteralert.acknowledged{border-color:var(--line);background:transparent}.clusteralert>div{display:flex;flex-direction:column;gap:2px}.clusteralert b{font-size:12px}.clusteralert span{color:var(--mut);font-size:11px}
 
@@ -1647,16 +1653,15 @@ html[data-theme="light"] .compose-editor{background:#fff}
    kind, its name, then its MAC and what has seen it - with the tick at the
    side, instead of six labelled lines, most of them empty, per address. */
 .ipam-narrow{display:none}
+.ipam-stats .linkish{padding:0}
 @media(max-width:560px){
   .ipam-wide{display:none}.ipam-narrow{display:inline-block}
   .ipam-head-acts{flex-wrap:nowrap}
-  .ipam-stats{gap:8px!important;margin:10px 0 12px!important}
-  .ipam-stats>.card{padding:11px 12px}
+  .ipam-stats .ui-stats{gap:8px;margin:10px 0 12px}
+  .ipam-stats .ui-stat{padding:11px 12px}
   .ipam-stats .ctitle{font-size:12px}
-  .ipam-stats .bignum{font-size:24px!important;margin-top:4px!important}
+  .ipam-stats .bignum{font-size:24px;margin-top:4px}
   .ipam-stats .csub{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .ipam-stats .csub:has(.btn){white-space:normal;display:flex;flex-wrap:wrap;gap:4px}
-  .ipam-stats .csub .btn{margin-top:4px;padding:4px 8px;font-size:11.5px}
   .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
     grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
   .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
@@ -2239,14 +2244,20 @@ div.ipam-line.dim{display:block}
   .ui-fields{grid-template-columns:1fr}
   .volume-delete-grid{grid-template-columns:1fr}
   .ui-facts{grid-template-columns:1fr 1fr}
-  /* Tables become cards: each cell on its own line, with its column's label. */
+  /* Tables fold as a stack table does (#506): the first cell is the card's
+     title, short values sit two to a line with their label above, and a long
+     value (data-wide, from labelStackTables) or the actions take the whole
+     line. An empty cell is left out rather than shown as a lone label. */
   .ui-table thead{display:none}
-  .ui-table,.ui-table tbody,.ui-table tr,.ui-table td{display:block;width:auto!important}
-  .ui-table tr{padding:10px 13px;border-bottom:1px solid var(--line)}
+  .ui-table,.ui-table tbody{display:block;width:auto!important}
+  .ui-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 14px;padding:12px 13px;border-bottom:1px solid var(--line)}
   .ui-table tr:last-child{border-bottom:0}
-  .ui-table td{padding:3px 0;border:0;text-align:left!important}
+  .ui-table td{display:block;width:auto!important;min-width:0;padding:0;border:0;text-align:left!important;white-space:normal;overflow-wrap:anywhere}
   .ui-table td[data-label]:not([data-label=""]):not(:first-child)::before{content:attr(data-label);display:block;font:500 11px "Inter Tight",sans-serif;color:var(--mut);margin-bottom:2px}
-  .ui-table td:first-child{font-weight:600;padding-bottom:6px}
+  .ui-table td:first-child{grid-column:1/-1;order:-1;font-weight:600;padding-bottom:2px}
+  .ui-table td[data-wide],.ui-table td[data-label=""],.ui-table td[colspan]{grid-column:1/-1}
+  .ui-table td[data-wide]{order:1}.ui-table td[data-label=""]{order:2}
+  .ui-table td:empty{display:none}
 }
 html[data-theme="light"] .ui-facts>div{background:var(--surf)}
 html[data-theme="light"] .ui-callout.warn b{color:#8a5200}html[data-theme="light"] .ui-callout.bad b{color:#a1242a}

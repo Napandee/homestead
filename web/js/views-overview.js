@@ -31,6 +31,22 @@ const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
 
 /* Dashboard, Nodes, node detail modal */
 
+/* The Dashboard shows one warning (#506): whatever needs saying - the
+   cluster's health, chart history, the saved layout - is one UI.callout,
+   led by the most serious, with the rest listed under it. */
+function dashboardAlert(items) {
+  const list = items.filter(Boolean);
+  if (!list.length) return "";
+  const [lead, ...rest] = list;
+  const tone = list.some(item => item.tone === "bad") ? "bad" : "warn";
+  const body = `${lead.text ? `<p>${esc(lead.text)}</p>` : ""}
+    ${rest.length ? `<ul>${rest.map(item => `<li><b>${esc(item.title)}.</b> ${esc(item.text || "")}</li>`).join("")}</ul>` : ""}
+    ${list.some(item => item.action) ? `<div class="row dash-alert-actions">${list.map(item => item.action || "").join("")}</div>` : ""}`;
+  // The health item leads when there is one; insights.js marks it
+  // acknowledged once every issue in it has been.
+  return `<div class="dash-alert"${lead.health ? " data-health" : ""}>${UI.callout(tone, lead.title, body)}</div>`;
+}
+
 async function viewDash() {
   if (Dashboard.editing()) return;
   const requestedNavigation = window.NAV_TOKEN;
@@ -127,15 +143,14 @@ async function viewDash() {
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
 
-  ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
-    <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
-      <span>${esc(o.health_summary)}</span></div>
-    <button class="btn sm" onclick="HealthInsights.open('health')">Review</button>
-  </div>` : ""}
-
-  ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
-    : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
-  ${Dashboard.notice()}
+  ${dashboardAlert([
+    (o.health_issues || []).length && { health: true, tone: o.health === "critical" ? "bad" : "warn",
+      title: o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded", text: o.health_summary,
+      action: `<button class="btn sm" onclick="HealthInsights.open('health')">Review</button>` },
+    hist === null ? { title: "Chart history could not be loaded", text: "Current overview values are shown; history will retry on the next refresh." }
+      : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? { title: `Charts last sampled ${fmtAgo(sampleAge)}`, text: "Check Live charts in Settings → About." } : null,
+    Dashboard.notice(),
+  ])}
   ${Dashboard.render()}`);
   // Saved history must not hold the live refresh loop's busy flag.
   historyPaint();
