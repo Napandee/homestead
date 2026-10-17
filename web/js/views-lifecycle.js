@@ -1757,7 +1757,8 @@ window.srcKindChanged = () => {
 window.doSrcAdd = async () => {
   const save = $("#sc_save"), password = $("#sc_pass");
   if (!save || save.disabled) return;
-  const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
+  // A name is lower case, as Kubernetes names are: Proxmox is saved as proxmox.
+  const body = { name: $("#sc_name").value.trim().toLowerCase(), host: $("#sc_host").value.trim(),
     user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
     kind: $("#sc_kind").value, base_path: $("#sc_kind").value === "proxmox" ? "/" : $("#sc_path").value.trim(), port: +$("#sc_port").value };
   if (!body.name || !body.host) return toast("Name and host are required", "bad");
@@ -1767,7 +1768,12 @@ window.doSrcAdd = async () => {
     password.value = ""; body.password = "";
     STATE.data.srcs = result.sources;
     if ($("#sc_save") === save) await srcVerify(body.name);
-  } catch (e) { toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad"); }
+  } catch (e) {
+    // Refused (a bad name, a missing field): nothing was saved, so correct it
+    // and save again. Anything else may have saved: refresh before retrying.
+    if (e.status >= 400 && e.status < 500) { save.disabled = false; toast(e.message, "bad"); }
+    else toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad");
+  }
 };
 let SOURCE_KEY_REVIEW = null, SOURCE_KEY_SEQUENCE = 0, SOURCE_KEY_BUSY = false;
 window.srcVerify = async name => {

@@ -98,11 +98,8 @@ PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-u
 _cache = {}
 _lock = threading.Lock()
 
-# Each background task says when it last did its work, and what went wrong
-# if it did not, so Settings › About can say whether Homestead is healthy
-# rather than only whether it answers.
-HEART = {}
-_heart_lock = threading.Lock()
+# Each background task's last beat, shared by the leader (homestead_heartbeats).
+from homestead_heartbeats import HEART, beat, heartbeats as _heartbeats
 
 
 def _late(*names):
@@ -157,24 +154,6 @@ from homestead_deploy_server import (
     rebalance_move, redact_deployment_preview, reviewed_deploy,
 )
 DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
-
-
-def _heartbeats():
-    """Each background task's last beat, copied under the lock."""
-    with _heart_lock:
-        return {k: dict(v) for k, v in HEART.items()}
-
-
-def beat(name, every, error=None, leader_only=False):
-    now = time.time()
-    with _heart_lock:
-        row = HEART.setdefault(name, {"every": every, "leader_only": leader_only, "last_ok": 0, "error": "", "error_at": 0})
-        row["seen"] = now
-        if error is None:
-            row["last_ok"] = now
-            row["error"] = ""
-        else:
-            row["error"], row["error_at"] = str(error)[:200], now
 
 
 # A dot segment, plain or percent-encoded, anywhere in a path.
