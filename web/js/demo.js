@@ -2364,6 +2364,15 @@ ssh_pwauth: true
     },
     // Search logs (logsearch.js): lines from three apps, one of which wrote
     // more than is read at once, and a pod that could not be read.
+    "/api/container/diagnostics": url => ({
+      ns: url.searchParams.get("ns"), name: url.searchParams.get("name"), desired: 1,
+      pod: "example-server-abc-123", container: "server", pods: [{ name: "example-server-abc-123", uid: "demo-pod", node: "node-1", phase: "Running",
+        containers: [{ name: "server", kind: "app", ready: false, restarts: 7, image: "example/server:1",
+          state: { waiting: { reason: "CrashLoopBackOff" } }, last_state: { terminated: { reason: "Error", exitCode: 1 } } }] }],
+      logs: { previous: { text: "Server exited: configuration could not be loaded." }, current: { text: "Preparing server…" } } }),
+    "/api/container/command/preview": (url, init) => ({ settings: JSON.parse(init.body), review_token: "demo-command",
+      summary: { limit: "Requires timeout in the image. Sends TERM, then KILL after 2 seconds; detached children may survive." } }),
+    "/api/container/command": { exit_code: 0, stdout: "Linux example-server 6.12.0 x86_64\n", stderr: "", truncated: false, timed_out: false },
     "/api/logs/search": url => {
       const q = url.searchParams.get("q") || "", only = url.searchParams.get("apps") || "", t = Date.now();
       const at = s => new Date(t - s * 1000).toISOString();

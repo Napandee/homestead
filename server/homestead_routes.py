@@ -52,6 +52,7 @@ MODULES = (
     "homestead_cluster_shutdown",
     "homestead_components",
     "homestead_config_backup",
+    "homestead_container_diagnostics",
     "homestead_container_rebalance",
     "homestead_deploy",
     "homestead_diagnostics",

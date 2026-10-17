@@ -7,6 +7,21 @@ them containers because that is what you think of them as.
 
 ![Containers](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-containers.jpg)
 
+## Troubleshooting a restarting app
+
+Open the app's **⋯ → Diagnostics** action to see its pod and container state,
+restart count, last exit reason and code, and current and previous logs.
+Refresh to collect new evidence; a stopped app needs to be started before
+Kubernetes can provide pod diagnostics.
+
+Administrators can expand **Run a command** to inspect a running container.
+Review the exact command and target before running it. Commands use the
+container's permissions, can change its data, and may return secrets. They
+require `timeout` in the image, have a maximum 30-second timeout and bounded
+output; detached child processes may survive. Homestead's own workloads and
+system namespaces are excluded. Agents can request the same capability,
+but an administrator must approve each command in Homestead.
+
 ## Deploying a container
 
 **＋ Deploy** takes an image - `lscr.io/linuxserver/jellyfin:latest`, say - and

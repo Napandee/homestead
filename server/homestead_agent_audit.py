@@ -10,6 +10,7 @@ anything that looks like a password or token in what was asked is written
 as "(hidden)", and long text is cut short.
 """
 import json
+import hashlib
 import os
 import re
 import threading
@@ -48,6 +49,10 @@ def redact(value, depth=0):
                 out[key] = "(hidden)"
             elif key in ("env", "environment") and isinstance(item, dict):
                 out[key] = {str(k)[:80]: "(hidden)" for k in list(item)[:60]}
+            elif key == "argv" and isinstance(item, list):
+                # A shell script can carry credentials without named fields.
+                # The exact arguments remain in the administrator's review.
+                out[key] = {"sha256": hashlib.sha256(json.dumps(item).encode()).hexdigest(), "arguments": len(item)}
             else:
                 out[key] = redact(item, depth + 1)
         return out

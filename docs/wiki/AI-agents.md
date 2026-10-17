@@ -127,6 +127,8 @@ Tools come in three classes:
 | `get_container_settings` | A container's settings as Edit shows them; priority may be group, for an app that follows its group's tier | `read` | read |
 | `list_events` | Kubernetes' recent events for a container or VM, newest first | `read` | read |
 | `get_container_logs` | A container's last lines of output (at most 500) | `logs:read` | read |
+| `get_container_diagnostics` | Owned pods, restarts, current and last exit details, and current/previous logs, including crash loops | `logs:read` | read |
+| `run_container_command` | Ask an administrator to approve an exact argument array in one app container; bounded output and execution time | `containers:manage` | destructive |
 | `deploy_options` | What a new container can use: storage classes, networks, hosts, hardware, addresses | `read` | read |
 | `search_app_store` | Apps the App Store offers, by name or category | `read` | read |
 | `container_start` | Starts a stopped container, once Homestead has checked it fits | `containers:control` | change |
@@ -315,7 +317,20 @@ agent follows it with `get_agent_request`.
 - **App text is data.** Names, events, logs and alerts are written by your apps
   and users, so the agent is told to treat them as data, not instructions. Logs
   come back marked untrusted, with control codes stripped, at most 500 lines.
-- **Never available to agents:** users, keys and settings; shells and exec;
+- **Container commands need admin approval.** `run_container_command` accepts
+  an argument array, not an implicit shell string. Its approval names the exact
+  command, workload and pod. A changed workload or replacement pod invalidates
+  it. Follow `get_agent_request` for stdout, stderr and the exit status; an
+  interrupted connection reports unknown completion, not success. The image
+  must provide `timeout`; execution is limited to 1–30 seconds, then TERM/KILL,
+  and output is capped at 12,000 bytes. Detached children may survive. Commands
+  run with the container's existing permissions and may change data or reveal
+  secrets, so review every argument before approving.
+- **The same feature is in Containers → ⋯ → Diagnostics.** Anyone who can view
+  logs can inspect current and previous output and exit details. Administrators
+  can expand **Run a command**, review it and run it once. No diagnostic read
+  starts or restarts the app. Kubernetes cannot provide deleted pods' logs.
+- **Never available to agents:** users, keys and settings; interactive shells;
   Secrets; the file manager; host power and updates; Homestead itself; and linked
   clusters. Hosts are read-only.
 - **Audited.** Every call is recorded (below).
