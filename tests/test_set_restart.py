@@ -113,5 +113,149 @@ class SetRestartReadTests(unittest.TestCase):
         self.assertTrue(sr.read_state("lab", "web", "host-1")["set"]["wait_mode"])
 
 
+NOW = 1792231200.0  # 2026-10-17T10:00:00Z
+DOWN_SINCE = "2026-10-17T09:30:00Z"  # 1800 s before NOW
+
+
+def good_state():
+    return {"node": {"ready": False, "since": DOWN_SINCE, "lease": "2026-10-17T09:29:00.000000Z"},
+            "harvester": False, "set": {"ns": "lab", "name": "web", "wait_mode": False},
+            "pods": [{"name": "web-0", "uid": "u0", "node": "host-1", "terminating": False, "claims": ["data-web-0"]}],
+            "claims": {"data-web-0": {"access": ["ReadWriteOnce"], "volume": "pv-a", "longhorn": True}},
+            "lh_nodes": {"host-1": False, "host-2": True, "host-3": True},
+            "replicas": {"pv-a": [{"node": "host-1", "failed": False, "healthy_at": True},
+                                  {"node": "host-2", "failed": False, "healthy_at": True}]},
+            "engines": {"pv-a": [{"node": "host-1", "state": "stopped"}]},
+            "robustness": {"pv-a": "degraded"},
+            "nodes_ready": {"host-1": False, "host-2": True, "host-3": True}}
+
+
+class SetRestartPlanTests(unittest.TestCase):
+    def refused(self, st, words, now=NOW):
+        p = sr.plan(st, now)
+        self.assertFalse(p["ready"])
+        self.assertTrue(any(words in b for b in p["blockers"]), p["blockers"])
+        return p
+
+    def test_good_state_is_ready(self):
+        p = sr.plan(good_state(), NOW)
+        self.assertTrue(p["ready"], p["blockers"])
+        self.assertEqual([], p["blockers"])
+        self.assertEqual("host-1", p["node"])
+        self.assertEqual(DOWN_SINCE, p["down_since"])
+        self.assertEqual(1800, p["down_seconds"])
+        self.assertEqual("2026-10-17T09:29:00.000000Z", p["last_heard"])
+
+    def test_harvester_refuses(self):
+        st = good_state(); st["harvester"] = True
+        self.refused(st, "Harvester")
+
+    def test_host_ready_refuses(self):
+        st = good_state(); st["node"].update(ready=True, since=None)
+        self.refused(st, "is Ready")
+
+    def test_down_under_ten_minutes_refuses(self):
+        self.refused(good_state(), "10 minutes", now=NOW - 1800 + 599)
+        self.assertTrue(sr.plan(good_state(), NOW - 1800 + 600)["ready"])
+
+    def test_unknown_down_time_refuses(self):
+        st = good_state(); st["node"]["since"] = None
+        self.refused(st, "how long")
+
+    def test_no_pod_on_host_refuses(self):
+        st = good_state(); st["pods"] = []
+        self.refused(st, "no pod")
+
+    def test_not_longhorn_refuses(self):
+        st = good_state(); st["claims"]["data-web-0"]["longhorn"] = False
+        p = self.refused(st, "data-web-0")
+        self.assertTrue(any("Longhorn" in b for b in p["blockers"]))
+
+    def test_unbound_claim_refuses(self):
+        st = good_state(); st["claims"]["data-web-0"].update(volume=None, longhorn=False)
+        self.refused(st, "data-web-0")
+
+    def test_rwx_refuses(self):
+        st = good_state(); st["claims"]["data-web-0"]["access"] = ["ReadWriteMany"]
+        self.refused(st, "ReadWriteMany")
+
+    def test_longhorn_still_sees_host_ready_refuses(self):
+        st = good_state(); st["lh_nodes"]["host-1"] = True
+        self.refused(st, "Longhorn")
+
+    def test_host_missing_from_longhorn_refuses(self):
+        st = good_state(); del st["lh_nodes"]["host-1"]
+        self.refused(st, "Longhorn")
+
+    def test_engine_running_on_host_refuses(self):
+        st = good_state(); st["engines"]["pv-a"][0]["state"] = "running"
+        self.refused(st, "engine")
+
+    def test_only_copy_elsewhere_failed_refuses(self):
+        st = good_state(); st["replicas"]["pv-a"][1].update(failed=True, healthy_at=False)
+        p = self.refused(st, "pv-a")
+        self.assertTrue(any("data-web-0" in b for b in p["blockers"]))
+
+    def test_unsynced_copy_refuses(self):
+        st = good_state(); st["replicas"]["pv-a"][1]["healthy_at"] = False
+        self.refused(st, "data-web-0")
+
+    def test_copy_on_another_down_host_refuses(self):
+        st = good_state()
+        st["replicas"]["pv-a"][1]["node"] = "host-3"
+        st["nodes_ready"]["host-3"] = False
+        self.refused(st, "host-3, which is not Ready either")
+
+    def test_faulted_volume_refuses(self):
+        st = good_state(); st["robustness"]["pv-a"] = "faulted"
+        self.refused(st, "faulted")
+
+    def test_volume_missing_from_robustness_refuses(self):
+        st = good_state(); st["robustness"] = {}
+        self.refused(st, "pv-a")
+
+    def test_ready_plan_lists_every_pod_and_volume(self):
+        st = good_state()
+        st["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": True, "claims": ["data-web-1"]})
+        st["claims"]["data-web-1"] = {"access": ["ReadWriteOnce"], "volume": "pv-b", "longhorn": True}
+        st["replicas"]["pv-b"] = [{"node": "host-1", "failed": False, "healthy_at": True},
+                                  {"node": "host-3", "failed": False, "healthy_at": True}]
+        st["engines"]["pv-b"] = []
+        st["robustness"]["pv-b"] = "degraded"
+        p = sr.plan(st, NOW)
+        self.assertTrue(p["ready"], p["blockers"])
+        self.assertEqual([("web-0", "u0", False), ("web-1", "u1", True)],
+                         [(x["name"], x["uid"], x["terminating"]) for x in p["pods"]])
+        self.assertEqual([{"pvc": "data-web-0", "volume": "pv-a", "copy_on": "host-2"},
+                          {"pvc": "data-web-1", "volume": "pv-b", "copy_on": "host-3"}], p["volumes"])
+
+    def test_second_pods_bad_volume_blocks_whole_plan(self):
+        st = good_state()
+        st["pods"].append({"name": "web-1", "uid": "u1", "node": "host-1", "terminating": False, "claims": ["data-web-1"]})
+        st["claims"]["data-web-1"] = {"access": ["ReadWriteOnce"], "volume": "pv-b", "longhorn": False}
+        self.refused(st, "data-web-1")
+
+    def test_token_changes_with_pod_uid(self):
+        st = good_state(); a = sr.plan(st, NOW)["review_token"]
+        st["pods"][0]["uid"] = "u0-new"
+        self.assertNotEqual(a, sr.plan(st, NOW)["review_token"])
+
+    def test_token_changes_with_chosen_copy(self):
+        st = good_state(); a = sr.plan(st, NOW)["review_token"]
+        st["replicas"]["pv-a"][1]["node"] = "host-3"
+        self.assertNotEqual(a, sr.plan(st, NOW)["review_token"])
+
+    def test_token_stable_for_same_state(self):
+        a = sr.plan(good_state(), NOW)["review_token"]
+        self.assertEqual(a, sr.plan(good_state(), NOW + 60)["review_token"])
+        self.assertEqual(20, len(a))
+
+    def test_wait_mode_carried(self):
+        st = good_state(); st["set"]["wait_mode"] = True
+        p = sr.plan(st, NOW)
+        self.assertTrue(p["ready"])
+        self.assertEqual({"ns": "lab", "name": "web", "wait_mode": True}, p["set"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,8 +3,11 @@
 Every read here is strict. The check that decides whether a pod may be
 started elsewhere is fail-closed, so a read that fails raises Unread with a
 reason a person can act on, rather than being treated as "nothing there"."""
+import hashlib
+import json
 import urllib.error
 import urllib.parse
+from datetime import datetime
 
 import homestead_failover as FAILOVER
 import homestead_hostrun as HOSTRUN
@@ -106,3 +109,83 @@ def read_state(ns, name, node):
     return {"node": host, "harvester": harvester, "set": {"ns": ns, "name": name, "wait_mode": wait},
             "pods": pods, "claims": claims, "lh_nodes": lh_nodes, "replicas": replicas, "engines": engines,
             "robustness": robustness, "nodes_ready": {n: r[0] for n, r in ready.items()}}
+
+
+MIN_DOWN = 600  # seconds the host must have been NotReady
+
+
+def _epoch(s):
+    return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+
+
+def _chosen_copy(state, volume, host):
+    """First healthy copy, by host name, on a Ready host other than `host`."""
+    ready = state["nodes_ready"]
+    names = sorted(r["node"] for r in state["replicas"].get(volume) or []
+                   if r["node"] != host and not r["failed"] and r["healthy_at"] and ready.get(r["node"]))
+    return names[0] if names else None
+
+
+def plan(state, now):
+    """What would be done, and what stands in the way. Pure: no reads.
+
+    The host's name is taken from its pods (read_state keeps only pods on the
+    host); with no pod there is nothing to start, which is itself a blocker."""
+    host, pods = state["node"], state["pods"]
+    node = pods[0]["node"] if pods else None
+    blockers, volumes = [], []
+    down_seconds = None
+    if state["harvester"]:
+        blockers.append("This cluster runs Harvester, which manages its own hosts and volumes; starting a pod elsewhere is not supported here.")
+    if host["ready"]:
+        blockers.append("The host is Ready, so its pod is not stuck on a down host.")
+    elif host["since"]:
+        down_seconds = int(now - _epoch(host["since"]))
+        if down_seconds < MIN_DOWN:
+            blockers.append(f"The host has been down for {down_seconds // 60} minutes; it must be down for at least 10 minutes first.")
+    else:
+        blockers.append("Homestead cannot tell how long the host has been down.")
+    if not pods:
+        blockers.append("There is no pod of this StatefulSet on the host.")
+    else:
+        if node not in state["lh_nodes"]:
+            blockers.append(f"Longhorn does not list host {node}, so Homestead cannot tell whether its volumes are still attached.")
+        elif state["lh_nodes"][node]:
+            blockers.append(f"Longhorn still sees host {node} as Ready, so its volumes may still be in use.")
+    seen = set()
+    for pod in pods:
+        for pvc in pod["claims"]:
+            if pvc in seen:
+                continue
+            seen.add(pvc)
+            c = state["claims"].get(pvc)
+            if not c or not c["volume"] or not c["longhorn"]:
+                blockers.append(f"{pvc}: it is not a bound Longhorn volume, so Homestead cannot check where its data is.")
+                continue
+            vol = c["volume"]
+            if "ReadWriteMany" in c["access"]:
+                blockers.append(f"{pvc}: it is ReadWriteMany (shared), which this action does not handle.")
+            if any(e["node"] == node and e["state"] == "running" for e in state["engines"].get(vol) or []):
+                blockers.append(f"{pvc}: the Longhorn engine of {vol} is still running on {node}.")
+            rob = state["robustness"].get(vol)
+            if rob is None:
+                blockers.append(f"{pvc}: Longhorn does not report the health of {vol}.")
+            elif rob == "faulted":
+                blockers.append(f"{pvc}: {vol} is faulted in Longhorn.")
+            copy_on = _chosen_copy(state, vol, node)
+            if copy_on is None:
+                others = sorted(r["node"] for r in state["replicas"].get(vol) or []
+                                if r["node"] != node and not r["failed"] and r["healthy_at"])
+                if others:
+                    blockers.append(f"{pvc}: its only other copy is on {others[0]}, which is not Ready either.")
+                else:
+                    blockers.append(f"{pvc}: its volume {vol} has no healthy copy on another host.")
+            volumes.append({"pvc": pvc, "volume": vol, "copy_on": copy_on})
+    review = {"node": node, "set": [state["set"]["ns"], state["set"]["name"]],
+              "pods": sorted(p["uid"] for p in pods),
+              "copies": sorted([v["volume"], v["copy_on"]] for v in volumes)}
+    token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
+    return {"ready": not blockers, "blockers": blockers, "node": node, "down_since": host["since"],
+            "down_seconds": down_seconds, "last_heard": host["lease"], "set": dict(state["set"]),
+            "pods": [{"name": p["name"], "uid": p["uid"], "terminating": p["terminating"]} for p in pods],
+            "volumes": volumes, "review_token": token}
