@@ -233,3 +233,16 @@ class WrongTypeTests(unittest.TestCase):
 
     def test_a_server_with_neither_is_no_proxmox(self):
         self.assertFalse(UVMS.parse_listing(["NOVIRSH"])["qm"])
+
+
+class VolumeSizeTests(unittest.TestCase):
+    def test_a_volume_has_room_for_its_filesystem_as_well_as_the_disk(self):
+        import homestead_unraid_vms as UVMS
+        # The import that failed: a 1 GiB disk on a volume of exactly 1 GiB.
+        self.assertEqual("1280Mi", UVMS.volume_request({"virtual": 1024 ** 3, "size_gb": 1}))
+        self.assertEqual("108544Mi", UVMS.volume_request({"virtual": 100 * 1024 ** 3, "size_gb": 100}))
+        self.assertEqual("1280Mi", UVMS.volume_request({"size_gb": 1}))
+
+
+if __name__ == "__main__":
+    unittest.main()

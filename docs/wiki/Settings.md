@@ -404,6 +404,13 @@ over TLS. **Turn off** removes the switches and buttons from Home Assistant
 and stops listening, and keeps what was picked for next time. The same
 actions are on the [API](API) for scripts.
 
+With [linked clusters](Linked-clusters), each Homestead has its own
+MQTT settings and controls only its own containers and VMs: picking a cluster
+from the top bar shows that cluster's MQTT card and its own list. If two
+clusters use the same broker, give each its own base topic; the base topic is
+then part of each power control entity's id, so they don't overwrite each
+other in Home Assistant.
+
 ## Notifications
 
 Opened over HTTPS, Homestead can be installed as an app and send push

@@ -270,3 +270,15 @@ class ProtocolTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+class LinkedClusterTests(unittest.TestCase):
+    def test_two_clusters_on_one_broker_keep_their_entities_apart_by_base_topic(self):
+        item = [{"id": "vm:vms/win11", "kind": "vm", "ns": "vms", "name": "win11", "on": True}]
+        home = dict(MQTT.control_discovery(MQTT.clean({"host": "b"}), item))
+        lab = dict(MQTT.control_discovery(MQTT.clean({"host": "b", "base": "lab-cluster"}), item))
+        self.assertIn("homeassistant/switch/hs_vm_vms_win11/config", home)          # the default keeps its ids
+        self.assertIn("homeassistant/switch/hs_lab_cluster_vm_vms_win11/config", lab)
+        self.assertEqual("lab-cluster/control/vm/vms/win11/power", lab["homeassistant/switch/hs_lab_cluster_vm_vms_win11/config"]["command_topic"])
+        self.assertFalse(set(home) & set(lab))
+        self.assertIn("homeassistant/button/hs_lab_cluster_vm_vms_win11_reset/config",
+                      MQTT.retire_topics(MQTT.clean({"host": "b", "base": "lab-cluster"}), ["vm:vms/win11"]))

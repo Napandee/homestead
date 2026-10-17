@@ -524,8 +524,12 @@ def _item_topic(cfg, kind, ns, name):
     return f"{cfg['base']}/control/{kind}/{ns}/{name}"
 
 
-def _uid(kind, ns, name):
-    return f"hs_{kind}_{slug(ns)}_{slug(name)}"
+def _uid(cfg, kind, ns, name):
+    """Home Assistant's id for an item. Linked clusters each publish their
+    own; two on one broker keep theirs apart by their base topic, which then
+    is part of the id (harvester, the default, is not)."""
+    scope = "" if cfg["base"] == DEFAULTS["base"] else re.sub(r"[^A-Za-z0-9]", "_", cfg["base"]) + "_"
+    return f"hs_{scope}{kind}_{slug(ns)}_{slug(name)}"
 
 
 def controlled(cfg):
@@ -542,7 +546,7 @@ def control_discovery(cfg, items):
     out = []
     for item in items:
         kind, ns, name = item["kind"], item["ns"], item["name"]
-        uid, topic = _uid(kind, ns, name), _item_topic(cfg, kind, ns, name)
+        uid, topic = _uid(cfg, kind, ns, name), _item_topic(cfg, kind, ns, name)
         device = {"identifiers": [uid], "name": name, "manufacturer": "Homestead",
                   "model": f"{KINDS[kind]} in {ns}", "via_device": "harvester_cluster"}
         out.append((f"{prefix}/switch/{uid}/config",
@@ -571,7 +575,7 @@ def retire_topics(cfg, ids):
             kind, ns, name = split_id(item_id)
         except ValueError:
             continue
-        uid = _uid(kind, ns, name)
+        uid = _uid(cfg, kind, ns, name)
         out.append(f"{cfg['discovery']}/switch/{uid}/config")
         out += [f"{cfg['discovery']}/button/{uid}_{action}/config" for action in BUTTONS]
         out.append(f"{_item_topic(cfg, kind, ns, name)}/state")

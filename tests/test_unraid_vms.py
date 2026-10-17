@@ -219,7 +219,8 @@ class ImportTests(unittest.TestCase):
         dvs = [body for method, path, body in self.sent if path.endswith("/datavolumes")]
         self.assertEqual(["win11-disk", "win11-disk-2"], [dv["metadata"]["name"] for dv in dvs])
         self.assertEqual({"upload": {}}, dvs[0]["spec"]["source"])
-        self.assertEqual(("80Gi", "longhorn-r2"), (dvs[0]["spec"]["storage"]["resources"]["requests"]["storage"],
+        # 80 GiB and the room its filesystem takes (6%)
+        self.assertEqual(("86836Mi", "longhorn-r2"), (dvs[0]["spec"]["storage"]["resources"]["requests"]["storage"],
                                                    dvs[0]["spec"]["storage"]["storageClassName"]))
         for dv in dvs:
             self.assertEqual("Filesystem", dv["spec"]["storage"]["volumeMode"],

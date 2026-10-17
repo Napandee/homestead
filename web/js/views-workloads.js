@@ -2137,6 +2137,8 @@ window.wlConsole = (ns, name, fromRoute = false) => {
       <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
       <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
       : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the app and wait until its pod is running.</span></div>`}`, true);
+  // What is typed into the shell is not an edit to this dialog: closing it asks nothing.
+  window.__modalGuard = () => "";
   if (pods.length) consolePodChanged();
 };
 
