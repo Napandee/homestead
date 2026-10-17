@@ -2,6 +2,7 @@ import base64
 import json
 import sys
 import unittest
+import urllib.error
 from unittest import mock
 from pathlib import Path
 
@@ -242,6 +243,55 @@ class VolumeSizeTests(unittest.TestCase):
         self.assertEqual("1280Mi", UVMS.volume_request({"virtual": 1024 ** 3, "size_gb": 1}))
         self.assertEqual("108544Mi", UVMS.volume_request({"virtual": 100 * 1024 ** 3, "size_gb": 100}))
         self.assertEqual("1280Mi", UVMS.volume_request({"size_gb": 1}))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class StuckImportTests(unittest.TestCase):
+    """An import paused by a safety check can still be cancelled."""
+    def setUp(self):
+        import homestead_operations as OPS
+        import homestead_unraid_vms as UVMS
+        self.OPS, self.UVMS = OPS, UVMS
+        self.objects = {
+            "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/test-disk": {"metadata": {"name": "test-disk", "uid": "u1", "resourceVersion": "1", "annotations": {"homestead.io/cdi-import-id": "w1"}}},
+            "/apis/batch/v1/namespaces/lab/jobs/homestead-vmimport-test-w1-1": {"metadata": {"name": "j", "uid": "u2", "resourceVersion": "1", "annotations": {"homestead.io/cdi-import-id": "w1"}}},
+            "/api/v1/namespaces/lab/secrets/homestead-vmimport-test-w1-1-upload": {"metadata": {"name": "s", "uid": "u3", "resourceVersion": "1", "annotations": {"homestead.io/cdi-import-id": "other"}}},
+        }
+        self.deleted = []
+
+        def kget(path):
+            if path not in self.objects:
+                raise urllib.error.HTTPError(path, 404, "gone", {}, None)
+            return self.objects[path]
+
+        def ksend(method, path, body=None, **_):
+            self.deleted.append(path)
+            self.objects.pop(path, None)
+            return {}
+        UVMS.bind(mock.Mock(), kget, ksend, OPS)
+        self.item = {"id": "op1", "kind": UVMS.KIND, "status": "running", "message": "Import paused: Import claim was replaced; its resources were preserved",
+                     "ref": {"namespace": "lab", "kind": "proxmox", "source": "pve", "vm": "100", "vm_name": "test", "phase": "copy",
+                             "cdi_cleanup": {"id": "w1", "disks": {}},
+                             "disks": [{"dv": "test-disk", "job": "homestead-vmimport-test-w1-1"}]}}
+
+    def test_it_is_cancellable_and_removes_only_what_carries_its_stamp(self):
+        self.assertTrue(self.OPS._public(self.item)["cancellable"])
+        plan = self.OPS._plan_for(self.item)
+        self.assertTrue(plan["can"])
+        self.assertIn("test-disk", " ".join(plan["undo"]))
+        message = self.UVMS.cancel_run(self.item, {})
+        self.assertEqual(["/apis/batch/v1/namespaces/lab/jobs/homestead-vmimport-test-w1-1",
+                          "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/test-disk"], self.deleted)
+        self.assertIn("belong to another import", message)
+        self.assertEqual("failed", self.item["ref"]["phase"])
+
+    def test_another_cdi_job_is_still_not_cancellable(self):
+        other = {**self.item, "kind": "vm-disk-import"}
+        self.assertFalse(self.OPS._public(other)["cancellable"])
+        self.assertFalse(self.OPS._plan_for(other)["can"])
 
 
 if __name__ == "__main__":
