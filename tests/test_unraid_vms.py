@@ -560,3 +560,17 @@ class RoomTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoomDefaultClassTests(unittest.TestCase):
+    def test_an_unreadable_default_class_leaves_the_room_unknown_instead_of_failing(self):
+        def unreadable():
+            raise OSError("the API server did not answer")
+        saved = (UVMS.storage_classes, UVMS.lh_capacity, UVMS.default_class)
+        UVMS.storage_classes, UVMS.lh_capacity, UVMS.default_class = (lambda: []), (lambda: {}), unreadable
+        try:
+            room = UVMS.storage_room([{"virtual": 1024 ** 3, "size_gb": 1}])
+        finally:
+            UVMS.storage_classes, UVMS.lh_capacity, UVMS.default_class = saved
+        self.assertEqual(("unknown", []), (room["level"], room["blockers"]))
+        self.assertTrue(room["warnings"])

@@ -341,7 +341,11 @@ def storage_room(disks, storage_class=""):
     ROOM_TIGHT_PCT left afterwards is a warning."""
     sizes = [request_mib(d) / 1024 for d in disks]
     needed = sum(sizes)
-    name = str(storage_class or "").strip() or default_class() or ""
+    try:
+        name = str(storage_class or "").strip() or default_class() or ""
+    except Exception:
+        # The default class could not be read: the room is unknown, said as such.
+        name = ""
     out = {"storage_class": name, "needed_gb": round(needed, 1), "free_gb": None, "copies": None,
            "level": "unknown", "blockers": [], "warnings": []}
 
