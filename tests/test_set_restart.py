@@ -113,6 +113,21 @@ class SetRestartReadTests(unittest.TestCase):
             sr.read_state("lab", "web", "host-1")
         self.assertIn("can't read", str(ctx.exception))
 
+    def unreadable(self, kind, item):
+        self.objects[f"{LH}/{kind}"]["items"].append(item)
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("can't read", str(ctx.exception))
+
+    def test_replica_without_spec_is_unread(self):
+        self.unreadable("replicas", {"metadata": {"name": "r"}})
+
+    def test_engine_without_volume_name_is_unread(self):
+        self.unreadable("engines", {"spec": {"nodeID": "host-1"}, "status": {"currentState": "running"}})
+
+    def test_engine_without_node_id_is_unread(self):
+        self.unreadable("engines", {"spec": {"volumeName": "pv-a"}, "status": {"currentState": "running"}})
+
     def test_longhorn_node_without_ready_condition_is_none(self):
         self.objects[f"{LH}/nodes"]["items"][0]["status"] = {"conditions": []}
         self.assertIsNone(sr.read_state("lab", "web", "host-1")["lh_nodes"]["host-1"])

@@ -36,6 +36,12 @@ def _read(path, what):
         raise Unread(f"Could not read {what} ({e}), so Homestead cannot tell whether starting the pod elsewhere is safe.") from e
 
 
+def _need(v):
+    if not v:
+        raise KeyError("empty field")
+    return v
+
+
 def _q(s):
     return urllib.parse.quote(str(s), safe="")
 
@@ -116,13 +122,13 @@ def _read_state(ns, name, node):
         lh_nodes[n["metadata"]["name"]] = None if st is None else st == "True"
     replicas, engines, robustness = {}, {}, {}
     for r in _read(f"{LH}/replicas", "the Longhorn replicas").get("items", []):
-        s = r.get("spec") or {}
-        replicas.setdefault(s.get("volumeName"), []).append(
-            {"node": s.get("nodeID"), "failed": bool(s.get("failedAt")), "healthy_at": bool(s.get("healthyAt"))})
+        s = r["spec"]  # a missing field raises, which read_state turns into Unread
+        replicas.setdefault(_need(s["volumeName"]), []).append(
+            {"node": _need(s["nodeID"]), "failed": bool(s.get("failedAt")), "healthy_at": bool(s.get("healthyAt"))})
     for e in _read(f"{LH}/engines", "the Longhorn engines").get("items", []):
-        s = e.get("spec") or {}
-        engines.setdefault(s.get("volumeName"), []).append(
-            {"node": s.get("nodeID"), "state": (e.get("status") or {}).get("currentState")})
+        s = e["spec"]
+        engines.setdefault(_need(s["volumeName"]), []).append(
+            {"node": _need(s["nodeID"]), "state": (e.get("status") or {}).get("currentState")})
     for v in _read("/apis/longhorn.io/v1beta2/volumes", "the Longhorn volumes").get("items", []):
         robustness[v["metadata"]["name"]] = (v.get("status") or {}).get("robustness")
     claims = {c: dict(row, longhorn=row["volume"] in robustness) for c, row in pvcs.items()}
