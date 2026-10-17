@@ -119,7 +119,7 @@ class NfsLifecycleTests(unittest.TestCase):
             server.guard_managed_smb(server.SMB_NAMESPACE, NFS.NAME)
         for kind in ("Deployment", "Service"):
             with self.assertRaisesRegex(ValueError, "Network Shares"):
-                server.guard_smb_object(kind, server.SMB_NAMESPACE, NFS.NAME)
+                server.STORAGE_ROUTES.guard_smb_object(kind, server.SMB_NAMESPACE, NFS.NAME)
 
     def test_install_manifest_is_separate_from_smb_and_preserves_client_ip(self):
         rows = [{"name": "media", "pvc": "share-media", "nfs_clients": "192.0.2.0/24"}]

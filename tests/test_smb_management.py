@@ -131,13 +131,13 @@ class SmbMigrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Network Shares"):
                 server.guard_managed_smb(self.namespace, name)
             with self.assertRaisesRegex(ValueError, "Network Shares"):
-                server.guard_smb_object("Deployment", self.namespace, name)
+                server.STORAGE_ROUTES.guard_smb_object("Deployment", self.namespace, name)
             with self.assertRaisesRegex(ValueError, "Network Shares"):
-                server.guard_smb_object("Service", self.namespace, name)
+                server.STORAGE_ROUTES.guard_smb_object("Service", self.namespace, name)
         for kind, name in (("ConfigMap", server.SHARES.CONFIGMAP()),
                            ("Secret", server.SHARES.SECRET())):
             with self.assertRaisesRegex(ValueError, "Network Shares"):
-                server.guard_smb_object(kind, self.namespace, name)
+                server.STORAGE_ROUTES.guard_smb_object(kind, self.namespace, name)
 
     def test_disabling_and_removing_smb_never_delete_share_volumes(self):
         pvc_path = f"/api/v1/namespaces/{self.namespace}/persistentvolumeclaims/share-media"

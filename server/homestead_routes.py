@@ -123,6 +123,7 @@ MODULES = (
     "homestead_snapshot_delete",
     "homestead_storage",
     "homestead_storage_classes",
+    "homestead_storage_server",
     "homestead_unraid_vms",
     "homestead_updates",
     "homestead_upgrades",

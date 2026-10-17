@@ -90,7 +90,7 @@ LONGHORN = {"name": "longhorn", "provisioner": "driver.longhorn.io", "migratable
 
 class StorageClassTests(unittest.TestCase):
     def test_local_path_does_not_share(self):
-        self.assertEqual(["longhorn"], server.shared_storage_classes([dict(LOCAL), dict(LONGHORN)]))
+        self.assertEqual(["longhorn"], server.STORAGE_ROUTES.shared_storage_classes([dict(LOCAL), dict(LONGHORN)]))
 
     def test_a_shared_volume_on_local_path_is_refused_with_the_reason(self):
         with mock.patch.object(server, "storage_classes", return_value=[dict(LOCAL), dict(LONGHORN)]):
