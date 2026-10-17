@@ -70,13 +70,13 @@ try {
     assert.equal(await page.locator('#nodeDevices').getByRole('button', {name: 'Refresh devices'}).count(), 1);
     const hostOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
     assert.equal(hostOverflow, false, 'host inventory fits the viewport');
-    await page.evaluate(async () => { await vmNew(); stepGo('v_steps', 4); });
+    await page.evaluate(async () => { await vmNew(); stepGo('v_steps', 5); });
     assert.match(await page.locator('#pd_pick option').first().innerText(), /GeForce RTX 2080.*group 12/);
     await page.getByRole('button', {name: 'Add device', exact: true}).click();
     assert.match(await page.locator('#pd_adds').innerText(), /GeForce RTX 2080/);
     const changes = await page.evaluate(() => vmDevicesChanges());
     assert.equal(changes.add[0].resource, 'homestead.io/pci-10de-1e87');
-    await page.evaluate(() => { stepGo('v_steps', 3); stepGo('v_steps', 4); });
+    await page.evaluate(() => { stepGo('v_steps', 4); stepGo('v_steps', 5); });
     assert.equal(await page.locator('#pd_adds .pd-add').count(), 1, 'wizard back keeps device selections');
     await page.screenshot({path: `${output}/vm-new-${width}-${theme}.png`});
     let overflow = await page.evaluate(() => document.querySelector('#mbody').scrollWidth > document.querySelector('#mbody').clientWidth + 1);

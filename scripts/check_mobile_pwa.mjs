@@ -115,7 +115,7 @@ try {
       }
       // An open VM dialog has its own scrolling and remains reachable.
       await page.evaluate(()=>vmOpen("lab","ubuntu-test"));
-      await page.locator("#mbody .ui-facts").waitFor();
+      await page.locator("#mbody .ui-facts").first().waitFor();
       assert.equal(await page.locator(".modalbox").evaluate(el=>el.scrollWidth<=el.clientWidth),true);
       await page.evaluate(()=>closeModal());
       // Nested horizontal controls must keep their own scrolling.
