@@ -144,7 +144,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
                   else "the others are cordoned, or have taints it doesn't tolerate")
         row.update(outcome="stops", why="no other host can run it: " + reason)
     elif mode == "wait":
-        row.update(outcome="waits", why=FAILOVER_WORDS["wait"][1], mode="wait")
+        row.update(outcome="waits", why=FAILOVER_WORDS["wait"][1])
     elif unread:
         row.update(outcome="unknown", why="couldn't be checked: " + " and ".join(unread))
     elif not all_longhorn or node_down not in SET_DELETED_BY:

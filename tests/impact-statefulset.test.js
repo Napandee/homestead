@@ -83,7 +83,7 @@ test("one heading fits apps waiting for their host and StatefulSets waiting for 
 });
 
 // Start on another host (#441): only for a set that waits, on a host that is down.
-const chosen = { ...waits, mode: "wait", setting: undefined, why: "set to wait for its host to come back" };
+const chosen = { ...waits, setting: undefined, why: "set to wait for its host to come back" };
 const down = (status, extra = {}) => ({ data: { nodes: [{ name: "node2", status }] }, ...extra });
 
 test("a waiting set on a NotReady host offers Start on another host to admins", () => {
