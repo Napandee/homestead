@@ -7,7 +7,7 @@ import hashlib
 import json
 import urllib.error
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 import homestead_failover as FAILOVER
 import homestead_hostrun as HOSTRUN
@@ -47,6 +47,14 @@ def _ready(obj):
     return False, None
 
 
+def _cond(obj):
+    """The Ready condition's (status string, lastTransitionTime); (None, None) if absent."""
+    for c in (obj.get("status") or {}).get("conditions") or []:
+        if c.get("type") == "Ready":
+            return c.get("status"), c.get("lastTransitionTime")
+    return None, None
+
+
 def _lease(node):
     try:
         return (kget(LEASES + _q(node)).get("spec") or {}).get("renewTime")
@@ -57,11 +65,22 @@ def _lease(node):
 
 
 def read_state(ns, name, node):
+    try:
+        return _read_state(ns, name, node)
+    except Unread:
+        raise
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError) as e:
+        raise Unread(f"Kubernetes or Longhorn answered in a form Homestead can't read: {type(e).__name__} {e}") from e
+
+
+def _read_state(ns, name, node):
     nodes = _read("/api/v1/nodes", "the hosts").get("items", [])
     ready = {n["metadata"]["name"]: _ready(n) for n in nodes}
     if node not in ready:
         raise Unread(f"Host {node} is not in the cluster's host list, so Homestead cannot tell its state.")
-    host = {"ready": ready[node][0], "since": None if ready[node][0] else ready[node][1], "lease": _lease(node)}
+    status = next((_cond(n)[0] for n in nodes if n["metadata"]["name"] == node), None)
+    host = {"ready": ready[node][0], "status": status,
+            "since": None if ready[node][0] else ready[node][1], "lease": _lease(node)}
     groups = _read("/apis", "the API groups").get("groups", [])
     harvester = "harvesterhci.io" in [g.get("name") for g in groups]
 
@@ -91,8 +110,10 @@ def read_state(ns, name, node):
         s = pvc.get("spec") or {}
         pvcs[c] = {"access": list(s.get("accessModes") or []), "volume": s.get("volumeName") or None}
 
-    lh_nodes = {n["metadata"]["name"]: _ready(n)[0]
-                for n in _read(f"{LH}/nodes", "the Longhorn nodes").get("items", [])}
+    lh_nodes = {}
+    for n in _read(f"{LH}/nodes", "the Longhorn nodes").get("items", []):
+        st = _cond(n)[0]
+        lh_nodes[n["metadata"]["name"]] = None if st is None else st == "True"
     replicas, engines, robustness = {}, {}, {}
     for r in _read(f"{LH}/replicas", "the Longhorn replicas").get("items", []):
         s = r.get("spec") or {}
@@ -115,15 +136,24 @@ MIN_DOWN = 600  # seconds the host must have been NotReady
 
 
 def _epoch(s):
-    return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    """Seconds since the epoch, or None when `s` is not a timestamp."""
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
+    except (AttributeError, ValueError):
+        return None
 
 
-def _chosen_copy(state, volume, host):
-    """First healthy copy, by host name, on a Ready host other than `host`."""
-    ready = state["nodes_ready"]
-    names = sorted(r["node"] for r in state["replicas"].get(volume) or []
-                   if r["node"] != host and not r["failed"] and r["healthy_at"] and ready.get(r["node"]))
-    return names[0] if names else None
+def _copies(state, volume, node):
+    """Healthy copies of `volume` on hosts other than `node`, by host name: [(host, is_ready)]."""
+    return sorted((r["node"], bool(state["nodes_ready"].get(r["node"])))
+                  for r in state["replicas"].get(volume) or []
+                  if r["node"] != node and not r["failed"] and r["healthy_at"])
+
+
+def _chosen_copy(state, volume, node):
+    """First healthy copy, by host name, on a Ready host other than `node`."""
+    return next((n for n, up in _copies(state, volume, node) if up), None)
 
 
 def plan(state, now):
@@ -131,27 +161,37 @@ def plan(state, now):
 
     The host's name is taken from its pods (read_state keeps only pods on the
     host); with no pod there is nothing to start, which is itself a blocker."""
-    host, pods = state["node"], state["pods"]
+    st, pods = state["node"], state["pods"]
     node = pods[0]["node"] if pods else None
     blockers, volumes = [], []
     down_seconds = None
     if state["harvester"]:
         blockers.append("This cluster runs Harvester, which manages its own hosts and volumes; starting a pod elsewhere is not supported here.")
-    if host["ready"]:
+    if st["ready"]:
         blockers.append("The host is Ready, so its pod is not stuck on a down host.")
-    elif host["since"]:
-        down_seconds = int(now - _epoch(host["since"]))
-        if down_seconds < MIN_DOWN:
-            blockers.append(f"The host has been down for {down_seconds // 60} minutes; it must be down for at least 10 minutes first.")
-    else:
-        blockers.append("Homestead cannot tell how long the host has been down.")
+    elif st.get("status") != "Unknown":
+        blockers.append(f"The host's kubelet is still answering (Ready status: {st.get('status')}), so it is not unreachable.")
+    since = _epoch(st["since"]) if st["since"] else None
+    if not st["ready"]:
+        if since is None:
+            blockers.append("Homestead can't read when the host went down.")
+        else:
+            down_seconds = int(now - since)
+            if down_seconds < MIN_DOWN:
+                blockers.append(f"The host has been down for {down_seconds // 60} minutes; it must be down for at least 10 minutes first.")
+        heard = _epoch(st["lease"]) if st["lease"] else None
+        if heard is None:
+            blockers.append("Homestead can't tell when the host was last heard from.")
+        elif now - heard < MIN_DOWN:
+            blockers.append("The host was heard from less than 10 minutes ago.")
     if not pods:
         blockers.append("There is no pod of this StatefulSet on the host.")
     else:
-        if node not in state["lh_nodes"]:
-            blockers.append(f"Longhorn does not list host {node}, so Homestead cannot tell whether its volumes are still attached.")
-        elif state["lh_nodes"][node]:
-            blockers.append(f"Longhorn still sees host {node} as Ready, so its volumes may still be in use.")
+        lh = state["lh_nodes"].get(node)
+        if lh is None:
+            blockers.append(f"Longhorn does not report {node} as down, so Homestead cannot tell whether its volumes are still attached.")
+        elif lh:
+            blockers.append(f"Longhorn still sees {node} as Ready, so its volumes may still be in use.")
     seen = set()
     for pod in pods:
         for pvc in pod["claims"]:
@@ -165,17 +205,16 @@ def plan(state, now):
             vol = c["volume"]
             if "ReadWriteMany" in c["access"]:
                 blockers.append(f"{pvc}: it is ReadWriteMany (shared), which this action does not handle.")
-            if any(e["node"] == node and e["state"] == "running" for e in state["engines"].get(vol) or []):
-                blockers.append(f"{pvc}: the Longhorn engine of {vol} is still running on {node}.")
+            for e in state["engines"].get(vol) or []:
+                if e["node"] == node and e["state"] != "stopped":
+                    blockers.append(f"{pvc}: Longhorn can't confirm the engine of {vol} on {node} has stopped (state: {e['state']}).")
+                    break
             rob = state["robustness"].get(vol)
-            if rob is None:
-                blockers.append(f"{pvc}: Longhorn does not report the health of {vol}.")
-            elif rob == "faulted":
-                blockers.append(f"{pvc}: {vol} is faulted in Longhorn.")
+            if rob not in ("healthy", "degraded"):
+                blockers.append(f"{pvc}: Longhorn reports {vol} as {rob}, not healthy or degraded.")
             copy_on = _chosen_copy(state, vol, node)
             if copy_on is None:
-                others = sorted(r["node"] for r in state["replicas"].get(vol) or []
-                                if r["node"] != node and not r["failed"] and r["healthy_at"])
+                others = [n for n, _ in _copies(state, vol, node)]
                 if others:
                     blockers.append(f"{pvc}: its only other copy is on {others[0]}, which is not Ready either.")
                 else:
@@ -185,7 +224,7 @@ def plan(state, now):
               "pods": sorted(p["uid"] for p in pods),
               "copies": sorted([v["volume"], v["copy_on"]] for v in volumes)}
     token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
-    return {"ready": not blockers, "blockers": blockers, "node": node, "down_since": host["since"],
-            "down_seconds": down_seconds, "last_heard": host["lease"], "set": dict(state["set"]),
+    return {"ready": not blockers, "blockers": blockers, "node": node, "down_since": st["since"],
+            "down_seconds": down_seconds, "last_heard": st["lease"], "set": dict(state["set"]),
             "pods": [{"name": p["name"], "uid": p["uid"], "terminating": p["terminating"]} for p in pods],
             "volumes": volumes, "review_token": token}

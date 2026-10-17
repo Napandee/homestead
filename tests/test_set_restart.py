@@ -63,7 +63,7 @@ class SetRestartReadTests(unittest.TestCase):
 
     def test_reads_the_whole_state(self):
         st = sr.read_state("lab", "web", "host-1")
-        self.assertEqual({"ready": False, "since": "2026-10-17T09:00:00Z",
+        self.assertEqual({"ready": False, "status": "Unknown", "since": "2026-10-17T09:00:00Z",
                           "lease": "2026-10-17T08:59:00.000000Z"}, st["node"])
         self.assertFalse(st["harvester"])
         self.assertEqual({"ns": "lab", "name": "web", "wait_mode": False}, st["set"])
@@ -107,6 +107,16 @@ class SetRestartReadTests(unittest.TestCase):
                           ("web-2", "u2", "host-1", False, ["data-web-0"])],
                          [(p["name"], p["uid"], p["node"], p["terminating"], p["claims"]) for p in pods])
 
+    def test_malformed_object_is_unread_not_keyerror(self):
+        self.objects[f"{LH}/replicas"]["items"].append(None)
+        with self.assertRaises(sr.Unread) as ctx:
+            sr.read_state("lab", "web", "host-1")
+        self.assertIn("can't read", str(ctx.exception))
+
+    def test_longhorn_node_without_ready_condition_is_none(self):
+        self.objects[f"{LH}/nodes"]["items"][0]["status"] = {"conditions": []}
+        self.assertIsNone(sr.read_state("lab", "web", "host-1")["lh_nodes"]["host-1"])
+
     def test_wait_mode_from_tolerations(self):
         spec = self.objects["/apis/apps/v1/namespaces/lab/statefulsets/web"]["spec"]["template"]["spec"]
         spec["tolerations"] = [{"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute"}]
@@ -118,7 +128,7 @@ DOWN_SINCE = "2026-10-17T09:30:00Z"  # 1800 s before NOW
 
 
 def good_state():
-    return {"node": {"ready": False, "since": DOWN_SINCE, "lease": "2026-10-17T09:29:00.000000Z"},
+    return {"node": {"ready": False, "status": "Unknown", "since": DOWN_SINCE, "lease": "2026-10-17T09:29:00.000000Z"},
             "harvester": False, "set": {"ns": "lab", "name": "web", "wait_mode": False},
             "pods": [{"name": "web-0", "uid": "u0", "node": "host-1", "terminating": False, "claims": ["data-web-0"]}],
             "claims": {"data-web-0": {"access": ["ReadWriteOnce"], "volume": "pv-a", "longhorn": True}},
@@ -160,7 +170,7 @@ class SetRestartPlanTests(unittest.TestCase):
 
     def test_unknown_down_time_refuses(self):
         st = good_state(); st["node"]["since"] = None
-        self.refused(st, "how long")
+        self.refused(st, "went down")
 
     def test_no_pod_on_host_refuses(self):
         st = good_state(); st["pods"] = []
@@ -249,6 +259,47 @@ class SetRestartPlanTests(unittest.TestCase):
         a = sr.plan(good_state(), NOW)["review_token"]
         self.assertEqual(a, sr.plan(good_state(), NOW + 60)["review_token"])
         self.assertEqual(20, len(a))
+
+    def test_longhorn_node_none_or_missing_blocks_false_passes(self):
+        for v in (None, True):
+            st = good_state(); st["lh_nodes"]["host-1"] = v
+            self.refused(st, "Longhorn")
+        st = good_state(); del st["lh_nodes"]["host-1"]
+        self.refused(st, "Longhorn")
+        self.assertTrue(sr.plan(good_state(), NOW)["ready"])
+
+    def test_engine_must_be_stopped(self):
+        for state in ("running", "unknown", "error", None, "starting"):
+            st = good_state(); st["engines"]["pv-a"][0]["state"] = state
+            self.refused(st, "stopped")
+        st = good_state(); st["engines"]["pv-a"].append({"node": "host-2", "state": "running"})
+        self.assertTrue(sr.plan(st, NOW)["ready"])
+
+    def test_robustness_allowlist(self):
+        for ok in ("healthy", "degraded"):
+            st = good_state(); st["robustness"]["pv-a"] = ok
+            self.assertTrue(sr.plan(st, NOW)["ready"], ok)
+        for bad in ("unknown", "faulted", None):
+            st = good_state(); st["robustness"]["pv-a"] = bad
+            self.refused(st, "pv-a")
+
+    def test_kubelet_still_answering_blocks(self):
+        st = good_state(); st["node"]["status"] = "False"
+        self.refused(st, "still answering")
+
+    def test_fresh_lease_blocks(self):
+        st = good_state(); st["node"]["lease"] = "2026-10-17T09:55:00.000000Z"
+        self.refused(st, "heard from")
+
+    def test_missing_lease_blocks(self):
+        st = good_state(); st["node"]["lease"] = None
+        self.refused(st, "last heard")
+
+    def test_malformed_timestamps_block_not_raise(self):
+        st = good_state(); st["node"]["since"] = "garbage"
+        self.refused(st, "went down")
+        st = good_state(); st["node"]["lease"] = "garbage"
+        self.refused(st, "last heard")
 
     def test_wait_mode_carried(self):
         st = good_state(); st["set"]["wait_mode"] = True
