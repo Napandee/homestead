@@ -100,6 +100,7 @@ class CleanupTests(unittest.TestCase):
             E.idle(OPS)
             return {"id": "next"}
         with mock.patch.object(server, "DATA_DIR", self.directory), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "DATA_DIR", self.directory), \
              mock.patch.object(server.SELF, "NS", "lab"), \
              mock.patch.object(server, "_require_no_data_handoff"), \
              mock.patch.object(server, "homestead_data_volume", return_value={"classes": [{"name": "next", "shareable": False}]}), \
@@ -108,7 +109,7 @@ class CleanupTests(unittest.TestCase):
              mock.patch.object(server.SELF_DATA_PREPARE, "review", return_value=({}, {}, {}, {"destination": "next"})), \
              mock.patch.object(server.SELF_DATA_PREPARE, "start", side_effect=start), \
              mock.patch.object(OPS, "list_operations", side_effect=AssertionError("No resolver polling")):
-            result = server.self_data_preparation({"storage_class": "next"}, "admin", start=True)
+            result = server.SELF_DATA_ROUTES.self_data_preparation({"storage_class": "next"}, "admin", start=True)
         self.assertEqual("next", result["operation"]["id"])
 
     def test_new_move_marker_revokes_cached_completion(self):

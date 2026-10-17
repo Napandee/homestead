@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 3451
+MAX_LINES = 3215
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -38,7 +38,6 @@ INLINE_ROUTES = (
     ("GET", "/api/fleet/home", "connection-bound: cookies/session"),
     ("GET", "/api/fleet/all/", "connection-bound: fleet forwarding"),
     ("GET", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
-    ("GET", "/api/self/data/prepare", "to move in Part 7"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
     ("POST", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
     ("POST", "/api/auth/keys", "connection-bound: fleet forwarding (refused when relayed)"),
@@ -57,15 +56,8 @@ INLINE_ROUTES = (
     ("POST", "/api/auth/role", "connection-bound: sign-in history (address, User-Agent)"),
     ("POST", "/api/auth/users/delete", "connection-bound: sign-in history (address, User-Agent)"),
     ("POST", "/api/auth/signout-everywhere", "connection-bound: cookies/session"),
-    ("POST", "/api/self/data/abandon", "to move in Part 7"),
     ("POST", "/api/self/data/move", "connection-bound: cookies/session"),
-    ("POST", "/api/self/data/move/preview", "to move in Part 7"),
-    ("POST", "/api/self/data/handoff/close", "to move in Part 7"),
-    ("POST", "/api/self/data/handoff/close/preview", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare/archive", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare/archive/preview", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare/preview", "to move in Part 7"),
+    ("ANY", "/api/self/data/abandon", "not a route here: _guard lets the recovery action through while boot is pending; the route is in homestead_self_data_server"),
     ("ANY", "/api/fleet/accept", "stays: fleet forwarding (_fleet_post)"),
     ("ANY", "/api/fleet/address", "stays: fleet forwarding (_fleet_post)"),
     ("ANY", "/api/fleet/join", "stays: fleet forwarding (_fleet_post)"),
