@@ -1008,11 +1008,11 @@ window.uvmImport = async (source, id) => {
       UI.field("Memory", `<input id="uvm_mem" value="${esc(vm.memory)}" oninput="uvmPicture()">`))}
     ${settingRow("Firmware", `As on ${kind}; change it later under the VM's Hardware.`, `<span class="mono small">${esc(hw)}</span>`)}`;
   const disks = `
-    ${UI.field("Storage class", `<select id="uvm_sc">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
+    ${UI.field("Storage class", `<select id="uvm_sc" onchange="uvmRoom()">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
       { tipHtml: tip("The storage class for the disks. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
     ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
       `${esc(d.size_gb)} GiB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
-      i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
+      i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture();uvmRoom()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
     <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 110 MiB/s on gigabit.</p>`;
   const lan = (opts.network_details || []).filter(n => n.vms !== false);
   const network = `
@@ -1024,11 +1024,45 @@ window.uvmImport = async (source, id) => {
       { tipHtml: tip(`As on ${kind}. VirtIO needs its driver in the guest; Windows has it if it used VirtIO on ${kind}.`) })}`;
   const behind = [...vm.dropped.map(d => `<p><b>${esc(d.what)}</b> ${esc(d.detail)}: ${esc(d.reason)}.</p>`), ...vm.notes.map(n => `<p>${esc(n)}.</p>`)];
   modal(`Import ${name}`, UI.lead(`From ${esc(source)}. The VM here is made stopped once its disks have arrived; ${esc(name)} on ${kind} is left as it is.`)
-    + '<div id="uvm_picture"></div>'
+    + '<div id="uvm_picture"></div><div id="uvm_room"></div>'
     + stepper("uvm_steps", [{ title: "Settings", html: settings }, { title: "Disks", html: disks }, { title: "Network", html: network }],
       '<button class="btn pri" data-need="admin" id="uvm_go" onclick="uvmStart()">Import</button>')
     + (behind.length ? UI.more("What stays behind", behind.join("")) : ""), true);
   uvmPicture();
+  uvmRoom();
+};
+
+/* Whether the chosen storage class can still place the disks, checked as the
+   class and disks change: too little blocks the import, tight asks first. */
+let UVM_ROOM = null, UVM_ROOM_SEQUENCE = 0;
+window.uvmRoom = async () => {
+  const state = window.__uvm, host = $("#uvm_room");
+  if (!state || !host) return;
+  const sequence = ++UVM_ROOM_SEQUENCE, kept = new Set([0, ...$$(".uvm-disk").filter(c => c.checked).map(c => +c.dataset.i)]);
+  UVM_ROOM = null;
+  host.innerHTML = '<p class="ui-help"><span class="spin2"></span>Checking the storage class has room for the disks…</p>';
+  let room;
+  try {
+    room = await uvmPost("/api/vms/import-unraid/room", { storage_class: $("#uvm_sc")?.value || "",
+      disks: state.vm.disks.filter(d => kept.has(d.index)).map(d => ({ virtual: d.virtual, size_gb: d.size_gb })) });
+  } catch (e) {
+    room = { level: "unknown", blockers: [], warnings: [`The room on the storage class could not be checked: ${e.message}`] };
+  }
+  if (sequence !== UVM_ROOM_SEQUENCE || !$("#uvm_room")) return;
+  UVM_ROOM = room;
+  const blockers = room.blockers || [], warnings = room.warnings || [];
+  host.innerHTML = blockers.length || warnings.length
+    ? UI.notices([...blockers.map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], blockers.length ? "Can't import" : "Check first")
+      + (!blockers.length ? UI.ack("uvm_room_ok", reviewAck("Imports"), { onchange: "uvmRoomReady()" }) : "")
+    : `<p class="ui-help">${esc(room.storage_class)} has room: these disks take ${esc(room.needed_gb)} of the ${esc(room.free_gb)} GiB it can still place.</p>`;
+  uvmRoomReady();
+};
+window.uvmRoomReady = () => {
+  const go = $("#uvm_go"), room = UVM_ROOM;
+  // Until the check answers, starting is left to the server's own check.
+  const ready = !room || (!(room.blockers || []).length && (!$("#uvm_room_ok") || $("#uvm_room_ok").checked));
+  if (go && go.textContent === "Import") go.disabled = !ready;
+  return ready;
 };
 
 window.uvmPicture = () => {
@@ -1058,6 +1092,7 @@ window.uvmPicture = () => {
 window.uvmStart = async () => {
   const state = window.__uvm, go = $("#uvm_go");
   if (!state || !go || go.disabled) return;
+  if (!uvmRoomReady()) return toast(UVM_ROOM?.blockers?.[0] || `Tick ${reviewAck("Imports")} to accept the warning first`, "bad");
   const body = { source: state.source, vm: state.vm.id, name: $("#uvm_name").value.trim(), namespace: $("#uvm_ns").value,
     cores: +$("#uvm_cores").value, memory: $("#uvm_mem").value.trim(), storage_class: $("#uvm_sc").value,
     network: $("#uvm_net").value, keep_mac: $("#uvm_mac") ? $("#uvm_mac").checked : false, nic_model: $("#uvm_nic").value,
@@ -1069,5 +1104,5 @@ window.uvmStart = async () => {
     closeModal();
     if (window.refreshOperations) await refreshOperations(true);
     resetPaint(); viewVmImport();
-  } catch (e) { toast(e.message, "bad"); go.disabled = false; go.textContent = "Import"; }
+  } catch (e) { toast(e.message, "bad"); go.textContent = "Import"; go.disabled = false; uvmRoomReady(); }
 };

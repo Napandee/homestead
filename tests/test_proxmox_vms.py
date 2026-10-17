@@ -245,6 +245,54 @@ class VolumeSizeTests(unittest.TestCase):
         self.assertEqual("1280Mi", UVMS.volume_request({"size_gb": 1}))
 
 
+class RoomTests(unittest.TestCase):
+    """The room check with a Proxmox source: 128 GiB and 500 GiB disks, asked
+    for as 135.7 and 530 GiB with their filesystem's room."""
+
+    def setUp(self):
+        self.imp = mock.Mock()
+        self.imp.NS = "lab"
+        self.imp._source.return_value = dict(ImportTests.SRC)
+        self.imp._ssh_script.side_effect = lambda src, cmd: f"ssh {src['host']} {cmd!r}"
+        self.imp.run_probe.return_value = listing_lines([("100", "stopped", WIN11)], FACTS)
+        self.imp._required_name.side_effect = lambda value, label="name": str(value)
+        self.imp._get_or_none.return_value = None
+        self.imp.vm_disk_import_plan.return_value = {"ready": True, "message": ""}
+        self.kget, self.ksend, self.ops = mock.Mock(), mock.Mock(), mock.Mock()
+        self.kget.return_value = {"items": [{"metadata": {"namespace": "cdi"}}]}
+        self.rooms = [400, 400, 400]
+        cap = lambda: {"nodes": [{"name": f"node{i + 1}", "tags": [], "disks": [
+            {"id": "d", "room_gb": room, "physical_room_gb": room, "blocked": "", "tags": []}]}
+            for i, room in enumerate(self.rooms)]}
+        classes = lambda: [{"name": "longhorn-r3", "provisioner": "driver.longhorn.io", "replicas": "3",
+                            "disk_tags": [], "node_tags": []}]
+        UVMS.bind(self.imp, self.kget, self.ksend, self.ops, storage=(classes, cap, lambda: "longhorn-r3"))
+        self.addCleanup(UVMS.bind, self.imp, self.kget, self.ksend, self.ops, storage=(None, None, lambda: ""))
+
+    def test_both_disks_need_more_than_three_copies_leave_room_for(self):
+        found = UVMS._one("pve", "100")
+        room = UVMS.storage_room(UVMS._chosen_disks(found, []), "longhorn-r3")
+        self.assertEqual("bad", room["level"])
+        self.assertEqual(["Not enough room on longhorn-r3: these disks need 665.7 GiB (1997 GiB with its 3 copies), "
+                          "and it can still place 400 GiB. Free some space, add a disk, or leave a disk out"], room["blockers"])
+
+    def test_the_import_is_refused_before_any_disk_is_made(self):
+        with self.assertRaises(ValueError) as caught:
+            UVMS.start({"source": "pve", "vm": "100", "name": "win11"})
+        self.assertIn("these disks need 665.7 GiB", str(caught.exception))
+        self.ksend.assert_not_called()
+        self.ops.start.assert_not_called()
+
+    def test_the_boot_disk_alone_fits_and_a_tight_fit_warns(self):
+        found = UVMS._one("pve", "100")
+        alone = UVMS._chosen_disks(found, [1])
+        self.assertEqual(("ok", 135.7), (UVMS.storage_room(alone, "")["level"], UVMS.storage_room(alone, "")["needed_gb"]))
+        self.rooms = [140, 140, 140]
+        room = UVMS.storage_room(alone, "")
+        self.assertEqual(("warn", 140.0), (room["level"], room["free_gb"]))
+        self.assertIn("leaving 4.3 GiB (3%)", room["warnings"][0])
+
+
 if __name__ == "__main__":
     unittest.main()
 

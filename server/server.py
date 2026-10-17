@@ -1609,7 +1609,7 @@ HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
 HOST_CONSOLE.platform = lambda: PLATFORM.detect()
 OPS.RESOLVERS["host-console"] = HOST_CONSOLE.status
 import homestead_unraid_vms as UNRAID_VMS
-UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect())
+UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect(), (storage_classes, LHCAP.capacity, vm_default_class))
 OPS.RESOLVERS[UNRAID_VMS.KIND] = UNRAID_VMS.status
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
@@ -2394,7 +2394,7 @@ ADMIN_ROUTES = {
     "/api/sources/scan", "/api/sources/trust",
     "/api/sources/containers", "/api/sources/inspect", "/api/sources/measure",
     # A server's VMs, one shut down there, and one copied across.
-    "/api/sources/vms", "/api/sources/vms/shutdown", "/api/vms/import-unraid",
+    "/api/sources/vms", "/api/sources/vms/shutdown", "/api/vms/import-unraid", "/api/vms/import-unraid/room",
     "/api/import", "/api/import/preview", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",

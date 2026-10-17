@@ -110,6 +110,7 @@ def capacity(cfg=None):
                      ("" if condition.get("status", "True") == "True" else (condition.get("message") or "Longhorn marks it unschedulable")) or \
                      ("" if available > maximum * minimal / 100 else f"less than {minimal}% of it is physically free")
             disks.append({"id": disk_id, "path": disk_spec.get("path", ""), "type": disk_spec.get("diskType", "filesystem"),
+                          "tags": list(disk_spec.get("tags") or []),
                           "size_gb": _gb(maximum - reserved), "allocated_gb": _gb(scheduled), "limit_gb": _gb(limit),
                           "used_gb": _gb(maximum - available), "free_gb": _gb(available),
                           "room_gb": 0.0 if reason else _gb(max(0, limit - scheduled)),
@@ -121,7 +122,7 @@ def capacity(cfg=None):
         pct = round(allocated / limit * 100, 1) if limit else 0.0
         room = max((d["room_gb"] for d in usable), default=0.0)
         physical_room = max((d["physical_room_gb"] for d in usable), default=0.0)
-        nodes.append({"name": node["metadata"]["name"], "disks": disks, "allocated_gb": round(allocated, 1),
+        nodes.append({"name": node["metadata"]["name"], "tags": list(spec.get("tags") or []), "disks": disks, "allocated_gb": round(allocated, 1),
                       "limit_gb": round(limit, 1), "size_gb": round(sum(d["size_gb"] for d in disks), 1),
                       "used_gb": round(sum(d["used_gb"] for d in disks), 1), "pct": pct, "room_gb": room,
                       "physical_room_gb": physical_room,
