@@ -129,13 +129,13 @@ or explicitly cleared before the affected edit can proceed.
 ## 4. Choose where the display appears
 
 For GPU compute or transcoding while retaining Homestead's VNC access, leave
-**Primary boot output** set to **Web console (virtual display)**. The guest can
+**Display** set to **Virtual display**. The guest can
 use the attached GPU once its driver is installed.
 
 For a monitor connected directly to the GPU:
 
-1. Open **Hardware → Devices → Primary boot output** and choose
-   **Passed-through GPU (physical monitor)**.
+1. Open **Edit → Hardware → Display and devices → Display** and choose
+   **Passed-through GPU only**.
 2. Keep the serial console enabled as a possible recovery path. The guest OS
    must also be configured to send output to its serial port for this to help.
 3. Review and save. This choice disables virtual VGA and selects **UEFI**.
@@ -171,8 +171,8 @@ More diagnostics: [GPU troubleshooting](Troubleshooting#gpu-passthrough).
 
 ## Undo the setup or move to another host
 
-Stop the VM. If removing its last GPU, select **Web console (virtual display)**
-or serial output in the same edit. Remove the passthrough device and review the
+Stop the VM. If removing its last GPU, select **Virtual display** or **No
+display** in the same edit. Remove the passthrough device and review the
 change; removing the device also removes its managed ROM. Clearing only the ROM
 does not restore the virtual display. Switching back to the web console leaves
 UEFI enabled, so it does not undo an earlier firmware change.

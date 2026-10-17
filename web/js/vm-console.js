@@ -27,8 +27,8 @@ function vmConsoleDisplayNote(ns, name) {
   if (!vm || !vm.display || vm.display === "virtual") return "";
   return vm.display === "gpu"
     ? UI.callout("warn", "No virtual display: the picture is on the passed-through GPU",
-      "This VM has a GPU passed through and no virtual display adapter, so Screen shows nothing. Use a monitor on the GPU, Remote Desktop, or Serial - or turn the virtual display on under Hardware.")
-    : UI.callout("warn", "No virtual display", "This VM has no display adapter, so Screen shows nothing. Use Serial, or turn the virtual display on under Hardware.");
+      "This VM has a GPU passed through and no virtual display adapter, so Screen shows nothing. Use a monitor on the GPU, Remote Desktop, or Serial - or turn the virtual display on under Edit → Display and devices.")
+    : UI.callout("warn", "No virtual display", "This VM has no display adapter, so Screen shows nothing. Use Serial, or turn the virtual display on under Edit → Display and devices.");
 }
 window.vmConsoleDisplayNote = vmConsoleDisplayNote;
 

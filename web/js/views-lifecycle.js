@@ -1138,8 +1138,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
       <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
-    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, virtual devices</summary>
-      ${vmHardwareFields(opts.hardware_base, opts, false, true)}</details>` : ""}
+    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, memory</summary>
+      ${vmHardwareFields(opts.hardware_base, opts, false, true, true)}</details>` : ""}
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
 `;
   const vmNetwork = `
@@ -1176,6 +1176,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
   modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
     { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
+    // The display and virtual devices, a step of their own as on the Edit dialog.
+    ...(opts.hardware_base ? [{ title: "Display and devices", html: vmDisplayFields(opts.hardware_base) }] : []),
     { title: "Passthrough", html: window.vmDevicesPane ? vmDevicesPane({}, devices) : "" }],
     `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true, "vm-config");
   window.__vmPreset = "";

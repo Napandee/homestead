@@ -394,12 +394,17 @@ managed ConfigMap is retained for inspection and reuse. Several ROM files
 must fit together within the ConfigMap's 1 MiB limit. If a saved ROM is missing,
 replace or clear it explicitly in the edit form; unrelated edits keep it intact.
 
-### Primary boot output
+### Display
 
-In **New VM → Hardware → Devices**, or **VM → Edit → Hardware → Devices**,
-**Primary boot output** chooses
-**Web console (virtual display)**, **Passed-through GPU (physical monitor)**,
-or **Serial console only**. The change applies at the VM's next start.
+In **New VM → Hardware → Display and devices**, or **VM → Edit → Hardware →
+Display and devices**, **Display** chooses
+**Virtual display** (the console's Screen), **Passed-through GPU only** (a
+monitor on the GPU, no virtual display), or **No display** (serial console
+only). The VM page's **Hardware** tab shows which one a VM has. The change
+applies at the VM's next start.
+
+A VM with a passed-through GPU can keep its virtual display: the GPU then
+works for compute or transcoding, and the console still shows the VM.
 
 GPU output requires an attached passthrough GPU. It turns off virtual VGA and
 uses UEFI; when changing from BIOS, Secure Boot starts off. Connect the monitor
@@ -412,8 +417,8 @@ With several passed-through GPUs, the guest firmware chooses which card to
 initialize; this setting chooses physical GPU output rather than a specific
 card or connector.
 
-If removing the last GPU, change **Primary boot output** to web console or
-serial in the same edit. Clearing a vBIOS file alone does not restore the
+If removing the last GPU, change **Display** to the virtual display or no
+display in the same edit. Clearing a vBIOS file alone does not restore the
 virtual display. A serial console also needs the guest to send output to its
 serial port; enabling the virtual port alone does not configure the guest OS.
 

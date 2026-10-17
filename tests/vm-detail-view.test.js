@@ -51,6 +51,20 @@ test("a VM's dialog uses the shared section tabs and closes from a footer",async
   assert.doesNotMatch(html,/class="seg"/,"no hand-built tab strip");
   assert.match(html,/role="tablist"/);
   const tabs=[...html.matchAll(/role="tab"[^>]*>([^<]*)<\/button>/g)].map(m=>m[1]);
-  assert.deepEqual(tabs.map(x=>x.split(" ·")[0]),["Overview","Disks","Network","Events"]);
+  assert.deepEqual(tabs.map(x=>x.split(" ·")[0]),["Overview","Disks","Network","Passthrough","Events"]);
   assert.match(html,/<button[^>]*data-dialog-dismiss="true"[^>]*>Close<\/button>/);
+});
+/* What Edit changes is shown on the page too, each with a Change that opens Edit at it. */
+test("a VM's page shows its hardware, display and passthrough without opening Edit",async()=>{
+  const hardware={cpu:{sockets:1,cores:4,threads:1,model:"host-passthrough",dedicated:false},firmware:"uefi",secure_boot:false,
+    efi_persistent:true,tpm:"persistent",machine:"q35",hyperv:true,timezone:"Europe/London",hugepages:"",graphics:false,
+    boot_output:"gpu",serial:true,tablet:true,rng:false,balloon:true,sound:false};
+  const t=open({...shown,hardware,host_devices:[{name:"gpu1",resource:"nvidia.com/GA104",gpu:true,rom:false}]});
+  await t.ctx.vmOpen("lab","guest");
+  const html=t.body.innerHTML;
+  const tabs=[...html.matchAll(/role="tab"[^>]*>([^<]*)<\/button>/g)].map(m=>m[1].split(" ·")[0]);
+  assert.deepEqual(tabs,["Overview","Hardware","Display and devices","Disks","Network","Passthrough","Events"]);
+  assert.match(html,/Passed-through GPU only - no virtual display/);
+  assert.match(html,/nvidia\.com\/GA104/);
+  assert.match(html,/vmEditAt\(&quot;lab&quot;,&quot;guest&quot;,&quot;display&quot;\)/);
 });

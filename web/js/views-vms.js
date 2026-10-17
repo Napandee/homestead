@@ -425,6 +425,23 @@ window.vmOpen = async (ns, name) => {
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
         <td class="mono xs">${esc(n.mac || "—")}</td><td class="mono small">${esc(n.ips.join(", ") || "—")}</td></tr>`).join("")}</tbody></table>`;
+  // What Edit changes, shown here too: hardware, display and passthrough (#vm-page).
+  const hw = v.hardware, change = key => `<div class="row" style="margin-top:10px">${UI.button("Change", `vmEditAt(${jsArg(v.ns)},${jsArg(v.name)},${jsArg(key)})`, { attrs: 'data-need="operator"' })}</div>`;
+  const yes = on => on ? "on" : '<span class="dim">off</span>';
+  const hardware = hw ? `${UI.facts([
+      ["CPU", `${esc((hw.cpu.sockets || 1) * (hw.cpu.cores || 1) * (hw.cpu.threads || 1))} vCPUs · ${esc(hw.cpu.model || "cluster default model")}${hw.cpu.dedicated ? " · dedicated" : ""}`],
+      ["Firmware", hw.firmware === "uefi" ? `UEFI${hw.secure_boot ? " · Secure Boot" : ""}${hw.efi_persistent ? " · kept variables" : ""}` : "BIOS"],
+      ["TPM", hw.tpm === "off" ? '<span class="dim">off</span>' : hw.tpm === "persistent" ? "on, kept" : "on"],
+      ["Machine", esc(hw.machine || "default")], ["Hyper-V", yes(hw.hyperv)], ["Clock", esc(hw.timezone || "UTC")],
+      ["Hugepages", esc(hw.hugepages || "normal pages")]])}${change("hardware")}` : "";
+  const displayWord = { console: "Virtual display (the console's Screen)", gpu: "Passed-through GPU only - no virtual display", serial: "No display - serial console only" };
+  const display = hw ? `${UI.facts([
+      ["Display", esc(displayWord[hw.boot_output] || displayWord[hw.graphics ? "console" : "serial"])],
+      ["Serial console", yes(hw.serial)], ["Tablet pointer", yes(hw.tablet)], ["Random-number device", yes(hw.rng)],
+      ["Memory balloon", yes(hw.balloon)], ["Sound card", yes(hw.sound)]])}${change("display")}` : "";
+  const devices = `${(v.host_devices || []).length ? `<table class="tbl dense stack"><thead><tr><th>Device</th><th>Resource</th><th>ROM (vBIOS)</th></tr></thead><tbody>
+      ${v.host_devices.map(d => `<tr><td><b>${esc(d.name)}</b>${d.gpu ? ` ${UI.chip("GPU", "info")}` : ""}</td><td class="mono small">${esc(d.resource)}</td><td>${d.rom ? "its own" : '<span class="dim">default</span>'}</td></tr>`).join("")}</tbody></table>`
+      : '<div class="dim small">No PCI or USB device is passed through.</div>'}${change("devices")}`;
   const events = v.events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Last</th></tr></thead><tbody>
       ${v.events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
         <td class="small">${esc(e.message)}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>';
@@ -434,10 +451,18 @@ window.vmOpen = async (ns, name) => {
     ${vmFilling(v)}
     ${UI.sectionForm("vm_detail", [
       { key: "overview", title: "Overview", html: overview },
+      ...(hw ? [{ key: "hardware", title: "Hardware", html: hardware }, { key: "display", title: "Display and devices", html: display }] : []),
       { key: "disks", title: `Disks · ${v.disks.length}`, html: disks },
       { key: "network", title: `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`, html: network },
+      { key: "devices", title: `Passthrough · ${(v.host_devices || []).length}`, html: devices },
       { key: "events", title: "Events", html: events }], "", { always: true, cancelHtml: UI.cancel("Close") })}`;
   if (window.applyRole) applyRole();
+};
+
+/* Edit, opened at one of its sections - from the VM page's Change. */
+window.vmEditAt = async (ns, name, key) => {
+  await vmEdit(ns, name);
+  if ($("#mbody")) UI.selectSection("ve", key);
 };
 
 /* ---- editing: everything the VM is made of ---- */
@@ -525,8 +550,9 @@ window.vmEdit = async (ns, name) => {
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
       <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div>
-      ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsq(ns)},${jsq(name)})`, { attrs: 'data-need="admin"' }))}`},
-    v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)},
+      ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsArg(ns)},${jsArg(name)})`, { attrs: 'data-need="admin"' }))}`},
+    v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name, false, true)},
+    v.hardware && {key:"display", title:"Display and devices", html:vmDisplayFields(v.hardware)},
     {key:"disks", title:`Disks · ${disks.length}`, html:`
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Disk</th><th>Boot</th><th>Bus</th><th>Size</th><th>Source</th><th></th></tr></thead>
         <tbody>${disks.map(d => vmDiskRow(d, o)).join("")}</tbody></table></div>

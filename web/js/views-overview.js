@@ -601,11 +601,11 @@ function nodeWorkloadChips(n) {
       : `<button type="button" class="tag movable" title="Move ${esc(name)} to another host" onclick="moveWorkload(${jsq(name)},${jsq(ns)})">${esc(name)} <span class="mv" aria-hidden="true">⇄</span></button>`; }).join("");
   const bar = selecting
     ? `<div class="wg-selbar"><b aria-live="polite">${picked.size} selected</b>
-        ${UI.button("Select all", `nodePickAll(${jsq(n.name)},true,${esc(JSON.stringify(ids))})`, { kind: "sm" })}
-        ${UI.button("Clear", `nodePickAll(${jsq(n.name)},false)`, { kind: "sm" })}
-        ${UI.button("Move selected…", `nodeMoveSelected(${jsq(n.name)})`, { kind: "sm pri", disabled: !picked.size, attrs: 'data-need="operator"' })}
-        ${UI.button("Done", `nodeSelect(${jsq(n.name)},false)`, { kind: "sm" })}</div>`
-    : `<div class="dim xs" style="margin-top:8px">Click one to move it to another host, or ${UI.button("Select", `nodeSelect(${jsq(n.name)},true)`, { kind: "sm" })} several.</div>`;
+        ${UI.button("Select all", `nodePickAll(${jsArg(n.name)},true,${JSON.stringify(ids)})`, { kind: "sm" })}
+        ${UI.button("Clear", `nodePickAll(${jsArg(n.name)},false)`, { kind: "sm" })}
+        ${UI.button("Move selected…", `nodeMoveSelected(${jsArg(n.name)})`, { kind: "sm pri", disabled: !picked.size, attrs: 'data-need="operator"' })}
+        ${UI.button("Done", `nodeSelect(${jsArg(n.name)},false)`, { kind: "sm" })}</div>`
+    : `<div class="dim xs" style="margin-top:8px">Click one to move it to another host, or ${UI.button("Select", `nodeSelect(${jsArg(n.name)},true)`, { kind: "sm" })} several.</div>`;
   return `<div id="nodeChips">${chips}</div>${bar}`;
 }
 window.nodeWorkloadChips = nodeWorkloadChips;

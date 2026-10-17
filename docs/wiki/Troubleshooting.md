@@ -234,9 +234,9 @@ checks in order:
 2. On the GPU's host, **Hardware → Devices for VMs → Refresh devices** should
    show IOMMU on and the card handed to VMs. Confirm the VM's **Passthrough**
    tab contains that GPU resource and that it started on a host offering it.
-3. In **VM → Edit → Hardware → Devices**, choose **Passed-through GPU (physical
-   monitor)** as **Primary boot output**. This selects UEFI and disables virtual
-   VGA. Save and restart the VM; adding the GPU alone does not choose its boot
+3. In **VM → Edit → Hardware → Display and devices**, set **Display** to
+   **Passed-through GPU only**. This selects UEFI and removes the virtual
+   display. Save and restart the VM; adding the GPU alone does not choose its boot
    display. A BIOS-installed guest may need a UEFI bootloader repair.
 4. If the card needs an explicit ROM, capture it on the host and select the
    downloaded file beside the GPU in **Edit → Passthrough**. Use a ROM from the
