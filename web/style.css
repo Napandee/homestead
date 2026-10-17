@@ -2327,10 +2327,10 @@ html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-the
   .tbl.stack tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 14px;padding:12px 14px}
   .tbl.stack td{display:block;padding:0;text-align:left;white-space:normal;overflow-wrap:anywhere}
   .tbl.stack td::before{display:block;margin-bottom:2px;font:500 11px/1.4 "Inter Tight",sans-serif;letter-spacing:0;text-transform:none;color:var(--mut)}
-  .tbl.stack td:first-child,.tbl.stack td[data-label=""],.tbl.stack td[colspan],.tbl.stack td[data-wide]{grid-column:1/-1}
+  .tbl.stack td:first-child,.tbl.stack td[data-label=""],.tbl.stack td[data-actions],.tbl.stack td[colspan],.tbl.stack td[data-wide]{grid-column:1/-1}
   .tbl.stack td:first-child{padding-bottom:2px;order:-1}
   /* Short values first, so they pair up; long ones and actions after. */
-  .tbl.stack td[data-wide]{order:1}.tbl.stack td[data-label=""]{order:2}
+  .tbl.stack td[data-wide]{order:1}.tbl.stack td[data-label=""],.tbl.stack td[data-actions]{order:2}
   .tbl.stack tr>td:first-child{order:-1}
   .tbl.stack td .row,.tbl.stack td[data-label=""] .row{justify-content:flex-start}
   .tbl.stack td[data-label=""]{display:flex;flex-wrap:wrap;gap:8px;padding-top:4px}
@@ -2420,7 +2420,7 @@ textarea{min-height:0}
   .tbl.stack.compact td[data-status]{grid-column:2;grid-row:1;justify-self:end;order:0;text-align:right!important;width:auto!important}
   .tbl.stack.compact td[data-status]::before{display:none}
   .tbl.stack.compact td[data-sm-hide]{display:none}
-  .tbl.stack.compact td[data-actions]{grid-column:1/-1;display:flex;justify-content:flex-end;padding-top:4px}
+  .tbl.stack.compact td[data-actions]{grid-column:1/-1;display:flex;justify-content:flex-end;padding-top:4px;width:auto;white-space:normal}
   .tbl.stack.compact td .meter{display:none}
   .tbl.stack.compact td>div{display:inline}
   .tbl.stack.compact tr>td:first-child{grid-column:1;grid-row:1}
@@ -2770,6 +2770,10 @@ html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
 /* A card's or row's buttons: two, then ⋯, on one line. */
 .actionbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .actionbar>.actionmenu{margin-left:0}
+/* A row's actions (#559): the cell is as narrow as its buttons, and they end at
+   the table's right edge on every row, whatever width the column would get. */
+td[data-actions]{width:1%;white-space:nowrap}
+td[data-actions]>.actionbar{justify-content:flex-end}
 .vip-card-actions .actionbar,.wacts .actionbar{width:100%}
 .wacts .actionbar>.actionmenu,.vip-card-actions .actionbar>.actionmenu{margin-left:auto}
 /* Tabs of a page family (Containers, Images, Schedules, Import...), first in

@@ -532,7 +532,7 @@ async function viewStorage() {
   ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume moved to another storage class, kept in case the new copy disappoints. Remove each once its app works on the new one.")}</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
-      <td>${actionBar([{ label: "Remove", run: `reclassRemoveOld(${jsq(o.pv)})`, need: "admin", danger: true }])}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+      <td data-actions>${actionBar([{ label: "Remove", run: `reclassRemoveOld(${jsq(o.pv)})`, need: "admin", danger: true }])}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
   ${otherVolumesHtml(others)}`);
   volumeProgressWatch();
 }
@@ -826,7 +826,7 @@ function storageClassCard(classes, v2 = null) {
       <td class="mono" data-label="Copies">${esc(row.replicas || "—")}</td>
       <td data-label="Its volumes">${features(row)}</td>
       <td class="mono" data-label="In use">${row.in_use ?? 0}</td>
-      <td>${actionBar([
+      <td data-actions>${actionBar([
         row.default || row.internal || row.made_for ? null : { label: "Make default", run: `storageClassDefault(${jsq(row.name)})`, need: "admin", tip: "Use this class when nothing else is chosen" },
         row.internal || row.default || row.in_use ? null : { label: "Delete", icon: "trash", run: `storageClassDelete(${jsq(row.name)})`, need: "admin", danger: true },
       ], { shown: 1 })}</td></tr>`).join("")}</tbody></table></div>${specialLine}`;
@@ -1349,7 +1349,7 @@ async function viewShares() {
         ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
         ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
       <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
-      <td class="shareactions">${actionBar([
+      <td data-actions>${actionBar([
         { label: "Edit", icon: "edit", run: `editShare(${jsq(s.name)})`, need: "admin", tip: "Grow this share or change its access policy" },
         { label: "NFS", run: `nfsExport(${jsq(s.name)})`, need: "admin", tip: "Configure this share's NFSv4 export and allowed clients" },
         { label: "Remove", icon: "trash", run: `rmShare(${jsq(s.name)})`, need: "admin", danger: true }])}</td></tr>`).join("")
