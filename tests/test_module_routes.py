@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 3472
+MAX_LINES = 3451
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20

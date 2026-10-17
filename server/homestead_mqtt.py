@@ -39,6 +39,7 @@ import time
 import urllib.error
 
 import homestead_agent_audit as AUDIT
+import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -361,7 +362,33 @@ def _store(clean_cfg):
 
 def public(cfg=None):
     cfg = cfg or load()
-    return {**{k: v for k, v in cfg.items() if k != "password"}, "status": dict(STATUS)}
+    return {**{k: v for k, v in cfg.items() if k != "password"}, "status": shown_status(cfg["interval"])}
+
+
+# ------------------------------------------------------------------ status every replica can show
+# Only the leader publishes, but any replica may answer the browser. The
+# leader shares what it is doing (homestead_leader_state) - on a change, and
+# at most once a minute while it publishes - and a replica on standby shows
+# that, rather than its own "standby".
+SHARE_EVERY = 60
+
+
+def _share(now=None):
+    with _lock:
+        status = dict(STATUS)
+    LEADER_STATE.put("mqtt", status, every=SHARE_EVERY, key=status["state"], now=now)
+
+
+def shown_status(interval=60, now=None):
+    """This replica's status; on standby, the leader's, while it is fresh."""
+    with _lock:
+        local = dict(STATUS)
+    if local["state"] != "standby":
+        return local
+    shared, _ = LEADER_STATE.get("mqtt", max_age=max(3 * SHARE_EVERY, 3 * interval), now=now)
+    if isinstance(shared, dict) and shared.get("state") in ("publishing", "error"):
+        return {k: shared.get(k, v) for k, v in local.items()}
+    return local
 
 
 # ------------------------------------------------------------------ what is published
@@ -750,6 +777,7 @@ def run():
                     STATUS.update(state="publishing", error="", last_publish=int(time.time()),
                                   published=STATUS["published"] + count,
                                   detail=f"publishing to {cfg['host']}:{cfg['port']} every {cfg['interval']}s")
+                _share()
             backoff = 5
             # Between publishes the broker hears a ping at least every minute,
             # inside the keepalive, so a long interval does not look like a
@@ -767,6 +795,8 @@ def run():
                 client = None
         except Exception as error:
             _set("error", "", str(error)[:200])
+            if is_leader():
+                _share()
             if client:
                 client.close(gracefully=False)
                 client = None
