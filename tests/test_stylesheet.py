@@ -170,5 +170,18 @@ class StylesheetTests(unittest.TestCase):
         self.assertNotIn("--ok", style[".setup-return"]["background"])
         self.assertNotIn("--ok", style[".store-official"]["color"])
 
+    def test_over_time_lines_keep_their_width(self):
+        """Over time stretches a 300-unit chart across a wide card: a line that
+        scaled with it drew thick and smeared, and spikes looked doubled."""
+        style = {}
+        for selectors, declarations in rules():
+            for selector in selectors:
+                style.setdefault(selector, {}).update(declarations)
+        line = style[".hist-chart .spark .ln"]
+        self.assertEqual(line["vector-effect"], "non-scaling-stroke")
+        glow = int(re.search(r"0 0 (\d+)px", line["filter"]).group(1))
+        self.assertLess(glow, int(re.search(r"0 0 (\d+)px", style[".spark .ln"]["filter"]).group(1)),
+                        "the glow is drawn in the chart's units, so a stretched chart needs a smaller one")
+
 if __name__ == "__main__":
     unittest.main()
