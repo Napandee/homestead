@@ -3827,6 +3827,16 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .agent-req-detail{margin:0;overflow-wrap:anywhere}
 .agent-req-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap}
 .agent-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}
+/* A command to approve: one block, wrapping at any width, however long its script. */
+.agent-command{margin:0;padding:10px 12px;border-radius:10px;background:var(--surf2);border:1px solid var(--line);
+  white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto}
+/* A long command starts at its first lines, fading out, until it is opened. */
+.agent-command-wrap{display:grid;gap:6px;justify-items:start}
+.agent-command-wrap .agent-command{width:100%;box-sizing:border-box}
+.agent-command-wrap.clamped .agent-command{max-height:9.2em;overflow:hidden;
+  -webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+.agent-mono{overflow-wrap:anywhere}
+.agent-command-block{display:grid;gap:6px;margin-top:12px}
 /* The VM dialog's state and its actions share a line, and wrap on a phone (#504). */
 .vm-head{flex-wrap:wrap;gap:10px}
 /* Remove container sits clear of the first field (#495). */
