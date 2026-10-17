@@ -732,9 +732,12 @@ def forward(handler, ref, body, user="", role="", cookies=()):
         raise Unreachable("that cluster is no longer linked")
     websocket = (handler.headers.get("Upgrade") or "").lower() == "websocket"
     if websocket:
-        # A console from another site is refused here, as it would be anywhere.
+        # A console from another site is refused here, as it would be anywhere -
+        # checked as a console on this cluster checks it: against the address the
+        # browser used, which a proxy or tunnel in front gives as X-Forwarded-Host.
         origin = urllib.parse.urlparse(handler.headers.get("Origin") or "").netloc.lower()
-        if not origin or origin != (handler.headers.get("Host") or "").lower():
+        host = handler.headers.get("X-Forwarded-Host") or handler.headers.get("Host") or ""
+        if not origin or origin != host.lower():
             raise PermissionError("console websocket origin rejected")
     try:
         sock, parsed = _connect(target["url"])
