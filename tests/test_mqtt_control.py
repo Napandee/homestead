@@ -269,3 +269,49 @@ class ProtocolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedStatusTests(unittest.TestCase):
+    """The leader publishes; a replica on standby shows what the leader is doing."""
+    def setUp(self):
+        self.maps, self.writes = {}, []
+
+        def kget(path):
+            name = path.rsplit("/", 1)[-1]
+            if name not in self.maps:
+                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+            return self.maps[name]
+
+        def ksend(method, path, body=None, **_):
+            self.writes.append(method)
+            if method == "PUT" and body["metadata"]["name"] not in self.maps:
+                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+            self.maps[body["metadata"]["name"]] = body
+            return {}
+        MQTT.bind(kget, ksend, "default", lambda: None, lambda: True)
+        MQTT._shared.update(at=0.0, state=None)
+        self.saved = dict(MQTT.STATUS)
+
+    def tearDown(self):
+        MQTT.STATUS.clear()
+        MQTT.STATUS.update(self.saved)
+        MQTT._shared.update(at=0.0, state=None)
+
+    def test_a_standby_replica_shows_the_leaders_status(self):
+        MQTT.STATUS.update(state="publishing", detail="publishing to 192.0.2.177:1883 every 60s", last_publish=1000, error="")
+        MQTT._share(now=1000)
+        self.assertEqual(["PUT", "POST"], self.writes)
+        MQTT._share(now=1030)                       # same state, inside a minute: not written again
+        self.assertEqual(2, len(self.writes))
+        MQTT._share(now=1061)
+        self.assertEqual(3, len(self.writes))
+        MQTT.STATUS.update(state="standby", detail="another Homestead replica is publishing", last_publish=0)
+        shown = MQTT.shown_status(60, now=1100)
+        self.assertEqual(("publishing", 1000), (shown["state"], shown["last_publish"]))
+        # the leader has not written for a long while: this replica's own word
+        self.assertEqual("standby", MQTT.shown_status(60, now=1061 + 600)["state"])
+
+    def test_a_publishing_replica_shows_its_own(self):
+        MQTT.STATUS.update(state="error", error="the broker refused the connection")
+        self.assertEqual("error", MQTT.shown_status(60, now=5)["state"])
+        self.assertEqual([], self.writes)

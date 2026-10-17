@@ -89,7 +89,7 @@ def report():
         backups = {}
     mqtt = {}
     try:
-        mqtt = dict(MQTT.STATUS)
+        mqtt = MQTT.shown_status()
     except Exception:
         pass
     # Homestead's shared address, and any app, on the cluster's own address:

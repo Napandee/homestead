@@ -361,7 +361,58 @@ def _store(clean_cfg):
 
 def public(cfg=None):
     cfg = cfg or load()
-    return {**{k: v for k, v in cfg.items() if k != "password"}, "status": dict(STATUS)}
+    return {**{k: v for k, v in cfg.items() if k != "password"}, "status": shown_status(cfg["interval"])}
+
+
+# ------------------------------------------------------------------ status every replica can show
+# Only the leader publishes, but any replica may answer the browser. The
+# leader writes what it is doing to a ConfigMap of its own - on a change, and
+# at most once a minute while it publishes - and a replica on standby shows
+# that, rather than its own "standby".
+SHARE_EVERY = 60
+_shared = {"at": 0.0, "state": None}
+
+
+def _status_map():
+    return NAMES.object_name("mqtt-status")
+
+
+def _share(now=None):
+    now = now or time.time()
+    with _lock:
+        status = dict(STATUS)
+    if status["state"] == _shared["state"] and now - _shared["at"] < SHARE_EVERY:
+        return
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": _status_map(), "namespace": NAMESPACE, "labels": {NAMES.key("managed"): "true"}},
+            "data": {"status.json": json.dumps({**status, "at": int(now)})}}
+    try:
+        try:
+            ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_status_map()}", body)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
+        _shared.update(at=now, state=status["state"])
+    except Exception as error:
+        print(f"mqtt: could not share its status: {str(error)[:160]}", flush=True)
+
+
+def shown_status(interval=60, now=None):
+    """This replica's status; on standby, the leader's, while it is fresh."""
+    now = now or time.time()
+    with _lock:
+        local = dict(STATUS)
+    if local["state"] != "standby":
+        return local
+    try:
+        shared = json.loads((kget(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_status_map()}").get("data") or {})
+                            .get("status.json") or "{}")
+    except Exception:
+        return local
+    if shared.get("state") in ("publishing", "error") and now - shared.get("at", 0) <= max(3 * SHARE_EVERY, 3 * interval):
+        return {k: shared.get(k, v) for k, v in local.items()}
+    return local
 
 
 # ------------------------------------------------------------------ what is published
@@ -750,6 +801,7 @@ def run():
                     STATUS.update(state="publishing", error="", last_publish=int(time.time()),
                                   published=STATUS["published"] + count,
                                   detail=f"publishing to {cfg['host']}:{cfg['port']} every {cfg['interval']}s")
+                _share()
             backoff = 5
             # Between publishes the broker hears a ping at least every minute,
             # inside the keepalive, so a long interval does not look like a
@@ -767,6 +819,8 @@ def run():
                 client = None
         except Exception as error:
             _set("error", "", str(error)[:200])
+            if is_leader():
+                _share()
             if client:
                 client.close(gracefully=False)
                 client = None
