@@ -36,10 +36,26 @@ test("opening the form preserves its current output and changes serialize for re
   const original = vm.runInContext("vmHardwareValues()", ctx);
   assert.equal(ctx.vmHardwareChanges(original), null);
   const html = ctx.vmHardwareFields(original);
-  assert.match(html, /Primary boot output/);
+  assert.match(html, />Display</);
+  assert.match(html, /Virtual display \(the console's Screen\)/);
   assert.match(html, /Passed-through GPU/);
   fields["#vh_boot_output"].value = "gpu"; ctx.vmBootOutputChanged();
   const changes = ctx.vmHardwareChanges(original);
   assert.equal(changes.boot_output, "gpu"); assert.equal(changes.graphics, false);
   assert.equal(changes.firmware, "uefi");
+});
+
+test("the display and virtual devices are a section of their own beside Disks", () => {
+  const {ctx} = setup();
+  const original = vm.runInContext("vmHardwareValues()", ctx);
+  const split = ctx.vmHardwareFields(original, {}, false, false, true);
+  assert.doesNotMatch(split, /id="vh_boot_output"/, "not repeated inside Hardware");
+  assert.match(ctx.vmHardwareFields(original), /id="vh_boot_output"/, "still inside Hardware when not split");
+  const display = ctx.vmDisplayFields(original);
+  assert.match(display, /id="vh_boot_output"/);
+  assert.match(display, /id="vh_display_notes"/);
+  const edit = require("node:fs").readFileSync("web/js/views-vms.js", "utf8");
+  assert.match(edit, /\{key:"display", title:"Display and devices", html:vmDisplayFields\(v\.hardware\)\}/);
+  assert.match(edit, /\{ key: "devices", title: `Passthrough · \$\{\(v\.host_devices \|\| \[\]\)\.length\}`, html: devices \}/, "the VM page shows passthrough without Edit");
+  assert.match(require("node:fs").readFileSync("web/js/views-lifecycle.js", "utf8"), /title: "Display and devices", html: vmDisplayFields\(opts\.hardware_base\)/);
 });

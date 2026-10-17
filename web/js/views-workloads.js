@@ -619,7 +619,7 @@ function mvRender() {
   if (!list) return;
   const shown = mvShown(), hosts = [...new Set(shown.map(w => (w.nodes || [])[0] || "unscheduled"))].sort();
   list.innerHTML = shown.length ? hosts.map(h => `<div class="wg-group"><div class="between"><b class="mono">${esc(h)}</b>
-      ${h === "unscheduled" ? "" : UI.button("Tick these", `mvTickHost(${jsq(h)})`, { kind: "sm" })}</div>
+      ${h === "unscheduled" ? "" : UI.button("Tick these", `mvTickHost(${jsArg(h)})`, { kind: "sm" })}</div>
       ${shown.filter(w => ((w.nodes || [])[0] || "unscheduled") === h).map(w => { const id = `${w.ns}/${w.name}`;
         return `<label class="wg-item"><input type="checkbox" value="${esc(id)}" ${MV.picked.has(id) ? "checked" : ""}
           onchange="mvTick(${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`; }).join("")}</div>`).join("")

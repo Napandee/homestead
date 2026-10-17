@@ -110,7 +110,7 @@ const DIALOGS = [
   ["workload-storage-copy", "workloads", "wlEdit('lab','frigate')", "editReview({ns:'lab',name:'frigate',containers:[{name:'frigate',volumes:[{path:'/media/frigate',source:'camera-data',sub_path:'recordings',copy_from:{claim:'frigate-recordings'}}]}]})"],
   ["vm-migrate", "vms", "vmMove('default','home-assistant-os')"],
   ["vm-new", "vms", "vmNew()"],
-  ["vm-new-passthrough", "vms", "vmNew()", "stepGo('v_steps',4);vmAddHostDevice()"],
+  ["vm-new-passthrough", "vms", "vmNew()", "stepGo('v_steps',5);vmAddHostDevice()"],
   ["vm-image-delete", "images", "click:vmImageDelete"],
   ["schedule-new", "schedules", "jobEdit()"],
   ["vm-disk-import", "vmimport", "vmDiskImport()"],

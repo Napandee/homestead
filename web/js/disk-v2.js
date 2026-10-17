@@ -30,9 +30,9 @@ window.diskV2Open = async (node,disk) => {
       diskV2Volumes(plan.volumes,true) +
       UI.more('V1 and V2 capacity','<p class="ui-help">A V2 disk cannot receive V1 replicas. If every eligible host already holds a replica, add a spare V1 disk on the host being cleared or add another eligible V1 host. Preparing a disk does not change any volume’s data engine.</p>') +
       (!plan.blockers.length?UI.ack('diskV2Confirm','Disable new replicas and move existing replicas off this disk',{onchange:"$('#diskV2Begin').disabled=!this.checked"}):'') +
-      UI.actions(UI.cancel('Close')+UI.button('Move replicas off','diskV2Begin()',{kind:'pri',id:'diskV2Begin',disabled:true,attrs:'data-need="admin"'}),UI.button('Check again',`diskV2Open(${jsq(node)},${jsq(disk)})`));
+      UI.actions(UI.cancel('Close')+UI.button('Move replicas off','diskV2Begin()',{kind:'pri',id:'diskV2Begin',disabled:true,attrs:'data-need="admin"'}),UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`));
     window.applyRole?.();
-  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsq(node)},${jsq(disk)})`) + (e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):''));}
+  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`) + (e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):''));}
 };
 window.diskV2Begin = async () => {
   if(diskV2Busy || !diskV2Approval || !$('#diskV2Confirm')?.checked || !$('#diskV2Review') || $('#modal')?.classList.contains('hidden')) return;
@@ -74,7 +74,7 @@ function diskV2Paint(item) {
     (item.needs_erase_review?UI.callout('info','Evacuation finished','Healthy replacement replicas are confirmed. Nothing is erased until you complete a fresh device review.'):item.status==='failed'?UI.callout('warn','Inspect before continuing','Preparation is not retried automatically. Keep this task and its log while checking the device and host receipt; partial changes may remain.'):done?UI.callout('ok','Block disk ready','Longhorn has verified the V2 disk. Existing volumes keep their engine. Use Change storage class on a volume to copy it into a V2 class. This stops its apps and VMs.'):item.status==='cancelled'?UI.callout('info','Filesystem retained','Replacement replicas remain. This disk stays disabled for new replicas; allow them again from the disk’s actions when ready.'):'') +
     diskV2Volumes(item.volumes) +
     UI.actions(UI.cancel('Close') +
-      (item.needs_erase_review?UI.button('Review erase',`diskV2EraseReview(${jsq(item.id)})`,{kind:'pri',attrs:'data-need="admin"'}):done?UI.button('V2 storage class',"closeModal();storageClassCreate({engine:'v2'})",{kind:'pri',attrs:'data-need="admin"'}):''),
+      (item.needs_erase_review?UI.button('Review erase',`diskV2EraseReview(${jsArg(item.id)})`,{kind:'pri',attrs:'data-need="admin"'}):done?UI.button('V2 storage class',"closeModal();storageClassCreate({engine:'v2'})",{kind:'pri',attrs:'data-need="admin"'}):''),
       actionBar([{label:'Task log',run:`diskV2Log(${jsq(item.id)})`},item.cancellable && {label:'Stop evacuation',need:'admin',run:`diskV2Cancel(${jsq(item.id)})`}],{shown:1,label:'Task actions'}));
   window.applyRole?.();
 }
@@ -89,7 +89,7 @@ window.diskV2EraseReview = async id => {
       UI.callout('warn','The filesystem will be erased','Remove the V1 entry, unmount this filesystem, remove its mount from fstab and erase its signatures. Its old replica files become inaccessible. The blank device will be registered with V2.') +
       UI.typedConfirm({ id: 'diskV2Device', expect: plan.device, oninput: 'diskV2EraseReady()' }) +
       UI.ack('diskV2EraseConfirm','Erase this evacuated device and use it for V2',{onchange:'diskV2EraseReady()'}) +
-      UI.actions(UI.button('Back to task',`diskV2Watch(${jsq(id)})`, { attrs: 'data-dialog-dismiss="true"' }) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
+      UI.actions(UI.button('Back to task',`diskV2Watch(${jsArg(id)})`, { attrs: 'data-dialog-dismiss="true"' }) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
     if(typeof MODAL_STACK!=='undefined' && MODAL_STACK.length) MODAL_STACK[MODAL_STACK.length-1].onReturn=()=>diskV2Watch(id);
     window.applyRole?.();
   } catch(e) {toast(e.message,'bad');if(sequence===diskV2Sequence && $('#diskV2Status') && !$('#modal')?.classList.contains('hidden')) await diskV2Watch(id);}

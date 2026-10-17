@@ -489,7 +489,7 @@ window.apiKeyEdit = id => {
     + `<div class="sec">What it may do</div>` + apiKeyForm(key)
     + UI.fields(UI.field("Expires", `<select id="ak_ttl"><option value="">Keep: ${esc(keyUntil(key.expires))}</option>${API_TTLS.map(([label, s]) => `<option value="${s}">${esc(label)} from now</option>`).join("")}</select>`),
       UI.field("Only from (optional)", `<input id="ak_nets" value="${esc((key.networks || []).join(", "))}" placeholder="192.0.2.20, 198.51.100.0/24">`, { help: apiKeyNetworksHelp() }))
-    + UI.actions(UI.cancel() + UI.button("Save changes", `apiKeySave(this,${jsq(id)})`, { kind: "pri" })));
+    + UI.actions(UI.cancel() + UI.button("Save changes", `apiKeySave(this,${jsArg(id)})`, { kind: "pri" })));
 };
 window.apiKeySave = async (button, id) => {
   const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
