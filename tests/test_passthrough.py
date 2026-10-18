@@ -34,10 +34,11 @@ END
 
 class Host:
     def __init__(self, out=HOST, action_out="OK\n"):
-        self.out, self.action_out, self.scripts = out, action_out, []
+        self.out, self.action_out, self.scripts, self.changes = out, action_out, [], []
 
-    def run(self, node, script, timeout=60):
+    def run(self, node, script, timeout=60, change=""):
         self.scripts.append(script)
+        self.changes.append(change)
         return (self.out if script.startswith('echo "CMDLINE') else self.action_out), ""
 
 
@@ -144,6 +145,7 @@ class PassthroughTests(unittest.TestCase):
         self.assertIn("intel_iommu=on iommu=pt", script)
         self.assertIn("grub.homestead-backup", script)
         self.assertIn("update-grub", script)
+        self.assertEqual(["", "Turn on IOMMU on node-1"], self.host.changes, "the look is a read; the change takes the lease")
 
     def test_a_device_given_back_is_no_longer_offered(self):
         PASS.give("node-1", "0000:01:00.0")

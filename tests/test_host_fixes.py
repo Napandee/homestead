@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_specs as SPECS
 import homestead_shares as shares
 import homestead_manifests as MANIFESTS
+import homestead_hostrun as HOSTRUN
 import server
 import homestead_storage_classes as STORAGE_CLASSES
 import test_shares
@@ -54,10 +55,15 @@ class ManifestTests(unittest.TestCase):
                       {"metadata": {"name": "node-2", "labels": {}}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]
         self.runs = []
 
+        self.held, self.changes = set(), []
+
         class Host:
             @staticmethod
-            def run(node, script, timeout=60):
+            def run(node, script, timeout=60, change=""):
+                if node in self.held:
+                    raise HOSTRUN.Busy(f"another change is running on {node}: Install 3 updates on {node}")
                 self.runs.append((node, script))
+                self.changes.append(change)
                 return "/var/lib/rancher/k3s/server/manifests/homestead.yaml\ndone\n", ""
 
         self.platform = {"distribution": "k3s"}
@@ -74,6 +80,15 @@ class ManifestTests(unittest.TestCase):
         for part in ("homestead.yaml", "longhorn.yaml", "kubevirt-cr.yaml", ".skip", "rke2/server/manifests"):
             self.assertIn(part, script)
         self.assertNotIn("rm ", script, "files are marked, never removed")
+
+    def test_marking_is_a_change_and_a_held_host_is_skipped_not_the_round(self):
+        self.nodes.insert(0, {"metadata": {"name": "node-0", "labels": {"node-role.kubernetes.io/control-plane": "true"}},
+                              "status": {"conditions": [{"type": "Ready", "status": "True"}]}})
+        self.held = {"node-0"}
+        self.assertEqual(["node-1"], list(MANIFESTS.tick()), "a held host never stops the others (#597)")
+        self.assertEqual(["Mark the auto-deploy files on node-1"], self.changes)
+        self.held = set()
+        self.assertEqual(["node-0"], list(MANIFESTS.tick()), "tried again next round")
 
     def test_harvester_and_other_clusters_are_left_alone(self):
         for platform in ({"harvester": True, "distribution": "harvester"}, {"distribution": "kubernetes"}):
