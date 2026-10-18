@@ -136,7 +136,7 @@ class RouteTests(Base):
             if path.endswith("/persistentvolumeclaims"):
                 return {"items": []}
             raise AssertionError(path)
-        with mock.patch.object(server, "kget", side_effect=kget), mock.patch.object(server, "guard_managed_smb"), \
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=kget), mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), \
                 mock.patch.object(server, "CHANGES", CH):
             with self.assertRaisesRegex(ValueError, "sonarr-config, which no longer exists"):
                 server.OVERVIEW_ROUTES.change_undo_plan({"ns": "lab", "name": "sonarr", "id": entry_id})

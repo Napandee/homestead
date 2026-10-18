@@ -55,7 +55,7 @@ class IconCacheTests(unittest.TestCase):
         cfg = {"name": "demo", "image": "nginx:alpine",
                "icon": "https://example.com/logo.png"}
         with mock.patch.object(server.ICONS, "persist", return_value="/api/icons/" + "a" * 64 + ".png"):
-            server.persist_icon_config(cfg)
+            server.DEPLOY_ROUTES.persist_icon_config(cfg)
         dep, _ = server.DEPLOY.build_deployment(cfg)
         annotations = dep["metadata"]["annotations"]
         self.assertEqual("/api/icons/" + "a" * 64 + ".png", annotations["homestead.io/icon"])
@@ -78,16 +78,16 @@ class IconCacheTests(unittest.TestCase):
         self.assertIn('img.addEventListener("error", failed', core)
 
     def test_only_content_addressed_icon_route_is_public(self):
-        self.assertTrue(server.is_public_path("/api/icons/" + "a" * 64 + ".png"))
-        self.assertFalse(server.is_public_path("/api/workloads"))
-        self.assertFalse(server.is_public_path("/api/icons"))
+        self.assertTrue(server.WEB_PATHS.is_public_path("/api/icons/" + "a" * 64 + ".png"))
+        self.assertFalse(server.WEB_PATHS.is_public_path("/api/workloads"))
+        self.assertFalse(server.WEB_PATHS.is_public_path("/api/icons"))
 
     def test_workload_display_uses_persisted_bytes_not_remote_source(self):
         with tempfile.TemporaryDirectory() as data_dir, \
                 mock.patch.object(icons, "_download", return_value=(PNG, "image/png")):
             reference = icons.persist("https://example.com/logo.png", data_dir)
-            with mock.patch.object(server, "DATA_DIR", data_dir):
-                rendered = server.display_icon({"homestead.io/icon": reference})
+            with mock.patch.object(server.NAMES_HELPERS, "DATA_DIR", data_dir):
+                rendered = server.NAMES_HELPERS.display_icon({"homestead.io/icon": reference})
         self.assertTrue(rendered.startswith("data:image/png;base64,"))
         self.assertNotIn("example.com", rendered)
 

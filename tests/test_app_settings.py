@@ -71,17 +71,17 @@ class AppSettingsTests(unittest.TestCase):
         monday = calendar.timegm(time.strptime("2026-09-21T23:45:00Z", "%Y-%m-%dT%H:%M:%SZ"))
         tuesday_carry = calendar.timegm(time.strptime("2026-09-22T00:30:00Z", "%Y-%m-%dT%H:%M:%SZ"))
         tuesday_closed = calendar.timegm(time.strptime("2026-09-22T01:15:00Z", "%Y-%m-%dT%H:%M:%SZ"))
-        self.assertTrue(server.update_policy_status(settings, monday)["allows_install"])
-        self.assertTrue(server.update_policy_status(settings, tuesday_carry)["allows_install"])
-        self.assertFalse(server.update_policy_status(settings, tuesday_closed)["allows_install"])
+        self.assertTrue(server.SETTINGS_HELPERS.update_policy_status(settings, monday)["allows_install"])
+        self.assertTrue(server.SETTINGS_HELPERS.update_policy_status(settings, tuesday_carry)["allows_install"])
+        self.assertFalse(server.SETTINGS_HELPERS.update_policy_status(settings, tuesday_closed)["allows_install"])
         with self.assertRaisesRegex(PermissionError, "explicit approval"):
-            server.enforce_update_policy({}, settings, monday)
-        self.assertTrue(server.enforce_update_policy({"approved": True}, settings, monday)["allows_install"])
+            server.SETTINGS_HELPERS.enforce_update_policy({}, settings, monday)
+        self.assertTrue(server.SETTINGS_HELPERS.enforce_update_policy({"approved": True}, settings, monday)["allows_install"])
 
     def test_notify_only_is_enforced_server_side(self):
         settings = server.APP_SETTINGS.validate({"updates": {"policy": "notify_only"}})
         with self.assertRaisesRegex(PermissionError, "notify only"):
-            server.enforce_update_policy({"approved": True}, settings)
+            server.SETTINGS_HELPERS.enforce_update_policy({"approved": True}, settings)
 
     def test_image_cleanup_is_admin_only(self):
         self.assertEqual("admin", server.needed_role("/api/images/cleanup", "POST"))

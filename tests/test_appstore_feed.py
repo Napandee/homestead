@@ -92,10 +92,10 @@ class SourceTests(unittest.TestCase):
                     server.APP_SETTINGS.validate({"catalog_url": bad})
 
     def test_the_feed_in_use_is_the_one_set_else_the_default(self):
-        with mock.patch.object(server, "get_app_settings", return_value={"catalog_url": ""}):
+        with mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"catalog_url": ""}):
             server._cache.pop("settings", None)
             self.assertEqual(server.DEPLOY.CA_FEED, server.DEPLOY.catalog_source())
-        with mock.patch.object(server, "get_app_settings", return_value={"catalog_url": "https://m.example/f.json"}):
+        with mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"catalog_url": "https://m.example/f.json"}):
             server._cache.pop("settings", None)
             self.assertEqual("https://m.example/f.json", server.DEPLOY.catalog_source())
         server._cache.pop("settings", None)

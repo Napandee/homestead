@@ -265,7 +265,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         cfg = {"env": {"WEBPASSWORD": ""}, "env_meta": [
             {"key": "WEBPASSWORD", "masked": True, "generate": True},
         ]}
-        generated = server.apply_generated_secrets(cfg)
+        generated = server.DEPLOY_ROUTES.apply_generated_secrets(cfg)
         self.assertGreaterEqual(len(generated["env"]["WEBPASSWORD"]), 20)
         self.assertEqual("", cfg["env"]["WEBPASSWORD"])
         dep = {"spec": {"template": {"spec": {"containers": [{"env": [
@@ -296,7 +296,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertTrue(cfg["app_profile"]["blocked"])
         self.assertEqual("host", cfg["volumes"][0]["type"])
         with self.assertRaisesRegex(ValueError, "Needs Kubernetes design"):
-            server.ensure_profile_compatible(cfg)
+            server.DEPLOY_ROUTES.ensure_profile_compatible(cfg)
 
 
 class SidecarDeploymentTests(unittest.TestCase):
@@ -389,7 +389,7 @@ class DeployOptionsTests(unittest.TestCase):
                 return {"items": [{"metadata": {"name": "longhorn-r2"}}]}
             raise AssertionError(path)
 
-        with mock.patch.object(server, "kget", side_effect=get):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=get):
             options = server.DEPLOY_ROUTES.deploy_options("lab")
         self.assertEqual(["ReadWriteMany"], options["pvcs"][0]["access_modes"])
         self.assertEqual("pvc", options["deployments"][0]["volumes"][0]["kind"])
@@ -455,7 +455,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/homestead-lab/homestead:2.8.329",
+        self.assertIn("- name: homestead\n          image: ghcr.io/homestead-lab/homestead:2.8.330-dev.10",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 

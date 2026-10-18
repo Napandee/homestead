@@ -629,7 +629,7 @@ class ShutdownTests(unittest.TestCase):
             with mock.patch.object(server.CLUSTER_SHUTDOWN.Shutdown, "state", return_value={"phase":phase}), \
                  mock.patch.object(server.urllib.request, "urlopen") as send:
                 with self.assertRaisesRegex(ValueError, "shutdown is active"):
-                    server._ksend("PATCH", "/apis/apps/v1/namespaces/lab/deployments/app", {})
+                    server.KUBE_HELPERS._ksend("PATCH", "/apis/apps/v1/namespaces/lab/deployments/app", {})
                 send.assert_not_called()
 
 

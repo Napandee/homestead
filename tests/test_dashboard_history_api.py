@@ -43,7 +43,7 @@ class DashboardHistoryApiTests(unittest.TestCase):
         for leading in (False, True):
             with self.subTest(leading=leading), \
                     mock.patch.object(server.LEADER, "is_leader", return_value=leading), \
-                    mock.patch.object(server, "get_overview", return_value=overview(17)), \
+                    mock.patch.object(server.OVERVIEW_ROUTES, "get_overview", return_value=overview(17)), \
                     mock.patch.object(server.HISTORY, "record_live", wraps=server.HISTORY.record_live) as record, \
                     mock.patch.object(server.VMUSAGE, "sample") as vm_sample, \
                     mock.patch.object(server, "beat"), \

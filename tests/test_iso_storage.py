@@ -110,24 +110,24 @@ class IsoClassTests(unittest.TestCase):
         sent = []
         with mock.patch.object(server, "storage_classes", return_value=[dict(LONGHORN)]), \
                 mock.patch.object(server, "STORAGE_CLASS", "longhorn-r2"), \
-                mock.patch.object(server, "ksend", lambda method, path, body=None, **kw: sent.append((method, path, body))):
+                mock.patch.object(server.KUBE_HELPERS, "ksend", lambda method, path, body=None, **kw: sent.append((method, path, body))):
             self.assertEqual((server.ISO_CLASS, True), server.iso_storage_class())
         method, path, body = sent[0]
         self.assertEqual(("POST", "homestead-isos"), (method, body["metadata"]["name"]))
         self.assertEqual({"numberOfReplicas": "1", "dataLocality": "disabled", "staleReplicaTimeout": "30"}, body["parameters"])
-        self.assertEqual("iso", server._class_made_for("homestead-isos", {}))
+        self.assertEqual("iso", server.STORAGE_ROUTES._class_made_for("homestead-isos", {}))
         made = dict(LONGHORN, name="homestead-isos", made_for="iso")
         sent.clear()
         with mock.patch.object(server, "storage_classes", return_value=[dict(LONGHORN), made]), \
                 mock.patch.object(server, "STORAGE_CLASS", "longhorn-r2"), \
-                mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
+                mock.patch.object(server.KUBE_HELPERS, "ksend", lambda *a, **k: sent.append(a)):
             self.assertEqual((server.ISO_CLASS, True), server.iso_storage_class())
         self.assertEqual([], sent, "made once")
 
     def test_without_longhorn_a_shared_class_is_used_as_it_is(self):
         nfs = dict(LONGHORN, name="nfs-client", provisioner="nfs.csi.k8s.io")
         with mock.patch.object(server, "storage_classes", return_value=[nfs]), mock.patch.object(server, "STORAGE_CLASS", "nfs-client"), \
-                mock.patch.object(server, "ksend", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no class made"))):
+                mock.patch.object(server.KUBE_HELPERS, "ksend", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no class made"))):
             self.assertEqual(("nfs-client", True), server.iso_storage_class())
 
 

@@ -8,8 +8,10 @@ that runs one script through nsenter into PID 1 - the host as SSH gives it -
 and is deleted when the script ends. Only code in Homestead calls it, with
 scripts written here, never text from a request.
 """
+import secrets
 import time
 import urllib.error
+import urllib.parse
 
 import homestead_names as NAMES
 
@@ -37,8 +39,10 @@ def bind(_kget, _ksend, _exec_in, namespace):
 
 
 def pod_name(node):
+    """A helper's name: the node it runs on, and a part of its own, so two
+    runs on one host never share (or delete) one helper (#597)."""
     safe = "".join(c if c.isalnum() or c == "-" else "-" for c in node.lower()).strip("-")
-    return f"homestead-host-{safe}"[:63].rstrip("-")
+    return f"homestead-host-{safe}"[:56].rstrip("-") + "-" + secrets.token_hex(3)
 
 
 def _get(path):
@@ -50,9 +54,9 @@ def _get(path):
         raise
 
 
-def body(node, lifetime=900):
+def body(node, lifetime=900, name=""):
     return {"apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": pod_name(node), "namespace": NS,
+            "metadata": {"name": name or pod_name(node), "namespace": NS,
                          "labels": {**NAMES.labels(TASK), NAMES.key("node"): node[:63]}},
             "spec": {"nodeName": node, "hostPID": True, "hostIPC": True, "hostNetwork": True,
                      "restartPolicy": "Never", "terminationGracePeriodSeconds": 1,
@@ -71,19 +75,37 @@ def _delete(path):
         pass
 
 
+def _clear_ended():
+    """Helpers of runs that ended without removing theirs (the run's process
+    stopped, or the pod reached its deadline) are deleted - never one still
+    running, which is another run's. Housekeeping: a failed read skips it."""
+    selector = urllib.parse.quote(NAMES.key("task") + "=" + TASK)
+    try:
+        pods = (kget(f"/api/v1/namespaces/{NS}/pods?labelSelector={selector}") or {}).get("items") or []
+    except Exception:
+        return
+    for pod in pods:
+        meta = pod.get("metadata") or {}
+        if ((pod.get("status") or {}).get("phase") in ("Succeeded", "Failed") and meta.get("name", "").startswith("homestead-host-")
+                and NAMES.label_of(meta, "task") == TASK):
+            try:
+                ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}",
+                      {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
+                       **({"preconditions": {"uid": meta["uid"]}} if meta.get("uid") else {})})
+            except urllib.error.HTTPError:
+                pass
+
+
 def run(node, script, timeout=120, wait=60, sleep=time.sleep, stdin=b""):
     """Run script as root on node's host; (stdout text, stderr text). The
-    helper is made for this run and removed after it. stdin, when given,
-    is what the script reads: a secret goes there, never on its command line."""
-    path = f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}"
-    if _get(path):
-        # One left from a run that did not finish.
-        _delete(path)
-        for _ in range(20):
-            if not _get(path):
-                break
-            sleep(0.5)
-    ksend("POST", f"/api/v1/namespaces/{NS}/pods", body(node, lifetime=max(300, timeout + wait + 60)))
+    helper is made for this run and removed after it; another run on the
+    same host has its own, which this one never touches (#597). stdin, when
+    given, is what the script reads: a secret goes there, never on its
+    command line."""
+    _clear_ended()
+    name = pod_name(node)
+    path = f"/api/v1/namespaces/{NS}/pods/{name}"
+    ksend("POST", f"/api/v1/namespaces/{NS}/pods", body(node, lifetime=max(300, timeout + wait + 60), name=name))
     try:
         for _ in range(int(wait * 2)):
             status = (_get(path) or {}).get("status") or {}
@@ -101,7 +123,7 @@ def run(node, script, timeout=120, wait=60, sleep=time.sleep, stdin=b""):
         # is tried again for a while (seen on RKE2 after a host failed).
         for attempt in range(EXEC_TRIES):
             try:
-                out, err = exec_in(NS, pod_name(node), HOST + [script], timeout=timeout, container="host",
+                out, err = exec_in(NS, name, HOST + [script], timeout=timeout, container="host",
                                    **({"stdin": stdin} if stdin else {}))
                 return out.decode("utf-8", "replace"), err
             except ConnectionError as error:

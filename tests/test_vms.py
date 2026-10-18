@@ -41,6 +41,7 @@ class Cluster:
         self.vmi = copy.deepcopy(VMI) if running else None
         self.refuse_start = refuse_start
         self.sent = []
+        self.patched = {}   # owners a PATCH set, as the API server keeps them
 
     def get(self, path):
         if path.endswith("/virtualmachines"):
@@ -57,7 +58,15 @@ class Cluster:
             return PVCS
         if path.endswith("/datavolumes/win11-disk-0") or path.endswith("/persistentvolumeclaims/win11-disk-0"):
             # Made from dataVolumeTemplates: owned by the VM.
+            if path in self.patched:
+                return {"metadata": {"ownerReferences": self.patched[path]}}
             return {"metadata": {"ownerReferences": [{"kind": "VirtualMachine", "uid": "u1"}, {"kind": "Other", "uid": "x"}]}}
+        # Any other disk (an ISO from the library, say) is a claim no VM owns,
+        # with no DataVolume behind it: a delete now reads both before going on.
+        if "/persistentvolumeclaims/" in path:
+            return {"metadata": {}}
+        if "/datavolumes/" in path:
+            raise urllib.error.HTTPError(path, 404, "missing", None, None)
         raise AssertionError(path)
 
     def send(self, method, path, body=None, **kw):
@@ -66,6 +75,8 @@ class Cluster:
             raise urllib.error.HTTPError(path, 400, "no", None, io.BytesIO(b'{"message":"Always does not support manual start requests"}'))
         if method == "PUT" and path.endswith("/virtualmachines/win11"):
             self.vm = body
+        if method == "PATCH":
+            self.patched[path] = (body.get("metadata") or {}).get("ownerReferences") or []
         return body
 
 
@@ -215,6 +226,12 @@ class VmTests(unittest.TestCase):
         ]}
         self.assertEqual("0/2 nodes are available: 2 Insufficient memory.", VMS._problem(vm, {}))
 
+    def test_display_says_where_the_picture_goes(self):
+        self.assertEqual("virtual", VMS._display({}))
+        self.assertEqual("gpu", VMS._display({"autoattachGraphicsDevice": False, "gpus": [{"name": "gpu1"}]}))
+        self.assertEqual("gpu", VMS._display({"autoattachGraphicsDevice": False, "hostDevices": [{"name": "hd1"}]}))
+        self.assertEqual("none", VMS._display({"autoattachGraphicsDevice": False}))
+
     def test_power_uses_subresources_without_fallback_policy_mutation(self):
         c = self.use()
         VMS.power("default", "win11", "start")
@@ -223,6 +240,10 @@ class VmTests(unittest.TestCase):
         self.assertTrue(c.sent[-1][1].endswith("/virtualmachineinstances/win11/pause"))
         VMS.power("default", "win11", "force-stop")
         self.assertEqual({"gracePeriod": 0}, c.sent[-1][2])
+        # Reset: a restart that does not wait for the guest.
+        self.assertEqual("win11 is being reset", VMS.power("default", "win11", "reset")["detail"])
+        self.assertTrue(c.sent[-1][1].endswith("/virtualmachines/win11/restart"))
+        self.assertEqual({"gracePeriodSeconds": 0}, c.sent[-1][2])
         c = self.use(refuse_start=True)
         with self.assertRaisesRegex(ValueError, "does not support manual start"):
             VMS.power("default", "win11", "start")

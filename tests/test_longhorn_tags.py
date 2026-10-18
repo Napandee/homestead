@@ -94,7 +94,7 @@ class StorageClassTagTests(unittest.TestCase):
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
-            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
         self.sent = []
         Cluster()
 
@@ -103,8 +103,8 @@ class StorageClassTagTests(unittest.TestCase):
                 return {"items": []}
             return {"items": []}
 
-        for patcher in (mock.patch.object(server, "kget", side_effect=get),
-                        mock.patch.object(server, "ksend", side_effect=lambda m, p, b=None, **kw: self.sent.append(b) or b)):
+        for patcher in (mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=get),
+                        mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda m, p, b=None, **kw: self.sent.append(b) or b)):
             patcher.start()
             self.addCleanup(patcher.stop)
 

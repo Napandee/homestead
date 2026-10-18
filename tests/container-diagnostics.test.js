@@ -27,6 +27,15 @@ test("diagnostics show the previous exit and escape app-controlled output", () =
   assert.match(html, /Run a command/);
 });
 
+test("Diagnostics has an icon of its own, not Search logs' magnifying glass", () => {
+  // A row shows it as an icon only, beside Logs, with Search logs in the same menu.
+  const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const iconOf = label => source.match(new RegExp(`item\\("${label}", [^\\n]*?, "([a-z-]+)"`))?.[1];
+  assert.ok(iconOf("Diagnostics"), "the Diagnostics action is found");
+  assert.notEqual(iconOf("Diagnostics"), iconOf("Search logs"));
+  assert.notEqual(iconOf("Diagnostics"), iconOf("Logs"));
+});
+
 test("viewers see evidence without a command runner", () => {
   const { c } = context(false);
   assert.doesNotMatch(c.diagnosticMarkup(report), /diagnosticCommand/);

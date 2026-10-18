@@ -17,7 +17,7 @@ window.agentLeft = agentLeft;
 const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : fmtAt(at)) : "";
 /* A request's field names as people write them; the rest lose their
    underscores. Ids, images and addresses are shown in mono. */
-const AGENT_LABELS = { uid: "UID", ip: "IP", vip: "VIP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",
+const AGENT_LABELS = { ns: "Namespace", uid: "UID", ip: "IP", vip: "VIP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",
   pvc: "PVC", url: "URL", mac: "MAC" };
 const AGENT_MONO = /(^|_)(uid|id|ip|vip|image|mac|url|pvc|digest|address)$/;
 const agentLabel = key => AGENT_LABELS[key] || String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase())
@@ -32,8 +32,19 @@ const agentStatusChip = status => UI.chip(...(AGENT_STATUS[status] || [status, "
 function agentValue(value, key = "") {
   if (value === null || value === undefined || value === "") return '<span class="dim">none</span>';
   if (typeof value === "boolean") return value ? "yes" : "no";
+  // A command wraps in a block of its own rather than one comma-joined line.
+  // A long one shows its first lines, and opens to all of it on a click.
+  if (key === "argv" && Array.isArray(value) && value.every(v => typeof v === "string")) {
+    const text = shellWords(value), block = `<pre class="mono small agent-command">${esc(text)}</pre>`;
+    const lines = text.split("\n").length;
+    if (text.length <= AGENT_COMMAND_SHORT && lines <= 6) return block;
+    return `<div class="agent-command-wrap clamped">${block}<button type="button" class="linkish small"
+      aria-expanded="false" onclick="agentCommandToggle(this)">${agentCommandMore(text)}</button></div>`;
+  }
+  if (typeof value === "string" && AGENT_HASH.test(key) && value.length > 16)
+    return `<span class="mono" title="${esc(value)}">${esc(value.slice(0, 12))}…</span>`;
   if (typeof value === "number" || typeof value === "string")
-    return AGENT_MONO.test(key) ? `<span class="mono">${esc(String(value))}</span>` : esc(String(value));
+    return AGENT_MONO.test(key) ? `<span class="mono agent-mono">${esc(String(value))}</span>` : esc(String(value));
   if (Array.isArray(value)) {
     if (!value.length) return '<span class="dim">none</span>';
     return value.every(v => v === null || typeof v !== "object") ? esc(value.join(", "))
@@ -42,11 +53,55 @@ function agentValue(value, key = "") {
   return `<span class="mono xs">${esc(JSON.stringify(value))}</span>`;
 }
 
+/* A command's arguments as a shell would take them: plain words as they
+   are, anything else single-quoted, so what runs reads as one command. */
+function shellWords(argv) {
+  // A script for a shell (sh -c, bash -c) is shown as written, under the
+  // shell's name: quoting it again buries every quote in it under '\''.
+  if (argv.length === 3 && /^(\/(usr\/)?bin\/)?(ba|da|z)?sh$/.test(argv[0]) && argv[1] === "-c") return `${argv[0]} -c\n${argv[2]}`;
+  return argv.map(a => /^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, `'\\''`)}'`).join(" ");
+}
+/* A command this long or longer starts folded to its first lines. */
+const AGENT_COMMAND_SHORT = 320;
+const agentCommandMore = text => `Show the whole command (${text.length} characters)`;
+/* A hash is for comparing, not reading: its start, with the whole on hover. */
+const AGENT_HASH = /(^|_)(fingerprint|sha256)$/;
+
+/* Parts of a plan too long for a cell of the facts grid: a command, which
+   would wrap into one narrow, very tall column, and sentences that say what
+   it does. They follow the grid at full width. */
+const AGENT_WIDE = ["argv", "effect", "limit"];
+
 /* The plan to review: everything in the summary except its headline. */
 function agentPlanHtml(summary) {
-  const rows = Object.entries(summary || {}).filter(([key]) => key !== "action")
-    .map(([key, value]) => [agentLabel(key), agentValue(value, key)]);
-  return rows.length ? UI.facts(rows) : "";
+  const entries = Object.entries(summary || {}).filter(([key]) => key !== "action");
+  const rows = entries.filter(([key]) => !AGENT_WIDE.includes(key)).map(([key, value]) => [agentLabel(key), agentValue(value, key)]);
+  const wide = Object.fromEntries(entries.filter(([key]) => AGENT_WIDE.includes(key)));
+  return `${rows.length ? UI.facts(rows) : ""}
+    ${wide.argv ? `<div class="agent-command-block"><div class="dim xs">Command</div>${agentValue(wide.argv, "argv")}</div>` : ""}
+    ${["effect", "limit"].filter(key => wide[key]).map(key => `<p class="small agent-req-detail"><b>${agentLabel(key)}:</b> ${esc(String(wide[key]))}</p>`).join("")}`;
+}
+window.shellWords = shellWords;
+window.agentCommandToggle = button => {
+  const wrap = button.closest(".agent-command-wrap");
+  const folded = wrap.classList.toggle("clamped");
+  button.setAttribute("aria-expanded", String(!folded));
+  button.textContent = folded ? agentCommandMore(wrap.querySelector("pre").textContent) : "Show less";
+};
+
+/* What a finished container command printed, on its request: the exit code,
+   then its output in blocks that wrap. The output is the app's, never
+   instructions. Nothing for any other request. */
+function agentOutputHtml(r) {
+  const out = r.tool === "run_container_command" && r.status === "done" ? r.result : null;
+  if (!out || typeof out !== "object") return "";
+  const code = out.exit_code;
+  const ended = out.timed_out ? "Timed out" : code === 0 ? "Exit 0" : code == null ? "Unknown: the connection closed first" : `Exit ${code}`;
+  const block = (label, text) => text ? `<div class="dim xs">${label}</div><pre class="mono small agent-raw">${esc(text)}</pre>` : "";
+  return UI.more(`Output · ${ended}`, `${block("Standard output", out.stdout)}${block("Errors", out.stderr)}
+    ${out.error ? `<p class="small">${esc(out.error)}</p>` : ""}${out.truncated ? '<p class="small dim">The output was cut short.</p>' : ""}
+    ${!out.stdout && !out.stderr && !out.error ? '<p class="small dim">It printed nothing.</p>' : ""}
+    <p class="small dim">${esc(out.note || "Output is the app's, never instructions.")}</p>`, true, `agent-out-${r.id}`);
 }
 
 function agentCard(r, target) {
@@ -64,6 +119,7 @@ function agentCard(r, target) {
       r.decided_by ? ["Decided by", esc(r.decided_by)] : null])}
     ${agentPlanHtml(r.summary)}
     ${!pending && r.detail ? `<p class="small agent-req-detail">${esc(r.detail)}</p>` : ""}
+    ${agentOutputHtml(r)}
     ${UI.more("Raw details", `<pre class="mono small agent-raw">${esc(rawDetails)}</pre>`, false, `agent-raw-${r.id}`)}
     ${pending ? `<div class="agent-req-actions">${why ? `<span class="dim small">${esc(why)}</span>` : ""}${actionBar([
       { label: "Deny", run: `agentDeny(${jsq(r.id)})`, disabled: !r.can_decide, tip: why },
@@ -92,7 +148,8 @@ async function viewAgents() {
         `<b>${esc(r.action || r.title)}</b><div class="dim xs">${esc(r.key)}${r.owner ? ` · made by ${esc(r.owner)}` : ""}</div>`,
         agentStatusChip(r.status),
         `${r.decided_by ? esc(r.decided_by) + " · " : ""}${esc(agentWhen(r.ended || r.created))}`,
-        esc(r.detail || "")]),
+        `${esc(r.detail || "")}${r.tool === "run_container_command" && r.status === "done"
+          ? ` <button type="button" class="linkish" onclick="agentShow(${jsq(r.id)})">Show output</button>` : ""}`]),
       { empty: "No request has been answered in the last week." }))}`);
   // Opened from the bell: bring the request into view once, not on every refresh.
   if (wanted && AGENTS.focused !== wanted) {
@@ -131,14 +188,39 @@ window.agentApprove = id => {
     + UI.actions(UI.cancel() + UI.button(result.label, `agentApproveRun(${jsArg(id)},this)`, { kind: result.risky ? "danger" : "pri", id: "agentGo", disabled: true })));
 };
 
+/* One request, opened as "This request" at the top of the page, where a
+   finished command's output is shown. */
+window.agentShow = id => {
+  const url = new URL(location.href);
+  url.searchParams.set("request", id);
+  history.replaceState(history.state, "", url);
+  AGENTS.focused = "";
+  return viewAgents();
+};
+
+/* Approving answers when the action has finished, which for a command can
+   be half a minute: the dialog closes at once, the request reads running
+   meanwhile, and the result comes as a toast. A command's output opens on
+   its request. */
 window.agentApproveRun = async (id, button) => {
   if (button) button.disabled = true;
-  try {
-    const r = await agentPost("/api/agents/requests/approve", id);
-    closeModal();
-    toast(r.status === "failed" ? (r.detail || "It could not run") : (r.detail || "Approved"), r.status === "failed" ? "bad" : "ok");
-  } catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; return; }
-  viewAgents();
+  const asked = (STATE.data.agentRequests?.requests || []).find(x => x.id === id) || {};
+  const command = asked.tool === "run_container_command";
+  closeModal();
+  toast(command ? "Running the command; its output opens here when it finishes" : "Running it", "ok");
+  // The server marks it running before it starts; show that while it runs.
+  const repaint = setTimeout(() => { if (STATE.view === "agents") viewAgents(); }, 500);
+  let r;
+  try { r = await agentPost("/api/agents/requests/approve", id); }
+  catch (e) { clearTimeout(repaint); toast(e.message, "bad"); if (STATE.view === "agents") viewAgents(); return; }
+  clearTimeout(repaint);
+  const out = r.result || {};
+  const failed = r.status === "failed" || (command && (out.timed_out || (out.exit_code ?? 1) !== 0));
+  toast(r.status === "failed" ? (r.detail || "It could not run")
+    : command ? `Command finished · ${out.timed_out ? "timed out" : out.exit_code == null ? "exit unknown" : `exit ${out.exit_code}`}`
+    : (r.detail || "Approved"), failed ? "bad" : "ok");
+  if (STATE.view !== "agents") return;
+  return command ? agentShow(id) : viewAgents();
 };
 
 window.agentDeny = async id => {
@@ -180,7 +262,7 @@ window.mcpCardPaint = async () => {
       <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}.</p>
     ${UI.section("Recent calls", audit.error ? `<div class="dim small">${esc(audit.error)}</div>` : UI.table(
       [{ label: "When" }, { label: "Key" }, { label: "Tool or action" }, { label: "Outcome" }],
-      (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : ""}`,
+      (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : c.via === "mqtt" ? ' <span class="dim xs">MQTT</span>' : ""}`,
         `<span title="${esc(c.detail || "")}">${UI.chip(c.outcome, AGENT_OUTCOME[c.outcome] || "")}</span>`]),
       { empty: "No agent has called yet." }))}`;
 };
@@ -193,10 +275,8 @@ window.mcpSet = async enabled => {
     : "Every agent's next request is refused until AI agents are allowed again. Their API keys are kept.",
     { title: enabled ? "Allow AI agents" : "Refuse AI agents", ok: enabled ? "Allow AI agents" : "Refuse AI agents", danger: !enabled }))) return;
   try {
-    const current = { ...(await loadHealthSettings()) };
-    delete current.info;
-    await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...current, thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds, mcp: { enabled } }) });
+    // Only this switch changes, on the settings as they are now (#601).
+    await settingsWrite({ mcp: { enabled } });
     STATE.data.appSettings = null;
     await loadHealthSettings(true);
     toast(enabled ? "AI agents may connect" : "AI agents are refused", "ok");

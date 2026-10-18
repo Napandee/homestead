@@ -72,10 +72,15 @@ it available to the VM. **Neither operation flashes the physical GPU.**
 1. Keep the GPU given to VMs. Its host display driver must no longer be active.
 2. Stop any VM using the card or another device in its IOMMU group, and wait for
    the VM instance to release it. Keep those VMs stopped during capture.
-3. On the host's **Hardware → Devices for VMs** page, choose **Capture vBIOS**
-   beside the GPU.
-4. Save the downloaded `.rom` file. Keep a copy labelled with the card model,
-   host and PCI address so it is not confused with another GPU's firmware.
+3. Capture it where you need it:
+   - **In the VM:** open **VM → Edit → Passthrough** (or **New VM →
+     Passthrough**), and choose **Capture from host** beside the GPU. Where
+     more than one host offers that GPU, pick which one first. The vBIOS is
+     attached to that device and saved with the VM when you review and save.
+   - **On the host:** on the host's **Hardware → Devices for VMs** page,
+     choose **Capture vBIOS** beside the GPU. This only downloads the `.rom`
+     file; keep a copy labelled with the card model, host and PCI address,
+     and attach it in the VM editor as a file.
 
 Homestead reads the card's sysfs ROM and checks the PCI image headers, image
 lengths, and vendor/device IDs. It refuses capture if it cannot establish that
@@ -84,7 +89,8 @@ For a runtime-suspended VFIO GPU, it temporarily wakes the device and restores
 the previous power policy afterwards. The ROM read switch is disabled again
 when the helper finishes, including after failure.
 
-**Capture only downloads the file. It does not attach it to a VM.**
+Capture from the host page only downloads the file. Capture from the VM
+editor attaches it to that VM's GPU.
 
 ### If capture fails
 
@@ -117,8 +123,9 @@ image. Physical UEFI boot output needs a UEFI-capable ROM when supplying one.
 3. Add the GPU's audio function separately if the guest needs HDMI/DisplayPort
    audio. Handing the group to VFIO does not automatically attach every function
    to the VM.
-4. If needed, select the downloaded **ROM file beside the GPU**. Otherwise keep
-   its default ROM. Review and save the configuration.
+4. If needed, choose **Capture from host** beside the GPU, or choose a ROM
+   file there. Otherwise keep its default ROM. Review and save the
+   configuration.
 
 Homestead stores uploaded ROMs in the VM's managed `<vm>-vbios` ConfigMap and
 configures a KubeVirt hook sidecar to supply them to QEMU. Several ROMs must fit
@@ -129,13 +136,13 @@ or explicitly cleared before the affected edit can proceed.
 ## 4. Choose where the display appears
 
 For GPU compute or transcoding while retaining Homestead's VNC access, leave
-**Primary boot output** set to **Web console (virtual display)**. The guest can
+**Display** set to **Virtual display**. The guest can
 use the attached GPU once its driver is installed.
 
 For a monitor connected directly to the GPU:
 
-1. Open **Hardware → Devices → Primary boot output** and choose
-   **Passed-through GPU (physical monitor)**.
+1. Open **Edit → Hardware → Display and devices → Display** and choose
+   **Passed-through GPU only**.
 2. Keep the serial console enabled as a possible recovery path. The guest OS
    must also be configured to send output to its serial port for this to help.
 3. Review and save. This choice disables virtual VGA and selects **UEFI**.
@@ -171,8 +178,8 @@ More diagnostics: [GPU troubleshooting](Troubleshooting#gpu-passthrough).
 
 ## Undo the setup or move to another host
 
-Stop the VM. If removing its last GPU, select **Web console (virtual display)**
-or serial output in the same edit. Remove the passthrough device and review the
+Stop the VM. If removing its last GPU, select **Virtual display** or **No
+display** in the same edit. Remove the passthrough device and review the
 change; removing the device also removes its managed ROM. Clearing only the ROM
 does not restore the virtual display. Switching back to the web console leaves
 UEFI enabled, so it does not undo an earlier firmware change.

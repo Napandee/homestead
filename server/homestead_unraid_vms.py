@@ -12,6 +12,12 @@ a Job reads the file over SSH and streams it into an authenticated upload, and
 CDI turns raw or qcow2 into a VM disk as it arrives. An upload token lasts a
 few minutes, so every disk has its own Job, all started together. Once every
 disk has arrived the VM is made, stopped, for its owner to start.
+Before any disk is made, storage_room() checks the chosen storage class can
+still place them all, so an import doesn't run out of room partway through.
+
+A Proxmox VE host comes across the same way: homestead_proxmox_vms reads
+and maps its VMs (qm config) into the same plan, and the copy, the job and
+the page below are shared, with only the stopped check and shut down its own.
 
 Nothing on Unraid is changed, but for one thing its owner asks for: a VM still
 running there can be shut down (virsh shutdown - its power button), because a
@@ -27,6 +33,7 @@ import xml.etree.ElementTree as ET
 
 import homestead_names as NAMES
 import homestead_cdi_cleanup as CDI_CLEANUP
+import homestead_proxmox_vms as PROXMOX
 
 IMP = kget = ksend = OPS = None
 platform = lambda: {}
@@ -43,11 +50,66 @@ DISK_BUSES = {"virtio": "virtio", "sata": "sata", "scsi": "scsi", "ide": "sata",
 UNRAID_NAME = re.compile(r"[^\x00-\x1f/]{1,128}")
 
 
-def bind(imports, _kget, _ksend, ops, _platform=None):
-    global IMP, kget, ksend, OPS, platform
+# What the room check reads: the cluster's storage classes, Longhorn's
+# capacity (homestead_lhcapacity.capacity) and the class a VM disk lands on
+# when none is chosen. Unbound, the room is unknown and said to be.
+storage_classes = lh_capacity = None
+default_class = lambda: ""
+
+
+def bind(imports, _kget, _ksend, ops, _platform=None, storage=None):
+    global IMP, kget, ksend, OPS, platform, storage_classes, lh_capacity, default_class
     IMP, kget, ksend, OPS = imports, _kget, _ksend, ops
     if _platform:
         platform = _platform
+    if storage:
+        storage_classes, lh_capacity, default_class = storage
+    if isinstance(getattr(OPS, "CANCELLERS", None), dict):     # not a test's stand-in
+        OPS.CANCELLERS[KIND] = (cancel_plan, cancel_run)
+        OPS.CDI_CANCELLABLE.add(KIND)
+
+
+# ------------------------------------------------------------ cancelling
+# An import can stop where it cannot go on by itself - paused because a
+# claim it made was replaced, or its cleanup stopped by the same check - and
+# its job then never ends. Cancel removes what it made, and only that: each
+# object must carry the stamp its receipt was written with. Deleting a
+# DataVolume takes its claim, CDI's staging claim and upload pod with it.
+def cancel_plan(item):
+    ref = item.get("ref") or {}
+    work = ref.get("cdi_cleanup") or {}
+    if not work.get("id"):
+        return {"can": False, "why_not": "This older import kept no record of what it made: review its volumes under Volumes"}
+    where = _where(ref)
+    disks = ", ".join(d["dv"] for d in ref.get("disks") or [])
+    return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
+            "undo": [f"Stops the copy from {where}", f"Removes the disks it was making ({disks}) and their temporary storage"],
+            "keeps": [f"The VM on {where} is unchanged",
+                      "A volume on a class that keeps released data (Retain) stays under Volumes until you remove it"]}
+
+
+def cancel_run(item, _options):
+    ref = item["ref"]
+    ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
+    paths = []
+    for disk in ref.get("disks") or []:
+        if disk.get("job"):
+            paths += [f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}",
+                      f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload"]
+        paths.append(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
+    removed, foreign = 0, []
+    for path in paths:
+        found = CDI_CLEANUP.RESOURCES.optional(kget, path)
+        if not found:
+            continue
+        if ((found.get("metadata") or {}).get("annotations") or {}).get(CDI_CLEANUP.STAMP) != stamp:
+            foreign.append(path.rsplit("/", 1)[-1])
+            continue
+        CDI_CLEANUP.RESOURCES.delete(kget, ksend, path, found)
+        removed += 1
+    ref.update(phase="failed", retain_resources=False)
+    note = (f"; {', '.join(foreign)} belong to another import and were left" if foreign else "")
+    return f"Stopped; removed {removed} of the import's objects and their temporary storage{note}. The VM on {_where(ref)} is unchanged"
 
 
 # ------------------------------------------------------------ reading Unraid
@@ -55,7 +117,7 @@ def bind(imports, _kget, _ksend, ops, _platform=None):
 # One line per VM (name, state, XML, each base64 so nothing in them can break
 # the listing), then one per file disk with what qemu-img says of it.
 LIST_SCRIPT = r"""
-command -v virsh >/dev/null 2>&1 || { echo NOVIRSH; exit 0; }
+command -v virsh >/dev/null 2>&1 || { echo NOVIRSH; command -v qm >/dev/null 2>&1 && echo HASQM; exit 0; }
 virsh list --all --name 2>/dev/null | while IFS= read -r vm; do
   [ -n "$vm" ] || continue
   state=$(virsh domstate --domain "$vm" 2>/dev/null | head -n 1)
@@ -82,11 +144,14 @@ def _b64(value):
 
 def parse_listing(lines):
     """[(name, state, xml)] and {path: facts} from what LIST_SCRIPT printed."""
-    domains, disks, complete, virsh = [], {}, False, True
+    domains, disks, complete, virsh, qm = [], {}, False, True, False
     for line in lines:
         parts = line.split(" ")
         if parts[0] == "NOVIRSH":
             virsh = False
+        elif parts[0] == "HASQM":
+            # A Proxmox host added as Unraid: the page says to add it as Proxmox.
+            qm = True
         elif parts[0] == "END":
             complete = True
         elif parts[0] == "VM" and len(parts) == 4:
@@ -102,7 +167,7 @@ def parse_listing(lines):
                 "format": str(info.get("format") or ""),
                 "virtual": int(info.get("virtual-size") or size or 0),
                 "size": size, "used": int(parts[3]) if parts[3].isdigit() else 0}
-    return {"virsh": virsh, "complete": complete, "domains": domains, "disks": disks}
+    return {"virsh": virsh, "qm": qm, "complete": complete, "domains": domains, "disks": disks}
 
 
 def _kib(element, default=0):
@@ -198,6 +263,170 @@ def slug(name):
     return value or "imported-vm"
 
 
+# The disk image is written into a filesystem on the volume, and the
+# filesystem takes room of its own: a volume exactly the disk's size is
+# refused by CDI ("virtual image size ... is larger than the reported
+# available storage"). So a volume is the disk plus 6%, and at least 256 MiB
+# more, in MiB.
+FS_OVERHEAD_PCT = 6
+FS_MINIMUM = 256 * 1024 ** 2
+
+
+def request_mib(disk):
+    virtual = int(disk.get("virtual") or 0) or int(disk["size_gb"]) * 1024 ** 3
+    total = virtual + max(-(-virtual * FS_OVERHEAD_PCT // 100), FS_MINIMUM)
+    return -(-total // 1024 ** 2)
+
+
+def volume_request(disk):
+    return f"{request_mib(disk)}Mi"
+
+
+# ------------------------------------------------------------ room for the disks
+
+# Under this share of what the class can still place left over afterwards,
+# the import goes ahead with a warning: the next volume, or a rebuild, may not fit.
+ROOM_TIGHT_PCT = 10
+LONGHORN = "driver.longhorn.io"
+
+
+def _subset(wanted, have):
+    return set(wanted or []) <= set(have or [])
+
+
+def _most_placeable(rooms, copies):
+    """The most, in GiB, that volumes of `copies` copies can still take in
+    all, no two copies of one volume on the same node: the largest T with
+    sum(min(room, T)) >= copies x T over the nodes' rooms."""
+    if copies < 1 or len(rooms) < copies:
+        return 0.0
+    low, high = 0.0, sum(rooms) / copies
+    for _ in range(60):
+        mid = (low + high) / 2
+        if sum(min(r, mid) for r in rooms) >= copies * mid:
+            low = mid
+        else:
+            high = mid
+    return low
+
+
+def _place(sizes, nodes, copies):
+    """Place each volume, biggest first, a copy on each of the `copies` nodes
+    whose roomiest disk fits it. nodes: a list of disk rooms (GiB) per node.
+    False when one won't go: each copy needs its whole size on one disk."""
+    nodes = [sorted(disks, reverse=True) for disks in nodes]
+    for size in sorted(sizes, reverse=True):
+        fits = sorted((i for i, disks in enumerate(nodes) if disks and disks[0] >= size),
+                      key=lambda i: -nodes[i][0])[:copies]
+        if len(fits) < copies:
+            return False
+        for i in fits:
+            nodes[i][0] -= size
+            nodes[i].sort(reverse=True)
+    return True
+
+
+def _gib(value):
+    value = round(value, 1)
+    return f"{int(value)}" if value == int(value) else f"{value}"
+
+
+def storage_room(disks, storage_class=""):
+    """Whether the chosen class can still place the disks an import makes,
+    checked before anything is created. A Longhorn disk takes a replica while
+    what is allocated on it stays under (size - reserved) x over-provisioning %
+    and its real free space above the minimal-available share - room_gb and
+    physical_room_gb in homestead_lhcapacity.capacity - and each of a volume's
+    copies goes on a different node. Too little is a blocker; less than
+    ROOM_TIGHT_PCT left afterwards is a warning."""
+    sizes = [request_mib(d) / 1024 for d in disks]
+    needed = sum(sizes)
+    try:
+        name = str(storage_class or "").strip() or default_class() or ""
+    except Exception:
+        # The default class could not be read: the room is unknown, said as such.
+        name = ""
+    out = {"storage_class": name, "needed_gb": round(needed, 1), "free_gb": None, "copies": None,
+           "level": "unknown", "blockers": [], "warnings": []}
+
+    def unknown(why):
+        return {**out, "warnings": [f"{why}, so Homestead cannot check it has room for {_gib(needed)} GiB; "
+                                    "make sure it does before importing"]}
+    try:
+        rows = storage_classes() if storage_classes else None
+    except Exception:
+        rows = None
+    if rows is None or lh_capacity is None:
+        return unknown(f"The free space on {name or 'the default storage class'} could not be read")
+    row = next((r for r in rows if r.get("name") == name), None)
+    if row is None:
+        return unknown(f"There is no storage class {name}" if name else "No default storage class is set")
+    if row.get("provisioner") != LONGHORN:
+        return unknown(f"{name} is not Longhorn")
+    try:
+        copies = max(1, int(str(row.get("replicas") or "3").strip()))
+    except ValueError:
+        copies = 3
+    try:
+        cap = lh_capacity()
+    except Exception:
+        return unknown("Longhorn's free space could not be read")
+    nodes = []
+    for node in cap.get("nodes") or []:
+        if not _subset(row.get("node_tags"), node.get("tags")):
+            continue
+        rooms = [min(d.get("room_gb") or 0, d.get("physical_room_gb") or 0) for d in node.get("disks") or []
+                 if not d.get("blocked") and _subset(row.get("disk_tags"), d.get("tags"))]
+        nodes.append([r for r in rooms if r > 0])
+    free = _most_placeable([sum(n) for n in nodes], copies)
+    out.update(free_gb=round(free, 1), copies=copies)
+    with_copies = f" ({_gib(needed * copies)} GiB with its {copies} copies)" if copies > 1 else ""
+    usable = sum(1 for n in nodes if n)
+    if usable < copies:
+        out["blockers"].append(f"Not enough room on {name}: it keeps {copies} copies of a disk, each on a different "
+                               f"node, and {usable} node{'' if usable == 1 else 's'} {'has' if usable == 1 else 'have'} "
+                               f"room for one. These disks need {_gib(needed)} GiB{with_copies}; free some space "
+                               "or add a disk first")
+    elif needed > free + 0.05:
+        out["blockers"].append(f"Not enough room on {name}: these disks need {_gib(needed)} GiB{with_copies}, and "
+                               f"it can still place {_gib(free)} GiB. Free some space, add a disk, or leave a disk out")
+    elif not _place(sizes, nodes, copies):
+        biggest = sorted((max(n) for n in nodes if n), reverse=True)[copies - 1]
+        out["blockers"].append(f"Not enough room on {name} in one place: a {_gib(max(sizes))} GiB disk needs that "
+                               f"much free on one Longhorn disk on each of {copies} node{'' if copies == 1 else 's'}, "
+                               f"and {_gib(biggest)} GiB is the most there is. Free some space or add a bigger disk")
+    elif free - needed < free * ROOM_TIGHT_PCT / 100:
+        left = max(0.0, free - needed)
+        out["warnings"].append(f"Room is tight on {name}: these disks take {_gib(needed)} of the {_gib(free)} GiB "
+                               f"it can still place, leaving {_gib(left)} GiB ({round(left / free * 100) if free else 0}%). "
+                               "New volumes and replica rebuilds may not fit afterwards")
+    out["level"] = "bad" if out["blockers"] else "warn" if out["warnings"] else "ok"
+    return out
+
+
+def _chosen_disks(found, skip_disks):
+    skip = {int(i) for i in skip_disks or [] if str(i).isdigit()}
+    return [d for d in found["disks"] if d["index"] == 0 or d["index"] not in skip]
+
+
+def room(body):
+    """The import dialog's room check, on the class chosen, for the disks it
+    would make, from the listing the dialog already has. Starting the import
+    reads the disks again and checks again before anything is created."""
+    disks = []
+    for d in body.get("disks") or []:
+        try:
+            virtual, size_gb = int(d.get("virtual") or 0), int(d.get("size_gb") or 0)
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError("disk sizes are whole numbers")
+        if virtual < 0 or size_gb < 0 or not (virtual or size_gb):
+            raise ValueError("every disk needs a size")
+        disks.append({"virtual": virtual, "size_gb": size_gb})
+    if not disks or len(disks) > 64:
+        raise ValueError("which disks?")
+    return storage_room(disks, body.get("storage_class"))
+
+
 def plan(dom, facts):
     """How one Unraid VM maps to a Homestead VM, and what stays behind."""
     gib = 1024 ** 3
@@ -239,7 +468,7 @@ def plan(dom, facts):
     nic = dom["nics"][0] if dom["nics"] else {}
     unraid_state = dom.get("state", "")
     return {
-        "name": dom["name"], "slug": slug(dom["name"]), "state": unraid_state,
+        "id": dom["name"], "name": dom["name"], "slug": slug(dom["name"]), "state": unraid_state,
         "shut_off": unraid_state == "shut off", "os": dom["os"],
         "cores": max(1, min(128, dom["vcpus"])),
         "memory": f"{dom['memory_kib'] // 1024 ** 2}Gi" if dom["memory_kib"] >= 1024 ** 2 and not dom["memory_kib"] % 1024 ** 2
@@ -259,18 +488,31 @@ def plan(dom, facts):
 
 def _source(name):
     src = IMP._source(name)
-    if src.get("kind") not in ("unraid", "ssh"):
-        raise ValueError("VMs are imported from an Unraid server")
+    if src.get("kind") not in ("unraid", "ssh", "proxmox"):
+        raise ValueError("VMs are imported from an Unraid server or a Proxmox host")
     return src
 
 
+KIND_NAMES = {"unraid": "Unraid", "ssh": "Unraid", "proxmox": "Proxmox"}
+
+
+def _where(ref):
+    """What the import came from, in words: "Proxmox" or "Unraid"."""
+    return KIND_NAMES.get(ref.get("kind", "unraid"), "the source")
+
+
 def listing(source):
-    """Every VM on one Unraid server, mapped."""
+    """Every VM on one Unraid server or Proxmox host, mapped."""
     src = _source(source)
+    if src.get("kind") == "proxmox":
+        lines = IMP.run_probe(f"vms-{source}", IMP._ssh_script(src, PROXMOX.LIST_SCRIPT), src, timeout=120)
+        found = PROXMOX.listing(lines)
+        # "virsh" is what the page asks: whether the host runs VMs at all.
+        return {"source": source, "kind": "proxmox", "virsh": found["hypervisor"], "vms": found["vms"]}
     lines = IMP.run_probe(f"vms-{source}", IMP._ssh_script(src, LIST_SCRIPT), src, timeout=120)
     found = parse_listing(lines)
     if not found["virsh"]:
-        return {"source": source, "virsh": False, "vms": []}
+        return {"source": source, "kind": src.get("kind"), "virsh": False, "proxmox": found["qm"], "vms": []}
     if not found["complete"]:
         raise ValueError("Unraid's VM list was cut short; try again")
     vms = []
@@ -281,16 +523,18 @@ def listing(source):
             continue
         dom["state"] = state
         vms.append(plan(dom, found["disks"]))
-    return {"source": source, "virsh": True, "vms": sorted(vms, key=lambda v: v["name"].lower())}
+    return {"source": source, "kind": src.get("kind"), "virsh": True, "vms": sorted(vms, key=lambda v: v["name"].lower())}
 
 
 def _one(source, vm):
+    """One VM by its id: its name on Unraid, its VMID on Proxmox."""
     vm = str(vm or "")
-    if not UNRAID_NAME.fullmatch(vm) or vm.startswith("-"):
+    proxmox = _source(source).get("kind") == "proxmox"
+    if not (vm.isdigit() if proxmox else UNRAID_NAME.fullmatch(vm) and not vm.startswith("-")):
         raise ValueError("which VM?")
-    found = next((v for v in listing(source)["vms"] if v["name"] == vm), None)
+    found = next((v for v in listing(source)["vms"] if v["id"] == vm), None)
     if not found:
-        raise ValueError(f"{source} has no VM named {vm}")
+        raise ValueError(f"{source} has no VM {vm}" if proxmox else f"{source} has no VM named {vm}")
     return found
 
 
@@ -300,6 +544,9 @@ def shutdown(source, vm):
     if found["shut_off"]:
         return {"ok": True, "message": f"{vm} is already shut off"}
     src = _source(source)
+    if src.get("kind") == "proxmox":
+        IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, PROXMOX.shutdown_command(found["vmid"])), src, timeout=70)
+        return {"ok": True, "message": f"Asked {source} to shut {found['name']} down; it shows as stopped once the guest has stopped"}
     IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, "virsh shutdown --domain " + shlex.quote(vm)), src, timeout=60)
     return {"ok": True, "message": f"Asked {source} to shut {vm} down; it shows as shut off once the guest has stopped"}
 
@@ -325,6 +572,7 @@ def disk_names(name, count):
 def start(body, actor=""):
     """Check, make the empty disks, and start the job that fills them."""
     source = str(body.get("source") or "")
+    kind = _source(source).get("kind", "unraid")
     found = _one(source, body.get("vm"))
     if not found["shut_off"]:
         raise ValueError(f"{found['name']} is {found['state'] or 'running'} on {source}: shut it down first, "
@@ -335,8 +583,7 @@ def start(body, actor=""):
     ns = IMP._required_name(body.get("namespace") or IMP.NS, "namespace")
     if IMP._get_or_none(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}") is not None:
         raise ValueError(f"a VM named {name} already exists in {ns}")
-    skip = {int(i) for i in body.get("skip_disks") or [] if str(i).isdigit()}
-    disks = [d for d in found["disks"] if d["index"] == 0 or d["index"] not in skip]
+    disks = _chosen_disks(found, body.get("skip_disks"))
     names = disk_names(name, len(disks))
     for dv in names:
         plan_ = IMP.vm_disk_import_plan(ns, dv)
@@ -349,6 +596,10 @@ def start(body, actor=""):
     if not re.fullmatch(r"\d+(?:\.\d+)?(?:Mi|Gi)", memory):
         raise ValueError("memory must be like 8Gi or 512Mi")
     storage_class = str(body.get("storage_class") or "").strip()
+    # Checked before any disk is made, not partway through a copy.
+    space = storage_room(disks, storage_class)
+    if space["blockers"]:
+        raise ValueError(space["blockers"][0])
     network = str(body.get("network") or "pod").strip()
     if network != "pod":
         # Checked now, not after an hour of copying.
@@ -377,17 +628,18 @@ def start(body, actor=""):
     for dv, disk in zip(names, disks):
         # Filesystem mode avoids raw block-device ownership requirements.
         storage = {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
-                   "resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
+                   "resources": {"requests": {"storage": volume_request(disk)}}}
         if storage_class:
             storage["storageClassName"] = storage_class
         bodies.append({
             "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
             "metadata": {"name": dv, "namespace": ns,
                          "labels": {NAMES.key("managed"): "true", IMP.VM_DISK_LABEL: "true"},
-                         "annotations": {"homestead.io/import-source": "unraid",
+                         "annotations": {"homestead.io/import-source": "proxmox" if kind == "proxmox" else "unraid",
                                          "homestead.io/disk-format": disk["format"]}},
             "spec": {"source": {"upload": {}}, "contentType": "kubevirt", "storage": storage}})
-    ref = {"source": source, "vm": found["name"], "namespace": ns, "name": name, "url": url,
+    # vm is what the copy checks is still off: Unraid's name, Proxmox's VMID.
+    ref = {"source": source, "kind": kind, "vm": found["id"], "vm_name": found["name"], "namespace": ns, "name": name, "url": url,
            "disks": [{"dv": dv, "path": d["path"], "bytes": d["size"], "job": ""} for dv, d in zip(names, disks)],
            "vm_cfg": vm_cfg, "by": actor}
     return CDI_CLEANUP.dispatch(kget, ksend, OPS, KIND, f"Import {found['name']} from {source}",
@@ -395,16 +647,23 @@ def start(body, actor=""):
 
 
 def copy_script(src, vm, path, size):
-    """Read one vdisk over SSH into the upload, the VM checked still off first."""
+    """Read one disk over SSH into the upload, the VM checked still off first.
+    vm is Unraid's VM name or Proxmox's VMID; path is a file, or on Proxmox a
+    block device (an LVM-thin or ZFS volume), which reads the same way."""
     ssh = lambda remote: IMP._ssh_script(src, remote)
+    if src.get("kind") == "proxmox":
+        check = [f"state=$({ssh(PROXMOX.status_command(vm))})",
+                 "[ \"$state\" = 'stopped' ] || { echo \"HSVM-FAILED VM $vm is ${state:-unknown} on Proxmox again; its disk was not copied\"; exit 5; }"]
+    else:
+        check = [f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
+                 "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }"]
     return "\n".join([
         "set -eu", "set -o pipefail",
         # The name is Unraid's free text: a shell variable, never part of a command.
-        f"vm={shlex.quote(vm)}",
+        f"vm={shlex.quote(str(vm))}",
         "apk add --no-cache openssh-client sshpass curl pv >/dev/null 2>&1 || apk add --no-cache openssh-client sshpass curl >/dev/null",
         IMP.SOURCE_SSH.setup(src).rstrip("\n"),
-        f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
-        "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }",
+        *check,
         "meter() { if command -v pv >/dev/null 2>&1; then pv -n -t -b -i 10 -s " + str(int(size)) + "; else cat; fi; }",
         # Compressed on the wire: a raw vdisk is mostly empty space, which
         # crosses as almost nothing; pv counts the disk's own bytes after SSH
@@ -648,12 +907,12 @@ def _fail(ref, message, item=None):
     ref["diagnostics"] = saved
     if ref.get("cdi_cleanup"):
         ref.update(phase="cleanup", cleanup_outcome="failed",
-                   cleanup_detail=message + "; the VM on Unraid is unchanged")
+                   cleanup_detail=message + f"; the VM on {_where(ref)} is unchanged")
         return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
     # Older jobs lack identity receipts. Never delete a retry's disks by name.
     ref["phase"] = "failed"
     return "failed", 100, (message + "; this older import has no cleanup receipt; review its disconnected volumes. "
-                           "The VM on Unraid is unchanged")
+                           f"The VM on {_where(ref)} is unchanged")
 
 
 def status(item):
@@ -714,7 +973,7 @@ def status(item):
                 disk["pct"] = progress(_job_logs(ns, disk["job"]), disk["bytes"])
                 running += 1
         if failed:
-            return _fail(ref, f"Copying {ref['vm']} failed: {failed}", item)
+            return _fail(ref, f"Copying {ref.get('vm_name', ref['vm'])} failed: {failed}", item)
         pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
         if done < len(ref["disks"]):
             gib = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1024 ** 3
@@ -739,7 +998,7 @@ def status(item):
             return "failed", 100, detail
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
-                         f"{ref['vm']} on {ref['source']} is untouched")
+                         f"{ref.get('vm_name', ref['vm'])} on {ref['source']} is untouched")
         if ref.get("cdi_cleanup"):
             ref.update(phase="cleanup", cleanup_outcome="succeeded", cleanup_detail=ref["detail"])
             return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
@@ -751,5 +1010,6 @@ def status(item):
 ROUTES = {
     ("POST", "/api/sources/vms"): ("admin", lambda request: listing(str(request.body.get("name") or ""))),
     ("POST", "/api/sources/vms/shutdown"): ("admin", lambda request: shutdown(str(request.body.get("source") or ""), request.body.get("vm"))),
+    ("POST", "/api/vms/import-unraid/room"): ("admin", lambda request: room(request.body)),
     ("POST", "/api/vms/import-unraid"): ("admin", lambda request: {"ok": True, "operation": start(request.body, request.user or "")}),
 }

@@ -1138,8 +1138,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
       <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
-    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, virtual devices</summary>
-      ${vmHardwareFields(opts.hardware_base, opts, false, true)}</details>` : ""}
+    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, memory</summary>
+      ${vmHardwareFields(opts.hardware_base, opts, false, true, true)}</details>` : ""}
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
 `;
   const vmNetwork = `
@@ -1176,6 +1176,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
   modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
     { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
+    // The display and virtual devices, a step of their own as on the Edit dialog.
+    ...(opts.hardware_base ? [{ title: "Display and devices", html: vmDisplayFields(opts.hardware_base) }] : []),
     { title: "Passthrough", html: window.vmDevicesPane ? vmDevicesPane({}, devices) : "" }],
     `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true, "vm-config");
   window.__vmPreset = "";
@@ -1410,7 +1412,7 @@ function vmImagesSection(vm, nodeNames) {
           <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag dim" data-tip="Not cached on this host">${esc(n.replace("harvester-", ""))}</span>`).join("")}</td>
           <td><div class="row" style="gap:5px">${used}</div></td>
-          <td>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
+          <td data-actions>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}
     </tbody></table></div></div>`;
 }
@@ -1496,7 +1498,7 @@ async function viewSchedules() {
         <td class="small dim">${fmtWhen(j.last)}</td>
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill low">running</span>' : '<span class="pill ok">active</span>'}</td>
-        <td>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
+        <td data-actions>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
           { label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
           { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
@@ -1584,7 +1586,7 @@ async function viewImport() {
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "low"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${fmtWhen(j.start)}</td>
-        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
+        <td data-actions>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
           { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || defaultNamespace())})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
@@ -1728,20 +1730,39 @@ window.doVmDiskImport = async () => {
     toast(result.message, "ok"); closeModal(); importRepaint();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.srcAdd = () => modal("Add an Unraid or Docker server", UI.lead("Homestead reaches the server over SSH, lists its Docker containers, and copies each one's appdata. Save it, then verify its SSH fingerprint: no login is attempted until you trust it.") +
-  UI.fields(UI.field("Name", '<input id="sc_name" placeholder="unraid">'), UI.field("Address", '<input id="sc_host" placeholder="192.0.2.10">'),
+/* What each type of server is for, in the dialog's lead. */
+const SOURCE_LEADS = {
+  unraid: "Homestead reaches the server over SSH, lists its Docker containers and VMs, and copies each one's data.",
+  ssh: "Homestead reaches the host over SSH, lists its Docker containers, and copies each one's appdata.",
+  proxmox: "Homestead reaches the Proxmox host over SSH (root, or a user that may run qm), lists its VMs, and copies each one's disks.",
+};
+/* Add a server: its type first, since it decides the rest. kind is the type to
+   start on: Proxmox from the VM import page, Unraid elsewhere. */
+window.srcAdd = (kind = STATE.view === "vmimport" ? "proxmox" : "unraid") => {
+  const option = (value, label) => `<option value="${value}"${value === kind ? " selected" : ""}>${label}</option>`;
+  modal("Add a server", `<p class="ui-lead" id="sc_lead">${esc(SOURCE_LEADS[kind] || SOURCE_LEADS.unraid)} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.</p>` +
+  UI.field("Type", `<select id="sc_kind" onchange="srcKindChanged()">${option("unraid", "Unraid")}${option("proxmox", "Proxmox VE")}${option("ssh", "Other Docker host")}</select>`) +
+  UI.fields(UI.field("Name", `<input id="sc_name" placeholder="${kind === "proxmox" ? "proxmox" : "unraid"}">`), UI.field("Address", '<input id="sc_host" placeholder="192.0.2.10">'),
     UI.field("Username", '<input id="sc_user" value="root" autocomplete="off">'), UI.field("Password", '<input type="password" id="sc_pass" autocomplete="new-password">'),
-    UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">'),
-    UI.field("Type", '<select id="sc_kind"><option value="unraid">Unraid</option><option value="ssh">Other Docker host</option><option value="proxmox">Proxmox</option></select>')) +
-  UI.field("Appdata folder", '<input id="sc_path" value="/mnt/user/appdata">') +
+    UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">')) +
+  `<div id="sc_path_field"${kind === "proxmox" ? " hidden" : ""}>${UI.field("Appdata folder", '<input id="sc_path" value="/mnt/user/appdata">')}</div>` +
   UI.more("Credentials and source ownership", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a source does not revoke credentials already used by copy Jobs.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
   UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})), false, "operation-review");
+};
+/* The lead and the appdata folder follow the type: a Proxmox host has no appdata. */
+window.srcKindChanged = () => {
+  const kind = $("#sc_kind").value;
+  $("#sc_lead").textContent = `${SOURCE_LEADS[kind] || SOURCE_LEADS.unraid} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.`;
+  $("#sc_path_field").hidden = kind === "proxmox";
+  $("#sc_name").placeholder = kind === "proxmox" ? "proxmox" : "unraid";
+};
 window.doSrcAdd = async () => {
   const save = $("#sc_save"), password = $("#sc_pass");
   if (!save || save.disabled) return;
-  const body = { name: $("#sc_name").value.trim(), host: $("#sc_host").value.trim(),
+  // A name is lower case, as Kubernetes names are: Proxmox is saved as proxmox.
+  const body = { name: $("#sc_name").value.trim().toLowerCase(), host: $("#sc_host").value.trim(),
     user: $("#sc_user").value.trim(), password: $("#sc_pass").value,
-    kind: $("#sc_kind").value, base_path: $("#sc_path").value.trim(), port: +$("#sc_port").value };
+    kind: $("#sc_kind").value, base_path: $("#sc_kind").value === "proxmox" ? "/" : $("#sc_path").value.trim(), port: +$("#sc_port").value };
   if (!body.name || !body.host) return toast("Name and host are required", "bad");
   try {
     save.disabled = true;
@@ -1749,7 +1770,12 @@ window.doSrcAdd = async () => {
     password.value = ""; body.password = "";
     STATE.data.srcs = result.sources;
     if ($("#sc_save") === save) await srcVerify(body.name);
-  } catch (e) { toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad"); }
+  } catch (e) {
+    // Refused (a bad name, a missing field): nothing was saved, so correct it
+    // and save again. Anything else may have saved: refresh before retrying.
+    if (e.status >= 400 && e.status < 500) { save.disabled = false; toast(e.message, "bad"); }
+    else toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad");
+  }
 };
 let SOURCE_KEY_REVIEW = null, SOURCE_KEY_SEQUENCE = 0, SOURCE_KEY_BUSY = false;
 window.srcVerify = async name => {

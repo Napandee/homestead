@@ -98,7 +98,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error, cause = "") {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.329" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.330-dev.10" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
@@ -191,7 +191,7 @@ function stopAuthenticatedWork() {
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.329" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.330-dev.10" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -445,7 +445,7 @@ window.apiKeysPaint = async () => {
       <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ' <span class="tag" title="A host\'s address inside the cluster, not the client\'s">host</span>' : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
-      <td>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
+      <td data-actions>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
         { label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 2 })}</td></tr>`).join("");
   card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
         <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}
@@ -489,7 +489,7 @@ window.apiKeyEdit = id => {
     + `<div class="sec">What it may do</div>` + apiKeyForm(key)
     + UI.fields(UI.field("Expires", `<select id="ak_ttl"><option value="">Keep: ${esc(keyUntil(key.expires))}</option>${API_TTLS.map(([label, s]) => `<option value="${s}">${esc(label)} from now</option>`).join("")}</select>`),
       UI.field("Only from (optional)", `<input id="ak_nets" value="${esc((key.networks || []).join(", "))}" placeholder="192.0.2.20, 198.51.100.0/24">`, { help: apiKeyNetworksHelp() }))
-    + UI.actions(UI.cancel() + UI.button("Save changes", `apiKeySave(this,${jsq(id)})`, { kind: "pri" })));
+    + UI.actions(UI.cancel() + UI.button("Save changes", `apiKeySave(this,${jsArg(id)})`, { kind: "pri" })));
 };
 window.apiKeySave = async (button, id) => {
   const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),

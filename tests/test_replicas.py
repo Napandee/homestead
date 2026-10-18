@@ -127,8 +127,8 @@ class ReplicaSettingTests(unittest.TestCase):
                "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}},
                "selector": {"matchLabels": {"app": "homestead"}}, "template": {"spec": {}}}}
         sent = []
-        with mock.patch.object(server, "kget", lambda path: copy.deepcopy(dep)),                 mock.patch.object(server, "homestead_data_volume", lambda *a: {"shareable": False}),                 mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
-            server.fit_own_strategy()
+        with mock.patch.object(server.KUBE_HELPERS, "kget", lambda path: copy.deepcopy(dep)),                 mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", lambda *a: {"shareable": False}),                 mock.patch.object(server.KUBE_HELPERS, "ksend", lambda *a, **k: sent.append(a)):
+            server.SELF_DATA_ROUTES.fit_own_strategy()
             server.SELF_HEALTH.set_replicas(1)
         self.assertEqual({"spec": {"strategy": {"type": "Recreate", "rollingUpdate": None}}}, sent[0][2])
         self.assertEqual({"type": "Recreate"}, sent[1][2]["spec"]["strategy"])
@@ -141,9 +141,9 @@ class ReplicaSettingTests(unittest.TestCase):
         dep = {"metadata": {"name": "homestead"}, "spec": {"replicas": 1, "strategy": {"type": "Recreate"},
                "selector": {"matchLabels": {"app": "homestead"}}, "template": {"spec": {}}}}
         sent = []
-        with mock.patch.object(server, "kget", lambda path: copy.deepcopy(dep)), \
-                mock.patch.object(server, "homestead_data_volume", lambda *a: {"shareable": True}), \
-                mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", lambda path: copy.deepcopy(dep)), \
+                mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", lambda *a: {"shareable": True}), \
+                mock.patch.object(server.KUBE_HELPERS, "ksend", lambda *a, **k: sent.append(a)):
             server.SELF_HEALTH.set_replicas(2)
             with self.assertRaises(ValueError):
                 server.SELF_HEALTH.set_replicas(9)

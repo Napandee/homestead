@@ -6,12 +6,14 @@ and the host fixes, the storage loops, and the snapshot-file and share-server
 routes server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache and _lock)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache and _lock)."""
 import json
 import os
 import time
+import urllib.request, urllib.parse, urllib.error
 import homestead_cancel as CANCEL
 import homestead_disks as DISKS
 import homestead_files as FILES
@@ -27,6 +29,7 @@ import homestead_nfs as NFS
 import homestead_node_parity as NODE_PARITY
 import homestead_objectstore as OBJECTS
 import homestead_operations as OPS
+import homestead_place as PLACE
 import homestead_reclass as RECLASS
 import homestead_restore_test as RESTORE_TEST
 import homestead_root_guard as ROOT_GUARD
@@ -36,6 +39,9 @@ import homestead_shared as SHARED
 import homestead_shares as SHARES
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_snapshot_files as SNAPSHOT_FILES
+import homestead_snapshot_restore as SNAPSHOT_RESTORE
+import homestead_storage as STORAGE
+import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_storage_pending as STORAGE_PENDING
@@ -43,7 +49,10 @@ import homestead_storage_runtime as STORAGE_RUNTIME
 import homestead_storage_workflow as STORAGE_WORKFLOW
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_pvc_rows", "beat", "cached", "class_selectable", "cleanup_restores", "get_app_settings", "guard_managed_smb", "is_self", "kget", "require_self_data_write", "selectable_storage_classes", "self_data_activity", "serves_many", "storage_classes", "storage_helper_admission", "storage_restart_admission", "update_policy_status")
+ROUTE_NEEDS = ("beat", "cached", "copy_admission", "create_pvc", "get_app_settings",
+               "guard_managed_smb", "is_self", "kget", "require_self_data_write",
+               "selectable_storage_classes", "self_data_activity", "storage_classes",
+               "update_policy_status")
 VALUES = ("DATA_DIR", "HOMESTEAD_VERSION", "SMB_NAMESPACE", "_cache", "_lock")
 
 
@@ -448,6 +457,70 @@ def _samba_loop():
         time.sleep(60)
 
 
+def _pvc_rows(namespace):
+    """Every claim in a namespace, with the Longhorn facts a picker needs."""
+    live = longhorn_state_by_pvc(namespace)
+    rows = []
+    for item in kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims").get("items", []):
+        spec, status = item.get("spec", {}), item.get("status", {})
+        name = item["metadata"]["name"]
+        facts = live.get(name, {})
+        rows.append({
+            "name": name,
+            "size": (status.get("capacity", {}) or {}).get("storage") or
+                    (spec.get("resources", {}).get("requests", {}) or {}).get("storage", ""),
+            "status": status.get("phase", "Unknown"),
+            "access_modes": spec.get("accessModes", []) or [],
+            "storage_class": spec.get("storageClassName", ""),
+            "robustness": facts.get("robustness", ""),
+            "node": facts.get("node", ""),
+            "migratable": facts.get("migratable", False),
+            "workloads": facts.get("workloads", []),
+        })
+    return sorted(rows, key=lambda row: row["name"])
+
+
+# Harvester keeps these for VM images and VM state; they are not general
+# purpose storage and Harvester's own UI marks them internal.
+INTERNAL_STORAGE_CLASSES = {"longhorn-static", "vmstate-persistence"}
+
+
+def _internal_class(meta):
+    annotations = meta.get("annotations", {}) or {}
+    return (meta.get("name", "") in INTERNAL_STORAGE_CLASSES or
+            str(annotations.get("harvesterhci.io/is-reserved-storageclass", "")).lower() == "true")
+
+
+def _class_made_for(name, parameters):
+    """A class made for one thing, not for choosing: a Harvester image's
+    (its disks start as that image - named longhorn-image-* or lh-<uuid>,
+    with the image as its backing image) or a restore's (Homestead's
+    homestead-restore-*, reading one backup). Neither belongs in a picker."""
+    if name.startswith("homestead-restore-") or parameters.get("fromBackup"):
+        return "restore"
+    if parameters.get("backingImage") or name.startswith("longhorn-image-"):
+        return "image"
+    if name == NAMES.object_name("isos"):
+        # Homestead's ISO copies: one replica, not a class to put data on.
+        return "iso"
+    return ""
+
+
+def class_selectable(row):
+    return not row.get("internal") and not row.get("made_for")
+
+
+# Provisioners that can serve one volume to pods on several nodes at once.
+# k3s's local-path and most block CSI drivers cannot: a ReadWriteMany claim on
+# them stays Pending for good.
+SHARED_DRIVERS = {"driver.longhorn.io", "nfs.csi.k8s.io", "efs.csi.aws.com", "file.csi.azure.com", "smb.csi.k8s.io"}
+
+
+def serves_many(row):
+    provisioner = str(row.get("provisioner") or "")
+    return provisioner in SHARED_DRIVERS or provisioner.endswith(".cephfs.csi.ceph.com")
+
+
 # The routes server.py's handler answered for this code.
 def _snapshot_files_plan(request):
     q = request.query
@@ -459,9 +532,9 @@ def _snapshot_files_session(request):
     ns, session = (q.get("namespace") or [""])[0], (q.get("session") or [""])[0]
     if p.endswith("/status"):
         return SNAPSHOT_FILES.status(ns, session)
-    path = (q.get("path") or [""])[0]
     if p.endswith("/download"):
-        return SNAPSHOT_FILES.download(ns, session, path)
+        return SNAPSHOT_FILES.download(ns, session, q.get("path") or [""])
+    path = (q.get("path") or [""])[0]
     return SNAPSHOT_FILES.read(ns, session, "list", path)
 
 
@@ -488,6 +561,8 @@ ROUTES = {
     ("GET", "/api/snapshot-files/list"): ("admin", _snapshot_files_session),
     ("GET", "/api/snapshot-files/download"): ("admin", _snapshot_files_session),
     ("POST", "/api/snapshot-files/start"): ("admin", _snapshot_files_start),
+    ("POST", "/api/snapshot-files/restore/plan"): ("admin", lambda request: SNAPSHOT_RESTORE.restore_plan(request.body)),
+    ("POST", "/api/snapshot-files/restore"): ("admin", lambda request: SNAPSHOT_RESTORE.restore(request.body)),
     ("POST", "/api/snapshot-files/close"): ("admin", lambda request: SNAPSHOT_FILES.close(request.body.get("namespace"),
                                                                                        request.body.get("session"))),
     ("POST", "/api/self/samba"): ("admin", lambda request: SHARE_SERVERS.set_samba(
@@ -497,3 +572,49 @@ ROUTES = {
     ("POST", "/api/addons/smb/remove"): ("admin", _remove_samba),
     ("POST", "/api/addons/nfs/remove"): ("admin", _remove_nfs),
 }
+
+
+def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
+    """A deploy's new volume - or the one of that name already there, when
+    nothing uses it.
+
+    A failed install leaves its volumes behind (deleting a container keeps
+    its data), and installing again then stopped at "already exists". One
+    that nothing refers to is taken as it is, data and all, and said so; one
+    another container, VM or job uses is refused by name.
+    """
+    try:
+        existing = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        existing = None
+    if not existing:
+        create_pvc(ns, name, size_gb, sc, access_mode)
+        return ""
+    try:
+        users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
+    except Exception:
+        users = ["something"]
+    if users:
+        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
+                         "give this app's volume another name, or choose the existing one to share it")
+    return name
+
+
+def cleanup_restores():
+    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, LH.cleanup_restore_snapshots):
+        try:
+            cleanup()
+        except Exception as error:
+            # Cleanup may be retried; it must not change a completed restore
+            # into a failed data operation. The cleanup itself fails closed.
+            print(f"Restore metadata cleanup deferred: {error}", flush=True)
+
+
+def storage_restart_admission(item, proposals):
+    return STORAGE_ADMISSION.plan(item, proposals, kget, PLACE.get_nodes(), get_app_settings()["thresholds"]["memory"]["critical"])
+
+
+def storage_helper_admission(item, manifest):
+    return copy_admission(manifest)

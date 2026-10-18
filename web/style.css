@@ -190,15 +190,12 @@ html{scrollbar-color:var(--scroll-thumb) transparent}
   background:var(--med);color:#15100a;font:750 10px/1 "JetBrains Mono",monospace;box-shadow:0 0 0 2px rgba(255,176,32,.12)}
 .navbadge.hidden{display:none}
 .sidefoot{padding:16px 18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
-.clusteralert{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:-5px 0 18px;padding:12px 14px;border:1px solid rgba(255,176,32,.3);border-radius:13px;background:rgba(255,176,32,.08)}
 /* The Dashboard's one warning (#506): a UI.callout. Once every health issue
    in it is acknowledged it goes quiet. */
 .dash-alert{margin:-5px 0 18px}
 .dash-alert .ui-callout-body ul{margin:6px 0 0;padding-left:18px}
 .dash-alert-actions{margin-top:10px}
 .dash-alert.acknowledged .ui-callout{border-color:var(--line);background:transparent}
-.clusteralert.critical{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.08)}
-.clusteralert.acknowledged{border-color:var(--line);background:transparent}.clusteralert>div{display:flex;flex-direction:column;gap:2px}.clusteralert b{font-size:12px}.clusteralert span{color:var(--mut);font-size:11px}
 
 /* ---------------- persistent jobs tray ---------------- */
 .jobtray{position:fixed;left:258px;right:20px;bottom:18px;z-index:42;display:flex;flex-direction:column;align-items:flex-end;pointer-events:none}
@@ -785,6 +782,15 @@ html[data-display="standalone"]:has(#modal:not(.hidden)) .main,html[data-display
 .modal,.modalbox,.askdlg,.drawer{overscroll-behavior:contain}
 .modalbox{background:linear-gradient(158deg,rgba(255,255,255,.08),rgba(255,255,255,.03));backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3);border:1px solid var(--line2);border-radius:22px;width:min(840px,100%);
   max-height:88vh;overflow-y:auto;overflow-x:hidden;box-shadow:0 36px 100px rgba(0,0,0,.8);animation:pop .3s var(--e)}
+/* The dialog scrolls itself, so its scrollbar ran the box's full height and
+   the rounded corners cut off both ends. Where the -webkit- scrollbar can be
+   styled (Chromium, Safari), the dialog uses it - the inherited standard
+   scrollbar-color would switch it off - and its track stops short of the
+   corners. Firefox keeps its thin themed scrollbar. */
+@supports selector(::-webkit-scrollbar){
+  .modalbox{scrollbar-color:auto;scrollbar-width:auto}
+  .modalbox::-webkit-scrollbar-track{margin-block:22px}
+}
 @keyframes pop{from{transform:translateY(16px) scale(.98);opacity:0}to{transform:none;opacity:1}}
 .modalhead{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;
@@ -1601,6 +1607,8 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .tag.movable:hover{background:rgba(74,158,255,.18);border-color:rgba(74,158,255,.45);color:#9ecbff}
 .tag.movable .mv{opacity:.45;font-size:10px;margin-left:1px}
 .tag.movable:hover .mv{opacity:1}
+/* Select mode on a host's apps (#589): a picked chip lights up, hovered or not. */
+.tag.movable[aria-pressed=true],.tag.movable[aria-pressed=true]:hover{background:var(--focus);border-color:var(--focus);color:var(--bg)}
 .nodelink{cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25)}
 .nodelink:hover{color:var(--tx);border-bottom-color:var(--low)}
 .movegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
@@ -1664,25 +1672,10 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .ipam-stats .ctitle{font-size:12px}
   .ipam-stats .bignum{font-size:24px;margin-top:4px}
   .ipam-stats .csub{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
-    grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
-  .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
-  .tbl.stack.ipam-table tr.ipam-row>td::before{content:none}
-  .tbl.stack.ipam-table tr.ipam-row>td:empty{display:none}
-  .tbl.stack.ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
+  /* The cards themselves are the container rule below; a phone only gets
+     bigger ticks and smaller tags. */
   .ipam-table .ip-pick input{width:20px;height:20px}
-  .ipam-table .ip-addr{grid-area:addr;font-size:14px;font-weight:650}
-  .ipam-table .ip-kind{grid-area:kind;justify-self:end}
-  .tbl.stack.ipam-table .ip-name{grid-area:name}
-  .ipam-table .ip-name .ipam-line{white-space:normal;overflow:visible}
-  .ipam-table .ip-seen{grid-area:seen;justify-self:end}
-  .ipam-table .ip-mac{grid-area:mac;color:var(--mut)}
-  .ipam-table .ip-notes{grid-area:notes;max-width:100%;overflow:hidden}
-  .ipam-table .ip-notes .ipam-line{flex-wrap:nowrap;gap:4px;min-width:0;max-width:100%;width:100%}
-  .ipam-table .ip-notes .ipam-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--mut)}
   .ipam-table .ip-seen .tag,.ipam-table .ip-kind .tag{font-size:10.5px;padding:2px 7px}
-  .tbl.stack.ipam-table tbody.ipam-gap tr{padding:3px 12px}
-  .tbl.stack.ipam-table tbody.ipam-gap td{padding:0}
   .ipam-bulk select,.ipam-bulk input{flex:1 1 40%;min-width:0}
 }
 
@@ -1697,7 +1690,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-grid[data-tab="placement"]>section[data-tab="placement"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="monitoring"],
 .settings-grid[data-tab="monitoring"]>section[data-tab="health"],
-.settings-grid[data-tab="monitoring"]>section[data-tab="mqtt"],
+.settings-grid[data-tab="connections"]>section[data-tab="mqtt"],
 .settings-grid[data-tab="hardware"]>section[data-tab="hardware"],
 .settings-grid[data-tab="hardware"]>section[data-tab="cluster"],
 .settings-grid[data-tab="hardware"]>section[data-tab="namespaces"],
@@ -1930,6 +1923,11 @@ tr.clickable{cursor:pointer}
 
 /* MQTT settings and the long-term history card. */
 .mqtt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.mqtt-pick-filter{width:100%;margin:4px 0 8px}
+.mqtt-pick-list{max-height:min(46vh,420px);overflow:auto;display:grid;gap:10px;padding-right:4px}
+.mqtt-pick-group{display:grid;gap:2px}
+.mqtt-pick{display:flex;align-items:center;gap:8px;padding:4px 2px;min-width:0;overflow-wrap:anywhere}
+.mqtt-pick[hidden]{display:none}
 .history-card{margin-top:18px}
 .hist-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:12px}
 .hist-chart .spark{width:100%;height:56px;margin-top:4px}
@@ -1974,7 +1972,7 @@ div.ipam-line.dim{display:block}
 @media(min-width:561px){
   .ipam-table .ip-addr{width:1%;padding-right:8px}
   .ipam-table .ip-addr>.dim{display:block}
-  .ipam-table .ipam-name{min-width:clamp(160px,24vw,340px)}
+  .ipam-table .ipam-name{min-width:180px}
 }
 /* Notes take what width is left: no width of their own, all of the cell's. */
 .ipam-table td.ipam-notes{width:100%}
@@ -1991,6 +1989,43 @@ div.ipam-line.dim{display:block}
   .ipam-gap tr,.ipam-gap td{display:block}
   .ipam-gap td::before{display:none}
   .ipam-name,.ipam-notes{max-width:none}
+}
+/* IP addresses fit their box (#559). Beside the sidebar and the Networking
+   rail the box can be under 800 px on a desktop, too narrow for seven
+   columns: there each address is the phone's short card. Wider, Seen's chips
+   wrap and the name keeps 180 px, so the table never scrolls sideways. */
+.ipam-box{container:ipam/inline-size}
+.ipam-all-cards{display:none}
+.ipam-table td.ip-seen{white-space:normal}
+.ipam-table .ip-seen .pill{white-space:nowrap;margin:1px 0}
+@container ipam (max-width:800px){
+  /* The cards keep what the hidden headings gave: sorting and Select all. */
+  .ipam-box>.sortbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;font-size:12px;color:var(--mut)}
+  .ipam-box>.sortbar select{margin-left:6px;padding:5px 8px;font-size:12px;width:auto}
+  .ipam-box>.ipam-all-cards{display:flex;align-items:center;gap:8px;margin:0 0 8px;color:var(--mut)}
+  .tbl.ipam-table,.tbl.ipam-table tbody,.tbl.ipam-table tr,.tbl.ipam-table td{display:block;width:100%}
+  .tbl.ipam-table thead{display:none}
+  .tbl.ipam-table tr{border-bottom:1px solid var(--line)}
+  .tbl.ipam-table tbody tr:last-child{border-bottom:0}
+  .tbl.stack.ipam-table tr.ipam-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;
+    grid-template-areas:"pick addr kind" "pick name seen" "pick mac mac" "pick notes notes";align-items:center;column-gap:10px;row-gap:3px;padding:9px 12px}
+  .tbl.stack.ipam-table tr.ipam-row>td{display:block;padding:0;min-width:0;width:auto;text-align:left}
+  .tbl.stack.ipam-table tr.ipam-row>td::before{content:none}
+  .tbl.stack.ipam-table tr.ipam-row>td:empty{display:none}
+  .tbl.stack.ipam-table .ip-pick{grid-area:pick;align-self:start;padding-top:2px!important}
+  .ipam-table .ip-addr{grid-area:addr;font-size:14px;font-weight:650}
+  .ipam-table .ip-kind{grid-area:kind;justify-self:end}
+  .tbl.stack.ipam-table .ip-name{grid-area:name}
+  .ipam-table .ip-name .ipam-line{white-space:normal;overflow:visible}
+  .ipam-table .ip-seen{grid-area:seen;justify-self:end;text-align:right}
+  .ipam-table .ip-mac{grid-area:mac;color:var(--mut)}
+  .ipam-table .ip-notes{grid-area:notes;max-width:100%;overflow:hidden}
+  .ipam-table .ip-notes .ipam-line{flex-wrap:nowrap;gap:4px;min-width:0;max-width:100%;width:100%}
+  .ipam-table .ip-notes .ipam-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--mut)}
+  .tbl.ipam-table tr.ipam-row>td{border:0}
+  .tbl.stack.ipam-table tbody.ipam-gap tr{padding:3px 12px}
+  .tbl.stack.ipam-table tbody.ipam-gap td{padding:0;border:0}
+  .ipam-gap td::before{display:none}
 }
 .ipam-doc{cursor:pointer;font-size:12px;color:var(--mut)}
 .ipam-doc:hover{color:var(--tx);text-decoration:underline}
@@ -2294,10 +2329,10 @@ html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-the
   .tbl.stack tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 14px;padding:12px 14px}
   .tbl.stack td{display:block;padding:0;text-align:left;white-space:normal;overflow-wrap:anywhere}
   .tbl.stack td::before{display:block;margin-bottom:2px;font:500 11px/1.4 "Inter Tight",sans-serif;letter-spacing:0;text-transform:none;color:var(--mut)}
-  .tbl.stack td:first-child,.tbl.stack td[data-label=""],.tbl.stack td[colspan],.tbl.stack td[data-wide]{grid-column:1/-1}
+  .tbl.stack td:first-child,.tbl.stack td[data-label=""],.tbl.stack td[data-actions],.tbl.stack td[colspan],.tbl.stack td[data-wide]{grid-column:1/-1}
   .tbl.stack td:first-child{padding-bottom:2px;order:-1}
   /* Short values first, so they pair up; long ones and actions after. */
-  .tbl.stack td[data-wide]{order:1}.tbl.stack td[data-label=""]{order:2}
+  .tbl.stack td[data-wide]{order:1}.tbl.stack td[data-label=""],.tbl.stack td[data-actions]{order:2}
   .tbl.stack tr>td:first-child{order:-1}
   .tbl.stack td .row,.tbl.stack td[data-label=""] .row{justify-content:flex-start}
   .tbl.stack td[data-label=""]{display:flex;flex-wrap:wrap;gap:8px;padding-top:4px}
@@ -2387,7 +2422,7 @@ textarea{min-height:0}
   .tbl.stack.compact td[data-status]{grid-column:2;grid-row:1;justify-self:end;order:0;text-align:right!important;width:auto!important}
   .tbl.stack.compact td[data-status]::before{display:none}
   .tbl.stack.compact td[data-sm-hide]{display:none}
-  .tbl.stack.compact td[data-actions]{grid-column:1/-1;display:flex;justify-content:flex-end;padding-top:4px}
+  .tbl.stack.compact td[data-actions]{grid-column:1/-1;display:flex;justify-content:flex-end;padding-top:4px;width:auto;white-space:normal}
   .tbl.stack.compact td .meter{display:none}
   .tbl.stack.compact td>div{display:inline}
   .tbl.stack.compact tr>td:first-child{grid-column:1;grid-row:1}
@@ -2737,6 +2772,10 @@ html[data-theme="light"] .sumline{background:rgba(0,0,0,.02)}
 /* A card's or row's buttons: two, then ⋯, on one line. */
 .actionbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .actionbar>.actionmenu{margin-left:0}
+/* A row's actions (#559): the cell is as narrow as its buttons, and they end at
+   the table's right edge on every row, whatever width the column would get. */
+td[data-actions]{width:1%;white-space:nowrap}
+td[data-actions]>.actionbar{justify-content:flex-end}
 .vip-card-actions .actionbar,.wacts .actionbar{width:100%}
 .wacts .actionbar>.actionmenu,.vip-card-actions .actionbar>.actionmenu{margin-left:auto}
 /* Tabs of a page family (Containers, Images, Schedules, Import...), first in
@@ -3771,6 +3810,9 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .fm-pane.active{border-color:color-mix(in srgb,var(--low) 55%,var(--line))}
 .fm-panehead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
 .fm-panehead select{flex:1 1 160px;min-width:0;max-width:100%}
+.fm-snaptitle{flex:1 1 160px;min-width:0;overflow-wrap:anywhere}
+.fm-restore-list{margin:8px 0}.fm-restore-list ul{margin:4px 0 0;padding-left:18px;max-height:180px;overflow:auto}
+.fm-restore-list li{overflow-wrap:anywhere}
 .fm-tools{display:flex;gap:4px;margin-left:auto}
 .fm-tools label.iconbtn{cursor:pointer}
 .fm-state{font-size:12px;color:var(--mut)}
@@ -3818,8 +3860,22 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .agent-req-detail{margin:0;overflow-wrap:anywhere}
 .agent-req-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap}
 .agent-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}
+/* A command to approve: one block, wrapping at any width, however long its script. */
+.agent-command{margin:0;padding:10px 12px;border-radius:10px;background:var(--surf2);border:1px solid var(--line);
+  white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto}
+/* A long command starts at its first lines, fading out, until it is opened. */
+.agent-command-wrap{display:grid;gap:6px;justify-items:start}
+.agent-command-wrap .agent-command{width:100%;box-sizing:border-box}
+.agent-command-wrap.clamped .agent-command{max-height:9.2em;overflow:hidden;
+  -webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+.agent-mono{overflow-wrap:anywhere}
+.agent-command-block{display:grid;gap:6px;margin-top:12px}
 /* The VM dialog's state and its actions share a line, and wrap on a phone (#504). */
 .vm-head{flex-wrap:wrap;gap:10px}
+/* A VM's Network tab: its explanation, then its own action, wrapping on a phone (#559). */
+.vm-net-head{flex-wrap:wrap;gap:10px;align-items:flex-start;margin-bottom:10px}
+.vm-net-head>.ui-lead{flex:1 1 260px;margin:0}
+.vm-net-head>.btn{flex:0 0 auto}
 /* Remove container sits clear of the first field (#495). */
 .edit-container-remove{display:flex;justify-content:flex-end;margin-bottom:12px}
 /* Port links and movable tags are buttons (#487); they keep the text they sit in. */

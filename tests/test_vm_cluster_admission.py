@@ -33,15 +33,15 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.sent = []
         self.after_write = lambda *args: None
-        for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+        for patch in (mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.IMP, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.K3SC, "check", return_value=""),
-                      mock.patch.object(server, "vm_address_problem", return_value=""),
+                      mock.patch.object(server.VM_ROUTES, "vm_address_problem", return_value=""),
                       mock.patch.object(server.PLATFORM, "detect", side_effect=lambda: self.platform),
-                      mock.patch.object(server, "vm_default_class", return_value="storage"),
+                      mock.patch.object(server.VM_ROUTES, "vm_default_class", return_value="storage"),
                       mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
                       mock.patch.object(server.PLACE, "hardware_features", return_value=[]),
-                      mock.patch.object(server, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
+                      mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
                       mock.patch.object(server.OPS, "DATA_DIR", self.tmp.name),
                       mock.patch.object(server.IPAM, "save_record"),
                       mock.patch.object(review, "_key", return_value=b"cluster-admission-tests")):
@@ -69,7 +69,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         handler._body = lambda: copy.deepcopy(body)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server.IMP, "ksend", side_effect=self.send), mock.patch.object(server, "ksend") as other:
+        with mock.patch.object(server.IMP, "ksend", side_effect=self.send), mock.patch.object(server.KUBE_HELPERS, "ksend") as other:
             handler.do_POST()
         other.assert_not_called()
         return handler._send.call_args.args

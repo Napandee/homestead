@@ -4,6 +4,7 @@ The retained CSI content is the durable session record. Cleanup never requests
 DeleteSnapshot: only our helper, restored claim and import metadata are removed.
 """
 import base64
+import collections
 import copy
 import hashlib
 import json
@@ -26,6 +27,10 @@ kget = ksend = image = None
 system_namespaces = set()
 SC = "/apis/storage.k8s.io/v1/storageclasses/"
 _lock = threading.RLock()
+# Sessions restores are copying from (homestead_snapshot_restore), counted:
+# cleanup leaves them, and a close waits, until the last restore ends.
+ACTIVE_RESTORES = collections.Counter()
+CLOSE_AFTER_RESTORE = set()
 
 
 def serialized(fn):
@@ -331,6 +336,11 @@ def _delete(path, obj, owner_uid=None):
 
 @serialized
 def close(namespace, name):
+    if ACTIVE_RESTORES[(namespace, name)]:
+        # Removing the copy now would cut a restore off mid-file; the
+        # restore closes the session when it ends.
+        CLOSE_AFTER_RESTORE.add((namespace, name))
+        return {"state": "closing"}
     record = _record(namespace, name)
     if record is None:
         return {"state": "closed"}
@@ -371,6 +381,8 @@ def cleanup():
     for record in _items(f"{CSI.API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue"):
         if not _owned(record):
             continue
+        if ACTIVE_RESTORES[(record["spec"]["volumeSnapshotRef"].get("namespace"), record["metadata"]["name"])]:
+            continue
         try:
             annotations = record["metadata"].get("annotations", {})
             if annotations.get("homestead.io/closing") or float(annotations.get("homestead.io/expires", "inf")) <= time.time():
@@ -383,16 +395,79 @@ def cleanup():
 
 # Walk with dirfds and O_NOFOLLOW: snapshot symlinks, FIFOs and device nodes
 # must never expose the helper filesystem or block a download indefinitely.
+# `tar` writes the named entries of one folder to stdout with tarfile (the
+# image may not ship tar), skipping links and special files as `list` does.
 READER = r'''
-import os, sys, stat, json, base64
-root, action, path, offset = sys.argv[1:]
+import os, sys, stat, json, base64, tarfile
+root, action, path, extra = sys.argv[1:]
 parts = path.split('/') if path else []
 if any(p in ('', '.', '..') for p in parts): raise ValueError('Invalid path')
+def walk_into(fd, name, flags):
+    return os.open(name, flags | os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+def member(fd, name, arcname):
+    """A TarInfo for one entry and, for a file or folder, its open fd. Links
+    are described, never followed; other kinds come back as None."""
+    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    item = tarfile.TarInfo(arcname)
+    item.mode, item.uid, item.gid, item.mtime = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, int(info.st_mtime)
+    if stat.S_ISLNK(info.st_mode):
+        item.type, item.linkname = tarfile.SYMTYPE, os.readlink(name, dir_fd=fd)
+        return item, None
+    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        return None, None
+    child = walk_into(fd, name, 0)
+    opened = os.fstat(child)
+    if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+        os.close(child); raise ValueError('Entry changed while reading')
+    if stat.S_ISDIR(opened.st_mode):
+        item.type = tarfile.DIRTYPE
+    else:
+        item.size = opened.st_size
+        os.set_blocking(child, True)
+    return item, child
+def add(tar, fd, name, arcname, recursive=True, links=False, strict=False):
+    try:
+        item, child = member(fd, name, arcname)
+    except OSError as error:
+        if strict: sys.exit(f'cannot read {arcname}: {error.strerror}')
+        return
+    if item is None or (item.issym() and not links):
+        return
+    if child is None:
+        tar.addfile(item); return
+    try:
+        if item.isdir():
+            tar.addfile(item)
+            if recursive:
+                for entry in sorted(os.listdir(child)):
+                    add(tar, child, entry, arcname + '/' + entry, recursive, links)
+        else:
+            with os.fdopen(os.dup(child), 'rb') as source:
+                tar.addfile(item, source)
+    finally:
+        os.close(child)
+def rows_of(fd, name, arcname, rows):
+    if len(rows) > 20000: return
+    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    kind = 'dir' if stat.S_ISDIR(info.st_mode) else 'file' if stat.S_ISREG(info.st_mode) else 'link' if stat.S_ISLNK(info.st_mode) else 'other'
+    row = dict(path=arcname, kind=kind, size=info.st_size if kind == 'file' else 0, modified=int(info.st_mtime))
+    if kind == 'link': row['target'] = os.readlink(name, dir_fd=fd)
+    rows.append(row)
+    if kind == 'dir':
+        child = walk_into(fd, name, os.O_DIRECTORY)
+        try:
+            for entry in sorted(os.listdir(child)):
+                rows_of(child, entry, arcname + '/' + entry, rows)
+        finally:
+            os.close(child)
+def single(name):
+    if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\x00' in name: raise ValueError('Invalid entry name')
+    return name
 fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 try:
     for i, part in enumerate(parts):
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        if i < len(parts)-1 or action == 'list': flags |= os.O_DIRECTORY
+        if i < len(parts)-1 or action in ('list', 'tar', 'walk', 'tarlist'): flags |= os.O_DIRECTORY
         child = os.open(part, flags, dir_fd=fd)
         os.close(fd); fd = child
     info = os.fstat(fd)
@@ -402,14 +477,46 @@ try:
             for entry in entries:
                 item = entry.stat(follow_symlinks=False)
                 if stat.S_ISDIR(item.st_mode) or stat.S_ISREG(item.st_mode):
-                    rows.append(dict(name=entry.name, kind='dir' if stat.S_ISDIR(item.st_mode) else 'file', size=item.st_size, editable=False))
+                    rows.append(dict(name=entry.name, kind='dir' if stat.S_ISDIR(item.st_mode) else 'file', size=item.st_size,
+                                     mode=format(stat.S_IMODE(item.st_mode), 'o'), uid=item.st_uid, gid=item.st_gid,
+                                     modified=int(item.st_mtime), editable=False))
                 if len(rows) > 500: break
         print(json.dumps(dict(entries=sorted(rows[:500], key=lambda r:(r['kind']!='dir', r['name'].lower())), truncated=len(rows)>500, path=path, read_only=True)))
+    elif action == 'tar':
+        names = [single(n) for n in json.loads(extra)]
+        if not names: raise ValueError('Invalid entry name')
+        with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
+            for name in names:
+                add(tar, fd, name, name)
+    elif action == 'walk':
+        rows = []
+        for name in [single(n) for n in json.loads(extra)]:
+            rows_of(fd, name, name, rows)
+        print(json.dumps(dict(entries=rows[:20000], truncated=len(rows) > 20000)))
+    elif action == 'tarlist':
+        # Exactly the reviewed entries, one each, links as links: a restore
+        # writes nothing it did not show.
+        wanted = json.loads(extra)
+        if not wanted: raise ValueError('Nothing to restore')
+        with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
+            for rel in wanted:
+                if not isinstance(rel, str): raise ValueError('Invalid entry name')
+                steps = [single(p) for p in rel.split('/')]
+                parent = os.dup(fd)
+                try:
+                    for step in steps[:-1]:
+                        child = walk_into(parent, step, os.O_DIRECTORY)
+                        os.close(parent); parent = child
+                    add(tar, parent, steps[-1], rel, recursive=False, links=True, strict=True)
+                finally:
+                    os.close(parent)
     else:
+        if action == 'stat' and stat.S_ISDIR(info.st_mode):
+            print(json.dumps(dict(size=0, path=path, kind='dir'))); sys.exit(0)
         if not stat.S_ISREG(info.st_mode): raise ValueError('Choose a regular file')
-        result = dict(size=info.st_size, path=path)
+        result = dict(size=info.st_size, path=path, kind='file')
         if action == 'chunk':
-            os.lseek(fd, int(offset), os.SEEK_SET)
+            os.lseek(fd, int(extra), os.SEEK_SET)
             result['data'] = base64.b64encode(os.read(fd, 1048576)).decode()
         elif action != 'stat': raise ValueError('Read-only operation required')
         print(json.dumps(result))
@@ -418,7 +525,8 @@ finally:
 '''
 
 
-def read(namespace, name, action, path="", offset=0):
+def _verified(namespace, name):
+    """The snapshot session's pod, checked to mount only its own copy, read-only."""
     state = status(namespace, name)
     if state["state"] != "ready":
         raise ValueError(state.get("message", "Snapshot browser is closed"))
@@ -434,11 +542,20 @@ def read(namespace, name, action, path="", offset=0):
             or not any(o.get("uid") == pvc["metadata"]["uid"] and o.get("kind") == "PersistentVolumeClaim"
                        for o in pod["metadata"].get("ownerReferences", []))):
         raise ValueError("Read-only snapshot mount could not be verified")
-    if action not in ("list", "stat", "chunk") or not isinstance(offset, int) or offset < 0:
-        raise ValueError("Read-only operation required")
+
+
+def _relative(path):
     relative = str(path or "").lstrip("/")
     if len(relative) > 4096 or "\x00" in relative or any(p in ("", ".", "..") for p in relative.split("/") if relative):
         raise ValueError("Invalid snapshot file path")
+    return relative
+
+
+def read(namespace, name, action, path="", offset=0):
+    _verified(namespace, name)
+    if action not in ("list", "stat", "chunk") or not isinstance(offset, int) or offset < 0:
+        raise ValueError("Read-only operation required")
+    relative = _relative(path)
     out, err = FILES._exec(namespace, name, ["python3", "-c", READER, "/data", action, relative, str(offset)])
     if err or not out:
         raise ValueError("Cannot read that path; symbolic links and special files are not browsable")
@@ -448,19 +565,35 @@ def read(namespace, name, action, path="", offset=0):
     return value
 
 
-def download(namespace, name, path):
+def download(namespace, name, paths):
     """A file from the snapshot copy, read a piece at a time as it is sent
-    (homestead_routes.Stream); one that changes part-way stops the download."""
+    (homestead_routes.Stream); one that changes part-way stops the download.
+    A folder, or several entries of one folder, comes as one zip, as the
+    live file manager's download does."""
     import homestead_routes as ROUTER
-    info = read(namespace, name, "stat", path)
-
-    def chunks():
-        offset = 0
-        while offset < info["size"]:
-            chunk = read(namespace, name, "chunk", path, offset)
-            data = chunk["data"]
-            if chunk["size"] != info["size"] or not data or offset + len(data) > info["size"]:
-                raise ValueError("Snapshot file changed during download")
-            yield data
-            offset += len(data)
-    return ROUTER.Stream(chunks(), "application/octet-stream", path.rsplit("/", 1)[-1], info["size"])
+    sources = [_relative(p) for p in (paths if isinstance(paths, list) else [paths])]
+    if not sources or not all(sources):
+        raise ValueError("Choose what to download")
+    if len(sources) == 1:
+        path = sources[0]
+        info = read(namespace, name, "stat", path)
+        if info.get("kind") != "dir":
+            def chunks():
+                offset = 0
+                while offset < info["size"]:
+                    chunk = read(namespace, name, "chunk", path, offset)
+                    data = chunk["data"]
+                    if chunk["size"] != info["size"] or not data or offset + len(data) > info["size"]:
+                        raise ValueError("Snapshot file changed during download")
+                    yield data
+                    offset += len(data)
+            return ROUTER.Stream(chunks(), "application/octet-stream", path.rsplit("/", 1)[-1], info["size"])
+    folders = {p.rsplit("/", 1)[0] if "/" in p else "" for p in sources}
+    if len(folders) != 1:
+        raise ValueError("choose entries from one folder")
+    folder = folders.pop()
+    _verified(namespace, name)
+    names = [p.rsplit("/", 1)[-1] for p in sources]
+    sock = FILES._open_exec(namespace, name, ["python3", "-c", READER, "/data", "tar", folder, json.dumps(names)])
+    base = names[0] if len(names) == 1 else (folder.rsplit("/", 1)[-1] or "snapshot")
+    return ROUTER.Stream(FILES._zip_of_tar(sock), "application/zip", f"{base}.zip", None)

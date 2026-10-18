@@ -219,7 +219,8 @@ class ImportTests(unittest.TestCase):
         dvs = [body for method, path, body in self.sent if path.endswith("/datavolumes")]
         self.assertEqual(["win11-disk", "win11-disk-2"], [dv["metadata"]["name"] for dv in dvs])
         self.assertEqual({"upload": {}}, dvs[0]["spec"]["source"])
-        self.assertEqual(("80Gi", "longhorn-r2"), (dvs[0]["spec"]["storage"]["resources"]["requests"]["storage"],
+        # 80 GiB and the room its filesystem takes (6%)
+        self.assertEqual(("86836Mi", "longhorn-r2"), (dvs[0]["spec"]["storage"]["resources"]["requests"]["storage"],
                                                    dvs[0]["spec"]["storage"]["storageClassName"]))
         for dv in dvs:
             self.assertEqual("Filesystem", dv["spec"]["storage"]["volumeMode"],
@@ -421,5 +422,155 @@ class ImportTests(unittest.TestCase):
         self.assertIn(f"{UVMS.CDI_API}/namespaces/lab/datavolumes/win11-disk", deleted)
 
 
+def lh_class(name="longhorn-r2", replicas="2", provisioner="driver.longhorn.io", disk_tags=(), node_tags=()):
+    return {"name": name, "provisioner": provisioner, "replicas": replicas,
+            "disk_tags": list(disk_tags), "node_tags": list(node_tags)}
+
+
+def lh_nodes(*rooms, tags=()):
+    """capacity()'s nodes, one disk each with this much room (GiB) under both limits."""
+    return {"nodes": [{"name": f"node{i + 1}", "tags": [], "disks": [
+        {"id": "d", "room_gb": room, "physical_room_gb": room, "blocked": "", "tags": list(tags)}]}
+        for i, room in enumerate(rooms)]}
+
+
+class RoomTests(unittest.TestCase):
+    """The room check before an import makes its disks: 80 GiB and 100 GiB,
+    asked for as 84.8 and 106 GiB with their filesystem's room."""
+
+    def setUp(self):
+        ImportTests.setUp(self)
+        self.classes = [lh_class(), lh_class("local-path", "", "rancher.io/local-path")]
+        self.cap = lh_nodes(300, 300, 300)
+        for name, value in (("storage_classes", lambda: self.classes), ("lh_capacity", lambda: self.cap),
+                            ("default_class", lambda: "longhorn-r2")):
+            patcher = mock.patch.object(UVMS, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def room(self, storage_class="longhorn-r2", skip=()):
+        found = UVMS._one("nas", "Windows 11")
+        return UVMS.storage_room(UVMS._chosen_disks(found, skip), storage_class)
+
+    def test_disks_that_fit_with_room_to_spare_pass(self):
+        room = self.room()
+        self.assertEqual(("ok", [], []), (room["level"], room["blockers"], room["warnings"]))
+        # Two copies on three nodes of 300 GiB: 450 GiB of two-copy volumes.
+        self.assertEqual((190.8, 450.0, 2), (room["needed_gb"], room["free_gb"], room["copies"]))
+
+    def test_too_little_room_blocks_and_says_what_is_needed_and_free(self):
+        self.cap = lh_nodes(100, 100, 100)
+        room = self.room()
+        self.assertEqual("bad", room["level"])
+        self.assertEqual(["Not enough room on longhorn-r2: these disks need 190.8 GiB (381.6 GiB with its 2 copies), "
+                          "and it can still place 150 GiB. Free some space, add a disk, or leave a disk out"], room["blockers"])
+
+    def test_leaving_a_disk_out_can_make_it_fit(self):
+        self.cap = lh_nodes(100, 100, 100)
+        self.assertEqual("ok", self.room(skip=[1])["level"])
+
+    def test_tight_room_warns_but_does_not_block(self):
+        self.cap = lh_nodes(200, 200)
+        room = self.room()
+        self.assertEqual(("warn", []), (room["level"], room["blockers"]))
+        self.assertIn("Room is tight on longhorn-r2: these disks take 190.8 of the 200 GiB", room["warnings"][0])
+        self.assertIn("leaving 9.2 GiB (5%)", room["warnings"][0])
+
+    def test_each_copy_needs_its_own_node(self):
+        self.cap = lh_nodes(1000)
+        room = self.room()
+        self.assertEqual("bad", room["level"])
+        self.assertIn("keeps 2 copies of a disk, each on a different node, and 1 node has room", room["blockers"][0])
+
+    def test_a_disk_too_big_for_any_one_longhorn_disk_is_blocked(self):
+        # 270 GiB in all is enough by sum, but the 106 GiB disk fits on no node's disk.
+        self.cap = {"nodes": [{"name": f"node{i}", "tags": [], "disks": [
+            {"id": f"d{j}", "room_gb": 50, "physical_room_gb": 50, "blocked": "", "tags": []} for j in range(3)]}
+            for i in range(3)]}
+        room = self.room()
+        self.assertEqual("bad", room["level"])
+        self.assertIn("in one place: a 106 GiB disk needs that much free on one Longhorn disk on each of 2 nodes", room["blockers"][0])
+
+    def test_the_less_of_over_provisioned_and_physical_room_counts(self):
+        self.cap = {"nodes": [{"name": f"node{i}", "tags": [], "disks": [
+            {"id": "d", "room_gb": 900, "physical_room_gb": 90, "blocked": "", "tags": []}]} for i in range(3)]}
+        self.assertEqual(135.0, self.room()["free_gb"])
+
+    def test_blocked_disks_and_untagged_ones_do_not_count(self):
+        self.classes = [lh_class(disk_tags=["ssd"])]
+        self.cap = lh_nodes(300, 300, 300)
+        self.cap["nodes"][0]["disks"][0]["tags"] = ["ssd"]
+        self.cap["nodes"][1]["disks"][0]["tags"] = ["ssd"]
+        self.assertEqual(300.0, self.room()["free_gb"])
+        self.cap["nodes"][1]["disks"][0]["blocked"] = "scheduling is off on this disk"
+        self.assertEqual("bad", self.room()["level"])
+
+    def test_the_default_class_is_checked_when_none_is_chosen(self):
+        self.assertEqual(("longhorn-r2", "ok"), (self.room("")["storage_class"], self.room("")["level"]))
+
+    def test_a_class_that_is_not_longhorn_or_unreadable_warns_without_blocking(self):
+        room = self.room("local-path")
+        self.assertEqual(("unknown", []), (room["level"], room["blockers"]))
+        self.assertIn("local-path is not Longhorn, so Homestead cannot check it has room for 190.8 GiB", room["warnings"][0])
+        with mock.patch.object(UVMS, "lh_capacity", mock.Mock(side_effect=RuntimeError("down"))):
+            room = self.room()
+        self.assertEqual(("unknown", []), (room["level"], room["blockers"]))
+        self.assertIn("Longhorn's free space could not be read", room["warnings"][0])
+
+    def test_longhorns_settings_decide_the_room(self):
+        # Real capacity(): two 100 GiB disks, 90 GiB physically free, nothing
+        # placed yet. Over-provisioning 200% books up to 200 GiB on each, but
+        # minimal-available 25% keeps 25 GiB of each free: 65 GiB for one disk.
+        import homestead_lhcapacity as LHCAP
+        lh_node = lambda name: {"metadata": {"name": name}, "spec": {"disks": {"d": {"path": "/var/lib/longhorn"}}},
+                                "status": {"diskStatus": {"d": {"storageMaximum": 100 * 1024 ** 3, "storageScheduled": 0,
+                                                                "storageAvailable": 90 * 1024 ** 3}}}}
+        with mock.patch.object(LHCAP, "kget", lambda path: {"items": [lh_node("node1"), lh_node("node2")]}):
+            for minimal, level, free in ((25, "bad", 65.0), (5, "warn", 85.0)):
+                with self.subTest(minimal=minimal), mock.patch.object(UVMS, "lh_capacity", lambda: LHCAP.capacity(
+                        {"over_provisioning": 200, "minimal_available": minimal})):
+                    room = self.room(skip=[1])
+                    self.assertEqual((level, free), (room["level"], room["free_gb"]))
+
+    def test_an_import_that_will_not_fit_is_refused_before_anything_is_made(self):
+        self.cap = lh_nodes(100, 100, 100)
+        with self.assertRaises(ValueError) as caught:
+            UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11", "storage_class": "longhorn-r2"})
+        self.assertIn("these disks need 190.8 GiB", str(caught.exception))
+        self.assertIn("it can still place 150 GiB", str(caught.exception))
+        self.assertEqual([], self.sent)
+        self.assertEqual([], self.started)
+
+    def test_a_tight_import_still_starts(self):
+        self.cap = lh_nodes(200, 200)
+        op = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11", "storage_class": "longhorn-r2"})
+        self.assertEqual(["win11-disk", "win11-disk-2"], [d["dv"] for d in op["ref"]["disks"]])
+
+    def test_the_dialogs_check_takes_the_disks_it_shows(self):
+        disks = [{"virtual": 80 * 1024 ** 3, "size_gb": 80}, {"virtual": 100 * 1024 ** 3, "size_gb": 100}]
+        self.cap = lh_nodes(100, 100, 100)
+        self.assertEqual("bad", UVMS.room({"storage_class": "longhorn-r2", "disks": disks})["level"])
+        self.assertEqual("ok", UVMS.room({"storage_class": "longhorn-r2", "disks": disks[:1]})["level"])
+        for bad in ([], [{"virtual": "lots"}], [{"virtual": 0, "size_gb": 0}], [{"virtual": -1}]):
+            with self.subTest(disks=bad), self.assertRaises(ValueError):
+                UVMS.room({"disks": bad})
+        self.assertIn(("POST", "/api/vms/import-unraid/room"), UVMS.ROUTES)
+        self.assertEqual("admin", UVMS.ROUTES[("POST", "/api/vms/import-unraid/room")][0])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoomDefaultClassTests(unittest.TestCase):
+    def test_an_unreadable_default_class_leaves_the_room_unknown_instead_of_failing(self):
+        def unreadable():
+            raise OSError("the API server did not answer")
+        saved = (UVMS.storage_classes, UVMS.lh_capacity, UVMS.default_class)
+        UVMS.storage_classes, UVMS.lh_capacity, UVMS.default_class = (lambda: []), (lambda: {}), unreadable
+        try:
+            room = UVMS.storage_room([{"virtual": 1024 ** 3, "size_gb": 1}])
+        finally:
+            UVMS.storage_classes, UVMS.lh_capacity, UVMS.default_class = saved
+        self.assertEqual(("unknown", []), (room["level"], room["blockers"]))
+        self.assertTrue(room["warnings"])

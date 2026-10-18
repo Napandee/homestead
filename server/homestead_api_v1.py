@@ -125,6 +125,11 @@ def vm(params, **_):
     return _vm(_find(ctx["vms"](), params["namespace"], params["name"], "virtual machine"))
 
 
+VM_ACTION_SUMMARY = {"start": "Start a virtual machine", "stop": "Stop a virtual machine",
+                     "restart": "Restart a virtual machine", "force-off": "Force a virtual machine off",
+                     "reset": "Reset a virtual machine"}
+
+
 def vm_action(params, action, **_):
     ns, name = params["namespace"], params["name"]
     _find(ctx["vms"](), ns, name, "virtual machine")
@@ -222,13 +227,17 @@ ENDPOINTS = [
     Endpoint("GET", "/api/v1/vms/{namespace}/{name}", "read", "One virtual machine", vm, REF("VM"),
              tag="Virtual machines"),
     *[Endpoint("POST", f"/api/v1/vms/{{namespace}}/{{name}}/{action}", "vms:control",
-               f"{action.capitalize()} a virtual machine", vm_action, REF("ActionResult"), tag="Virtual machines",
-               action=action, operation=f"vm_{action}",
+               VM_ACTION_SUMMARY[action], vm_action, REF("ActionResult"), tag="Virtual machines",
+               action=action, operation="vm_" + action.replace("-", "_"),
                description={"start": START_NOTE + " A start that needs a person - setting up missing TPM or "
                                                   "EFI state - is refused; do it in the app.",
                             "stop": "Asks the guest to shut down, as its power button would.",
-                            "restart": "Restarts the guest. " + START_NOTE}[action])
-      for action in ("start", "stop", "restart")],
+                            "restart": "Restarts the guest. " + START_NOTE,
+                            "force-off": "Stops it at once, as pulling its power would, for a guest that does not "
+                                         "shut down. Anything it had not written is lost.",
+                            "reset": "Replaces its running instance at once, as a reset switch would, without waiting "
+                                     "for the guest. Anything it had not written is lost. " + START_NOTE}[action])
+      for action in ("start", "stop", "restart", "force-off", "reset")],
     Endpoint("GET", "/api/v1/jobs/{id}", "read", "A job", job, REF("Job"), tag="Status",
              description="A background job by the id an action answered with: follow it until it ends."),
 ]

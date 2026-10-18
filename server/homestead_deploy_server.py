@@ -1,16 +1,21 @@
 """The deploy, Compose, import and operations code that lived in server.py
-(track 1, part 6): a deployment's extra containers, volumes, network and
-capacity manifest; reviewed deploys; Compose's report, preparation, preview
-and apply; deploy options and bindings; import namespaces and their capacity
-plan; deleting a workload; a rebalance move; the move engine's loop; and the
-Helm routes server.py's handler answered.
+(track 1, parts 6 and 8): a deployment's extra containers, volumes, network,
+hardware device paths, generated secrets, profile check and capacity
+manifest; reviewed deploys, reviewed edits and the rollout review's context;
+Compose's report, preparation, preview and apply; deploy options and
+bindings; import previews, reviewed imports, import namespaces and their
+capacity plan; copy admission; pull progress and service listeners; deleting
+a workload; a rebalance move; the move engine's loop; and the Helm routes
+server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache)."""
 import copy
 import re
+import secrets
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
@@ -20,20 +25,25 @@ import homestead_env_secrets as ENVSEC
 import homestead_hardware as HW
 import homestead_helm as HELM
 import homestead_host_access as HOSTACCESS
+import homestead_icons as ICONS
+import homestead_import_job as IMPORT_JOB
 import homestead_imports as IMP
 import homestead_lan as LAN
 import homestead_leader as LEADER
+import homestead_lifecycle as LC
 import homestead_move_engine as MOVE_ENGINE
+import homestead_names as NAMES
 import homestead_namespaces as NSMOD
 import homestead_networking as NETWORK
 import homestead_operations as OPS
 import homestead_place as PLACE
+import homestead_pullwatch as PULLWATCH
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_volowner as VOLOWNER
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_dns_name", "_pvc_rows", "beat", "ensure_profile_compatible", "get_app_settings", "guard_managed_smb", "guard_self", "kget", "ksend", "new_claims", "require_workload_target", "rollout_review_context", "selectable_storage_classes", "shared_storage_classes", "storage_class_facts", "storage_classes")
-VALUES = ("DEFAULT_NS", "SYS_NS", "_cache")
+ROUTE_NEEDS = ("_dns_name", "_pvc_rows", "beat", "create_pvc", "edit_lan", "get_app_settings", "guard_managed_smb", "guard_self", "kget", "ksend", "new_claims", "require_workload_target", "selectable_storage_classes", "shared_storage_classes", "storage_class_facts", "storage_classes")
+VALUES = ("DATA_DIR", "DEFAULT_NS", "SYS_NS", "_cache")
 
 
 def bind_routes(helpers, **values):
@@ -412,6 +422,132 @@ def _moves_loop():
         time.sleep(MOVE_ENGINE.TICK_SECONDS)
 
 
+def rollout_review_context(current):
+    meta = current.get("metadata") or {}
+    if not meta.get("uid") or not meta.get("resourceVersion"):
+        raise ValueError("workload identity/version is unavailable; refresh before changing its pod")
+    return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
+
+
+def preview_import(body):
+    _, prepared, phases, capacity, context = import_capacity_plan(body)
+    return {"phases": phases, "capacity": capacity, "volumes": prepared["volumes"],
+            "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def reviewed_import(body):
+    cfg, prepared, _, capacity, context = import_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    # Logo persistence cannot change scheduling, but must follow admission.
+    persist_icon_config(cfg)
+    # Re-admit after the potentially slow logo fetch, not merely against the
+    # inventory from before it. Registry/network/claim drift needs new review.
+    _, prepared, _, capacity, context = import_capacity_plan(body)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    context = copy.deepcopy(context)  # persisted logo must not mutate the signed review
+    if prepared["deployment"]:
+        annotations = prepared["deployment"]["metadata"].setdefault("annotations", {})
+        if cfg.get("icon"):
+            annotations[NAMES.key("icon")] = cfg["icon"]
+            annotations[NAMES.key("icon-source")] = cfg.get("icon_source", "")
+    return IMPORT_JOB.dispatch(body, prepared, context, kget, ksend, OPS, create_pvc, copy_admission)
+
+
+def hardware_device_paths():
+    """The host paths an admin has offered as hardware features."""
+    try:
+        return {f.get("host_path") for f in HW.features() if f.get("host_path")}
+    except Exception:
+        return set()
+
+
+def apply_reviewed_edit(b, prepared, hold=False):
+    """Commit an already reviewed edit. Copy setup journals before calling this."""
+    persist_icon_config(b)
+    if "icon" in b:
+        ann = prepared["deployment"]["metadata"].setdefault("annotations", {})
+        for key in ("icon", "icon-source"):
+            ann.pop(NAMES.key(key), None)
+        if b["icon"]:
+            ann[NAMES.key("icon")] = b["icon"]
+            ann[NAMES.key("icon-source")] = b.get("icon_source", b["icon"])
+    result = LC.edit_workload(b, hold=hold, prepared=prepared)
+    if "lan" in b:
+        lan_message = edit_lan(b["ns"], result.get("name") or b["name"], b.get("lan"))
+        if lan_message:
+            result["lan"] = lan_message
+            if b.get("lan"):
+                b["network_mode"] = "lan"
+    ports = [port for container in b.get("containers") or [] for port in container.get("ports") or []]
+    # The Address step, as in Deploy: how clients reach it, and on which VIP.
+    address = b.get("address") if isinstance(b.get("address"), dict) else {}
+    vip_mode = address.get("vip_mode") or "shared"
+    if b.get("manage_ports") or any("expose" in port for port in ports):
+        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
+                                              network_mode=address.get("network_mode") or b.get("network_mode"),
+                                              vip_mode={"auto": "automatic"}.get(vip_mode, vip_mode),
+                                              vip=address.get("lb_ip", "") if vip_mode == "manual" else "")
+        if message:
+            result["network"] = message
+            _cache.pop("network", None)
+    if address.get("network_mode") in ("loadbalancer", "internal"):
+        message = NETWORK.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
+                                               vip_mode, address.get("lb_ip", ""))
+        if message:
+            result["network"] = "; ".join(filter(None, [result.get("network"), message]))
+            _cache.pop("network", None)
+    return result
+
+
+def copy_admission(dep):
+    return PLACE.manifest_plan(dep, dep["metadata"]["namespace"], dep["metadata"]["name"], dep["spec"]["replicas"],
+        get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
+        nodes_snapshot=PLACE.get_nodes(), pod_snapshot=ROLLOUT_CAPACITY.items(kget, "/api/v1/pods"))
+
+
+def apply_generated_secrets(cfg):
+    """Fill catalogue password defaults without trusting a public feed value."""
+    generate = {item.get("key") for item in (cfg.get("env_meta") or [])
+                if item.get("generate") and item.get("key")}
+    if not generate:
+        return cfg
+    updated = dict(cfg)
+    updated["env"] = dict(cfg.get("env") or {})
+    for key in generate:
+        if not updated["env"].get(key):
+            updated["env"][key] = secrets.token_urlsafe(18)
+    return updated
+
+
+def ensure_profile_compatible(cfg):
+    profile = cfg.get("app_profile") or {}
+    if profile.get("blocked"):
+        raise ValueError(profile.get("label") or "this App Store template is not directly compatible")
+    return cfg
+
+
+def _pull_progress(node, image):
+    PULLWATCH.sweep()
+    return PULLWATCH.progress(node, image)
+
+
+def _service_listeners(deployment, services):
+    """Map a container port onto the Service port that publishes it."""
+    selector = (deployment["spec"].get("selector", {}) or {}).get("matchLabels", {}) or {}
+    listeners = {}
+    for service in services or []:
+        chosen = (service.get("spec", {}) or {}).get("selector") or {}
+        if not chosen or not all(selector.get(key) == value for key, value in chosen.items()):
+            continue
+        for port in (service.get("spec", {}) or {}).get("ports", []) or []:
+            try:
+                target = int(port.get("targetPort", port.get("port")))
+                listeners[(str(port.get("protocol") or "TCP").upper(), target)] = int(port["port"])
+            except (TypeError, ValueError):
+                continue
+    return listeners
+
+
 # The routes server.py's handler answered for this code.
 def _helm(request):
     b = request.body
@@ -434,3 +570,17 @@ ROUTES = {
     ("POST", "/api/helm/upgrade"): ("admin", _helm),
     ("POST", "/api/helm/uninstall"): ("admin", _helm),
 }
+
+
+def persist_icon_config(cfg):
+    """Replace a remote logo with a persistent same-origin cache reference."""
+    if "icon" not in cfg:
+        return cfg
+    source = str(cfg.get("icon") or "").strip()
+    if not source:
+        cfg["icon"] = ""
+        cfg["icon_source"] = ""
+        return cfg
+    cfg["icon"] = ICONS.persist(source, DATA_DIR)
+    cfg["icon_source"] = source
+    return cfg

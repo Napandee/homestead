@@ -2,8 +2,8 @@
 
 **Import** (a tab of **Containers**) brings things in from elsewhere: containers and their data from an
 Unraid (or any Docker) server, or a Docker Compose file. VMs have an **Import**
-tab of their own under **Virtual machines**: VMs from Unraid, and disk images
-from a web address.
+tab of their own under **Virtual machines**: VMs from Unraid or Proxmox, and
+disk images from a web address.
 Workloads from another Homestead cluster move under **Settings → Linked
 clusters**.
 
@@ -255,6 +255,40 @@ ownership, or left by an older import without tracked ownership is preserved;
 inspect it under **Volumes** before removing anything separately.
 
 This needs CDI, which Harvester includes.
+
+## VMs from Proxmox
+
+A Proxmox VE host is added the same way, as a server of type **Proxmox** with
+an SSH login (`root`, or a user that may run `qm`), and its VMs are listed
+under **Virtual machines → Import** beside Unraid's. Each VM shows its VMID,
+and is imported in the same three steps, with the same copy, progress and
+cleanup as above.
+
+- **What comes across:** cores (sockets × cores), memory, OVMF as UEFI with
+  Secure Boot when its EFI disk has enrolled keys, a TPM as a new one, Hyper-V
+  enlightenments for a Windows OS type, `cpu: host` as host-passthrough, and
+  the first network card with its MAC address. Each disk keeps its bus; IDE
+  becomes SATA.
+- **Choosing disks:** the boot disk always comes; every other disk has a
+  switch in the **Disks** step, so a large data or games disk can stay behind.
+- **Disks it reads:** volumes on local storage: LVM-thin and ZFS volumes,
+  which are read as block devices, and raw or qcow2 files on directory
+  storage.
+- **What stays behind, saying why:** CD-ROMs, PCI and USB passthrough, a
+  second network card, unused (detached) disks, CPU affinity, a disk on
+  network storage such as Ceph (move it to local storage first), and a vmdk
+  file (convert it with `qm disk move --format qcow2`). The EFI variables start
+  fresh, so boot entries Proxmox kept are gone; Windows and most Linux boot from
+  the disk's default entry.
+
+**Shut down** asks Proxmox for a clean shutdown (`qm shutdown`, the power
+button), and the copy checks that `qm status` still says stopped before it
+starts. `qm list` lists the VMs of the host it runs on, so add each node of a
+Proxmox cluster as a server of its own. Nothing on Proxmox is changed.
+
+**Remove server**, in the server's **⋯** on this page or with **✕** on its card
+under Containers → Import, takes it off Homestead's import servers. Nothing on
+the server changes, and copies already running carry on.
 
 ## A VM disk image
 

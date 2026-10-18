@@ -40,7 +40,7 @@ class BootTests(unittest.TestCase):
     def test_ready_route_checks_journal_and_key_without_any_persistent_write(self):
         with mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("resolver polling")), \
              mock.patch.object(server.OPS, "_lock", side_effect=AssertionError("creating locks")), \
-             mock.patch.object(server, "ksend", side_effect=AssertionError("write")):
+             mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=AssertionError("write")):
             h, result = self.handler("/healthz")
         self.assertTrue(result)
         self.assertEqual((200, {"ok": True, "data_handoff": True, "read_only": True}), h._send.call_args.args)
@@ -96,7 +96,7 @@ class BootTests(unittest.TestCase):
             thread.assert_not_called()
 
     def test_normal_health_endpoint_is_json_not_the_application_shell(self):
-        self.assertFalse(server.is_page_path("/healthz"))
+        self.assertFalse(server.WEB_PATHS.is_page_path("/healthz"))
         self.fence.require_write.side_effect = None
         with mock.patch.object(server, "_self_data_boot_pending", False):
             h, result = self.handler("/healthz")

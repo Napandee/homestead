@@ -14,7 +14,7 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 3472
+MAX_LINES = 2135
 MAX_PATH_BRANCHES = 57
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -38,16 +38,12 @@ INLINE_ROUTES = (
     ("GET", "/api/fleet/home", "connection-bound: cookies/session"),
     ("GET", "/api/fleet/all/", "connection-bound: fleet forwarding"),
     ("GET", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
-    ("GET", "/api/self/data/prepare", "to move in Part 7"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
     ("POST", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
     ("POST", "/api/auth/keys", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/auth/keys/revoke", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/auth/keys/edit", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/fleet/", "connection-bound: fleet forwarding"),
-    ("POST", "/api/config/backup", "to move in Part 8"),
-    ("POST", "/api/config/inspect", "to move in Part 8"),
-    ("POST", "/api/config/restore", "to move in Part 8"),
     ("POST", "/api/auth/setup", "connection-bound: cookies/session"),
     ("POST", "/api/auth/login", "connection-bound: cookies/session"),
     ("POST", "/api/auth/logout", "connection-bound: cookies/session"),
@@ -57,15 +53,8 @@ INLINE_ROUTES = (
     ("POST", "/api/auth/role", "connection-bound: sign-in history (address, User-Agent)"),
     ("POST", "/api/auth/users/delete", "connection-bound: sign-in history (address, User-Agent)"),
     ("POST", "/api/auth/signout-everywhere", "connection-bound: cookies/session"),
-    ("POST", "/api/self/data/abandon", "to move in Part 7"),
     ("POST", "/api/self/data/move", "connection-bound: cookies/session"),
-    ("POST", "/api/self/data/move/preview", "to move in Part 7"),
-    ("POST", "/api/self/data/handoff/close", "to move in Part 7"),
-    ("POST", "/api/self/data/handoff/close/preview", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare/archive", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare/archive/preview", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare", "to move in Part 7"),
-    ("POST", "/api/self/data/prepare/preview", "to move in Part 7"),
+    ("ANY", "/api/self/data/abandon", "not a route here: _guard lets the recovery action through while boot is pending; the route is in homestead_self_data_server"),
     ("ANY", "/api/fleet/accept", "stays: fleet forwarding (_fleet_post)"),
     ("ANY", "/api/fleet/address", "stays: fleet forwarding (_fleet_post)"),
     ("ANY", "/api/fleet/join", "stays: fleet forwarding (_fleet_post)"),
@@ -233,6 +222,25 @@ class RouteLiterals(unittest.TestCase):
                      'f"/api/x/new/{name}"', 'p.startswith("/api/x/new?")'):
             with self.subTest(form=form):
                 self.assertTrue(any(path.startswith("/api/x/new") for path in literals_in(f"if {form}:")), form)
+
+
+class MovedHelpers(unittest.TestCase):
+    def test_each_moved_helper_lives_in_its_module_and_is_not_late_bound_there(self):
+        """MOVED (#527 track 2) says which module a helper moved to; _late looks
+        it up there, so tests patch it there. That module must define it and must
+        not late-bind it too: bind_routes would replace the function with a
+        lookup that finds itself. A copy server.py imports back is the same."""
+        import server
+        self.assertTrue(server.MOVED)
+        for name, module in server.MOVED.items():
+            with self.subTest(name=name, module=module.__name__):
+                found = vars(module).get(name)
+                self.assertEqual(module.__name__, getattr(found, "__module__", None),
+                                 f"{module.__name__} defines {name}")
+                late = set(getattr(module, "ROUTE_NEEDS", ())) | set(getattr(module, "NEEDS", ()))
+                self.assertNotIn(name, late)
+                if name in vars(server):
+                    self.assertIs(found, vars(server)[name])
 
 
 class ServerStaysRouting(unittest.TestCase):

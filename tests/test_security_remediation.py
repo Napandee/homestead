@@ -347,7 +347,7 @@ class HttpTests(unittest.TestCase):
         obj = {"metadata": {"name": "target", "namespace": "lab"}, "spec": {"template": {"spec": {"containers": [{"name": "main"}]}}}}
         headers = {"X-Homestead-Auth": "1", "Content-Type": "application/json"}
         body = json.dumps({"ns": "lab", "name": "target"})
-        with mock.patch.object(server.H, "_who", return_value={"user": "fixture", "role": "operator"}), mock.patch.object(server, "kget", return_value=obj), mock.patch.object(server, "ksend") as send:
+        with mock.patch.object(server.H, "_who", return_value={"user": "fixture", "role": "operator"}), mock.patch.object(server.KUBE_HELPERS, "kget", return_value=obj), mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             self.assertEqual(200, self.request(body, headers, "/api/restart"))
             send.assert_called_once()
             send.reset_mock()
@@ -358,7 +358,7 @@ class HttpTests(unittest.TestCase):
     def test_control_api_key_cannot_bypass_management_target_checks(self):
         obj = {"metadata": {"name": "target", "namespace": "lab"}, "spec": {"template": {"spec": {"serviceAccountName": "homestead"}}}}
         key = {"name": "fixture-key", "scopes": ["containers:control"]}
-        with mock.patch.object(server.API_KEYS, "verify", return_value=key), mock.patch.dict(server.API_V1.ctx, {"workloads": lambda: [{"ns": "lab", "name": "target"}], "restart": server.restart_workload}), mock.patch.object(server, "kget", return_value=obj), mock.patch.object(server, "ksend") as send:
+        with mock.patch.object(server.API_KEYS, "verify", return_value=key), mock.patch.dict(server.API_V1.ctx, {"workloads": lambda: [{"ns": "lab", "name": "target"}], "restart": server.OVERVIEW_ROUTES.restart_workload}), mock.patch.object(server.KUBE_HELPERS, "kget", return_value=obj), mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             self.assertEqual(409, self.request("{}", {"Authorization": "Bearer fixture-token", "Content-Type": "application/json"}, "/api/v1/containers/lab/target/restart"))
             send.assert_not_called()
 

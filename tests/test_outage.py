@@ -139,8 +139,8 @@ class ServerTests(unittest.TestCase):
     def test_only_the_annotation_changes(self):
         import server
         sent = []
-        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
-             mock.patch.object(server, "guard_managed_smb"):
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
+             mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"):
             r = server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate",
                                            "actions": {"restart": {"after_min": 5, "max": 3}}})
             server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate", "actions": None})
@@ -151,7 +151,7 @@ class ServerTests(unittest.TestCase):
     def test_a_vm_on_automatic_monitoring_cannot_be_restarted(self):
         import server
         vm = {"metadata": {"annotations": {}}}
-        with mock.patch.object(server, "kget", return_value=vm), mock.patch.object(server, "ksend"):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=vm), mock.patch.object(server.KUBE_HELPERS, "ksend"):
             with self.assertRaises(ValueError):
                 server.OUTAGE.set_actions({"kind": "vm", "ns": "lab", "name": "ha", "actions": {"restart": {"after_min": 5, "max": 1}}})
             vm["metadata"]["annotations"]["homestead.io/uptime"] = "tcp:22"
@@ -160,12 +160,12 @@ class ServerTests(unittest.TestCase):
     def test_busy_while_a_job_runs_on_it(self):
         import server
         restarted = []
-        with mock.patch.object(server, "cached", side_effect=lambda key, ttl, fn: [{"ns": "lab", "name": "frigate", "outage_actions": APP["actions"]}] if key == "wl" else []), \
+        with mock.patch.object(server.CACHE, "cached", side_effect=lambda key, ttl, fn: [{"ns": "lab", "name": "frigate", "outage_actions": APP["actions"]}] if key == "wl" else []), \
              mock.patch.object(server.OPS, "list_operations", return_value=[{"status": "running", "resource": {"namespace": "lab", "name": "frigate"}}]), \
              mock.patch.object(server.UPTIME, "report", return_value=down(0)), \
-             mock.patch.object(server, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
+             mock.patch.object(server.OVERVIEW_ROUTES, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
              mock.patch.object(O, "_send_later"):
-            server.outage_tick()
+            server.OVERVIEW_ROUTES.outage_tick()
         self.assertEqual([], restarted)
 
 

@@ -115,7 +115,7 @@ test("dialog navigation and layout are authored only by shared components", () =
 
 test("dialog dismissal rows use UI.actions", () => {
   const found = offences(/<div\b[^>]*class="row[^>]*>((?:(?!<div\b)[\s\S])*?)<\/div>/g,
-    match => /<button\b[^>]*>\s*(?:Cancel|Close(?: browser)?|Done|Back(?: to [^<]*)?|Keep tracking)\s*<\/button>|onclick="(?:closeModal|closeFiles)\(\)"/.test(match[1]));
+    match => /<button\b[^>]*>\s*(?:Cancel|Close(?: browser)?|Done|Back(?: to [^<]*)?|Keep tracking)\s*<\/button>|onclick="(?:closeModal|fmClose)\(\)"/.test(match[1]));
   assert.deepStrictEqual(found, [], "use UI.actions for footer buttons, with dismissal/back in its start slot");
 });
 

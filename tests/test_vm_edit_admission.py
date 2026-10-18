@@ -28,11 +28,11 @@ class VMEditAdmissionTests(unittest.TestCase):
         self.vm_path = "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/guest"
         self.objects[self.vm_path] = self.vm
         self.body = {"ns": "lab", "name": "guest", "memory": "6Gi", "restart": False}
-        for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+        for patch in (mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.VMS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
                       mock.patch.object(server.PLACE, "hardware_features", return_value=[]),
-                      mock.patch.object(server, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
+                      mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
                       mock.patch.object(review, "_key", return_value=b"edit-review-tests")):
             patch.start()
             self.addCleanup(patch.stop)
@@ -61,7 +61,7 @@ class VMEditAdmissionTests(unittest.TestCase):
                 meta.setdefault("name", path.rsplit("/", 1)[-1])
             return value
         with mock.patch.object(server.VMS, "ksend", side_effect=send) as writes, \
-                mock.patch.object(server, "ksend", side_effect=expand) as other_writes:
+                mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=expand) as other_writes:
             handler.do_POST()
         if not hasattr(self, "profile_memory"):
             other_writes.assert_not_called()

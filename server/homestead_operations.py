@@ -184,6 +184,10 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", un
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
+        if kind == "set-restart" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+                                         (i.get("ref", {}).get("ns"), i.get("ref", {}).get("name")) ==
+                                         (ref.get("ns"), ref.get("name")) for i in items):
+            raise ValueError("A restart for this StatefulSet is already active; inspect its job before retrying")
         if kind == "k3s-cluster" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
                                         (ref.get("namespace"), ref.get("name")) for i in items):
@@ -289,7 +293,7 @@ def _public(item):
     # separately, as it reads Kubernetes and the tray is polled often.
     out["cancellable"] = item.get("kind") != "self-data-handoff" and item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
-    if item.get("ref", {}).get("cdi_cleanup"):
+    if item.get("ref", {}).get("cdi_cleanup") and item.get("kind") not in CDI_CANCELLABLE:
         out["cancellable"] = False
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = _dismissible(item)
@@ -315,6 +319,11 @@ def _public(item):
                         "held": len(ref.get("held") or []),
                         "waiting": bool(ref.get("held")) and ref.get("restored") is None,
                         "restored": ref.get("restored")}
+    if item.get("kind") == "set-restart":
+        ref = item.get("ref") or {}
+        out["cancellable"] = False  # the delete is done when the job starts
+        out["set_restart"] = {"node": ref.get("node", ""), "set": ref.get("name", ""),
+                              "started_by": ref.get("started_by", ""), "stage": ref.get("stage", "")}
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
@@ -907,6 +916,10 @@ def dismiss(operation_id):
 #     change item["ref"], which is kept. Each step must be safe to run again:
 #     a cancel interrupted part-way is asked again from the start.
 CANCELLERS = {}
+# Kinds with a CDI receipt that may still be cancelled: their canceller
+# removes only what carries the receipt's stamp, so a cleanup stopped by a
+# safety check is not left with no way out.
+CDI_CANCELLABLE = set()
 # Kinds whose cancel also tidies up after the job has failed: what a failed
 # k3s build made - VMs, disks, addresses - stays until something removes it.
 CLEANUPS = set()
@@ -933,7 +946,7 @@ def _plan_for(item):
                       "and only stops showing here."],
             "confirm": "", "needs": "operator", "options": []}
     entry = CANCELLERS.get(item.get("kind"))
-    if item.get("ref", {}).get("cdi_cleanup"):
+    if item.get("ref", {}).get("cdi_cleanup") and item.get("kind") not in CDI_CANCELLABLE:
         plan.update(can=False, why_not="The import must finish reclaiming its temporary storage before its job can be dismissed.")
         return plan
     if item.get("kind") == "self-data-handoff":

@@ -70,10 +70,10 @@ const SETTINGS_SECTIONS = [
   ["homestead", "Homestead", "Version, health, copies, backup", ["homestead", "about"], "Cluster", "home"],
   ["updates", "Updates", "Releases, platform, hosts, containers", ["updates"], "Cluster", "update"],
   ["placement", "Placement", "How hosts share the work", ["placement"], "Cluster", "node"],
-  ["monitoring", "Monitoring", "Thresholds, drives, MQTT", ["monitoring", "health", "mqtt"], "Cluster", "pulse"],
+  ["monitoring", "Monitoring", "Thresholds and drives", ["monitoring", "health"], "Cluster", "pulse"],
   ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster", "chip"],
   ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster", "link"],
-  ["connections", "Connections", "UniFi, App Store", ["connections", "apps", "integrations"], "Cluster", "plug"],
+  ["connections", "Connections", "UniFi, MQTT, App Store", ["connections", "mqtt", "apps", "integrations"], "Cluster", "plug"],
   ["access", "Users and access", "Accounts and roles", ["access"], "Cluster", "users"],
   ["troubleshooting", "Troubleshooting", "Bug reports and logs", ["troubleshooting"], "Cluster", "bug"],
   ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you", "user"],
@@ -326,6 +326,7 @@ async function viewSettings() {
     `, tab) + UI.saveBar({id:"settingsSaveBar",messageId:"settingsSaveMsg",save:"settingsSave(this)",discard:"settingsDiscard()"}),
       {open:STATE.settingsOpen,backLabel:"All settings",currentLabel:SETTINGS_SECTIONS.find(([id])=>id===tab)?.[1],back:"settingsGo('')"})}`);
   STATE.settingsDirty = new Set();
+  if (settings === HEALTH_DEFAULTS) toast("The settings could not be read, so the defaults are shown and saving them is refused. Reload to try again.", "bad");
   if (window.bindAppearance) bindAppearance();
   pwaPaint();
   if (window.troubleshootingPaint) troubleshootingPaint();
@@ -678,10 +679,7 @@ async function namespacesPaint() {
   let inv;
   try { inv = await api("/api/namespaces/manage", { keep: true }); }
   catch (e) { host.innerHTML = UI.error(e, { retry: "namespacesPaint()" }); return; }
-  const what = r => [r.deployments && `${r.deployments} app${r.deployments === 1 ? "" : "s"}`,
-    r.statefulsets && `${r.statefulsets} stateful set${r.statefulsets === 1 ? "" : "s"}`,
-    r.volumes && `${r.volumes} volume${r.volumes === 1 ? "" : "s"}`,
-    r.vms && `${r.vms} VM${r.vms === 1 ? "" : "s"}`].filter(Boolean).join(" · ") || "empty";
+  const what = namespaceHolds;
   host.innerHTML = `<div class="tblwrap"><table class="tbl stack dense" data-sort="namespaces"><thead><tr>
       <th>Namespace</th><th>Holds</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
     ${inv.namespaces.map(r => `<tr><td data-sort="${esc(r.name)}"><b class="mono">${esc(r.name)}</b>
@@ -690,11 +688,24 @@ async function namespacesPaint() {
       <td class="dim xs">${r.created ? esc(fmtDay(r.created)) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs ns-kept">Kept: ${esc(r.protected)}</span>`
         : actionBar([{ label: "Delete", run: `namespaceDelete(${jsq(r.name)})`, danger: true, disabled: !r.empty,
-            tip: r.empty ? "" : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
+            tip: r.empty ? "" : r.unread?.length ? "Homestead could not check everything in it; refresh to try again"
+              : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>
     ${UI.more("Changing the default namespace", `<p class="small">New apps go in <b class="mono">${esc(inv.default)}</b> unless you pick another in Deploy. The default was chosen when Homestead was installed - <span class="mono">workloadNamespace.name</span> in the Helm chart, <span class="mono">DEFAULT_NS</span> in the manifest - and Homestead keeps its own settings, network shares and node probe there too, so it is not changed from here: moving them on a running cluster would leave them behind. To use another namespace for your apps, create it above and pick it in Deploy.</p>`)}`;
   sortTables(host);
 }
+
+/* What a namespace holds, every kind its delete checks; what could not be
+   read is said as such, never as "empty" (#599). */
+const NS_KINDS = [["deployments", "app", "apps"], ["statefulsets", "stateful set", "stateful sets"],
+  ["daemonsets", "daemon set", "daemon sets"], ["cronjobs", "scheduled job", "scheduled jobs"],
+  ["pods", "running pod", "running pods"], ["volumes", "volume", "volumes"], ["vms", "VM", "VMs"],
+  ["disks", "VM disk", "VM disks"]];
+window.namespaceHolds = r => {
+  const held = NS_KINDS.filter(([key]) => r[key]).map(([key, one, many]) => `${r[key]} ${r[key] === 1 ? one : many}`);
+  if (r.unread?.length) held.push(`could not check ${r.unread.join(", ")}`);
+  return held.join(" · ") || "empty";
+};
 
 window.namespaceCreate = async () => {
   const name = $("#nsName").value.trim().toLowerCase();
@@ -737,6 +748,25 @@ function permissionsCell(state) {
     ${can("admin") && state.state === "manual" ? '<div class="row" style="margin-top:6px"><button class="btn sm" onclick="permissionsRecheck()">Check again</button></div>' : ""}</div>`;
 }
 
+/* Every settings save goes through here: the settings as they are now, read
+   fresh (never a copy kept since the page opened, nor the defaults that stand
+   in for a failed read), with only the sections this save changes. The server
+   keeps the document whole, so a section left out of a save would be reset.
+   change is an object, or a function of the current settings returning one;
+   a failed read saves nothing (#601). */
+window.settingsWrite = async change => {
+  let current;
+  try { current = await api("/api/settings", { keep: true }); }
+  catch (e) { throw new Error(`The settings could not be read, so nothing was saved: ${e.message}`); }
+  if (!current || typeof current !== "object") throw new Error("The settings could not be read, so nothing was saved");
+  const fresh = { ...current };
+  delete fresh.info;
+  const body = { ...fresh, ...(typeof change === "function" ? change(fresh) : change) };
+  const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  STATE.data.appSettings = { ...saved, info: current.info };
+  return saved;
+};
+
 window.permissionsRecheck = async () => {
   try {
     const result = await api("/api/self/permissions", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -747,44 +777,15 @@ window.permissionsRecheck = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.saveHealthSettings = async () => {
-  const read = id => ({ warning: +$("#set_" + id + "_warn").value, critical: +$("#set_" + id + "_crit").value });
-  const body = { thresholds: { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") },
-    smart: { temperature: read("drive_temperature"), reallocated_warning: +$("#set_smart_reallocated").value,
-      pending_critical: +$("#set_smart_pending").value, uncorrectable_critical: +$("#set_smart_uncorrectable").value,
-      notify_failures: $("#set_smart_notify").checked },
-    site_name: STATE.data.appSettings?.site_name || "",
-    updates: STATE.data.appSettings?.updates };
-  try {
-    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || {}) } };
-    STATE.data.appSettings = null;
-    toast("Health thresholds saved", "ok");
-    viewSettings();
-  } catch (e) { toast(e.message, "bad"); }
-};
 
 const probeWord = state => ({ updated: "updated with this release", current: "up to date",
   absent: "not installed", error: "could not be checked" })[state] || "unknown";
 
-window.saveSiteName = async () => {
-  const body = { ...(STATE.data.appSettings || {}), site_name: $("#set_site_name").value.trim() };
-  delete body.info;
-  try {
-    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    STATE.data.appSettings = null;
-    await loadHealthSettings(true);
-    toast(saved.site_name ? `named ${saved.site_name}` : "site name cleared", "ok");
-    viewSettings();
-  } catch (e) { toast(e.message, "bad"); }
-};
 
 window.saveCatalog = async reset => {
   const url = reset ? "" : $("#set_catalog").value.trim();
-  const body = { ...(STATE.data.appSettings || {}), catalog_url: url };
-  delete body.info;
   try {
-    await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await settingsWrite({ catalog_url: url });
     STATE.data.appSettings = null;
     await loadHealthSettings(true);
     toast(url ? "App Store now reads that catalogue" : "App Store reads the Community Applications feed again", "ok");
@@ -829,7 +830,7 @@ async function capacityForecastLoad() {
     const [tone, word] = capacityVerdict(f.verdict);
     return `<tr><td><b class="mono">${esc(f.node)}</b> <span class="pill slim ${tone}">${esc(word)}</span></td>
       <td class="small">${esc(f.sentence)}</td>
-      <td class="right">${actionBar([{ label: "Details", run: `nodeIfDown(${jsq(f.node)})`, ariaLabel: `What happens if ${f.node} fails` }])}</td></tr>`;
+      <td data-actions>${actionBar([{ label: "Details", run: `nodeIfDown(${jsq(f.node)})`, ariaLabel: `What happens if ${f.node} fails` }])}</td></tr>`;
   });
   const notes = [
     all.unreserved ? `${all.unreserved} app${all.unreserved === 1 ? " reserves" : "s reserve"} nothing and fit${all.unreserved === 1 ? "s" : ""} anywhere on paper, so the figures are a floor.${can("operator")
@@ -881,35 +882,49 @@ function rebalanceModeText(mode, maintenance) {
 }
 
 async function settingsAppSave() {
-  const current = { ...(STATE.data.appSettings || {}) };
-  delete current.info;
-  const body = { ...current, thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds };
+  const saved = await settingsWrite(current => settingsChanges(current));
+  HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || {}) } };
+  STATE.data.appSettings = null;
+  await loadHealthSettings(true);
+  if (saved.updates) loadImageUpdates(false, true);
+}
+
+/* Which part of the settings a field of the save bar's form belongs to. */
+const SETTINGS_PARTS = [["thresholds", /^set_(cpu|memory|disk|temperature)_(warn|crit)$/],
+  ["smart", /^set_(drive_temperature_|smart_)/], ["updates", /^set_(update_|notify_)/],
+  ["site_name", /^set_site_name$/], ["placement", /^set_(rebalance|place_mode|standby)/]];
+const settingsParts = () => new Set([...(STATE.settingsDirty || [])].filter(key => key.startsWith("app:"))
+  .flatMap(key => SETTINGS_PARTS.filter(([, field]) => key.slice(4).split(" ").some(name => field.test(name))).map(([part]) => part)));
+
+/* What the save bar changes, on top of the current settings: only the parts
+   whose fields were changed, so a part shown as the page opened is not saved
+   back over a change made since (#601). */
+function settingsChanges(current) {
+  const parts = settingsParts(), body = {};
   const read = id => ({ warning: +$("#set_" + id + "_warn").value, critical: +$("#set_" + id + "_crit").value });
-  if ($("#set_cpu_warn")) body.thresholds = { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") };
-  if ($("#set_drive_temperature_warn")) body.smart = { temperature: read("drive_temperature"), reallocated_warning: +$("#set_smart_reallocated").value,
+  if (parts.has("thresholds") && $("#set_cpu_warn")) body.thresholds = { cpu: read("cpu"), memory: read("memory"), disk: read("disk"), temperature: read("temperature") };
+  if (parts.has("smart") && $("#set_drive_temperature_warn")) body.smart = { temperature: read("drive_temperature"), reallocated_warning: +$("#set_smart_reallocated").value,
     pending_critical: +$("#set_smart_pending").value, uncorrectable_critical: +$("#set_smart_uncorrectable").value, notify_failures: $("#set_smart_notify").checked };
-  if ($("#set_update_policy")) body.updates = { ...(current.updates || {}), policy: $("#set_update_policy").value,
+  if (parts.has("updates") && $("#set_update_policy")) body.updates = { ...(current.updates || {}), policy: $("#set_update_policy").value,
     notify_available: $("#set_notify_available").checked, notify_failures: $("#set_notify_failures").checked,
     maintenance: $("#set_update_start") ? { start: $("#set_update_start").value, duration_minutes: +$("#set_update_duration").value,
       days: $$(".set_update_day:checked").map(input => +input.value) } : (current.updates || {}).maintenance };
-  if ($("#set_site_name")) body.site_name = $("#set_site_name").value.trim();
-  if ($("#set_rebalance")) body.placement = { ...(current.placement || {}), rebalance: $("#set_rebalance").value,
+  if (parts.has("site_name") && $("#set_site_name")) body.site_name = $("#set_site_name").value.trim();
+  if (parts.has("placement") && $("#set_rebalance")) body.placement = { ...(current.placement || {}), rebalance: $("#set_rebalance").value,
     ...($("#set_place_mode") ? { mode: $("#set_place_mode").value, standby_nodes: $$(".set_standby:checked").map(input => input.value) } : {}) };
   if (body.placement?.mode === "standby" && !body.placement.standby_nodes.length) {
     settingsTab("placement");
     throw new Error("Tick at least one standby host, or choose another way to share the work");
   }
-  const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  HEALTH = { thresholds: { ...HEALTH_DEFAULTS.thresholds, ...(saved.thresholds || body.thresholds || {}) } };
-  STATE.data.appSettings = null;
-  await loadHealthSettings(true);
-  if (body.updates) loadImageUpdates(false, true);
+  return body;
 }
 
 window.settingsSave = async button => {
   const kinds = settingsKinds();
   if (button) button.disabled = true;
   try {
+    // A failed read leaves the defaults on the form: saving them would replace what is stored.
+    if (kinds.has("app") && STATE.data.appSettings === HEALTH_DEFAULTS) throw new Error("The settings could not be read when this page opened, so nothing was saved. Reload and try again.");
     if (kinds.has("app")) await settingsAppSave();
     if (kinds.has("lh")) await lhSettingsSave();
     STATE.settingsDirty = new Set();
@@ -979,16 +994,13 @@ window.updateWindowEdit = () => {
    changed, so a change still waiting on the save bar stays there, unsaved. */
 window.updateWindowSave = async button => {
   if (button) button.disabled = true;
-  const stored = STATE.data.appSettings || {}, body = { ...stored };
-  delete body.info;
-  body.updates = { ...(stored.updates || {}), maintenance: { start: $("#set_update_start").value,
-    duration_minutes: +$("#set_update_duration").value, days: $$(".set_update_day:checked").map(input => +input.value) } };
+  const maintenance = { start: $("#set_update_start").value, duration_minutes: +$("#set_update_duration").value,
+    days: $$(".set_update_day:checked").map(input => +input.value) };
   try {
-    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    STATE.data.appSettings = { ...saved, info: stored.info };
+    const saved = await settingsWrite(current => ({ updates: { ...(current.updates || {}), maintenance } }));
     // The row changes in place: re-rendering would put the unsaved fields back.
     const row = $("#set_update_window");
-    if (row) row.textContent = updateWindowText((saved.updates || body.updates).maintenance);
+    if (row) row.textContent = updateWindowText((saved.updates || {}).maintenance || maintenance);
     closeModal(); toast("Update window saved", "ok");
     loadImageUpdates(false, true);
   } catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
@@ -1005,27 +1017,6 @@ window.updatePolicyFields = () => {
   if (fields) fields.classList.toggle("muted-policy", $("#set_update_policy").value !== "maintenance_window");
 };
 
-window.saveUpdateSettings = async () => {
-  const current = STATE.data.appSettings || {};
-  const body = { thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds,
-    smart: current.smart, updates: { ...(current.updates || {}),
-    policy: $("#set_update_policy").value,
-    notify_available: $("#set_notify_available").checked,
-    notify_failures: $("#set_notify_failures").checked,
-    maintenance: {
-      start: $("#set_update_start").value,
-      duration_minutes: +$("#set_update_duration").value,
-      days: $$(".set_update_day:checked").map(input => +input.value),
-    },
-  } };
-  try {
-    const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    STATE.data.appSettings = saved;
-    toast("Image update policy saved", "ok");
-    await loadImageUpdates(false, true);
-    viewSettings();
-  } catch (e) { toast(e.message, "bad"); }
-};
 
 /* Look for hardware now rather than at the next 30-second check. */
 window.hardwareRescan = async button => {

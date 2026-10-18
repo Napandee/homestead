@@ -19,12 +19,12 @@ class VolumeEditTests(unittest.TestCase):
         # STORAGE reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
-            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
-            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
-        self.saved = server.kget, server.ksend
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
+        self.saved = server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend
         self.sent = []
         self.replicas = 1
         self.pvc = {"spec": {"storageClassName": "example-storage", "volumeName": "pvc-123",
@@ -52,10 +52,10 @@ class VolumeEditTests(unittest.TestCase):
             self.sent.append((method, path, body))
             return body
 
-        server.kget, server.ksend = kget, ksend
+        server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend = kget, ksend
 
     def tearDown(self):
-        server.kget, server.ksend = self.saved
+        server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend = self.saved
 
     def test_growing_sends_only_the_new_size(self):
         result = STORAGE.edit_volume({"namespace": "lab", "name": "example-data", "size_gb": 10, "replicas": 1})

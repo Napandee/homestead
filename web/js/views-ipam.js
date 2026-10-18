@@ -162,13 +162,15 @@ function renderIpam() {
         <input id="ipamBulkOwner" placeholder="owner" style="width:110px">
         <button class="btn sm pri" onclick="ipamBulk()">Apply</button>
         <button class="btn sm danger" onclick="ipamBulk(true)" data-tip="Remove these addresses and everything written about them">Remove</button></div>
+    <div class="ipam-box"><label class="ipam-all-cards small"><input type="checkbox" id="ipamAllCards" aria-label="Select every address shown" onchange="ipamSelectAll(this.checked)"
+        ${rows.some(r => !r.cluster) && rows.filter(r => !r.cluster).every(r => ipamPicks().has(r.ip)) ? "checked" : ""}> Select all shown</label>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack ipam-table" data-sort="ipam"><thead><tr>
       <th data-nosort><input type="checkbox" id="ipamAll" aria-label="Select every address shown" onchange="ipamSelectAll(this.checked)"
         ${rows.some(r => !r.cluster) && rows.filter(r => !r.cluster).every(r => ipamPicks().has(r.ip)) ? "checked" : ""}></th>
       <th>Address</th><th>Name</th><th>MAC</th><th>Kind</th><th data-nosort>Seen</th><th data-nosort>Notes</th></tr></thead>
       ${rows.length ? ipamBodies(rows, subnet, !STATE.ipamFilter && !STATE.q)
         : `<tbody><tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
-      </table></div></div>`, { actions, actionsClass: "ipam-head-acts" });
+      </table></div></div></div>`, { actions, actionsClass: "ipam-head-acts" });
   if (scanning) setTimeout(() => { if (STATE.view === "network" && networkTab() === "ip") viewIpam(); }, 3000);
 }
 
@@ -252,7 +254,8 @@ window.ipamPicked = box => {
   const n = ipamPicks().size, boxes = $$(".ipam-pick");
   $("#ipamBulk").hidden = !n;
   $("#ipamBulkCount").textContent = `${n} selected`;
-  if ($("#ipamAll")) $("#ipamAll").checked = boxes.length > 0 && boxes.every(b => b.checked);
+  const all = boxes.length > 0 && boxes.every(b => b.checked);
+  ["#ipamAll", "#ipamAllCards"].forEach(id => { if ($(id)) $(id).checked = all; });
 };
 window.ipamSelectAll = on => {
   $$(".ipam-pick").forEach(box => { box.checked = on; on ? ipamPicks().add(box.value) : ipamPicks().delete(box.value); });

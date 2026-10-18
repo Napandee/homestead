@@ -14,7 +14,7 @@ class ApiPathTests(unittest.TestCase):
                      "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/home-assistant-os",
                      "/api/v1/events?limit=160", "/api/v1/pods?labelSelector=app%3Dfrigate",
                      "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-1.2"):
-            self.assertEqual(path, server.api_path(path))
+            self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
 
     def test_a_name_that_walks_out_is_refused(self):
         for path in ("/api/v1/namespaces/lab/pods/../secrets/homestead-auth",
@@ -24,14 +24,14 @@ class ApiPathTests(unittest.TestCase):
                      "/api/v1/namespaces/lab/pods/a\\b", "/api/v1/namespaces/lab/pods/a b",
                      "/api/v1/namespaces/lab/pods/a#b", "/api/v1/namespaces/lab/pods/a\r\nHost: evil"):
             with self.assertRaises(ValueError, msg=path):
-                server.api_path(path)
+                server.KUBE_HELPERS.api_path(path)
 
     def test_nothing_is_asked_of_the_api_server_for_a_refused_path(self):
         with mock.patch.object(server.urllib.request, "urlopen") as opened:
             with self.assertRaises(ValueError):
-                server.kget("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/../../../../api/v1/secrets")
+                server.KUBE_HELPERS.kget("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/../../../../api/v1/secrets")
             with self.assertRaises(ValueError):
-                server._ksend("DELETE", "/api/v1/namespaces/lab/pods/..")
+                server.KUBE_HELPERS._ksend("DELETE", "/api/v1/namespaces/lab/pods/..")
         opened.assert_not_called()
 
 
@@ -50,7 +50,7 @@ class BusyApiServerTests(unittest.TestCase):
     def test_a_read_turned_away_for_a_moment_is_asked_again(self):
         with mock.patch.object(server.urllib.request, "urlopen",
                                side_effect=[self.busy(), self.busy(), self.response(b'{"items": []}')]) as opened,              mock.patch.object(server.time, "sleep") as slept:
-            self.assertEqual({"items": []}, server.kget("/api/v1/nodes"))
+            self.assertEqual({"items": []}, server.KUBE_HELPERS.kget("/api/v1/nodes"))
         self.assertEqual(3, opened.call_count)
         self.assertEqual([mock.call(1.0), mock.call(1.0)], slept.call_args_list, "Retry-After is honoured")
 
@@ -58,7 +58,7 @@ class BusyApiServerTests(unittest.TestCase):
         import urllib.error
         with mock.patch.object(server.urllib.request, "urlopen", side_effect=[self.busy() for _ in range(4)]),              mock.patch.object(server.time, "sleep"):
             with self.assertRaises(urllib.error.HTTPError):
-                server.kget("/api/v1/nodes")
+                server.KUBE_HELPERS.kget("/api/v1/nodes")
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
         with mock.patch.object(updates, "ksend", side_effect=lambda method, path, dep: dep) as send, \
-                mock.patch.object(server, "ksend") as other_send, \
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as other_send, \
                 mock.patch.object(server.OPS, "start", return_value={}) as job:
             handler.do_POST()
         other_send.assert_not_called()
@@ -103,17 +103,17 @@ class ImageUpdateCapacityTests(unittest.TestCase):
 
     def test_policy_change_after_review_blocks(self):
         body = self.reviewed()
-        with mock.patch.object(server, "enforce_update_policy", side_effect=PermissionError("window closed")):
+        with mock.patch.object(server.SETTINGS_HELPERS, "enforce_update_policy", side_effect=PermissionError("window closed")):
             result, send, _ = self.call("/api/image-updates/apply", body)
         self.assertEqual(403, result[0])
         send.assert_not_called()
 
     def test_policy_is_rechecked_after_slow_preparation(self):
         body = self.reviewed()
-        with mock.patch.object(server, "enforce_update_policy", side_effect=[{}, PermissionError("window closed")]), \
+        with mock.patch.object(server.SETTINGS_HELPERS, "enforce_update_policy", side_effect=[{}, PermissionError("window closed")]), \
                 mock.patch.object(updates, "ksend") as send:
             with self.assertRaisesRegex(PermissionError, "window closed"):
-                server.reviewed_image_update(body, "update")
+                server.CLUSTER_ROUTES.reviewed_image_update(body, "update")
         send.assert_not_called()
 
     def test_rollback_uses_same_review_and_capacity_guard(self):
@@ -197,7 +197,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         with mock.patch.object(updates, "ksend", side_effect=urllib.error.HTTPError("put", 409, "conflict", {}, None)), \
                 mock.patch.object(server.OPS, "start") as job:
             with self.assertRaises(urllib.error.HTTPError):
-                server.reviewed_image_update(body, "update")
+                server.CLUSTER_ROUTES.reviewed_image_update(body, "update")
         updates._history.assert_not_called()
         job.assert_not_called()
 

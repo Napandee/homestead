@@ -52,7 +52,7 @@ window.vmPresetSettings = vmPresetSettings;
 
 const VH_SECTIONS = {
   cpu: "Processor", firmware: "Firmware and security", tuning: "Guest tuning",
-  devices: "Devices", memory: "Memory and placement",
+  devices: "Display and devices", memory: "Memory and placement",
 };
 
 function vhOpt(value, label, current) {
@@ -70,14 +70,14 @@ function vhSummary(h) {
     cpu: `${total} vCPU${total === 1 ? "" : "s"} · ${c.sockets} socket${c.sockets === 1 ? "" : "s"} × ${c.cores} core${c.cores === 1 ? "" : "s"}${c.threads > 1 ? ` × ${c.threads} threads` : ""} · ${c.model || "cluster default model"}${c.dedicated ? " · dedicated" : ""}`,
     firmware: `${h.firmware === "uefi" ? `UEFI${h.secure_boot ? " · Secure Boot" : ""}` : "BIOS"} · TPM ${h.tpm === "off" ? "off" : h.tpm === "persistent" ? "on, kept" : "on"}${h.machine ? ` · ${h.machine}` : ""}`,
     tuning: [h.hyperv ? "Hyper-V enlightenments" : "", h.kvm_hidden ? "KVM hidden" : "", h.timezone || "UTC"].filter(Boolean).join(" · "),
-    devices: [h.boot_output === "gpu" ? "GPU boot output" : h.graphics ? "web console boot output" : "serial boot output", h.serial ? "serial console" : "", h.tablet ? "tablet" : "", h.rng ? "RNG" : "",
+    devices: [h.boot_output === "gpu" ? "GPU display, no virtual display" : h.graphics ? "virtual display" : "no display, serial only", h.serial ? "serial console" : "", h.tablet ? "tablet" : "", h.rng ? "RNG" : "",
       h.balloon ? "balloon" : "", h.sound ? "sound" : ""].filter(Boolean).join(" · "),
     memory: `${h.hugepages ? `${h.hugepages} hugepages` : "normal pages"} · on drain: ${({ LiveMigrate: "live-migrate", LiveMigrateIfPossible: "live-migrate if it can", None: "stop" })[h.eviction] || "cluster default"}`,
   };
 }
 
 /* The fields, grouped. `h` is the VM's hardware as the server reads it. */
-function vmHardwareFields(h, o = {}, locked = false, creating = false) {
+function vmHardwareFields(h, o = {}, locked = false, creating = false, split = false) {
   const c = h.cpu || {};
   // What the summaries and notes compare against: this VM, or a new one.
   window.__vhBase = h;
@@ -112,14 +112,7 @@ function vmHardwareFields(h, o = {}, locked = false, creating = false) {
       ${vhCheck("vh_kvmhidden", "Hide KVM from the guest", h.kvm_hidden, "Some GPU drivers refuse to run in a VM; hiding the hypervisor's signature lets them. Only for passed-through GPUs.")}
       <div class="f"><label>Clock ${tip("UTC suits Linux. Windows keeps its clock in local time: give the time zone, like Europe/London.")}</label>
         <input id="vh_tz" class="mono" value="${esc(h.timezone || "")}" placeholder="UTC" oninput="vmHardwareChanged()"></div>`)}
-    ${section("devices", `<div class="f"><label>Primary boot output</label>
-      <select id="vh_boot_output" onchange="vmBootOutputChanged()">${vhOpt("console", "Web console (virtual display)", h.boot_output || (h.graphics ? "console" : "serial"))}${vhOpt("gpu", "Passed-through GPU (physical monitor)", h.boot_output)}${vhOpt("serial", "Serial console only", h.boot_output || (!h.graphics ? "serial" : "console"))}</select>
-      <div class="dim xs">GPU output uses UEFI and turns off the VNC display. Attach the GPU on Passthrough first. Applies at the next VM start.</div></div>
-      ${vhCheck("vh_serial", "Serial console", h.serial, "A text console, and the boot log Homestead keeps.")}
-      ${vhCheck("vh_tablet", "Tablet pointer", h.tablet, "An absolute pointer, so the mouse in the console lines up with the guest's.")}
-      ${vhCheck("vh_rng", "Random-number device", h.rng, "virtio-rng: entropy from the host, so a new guest does not stall making keys.")}
-      ${vhCheck("vh_balloon", "Memory balloon", h.balloon, "Lets the guest report and return unused memory.")}
-      ${vhCheck("vh_sound", "Sound card", h.sound, "An ich9 sound card, for a desktop guest.")}`)}
+    ${split ? "" : section("devices", vmDisplayFields(h))}
     ${section("memory", `<div class="f2"><div class="f"><label>Hugepages ${tip("Guest memory in large pages: faster for big or busy guests, but the pages must be reserved on the host beforehand.")}</label>
         <select id="vh_huge" onchange="vmHardwareChanged()">${vhOpt("", "Normal pages", h.hugepages)}${vhOpt("2Mi", "2 MiB", h.hugepages)}${vhOpt("1Gi", "1 GiB", h.hugepages)}</select></div>
       <div class="f"><label>On host drain ${tip("What happens when its host is drained for maintenance: move it running to another host, try to, or stop it.")}</label>
@@ -127,6 +120,21 @@ function vmHardwareFields(h, o = {}, locked = false, creating = false) {
     <div id="vh_notes"></div></div>`;
 }
 window.vmHardwareFields = vmHardwareFields;
+
+/* The display and the virtual devices: in Hardware, or a dialog's own
+   section beside Disks and Passthrough (vmHardwareFields with split). */
+function vmDisplayFields(h) {
+  return `<div class="f"><label for="vh_boot_output">Display</label>
+      <select id="vh_boot_output" onchange="vmBootOutputChanged()">${vhOpt("console", "Virtual display (the console's Screen)", h.boot_output || (h.graphics ? "console" : "serial"))}${vhOpt("gpu", "Passed-through GPU only (a monitor on the GPU, no virtual display)", h.boot_output)}${vhOpt("serial", "No display (serial console only)", h.boot_output || (!h.graphics ? "serial" : "console"))}</select>
+      <div class="dim xs">Keep the virtual display to use a passed-through GPU for compute or transcoding and still see the VM in the console. GPU only removes the virtual display and uses UEFI; attach the GPU under Passthrough first. Applies at the next VM start.</div></div>
+      ${vhCheck("vh_serial", "Serial console", h.serial, "A text console, and the boot log Homestead keeps.")}
+      ${vhCheck("vh_tablet", "Tablet pointer", h.tablet, "An absolute pointer, so the mouse in the console lines up with the guest's.")}
+      ${vhCheck("vh_rng", "Random-number device", h.rng, "virtio-rng: entropy from the host, so a new guest does not stall making keys.")}
+      ${vhCheck("vh_balloon", "Memory balloon", h.balloon, "Lets the guest report and return unused memory.")}
+      ${vhCheck("vh_sound", "Sound card", h.sound, "An ich9 sound card, for a desktop guest.")}
+      <div id="vh_display_notes"></div>`;
+}
+window.vmDisplayFields = vmDisplayFields;
 
 /* The form's values, in the server's terms. */
 function vmHardwareValues() {
@@ -176,12 +184,13 @@ function vmHardwareNotes(h, o = {}) {
     notes.push(["info", "Kept EFI variables and TPM state live in a small volume per VM; KubeVirt before 1.5 needs its VMPersistentState feature for them."]);
   if (h.cpu.model === "host-passthrough") notes.push(["info", "host-passthrough: the VM can live-migrate only to hosts with the same CPU."]);
   if (h.eviction === "LiveMigrate" && (o.nodes || []).length < 2) notes.push(["info", "Live migration needs a second host; on one host a drain waits for the VM."]);
+  // The display's own notes, shown beside the Display field (a third element).
   if (h.boot_output === "gpu") {
-    if (h.firmware !== "uefi") notes.push(["bad", "GPU boot output needs UEFI firmware."]);
-    notes.push(["warn", "Connect the monitor to the passed-through GPU. Its ROM must support UEFI; the guest needs GPU drivers. A BIOS-installed guest may need its bootloader repaired after switching to UEFI."]);
+    if (h.firmware !== "uefi") notes.push(["bad", "GPU only needs UEFI firmware.", "display"]);
+    notes.push(["warn", "Connect the monitor to the passed-through GPU. Its ROM must support UEFI; the guest needs GPU drivers. A BIOS-installed guest may need its bootloader repaired after switching to UEFI.", "display"]);
   }
-  if (!h.graphics) notes.push(["info", "The VNC console has no screen with this boot output. Keep the serial console enabled for troubleshooting."]);
-  if (h.boot_output === "serial" && !h.serial) notes.push(["bad", "Serial boot output needs the serial console enabled."]);
+  if (!h.graphics) notes.push(["info", "With no virtual display the console's Screen stays black. Keep the serial console on for troubleshooting.", "display"]);
+  if (h.boot_output === "serial" && !h.serial) notes.push(["bad", "No display needs the serial console on.", "display"]);
   return notes;
 }
 
@@ -196,7 +205,10 @@ window.vmHardwareChanged = () => {
   if ($("#vh_efikeep")) $("#vh_efikeep").disabled = h.firmware !== "uefi";
   if ($("#vh_isolate")) $("#vh_isolate").disabled = !h.cpu.dedicated;
   const notes = vmHardwareNotes(full, window.__vhOpts || {});
-  $("#vh_notes").innerHTML = UI.notices(notes.map(([tone, text]) => [tone === "bad" || tone === "warn" ? tone : "info", text]));
+  const shown = list => UI.notices(list.map(([tone, text]) => [tone === "bad" || tone === "warn" ? tone : "info", text]));
+  const display = $("#vh_display_notes");
+  $("#vh_notes").innerHTML = shown(notes.filter(n => !display || n[2] !== "display"));
+  if (display) display.innerHTML = shown(notes.filter(n => n[2] === "display"));
 };
 
 window.vmBootOutputChanged = () => {

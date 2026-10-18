@@ -25,6 +25,9 @@ case "${1:-}" in
     node scripts/check_image_admission.mjs
     node scripts/check_import_admission.mjs
     node scripts/check_dialog_focus.mjs
+    SET_RESTART_SCREENSHOTS=release-assets/dialogs/set-restart node tests/integration/set-restart.mjs
+    SNAPSHOT_RESTORE_SCREENSHOTS=release-assets/dialogs/snapshot-restore node tests/integration/snapshot-restore.mjs
+    HOST_SELECT_SCREENSHOTS=release-assets/dialogs/host-select node tests/integration/host-select-chips.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs
@@ -36,6 +39,8 @@ case "${1:-}" in
     CUSTOM_WIDGET_SCREENSHOTS=release-assets/pages/custom-widget node tests/integration/dashboard-custom.mjs
     PORTAL_COLUMN_SCREENSHOTS=release-assets/pages/portal-columns node tests/integration/portal-widget-columns.mjs
     RESTORE_LINES_SCREENSHOTS=release-assets/pages/restore-lines node tests/integration/restore-tests-lines.mjs
+    IPAM_FIT_SCREENSHOTS=release-assets/pages/ipam-fit node tests/integration/ipam-table-fits.mjs
+    ROW_ACTIONS_SCREENSHOTS=release-assets/pages/row-actions node tests/integration/row-actions-edge.mjs
     UI_TABLE_SCREENSHOTS=release-assets/pages/ui-table node tests/integration/ui-table-phone.mjs
     IPAM_FIGURES_SCREENSHOTS=release-assets/pages/ipam-figures node tests/integration/ipam-figures.mjs
     ;;

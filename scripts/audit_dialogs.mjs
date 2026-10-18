@@ -110,7 +110,7 @@ const DIALOGS = [
   ["workload-storage-copy", "workloads", "wlEdit('lab','frigate')", "editReview({ns:'lab',name:'frigate',containers:[{name:'frigate',volumes:[{path:'/media/frigate',source:'camera-data',sub_path:'recordings',copy_from:{claim:'frigate-recordings'}}]}]})"],
   ["vm-migrate", "vms", "vmMove('default','home-assistant-os')"],
   ["vm-new", "vms", "vmNew()"],
-  ["vm-new-passthrough", "vms", "vmNew()", "stepGo('v_steps',4);vmAddHostDevice()"],
+  ["vm-new-passthrough", "vms", "vmNew()", "stepGo('v_steps',5);vmAddHostDevice()"],
   ["vm-image-delete", "images", "click:vmImageDelete"],
   ["schedule-new", "schedules", "jobEdit()"],
   ["vm-disk-import", "vmimport", "vmDiskImport()"],
@@ -159,6 +159,9 @@ const DIALOGS = [
   ["snapshot-files-v2", "storage", "window.__demoSnapshotV2=true;snapshotFiles('pvc-demo-frigate','daily-snapshot')"],
   ["snapshot-files-progress", "storage", "window.__demoSnapshotV2=false;window.__demoSnapshotWaiting=true;snapshotFiles('pvc-demo-frigate','daily-snapshot')", "snapshotFilesStart()"],
   ["snapshot-files-ready", "storage", "window.__demoSnapshotV2=true;window.__demoSnapshotWaiting=false;snapshotFiles('pvc-demo-frigate','daily-snapshot')", "snapshotFilesStart().then(()=>snapshotFilesPoll())"],
+  // A ready snapshot opens in the file manager; restoring a file shows its review.
+  ["snapshot-restore-in-manager", "storage", "window.__demoSnapshotV2=true;window.__demoSnapshotWaiting=false;snapshotFiles('pvc-demo-frigate','daily-snapshot')", "snapshotFilesStart().then(()=>snapshotFilesPoll())",
+    "new Promise(done=>{const t=setInterval(()=>{if(FM.panes[0]?.listing){clearInterval(t);done();}},100);}).then(()=>{fmClick({},0,'config.yml');return fmRestoreReview();})"],
   ["backups", "storage", "lhBackupList('pvc-demo-frigate','frigate-config')"],
   ["backup-restore", "storage", "lhBackupList('pvc-demo-frigate','frigate-config')", "click:lhRestore"],
   ["backup-target", "protect", "lhTarget()"],
@@ -220,6 +223,8 @@ const DIALOGS = [
   ["log-search-results", "workloads", "logSearch();document.querySelector('#ls_q').value='error';logSearchRun()"],
   ["history-undo", "workloads", "historyUndo('lab','paperless','c2')"],
   ["node-if-down", "nodes", "nodeIfDown('harvester-node2')"],
+  ["set-restart-review", "nodes", "STATE.platform.harvester=false", "setRestartReview('data','postgres','harvester-node3')"],
+  ["set-restart-blocked", "nodes", "STATE.platform.harvester=false;window.__demoSetRestartBlocked=true", "setRestartReview('data','postgres','harvester-node3')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
@@ -287,7 +292,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; STATE.operationsStale = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; STATE.operationsStale = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);

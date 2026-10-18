@@ -11,7 +11,7 @@ function setup() {
   const questions = [];
 
   const ctx = {console, Set, Uint8Array, btoa, document: {},
-    jsArg: JSON.stringify,
+    jsArg: JSON.stringify, tip: text => `(${text})`,
     api: async (url, opts) => { requests.push({url, opts}); const answer = answers[url]; return typeof answer === "function" ? answer() : answer || {}; },
     ask: async text => { questions.push(text); return false; },
     $: key => fields[key], $$: selector => selector === "#mbody .pd-add" || selector === "#pd_adds .pd-add" ? rows.added : rows.all,
@@ -202,4 +202,30 @@ test("VM labels retain available hosts that have not yet been inspected", () => 
   const html = t.ctx.vmDevicesPane({}, {resources: [{resource: "example.test/gpu", kind: "pci", label: "Named GPU", nodes: ["node1", "node2"],
     devices: [{node: "node1", address: "0000:01:00.0", group: "12"}]}]});
   assert.match(html, /node1 0000:01:00.0 · group 12; node2/);
+});
+
+test("a GPU's vBIOS can be captured from its host in Edit and is sent with the save", async () => {
+  const t = setup();
+  const gpu = {resources: [{resource: "example.test/gpu", kind: "pci", label: "GPU", gpu: true, nodes: ["node1"],
+    devices: [{node: "node1", address: "0000:01:00.0", class: "0300"}]}]};
+  const html = t.ctx.vmDevicesPane({host_devices: [{name: "hostdev-0", resource: "example.test/gpu", gpu: false, rom: false}]}, gpu);
+  assert.match(html, /Capture from host vmCaptureRom\(this,"hostdev-0"\)/, "a GPU offered as a host device still gets Capture");
+  assert.match(html, /from node1 · 0000:01:00\.0/);
+  t.answers["/api/passthrough/vbios/capture"] = {data: "VaoA", size: 3};
+  const box = {dataset: {}, querySelector: s => s === ".pd_rom_state" ? state : null};
+  const state = {textContent: ""};
+  const row = {dataset: {hostdev: "hostdev-0", resource: "example.test/gpu"},
+    querySelector: s => s === ".pd-rom" ? box : null};
+  const button = {disabled: false, closest: s => s === ".pd-rom" ? box : row};
+  await t.ctx.vmCaptureRom(button, "hostdev-0");
+  assert.deepEqual(JSON.parse(t.requests.at(-1).opts.body), {node: "node1", address: "0000:01:00.0"});
+  assert.match(state.textContent, /Captured from node1/);
+  t.rows.all = [row];
+  const changes = JSON.parse(JSON.stringify(await t.ctx.vmDevicesChanges()));
+  assert.deepEqual(changes.roms, {"hostdev-0": "VaoA"});
+  // A refusal says why, and nothing is sent.
+  t.answers["/api/passthrough/vbios/capture"] = () => { throw new Error("Stop VM win11 before capturing this GPU's vBIOS"); };
+  await t.ctx.vmCaptureRom(button, "hostdev-0");
+  assert.match(state.textContent, /Not captured: Stop VM win11/);
+  assert.equal(box.dataset.captured, undefined);
 });

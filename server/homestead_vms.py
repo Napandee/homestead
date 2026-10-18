@@ -327,6 +327,15 @@ def _filling(vm, dvs, explain=False):
     return out
 
 
+def _display(devices):
+    """virtual: the console's screen shows it. gpu: no virtual display, and a
+    GPU passed through - its picture is on the GPU's own outputs. none:
+    neither, so only the serial console reaches it."""
+    if devices.get("autoattachGraphicsDevice") is not False:
+        return "virtual"
+    return "gpu" if devices.get("gpus") or devices.get("hostDevices") else "none"
+
+
 def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
     meta, spec = vm.get("metadata") or {}, vm.get("spec") or {}
     tspec = (spec.get("template") or {}).get("spec") or {}
@@ -373,6 +382,7 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             "ip": next((ip for n in nics for ip in n["ips"] if ":" not in ip), ""), "nics": nics, "disks": disks,
             "isolated": VMNETWORK.isolated(vm),
             "implicit_network": not nics and not networks and (dom.get("devices") or {}).get("autoattachPodInterface") is not False,
+            "display": _display(dom.get("devices") or {}),
             # Every IPv4 address, first first, and the network the VM is on.
             "ips": list(dict.fromkeys(ip for n in nics for ip in n["ips"] if ":" not in ip)),
             "network": next((n["network"] for n in nics if n["network"]), ""),
@@ -983,7 +993,9 @@ def _halt_crash_retries(ns, name):
 
 
 def power(ns, name, action, *, raw_errors=False):
-    """start, stop, force-stop, restart, pause, unpause."""
+    """start, stop, force-stop, restart, reset, pause, unpause. Reset is a restart
+    that does not wait for the guest: its instance is replaced at once, as a
+    reset switch would."""
     _name(ns, "namespace"), _name(name, "VM name")
     try:
         if action in ("stop", "force-stop"):
@@ -994,17 +1006,19 @@ def power(ns, name, action, *, raw_errors=False):
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachineinstances/{name}/{action}", {})
         elif action == "force-stop":
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/stop", {"gracePeriod": 0})
+        elif action == "reset":
+            ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/restart", {"gracePeriodSeconds": 0})
         elif action in ("start", "stop", "restart"):
             # A validation/conflict response is not authority to rewrite the
             # VM's restart policy. Any strategy change needs its own review.
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachines/{name}/{action}", {})
         else:
-            raise ValueError("the action is start, stop, force-stop, restart, pause or unpause")
+            raise ValueError("the action is start, stop, force-stop, restart, reset, pause or unpause")
     except urllib.error.HTTPError as error:
         if raw_errors:
             raise
         raise ValueError(f"KubeVirt refused to {action} {name}: {_refusal(error)}")
-    words = {"start": "starting", "stop": "stopping", "force-stop": "being stopped at once", "restart": "restarting",
+    words = {"start": "starting", "stop": "stopping", "force-stop": "being stopped at once", "restart": "restarting", "reset": "being reset",
              "pause": "paused", "unpause": "resumed"}
     return {"ok": True, "detail": f"{name} is {words[action]}"}
 
@@ -1230,15 +1244,18 @@ def edit(ns, name, cfg):
     return commit_edit(prepare_edit(ns, name, cfg))
 
 
-def _release(ns, claim, uid):
+def _release(ns, claim, uid, vm_name=""):
     """A disk made from the VM's dataVolumeTemplates belongs to the VM, and
     Kubernetes deletes what a deleted owner owned. A disk that is being kept
-    is let go of first: its DataVolume and claim stop naming the VM."""
+    is let go of first: its DataVolume and claim stop naming the VM.
+
+    Only "not found" is passed over (CDI may have cleaned up the DataVolume;
+    the claim holds the data). A disk that can't be read, or still names the
+    VM after letting go, stops the delete: kept means kept (#600)."""
     for path in (f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}",
                  f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}"):
-        try:
-            owners = (kget(path).get("metadata") or {}).get("ownerReferences") or []
-        except Exception:
+        owners = _owners(path, claim)
+        if owners is None:
             continue
         kept = [o for o in owners if o.get("uid") != uid]
         if len(kept) != len(owners):
@@ -1247,6 +1264,20 @@ def _release(ns, claim, uid):
                       ctype="application/merge-patch+json")
             except urllib.error.HTTPError as error:
                 raise ValueError(f"{claim} could not be kept, so nothing was deleted: {_refusal(error)}")
+            if any(o.get("uid") == uid for o in _owners(path, claim) or []):
+                raise ValueError(f"{claim} still belongs to {vm_name or 'the VM'}, so nothing was deleted; try again")
+
+
+def _owners(path, claim):
+    """Who owns the object at path; None when it isn't there."""
+    try:
+        return (kget(path).get("metadata") or {}).get("ownerReferences") or []
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise ValueError(f"{claim} could not be checked, so nothing was deleted: {_refusal(error)}") from None
+    except Exception as error:
+        raise ValueError(f"{claim} could not be checked, so nothing was deleted: {str(error)[:120]}") from None
 
 
 def delete(ns, name, with_disks=False):
@@ -1289,7 +1320,7 @@ def delete(ns, name, with_disks=False):
     uid = vm["metadata"].get("uid", "")
     for claim in (spared if with_disks else [c for c in every if c not in unfinished]):
         if uid:
-            _release(ns, claim, uid)
+            _release(ns, claim, uid, name)
     if claims:
         vm["metadata"].setdefault("annotations", {})["harvesterhci.io/removedPVCs"] = ",".join(claims)
         vm["metadata"].pop("managedFields", None)

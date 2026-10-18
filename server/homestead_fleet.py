@@ -707,14 +707,18 @@ def request_head(method, target, host, headers, body, signature, websocket=False
     return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1", "replace")
 
 
-def response_head(head, cookies=()):
+def response_head(head, cookies=(), keep_version=True):
     """The answer as the browser gets it: the other member's own cookies are
-    not this origin's to set; this one's session refresh is."""
+    not this origin's to set; this one's session refresh is. The member's
+    version is the page's only when the member serves the page (the cluster
+    picked in the top bar); an action this page sends to one linked cluster -
+    updating it, above all - must not make the page think it was updated."""
     lines = head.decode("latin-1").split("\r\n")
     status = lines[0]
     upgrade = " 101 " in f"{status} "
     kept = [line for line in lines[1:] if line and not line.lower().startswith("set-cookie:")
-            and (upgrade or not line.lower().startswith("connection:"))]
+            and (upgrade or not line.lower().startswith("connection:"))
+            and (keep_version or not line.lower().startswith("x-homestead-version:"))]
     if not upgrade:
         kept.append("Connection: close")
     kept += [f"Set-Cookie: {cookie}" for cookie in cookies]
@@ -732,9 +736,12 @@ def forward(handler, ref, body, user="", role="", cookies=()):
         raise Unreachable("that cluster is no longer linked")
     websocket = (handler.headers.get("Upgrade") or "").lower() == "websocket"
     if websocket:
-        # A console from another site is refused here, as it would be anywhere.
+        # A console from another site is refused here, as it would be anywhere -
+        # checked as a console on this cluster checks it: against the address the
+        # browser used, which a proxy or tunnel in front gives as X-Forwarded-Host.
         origin = urllib.parse.urlparse(handler.headers.get("Origin") or "").netloc.lower()
-        if not origin or origin != (handler.headers.get("Host") or "").lower():
+        host = handler.headers.get("X-Forwarded-Host") or handler.headers.get("Host") or ""
+        if not origin or origin != host.lower():
             raise PermissionError("console websocket origin rejected")
     try:
         sock, parsed = _connect(target["url"])
@@ -756,7 +763,11 @@ def forward(handler, ref, body, user="", role="", cookies=()):
     if not head:
         sock.close()
         raise Unreachable(f"{target.get('name')} closed the connection")
-    out, upgrade = response_head(head, cookies)
+    # Named on the request itself (a header, or a console's hs_cluster), not
+    # the top bar's choice: the page here is this Homestead's, not the member's.
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(handler.path).query)
+    named = bool(handler.headers.get("X-Homestead-Cluster") or query.get("hs_cluster"))
+    out, upgrade = response_head(head, cookies, keep_version=not named)
     handler.close_connection = True
     try:
         handler.wfile.write(out + rest)

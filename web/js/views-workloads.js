@@ -619,7 +619,7 @@ function mvRender() {
   if (!list) return;
   const shown = mvShown(), hosts = [...new Set(shown.map(w => (w.nodes || [])[0] || "unscheduled"))].sort();
   list.innerHTML = shown.length ? hosts.map(h => `<div class="wg-group"><div class="between"><b class="mono">${esc(h)}</b>
-      ${h === "unscheduled" ? "" : UI.button("Tick these", `mvTickHost(${jsq(h)})`, { kind: "sm" })}</div>
+      ${h === "unscheduled" ? "" : UI.button("Tick these", `mvTickHost(${jsArg(h)})`, { kind: "sm" })}</div>
       ${shown.filter(w => ((w.nodes || [])[0] || "unscheduled") === h).map(w => { const id = `${w.ns}/${w.name}`;
         return `<label class="wg-item"><input type="checkbox" value="${esc(id)}" ${MV.picked.has(id) ? "checked" : ""}
           onchange="mvTick(${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`; }).join("")}</div>`).join("")
@@ -798,7 +798,8 @@ function workloadActions(w, update, off, compact = false) {
   return bar([
     update?.available && !updateOwner(update) && item("Update", `imageUpdateReview(${ns},${name})`, "update", {pri:true,need:"operator"}),
     logs,
-    item("Diagnostics", `wlDiagnostics(${ns},${name})`, "search", {tip:"Exit details, previous logs and reviewed commands"}),
+    // Not the magnifying glass: Search logs has that, in the same menu.
+    item("Diagnostics", `wlDiagnostics(${ns},${name})`, "bug", {tip:"Exit details, previous logs and reviewed commands"}),
     off ? item("Start", `wlScale(${ns},${name},1)`, "play", {need:"operator"}) : restart,
     !off && item("Stop", w.self ? `wlStopSelf(${ns},${name})` : `wlScale(${ns},${name},0)`, "stop", {need:"operator"}),
     item("Console", `wlConsole(${ns},${name})`, "console", {need:"operator",tip:"Open an audited shell in a running container"}),
@@ -1105,6 +1106,8 @@ window.wlScale = async (ns, name, n) => {
       }
     } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }
   }
+  // Stopping is asked first: whatever it serves goes away until it is started.
+  if (!n && !(await ask(`Stop ${name}? Its pods stop and what it serves goes away until you start it again. Its data and settings are kept.`, { title: "Stop", ok: "Stop" }))) return;
   return wlScaleGo(ns, name, n, false);
 };
 window.wlScaleGo = async (ns, name, n, confirmed = false) => {
@@ -1553,6 +1556,7 @@ window.deployLanChanged = async () => {
 };
 
 window.wlRestart = async (ns, name) => {
+  if (!(await ask(`Restart ${name}? Its pods are replaced with fresh ones; what it serves may be away for a moment.`, { title: "Restart", ok: "Restart" }))) return;
   try {
     await api("/api/restart", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name }) });
@@ -2136,6 +2140,8 @@ window.wlConsole = (ns, name, fromRoute = false) => {
       <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
       <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
       : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the app and wait until its pod is running.</span></div>`}`, true);
+  // What is typed into the shell is not an edit to this dialog: closing it asks nothing.
+  window.__modalGuard = () => "";
   if (pods.length) consolePodChanged();
 };
 

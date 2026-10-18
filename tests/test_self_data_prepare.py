@@ -257,11 +257,11 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual("admin", server.needed_role(path, "POST"))
             return handler._send.call_args.args[1]
         with mock.patch.object(OPS, "DATA_DIR", temp.name), mock.patch.object(server, "_self_data_fence", None), \
-             mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "kget", side_effect=self.f.read), \
-             mock.patch.object(server, "ksend", side_effect=send), \
-             mock.patch.object(server, "_self_data_helper_image", return_value=({}, IMAGE)), \
-             mock.patch.object(server, "homestead_data_volume", return_value={"pvc": "source", "classes": [{"name": "destination-class", "shareable": False}]}), \
-             mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
+             mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.f.read), \
+             mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=send), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "_self_data_helper_image", return_value=({}, IMAGE)), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "source", "classes": [{"name": "destination-class", "shareable": False}]}), \
+             mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             preview = post("/api/self/data/prepare/preview", self.body)
             self.assertEqual([], OPS._read())
             started = post("/api/self/data/prepare", {**self.body, "confirm_capacity": True, "capacity_token": preview["capacity_token"]})
@@ -295,7 +295,7 @@ class PreparationTests(unittest.TestCase):
         import server
         item = {**self.item, "progress": 15}
         with mock.patch.object(server.SELF_DATA_PREPARE, "resolve", side_effect=Held("Admission changed")):
-            self.assertEqual(("failed", 15, "Admission changed"), server.self_data_preparation_progress(item))
+            self.assertEqual(("failed", 15, "Admission changed"), server.SELF_DATA_ROUTES.self_data_preparation_progress(item))
             self.assertTrue(item["ref"]["retain_resources"])
 
     def test_lost_deletion_reply_is_not_repeated_even_when_pod_disappeared(self):
@@ -323,18 +323,18 @@ class PreparationTests(unittest.TestCase):
         item = {**self.item, "id": "prepared", "kind": P.KIND, "status": "succeeded"}
         item["ref"]["prepared"] = {"claim_uid": "kept"}
         foreign = copy.deepcopy(item); foreign["ref"]["namespace"] = "foreign"
-        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "kget", side_effect=self.f.read), \
-             mock.patch.object(server, "homestead_data_volume", return_value={"pvc": "different"}), \
+        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.f.read), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "different"}), \
              mock.patch.object(server.OPS, "_read", return_value=[item, foreign]):
-            state = server.self_data_preparation_state()
+            state = server.SELF_DATA_ROUTES.self_data_preparation_state()
         self.assertEqual(1, len(state["preparations"]))
         self.assertFalse(state["preparations"][0]["prepared"])
         self.assertTrue(state["execution_ready"])
 
     def test_status_error_is_safe_and_never_mutates(self):
-        with mock.patch.object(server, "homestead_data_volume", side_effect=RuntimeError("private-secret")), \
-             mock.patch.object(server, "ksend") as send:
-            with self.assertRaises(Held) as error: server.self_data_preparation_state()
+        with mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", side_effect=RuntimeError("private-secret")), \
+             mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
+            with self.assertRaises(Held) as error: server.SELF_DATA_ROUTES.self_data_preparation_state()
             self.assertNotIn("private-secret", str(error.exception)); send.assert_not_called()
 
 

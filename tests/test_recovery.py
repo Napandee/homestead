@@ -280,13 +280,13 @@ class AutoUpdateTests(unittest.TestCase):
     def test_no_automatic_update_starts_while_a_rebalance_runs(self):
         running = [{"kind": server.CREBALANCE.KIND, "status": "running"}]
         with mock.patch.object(server.OPS, "list_operations", return_value=running), \
-                mock.patch.object(server, "update_policy_status", return_value={"window_open": True, "policy": "maintenance_window"}), \
-                mock.patch.object(server, "cached", return_value=[]), \
+                mock.patch.object(server.SETTINGS_HELPERS, "update_policy_status", return_value={"window_open": True, "policy": "maintenance_window"}), \
+                mock.patch.object(server.CACHE, "cached", return_value=[]), \
                 mock.patch.object(server.UPTIME, "report", return_value={}), \
                 mock.patch.object(server.AUTOUPDATE, "tidy"), \
                 mock.patch.object(server.AUTOUPDATE, "candidates", return_value=[{"ns": "lab", "name": "web"}]), \
                 mock.patch.object(server.OPS, "start") as start:
-            self.assertIsNone(server.autoupdate_tick())
+            self.assertIsNone(server.CLUSTER_ROUTES.autoupdate_tick())
         start.assert_not_called()
 
     def test_an_update_waits_for_a_rebalance_but_not_for_a_finished_one(self):

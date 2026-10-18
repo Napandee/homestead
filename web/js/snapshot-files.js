@@ -40,10 +40,9 @@ window.snapshotFilesStart = async () => {
 function snapshotFilesPaint(state) {
   if (state.state === 'ready') {
     clearTimeout(snapshotFilesTimer);
-    snapshotFilesSession = state;
-    Object.assign(FILEVIEW, {namespace:state.namespace, pvc:state.session, path:'', file:'', dirty:false, snapshotSession:state});
-    modal(`Snapshot files · ${state.source.claim}`, '<div class="empty"><span class="spin2"></span>Reading folders</div>', true, 'snapshot-files');
-    fileBrowse('');
+    // The file manager owns the session from here: closing it ends the session.
+    snapshotFilesSession = null;
+    window.fileManagerSnapshot(state);
     return;
   }
   const host = $('#snapshotFilesProgress');
@@ -70,10 +69,6 @@ async function snapshotFilesPoll() {
   }
   if ($('#snapshotFilesProgress') && !['failed','closed','closing'].includes(snapshotFilesSession?.state)) snapshotFilesTimer = setTimeout(snapshotFilesPoll, 3000);
 }
-function snapshotFileUrl(path) {
-  const s = FILEVIEW.snapshotSession;
-  return `/api/snapshot-files/download?namespace=${encodeURIComponent(s.namespace)}&session=${encodeURIComponent(s.session)}&path=${encodeURIComponent(path)}`;
-}
 async function snapshotFilesRelease(session) {
   if (!session) return;
   try {
@@ -85,8 +80,6 @@ window.snapshotFilesDismiss = () => {
   ++snapshotFilesSequence;
   clearTimeout(snapshotFilesTimer);
   const session = snapshotFilesSession;
-  if (FILEVIEW.snapshotSession) FILEVIEW.pvc = '';
-  FILEVIEW.snapshotSession = null;
   snapshotFilesSession = null;
   snapshotFilesReview = null;
   return snapshotFilesRelease(session);

@@ -9,10 +9,10 @@ Settings has ten sections: nine that change the cluster for everyone, and
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
 | **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
 | **Placement** | How hosts share the work - Kubernetes' default, spread by capacity, or a hot spare; whether the other hosts have room if one fails; and whether containers move back when a host returns |
-| **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
+| **Monitoring** | when bars and node cards turn amber or red; drive health |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
-| **Connections** | UniFi Network, the App Store catalogue |
+| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
 | **Troubleshooting** | bug reports and logs |
 | **You** | appearance, notifications on this device, refresh rate, your password and signing out |
@@ -305,7 +305,9 @@ writes a file only when what it holds has changed.
 **Settings › Hardware and storage › Namespaces** lists the namespaces your apps
 can go in - Harvester's, Rancher's and Kubernetes' own are hidden - with what each
 holds. **Create** makes one, and Deploy offers it at once; **Delete** removes an
-empty one.
+empty one: no apps, stateful sets, daemon sets, scheduled jobs, running pods,
+volumes, VMs or VM disks. If Homestead can't read one of those just then, it
+says so and doesn't offer Delete, rather than taking "couldn't read" for "none".
 
 One is the **default for new apps**: `lab`, unless another was chosen when
 Homestead was installed (`workloadNamespace.name` in the Helm chart, `DEFAULT_NS`
@@ -368,10 +370,48 @@ A move that still needs recovery cannot be cleared. See
 
 ## MQTT and Home Assistant
 
-**MQTT** publishes cluster and node stats to a broker, with Home Assistant
-discovery: nodes ready, volumes degraded, pods, VMs, CPU and memory per node.
-The entity ids stay the same from release to release, so Home Assistant keeps
-its entities and history. **Test connection** checks the broker.
+Under **Connections**, **MQTT** publishes cluster and node stats to a broker,
+with Home Assistant discovery: nodes ready, volumes degraded, pods, VMs, CPU and
+memory per node. The entity ids stay the same from release to release, so Home
+Assistant keeps its entities and history. **Test connection** checks the broker.
+
+### Power control
+
+Once a broker is set up, an admin can **Turn on** power control and pick the
+containers and VMs Home Assistant may control. Each one becomes a device in
+Home Assistant, under the cluster's:
+
+| Entity | Container | VM |
+|---|---|---|
+| **Power** switch | starts it, or stops it (scales it to 0) | starts it, or shuts it down |
+| **Restart** button | restarts its pods | restarts it |
+| **Force off** button | - | turns it off at once, like pulling the plug |
+| **Reset** button | - | resets it at once, without shutting down |
+
+Homestead listens on `<base>/control/<app or vm>/<namespace>/<name>/<power,
+restart, force_off or reset>` and publishes each one's state, ON or OFF, to
+`.../state`. Only what is picked is listened to. Homestead's own containers
+and those in system namespaces cannot be picked.
+
+A command goes through the same checks as the app's buttons, made as an
+operator would make it: a VM that would not fit is not started. At most one
+command every 10 seconds reaches one item, and 20 a minute in all; a retained
+command message is never acted on. Each command, carried out or refused, is
+listed under **AI agents** > **Recent calls** as Home Assistant (MQTT).
+
+Anything that can publish to the broker can send these commands. Give the
+broker a username and password, TLS, and an ACL so only Home Assistant can
+publish to `<base>/control/#`. Homestead warns on the card until it signs in
+over TLS. **Turn off** removes the switches and buttons from Home Assistant
+and stops listening, and keeps what was picked for next time. The same
+actions are on the [API](API) for scripts.
+
+With [linked clusters](Linked-clusters), each Homestead has its own
+MQTT settings and controls only its own containers and VMs: picking a cluster
+from the top bar shows that cluster's MQTT card and its own list. If two
+clusters use the same broker, give each its own base topic; the base topic is
+then part of each power control entity's id, so they don't overwrite each
+other in Home Assistant.
 
 ## Notifications
 

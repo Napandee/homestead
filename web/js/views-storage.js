@@ -532,7 +532,7 @@ async function viewStorage() {
   ${oldCopies.length ? `<div class="sec">Old copies ${tip("The original of a volume moved to another storage class, kept in case the new copy disappoints. Remove each once its app works on the new one.")}</div>
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
-      <td>${actionBar([{ label: "Remove", run: `reclassRemoveOld(${jsq(o.pv)})`, need: "admin", danger: true }])}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+      <td data-actions>${actionBar([{ label: "Remove", run: `reclassRemoveOld(${jsq(o.pv)})`, need: "admin", danger: true }])}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
   ${otherVolumesHtml(others)}`);
   volumeProgressWatch();
 }
@@ -826,7 +826,7 @@ function storageClassCard(classes, v2 = null) {
       <td class="mono" data-label="Copies">${esc(row.replicas || "—")}</td>
       <td data-label="Its volumes">${features(row)}</td>
       <td class="mono" data-label="In use">${row.in_use ?? 0}</td>
-      <td>${actionBar([
+      <td data-actions>${actionBar([
         row.default || row.internal || row.made_for ? null : { label: "Make default", run: `storageClassDefault(${jsq(row.name)})`, need: "admin", tip: "Use this class when nothing else is chosen" },
         row.internal || row.default || row.in_use ? null : { label: "Delete", icon: "trash", run: `storageClassDelete(${jsq(row.name)})`, need: "admin", danger: true },
       ], { shown: 1 })}</td></tr>`).join("")}</tbody></table></div>${specialLine}`;
@@ -985,16 +985,6 @@ window.volumeClassFacts = () => {
   }
 };
 
-const FILEVIEW = { namespace: "", pvc: "", path: "", file: "", dirty: false, editor: null };
-
-function disposeEditor() {
-  if (FILEVIEW.editor) {
-    FILEVIEW.editor.getModel()?.dispose();
-    FILEVIEW.editor.dispose();
-    FILEVIEW.editor = null;
-  }
-}
-
 const fileSize = bytes => bytesText(bytes);
 
 /* Monaco is several megabytes, so it is fetched the first time a file is
@@ -1040,7 +1030,8 @@ function monacoTheme() {
   return document.documentElement.dataset.theme === "light" ? "vs" : "vs-dark";
 }
 
-async function mountEditor(host, content, filename) {
+/* The caller owns what a change and Ctrl+S mean: { onChange, onSave }. */
+async function mountEditor(host, content, filename, { onChange, onSave } = {}) {
   const monaco = await loadMonaco();
   const editor = monaco.editor.create(host, {
     value: content,
@@ -1057,214 +1048,10 @@ async function mountEditor(host, content, filename) {
     rulers: [],
     padding: { top: 10, bottom: 10 },
   });
-  editor.onDidChangeModelContent(() => fileTouched());
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => fileSave());
+  if (onChange) editor.onDidChangeModelContent(() => onChange());
+  if (onSave) editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSave());
   return editor;
 }
-
-window.volumeFiles = async (namespace, pvc, attached) => {
-  const closing = filesDismiss();
-  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
-  Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false, snapshotSession: null });
-  const headers = { "Content-Type": "application/json" };
-  const cluster = window.FLEET?.target || window.FLEET?.view?.self;
-  if (cluster) headers["X-Homestead-Cluster"] = cluster;
-  const session = FILEVIEW.liveSession = { namespace, pvc, headers };
-  modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true, "volume-files");
-  if (attached && !(await ask(`${pvc} is attached to a running app or VM.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the app or VM is stopped. Continue anyway?`, { title: "Browse files in use", ok: "Open anyway" }))) {
-    if (FILEVIEW.liveSession === session) closeModal();
-    return;
-  }
-  await closing;
-  if (FILEVIEW.liveSession !== session) return;
-  fileBrowse("");
-};
-
-async function filesRelease(session, keepalive = false) {
-  if (!session) return;
-  try {
-    await api("/api/files/close", { method: "POST", headers: session.headers, keepalive,
-      body: JSON.stringify({ namespace: session.namespace, pvc: session.pvc }) });
-  } catch (_) { /* the pod deadline and leader cleanup remain the fallback */ }
-}
-
-window.filesDismiss = (keepalive = false) => {
-  const session = FILEVIEW.liveSession;
-  if (!session) return;
-  FILEVIEW.liveSession = null;
-  disposeEditor();
-  Object.assign(FILEVIEW, { namespace: "", pvc: "", path: "", file: "", dirty: false });
-  return filesRelease(session, keepalive);
-};
-window.addEventListener?.("pagehide", () => {
-  if (!FILEVIEW.liveSession) return;
-  filesDismiss(true);
-  // A page restored from the back/forward cache must not display a browser
-  // whose helper was released when the page left.
-  closeModal(false);
-});
-
-function filesCurrent(session, namespace, pvc) {
-  return FILEVIEW.liveSession === session && FILEVIEW.namespace === namespace && FILEVIEW.pvc === pvc;
-}
-
-function filesReleaseLate(session) {
-  const current = FILEVIEW.liveSession;
-  // Sessions share one helper per claim. A newer browser for that same claim
-  // already owns it, so an old response must not close the replacement.
-  if (session && (!current || current.namespace !== session.namespace || current.pvc !== session.pvc
-      || current.headers["X-Homestead-Cluster"] !== session.headers["X-Homestead-Cluster"])) filesRelease(session);
-}
-
-window.fileBrowse = async (path) => {
-  const { namespace, pvc } = FILEVIEW;
-  const session = FILEVIEW.liveSession;
-  if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
-  disposeEditor();
-  try {
-    const snapshot = FILEVIEW.snapshotSession;
-    const listing = await api(snapshot
-      ? `/api/snapshot-files/list?namespace=${encodeURIComponent(namespace)}&session=${encodeURIComponent(snapshot.session)}&path=${encodeURIComponent(path || "")}`
-      : `/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`,
-      { keep: true, headers: session?.headers });
-    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
-    Object.assign(FILEVIEW, { path: listing.path || "", file: "", dirty: false });
-    $("#mbody").innerHTML = fileBrowserMarkup(listing);
-    if (window.applyRole) window.applyRole();
-  } catch (e) {
-    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
-    $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
-      ${UI.actions(`<button class="btn" onclick="fileBrowse('')">Try again</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close</button>`)}`;
-  }
-};
-
-function fileCrumbs(path) {
-  const parts = String(path || "").split("/").filter(Boolean);
-  const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.snapshotSession?.source.claim || FILEVIEW.pvc)}</button>`];
-  parts.forEach((part, index) => {
-    const upto = parts.slice(0, index + 1).join("/");
-    crumbs.push(`<span class="dim">/</span><button class="linkish" onclick="fileBrowse(${jsq(upto)})">${esc(part)}</button>`);
-  });
-  return crumbs.join("");
-}
-
-function fileBrowserMarkup(listing) {
-  const parent = String(listing.path || "").split("/").slice(0, -1).join("/");
-  return `${FILEVIEW.snapshotSession ? UI.lead(`Read-only snapshot · ${esc(FILEVIEW.snapshotSession.source.snapshot)}. The live volume stays online.`) : ''}<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
-    <div class="filelist">
-      ${listing.path ? `<button class="filerow" onclick="fileBrowse(${jsq(parent)})"><span class="fileicon">↩</span><span>..</span><span class="dim xs">up one level</span></button>` : ""}
-      ${listing.entries.map(entry => {
-        const full = (listing.path ? listing.path + "/" : "") + entry.name;
-        return entry.kind === "dir"
-          ? `<button class="filerow" onclick="fileBrowse(${jsq(full)})"><span class="fileicon">▸</span><span>${esc(entry.name)}</span><span class="dim xs">folder</span></button>`
-          : FILEVIEW.snapshotSession
-          ? `<a class="filerow" href="${esc(snapshotFileUrl(full))}" download><span class="fileicon">↓</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)} · Download</span></a>`
-          : `<button class="filerow" ${entry.editable ? `onclick="fileOpen(${jsq(full)})"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
-      }).join("") || '<div class="empty small">This folder is empty.</div>'}
-    </div>
-    ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
-    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}
-    ${FILEVIEW.snapshotSession ? UI.more('Temporary copy', '<p class="ui-help">Files are downloaded from the selected snapshot. Closing this browser starts cleanup of its temporary copy. Abandoned sessions expire after 30 minutes; cleanup resumes when Homestead and the cluster API are available. Symbolic links and special files are excluded.</p>') : '<div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume. It stops on its own after 30 minutes, or when you close it.</div>'}`;
-}
-
-window.fileOpen = async (path) => {
-  if (FILEVIEW.snapshotSession) return;
-  const { namespace, pvc } = FILEVIEW;
-  const session = FILEVIEW.liveSession;
-  try {
-    const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`,
-      { keep: true, headers: session?.headers });
-    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
-    FILEVIEW.file = file.path;
-    FILEVIEW.revision = file.revision;
-    FILEVIEW.dirty = false;
-    $("#mbody").innerHTML = `<div class="filecrumbs">${fileCrumbs(FILEVIEW.path)}<span class="dim">/</span><b>${esc(file.path.split("/").pop())}</b></div>
-      <div class="between fileeditbar"><span class="dim xs">${fileSize(file.size)} · saving keeps the previous contents as <span class="mono">${esc(file.path.split("/").pop())}.homestead-bak</span></span>
-        <span class="dim xs" id="file_state"></span></div>
-      <div id="file_editor" class="fileeditor"></div>
-      ${UI.actions(`<button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
-        <button data-dialog-dismiss="true" class="btn" onclick="fileBrowse(${jsq(FILEVIEW.path)})">Back</button>
-        <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}`;
-    FILEVIEW.editor = null;
-    try {
-      const editor = await mountEditor($("#file_editor"), file.content, file.path);
-      if (!filesCurrent(session, namespace, pvc)) {
-        editor.getModel()?.dispose(); editor.dispose(); return;
-      }
-      FILEVIEW.editor = editor;
-    } catch (e) {
-      if (!filesCurrent(session, namespace, pvc)) return;
-      // Still perfectly editable, just without highlighting.
-      const host = $("#file_editor");
-      if (host) {
-        host.innerHTML = `<textarea id="file_body" class="mono fileeditor-plain" spellcheck="false"
-          oninput="fileTouched()"></textarea>`;
-        $("#file_body").value = file.content;
-        $("#file_body").addEventListener("keydown", event => {
-          if (event.key !== "Tab") return;
-          event.preventDefault();
-          const input = $("#file_body");
-          input.setRangeText("  ", input.selectionStart, input.selectionEnd, "end");
-          fileTouched();
-        });
-        const state = $("#file_state");
-        if (state) state.textContent = "plain editor";
-      }
-    }
-    if (window.applyRole) window.applyRole();
-  } catch (e) {
-    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
-    toast(e.message, "bad");
-  }
-};
-
-window.fileTouched = () => {
-  FILEVIEW.dirty = true;
-  window.__modalGuard = () => FILEVIEW.dirty
-    ? `${FILEVIEW.file} has unsaved changes.
-
-Close the editor and lose them?` : "";
-  const state = $("#file_state");
-  if (state) state.textContent = "unsaved changes";
-};
-
-window.fileSave = async (ignoreSyntax = false) => {
-  if (FILEVIEW.snapshotSession) return toast('Snapshots are read-only', 'bad');
-  const { namespace, pvc, file } = FILEVIEW;
-  const session = FILEVIEW.liveSession;
-  const button = $("#file_save");
-  const content = FILEVIEW.editor ? FILEVIEW.editor.getValue() : ($("#file_body")?.value ?? "");
-  if (button) { button.disabled = true; button.textContent = "Saving…"; }
-  try {
-    const result = await api("/api/files/write", { method: "POST", headers: session?.headers || { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace, pvc, path: file, content, revision: FILEVIEW.revision, ignore_syntax: ignoreSyntax }) });
-    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
-    FILEVIEW.revision = result.revision;
-    FILEVIEW.dirty = false;
-    const state = $("#file_state");
-    if (state) state.textContent = `saved ${fmtClock(Date.now())}`;
-    toast(result.message || "saved", "ok");
-  } catch (e) {
-    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
-    // A syntax complaint is a warning, not a refusal: it is your file.
-    if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) {
-      return fileSave(true);
-    }
-    toast(e.message, "bad");
-  } finally {
-    if (button) { button.disabled = false; button.textContent = "Save"; }
-  }
-};
-
-window.closeFiles = async () => {
-  if (FILEVIEW.snapshotSession) return snapshotFilesClose();
-  const { dirty } = FILEVIEW;
-  if (dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
-  const closing = filesDismiss();
-  closeModal();
-  await closing;
-};
 
 window.volumeChown = async (namespace, name) => {
   modal(`Ownership · ${name}`, '<div class="empty"><span class="spin2"></span>reading what uses this volume</div>');
@@ -1349,7 +1136,7 @@ async function viewShares() {
         ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
         ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
       <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
-      <td class="shareactions">${actionBar([
+      <td data-actions>${actionBar([
         { label: "Edit", icon: "edit", run: `editShare(${jsq(s.name)})`, need: "admin", tip: "Grow this share or change its access policy" },
         { label: "NFS", run: `nfsExport(${jsq(s.name)})`, need: "admin", tip: "Configure this share's NFSv4 export and allowed clients" },
         { label: "Remove", icon: "trash", run: `rmShare(${jsq(s.name)})`, need: "admin", danger: true }])}</td></tr>`).join("")
@@ -1849,7 +1636,7 @@ function diskRowsHtml(node, disks, harvester) {
             onclick="diskTags(${jsq(node)},${jsq(x.id)},JSON.parse(this.dataset.tags))">${(x.tags || []).length ? "Edit tags" : "Add tags"}</button></div>
         <div class="row disk-lh-acts">
           ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ''}
-          ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsq(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
+          ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
             !x.ready && {label:'Replace failed disk',need:'admin',run:`diskRetire(${jsq(node)},${jsq(x.id)})`},
             {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
             x.ready && x.replicas && !x.evicting && {label:'Move replicas off',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},true)`},
@@ -1865,7 +1652,7 @@ function diskRowsHtml(node, disks, harvester) {
           ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
           ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
-      ${lh}${d.v2_preparation && !d.longhorn.length ? UI.actions(UI.button('V2 preparation',`diskV2Watch(${jsq(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'})) : ''}</div>`;
+      ${lh}${d.v2_preparation && !d.longhorn.length ? UI.actions(UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'})) : ''}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
 }

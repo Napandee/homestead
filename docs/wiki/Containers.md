@@ -9,8 +9,10 @@ them containers because that is what you think of them as.
 
 ## Troubleshooting a restarting app
 
-Open the app's **⋯ → Diagnostics** action to see its pod and container state,
-restart count, last exit reason and code, and current and previous logs.
+Open the app's **Diagnostics** to see its pod and container state, restart
+count, last exit reason and code, and current and previous logs. On its row it
+is the bug button beside **⋯**, after Logs; when an update is waiting, the row
+shows Update instead and Diagnostics is in the **⋯** menu.
 Refresh to collect new evidence; a stopped app needs to be started before
 Kubernetes can provide pod diagnostics.
 

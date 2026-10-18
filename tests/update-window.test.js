@@ -37,6 +37,10 @@ function windowPage(stored) {
   };
   const page = { posted: [], rendered: 0, fields };
   const appSave = src.slice(src.indexOf("async function settingsAppSave"), src.indexOf("window.settingsSave"));
+  // Every save goes through settingsWrite (#601); a missing marker fails here, not silently.
+  const writeAt = src.indexOf("window.settingsWrite"), writeEnd = src.indexOf("window.permissionsRecheck");
+  assert.ok(writeAt >= 0 && writeEnd > writeAt, "settingsWrite is found in views-settings.js");
+  const write = src.slice(writeAt, writeEnd);
   const dialog = src.slice(start, src.indexOf("window.catalogEdit"));
   const win = {
     Date, String, Math, Number, Set, JSON, Error, Object, Array,
@@ -44,14 +48,18 @@ function windowPage(stored) {
     HEALTH_DEFAULTS: { thresholds: {} }, HEALTH: {},
     $: selector => fields[selector] || null,
     $$: selector => selector === ".set_update_day:checked" ? [{ value: "0" }, { value: "2" }] : [],
-    api: async (path, init) => { page.posted.push(JSON.parse(init.body)); return JSON.parse(init.body); },
+    // A save reads the settings as they are now first (#601): here, the stored ones.
+    api: async (path, init) => {
+      if (!init || !init.method) return JSON.parse(JSON.stringify(stored));
+      page.posted.push(JSON.parse(init.body)); return JSON.parse(init.body);
+    },
     loadHealthSettings: async () => { win.STATE.data.appSettings = stored; },
     loadImageUpdates: () => {}, settingsTab: () => {}, closeModal: () => {}, toast: () => {},
     resetPaint: () => {}, viewSettings: () => { page.rendered++; }, esc: String,
   };
   win.window = win;
   vm.createContext(win);
-  vm.runInContext(appSave + dialog, win);
+  vm.runInContext(write + appSave + dialog, win);
   page.win = win;
   return page;
 }

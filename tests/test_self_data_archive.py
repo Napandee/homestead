@@ -108,23 +108,23 @@ class PreparationArchiveTests(unittest.TestCase):
     def test_archive_is_admin_only_and_never_calls_the_cluster(self):
         for path in ("/api/self/data/prepare/archive", "/api/self/data/prepare/archive/preview"):
             self.assertEqual("admin", server.needed_role(path, "POST"))
-        with mock.patch.object(server, "kget", side_effect=AssertionError("cluster read")), mock.patch.object(server, "ksend", side_effect=AssertionError("cluster mutation")):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=AssertionError("cluster read")), mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=AssertionError("cluster mutation")):
             self.archive(self.confirmed(self.archive()), start=True)
 
     def test_settings_labels_historical_and_current_volume_preparations_and_hides_archived(self):
         info = {"pvc": "destination", "classes": []}
-        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "homestead_data_volume", return_value=info), mock.patch.object(server, "kget", return_value={"items": []}):
-            state = server.self_data_preparation_state()
+        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value=info), mock.patch.object(server.KUBE_HELPERS, "kget", return_value={"items": []}):
+            state = server.SELF_DATA_ROUTES.self_data_preparation_state()
             item = state["preparations"][0]
             self.assertFalse(item["prepared"])
             self.assertTrue(item["archivable"])
             self.assertIn("currently uses", item["message"])
             info["pvc"] = "new-source"
-            self.assertIn("earlier source", server.self_data_preparation_state()["preparations"][0]["message"])
+            self.assertIn("earlier source", server.SELF_DATA_ROUTES.self_data_preparation_state()["preparations"][0]["message"])
             info["pvc"] = "source"
-            self.assertTrue(server.self_data_preparation_state()["preparations"][0]["prepared"])
+            self.assertTrue(server.SELF_DATA_ROUTES.self_data_preparation_state()["preparations"][0]["prepared"])
             self.archive(self.confirmed(self.archive()), start=True)
-            self.assertEqual([], server.self_data_preparation_state()["preparations"])
+            self.assertEqual([], server.SELF_DATA_ROUTES.self_data_preparation_state()["preparations"])
 
 
 if __name__ == "__main__": unittest.main()

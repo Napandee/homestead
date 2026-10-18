@@ -20,6 +20,18 @@ function vmConsoleStop() {
   if (window.__consoleSocket && window.__consoleSocket === VMC.serial) window.__consoleSocket = null;
 }
 
+/* A VM with a GPU passed through and no virtual display adapter draws on
+   the GPU's own outputs: the screen here stays black, so it says why. */
+function vmConsoleDisplayNote(ns, name) {
+  const vm = (STATE.data.vms || []).find(v => v.ns === ns && v.name === name);
+  if (!vm || !vm.display || vm.display === "virtual") return "";
+  return vm.display === "gpu"
+    ? UI.callout("warn", "No virtual display: the picture is on the passed-through GPU",
+      "This VM has a GPU passed through and no virtual display adapter, so Screen shows nothing. Use a monitor on the GPU, Remote Desktop, or Serial - or turn the virtual display on under Edit → Display and devices.")
+    : UI.callout("warn", "No virtual display", "This VM has no display adapter, so Screen shows nothing. Use Serial, or turn the virtual display on under Edit → Display and devices.");
+}
+window.vmConsoleDisplayNote = vmConsoleDisplayNote;
+
 function vmConsoleState(text) { const el = $("#vmcState"); if (el) el.textContent = text; }
 
 window.vmConsole = (ns, name, kind = "vnc") => {
@@ -41,6 +53,7 @@ window.vmConsole = (ns, name, kind = "vnc") => {
         <button class="btn sm" onclick="vmSerialPaste()" title="Send the clipboard to the serial port (Ctrl+Shift+V)">Paste</button></span>`}
     </div>
     <div class="console-security">Operator-only · session start and stop are audited; what is typed and shown is not recorded.</div>
+    ${kind === "vnc" ? vmConsoleDisplayNote(ns, name) : ""}
     ${kind === "vnc" ? `<div class="vmc-paste" id="vmcPaste" hidden>
         <textarea id="vmcPasteText" rows="3" spellcheck="false" autocomplete="off"
           placeholder="Paste here (Ctrl+V), then Type it: the VM has no shared clipboard, so it is typed key by key"></textarea>
@@ -53,6 +66,8 @@ window.vmConsole = (ns, name, kind = "vnc") => {
       : `<pre class="consoleview" id="consoleView" tabindex="0" aria-label="Serial console output">Waiting for the serial port… press Enter below if it stays quiet: a login prompt only appears after a key.</pre>
         <div class="consoleinput"><textarea id="consoleInput" rows="1" spellcheck="false" autocomplete="off" placeholder="Type · Enter sends · Shift+Enter adds a line"></textarea>
         <button class="btn" onclick="consoleSend()">Send</button></div>`}`, true);
+  // Keys typed into the VM are not edits to this dialog: closing it asks nothing.
+  window.__modalGuard = () => "";
   clearInterval(VMC.watch);
   // Closing the dialog ends the session; nothing else would.
   VMC.watch = setInterval(() => { if ($("#modal").classList.contains("hidden")) { clearInterval(VMC.watch); vmConsoleStop(); } }, 1000);

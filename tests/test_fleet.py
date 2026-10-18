@@ -401,6 +401,34 @@ class RelayTests(unittest.TestCase):
         self.assertIn(f"Origin: http://127.0.0.1:{port}", received["head"])
         self.assertNotIn("homestead.example", received["head"].split("Host:")[0])
 
+    def test_an_action_on_one_linked_cluster_does_not_carry_its_version(self):
+        """Updating a linked cluster first, this one last: the updated member's
+        version must not tell this page that it was updated (and reload it)."""
+        head = b"HTTP/1.1 200 OK\r\nX-Homestead-Version: 2.8.331\r\nContent-Type: application/json"
+        kept, _ = self.a.fleet.response_head(head)
+        dropped, _ = self.a.fleet.response_head(head, keep_version=False)
+        # The cluster picked in the top bar serves the page: its version is the page's.
+        self.assertIn(b"X-Homestead-Version: 2.8.331", kept)
+        self.assertNotIn(b"X-Homestead-Version", dropped)
+        self.assertIn(b"Content-Type: application/json", dropped)
+
+    def test_a_console_through_a_proxy_is_checked_as_a_local_one(self):
+        """Behind a tunnel that rewrites Host, a local console passes on
+        X-Forwarded-Host; a console relayed to a linked cluster must too."""
+        class Handler:
+            command, path = "GET", "/api/vm/console?vm=x&hs_cluster=b"
+            headers = {"Upgrade": "websocket", "Origin": "https://homestead.example.com",
+                       "Host": "127.0.0.1:8080", "X-Forwarded-Host": "homestead.example.com"}
+            wfile = io.BytesIO()
+        # Past the origin check, it only fails to reach the (unanswering) member.
+        with self.assertRaises(self.a.fleet.Unreachable):
+            self.a.fleet.forward(Handler(), "shed", b"")
+
+        class Elsewhere(Handler):
+            headers = {**Handler.headers, "Origin": "https://evil.example"}
+        with self.assertRaises(PermissionError):
+            self.a.fleet.forward(Elsewhere(), "shed", b"")
+
     def test_a_console_from_another_site_is_refused_before_relaying(self):
         class Handler:
             command, path = "GET", "/api/console?pod=x"

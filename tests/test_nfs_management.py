@@ -116,7 +116,7 @@ class NfsLifecycleTests(unittest.TestCase):
 
     def test_general_workload_mutations_reject_managed_nfs(self):
         with self.assertRaisesRegex(ValueError, "Network Shares"):
-            server.guard_managed_smb(server.SMB_NAMESPACE, NFS.NAME)
+            server.OVERVIEW_ROUTES.guard_managed_smb(server.SMB_NAMESPACE, NFS.NAME)
         for kind in ("Deployment", "Service"):
             with self.assertRaisesRegex(ValueError, "Network Shares"):
                 server.STORAGE_ROUTES.guard_smb_object(kind, server.SMB_NAMESPACE, NFS.NAME)

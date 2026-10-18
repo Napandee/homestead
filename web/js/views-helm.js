@@ -63,7 +63,7 @@ function renderHelm() {
         <td data-label="Updated" class="small dim">${r.updated ? esc(fmtAgo(Math.max(0, (Date.now() - Date.parse(r.updated)) / 1000))) : "—"}</td>
         <td data-actions>${helmActions(r)}</td></tr>`).join("")}
       </tbody></table></div></div>`
-      : `<div class="empty">${q ? "Nothing matches that search." : `No Helm releases${hidden ? " outside the platform's own" : ""} yet. <a style="cursor:pointer;text-decoration:underline" onclick="helmInstall()">Install a chart</a> from Artifact Hub.`}</div>`}`);
+      : `<div class="empty">${q ? "Nothing matches that search." : `No Helm releases${HELM_VIEW.show === "mine" && all.some(r => r.system) ? " outside the platform's own" : ""} yet. <a style="cursor:pointer;text-decoration:underline" onclick="helmInstall()">Install a chart</a> from Artifact Hub.`}</div>`}`);
   loadAppIcons(V());
 }
 
@@ -83,32 +83,30 @@ window.helmRelease = async (ns, name) => {
   try {
     const r = await api(`/api/helm/release?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
     const editable = !!r.source;
+    // Its parts are the shared section tabs, as a VM's details are (#559).
+    const values = editable ? `<div class="f2"><div class="f"><label>Chart version</label><input id="hr_version" class="mono" value="${esc(r.source.version || "")}" placeholder="latest"></div><div></div></div>
+          <label>Values ${tip("Only what differs from the chart's defaults. Saved as the HelmChart's valuesContent.")}</label>
+          <textarea id="hr_values" class="mono helm-values" rows="16" spellcheck="false">${esc(r.source.values || "")}</textarea>`
+        : `<pre class="mono helm-values">${esc(r.values || "# installed with the chart's defaults")}</pre>`;
+    const history = `<table class="tbl dense stack"><thead><tr><th>Revision</th><th>Status</th><th>Chart</th><th>Updated</th><th>Description</th></tr></thead><tbody>
+        ${r.history.map(h => `<tr><td class="mono">${h.revision}</td><td>${helmStatus(h.status)}</td><td class="mono small">${esc(h.chart_version)}</td>
+          <td class="small dim">${fmtWhen(h.updated)}</td><td class="small">${esc(h.description)}</td></tr>`).join("")}</tbody></table>`;
+    const objects = `<table class="tbl dense stack"><thead><tr><th>Kind</th><th>Name</th><th>Namespace</th></tr></thead><tbody>
+        ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table>`;
     $("#mbody").innerHTML = `<div class="between"><div><b>${esc(r.chart)} ${esc(r.chart_version)}</b> <span class="dim small">app ${esc(r.app_version || "—")}</span>
-        <div class="dim xs">${esc(r.description || "")}</div></div><div>${helmStatus(r.status)} <span class="pill slim neutral">revision ${r.revision}</span></div></div>
+        <div class="dim xs">${esc(r.description || "")}</div></div><div class="row">${helmStatus(r.status)} <span class="pill slim neutral">revision ${r.revision}</span>
+        ${editable ? `<span data-need="admin">${actionBar([{ label: "Uninstall", icon: "trash", run: `helmUninstall(${jsq(ns)},${jsq(name)})`, need: "admin", danger: true }], { shown: 0, label: `More actions for ${name}` })}</span>` : ""}</div></div>
       ${editable ? `<div class="note" style="margin-top:10px">From <span class="mono">${esc(r.source.repo || r.source.chart)}</span> through a HelmChart: change the version or values and the Helm controller upgrades it.</div>`
         : `<div class="note" style="margin-top:10px">Installed some other way${r.system ? " - it is part of the platform" : ""}. Homestead shows it but does not change it, since whatever installed it would change it back.</div>`}
-      <div class="seg" style="margin:12px 0" role="tablist">${["values", "notes", "history", "objects"].map((t, i) =>
-        `<button class="${i ? "" : "on"}" onclick="helmTab(this,${jsq(t)})">${{ values: "Values", notes: "Notes", history: "History", objects: `Objects · ${r.objects.length}` }[t]}</button>`).join("")}</div>
-      <div class="helm-pane" data-pane="values">
-        ${editable ? `<div class="f2"><div class="f"><label>Chart version</label><input id="hr_version" class="mono" value="${esc(r.source.version || "")}" placeholder="latest"></div><div></div></div>
-          <label>Values ${tip("Only what differs from the chart's defaults. Saved as the HelmChart's valuesContent.")}</label>
-          <textarea id="hr_values" class="mono helm-values" rows="16" spellcheck="false">${esc(r.source.values || "")}</textarea>
-          <div class="row" style="margin-top:10px"><button class="btn pri" data-need="admin" onclick="helmUpgrade(${jsq(ns)},${jsq(name)})">Upgrade</button>
-            <button class="btn danger" data-need="admin" onclick="helmUninstall(${jsq(ns)},${jsq(name)})">Uninstall</button></div>`
-        : `<pre class="mono helm-values">${esc(r.values || "# installed with the chart's defaults")}</pre>`}</div>
-      <div class="helm-pane" data-pane="notes" hidden><pre class="helm-values">${esc(r.notes || "The chart left no notes.")}</pre></div>
-      <div class="helm-pane" data-pane="history" hidden><table class="tbl dense stack"><thead><tr><th>Revision</th><th>Status</th><th>Chart</th><th>Updated</th><th>Description</th></tr></thead><tbody>
-        ${r.history.map(h => `<tr><td class="mono">${h.revision}</td><td>${helmStatus(h.status)}</td><td class="mono small">${esc(h.chart_version)}</td>
-          <td class="small dim">${fmtWhen(h.updated)}</td><td class="small">${esc(h.description)}</td></tr>`).join("")}</tbody></table></div>
-      <div class="helm-pane" data-pane="objects" hidden><table class="tbl dense stack"><thead><tr><th>Kind</th><th>Name</th><th>Namespace</th></tr></thead><tbody>
-        ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table></div>
-      ${UI.actions(UI.cancel("Close"))}`;
+      ${UI.sectionForm("helm_release", [
+        { key: "values", title: "Values", html: values },
+        { key: "notes", title: "Notes", html: `<pre class="helm-values">${esc(r.notes || "The chart left no notes.")}</pre>` },
+        { key: "history", title: "History", html: history },
+        { key: "objects", title: `Objects · ${r.objects.length}`, html: objects }],
+        editable ? `<button class="btn pri" data-need="admin" onclick="helmUpgrade(${jsq(ns)},${jsq(name)})">Upgrade</button>` : "",
+        { always: true, cancelHtml: UI.cancel("Close") })}`;
     if (window.applyRole) applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `helmRelease(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
-};
-window.helmTab = (button, pane) => {
-  $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));
-  $$("#mbody .helm-pane").forEach(p => { p.hidden = p.dataset.pane !== pane; });
 };
 const helmPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 window.helmUpgrade = async (namespace, name) => {

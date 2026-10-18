@@ -279,9 +279,9 @@ class RouteTests(unittest.TestCase):
     def test_the_app_shell_files_need_no_session(self):
         for path in ("/sw.js", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/maskable-512.png"):
             with self.subTest(path):
-                self.assertTrue(server.is_public_path(path))
-        self.assertFalse(server.is_public_path("/icons/../server.py"))
-        self.assertFalse(server.is_public_path("/api/alerts"))
+                self.assertTrue(server.WEB_PATHS.is_public_path(path))
+        self.assertFalse(server.WEB_PATHS.is_public_path("/icons/../server.py"))
+        self.assertFalse(server.WEB_PATHS.is_public_path("/api/alerts"))
 
     def test_anyone_signed_in_manages_their_own_devices(self):
         for path in ("/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test", "/api/alerts/pending"):

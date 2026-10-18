@@ -183,8 +183,8 @@ class VMPowerRecoveryTests(unittest.TestCase):
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
         with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
-                mock.patch.object(server, "kget", side_effect=self.read), \
-                mock.patch.object(server, "ksend") as writes, mock.patch.object(server.VMS, "ksend") as power_writes:
+                mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.read), \
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as writes, mock.patch.object(server.VMS, "ksend") as power_writes:
             handler.do_POST()
         writes.assert_not_called()
         power_writes.assert_not_called()
