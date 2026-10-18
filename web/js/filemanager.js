@@ -387,8 +387,10 @@ window.fmEdit = async (index, name) => {
     <div id="fm_editor" class="fileeditor"></div>
     ${UI.actions(`<button class="btn pri" id="fm_save" data-need="admin" onclick="fmSave()">Save</button><button class="btn" data-dialog-dismiss="true" onclick="fmEditDone()">Back to files</button>`)}`;
   try {
-    FM.editing.editor = await mountEditor($("#fm_editor"), file.content, path);
-    FM.editing.editor.onDidChangeModelContent(() => { FM.editing.dirty = true; const s = $("#fm_editstate"); if (s) s.textContent = "unsaved changes"; });
+    FM.editing.editor = await mountEditor($("#fm_editor"), file.content, path, {
+      onChange: () => { FM.editing.dirty = true; const s = $("#fm_editstate"); if (s) s.textContent = "unsaved changes"; },
+      onSave: () => fmSave(),
+    });
   } catch (_) {
     $("#fm_editor").innerHTML = `<textarea id="fm_plain" class="mono fileeditor-plain" spellcheck="false"></textarea>`;
     $("#fm_plain").value = file.content;

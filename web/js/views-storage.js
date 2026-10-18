@@ -1040,7 +1040,8 @@ function monacoTheme() {
   return document.documentElement.dataset.theme === "light" ? "vs" : "vs-dark";
 }
 
-async function mountEditor(host, content, filename) {
+/* The caller owns what a change and Ctrl+S mean: { onChange, onSave }. */
+async function mountEditor(host, content, filename, { onChange, onSave } = {}) {
   const monaco = await loadMonaco();
   const editor = monaco.editor.create(host, {
     value: content,
@@ -1057,8 +1058,8 @@ async function mountEditor(host, content, filename) {
     rulers: [],
     padding: { top: 10, bottom: 10 },
   });
-  editor.onDidChangeModelContent(() => fileTouched());
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => fileSave());
+  if (onChange) editor.onDidChangeModelContent(() => onChange());
+  if (onSave) editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSave());
   return editor;
 }
 
@@ -1188,7 +1189,8 @@ window.fileOpen = async (path) => {
         <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}`;
     FILEVIEW.editor = null;
     try {
-      const editor = await mountEditor($("#file_editor"), file.content, file.path);
+      const editor = await mountEditor($("#file_editor"), file.content, file.path,
+        { onChange: () => fileTouched(), onSave: () => fileSave() });
       if (!filesCurrent(session, namespace, pvc)) {
         editor.getModel()?.dispose(); editor.dispose(); return;
       }
