@@ -27,7 +27,7 @@ class EditCapacityTests(unittest.TestCase):
         handler._body = lambda: copy.deepcopy(config)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server, "guard_managed_smb"), mock.patch.object(server, "guard_self"), \
+        with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), mock.patch.object(server.OVERVIEW_ROUTES, "guard_self"), \
                 mock.patch.object(server, "persist_icon_config") as icons, \
                 mock.patch.object(lifecycle, "ksend") as send, \
                 mock.patch.object(lifecycle, "create_pvc") as create:

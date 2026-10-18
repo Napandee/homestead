@@ -140,7 +140,7 @@ class ServerTests(unittest.TestCase):
         import server
         sent = []
         with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
-             mock.patch.object(server, "guard_managed_smb"):
+             mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"):
             r = server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate",
                                            "actions": {"restart": {"after_min": 5, "max": 3}}})
             server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate", "actions": None})
@@ -163,7 +163,7 @@ class ServerTests(unittest.TestCase):
         with mock.patch.object(server.CACHE, "cached", side_effect=lambda key, ttl, fn: [{"ns": "lab", "name": "frigate", "outage_actions": APP["actions"]}] if key == "wl" else []), \
              mock.patch.object(server.OPS, "list_operations", return_value=[{"status": "running", "resource": {"namespace": "lab", "name": "frigate"}}]), \
              mock.patch.object(server.UPTIME, "report", return_value=down(0)), \
-             mock.patch.object(server, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
+             mock.patch.object(server.OVERVIEW_ROUTES, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
              mock.patch.object(O, "_send_later"):
             server.OVERVIEW_ROUTES.outage_tick()
         self.assertEqual([], restarted)

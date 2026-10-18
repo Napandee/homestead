@@ -35,7 +35,7 @@ class ImportCapacityTests(unittest.TestCase):
                       mock.patch.object(imports, "NS", "lab"),
                       mock.patch.object(server, "DEFAULT_NS", "lab"),
                       mock.patch.object(server.DEPLOY_ROUTES, "DEFAULT_NS", "lab"),
-                      mock.patch.object(server, "guard_managed_smb")):
+                      mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb")):
             patch.start()
             self.addCleanup(patch.stop)
 

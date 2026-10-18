@@ -208,7 +208,7 @@ class HostMoveCapacityTests(unittest.TestCase):
         self.assertEqual("10", send.call_args.args[2]["metadata"]["resourceVersion"])
 
     def test_managed_share_containers_cannot_bypass_addon_management(self):
-        with mock.patch.object(server, "guard_managed_smb", side_effect=ValueError("managed add-on")):
+        with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb", side_effect=ValueError("managed add-on")):
             result, send, job = self.call("/api/move", self.config)
         self.assertEqual(400, result[0])
         send.assert_not_called()

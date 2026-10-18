@@ -234,7 +234,10 @@ def verify(dest, names):
     for match in re.finditer(r"^MOVED\.update\(dict\.fromkeys\(\(([^)]*)\), (\w+)\)\)", server_text, re.M):
         moved.update(re.findall(r"[\"'](\w+)[\"']", match.group(1)))
     for name in names:
-        if (name in refs or (name in uses and name not in moved)) and name not in imported:
+        # A moved name's quoted uses (_late("name"), NEEDS tuples) resolve
+        # through MOVED; only its bare uses need the name imported back.
+        bare = name in server_references(server_tree, "", {name}, set())
+        if (bare or (name not in moved and (name in refs or name in uses))) and name not in imported:
             problems.append(f"server.py still names {name} (lines {sorted(refs.get(name, []))} {uses.get(name, '')}): "
                             f"add it to `from {dest} import (...)`")
         if name in imported and name not in refs and name not in uses:

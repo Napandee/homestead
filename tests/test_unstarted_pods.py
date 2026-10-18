@@ -34,12 +34,12 @@ class UnstartedPodTests(unittest.TestCase):
 
     def test_stopping_clears_pods_that_never_started(self):
         self.pods = [pod("stuck-pull", [WAITING]), pod("creating", []), pod("was-running", [RUNNING])]
-        server.clear_unstarted_pods("lab", "doublecommander", stopping=True)
+        server.OVERVIEW_ROUTES.clear_unstarted_pods("lab", "doublecommander", stopping=True)
         self.assertEqual(["stuck-pull", "creating"], self.deleted)
 
     def test_starting_clears_only_those_still_stuck_stopping(self):
         self.pods = [pod("left-over", [WAITING], deleting="2026-01-01T00:00:00Z"), pod("fresh", [WAITING])]
-        server.clear_unstarted_pods("lab", "doublecommander", stopping=False)
+        server.OVERVIEW_ROUTES.clear_unstarted_pods("lab", "doublecommander", stopping=False)
         self.assertEqual(["left-over"], self.deleted)
 
 

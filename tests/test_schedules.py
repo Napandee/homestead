@@ -137,7 +137,7 @@ class ServerTests(unittest.TestCase):
         sent, scaled = [], []
         with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=dep), \
              mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
-             mock.patch.object(server, "api_scale", side_effect=lambda ns, name, n: scaled.append(n)):
+             mock.patch.object(server.OVERVIEW_ROUTES, "api_scale", side_effect=lambda ns, name, n: scaled.append(n)):
             self.assertEqual("stopped frigate", server.OVERVIEW_ROUTES.schedule_act({"kind": "app", "ns": "lab", "name": "frigate"}, "stop"))
             self.assertEqual("2", sent[0][2]["metadata"]["annotations"][NAMES.key(S.REPLICAS_KEY)])
             dep.update(spec={"replicas": 0}, metadata={"annotations": {NAMES.key(S.REPLICAS_KEY): "2"}})
@@ -146,8 +146,8 @@ class ServerTests(unittest.TestCase):
 
     def test_homestead_itself_cannot_be_scheduled(self):
         import server
-        with mock.patch.object(server, "guard_managed_smb"), mock.patch.object(server.KUBE_HELPERS, "require_workload_target"), \
-             mock.patch.object(server, "is_self", return_value=True):
+        with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), mock.patch.object(server.KUBE_HELPERS, "require_workload_target"), \
+             mock.patch.object(server.OVERVIEW_ROUTES, "is_self", return_value=True):
             with self.assertRaises(ValueError):
                 server.OVERVIEW_ROUTES.set_schedule({"kind": "app", "ns": "homestead", "name": "homestead",
                                      "schedule": {"stop": "01:00", "days": [0]}})

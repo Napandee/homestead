@@ -15,9 +15,9 @@ class CapacityApiTests(unittest.TestCase):
         handler._body = lambda: {"ns": "lab", "name": "example", "replicas": replicas, "confirm_capacity": confirmed}
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server, "workload_start_plan", return_value=plan) as check, \
+        with mock.patch.object(server.OVERVIEW_ROUTES, "workload_start_plan", return_value=plan) as check, \
                 mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
-                mock.patch.object(server, "clear_unstarted_pods") as cleanup:
+                mock.patch.object(server.OVERVIEW_ROUTES, "clear_unstarted_pods") as cleanup:
             handler.do_POST()
         return handler._send.call_args.args, check, send, cleanup
 
