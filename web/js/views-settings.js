@@ -678,10 +678,7 @@ async function namespacesPaint() {
   let inv;
   try { inv = await api("/api/namespaces/manage", { keep: true }); }
   catch (e) { host.innerHTML = UI.error(e, { retry: "namespacesPaint()" }); return; }
-  const what = r => [r.deployments && `${r.deployments} app${r.deployments === 1 ? "" : "s"}`,
-    r.statefulsets && `${r.statefulsets} stateful set${r.statefulsets === 1 ? "" : "s"}`,
-    r.volumes && `${r.volumes} volume${r.volumes === 1 ? "" : "s"}`,
-    r.vms && `${r.vms} VM${r.vms === 1 ? "" : "s"}`].filter(Boolean).join(" · ") || "empty";
+  const what = namespaceHolds;
   host.innerHTML = `<div class="tblwrap"><table class="tbl stack dense" data-sort="namespaces"><thead><tr>
       <th>Namespace</th><th>Holds</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
     ${inv.namespaces.map(r => `<tr><td data-sort="${esc(r.name)}"><b class="mono">${esc(r.name)}</b>
@@ -690,11 +687,24 @@ async function namespacesPaint() {
       <td class="dim xs">${r.created ? esc(fmtDay(r.created)) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs ns-kept">Kept: ${esc(r.protected)}</span>`
         : actionBar([{ label: "Delete", run: `namespaceDelete(${jsq(r.name)})`, danger: true, disabled: !r.empty,
-            tip: r.empty ? "" : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
+            tip: r.empty ? "" : r.unread?.length ? "Homestead could not check everything in it; refresh to try again"
+              : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>
     ${UI.more("Changing the default namespace", `<p class="small">New apps go in <b class="mono">${esc(inv.default)}</b> unless you pick another in Deploy. The default was chosen when Homestead was installed - <span class="mono">workloadNamespace.name</span> in the Helm chart, <span class="mono">DEFAULT_NS</span> in the manifest - and Homestead keeps its own settings, network shares and node probe there too, so it is not changed from here: moving them on a running cluster would leave them behind. To use another namespace for your apps, create it above and pick it in Deploy.</p>`)}`;
   sortTables(host);
 }
+
+/* What a namespace holds, every kind its delete checks; what could not be
+   read is said as such, never as "empty" (#599). */
+const NS_KINDS = [["deployments", "app", "apps"], ["statefulsets", "stateful set", "stateful sets"],
+  ["daemonsets", "daemon set", "daemon sets"], ["cronjobs", "scheduled job", "scheduled jobs"],
+  ["pods", "running pod", "running pods"], ["volumes", "volume", "volumes"], ["vms", "VM", "VMs"],
+  ["disks", "VM disk", "VM disks"]];
+window.namespaceHolds = r => {
+  const held = NS_KINDS.filter(([key]) => r[key]).map(([key, one, many]) => `${r[key]} ${r[key] === 1 ? one : many}`);
+  if (r.unread?.length) held.push(`could not check ${r.unread.join(", ")}`);
+  return held.join(" · ") || "empty";
+};
 
 window.namespaceCreate = async () => {
   const name = $("#nsName").value.trim().toLowerCase();

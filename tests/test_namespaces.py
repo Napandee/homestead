@@ -1,6 +1,7 @@
 """Which namespaces are yours, and making and removing them."""
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -12,17 +13,24 @@ def namespace(name, annotations=None):
 
 
 class Cluster:
-    def __init__(self, names, contents=None):
+    def __init__(self, names, contents=None, failing=(), missing=()):
         self.items = [namespace(n) for n in names]
         self.contents = contents or {}
+        self.failing, self.missing = failing, missing
         self.sent = []
 
     def get(self, path):
         if path == "/api/v1/namespaces":
             return {"items": self.items}
-        for (kind, name), count in self.contents.items():
+        for kind in self.failing:
+            if path.endswith("/" + kind):
+                raise urllib.error.HTTPError(path, 500, "busy", {}, None)
+        for kind in self.missing:
+            if path.endswith("/" + kind):
+                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+        for (kind, name), items in self.contents.items():
             if f"/namespaces/{name}/{kind}" in path:
-                return {"items": [{}] * count}
+                return {"items": items if isinstance(items, list) else [{}] * items}
         return {"items": []}
 
     def send(self, method, path, body=None):
@@ -36,8 +44,8 @@ HARVESTER = ["default", "lab", "media", "kube-system", "cattle-system", "harvest
 
 
 class NamespaceTests(unittest.TestCase):
-    def use(self, names=HARVESTER, contents=None):
-        self.cluster = Cluster(names, contents)
+    def use(self, names=HARVESTER, contents=None, **kw):
+        self.cluster = Cluster(names, contents, **kw)
         ns.bind(self.cluster.get, self.cluster.send, "lab", "lab")
 
     def test_pickers_offer_only_places_for_apps(self):
@@ -71,6 +79,37 @@ class NamespaceTests(unittest.TestCase):
             ns.delete("old", "")
         ns.delete("old", "old")
         self.assertEqual(("DELETE", "/api/v1/namespaces/old", None), self.cluster.sent[-1])
+
+    def test_a_failed_count_refuses_the_delete(self):
+        # A short API error must not read as "no volumes here" (#599).
+        self.use(names=["lab", "old"], failing=("persistentvolumeclaims",))
+        with self.assertRaisesRegex(ValueError, "could not check volumes in old, so nothing was deleted"):
+            ns.delete("old", "old")
+        self.assertEqual([], [s for s in self.cluster.sent if s[0] == "DELETE"])
+
+    def test_an_api_the_cluster_does_not_have_counts_as_none(self):
+        self.use(names=["lab", "old"], missing=("virtualmachines", "datavolumes"))
+        ns.delete("old", "old")
+        self.assertEqual(("DELETE", "/api/v1/namespaces/old", None), self.cluster.sent[-1])
+
+    def test_a_cronjob_a_daemonset_a_disk_or_a_bare_pod_is_not_empty(self):
+        bare = {"metadata": {"name": "debug"}, "status": {"phase": "Running"}}
+        owned = {"metadata": {"name": "web-1", "ownerReferences": [{"kind": "ReplicaSet"}]}, "status": {"phase": "Running"}}
+        done = {"metadata": {"name": "once"}, "status": {"phase": "Succeeded"}}
+        for kind, items, said in (("cronjobs", 1, "1 scheduled job"), ("daemonsets", 1, "1 daemon set"),
+                                  ("datavolumes", 1, "1 VM disk"), ("pods", [bare, owned, done], "1 running pod")):
+            with self.subTest(kind):
+                self.use(names=["lab", "old"], contents={(kind, "old"): items})
+                with self.assertRaisesRegex(ValueError, said):
+                    ns.delete("old", "old")
+        self.use(names=["lab", "old"], contents={("pods", "old"): [owned, done]})
+        ns.delete("old", "old")
+
+    def test_the_inventory_says_what_it_could_not_read_and_offers_no_delete(self):
+        self.use(names=["lab", "old"], failing=("cronjobs",))
+        row = next(r for r in ns.inventory()["namespaces"] if r["name"] == "old")
+        self.assertEqual(["cronjobs"], row["unread"])
+        self.assertFalse(row["empty"])
 
 
 if __name__ == "__main__":

@@ -44,20 +44,46 @@ def names(include_system=False):
     return sorted(n["metadata"]["name"] for n in _all() if include_system or not is_system(n))
 
 
-def _count(path, namespace):
-    try:
-        return len(kget(f"{path.format(ns=namespace)}").get("items", []))
-    except Exception:
-        return 0
+def _running_unowned(pod):
+    """A pod no app, stateful set or daemon set owns: one started by hand or
+    by a job, still running or waiting to."""
+    owners = {o.get("kind") for o in (pod.get("metadata") or {}).get("ownerReferences") or []}
+    return ((pod.get("status") or {}).get("phase") in ("Pending", "Running", "Unknown")
+            and not owners & {"ReplicaSet", "StatefulSet", "DaemonSet"})
+
+
+# What deleting a namespace would delete or stop, as the delete review words
+# each: (key, list path, which items count, one, several).
+KINDS = (
+    ("deployments", "/apis/apps/v1/namespaces/{ns}/deployments", None, "app", "apps"),
+    ("statefulsets", "/apis/apps/v1/namespaces/{ns}/statefulsets", None, "stateful set", "stateful sets"),
+    ("daemonsets", "/apis/apps/v1/namespaces/{ns}/daemonsets", None, "daemon set", "daemon sets"),
+    ("cronjobs", "/apis/batch/v1/namespaces/{ns}/cronjobs", None, "scheduled job", "scheduled jobs"),
+    ("pods", "/api/v1/namespaces/{ns}/pods", _running_unowned, "running pod", "running pods"),
+    ("volumes", "/api/v1/namespaces/{ns}/persistentvolumeclaims", None, "volume", "volumes"),
+    ("vms", "/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", None, "VM", "VMs"),
+    ("disks", "/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes", None, "VM disk", "VM disks"),
+)
 
 
 def _contents(namespace):
-    return {
-        "deployments": _count("/apis/apps/v1/namespaces/{ns}/deployments", namespace),
-        "statefulsets": _count("/apis/apps/v1/namespaces/{ns}/statefulsets", namespace),
-        "volumes": _count("/api/v1/namespaces/{ns}/persistentvolumeclaims", namespace),
-        "vms": _count("/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", namespace),
-    }
+    """How many of each kind the namespace holds, and the kinds that could not
+    be read. Not found means the cluster has no such API (no KubeVirt, say):
+    there are none. Any other failure is not "none": a namespace whose
+    contents can't be read is never offered for deletion (#599)."""
+    counts, unread = {}, []
+    for key, path, keep, _one, _many in KINDS:
+        try:
+            items = kget(path.format(ns=namespace)).get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                unread.append(key)
+            items = []
+        except Exception:
+            unread.append(key)
+            items = []
+        counts[key] = sum(1 for item in items if keep is None or keep(item))
+    return counts, unread
 
 
 def _protected(name):
@@ -78,12 +104,12 @@ def inventory():
             continue
         meta = n.get("metadata") or {}
         name = meta["name"]
-        contents = _contents(name)
+        contents, unread = _contents(name)
         rows.append({"name": name, "created": meta.get("creationTimestamp", ""),
                      "phase": (n.get("status") or {}).get("phase", ""),
                      "homestead": (meta.get("labels") or {}).get("homestead.io/managed") == "true",
-                     "protected": _protected(name), **contents,
-                     "empty": not any(contents.values())})
+                     "protected": _protected(name), **contents, "unread": unread,
+                     "empty": not unread and not any(contents.values())})
     hidden = sum(1 for n in _all() if is_system(n))
     return {"namespaces": sorted(rows, key=lambda r: r["name"]), "system_hidden": hidden,
             "default": DEFAULT_NS}
@@ -115,8 +141,11 @@ def delete(name, confirm=""):
     reason = _protected(name)
     if reason:
         raise ValueError(f"{name} cannot be removed: {reason}")
-    contents = _contents(name)
-    held = [f"{count} {kind}" for kind, count in contents.items() if count]
+    contents, unread = _contents(name)
+    if unread:
+        raise ValueError(f"could not check {', '.join(unread)} in {name}, so nothing was deleted; try again")
+    held = [f"{contents[key]} {one if contents[key] == 1 else many}"
+            for key, _path, _keep, one, many in KINDS if contents[key]]
     if held:
         raise ValueError(f"{name} still holds {', '.join(held)} - move or delete them first")
     if confirm != name:
