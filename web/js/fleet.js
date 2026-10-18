@@ -12,6 +12,12 @@
 const FLEET_LISTS = { "/api/workloads": "workloads", "/api/vms": "vms", "/api/nodes": "nodes", "/api/volumes": "storage", "/api/flow": "flow" };
 window.FLEET = { view: null, target: "", missingSaid: new Set() };
 
+/* Linking sends the admin password there, then the clusters' shared key, to
+   the address typed; a key change sends the new key to every member. Over
+   plain http:// anyone on that network path can read them, so until linking
+   stops sending either (#602), a plain address is said and agreed to. */
+const fleetPlain = url => /^http:\/\//i.test(String(url || "").trim());
+
 function fleetMode() {
   try { return localStorage.getItem("homestead.fleet.mode") === "all" ? "all" : "one"; }
   catch (e) { return "one"; }
@@ -195,7 +201,7 @@ window.fleetManage = window.fleetOpenSettings;
 function fleetMembersHtml(view) {
   return view.members.map(m => `<li>
     <span class="fleet-dot ${m.self || m.reachable ? (m.compatible === false ? "warn" : "ok") : "bad"}" aria-hidden="true"></span>
-    <div class="fleet-row"><b>${esc(m.name)}</b>${m.self ? ` ${UI.chip("this one")}` : ""}${m.compatible === false ? ` ${UI.chip("update needed", "warn")}` : ""}
+    <div class="fleet-row"><b>${esc(m.name)}</b>${m.self ? ` ${UI.chip("this one")}` : ""}${m.compatible === false ? ` ${UI.chip("update needed", "warn")}` : ""}${fleetPlain(m.url) ? ` <span title="Linking, and every key change, sends the clusters' key unencrypted at this address">${UI.chip("plain HTTP", "warn")}</span>` : ""}
       <span class="fleet-sub"${m.self || m.reachable ? "" : ` title="${esc(m.error || "")}"`}><span class="mono">${esc(m.url || "no address")}</span>
         · ${m.self || m.reachable ? `v${esc(m.version)}` : "not answering"}</span></div>
     <div class="row nowrap fleet-row-acts"><span class="fleet-out" id="fout_${esc(m.id)}"></span>
@@ -377,6 +383,7 @@ function fleetLegacyHtml(rows) {
   return rows.map(r => `<li>
     <span class="fleet-dot" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(r.name)}</b>
+      ${!r.linked_as && fleetPlain(r.url) ? ` <span title="Each new session signs in there with the stored admin password, over plain HTTP">${UI.chip("password sent unencrypted", "warn")}</span>` : ""}
       <span class="fleet-sub">${r.linked_as ? `linked as ${esc(r.linked_as.name)}` : `<span class="mono">${esc(r.user)}@${esc(r.url)}</span>`}</span></div>
     <div class="row nowrap">${UI.button("Forget", `fleetForgetLegacy(${jsArg(r.name)})`, { attrs: 'data-need="admin"' })}
       ${UI.button(r.linked_as ? "Use the link" : "Link", `fleetLinkLegacy(${jsArg(r.name)})`, { kind: "pri", attrs: 'data-need="admin"' })}</div></li>`).join("");
@@ -387,6 +394,7 @@ window.fleetSettingsPaint = async () => {
   if (!host) return;
   fleetMovesPaint();
   const [view, legacy] = await Promise.all([api("/api/fleet").catch(() => null), api("/api/fleet/legacy").catch(() => [])]);
+  FLEET.legacy = legacy;
   if (!$("#fleetCard")) return;
   if (view) FLEET.view = view;
   const all = fleetMode() === "all";
@@ -446,6 +454,10 @@ async function fleetRefreshAfter() {
 }
 
 window.fleetLinkLegacy = async name => {
+  const row = (FLEET.legacy || []).find(r => r.name === name);
+  // Using a link already made sends no password; only a new link does.
+  if (row && !row.linked_as && fleetPlain(row.url) && !(await ask(`${name} is at a plain http:// address.${String.fromCharCode(10, 10)}Linking sends its admin password and then the clusters' shared key there unencrypted: anyone on that network path could read them. Link it at an https:// address if it has one.`,
+    { title: "Link over plain HTTP", ok: "Send them unencrypted", danger: true }))) return;
   try {
     const result = await api("/api/fleet/link-legacy", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, own_url: FLEET.view?.address || "" }) });
@@ -470,22 +482,31 @@ window.fleetLink = () => {
   (open ? childModal : modal)("Link a cluster", `<div class="ui-stack">
     ${UI.lead("Links another Homestead to this one and to every cluster already linked here. It must not be linked to others yet.")}
     ${UI.fields(
-      UI.field("Its address", '<input id="fl_url" placeholder="http://192.0.2.250:8088" autocomplete="off">', { wide: true,
+      UI.field("Its address", '<input id="fl_url" placeholder="http://192.0.2.250:8088" autocomplete="off" oninput="fleetPlainShow()">', { wide: true,
         help: "What you open it at in a browser on your LAN, with the port." }),
       UI.field("Admin username there", '<input id="fl_user" placeholder="admin" autocomplete="off">'),
       UI.field("Password there", '<input id="fl_pass" type="password" autocomplete="new-password">'),
-      UI.field("This Homestead's address", `<input id="fl_own" value="${esc(suggested)}" autocomplete="off">`, { wide: true,
+      UI.field("This Homestead's address", `<input id="fl_own" value="${esc(suggested)}" autocomplete="off" oninput="fleetPlainShow()">`, { wide: true,
         help: "How that cluster reaches this one." }))}
+    <label class="switch" id="fl_plain_row" hidden><input type="checkbox" id="fl_plain"> <span>Send the admin password and the cluster key unencrypted: an address here is plain http://, so anyone on that network path could read them</span></label>
     ${UI.more("What is kept", "<p>The password signs in once to exchange a shared key, and is not stored. From then on the clusters sign their requests to each other with that key.</p>")}
     ${UI.actions((open ? UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Link", "fleetLinkSave()", { kind: "pri", id: "fl_go" }))}
   </div>`);
-  setTimeout(() => $("#fl_url")?.focus(), 30);
+  setTimeout(() => { fleetPlainShow(); $("#fl_url")?.focus(); }, 30);
 };
+
+// Either way the key crosses unencrypted: there to that cluster, and back here from it.
+const fleetLinkPlain = () => fleetPlain($("#fl_url")?.value) || fleetPlain($("#fl_own")?.value);
+window.fleetPlainShow = () => { const row = $("#fl_plain_row"); if (row) row.hidden = !fleetLinkPlain(); };
 
 window.fleetLinkSave = async () => {
   const body = { url: $("#fl_url").value.trim(), username: $("#fl_user").value.trim(),
     password: $("#fl_pass").value, own_url: $("#fl_own").value.trim() };
   if (!body.url || !body.username || !body.password) return toast("Its address, and an admin username and password there", "bad");
+  if (fleetLinkPlain() && !$("#fl_plain")?.checked) {
+    fleetPlainShow();
+    return toast("An address is plain http://: tick that the password and key may be sent unencrypted, or use https://", "bad");
+  }
   const go = $("#fl_go");
   if (go) { go.disabled = true; go.textContent = "Linking…"; }
   try {
