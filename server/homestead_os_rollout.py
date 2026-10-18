@@ -273,7 +273,7 @@ def step(state, now=None):
         facts = host_os.read(name, refresh=True)
         node.update(updates=len(facts.get("updates") or []), security=facts.get("security", 0))
         if node["updates"]:
-            host_os.upgrade_begin(name, facts)
+            host_os.upgrade_begin(name, facts, node)
             rollout["phase"], node["since"] = "installing", now
             rollout["message"] = f"{name}: installing {node['updates']} update{'s' if node['updates'] != 1 else ''}"
         elif facts.get("reboot") and config["reboot"] == "when-needed":
@@ -283,6 +283,8 @@ def step(state, now=None):
         return True
     if phase == "installing":
         state_now = host_os.upgrade_state(name)
+        if not state_now["running"]:
+            host_os.upgrade_done(name, node)
         if state_now["running"]:
             if now - node.get("since", now) > INSTALL_LIMIT:
                 _result(rollout, False, f"updates did not finish in two hours; see {host_os.LOG} there")

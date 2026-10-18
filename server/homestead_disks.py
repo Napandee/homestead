@@ -816,7 +816,8 @@ def set_up(cfg):
                 raise ValueError(f"type {device} to confirm: it holds {facts['fstype'] or 'partitions or LVM'}, which Longhorn's V2 engine erases")
             facts = setup_module.wipe(node, device, facts)
         elif release:
-            out, err = setup_module.hostrun.run(node, f"D={device}\n{release}echo WIPED", timeout=60)
+            out, err = setup_module.hostrun.run(node, f"D={device}\n{release}echo WIPED", timeout=60,
+                                                       change=f"Release {device} on {node}")
             if "WIPED" not in out:
                 raise ValueError(f"could not release {device}: {(err or out)[:200]}")
         path, kept = facts["by_id"] or device, False
