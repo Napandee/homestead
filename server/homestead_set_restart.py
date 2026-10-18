@@ -242,6 +242,20 @@ def _chosen_copy(state, volume, node):
     return next((n for n, up in _copies(state, volume, node) if up), None)
 
 
+def _host_down(state, node, now):
+    """True only when every measure says `node` is down: Kubernetes Ready is
+    Unknown, NotReady and unheard from for MIN_DOWN, and Longhorn's node Ready
+    is False. Checked on its own, apart from the blockers, so that accepting
+    Longhorn's "unknown" can never rest on fewer conditions."""
+    st = state["node"]
+    since = _epoch(st["since"]) if st["since"] else None
+    heard = _epoch(st["lease"]) if st["lease"] else None
+    return (node is not None and st["ready"] is False and st.get("status") == "Unknown"
+            and since is not None and now - since >= MIN_DOWN
+            and heard is not None and now - heard >= MIN_DOWN
+            and state["lh_nodes"].get(node) is False)
+
+
 def plan(state, now):
     """What would be done, and what stands in the way. Pure: no reads.
 
@@ -278,7 +292,8 @@ def plan(state, now):
             blockers.append(f"Longhorn does not report {node} as down, so Homestead cannot tell whether its volumes are still attached.")
         elif lh:
             blockers.append(f"Longhorn still sees {node} as Ready, so its volumes may still be in use.")
-    seen = set()
+    host_down = _host_down(state, node, now)
+    relied_on, seen = [], set()
     for pod in pods:
         for v in pod["unchecked"]:
             blockers.append(f"{pod['name']}: volume {v['name']} is {v['type']}, which Homestead can't check")
@@ -293,17 +308,26 @@ def plan(state, now):
             vol = c["volume"]
             if "ReadWriteMany" in c["access"]:
                 blockers.append(f"{pvc}: it is ReadWriteMany (shared), which this action does not handle.")
-            for e in state["engines"].get(vol) or []:
+            copy_on = _chosen_copy(state, vol, node)
+            # Longhorn reports "unknown" for what is on a host it can't reach
+            # (#441's real host-loss test). It is read as "down" only when the
+            # host is down by every other measure and a current copy is elsewhere.
+            down_ok = host_down and copy_on is not None
+            engines = state["engines"].get(vol) or []
+            for e in engines:
                 if e["node"] is None:
                     blockers.append(f"{pvc}: Longhorn can't say where the engine of {vol} runs (state: {e['state']}).")
                     break
-                if e["node"] == node and e["state"] != "stopped":
+                if e["node"] == node and e["state"] == "unknown" and down_ok:
+                    relied_on.append(f"Longhorn reports the engine of {vol} on {node} as unknown, as it does for a host that is down.")
+                elif e["node"] == node and e["state"] != "stopped":
                     blockers.append(f"{pvc}: Longhorn can't confirm the engine of {vol} on {node} has stopped (state: {e['state']}).")
                     break
             rob = state["robustness"].get(vol)
-            if rob not in ("healthy", "degraded"):
+            if rob == "unknown" and down_ok and engines and all(e["node"] == node for e in engines):
+                relied_on.append(f"Longhorn reports {vol} as unknown, as it does for a volume whose engine is on a host that is down.")
+            elif rob not in ("healthy", "degraded"):
                 blockers.append(f"{pvc}: Longhorn reports {vol} as {rob}, not healthy or degraded.")
-            copy_on = _chosen_copy(state, vol, node)
             if copy_on is None:
                 others = [n for n, _ in _copies(state, vol, node)]
                 if others:
@@ -318,7 +342,7 @@ def plan(state, now):
     return {"ready": not blockers, "blockers": blockers, "node": node, "down_since": st["since"],
             "down_seconds": down_seconds, "last_heard": st["lease"], "set": dict(state["set"]),
             "pods": [{"name": p["name"], "uid": p["uid"], "terminating": p["terminating"]} for p in pods],
-            "volumes": volumes, "review_token": token}
+            "volumes": volumes, "relied_on": relied_on, "review_token": token}
 
 
 KIND = "set-restart"

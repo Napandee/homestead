@@ -24,8 +24,9 @@ function setRestartBody(plan, node) {
   const facts = UI.facts([
     ["Not ready since", `${esc(setRestartClock(plan.down_since))} (${esc(setRestartAgo(plan.down_seconds))})`],
     ["Last heard from", esc(plan.last_heard ? setRestartClock(plan.last_heard) : "not known")],
-    ["Longhorn", "sees the host as down, with no engine of these volumes running on it"],
+    ["Longhorn", (plan.relied_on || []).length ? "sees the host as down" : "sees the host as down, with no engine of these volumes running on it"],
     ...volumes.map(v => [`Volume ${v.pvc}`, `the current copy is on ${esc(v.copy_on)}`]),
+    ...(plan.relied_on || []).map(r => ["Relied on", esc(r)]),
   ]);
   const podList = UI.table([{ label: "Pod to remove" }, { label: "State" }], pods.map(p => [`<span class="mono">${esc(p.name)}</span>`,
     p.terminating ? "already being deleted; its deletion is made final" : "stuck on the host"]));

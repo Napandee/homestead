@@ -431,9 +431,12 @@ class SetRestartPlanTests(unittest.TestCase):
         self.refused(st, "data-web-0: Longhorn can't say where the engine of pv-a runs (state: running)")
 
     def test_engine_must_be_stopped(self):
-        for state in ("running", "unknown", "error", None, "starting"):
+        for state in ("running", "error", None, "starting"):
             st = good_state(); st["engines"]["pv-a"][0]["state"] = state
             self.refused(st, "stopped")
+        # "unknown" passes only on a host that is down by every measure (SetRestartDownHostTests).
+        st = good_state(); st["engines"]["pv-a"][0]["state"] = "unknown"
+        self.assertTrue(sr.plan(st, NOW)["ready"])
         st = good_state(); st["engines"]["pv-a"].append({"node": "host-2", "state": "running"})
         self.assertTrue(sr.plan(st, NOW)["ready"])
 
@@ -441,9 +444,12 @@ class SetRestartPlanTests(unittest.TestCase):
         for ok in ("healthy", "degraded"):
             st = good_state(); st["robustness"]["pv-a"] = ok
             self.assertTrue(sr.plan(st, NOW)["ready"], ok)
-        for bad in ("unknown", "faulted", None):
+        for bad in ("faulted", None, "other"):
             st = good_state(); st["robustness"]["pv-a"] = bad
             self.refused(st, "pv-a")
+        # "unknown" passes only with the engine on a host that is down by every measure (SetRestartDownHostTests).
+        st = good_state(); st["robustness"]["pv-a"] = "unknown"
+        self.assertTrue(sr.plan(st, NOW)["ready"])
 
     def test_kubelet_still_answering_blocks(self):
         st = good_state(); st["node"]["status"] = "False"
@@ -479,6 +485,110 @@ class SetRestartPlanTests(unittest.TestCase):
         p = sr.plan(st, NOW)
         self.assertTrue(p["ready"])
         self.assertEqual({"ns": "lab", "name": "web", "wait_mode": True}, p["set"])
+
+
+def down_host_state():
+    """What Longhorn and Kubernetes reported for a genuinely down host (#441's
+    real host-loss test): K8s Ready Unknown, Longhorn node Ready False, the
+    volume's robustness and the engine on the down host both "unknown", the
+    down host's replica "unknown" (still healthyAt, no failedAt) and the copy
+    on the other host running with healthyAt."""
+    st = good_state()
+    st["engines"]["pv-a"] = [{"node": "host-1", "state": "unknown"}]
+    st["robustness"]["pv-a"] = "unknown"
+    return st
+
+
+class SetRestartDownHostTests(unittest.TestCase):
+    def blocked(self, st, words, now=NOW):
+        p = sr.plan(st, now)
+        self.assertFalse(p["ready"])
+        self.assertTrue(any(words in b for b in p["blockers"]), p["blockers"])
+        return p
+
+    def test_recorded_down_host_states_are_ready(self):
+        p = sr.plan(down_host_state(), NOW)
+        self.assertTrue(p["ready"], p["blockers"])
+        self.assertEqual([{"pvc": "data-web-0", "volume": "pv-a", "copy_on": "host-2"}], p["volumes"])
+        relied = " ".join(p["relied_on"])
+        self.assertIn("Longhorn reports the engine of pv-a on host-1 as unknown, as it does for a host that is down", relied)
+        self.assertIn("Longhorn reports pv-a as unknown", relied)
+
+    def test_normal_states_rely_on_nothing_extra(self):
+        self.assertEqual([], sr.plan(good_state(), NOW)["relied_on"])
+
+    def test_longhorn_node_true_blocks(self):
+        st = down_host_state(); st["lh_nodes"]["host-1"] = True
+        p = self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+        self.assertEqual([], p["relied_on"])
+
+    def test_longhorn_node_none_blocks(self):
+        st = down_host_state(); del st["lh_nodes"]["host-1"]
+        self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_kubernetes_ready_false_blocks(self):
+        st = down_host_state(); st["node"]["status"] = "False"
+        self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_fresh_lease_blocks(self):
+        st = down_host_state(); st["node"]["lease"] = "2026-10-17T09:55:00Z"
+        self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_missing_lease_blocks(self):
+        st = down_host_state(); st["node"]["lease"] = None
+        self.blocked(st, "state: unknown")
+
+    def test_down_under_ten_minutes_blocks(self):
+        st = down_host_state(); st["node"]["since"] = "2026-10-17T09:50:01Z"
+        self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_no_healthy_copy_elsewhere_blocks(self):
+        st = down_host_state(); st["replicas"]["pv-a"][1].update(failed=True)
+        self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_copy_elsewhere_on_a_host_not_ready_blocks(self):
+        st = down_host_state(); st["nodes_ready"]["host-2"] = False
+        self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_engine_running_on_down_host_still_blocks(self):
+        st = down_host_state(); st["engines"]["pv-a"][0]["state"] = "running"
+        self.blocked(st, "state: running")
+
+    def test_other_engine_states_on_down_host_block(self):
+        for state in ("error", "starting", None, "stopping"):
+            st = down_host_state(); st["engines"]["pv-a"][0]["state"] = state
+            self.blocked(st, f"state: {state}")
+
+    def test_unknown_robustness_with_engine_on_another_host_blocks(self):
+        st = down_host_state(); st["engines"]["pv-a"] = [{"node": "host-2", "state": "unknown"}]
+        self.blocked(st, "pv-a as unknown")
+
+    def test_unknown_robustness_with_no_engine_blocks(self):
+        st = down_host_state(); st["engines"]["pv-a"] = []
+        self.blocked(st, "pv-a as unknown")
+
+    def test_unknown_robustness_with_an_engine_also_elsewhere_blocks(self):
+        st = down_host_state(); st["engines"]["pv-a"].append({"node": "host-2", "state": "running"})
+        self.blocked(st, "pv-a as unknown")
+
+    def test_faulted_robustness_blocks(self):
+        st = down_host_state(); st["robustness"]["pv-a"] = "faulted"
+        self.blocked(st, "pv-a as faulted")
+
+    def test_missing_robustness_blocks(self):
+        st = down_host_state(); st["robustness"] = {}
+        self.blocked(st, "pv-a as None")
+
+    def test_stopped_engine_with_unknown_robustness_on_down_host_is_ready(self):
+        st = down_host_state(); st["engines"]["pv-a"][0]["state"] = "stopped"
+        self.assertTrue(sr.plan(st, NOW)["ready"])
 
 
 def req(method="POST", user="alice", **body):

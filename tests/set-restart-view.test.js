@@ -51,6 +51,24 @@ test("the review shows each check as a fact, every pod and volume, and the typed
   assert.match(t.requests[0][0], /ns=data&name=postgres&node=node2/);
 });
 
+test("the review says plainly what it relied on when Longhorn reported unknown", async () => {
+  const relied = "Longhorn reports the engine of pvc-aaa on node2 as unknown, as it does for a host that is down.";
+  const t = setup({ plan: { ...PLAN, relied_on: [relied, "<b>x</b>"] } });
+  await t.ctx.setRestartReview("data", "postgres", "node2");
+  const html = t.html();
+  assert.match(html, /Relied on/);
+  assert.ok(html.includes(relied), html);
+  assert.match(html, /&lt;b&gt;x&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /no engine of these volumes running/);
+});
+
+test("a review without anything relied on shows no such row", async () => {
+  const t = setup();
+  await t.ctx.setRestartReview("data", "postgres", "node2");
+  assert.doesNotMatch(t.html(), /Relied on/);
+  assert.match(t.html(), /no engine of these volumes running on it/);
+});
+
 test("a set that waits by its own setting says this overrides that once", async () => {
   const t = setup({ plan: { ...PLAN, set: { ...PLAN.set, wait_mode: true } } });
   await t.ctx.setRestartReview("data", "postgres", "node2");
