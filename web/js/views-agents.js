@@ -275,10 +275,8 @@ window.mcpSet = async enabled => {
     : "Every agent's next request is refused until AI agents are allowed again. Their API keys are kept.",
     { title: enabled ? "Allow AI agents" : "Refuse AI agents", ok: enabled ? "Allow AI agents" : "Refuse AI agents", danger: !enabled }))) return;
   try {
-    const current = { ...(await loadHealthSettings()) };
-    delete current.info;
-    await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...current, thresholds: current.thresholds || HEALTH_DEFAULTS.thresholds, mcp: { enabled } }) });
+    // Only this switch changes, on the settings as they are now (#601).
+    await settingsWrite({ mcp: { enabled } });
     STATE.data.appSettings = null;
     await loadHealthSettings(true);
     toast(enabled ? "AI agents may connect" : "AI agents are refused", "ok");
