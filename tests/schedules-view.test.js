@@ -88,3 +88,35 @@ test("editing a job with no zone warns that saving pins it to UTC", () => {
   assert.match(out.modal, /host's clock/);
   assert.match(out.modal, /pins it to UTC/);
 });
+
+test("a CronJob Homestead did not make is read-only and says who manages it", async () => {
+  const { ctx, out } = setup([job({ name: "helm-backup", managed: false, managed_by: "Helm" }),
+    job({ name: "kubectl-job", managed: false, managed_by: "" })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /managed by Helm/);
+  assert.match(out.html, /not made here/);
+  assert.match(out.html, /Run now/);
+  assert.doesNotMatch(out.html, /jobEdit\(\{/);
+  assert.doesNotMatch(out.html, /jobDel\(/);
+});
+
+test("a schedule Homestead made can still be edited and deleted", async () => {
+  const { ctx, out } = setup([job({ managed: true, managed_by: "" })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /jobEdit\(\{/);
+  assert.match(out.html, /jobDel\(/);
+  assert.doesNotMatch(out.html, /managed by|not made here/);
+});
+
+test("saving sends the generation the page read, and an empty one for a new schedule", async () => {
+  const { ctx, out, fields } = setup();
+  ctx.jobEdit(job({ managed: true, generation: 41 }));
+  Object.assign(fields("#j_name"), { value: "nightly-db-dump" });
+  Object.assign(fields("#j_cmd"), { value: "pg_dumpall" });
+  await ctx.jobSave();
+  assert.equal(out.calls[0].body.generation, 41);
+  ctx.jobEdit();
+  Object.assign(fields("#j_name"), { value: "fresh" });
+  await ctx.jobSave();
+  assert.equal(out.calls[1].body.generation, "");
+});
