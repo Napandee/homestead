@@ -335,9 +335,12 @@ def plan(state, now):
                 else:
                     blockers.append(f"{pvc}: its volume {vol} has no healthy copy on another host.")
             volumes.append({"pvc": pvc, "volume": vol, "copy_on": copy_on})
+    relied_on = list(dict.fromkeys(relied_on))
+    # What the person saw is what runs: the facts relied on are part of the review.
     review = {"node": node, "set": [state["set"]["ns"], state["set"]["name"]],
               "pods": sorted(p["uid"] for p in pods),
-              "copies": sorted([v["volume"], v["copy_on"]] for v in volumes)}
+              "copies": sorted([v["volume"], v["copy_on"]] for v in volumes),
+              "relied_on": sorted(relied_on)}
     token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
     return {"ready": not blockers, "blockers": blockers, "node": node, "down_since": st["since"],
             "down_seconds": down_seconds, "last_heard": st["lease"], "set": dict(state["set"]),

@@ -541,6 +541,45 @@ class SetRestartDownHostTests(unittest.TestCase):
     def test_missing_lease_blocks(self):
         st = down_host_state(); st["node"]["lease"] = None
         self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+
+    def test_unknown_down_time_blocks(self):
+        st = down_host_state(); st["node"]["since"] = None
+        p = self.blocked(st, "state: unknown")
+        self.blocked(st, "pv-a as unknown")
+        self.assertEqual([], p["relied_on"])
+
+    def test_token_covers_what_was_relied_on(self):
+        stopped = down_host_state(); stopped["engines"]["pv-a"][0]["state"] = "stopped"
+        a, b = sr.plan(stopped, NOW), sr.plan(down_host_state(), NOW)
+        self.assertTrue(a["ready"] and b["ready"])
+        self.assertNotEqual(a["relied_on"], b["relied_on"])
+        self.assertNotEqual(a["review_token"], b["review_token"])
+        self.assertEqual(b["review_token"], sr.plan(down_host_state(), NOW + 60)["review_token"])
+
+    def test_relied_on_lines_are_not_repeated(self):
+        st = down_host_state(); st["engines"]["pv-a"].append({"node": "host-1", "state": "unknown"})
+        p = sr.plan(st, NOW)
+        self.assertTrue(p["ready"], p["blockers"])
+        self.assertEqual(2, len(p["relied_on"]), p["relied_on"])
+        self.assertEqual(len(p["relied_on"]), len(set(p["relied_on"])))
+
+    def test_relaxation_is_per_volume(self):
+        st = down_host_state()
+        st["pods"][0]["claims"].append("data-web-0b")
+        st["claims"]["data-web-0b"] = {"access": ["ReadWriteOnce"], "volume": "pv-b", "longhorn": True}
+        # pv-b's only other copy is on a host that is not Ready: its "unknown"s are not accepted.
+        st["replicas"]["pv-b"] = [{"node": "host-1", "failed": False, "healthy_at": True},
+                                  {"node": "host-3", "failed": False, "healthy_at": True}]
+        st["nodes_ready"]["host-3"] = False
+        st["engines"]["pv-b"] = [{"node": "host-1", "state": "unknown"}]
+        st["robustness"]["pv-b"] = "unknown"
+        p = self.blocked(st, "engine of pv-b on host-1 has stopped (state: unknown)")
+        self.blocked(st, "pv-b as unknown")
+        self.assertFalse(any("pv-a" in b for b in p["blockers"]), p["blockers"])
+        relied = " ".join(p["relied_on"])
+        self.assertIn("engine of pv-a on host-1 as unknown", relied)
+        self.assertNotIn("pv-b", relied)
 
     def test_down_under_ten_minutes_blocks(self):
         st = down_host_state(); st["node"]["since"] = "2026-10-17T09:50:01Z"
