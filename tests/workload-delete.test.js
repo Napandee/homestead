@@ -1,12 +1,12 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 /* "Delete app" lists the Services it removes and the volumes it keeps. A
    failed read used to show as "none" and still offer the delete, which then
    removed the Services anyway. */
 const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
-const from = source.indexOf("window.wlDelete = async"), to = source.indexOf("\nwindow.wlDeleteNow", from);
-assert.ok(from >= 0 && to > from);
+const wlDelete = between(source, "window.wlDelete = async", "\nwindow.wlDeleteNow");
 
 async function review(answers) {
   const body = { innerHTML: "" };
@@ -16,7 +16,7 @@ async function review(answers) {
     api: async url => { const a = answers[url]; if (a instanceof Error) throw a; return a; } };
   ctx.window = ctx;
   vm.createContext(ctx);
-  vm.runInContext(source.slice(from, to), ctx);
+  vm.runInContext(wlDelete, ctx);
   await ctx.wlDelete("lab", "frigate");
   return body.innerHTML;
 }
