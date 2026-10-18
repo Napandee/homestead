@@ -278,7 +278,9 @@ def check_address(ip, state=None):
     return ip
 
 
-def inventory():
+def inventory(leaving=None):
+    """leaving: (namespace, name) of a Service about to be replaced, whose
+    addresses count as free (set_workload_address)."""
     services = _items("/api/v1/services")
     slices = _items("/apis/discovery.k8s.io/v1/endpointslices")
     deployments = _items("/apis/apps/v1/deployments")
@@ -416,6 +418,8 @@ def inventory():
     platform, foreign = _address_owners(raw_rows, node_ips)
     reserved = set(node_ips) | set(platform)
     for row in raw_rows:
+        if (row["namespace"], row["name"]) == leaving:
+            continue
         reserved.update(row["external_ips"])
         if row["cluster_ip"] and row["cluster_ip"] != "None":
             reserved.add(row["cluster_ip"])
@@ -597,12 +601,12 @@ def _ports(cfg):
 
 
 def service_plan(cfg, require_workload=True):
-    state = inventory()
-    shared = state["shared_vip"]["ip"]
     namespace = _name(cfg.get("namespace") or DEFAULT_NAMESPACE, "namespace")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not create Services in system namespaces")
     service_name = _name(cfg.get("name") or cfg.get("service_name"), "service name")
+    state = inventory(leaving=(namespace, service_name) if cfg.get("replaces") else None)
+    shared = state["shared_vip"]["ip"]
     workload_name = _name(cfg.get("workload") or service_name, "workload name")
     kind = cfg.get("workload_kind") or "Deployment"
     if kind not in ("Deployment", "VirtualMachine"):
@@ -626,6 +630,9 @@ def service_plan(cfg, require_workload=True):
             raise ValueError("This Service is shared across workloads or managed by an add-on; change it in its owning settings")
         if existing["type"] != cfg.get("type", "LoadBalancer"):
             raise ValueError("Keep the existing Service type; create a separate Service to change reachability")
+        state["services"] = [row for row in state["services"] if row is not existing]
+    elif existing and cfg.get("replaces") and existing.get("uid") == cfg["replaces"]:
+        # Checked before set_workload_address deletes it: plan as if it had gone.
         state["services"] = [row for row in state["services"] if row is not existing]
     elif existing:
         raise ValueError(f"Service {namespace}/{service_name} already exists")
@@ -942,7 +949,12 @@ def set_workload_address(namespace, workload, network_mode, vip_mode="shared", v
            **({"vip": vip} if mode == "manual" and want == "LoadBalancer" else {}), "ports": ports}
     if spec.get("type") != want:
         # Reachability changes: the old Service goes and one of the new kind
-        # is made with the same ports, as Deploy would have made it.
+        # is made with the same ports, as Deploy would have made it. The new
+        # one is checked first, so a refusal leaves the old one answering. An
+        # automatic address taken while the old one goes is swapped for the
+        # next free one, as before: Edit showed none to review, and refusing
+        # after the DELETE would leave the app with no Service at all.
+        service_plan({**cfg, "replaces": meta.get("uid")})
         path = f"/api/v1/namespaces/{namespace}/services/{meta['name']}"
         ksend("DELETE", path)
         # A LoadBalancer Service lingers while its address is released.
