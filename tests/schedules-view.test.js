@@ -3,6 +3,7 @@
 process.env.TZ = "Europe/Berlin";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 const core = fs.readFileSync("web/js/core.js", "utf8");
 
@@ -19,7 +20,7 @@ function setup(jobs = []) {
   vm.createContext(ctx);
   require("./helpers/load-ui")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
-  vm.runInContext(core.slice(core.indexOf("const fmtUp"), core.indexOf("const upChip")), ctx);
+  vm.runInContext(between(core, "const fmtUp", "const upChip"), ctx);
   vm.runInContext(fs.readFileSync("web/js/cron.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), ctx);
   return { ctx, out, fields: field };

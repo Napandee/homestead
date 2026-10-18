@@ -4,11 +4,12 @@
 process.env.TZ = "Europe/Berlin";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 const core = fs.readFileSync("web/js/core.js", "utf8");
 const ctx = { Date, Intl, esc: x => String(x ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;") };
 vm.createContext(ctx);
-vm.runInContext(core.slice(core.indexOf("const fmtUp"), core.indexOf("const upChip")), ctx);
+vm.runInContext(between(core, "const fmtUp", "const upChip"), ctx);
 const run = src => vm.runInContext(src, ctx);
 const year = new Date().getFullYear();
 
@@ -65,8 +66,8 @@ test("no view formats a time itself", () => {
 });
 
 test("the uptime card's durations drop a zero second part too", () => {
-  const src = fs.readFileSync("web/js/views-overview.js", "utf8"), from = src.indexOf("function uptimeDuration");
-  const uptimeDuration = Function(`${src.slice(from, src.indexOf("\n}\n", from) + 2)}; return uptimeDuration;`)();
+  const src = fs.readFileSync("web/js/views-overview.js", "utf8");
+  const uptimeDuration = Function(`${between(src, "function uptimeDuration", "\n}\n", { through: true })}; return uptimeDuration;`)();
   assert.equal(uptimeDuration(2 * 86400), "2d");
   assert.equal(uptimeDuration(3 * 3600), "3h");
   assert.equal(uptimeDuration(2 * 86400 + 5 * 3600), "2d 5h");

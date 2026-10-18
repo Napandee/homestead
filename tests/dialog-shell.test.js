@@ -3,6 +3,7 @@
 // are announced - errors assertively, and they stay until dismissed (#486).
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const html = fs.readFileSync("web/index.html", "utf8"), core = fs.readFileSync("web/js/core.js", "utf8");
 
 test("the dialog shell is a labelled modal dialog with a Close button", () => {
@@ -25,7 +26,7 @@ function toasts() {
       setAttribute(k, v) { this.attrs[k] = v; }, appendChild(n) { this.children.push(n); }, addEventListener(t, fn) { this.listeners[t] = fn; },
       remove() { box.children = box.children.filter(n => n !== this); } }), documentElement: { style: { setProperty() {} } } } };
   c.window = c; vm.createContext(c);
-  vm.runInContext(core.slice(core.indexOf("function toast("), core.indexOf("if (window.ResizeObserver && $(\"#jobTray\"))")), c);
+  vm.runInContext(between(core, "function toast(", "if (window.ResizeObserver && $(\"#jobTray\"))"), c);
   const act = (type, target) => (listeners[type] || []).slice().forEach(fn => fn({ type, target }));
   return { c, box, timers, act };
 }

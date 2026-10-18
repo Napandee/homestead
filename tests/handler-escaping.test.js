@@ -7,11 +7,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 const context = { window: {}, console, document: { addEventListener() {} } };
 vm.createContext(context);
 const core = fs.readFileSync("web/js/core.js", "utf8");
-vm.runInContext(core.slice(0, core.indexOf("/* Put text on the clipboard.")) + "; this.esc = esc; this.jsq = jsq; this.jsArg = jsArg;", context);
+vm.runInContext(between(core, null, "/* Put text on the clipboard.") + "; this.esc = esc; this.jsq = jsq; this.jsArg = jsArg;", context);
 
 // What a browser does to a double-quoted attribute value before running it.
 const decode = s => s.replace(/&(amp|lt|gt|quot|#39);/g, (_, e) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" }[e]));

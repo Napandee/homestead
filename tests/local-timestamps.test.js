@@ -3,6 +3,7 @@
 process.env.TZ = "Europe/Berlin";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 const core = fs.readFileSync("web/js/core.js", "utf8");
 
@@ -16,7 +17,7 @@ test("a Helm release's history shows when each revision was deployed in local ti
         updated: "2026-09-22T03:00:04.123456789Z" }] }) };
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
-  vm.runInContext(core.slice(core.indexOf("const fmtUp"), core.indexOf("const upChip")), ctx);
+  vm.runInContext(between(core, "const fmtUp", "const upChip"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-helm.js", "utf8"), ctx);
   await ctx.helmRelease("media", "frigate");
   assert.match(body.innerHTML, /05:00/, "03:00 UTC is 05:00 in Berlin");
