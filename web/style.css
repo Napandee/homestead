@@ -2261,6 +2261,10 @@ div.ipam-line.dim{display:block}
 .ui-actions .btn{min-height:38px}
 .ui-actions .btn.danger:not(:disabled){background:var(--crit);border-color:var(--crit);color:#fff}
 .ui-actions .btn.danger:not(:disabled):hover{background:#ff6668;border-color:#ff6668}
+/* Inside a callout, actions are a row of the callout's own, not a dialog's
+   sticky footer: no bleed past its edges, no bar, no backdrop. */
+.ui-callout .ui-actions{position:static;margin:10px 0 0!important;padding:0;border-top:0;background:none;
+  backdrop-filter:none;-webkit-backdrop-filter:none;z-index:auto}
 
 @media(max-width:640px){
   .modal{padding:0;place-items:end stretch}
