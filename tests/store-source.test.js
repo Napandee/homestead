@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 const { webcrypto } = require("node:crypto");
 
 // The page's elements, by selector; each test starts with fresh ones.
@@ -79,7 +80,7 @@ test("a catalogue search says where its listings come from", async () => {
 
 test("the demo's catalogue answers name the default feed", () => {
   const demo = fs.readFileSync("web/js/demo.js", "utf8");
-  const answer = demo.slice(demo.indexOf('"/api/appstore":'), demo.indexOf('"/api/appstore/app":'));
+  const answer = between(demo, '"/api/appstore":', '"/api/appstore/app":');
   assert.equal(answer.match(/source: demoStoreSource/g)?.length, 2, "both the browse and the search answer carry the source");
   assert.match(demo, /const demoStoreSource = \{ url: "https:\/\/raw\.githubusercontent\.com\/Squidly271\/AppFeed\/master\/applicationFeed\.json", default: true \}/);
 });

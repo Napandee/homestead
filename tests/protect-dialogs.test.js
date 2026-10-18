@@ -3,6 +3,7 @@
 // most one notice, explanations in UI.more, and a title that names its object.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const src = fs.readFileSync("web/js/views-protect.js", "utf8");
 
 const PLAN = { backup: "backup-7f3a91", source_volume: "pvc-demo-frigate", minimum_size_gb: 20,
@@ -38,12 +39,12 @@ test("the destination name is checked at its field, not in a box", async () => {
   const { html } = await restore("frigate-config");
   assert.match(html, /<input id="lr_name"[^>]*>[\s\S]{0,200}id="lr_check"/);
   assert.match(html, /id="lr_check" class="ui-help"/);
-  const check = src.slice(src.indexOf("window.lhRestoreCheck"), src.indexOf("\n};\n", src.indexOf("window.lhRestoreCheck")));
+  const check = between(src, "window.lhRestoreCheck", "\n};\n");
   assert.doesNotMatch(check, /note (bad|good)/);
   assert.match(check, /ui-field-error/);
 });
 
-const body = name => { const from = src.indexOf(`window.${name} =`); assert.ok(from >= 0, name); return src.slice(from, src.indexOf("\n};\n", from)); };
+const body = name => between(src, `window.${name} =`, "\n};\n");
 
 test("Protection plans and Protect open with a lead, not a muted paragraph", () => {
   for (const name of ["lhPlans", "lhAssign"]) {
@@ -84,7 +85,7 @@ test("New storage class says nothing about migration until Live-migratable is ti
   const storage = fs.readFileSync("web/js/views-storage.js", "utf8");
   assert.match(storage, /<div id="sc_hint" hidden><\/div>/);
   assert.match(storage, /Live-migratable · for VM disks \$\{tip\("Migratable is for VM live migration/);
-  const hint = storage.slice(storage.indexOf("window.storageClassHint"), storage.indexOf("\n};\n", storage.indexOf("window.storageClassHint")));
+  const hint = between(storage, "window.storageClassHint", "\n};\n");
   assert.match(hint, /hint\.hidden = !on/);
   assert.match(hint, /UI\.callout\("warn"/);
 });

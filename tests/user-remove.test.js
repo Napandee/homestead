@@ -2,10 +2,11 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
 const vm = require("vm");
+const between = require("./helpers/between");
 
 // Only the removal: the rest of auth.js needs a page.
 const src = fs.readFileSync("web/js/auth.js", "utf8");
-const body = src.slice(src.indexOf("async function userRemove"), src.indexOf("window.userRemove = userRemove"));
+const body = between(src, "async function userRemove", "window.userRemove = userRemove");
 
 function load(answer) {
   const calls = { toasts: [], settings: 0, asked: [] };

@@ -1,13 +1,11 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 /* Stopping a VM, and stopping or restarting a container, asks first with the
    standard dialog; saying no sends nothing. */
 function slice(file, start, end) {
-  const source = fs.readFileSync(file, "utf8");
-  const from = source.indexOf(start), to = source.indexOf(end, from + start.length);
-  assert.ok(from >= 0 && to > from, `${start} in ${file}`);
-  return source.slice(from, to);
+  return between(fs.readFileSync(file, "utf8"), start, end);
 }
 function run(code, answer) {
   const asked = [], sent = [];

@@ -4,6 +4,7 @@
 // Disable button, so nothing that acts at once looks like a field.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 const read = f => fs.readFileSync(f, "utf8");
 
 test("AI agents are allowed or refused with a button, not a switch", () => {
@@ -14,9 +15,8 @@ test("AI agents are allowed or refused with a button, not a switch", () => {
 });
 
 test("allowing or refusing AI agents asks first, since it changes who can reach the cluster", () => {
-  const src = read("web/js/views-agents.js"), from = src.indexOf("window.mcpSet");
-  assert.ok(from >= 0);
-  assert.match(src.slice(from, src.indexOf("\n};\n", from)), /await ask\(/);
+  const src = read("web/js/views-agents.js");
+  assert.match(between(src, "window.mcpSet", "\n};\n"), /await ask\(/);
 });
 
 test("the SMB, NFS and host console add-ons switch with Enable and Disable buttons", () => {

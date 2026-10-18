@@ -6,6 +6,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 const network = fs.readFileSync("web/js/views-network.js", "utf8");
 const ipam = fs.readFileSync("web/js/views-ipam.js", "utf8");
@@ -13,8 +14,8 @@ const sprite = fs.readFileSync("web/index.html", "utf8");
 
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(network.slice(network.indexOf("const NETWORK_SECTIONS = ["), network.indexOf("const networkSectionRow")) + "\nthis.SECTIONS = NETWORK_SECTIONS;", ctx);
-vm.runInContext(ipam.slice(ipam.indexOf("const NETWORK_TABS = ["), ipam.indexOf("\n", ipam.indexOf("const NETWORK_TABS = ["))) + "\nthis.TABS = NETWORK_TABS;", ctx);
+vm.runInContext(between(network, "const NETWORK_SECTIONS = [", "const networkSectionRow") + "\nthis.SECTIONS = NETWORK_SECTIONS;", ctx);
+vm.runInContext(between(ipam, "const NETWORK_TABS = [", "\n") + "\nthis.TABS = NETWORK_TABS;", ctx);
 
 test("each section is a ?tab= the page opens", () => {
   assert.deepEqual([...ctx.SECTIONS.map(row => row[0])].sort(), [...ctx.TABS].sort());
@@ -26,7 +27,7 @@ test("each section has an icon drawn in the sprite, and the groups read in order
 });
 
 test("every attention item says which section holds it", () => {
-  const helpers = network.slice(network.indexOf("function networkAttention(data)"), network.indexOf("function networkAttentionCounts"));
+  const helpers = between(network, "function networkAttention(data)", "function networkAttentionCounts");
   const run = { CSS: { escape: s => String(s) } };
   vm.createContext(run);
   vm.runInContext(helpers + "\nthis.networkAttention = networkAttention;", run);
