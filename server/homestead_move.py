@@ -378,7 +378,7 @@ def legacy_clusters():
     return out
 
 
-def link_legacy(name, own_url=""):
+def link_legacy(name, own_url="", plain_ok=False):
     """Turn a cluster added with a stored account into a linked one.
 
     The stored account links it (unless it is linked already), then its
@@ -393,7 +393,7 @@ def link_legacy(name, own_url=""):
     member = next((m for m in FLEET.others() if m["url"].rstrip("/") == str(row["url"]).rstrip("/")), None)
     missed = []
     if not member:
-        result = FLEET.join(row["url"], row.get("user", ""), _password(name), own_url)
+        result = FLEET.join(row["url"], row.get("user", ""), _password(name), own_url, plain_ok=plain_ok)
         member, missed = result["member"], result.get("missed", [])
     rows = [dict(r, user="", fleet=True, alias=True, id=member["id"]) if r["name"] == name else r
             for r in _stored_clusters()]

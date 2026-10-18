@@ -191,7 +191,10 @@ the link** instead.
   key to every remaining member. Over a plain `http://` address (the other
   cluster's, or this one's own) anyone on that
   network path could read them, so **Link** asks you to tick that they may be
-  sent unencrypted, and clusters at a plain `http://` address are marked
+  sent unencrypted, **Unlink** and **Leave** say which clusters get the new
+  key unencrypted before they send it, and Homestead itself refuses to send
+  any of them over plain `http://` without that agreement. Clusters at a plain
+  `http://` address are marked
   **plain HTTP** (clusters added before linking: **password sent
   unencrypted**, since each new session signs in with it).
 
