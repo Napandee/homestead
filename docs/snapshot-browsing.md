@@ -21,14 +21,43 @@ otherwise the bar is indeterminate. Scheduling, image-pull and clone errors
 are shown. Readiness requires Longhorn to report cloning complete from the
 selected snapshot, a bound independent volume, and a ready helper pod.
 
-Folders open in the existing file browser. Files download individually without
-the live editor's size limit; downloads stream through Homestead in bounded
-chunks. There are no write actions. Symbolic links, device nodes and other
-special files are excluded; a listing shows up to 500 entries. Files reflect
-the snapshot's consistency, which may be crash-consistent for a running app.
-This does not open a guest filesystem inside a VM disk image.
+The snapshot opens in the file manager: on the left the snapshot, read-only
+and titled with when it was taken; on the right the live volume it came from,
+which can be switched to another volume as usual. The snapshot pane has no
+write actions at all. Files download without the live editor's size limit,
+streamed through Homestead in bounded chunks; a folder, or several entries of
+one folder, downloads as a zip. Symbolic links, device nodes and other special
+files are not listed; a listing shows up to 500 entries. Files reflect the
+snapshot's consistency, which may be crash-consistent for a running app. This
+does not open a guest filesystem inside a VM disk image.
 
-Closing the browser (including X or Escape) requests cleanup. Abandoned sessions
+## Restore files into the live volume
+
+Select files or folders in the snapshot pane and choose **Restore to** the
+folder open on the other side. The review lists:
+
+- what the restore **adds**, and each live file it **replaces**, with the
+  live and the snapshot's size and time side by side;
+- what it **skips** and why: a symbolic link that points outside the volume,
+  a special file, a place where the live volume has a different kind of entry
+  or a link on the way to it;
+- a plain warning when an app is using the live volume: it sees the files
+  change while it runs, so stop a database first. A ReadWriteOncePod volume in
+  use is refused, as browsing it is.
+
+A restore adds and replaces; it never deletes. Folders merge, files that are
+not in the snapshot stay, and existing live folders keep their owner and
+permissions. Symbolic links are restored as links only when they point inside
+the volume. Running it plans again first: if anything reviewed changed (a live
+file was written, say), it shows the new review with **Review again** instead
+of running. It runs as a background copy, one restore into a volume at a time.
+Closing the file manager or the snapshot while it runs does not cut it off:
+the snapshot and the volume's helper stay until it ends, then the snapshot
+closes. The browsing session's 30 minutes still bound it, so a review is
+refused when what it copies would not fit in the time left (at a cautious
+10 MiB/s, plus 5 minutes); open the snapshot again to restore then.
+
+Closing the file manager (including X or Escape) ends the session and requests cleanup. Abandoned sessions
 expire 30 minutes after preparation starts, including time spent copying.
 The helper also has a Kubernetes active deadline. Cleanup resumes after a
 Homestead restart and when the API becomes available, removing the helper,

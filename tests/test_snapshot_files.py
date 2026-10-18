@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -15,6 +16,7 @@ import urllib.error
 import urllib.parse
 from types import SimpleNamespace
 from unittest.mock import patch
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_snapshot_files as S
@@ -187,6 +189,33 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(b'contents', S.read('lab', self.name, 'chunk', 'config/file', 2)['data'])
             self.assertEqual(['/data', 'chunk', 'config/file', '2'], execute.call_args.args[2][-4:])
 
+    def test_download_several_paths_is_a_zip(self):
+        self.start(); self.clone()
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode='w') as tar:
+            for name, data in (('a.conf', b'one'), ('b.conf', b'two')):
+                info = tarfile.TarInfo(name); info.size = len(data); info.mode = 0o640
+                tar.addfile(info, io.BytesIO(data))
+        with patch.object(S.FILES, '_open_exec', return_value='sock') as opened, \
+                patch.object(S.FILES, '_stdout', return_value=iter([raw.getvalue()])), \
+                patch.object(S.FILES, '_close_exec') as closed:
+            stream = S.download('lab', self.name, ['config/a.conf', 'config/b.conf'])
+            body = b''.join(stream.chunks)
+        self.assertEqual(('application/zip', 'config.zip'), (stream.ctype, stream.filename))
+        argv = opened.call_args.args[2]
+        self.assertEqual(['python3', '-c', S.READER, '/data', 'tar', 'config'], argv[:6])
+        self.assertEqual(['a.conf', 'b.conf'], json.loads(argv[6]))
+        with zipfile.ZipFile(io.BytesIO(body)) as zipped:
+            self.assertEqual(b'two', zipped.read('b.conf'))
+        closed.assert_called_once_with('sock')
+
+    def test_download_refuses_entries_from_two_folders_before_exec(self):
+        self.start(); self.clone()
+        with patch.object(S.FILES, '_open_exec') as opened:
+            with self.assertRaisesRegex(ValueError, 'one folder'):
+                S.download('lab', self.name, ['a/x', 'b/y'])
+            opened.assert_not_called()
+
     def test_cleanup_orders_resources_and_never_deletes_source_snapshot(self):
         self.start()
         for _ in range(6):
@@ -297,6 +326,44 @@ class LinuxReaderTests(unittest.TestCase):
             self.assertEqual(b'hello', base64.b64decode(json.loads(run('chunk', 'safe').stdout)['data']))
             for path in ('escape', 'outside/secret', '../secret', 'pipe'):
                 self.assertNotEqual(0, run('chunk', path).returncode, path)
+
+    def run_reader(self, root, action, path='', extra='0'):
+        return subprocess.run([sys.executable, '-c', S.READER, str(root), action, path, extra],
+                              capture_output=True, timeout=5)
+
+    def test_list_entries_have_mode_owner_and_modified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'app.conf').write_text('x'); os.chmod(root / 'app.conf', 0o640)
+            os.utime(root / 'app.conf', (1700000000, 1700000000))
+            row = json.loads(self.run_reader(root, 'list').stdout)['entries'][0]
+            self.assertEqual({'name': 'app.conf', 'kind': 'file', 'size': 1, 'mode': '640', 'uid': os.getuid(),
+                              'gid': os.getgid(), 'modified': 1700000000, 'editable': False}, row)
+
+    def test_reader_still_refuses_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'f').write_text('keep')
+            for action in ('write', 'delete', 'rename'):
+                self.assertNotEqual(0, self.run_reader(tmp, action, 'f').returncode, action)
+            self.assertEqual('keep', (Path(tmp) / 'f').read_text())
+
+    def test_tar_action_does_not_follow_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'volume'; (root / 'dir').mkdir(parents=True)
+            (Path(tmp) / 'secret').write_text('private')
+            (root / 'safe').write_bytes(b'hello')
+            (root / 'dir' / 'inner').write_bytes(b'deep')
+            (root / 'dir' / 'escape').symlink_to(Path(tmp) / 'secret')
+            (root / 'outside').symlink_to(Path(tmp), target_is_directory=True)
+            names = json.dumps(['safe', 'dir', 'outside'])
+            run = self.run_reader(root, 'tar', '', names)
+            self.assertEqual(0, run.returncode, run.stderr)
+            with tarfile.open(fileobj=io.BytesIO(run.stdout)) as tar:
+                self.assertEqual(['dir', 'dir/inner', 'safe'], sorted(tar.getnames()))
+                self.assertEqual(b'deep', tar.extractfile('dir/inner').read())
+            for bad in (['../secret'], ['dir/inner'], [''], ['.']):
+                self.assertNotEqual(0, self.run_reader(root, 'tar', '', json.dumps(bad)).returncode, bad)
+            self.assertNotEqual(0, self.run_reader(root, 'tar', 'outside', json.dumps(['secret'])).returncode)
 
 
 if __name__ == '__main__':

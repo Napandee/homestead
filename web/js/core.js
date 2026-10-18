@@ -323,7 +323,7 @@ if (window.ResizeObserver && $("#jobTray")) {
 function modal(t, h, wide, contextClass = "") {
   const opening = !modalIsOpen(), retitled = $("#mtitle").textContent !== t;
   if (opening) MODAL_OPENER = document.activeElement;
-  if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
+  if (contextClass !== "volume-files" && window.fileManagerDismiss) window.fileManagerDismiss();
   window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
   MODAL_EDITS = new Map();
@@ -422,7 +422,7 @@ function childModal(t, h, wide, contextClass = "") {
 }
 
 function modalBack() {
-  if (window.filesDismiss) window.filesDismiss();
+  if (window.fileManagerDismiss) window.fileManagerDismiss();
   if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   const back = MODAL_STACK.pop();
   if (!back) return closeModal();
@@ -547,7 +547,7 @@ async function dismissModal() {
   closeModal();
 }
 function closeModal(updateRoute = true) {
-  if (window.filesDismiss) window.filesDismiss();
+  if (window.fileManagerDismiss) window.fileManagerDismiss();
   if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;

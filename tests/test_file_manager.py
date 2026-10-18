@@ -252,3 +252,14 @@ class Routes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BusyClaimTests(unittest.TestCase):
+    def test_the_helper_of_a_claim_a_restore_writes_into_is_not_stopped(self):
+        import homestead_files as files
+        files.BUSY_CLAIMS.add(("lab", "data"))
+        self.addCleanup(files.BUSY_CLAIMS.clear)
+        with mock.patch.object(files, "ksend") as send, mock.patch.object(files, "_pod_status", return_value={"status": {"phase": "Running"}}):
+            answer = files.close_session("lab", "data")
+        send.assert_not_called()
+        self.assertEqual({"ok": True, "stopped": False, "busy": True}, answer)

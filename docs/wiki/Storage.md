@@ -68,17 +68,25 @@ it. From the row:
   while any claim or retained backing volume references them. VM disk and
   share edits use the same expansion checks; a disk with an expansion
   pending cannot be reduced to its old reported capacity.
-- **Files** - browse and edit the files on it, in the same editor VS Code uses.
-  A helper pod mounts it for up to 30 minutes; a ReadWriteOnce volume in use
-  must be stopped first. Closing the browser with its button, X, Escape, or
-  navigation requests removal of the helper. Closing the tab also sends a
-  cleanup request when the browser permits it. Abandoned helpers stop after
-  30 minutes; Homestead removes expired pod objects when the cluster API is
-  available. Saves keep the old file as `<name>.homestead-bak`.
+- **Files** - a two-pane file manager: browse, upload, download (a folder as
+  a zip), rename, delete, permissions and owners, copy or move to the other
+  pane (another volume too), and edit text files in the same editor VS Code
+  uses. A helper pod mounts the volume on the host it is attached to, so a
+  volume an app is using opens while the app runs, and edits change its live
+  files; only a ReadWriteOncePod volume, which one pod alone may mount, needs
+  its app stopped first. The helper stops a minute after you stop working in
+  the manager (the next action starts it again) and after 4 hours at most.
+  Closing the manager with its button, X, Escape or navigation stops it at
+  once; closing the tab sends a cleanup request when the browser permits it.
+  Homestead removes expired pod objects when the cluster API is available.
+  Saves keep the old file as `<name>.homestead-bak`.
 - **Ownership** - hand the files to the user an app runs as (read from its
   PUID/PGID), for data imported as root by an older release.
 - **Snapshots** - **Take snapshot now** and **Back up now**, and the volume's
-  list of both - see [Data protection](Data-protection).
+  list of both - see [Data protection](Data-protection). A snapshot's
+  **Browse files** opens it in the file manager, read-only, beside the live
+  volume, to download files from it or restore them into the volume after a
+  review of what they replace.
 - **Change storage class** - below.
 - **Delete** - refused while anything uses it. Then you choose: keep the data
   (the volume is released but its disk kept) or delete it for good, after

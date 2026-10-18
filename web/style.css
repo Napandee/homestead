@@ -3808,6 +3808,9 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .fm-pane.active{border-color:color-mix(in srgb,var(--low) 55%,var(--line))}
 .fm-panehead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
 .fm-panehead select{flex:1 1 160px;min-width:0;max-width:100%}
+.fm-snaptitle{flex:1 1 160px;min-width:0;overflow-wrap:anywhere}
+.fm-restore-list{margin:8px 0}.fm-restore-list ul{margin:4px 0 0;padding-left:18px;max-height:180px;overflow:auto}
+.fm-restore-list li{overflow-wrap:anywhere}
 .fm-tools{display:flex;gap:4px;margin-left:auto}
 .fm-tools label.iconbtn{cursor:pointer}
 .fm-state{font-size:12px;color:var(--mut)}
