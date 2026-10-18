@@ -1,0 +1,67 @@
+"use strict";
+// A browser that blocks site storage (Safari or Firefox set to block all
+// cookies and site data, some embedded webviews) throws on every localStorage
+// call; a saved value can also be damaged. Homestead must still load and sign
+// in, with its defaults, and simply not remember settings (#618).
+const test = require("node:test"), assert = require("node:assert/strict");
+const fs = require("node:fs"), vm = require("node:vm");
+
+const blocked = () => {
+  const refuse = () => { throw Object.assign(new Error("The operation is insecure."), { name: "SecurityError" }); };
+  return { getItem: refuse, setItem: refuse, removeItem: refuse };
+};
+const holding = value => ({ getItem: () => value, setItem() {}, removeItem() {} });
+
+/* Anything the page's code reaches for exists and does nothing. */
+function anything() {
+  const fn = function () { return anything(); };
+  return new Proxy(fn, {
+    get: (target, key) => key === Symbol.toPrimitive ? () => "" : key in target ? target[key] : (target[key] = anything()),
+    apply: () => anything(),
+    construct: () => anything(),
+  });
+}
+
+function loadCore(localStorage) {
+  const ctx = { console, localStorage, document: anything(), navigator: anything(), location: anything(),
+    matchMedia: () => ({ matches: false, addEventListener() {} }), fetch: async () => anything(),
+    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    requestAnimationFrame: () => 0, addEventListener() {}, URL, URLSearchParams, Map, Set, Promise };
+  ctx.window = ctx; ctx.self = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/core.js", "utf8"), ctx);
+  return ctx;
+}
+
+for (const [label, storage] of [["blocked storage", blocked], ["damaged saved settings", () => holding("{not json")]]) {
+  test(`core.js loads to the end with ${label}, using the default settings`, () => {
+    const ctx = loadCore(storage());
+    assert.deepEqual({ ...vm.runInContext("SET", ctx) },
+      { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 });
+    // Declared near the end of core.js: the whole file ran.
+    assert.equal(typeof vm.runInContext("PAGE_SNAPSHOT", ctx), "object");
+  });
+}
+
+test("saved settings are still read when storage works", () => {
+  const ctx = loadCore(holding('{"theme":"light","refresh":30}'));
+  assert.equal(vm.runInContext("SET.theme", ctx), "light");
+  assert.equal(vm.runInContext("SET.refresh", ctx), 30);
+});
+
+test("the image update check after sign-in still works with blocked storage", async () => {
+  const toasts = [];
+  const ctx = { localStorage: blocked(), STATE: { data: {} }, toasts,
+    api: async () => ({ updates: 2, errors: 0, workloads: [] }),
+    HomesteadUpdateState: { isStale: () => false }, updateKey: (ns, name) => `${ns}/${name}`,
+    paintUpdateBadge() {}, toast: (text, kind) => toasts.push([text, kind]) };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  vm.runInContext(source.slice(source.indexOf("async function loadImageUpdates("),
+    source.indexOf("window.loadImageUpdates = loadImageUpdates;")), ctx);
+  const report = await ctx.loadImageUpdates();
+  assert.equal(report?.updates, 2);
+  await ctx.loadImageUpdates(); // the next check, a quarter of an hour on, says nothing new
+  assert.deepEqual(toasts, [["2 container image updates available", "ok"]]);
+});

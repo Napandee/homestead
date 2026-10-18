@@ -145,15 +145,22 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
       .map(x => [updateKey(x.ns, x.name), x]));
     paintUpdateBadge(report.updates || 0, report.errors || 0);
     if (window.paintHomesteadNotice) paintHomesteadNotice();
-    const previous = +(localStorage.getItem("homestead.update-count") || 0);
+    // Without storage, compared with what this page last saw: no failed check,
+    // and no repeat of the same toast every quarter of an hour.
+    let previous = existing?.updates || 0, previousErrors = existing?.errors || 0;
+    try {
+      previous = +(localStorage.getItem("homestead.update-count") || 0);
+      previousErrors = +(localStorage.getItem("homestead.update-errors") || 0);
+    } catch (e) { /* this page's counts */ }
     const preferences = STATE.data.appSettings?.updates || {};
     if (!quiet && preferences.notify_available !== false && report.updates > previous)
       toast(`${report.updates} container image update${report.updates === 1 ? "" : "s"} available`, "ok");
-    const previousErrors = +(localStorage.getItem("homestead.update-errors") || 0);
     if (!quiet && preferences.notify_failures !== false && report.errors > previousErrors)
       toast(`${report.errors} image registry check${report.errors === 1 ? " needs" : "s need"} attention`, "bad");
-    localStorage.setItem("homestead.update-count", report.updates || 0);
-    localStorage.setItem("homestead.update-errors", report.errors || 0);
+    try {
+      localStorage.setItem("homestead.update-count", report.updates || 0);
+      localStorage.setItem("homestead.update-errors", report.errors || 0);
+    } catch (e) { /* this visit only */ }
     return report;
   } catch (e) {
     if (!quiet) toast("Image update check failed · " + e.message, "bad");
