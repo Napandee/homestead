@@ -526,7 +526,20 @@ def _login(url, username, password):
     return token
 
 
-def join(url, username, password, own_url=""):
+def _plain(url):
+    return str(url or "").strip().lower().startswith("http://")
+
+
+def _refuse_plain(sent_to, what, plain_ok):
+    """Secrets cross plain http:// only when the person agreed to it (#602)."""
+    plain = [m for m in sent_to if _plain(m.get("url"))]
+    if plain and not plain_ok:
+        names = ", ".join(f"{m.get('name') or m.get('url')} ({m.get('url')})" for m in plain)
+        raise ValueError(f"{what} would go unencrypted to {names}: that is a plain http:// address. "
+                         "Agree to send it unencrypted, or give it an https:// address; nothing was sent")
+
+
+def join(url, username, password, own_url="", plain_ok=False):
     """Link another Homestead to this one and every one already linked here.
 
     The account is used for this one sign-in; it must be an admin there. The
@@ -541,6 +554,8 @@ def join(url, username, password, own_url=""):
     own = _clean_url(own)
     if any(m.get("url") == url for m in state.get("members", [])):
         raise ValueError("that address is already linked")
+    _refuse_plain([{"url": url}, {"name": "this Homestead's address", "url": own}],
+                  "the admin password and the clusters' key", plain_ok)
     token = _login(url, username, password)
     try:
         there, _ = _json(url, "GET", "/api/fleet", token=token)
@@ -588,15 +603,16 @@ def accept(body):
         return mine
 
 
-def remove(ref):
+def remove(ref, plain_ok=False):
     """Unlink a member. The rest get a new key; the one leaving is told first."""
     state, key = _ensure()
     target = member(ref)
     if not target:
         raise ValueError(f"no linked cluster called {ref}")
     if target["id"] == state["self"]:
-        return leave()
+        return leave(plain_ok)
     rows = [m for m in state["members"] if m["id"] != target["id"]]
+    _refuse_plain([m for m in rows if m["id"] != state["self"]], "the clusters' new key", plain_ok)
     state = {"self": state["self"], "revision": int(state.get("revision") or 0) + 1,
              "updated": time.time(), "members": rows}
     try:
@@ -613,12 +629,13 @@ def remove(ref):
     return {"ok": True, "told": told, "missed": missed}
 
 
-def leave():
+def leave(plain_ok=False):
     """Stop being linked: the others keep each other, this one stands alone."""
     state, key = _ensure()
     rows = [m for m in state["members"] if m["id"] != state["self"]]
     if not rows:
         return {"ok": True, "missed": []}
+    _refuse_plain(rows, "the clusters' new key", plain_ok)
     revision = int(state.get("revision") or 0) + 1
     # The rest get a key this one forgets, so it cannot speak for them after.
     missed = _broadcast({"self": state["self"], "revision": revision, "updated": time.time(), "members": rows},

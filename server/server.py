@@ -1729,7 +1729,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True, "id": target["id"], "name": target.get("name")})
             if p == "/api/fleet/join":
                 return self._send(200, FLEET.join(b.get("url"), b.get("username"), b.get("password"),
-                                                  b.get("own_url", "")))
+                                                  b.get("own_url", ""), plain_ok=b.get("plain_ok") is True))
             if p == "/api/fleet/accept":
                 return self._send(200, FLEET.accept(b))
             if p == "/api/fleet/sync":
@@ -1737,13 +1737,13 @@ class H(HTTP.LimitedHandler):
                     return self._send(403, {"error": "only a linked Homestead sends this"})
                 return self._send(200, FLEET.adopt(b, self._fleet_from))
             if p == "/api/fleet/remove":
-                return self._send(200, FLEET.remove(str(b.get("id") or "")))
+                return self._send(200, FLEET.remove(str(b.get("id") or ""), plain_ok=b.get("plain_ok") is True))
             if p == "/api/fleet/leave":
-                return self._send(200, FLEET.leave())
+                return self._send(200, FLEET.leave(plain_ok=b.get("plain_ok") is True))
             if p == "/api/fleet/address":
                 return self._send(200, FLEET.set_address(b.get("url")))
             if p == "/api/fleet/link-legacy":
-                return self._send(200, MOVE.link_legacy(str(b.get("name") or ""), b.get("own_url", "")))
+                return self._send(200, MOVE.link_legacy(str(b.get("name") or ""), b.get("own_url", ""), plain_ok=b.get("plain_ok") is True))
         except ValueError as error:
             return self._send(409, {"error": str(error)})
         except FLEET.Unreachable as error:
