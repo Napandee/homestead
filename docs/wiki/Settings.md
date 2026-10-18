@@ -305,7 +305,9 @@ writes a file only when what it holds has changed.
 **Settings › Hardware and storage › Namespaces** lists the namespaces your apps
 can go in - Harvester's, Rancher's and Kubernetes' own are hidden - with what each
 holds. **Create** makes one, and Deploy offers it at once; **Delete** removes an
-empty one.
+empty one: no apps, stateful sets, daemon sets, scheduled jobs, running pods,
+volumes, VMs or VM disks. If Homestead can't read one of those just then, it
+says so and doesn't offer Delete, rather than taking "couldn't read" for "none".
 
 One is the **default for new apps**: `lab`, unless another was chosen when
 Homestead was installed (`workloadNamespace.name` in the Helm chart, `DEFAULT_NS`
