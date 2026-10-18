@@ -179,3 +179,11 @@ test("the same name signing back in with another role gets a fresh page", async 
   assert.deepEqual(t.ctx.navigations, ["/"]);
   assert.equal(t.ctx.afterAuthCalls, undefined);
 });
+
+test("the sign-in form opens in a browser that blocks site storage (#618)", () => {
+  const t = fixture();
+  const refuse = () => { throw Object.assign(new Error("The operation is insecure."), { name: "SecurityError" }); };
+  t.ctx.localStorage = { getItem: refuse, setItem: refuse, removeItem: refuse };
+  t.ctx.loginForm();
+  assert.ok(t.fields["#lg_go"], "the Sign in button is drawn");
+});

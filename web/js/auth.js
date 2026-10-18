@@ -202,6 +202,8 @@ function stopAuthenticatedWork() {
 }
 
 function loginForm(err, setup) {
+  let remember = true;
+  try { remember = localStorage.getItem("homestead.remember") !== "0"; } catch (e) { /* ticked */ }
   gate(`
     <img class="mark" src="/assets/homestead-mark.svg?v=2.8.331-dev.1" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
@@ -214,7 +216,7 @@ function loginForm(err, setup) {
     ${setup ? `<div class="f"><label for="lg_pass2">Confirm password</label>
       <input type="password" id="lg_pass2" autocomplete="new-password"></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
-      ${localStorage.getItem("homestead.remember") === "0" ? "" : "checked"}>Keep me signed in on this device</label>
+      ${remember ? "checked" : ""}>Keep me signed in on this device</label>
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
     ${setup ? `<div class="gatehint">Minimum 10 characters. Stored as PBKDF2-SHA256 with a
       per-user salt in a Kubernetes Secret — never in plain text.</div>`

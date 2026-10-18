@@ -177,9 +177,9 @@ const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/(
   .replace(/ (.*)$/, (all, rest) => " " + rest.toLowerCase());
 
 /* ---------------- settings ---------------- */
-const SET = Object.assign(
-  { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 },
-  JSON.parse(localStorage.getItem("homestead.settings") || "{}"));
+const SET = { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 };
+// Blocked storage or a damaged value: the defaults, not a page that never loads.
+try { Object.assign(SET, JSON.parse(localStorage.getItem("homestead.settings") || "{}")); } catch (e) { /* defaults */ }
 
 function applySettings() {
   const root = document.documentElement;
@@ -189,7 +189,7 @@ function applySettings() {
   root.dataset.bg = SET.bg;
   root.style.setProperty("--blur", SET.blur + "px");
   root.dataset.motion = SET.motion;
-  localStorage.setItem("homestead.settings", JSON.stringify(SET));
+  try { localStorage.setItem("homestead.settings", JSON.stringify(SET)); } catch (e) { /* this visit only */ }
 }
 applySettings();
 
