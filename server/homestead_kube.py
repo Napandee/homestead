@@ -4,11 +4,12 @@ homestead_kube_helpers; #619 grew it into this client).
 
 Reads: get, get_optional (None when the object is not there), items (a whole
 list or an error). Writes: send and delete_if_present, which go round
-WRITE_GUARDS in order before the transport _ksend. kget and ksend stay as the
-old names; the new functions call them, so a test that patches kget or ksend
-here reaches the new functions too. Also here: who may write to a workload,
-raw and table reads, path checks, log search reads, and CPU, memory and age
-parsing.
+WRITE_GUARDS in order before _ksend. Both reach the cluster through
+transport, the one place tests put a fake API (tests/fakes/kube.py). kget
+and ksend stay as the old names; the new functions call them, so a test that
+patches kget or ksend here reaches the new functions too. Also here: who may
+write to a workload, raw and table reads, path checks, log search reads, and
+CPU, memory and age parsing.
 
 server.py binds what it still owns through bind_routes(), the same entry
 point every moved module has whether or not it declares ROUTES: each helper
@@ -213,10 +214,8 @@ def ktable(path, timeout=20):
 
 def kget(path, timeout=10):
     for attempt in range(len(KGET_RETRY) + 1):
-        req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
         try:
-            with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-                return json.loads(r.read().decode())
+            return transport("GET", api_path(path), timeout=timeout)
         except urllib.error.HTTPError as error:
             # A read is safe to ask again; a write's 429 (an eviction a
             # disruption budget refuses) is an answer, and ksend keeps it.
@@ -306,9 +305,19 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shu
         shutdown = cluster_shutdown().state()
         if shutdown and shutdown["phase"] not in ("released", "failed"):
             raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
+    return transport(method, path, body, ctype, timeout)
+
+
+def transport(method, path, body=None, ctype=None, timeout=15):
+    """One request to the API server: its JSON answer, or urllib's HTTPError.
+    kget and _ksend reach the cluster only through here, after their own
+    checks, so it is the one place tests put a fake API (tests/fakes/kube.py)."""
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    if ctype:
+        headers["Content-Type"] = ctype
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(API + path, data=data, method=method,
-                                 headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
+    req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
         raw = r.read().decode()
-        return json.loads(raw) if raw.strip() else {}
+    # A write may answer with no body; a read always has one.
+    return json.loads(raw) if raw.strip() or method == "GET" else {}
