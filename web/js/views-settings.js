@@ -750,19 +750,24 @@ function permissionsCell(state) {
 
 /* Every settings save goes through here: the settings as they are now, read
    fresh (never a copy kept since the page opened, nor the defaults that stand
-   in for a failed read), with only the sections this save changes. The server
-   keeps the document whole, so a section left out of a save would be reset.
+   in for a failed read), with only the sections this save changes. It names
+   the revision it read, so the server refuses it (409, nothing saved) if
+   anything else saved in between, rather than undo that; such a refusal is
+   tried once more on a fresh read, as it is mostly the server's own short
+   cache that was behind.
    change is an object, or a function of the current settings returning one;
    a failed read saves nothing (#601). */
-window.settingsWrite = async change => {
+window.settingsWrite = async (change, retry = true) => {
   let current;
   try { current = await api("/api/settings", { keep: true }); }
   catch (e) { throw new Error(`The settings could not be read, so nothing was saved: ${e.message}`); }
   if (!current || typeof current !== "object") throw new Error("The settings could not be read, so nothing was saved");
   const fresh = { ...current };
   delete fresh.info;
-  const body = { ...fresh, ...(typeof change === "function" ? change(fresh) : change) };
-  const saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const body = { ...fresh, ...(typeof change === "function" ? change(fresh) : change), revision: current.revision };
+  let saved;
+  try { saved = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  catch (e) { if (e.status === 409 && retry) return settingsWrite(change, false); throw e; }
   STATE.data.appSettings = { ...saved, info: current.info };
   return saved;
 };
@@ -790,7 +795,8 @@ window.saveCatalog = async reset => {
     await loadHealthSettings(true);
     toast(url ? "App Store now reads that catalogue" : "App Store reads the Community Applications feed again", "ok");
     viewSettings();
-  } catch (e) { toast(e.message, "bad"); }
+    return true;
+  } catch (e) { toast(e.message, "bad"); return false; }
 };
 
 /* ---------------- the save bar ----------------
@@ -1010,7 +1016,8 @@ window.catalogEdit = () => modal("App Store catalogue", UI.lead("Any feed in the
     `<input id="set_catalog" type="url" maxlength="500" placeholder="blank: the public Community Applications feed" value="${esc(STATE.data.appSettings?.catalog_url || "")}">`,
     { tipHtml: " " + tip("A JSON feed shaped like applicationFeed.json - an object with an applist, or a plain list of templates. Blank uses the public feed.") }) +
   UI.actions(UI.cancel() + UI.button("Save", "catalogSave(false)", { kind: "pri" }), UI.button("Use Community Applications", "catalogSave(true)")));
-window.catalogSave = async reset => { await saveCatalog(reset); closeModal(); };
+// A failed save keeps the dialog open, with what was typed in it.
+window.catalogSave = async reset => { if (await saveCatalog(reset)) closeModal(); };
 
 window.updatePolicyFields = () => {
   const fields = $("#maintenanceFields");

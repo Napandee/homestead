@@ -302,7 +302,7 @@ def _settings_map():
 
 
 def app_settings_payload():
-    settings = json.loads(json.dumps(CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings)))
+    settings = json.loads(json.dumps(CACHE.cached(SETTINGS_HELPERS.REVISION_KEY, 15, SETTINGS_HELPERS.app_settings_with_revision)))
     try:
         kube = KUBE_HELPERS.kget("/version").get("gitVersion", "")
     except Exception:

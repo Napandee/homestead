@@ -9,6 +9,7 @@ import urllib.parse
 
 import homestead_placement_mode as PLACEMODE
 import homestead_recovery as RECOVERY
+import homestead_routes as MODULE_ROUTES
 
 # server.py's reader and writer, bound at start (bind below).
 _bound = {"payload": None, "save": None}
@@ -17,6 +18,17 @@ _bound = {"payload": None, "save": None}
 def bind(payload, save):
     """The settings as the Settings page shows them, and how they are saved."""
     _bound.update(payload=payload, save=save)
+
+
+class Stale(Exception):
+    """A save based on settings that have changed since it read them (#601)."""
+
+
+def _save(request):
+    try:
+        return {"ok": True, **_bound["save"](request.body)}
+    except Stale as error:
+        return MODULE_ROUTES.Reply(409, {"error": str(error), "settings": _bound["payload"]()})
 
 
 DEFAULTS = {
@@ -153,5 +165,5 @@ def validate(value):
 
 ROUTES = {
     ("GET", "/api/settings"): ("viewer", lambda request: _bound["payload"]()),
-    ("POST", "/api/settings"): ("admin", lambda request: {"ok": True, **_bound["save"](request.body)}),
+    ("POST", "/api/settings"): ("admin", _save),
 }
