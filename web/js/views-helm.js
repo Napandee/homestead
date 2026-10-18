@@ -24,7 +24,7 @@ const HELM_VIEW = { show: "mine", status: "", q: "" };
 const HELM_STATUS = [["", "Any status"], ["deployed", "Deployed"], ["pending", "Pending"], ["failed", "Failed"]];
 const helmStatusOf = r => r.status === "deployed" ? "deployed" : /pending/.test(r.status || "") ? "pending" : r.status === "superseded" ? "deployed" : "failed";
 window.helmShow = (key, value) => { HELM_VIEW[key] = value; renderHelm(); };
-window.helmSearch = input => {
+window.helmFilter = input => {
   HELM_VIEW.q = input.value;
   const at = input.selectionStart;
   renderHelm();
@@ -46,7 +46,7 @@ function renderHelm() {
   const controls = `<div class="helm-controls">
       <div class="seg wgroup-chips" role="group" aria-label="Whose releases">${chip("show", "mine", "Yours", all.filter(r => !r.system).length)}${chip("show", "platform", "Platform", all.filter(r => r.system).length)}${chip("show", "all", "All", all.length)}</div>
       ${statuses.length > 2 ? `<div class="seg wgroup-chips" role="group" aria-label="Status">${statuses.map(([v, label]) => chip("status", v, label, inShow.filter(r => !v || helmStatusOf(r) === v).length)).join("")}</div>` : ""}
-      <input id="helm_q" type="search" placeholder="Find a release or chart" aria-label="Find a release or chart" value="${esc(HELM_VIEW.q)}" oninput="helmSearch(this)"></div>`;
+      <input id="helm_q" type="search" placeholder="Find a release or chart" aria-label="Find a release or chart" value="${esc(HELM_VIEW.q)}" oninput="helmFilter(this)"></div>`;
   paint(`${UI.pageHeader(`Helm`, `${rows.length} release${rows.length === 1 ? "" : "s"} · charts from here install through ${esc(typeof platformName === "function" && STATE.platform?.distribution !== "harvester" ? platformName(STATE.platform) : "RKE2")}'s Helm controller`, `
       <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button>`)}
     ${controls}
