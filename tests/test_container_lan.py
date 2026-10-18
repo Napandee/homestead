@@ -43,7 +43,7 @@ class ContainerLanTests(unittest.TestCase):
 
     def test_changing_the_address_updates_its_network(self):
         c = Cluster()
-        c.objects[OWN] = {"metadata": {"name": "zigbee2mqtt-lan", "resourceVersion": "7"}}
+        c.objects[OWN] = {"metadata": {"name": "zigbee2mqtt-lan", "resourceVersion": "7", "labels": {"app": "zigbee2mqtt"}}}
         LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(dict(WANTED, address="192.0.2.71")))
         method, path, body = c.sent[0]
         self.assertEqual(("PUT", OWN, "7"), (method, path, body["metadata"]["resourceVersion"]))

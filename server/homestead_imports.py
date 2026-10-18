@@ -590,13 +590,21 @@ def chown_claim(namespace, pvc, uid, gid):
     owner_uid, owner_gid = _ownership({"uid": uid, "gid": gid})
     if owner_uid is None:
         raise ValueError("a user id is required")
-    job = f"homestead-chown-{pvc}"[:60].rstrip("-")
+    job = NAMES.fitted(f"homestead-chown-{pvc}")
     try:
+        existing = kget(f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        existing = None
+    if existing:
+        # Only this volume's last chown is replaced, never another volume's.
+        if NAMES.label_of(existing.get("metadata") or {}, "app") != pvc:
+            raise ValueError(f"the chown Job {job} belongs to another volume; try again once it is gone "
+                             "(a finished one is removed within 10 minutes)")
         ksend("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}"
                         "?propagationPolicy=Background")
         time.sleep(1)
-    except urllib.error.HTTPError:
-        pass
     script = (f"echo '==> step 1/1 ownership :: chown -R {owner_uid}:{owner_gid} /data'\n"
               f"chown -R {owner_uid}:{owner_gid} /data\n"
               "echo '==> done'; ls -ld /data\n")
