@@ -288,7 +288,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.assertEqual(before, self.current)
 
     def test_final_put_preserves_reviewed_resource_version_without_second_read(self):
-        with mock.patch.object(server, "persist_icon_config"), mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
+        with mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config"), mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(server.OPS, "start", return_value={}), \
                 mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=AssertionError("unreviewed second read")):
             server.DEPLOY.run_deploy(copy.deepcopy(self.cfg), reviewed_current=copy.deepcopy(self.current))

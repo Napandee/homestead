@@ -54,7 +54,7 @@ class ImportCapacityTests(unittest.TestCase):
             return result
         with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=send) as writes, \
              mock.patch.object(server, "create_pvc", wraps=server.create_pvc) as pvc, \
-             mock.patch.object(server, "persist_icon_config") as icons, \
+             mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config") as icons, \
              mock.patch.object(server.OPS, "start", wraps=server.OPS.start) as jobs:
             handler.do_POST()
         return handler._send.call_args.args, writes, pvc, icons, jobs
@@ -242,7 +242,7 @@ class ImportCapacityTests(unittest.TestCase):
         body = self.reviewed()
         def fill_node(cfg):
             self.nodes[0]["allocatable"]["memory"] = "5Gi"
-        with mock.patch.object(server, "persist_icon_config", side_effect=fill_node), \
+        with mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config", side_effect=fill_node), \
              mock.patch.object(imports, "ksend") as writes, \
              mock.patch.object(imports, "create_pvc") as pvc:
             with self.assertRaises(server.CAPACITY_REVIEW.Rejected):
@@ -254,7 +254,7 @@ class ImportCapacityTests(unittest.TestCase):
         body = self.reviewed()
         def icon(cfg):
             cfg["icon"] = "/api/icons/persisted.svg"
-        with mock.patch.object(server, "persist_icon_config", side_effect=icon), \
+        with mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config", side_effect=icon), \
              mock.patch.object(server.IMPORT_JOB, "dispatch", return_value={"ok": True}) as dispatch:
             server.DEPLOY_ROUTES.reviewed_import(body)
         submitted, prepared, context = dispatch.call_args.args[:3]

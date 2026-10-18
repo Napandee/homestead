@@ -179,6 +179,7 @@ from homestead_deploy_server import (
     operation_item, prepare_deploy_network, preview_import, rebalance_move,
     redact_deployment_preview, reviewed_deploy, reviewed_import, rollout_review_context,
 )
+MOVED.update(dict.fromkeys(("persist_icon_config",), DEPLOY_ROUTES))
 DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 import homestead_self_data_server as SELF_DATA_ROUTES
 from homestead_self_data_server import (
@@ -1240,20 +1241,6 @@ def needed_role(path, method):
     if declared is None:
         raise PermissionError("this route has no declared authorization policy")
     return declared
-
-
-def persist_icon_config(cfg):
-    """Replace a remote logo with a persistent same-origin cache reference."""
-    if "icon" not in cfg:
-        return cfg
-    source = str(cfg.get("icon") or "").strip()
-    if not source:
-        cfg["icon"] = ""
-        cfg["icon_source"] = ""
-        return cfg
-    cfg["icon"] = ICONS.persist(source, DATA_DIR)
-    cfg["icon_source"] = source
-    return cfg
 
 
 # ---------------------------------------------------------------- linked clusters
