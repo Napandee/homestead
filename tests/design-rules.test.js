@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
+const between = require("./helpers/between");
 
 const WEB = path.join(__dirname, "..", "web", "js");
 // demo.js is made-up data, not markup; ui.js defines the components.
@@ -35,10 +36,7 @@ test("a row's buttons are an actionBar, never loose buttons in a cell", () => {
 // line to the first line that closes it at the start of a line.
 function handBuiltButtons(file, start) {
   const text = FILES.find(f => f.name === file).text;
-  const from = text.search(start);
-  assert.ok(from >= 0, `${file} has ${start}`);
-  const end = text.slice(from).search(/\n\};?\n/);
-  const body = text.slice(from, from + end);
+  const body = between(text, start, /\n\};?\n/);
   const label = html => html.replace(/\$\{icon\([^)]*\)\}/g, "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
   return [...body.matchAll(/<button\b(?=[^>]*\bclass="(?:btn|iconbtn)\b)(?![^>]*\bdata-form-row\b)[^>]*>([\s\S]*?)<\/button>|UI\.button\(\s*(["'`])((?:(?!\2).)*)\2|<details class="actionmenu"/g)]
     .map(m => m[0].startsWith("<details") ? "⋯" : m[3] !== undefined ? m[3] : label(m[1]) || "(icon)");
@@ -61,9 +59,9 @@ test("lists' rows put their buttons in an actionBar, not loose in the row (#506)
 
 test("Helm releases have row actions and say their state in words (#506)", () => {
   const helm = FILES.find(f => f.name === "web/js/views-helm.js").text;
-  const render = helm.slice(helm.search(/function renderHelm\(/));
-  assert.match(render.slice(0, render.search(/\n\}\n/)), /<td data-actions>\$\{(?:actionBar|helmActions)\(/, "each release row ends in an actionBar");
-  if (!/actionBar\(/.test(render.slice(0, render.search(/\n\}\n/)))) assert.match(helm, /function helmActions\([^)]*\) \{[\s\S]*?return actionBar\(/, "helmActions returns an actionBar");
+  const render = between(helm, /function renderHelm\(/, /\n\}\n/);
+  assert.match(render, /<td data-actions>\$\{(?:actionBar|helmActions)\(/, "each release row ends in an actionBar");
+  if (!/actionBar\(/.test(render)) assert.match(helm, /function helmActions\([^)]*\) \{[\s\S]*?return actionBar\(/, "helmActions returns an actionBar");
   const source = helm.match(/const HELM_WORDS = [\s\S]*?\n\};?\n|function helmStatus\([\s\S]*?\n\}\n/g).join("\n");
   const helmStatus = new Function("esc", `${source}; return helmStatus;`)(s => String(s));
   for (const [status, words] of [["deployed", "Deployed"], ["pending-install", "Installing…"], ["pending-upgrade", "Upgrading…"], ["failed", "Failed"]]) {
@@ -159,7 +157,6 @@ test("start and update reviews use the shared review builders", () => {
   // design.md, Reviews: one host table and one start review, not a capacity
   // block written again for each dialog.
   const source = name => FILES.find(file => file.name === `web/js/${name}`).text;
-  const between = (text, from, to) => text.slice(text.indexOf(from), text.indexOf(to, text.indexOf(from)));
   assert.match(between(source("views-workloads.js"), "window.wlScale", "window.wlScaleGo"), /startReview\(/, "Start on a container uses startReview");
   assert.match(between(source("views-vms.js"), "window.vmPowerReview", "window.vmPowerReviewReady"), /startReview\(/, "Start on a VM uses startReview");
   assert.match(between(source("views-workloads.js"), "async function reviewImageActions", "window.imageReviewReady"), /capacityHostTable\(/, "the image update review uses capacityHostTable");
@@ -178,7 +175,7 @@ test("every Settings section has an icon from the menu's sprite", () => {
   // design.md, Settings: each section is listed with its icon, drawn like the main menu's.
   const settings = FILES.find(file => file.name === "web/js/views-settings.js").text;
   const html = fs.readFileSync(path.join(__dirname, "..", "web", "index.html"), "utf8");
-  const block = settings.slice(settings.indexOf("const SETTINGS_SECTIONS = ["), settings.indexOf("];", settings.indexOf("const SETTINGS_SECTIONS = [")));
+  const block = between(settings, "const SETTINGS_SECTIONS = [", "];");
   const rows = [...block.matchAll(/^\s*\["([^"]+)",.*,\s*"([^"]+)"\],?\s*$/gm)];
   assert.ok(rows.length >= 9, "the Settings sections are found");
   for (const [, key, icon] of rows) assert.match(html, new RegExp(`<symbol id="i-${icon}"`), `${key}: icon i-${icon} is in the sprite`);

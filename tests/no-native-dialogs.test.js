@@ -1,5 +1,6 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 /* A browser can silence confirm(), prompt() and alert() for a page, and an
    installed app window may not show them: the button then does nothing at
@@ -30,8 +31,7 @@ test("ask resolves to the answer, and askText to the text or null", async () => 
   const ctx = { document, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
-  const start = source.indexOf("function askDialog("), end = source.indexOf("/* The X and Escape");
-  vm.runInContext(source.slice(start, end), ctx);
+  vm.runInContext(between(source, "function askDialog(", "/* The X and Escape"), ctx);
   const click = answer => body.children[0].handlers.click({ target: { closest: () => ({ dataset: { a: answer } }) } });
 
   let pending = ctx.window.ask("Delete it?", { title: "Delete", ok: "Delete", danger: true });
@@ -60,7 +60,7 @@ test("ask shows the title and the button label it is given", () => {
   const ctx = { document: { createElement: make, body, addEventListener() {}, removeEventListener() {} }, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
-  vm.runInContext(source.slice(source.indexOf("function askDialog("), source.indexOf("/* The X and Escape")), ctx);
+  vm.runInContext(between(source, "function askDialog(", "/* The X and Escape"), ctx);
   ctx.window.ask("Delete backup \"nightly\"?", { title: "Delete backup", ok: "Delete backup", danger: true });
   const html = body.children[0].html;
   assert.match(html, /<h3>Delete backup<\/h3>/);
@@ -133,7 +133,7 @@ test("a red button is the caller's choice, not a guess from the first word", () 
   const ctx = { document: { createElement: make, body, addEventListener() {}, removeEventListener() {} }, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
-  vm.runInContext(source.slice(source.indexOf("function askDialog("), source.indexOf("/* The X and Escape")), ctx);
+  vm.runInContext(between(source, "function askDialog(", "/* The X and Escape"), ctx);
   ctx.window.ask("Delete the draft?", { title: "Delete draft", ok: "Delete draft" });
   assert.match(body.children[0].html, /class="btn pri" data-a="yes">Delete draft</);
 });

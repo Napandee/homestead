@@ -7,13 +7,13 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 const ui = fs.readFileSync("web/js/ui.js", "utf8");
-const start = ui.indexOf("const MEMORY_UNITS");
 const ctx = { text: s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])),
   document: { addEventListener() {} }, CSS: { escape: s => s } };
 vm.createContext(ctx);
-vm.runInContext(ui.slice(start, ui.indexOf("const quantityUpdate")) + "\nthis.parseMemory = parseMemory; this.parseCpu = parseCpu; this.quantity = quantity;", ctx);
+vm.runInContext(between(ui, "const MEMORY_UNITS", "const quantityUpdate") + "\nthis.parseMemory = parseMemory; this.parseCpu = parseCpu; this.quantity = quantity;", ctx);
 const plain = value => JSON.parse(JSON.stringify(value));
 
 test("memory: a number with MiB or GiB, and friendly spellings", () => {

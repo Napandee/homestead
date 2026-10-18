@@ -6,10 +6,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 
 const ui = fs.readFileSync("web/js/ui.js", "utf8");
 const css = fs.readFileSync("web/style.css", "utf8");
-const block = ui.slice(ui.indexOf("/* Back to top (#292)"));
+const block = between(ui, "/* Back to top (#292)", null);
 
 test("it follows whichever part scrolls: the window, or .main in the installed app", () => {
   assert.match(block, /dataset\.display === "standalone"\s*\? document\.querySelector\("\.main"\) : document\.scrollingElement/);

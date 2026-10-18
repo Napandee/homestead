@@ -7,10 +7,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 
 const source = fs.readFileSync("web/js/views-settings.js", "utf8");
 const css = fs.readFileSync("web/style.css", "utf8");
-const block = source.slice(source.indexOf("const SETTINGS_SECTIONS = ["), source.indexOf("];", source.indexOf("const SETTINGS_SECTIONS = [")) + 2);
+const block = between(source, "const SETTINGS_SECTIONS = [", "];", { through: true });
 const SECTIONS = new Function(`${block}; return SETTINGS_SECTIONS;`)();
 
 test("every section's topics are shown by the stylesheet", () => {

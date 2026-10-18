@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 test("finished imports offer dismissal while active and recovery records keep their history", () => {
   const host = {}, actions = [], opened = [], dismissed = [];
@@ -97,7 +98,7 @@ test("an Unraid server's VMs keep their name as their id and say Unraid", async 
 
 test("every import server on the VM page can be removed", () => {
   const src = fs.readFileSync("web/js/views-vms.js", "utf8");
-  const page = src.slice(src.indexOf("async function viewVmImport"), src.indexOf("window.viewVmImport"));
+  const page = between(src, "async function viewVmImport", "window.viewVmImport");
   assert.match(page, /label: "Remove server", icon: "trash", run: `srcDel\(\$\{jsq\(s\.name\)\}\)`, need: "admin", danger: true/);
   assert.doesNotMatch(page, /kind !== "proxmox"/, "Proxmox hosts are listed too");
 });
@@ -120,7 +121,7 @@ test("a Proxmox host added as Unraid says so, with Remove and Add as Proxmox", a
 
 test("the Add server dialog asks the type first and starts on Proxmox from the VM import page", () => {
   const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
-  const dialog = src.slice(src.indexOf("window.srcAdd = "), src.indexOf("window.doSrcAdd"));
+  const dialog = between(src, "window.srcAdd = ", "window.doSrcAdd");
   assert.match(dialog, /modal\("Add a server"/);
   assert.ok(dialog.indexOf('UI.field("Type"') < dialog.indexOf('UI.field("Name"'), "the type comes first");
   assert.match(dialog, /STATE\.view === "vmimport" \? "proxmox"/);
@@ -129,7 +130,7 @@ test("the Add server dialog asks the type first and starts on Proxmox from the V
 
 test("a refused Add server can be corrected and saved again; the name is sent lower case", async () => {
   const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
-  const code = src.slice(src.indexOf("window.doSrcAdd = "), src.indexOf("let SOURCE_KEY_REVIEW"));
+  const code = between(src, "window.doSrcAdd = ", "let SOURCE_KEY_REVIEW");
   const fields = { "#sc_save": { disabled: false }, "#sc_name": { value: " Proxmox " }, "#sc_host": { value: "192.0.2.10" },
     "#sc_user": { value: "root" }, "#sc_pass": { value: "pw" }, "#sc_kind": { value: "proxmox" }, "#sc_path": { value: "" }, "#sc_port": { value: "22" } };
   const sent = [], toasts = [];

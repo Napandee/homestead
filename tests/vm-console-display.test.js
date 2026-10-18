@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 
 const source = fs.readFileSync("web/js/vm-console.js", "utf8");
 
@@ -10,8 +11,7 @@ test("closing a console asks nothing: keys typed into the VM are not edits", () 
 });
 
 test("the screen says why it is black when the picture is on a passed-through GPU", () => {
-  const start = source.indexOf("function vmConsoleDisplayNote"), end = source.indexOf("window.vmConsoleDisplayNote");
-  const note = new Function("STATE", "UI", source.slice(start, end) + "return vmConsoleDisplayNote;")(
+  const note = new Function("STATE", "UI", between(source, "function vmConsoleDisplayNote", "window.vmConsoleDisplayNote") + "return vmConsoleDisplayNote;")(
     { data: { vms: [{ ns: "vms", name: "gpu", display: "gpu" }, { ns: "vms", name: "plain", display: "virtual" }, { ns: "vms", name: "headless", display: "none" }] } },
     { callout: (tone, title) => `${tone}:${title}` });
   assert.equal(note("vms", "gpu"), "warn:No virtual display: the picture is on the passed-through GPU");

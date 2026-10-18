@@ -2,12 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
 const vm = require("vm");
+const between = require("./helpers/between");
 
 const src = fs.readFileSync("web/js/views-settings.js", "utf8");
-const start = src.indexOf("const DAYS = ["), end = src.indexOf("window.updateWindowEdit");
 const ctx = { Date, String, Math, Number, Set };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + ";this.updateWindowText = updateWindowText; this.updateWindowDays = updateWindowDays;", ctx);
+vm.runInContext(between(src, "const DAYS = [", "window.updateWindowEdit") + ";this.updateWindowText = updateWindowText; this.updateWindowDays = updateWindowDays;", ctx);
 
 test("the days read at a glance", () => {
   assert.equal(ctx.updateWindowDays([0, 1, 2, 3, 4, 5, 6]), "Every day");
@@ -36,12 +36,10 @@ function windowPage(stored) {
     "#set_update_window": { textContent: "Every day · 02:00–04:00 UTC" },
   };
   const page = { posted: [], rendered: 0, fields };
-  const appSave = src.slice(src.indexOf("async function settingsAppSave"), src.indexOf("window.settingsSave"));
-  // Every save goes through settingsWrite (#601); a missing marker fails here, not silently.
-  const writeAt = src.indexOf("window.settingsWrite"), writeEnd = src.indexOf("window.permissionsRecheck");
-  assert.ok(writeAt >= 0 && writeEnd > writeAt, "settingsWrite is found in views-settings.js");
-  const write = src.slice(writeAt, writeEnd);
-  const dialog = src.slice(start, src.indexOf("window.catalogEdit"));
+  const appSave = between(src, "async function settingsAppSave", "window.settingsSave");
+  // Every save goes through settingsWrite (#601).
+  const write = between(src, "window.settingsWrite", "window.permissionsRecheck");
+  const dialog = between(src, "const DAYS = [", "window.catalogEdit");
   const win = {
     Date, String, Math, Number, Set, JSON, Error, Object, Array,
     STATE: { data: { appSettings: stored }, settingsDirty: new Set(["app:set_update_policy"]) },

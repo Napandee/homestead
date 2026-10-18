@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 function fixture({ base = "/", search = "" } = {}) {
   const fields = {}, timers = new Map();
@@ -81,7 +82,7 @@ test("session loss during initialization cannot restart background polls", async
   t.ctx.startLoop = () => loops++;
   // Restore the real initialization function (the fixture normally stubs it).
   const auth = fs.readFileSync("web/js/auth.js", "utf8");
-  t.run(auth.slice(auth.indexOf("async function afterAuth()"), auth.indexOf("/* ---------------- API keys")));
+  t.run(between(auth, "async function afterAuth()", "/* ---------------- API keys"));
   const initializing = t.ctx.afterAuth();
   const failed = t.ctx.api("/api/overview").catch(() => {}); t.fail(); await failed;
   finish(); await initializing;
@@ -104,7 +105,7 @@ test("a visibility or manual refresh does not load the page behind sign-in", asy
     $: () => ({ classList: { contains: () => false } }), toast() {} };
   vm.createContext(ctx);
   const app = fs.readFileSync("web/js/app.js", "utf8");
-  vm.runInContext(app.slice(app.indexOf("async function refresh(force)"), app.indexOf("window.refresh = refresh;")), ctx);
+  vm.runInContext(between(app, "async function refresh(force)", "window.refresh = refresh;"), ctx);
   assert.equal(await ctx.refresh(true), false);
   assert.equal(calls, 0);
 });

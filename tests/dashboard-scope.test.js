@@ -4,11 +4,10 @@
    its subtitle has to say so, and point to the pages that combine them. */
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 
 const source = fs.readFileSync("web/js/views-overview.js", "utf8");
-const start = source.indexOf("function dashboardScope(");
-assert.ok(start >= 0, "views-overview.js has dashboardScope()");
-const body = source.slice(start, source.indexOf("\n}\n", start) + 2);
+const body = between(source, "function dashboardScope(", "\n}\n", { through: true });
 
 function scope(all, nodes = 3) {
   const esc = s => String(s);

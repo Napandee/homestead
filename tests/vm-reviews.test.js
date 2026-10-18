@@ -5,6 +5,7 @@
    action, and a button that names the result. */
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const core = fs.readFileSync("web/js/core.js", "utf8");
 
 function context() {
@@ -13,7 +14,7 @@ function context() {
     fmtUp: String, svcUrl: () => "", fmtAgo: String, ratePair: () => ["0", "Mb/s"], sizePair: () => "", sizeText: () => "", meter: () => "", sev: () => "" };
   c.window = c; vm.createContext(c);
   require("./helpers/load-time")(c);
-  vm.runInContext(core.slice(0, core.indexOf("/* Put text on the clipboard.")), c);
+  vm.runInContext(between(core, null, "/* Put text on the clipboard."), c);
   for (const file of ["metrics-utils.js", "ui.js", "uptime.js", "autoupdate.js", "schedules.js", "views-workloads.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
   return c;

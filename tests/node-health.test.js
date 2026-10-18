@@ -4,6 +4,7 @@
    that isn't answering shows no current-looking readings. */
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const core = fs.readFileSync("web/js/core.js", "utf8");
 
 function context() {
@@ -11,7 +12,7 @@ function context() {
     clusterAttr: () => "", clusterTag: () => "", fleetAll: () => false, Diagram: null,
     meter: () => "", sev: () => "", hardwareTags: () => "", remoteRow: () => "", sizePair: (used, cap) => `${used}/${cap} GB`, ratePair: (rx, tx) => [`↓${rx}`, `↑${tx}`] };
   c.window = c; vm.createContext(c);
-  vm.runInContext(core.slice(0, core.indexOf("/* Put text on the clipboard.")), c);
+  vm.runInContext(between(core, null, "/* Put text on the clipboard."), c);
   require("./helpers/core-text")(c);
   for (const file of ["metrics-utils.js", "ui.js", "views-overview.js"]) vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
   return c;
