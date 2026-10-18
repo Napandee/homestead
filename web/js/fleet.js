@@ -23,6 +23,14 @@ function setFleetMode(mode) {
 const fleetAll = () => fleetMode() === "all" && !!FLEET.view?.linked;
 window.fleetAll = fleetAll;
 
+/* A row's cluster holds only on the page it was chosen on: after Back or a
+   link to another page, requests go to this cluster, and so do the readers of
+   FLEET.target (the file manager's headers). */
+function fleetTarget() {
+  if (FLEET.targetView && FLEET.targetView !== STATE.view) { FLEET.target = ""; FLEET.targetView = ""; }
+  return FLEET.target;
+}
+
 /* Where api() sends a request. Collections and Architecture come from every cluster in
    the view of all of them; an action taken on another cluster's row - or a
    dialog opened from one - goes to that cluster. */
@@ -33,7 +41,7 @@ window.fleetRoute = (path, opts = {}) => {
   if (opts.headers?.["X-Homestead-Cluster"]) return { path, opts };
   const method = String(opts.method || "GET").toUpperCase();
   if (method === "GET" && FLEET_LISTS[path] === STATE.view && fleetAll()) return { path: `/api/fleet/all/${path.slice(5)}`, opts };
-  const target = FLEET.target;
+  const target = fleetTarget();
   if (!target || target === FLEET.view?.self || path.startsWith("/api/fleet") || path.startsWith("/api/auth/")) return { path, opts };
   const dialog = !$("#modal")?.classList.contains("hidden");
   // A plain list read with no dialog open is the page refreshing itself.
@@ -43,7 +51,7 @@ window.fleetRoute = (path, opts = {}) => {
 
 /* A console cannot send a header, so it names the cluster in its address. */
 window.fleetSocketUrl = url => {
-  const target = FLEET.target;
+  const target = fleetTarget();
   if (!target || target === FLEET.view?.self) return url;
   return `${url}${url.includes("?") ? "&" : "?"}hs_cluster=${encodeURIComponent(target)}`;
 };
@@ -58,11 +66,23 @@ window.fleetNoteMissing = header => {
   });
 };
 
-// Which cluster a click is about: the row it was made in.
+// Which cluster a click is about: the row it was made in. What opens from a
+// row - a dialog, its confirmation, the row's "…" menu (moved out of the row),
+// a suggestion list, a page of its own such as a host's - stays with that
+// row's cluster; a click anywhere else (sidebar, phone bar, search, the
+// breadcrumb, the list page's own buttons, the job tray) is about this
+// cluster again (#598).
+const FLEET_FLOATING = "#modal, .askdlg, .actionmenu-portal, .actionmenu-pop, .suggest-pop, #uiTooltip, #toast";
+const FLEET_CHROME = "#nav, #bottombar, #searchwrap, #crumb, #jobTray";
 document.addEventListener("click", event => {
-  const row = event.target.closest?.("[data-cluster]");
-  if (row) FLEET.target = row.dataset.cluster;
-  else if (event.target.closest?.("#nav, .fleet-switch, .fleet-menu")) FLEET.target = "";
+  const el = event.target;
+  const owner = el.closest?.(".actionmenu-portal")?.owner;
+  const row = el.closest?.("[data-cluster]") || owner?.closest?.("[data-cluster]");
+  if (row) { FLEET.target = row.dataset.cluster; FLEET.targetView = STATE.view; FLEET.targetFrom = location.href; return; }
+  if (el.closest?.(FLEET_FLOATING)) return;
+  const opened = FLEET.target && location.href !== FLEET.targetFrom && el.closest?.("#views");
+  if (opened && !el.closest?.(FLEET_CHROME)) return;
+  FLEET.target = ""; FLEET.targetView = ""; FLEET.targetFrom = "";
 }, true);
 
 /* Rows in the view of all clusters: whose each is. */
