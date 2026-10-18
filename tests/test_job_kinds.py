@@ -83,12 +83,10 @@ class RegistryTests(unittest.TestCase):
             OPS.RESOLVERS.clear(); OPS.RESOLVERS.update(saved)
 
 
-# Kinds named in a branch that no job has. Each is a finding of #622's step 2,
-# left for a follow-up because removing or renaming it changes behaviour.
-#   longhorn-v2-upgrade: storage_conflicts.require_clear refuses it while a V2
-#     disk conversion is unresolved, but a Longhorn upgrade starts as
-#     "platform-upgrade", so that rule never fires.
-KNOWN_STRAYS = {"longhorn-v2-upgrade"}
+# Kinds named in a branch that no job has, each left for a follow-up because
+# removing or renaming it changes behaviour. None today: the one #622's step 2
+# found (a "longhorn-v2-upgrade" rule) now names the Longhorn platform-upgrade.
+KNOWN_STRAYS = set()
 # The modules that branch on a job's kind.
 BRANCHING = ("homestead_operations.py", "homestead_storage_conflicts.py", "homestead_vm_power_receipts.py")
 # Words a branch compares a `kind` against that are not jobs, by module.

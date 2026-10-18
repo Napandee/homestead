@@ -306,5 +306,15 @@ class UpgradeTests(unittest.TestCase):
             result = C.upgrade('longhorn', 'v1.13.0', {'v2_mode': 'live', 'confirm_backup': True})
             self.assertEqual('live', result['v2_mode']); helm.assert_called_once()
 
+    def test_an_unfinished_disk_conversion_refuses_the_upgrade_before_helm_is_touched(self):
+        # The conflict rule must hold before the upgrade starts, not when its job is recorded after.
+        found = {'name': 'Longhorn', 'installed': 'v1.12.2', 'next': 'v1.13.0'}
+        converting = {'kind': 'disk-v2-convert', 'status': 'running', 'ref': {'node': 'node-1', 'phase': 'erasing'}}
+        with patch.object(C, '_component', return_value=found), patch.object(C, 'helm_upgrade') as helm, \
+                patch.object(C, 'OPS', SimpleNamespace(_read=lambda: [converting]), create=True):
+            with self.assertRaisesRegex(ValueError, 'Finish disk preparation'):
+                C.upgrade('longhorn', 'v1.13.0', {'v2_mode': 'live', 'confirm_backup': True})
+            helm.assert_not_called()
+
 
 if __name__ == '__main__': unittest.main()
