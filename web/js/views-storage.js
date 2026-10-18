@@ -266,7 +266,8 @@ function volumeUse(x) {
   if (x.state === "attached") return { kind: "in-use" };
   if (x.unclaimed) return { kind: "unclaimed" };
   if (attachedWorkloads(x).length) return { kind: "in-use" };
-  if (x.used_by == null) return { kind: "detached" };
+  // Its claim's users could not be read: not knowing is not "unused".
+  if (x.used_by == null) return { kind: x.pvc_name ? "unknown" : "detached" };
   return x.used_by.length ? { kind: "stopped", by: x.used_by } : { kind: "orphaned" };
 }
 
@@ -298,6 +299,7 @@ function volumeUseCell(x) {
   if (use.kind === "stopped") return `<div class="attachlist">${use.by.map(w => `<span class="tag" data-tip="${esc(w)} is defined to use this volume and is stopped; the data waits for it to start">${esc(w.split("/").pop())} · stopped</span>`).join("")}</div>`;
   if (use.kind === "orphaned") return `<span class="tag warn" data-tip="No container, VM or job refers to this volume. If its data is not wanted, it can be deleted; otherwise attach it to something from its editor">orphaned</span>`;
   if (use.kind === "unclaimed") return `<span class="tag warn" data-tip="Its claim is gone and the volume was kept - an old copy from a storage class change, or a claim deleted with its data retained. Nothing can mount it as it is">no claim</span>`;
+  if (use.kind === "unknown") return `<span class="tag" data-tip="Homestead could not read what is defined to use this volume, so it is not called unused. Refresh to check again">could not check</span>`;
   return '<span class="dim">detached</span>';
 }
 

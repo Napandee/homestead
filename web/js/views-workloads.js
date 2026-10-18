@@ -1567,16 +1567,19 @@ window.wlDelete = async (ns, name) => {
   modal("Delete · " + name, '<div class="empty"><span class="spin2"></span>checking what this removes</div>', true);
   // The card list alone cannot say which Services or claims belong to this
   // workload, and deleting it removes the first and keeps the second.
+  // A failed read is not "none": it is shown, and the delete is not offered.
   const [network, vols] = await Promise.all([
-    STATE.data.network ? Promise.resolve(STATE.data.network) : api("/api/network").catch(() => ({ services: [] })),
-    STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes").catch(() => []),
+    STATE.data.network ? Promise.resolve(STATE.data.network) : api("/api/network").catch(e => ({ error: e.message })),
+    STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes").catch(e => ({ error: e.message })),
   ]);
+  const failed = [network, vols].find(read => read?.error);
+  const unread = read => `<span class="warn">could not be read: ${esc(read.error)}</span>`;
   const workload = (STATE.data.wl || []).find(row => row.ns === ns && row.name === name) || {};
   const services = (network.services || [])
     .filter(row => row.namespace === ns && (row.targets || []).includes(name));
   const listeners = services.flatMap(row => (row.external_ips || [])
     .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
-  const claims = (vols || []).filter(vol => (vol.attached || []).includes(name));
+  const claims = vols.error ? [] : (vols || []).filter(vol => (vol.attached || []).includes(name));
   $("#mbody").innerHTML = `
     <div class="note dependency-danger"><b>This removes the app, not its data.</b>
       The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
@@ -1585,16 +1588,19 @@ window.wlDelete = async (ns, name) => {
       <div class="dependency-row"><span>Deployment</span><b class="mono">${esc(ns)}/${esc(name)}</b></div>
       <div class="dependency-row"><span>Containers</span><b>${(workload.images || []).length || 1}</b></div>
       <div class="dependency-row ${services.length ? "stranded" : ""}"><span>Services removed</span>
-        <b>${services.length ? services.map(row => esc(row.name)).join(", ") : "none"}</b></div>
+        <b>${network.error ? unread(network) : services.length ? services.map(row => esc(row.name)).join(", ") : "none"}</b></div>
       ${listeners.length ? `<div class="dependency-row stranded"><span>LAN listeners freed</span>
         <b class="mono">${listeners.map(esc).join(", ")}</b></div>` : ""}
       <div class="dependency-row"><span>Volumes kept</span>
-        <b>${claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
+        <b>${vols.error ? unread(vols) : claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
     </div>
-    ${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
+    ${failed ? `<div class="note" style="margin-top:12px">Deleting is offered once Homestead can read which Services it removes and which volumes it keeps. Try again in a moment.</div>
+    ${UI.actions(`<button class="btn" onclick="wlDelete(${jsq(ns)},${jsq(name)})">Retry</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`
+    : `${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
       onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete app</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`}`;
   if (window.applyRole) window.applyRole();
 };
 window.wlDeleteNow = async (ns, name, button) => {

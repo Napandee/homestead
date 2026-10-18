@@ -52,3 +52,11 @@ test("current workload references remain protected and stopped workloads keep th
   assert.equal(context.volumeUse({state: "detached", attached: [], unclaimed: false, used_by: []}).kind, "orphaned");
   assert.equal(context.volumeUse({state: "detached", attached: [], unclaimed: false, used_by: null}).kind, "detached");
 });
+test("a claim whose users could not be read is 'could not check', never orphaned or spare", () => {
+  const v = {state: "detached", attached: [], unclaimed: false, pvc_name: "nextcloud-data", used_by: null};
+  assert.equal(context.volumeUse(v).kind, "unknown");
+  assert.match(context.volumeUseCell(v), /could not check/);
+  assert.doesNotMatch(context.volumeUseCell(v), /orphaned/);
+  // A Longhorn volume no claim was ever made for is simply detached.
+  assert.equal(context.volumeUse({...v, pvc_name: ""}).kind, "detached");
+});

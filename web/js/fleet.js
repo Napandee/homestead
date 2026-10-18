@@ -427,11 +427,13 @@ window.fleetSettingsPaint = async () => {
 window.fleetMovesPaint = async () => {
   const host = $("#fleetMovesCard");
   if (!host) return;
-  const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(() => []), api("/api/move/clusters").catch(() => [])]);
+  let unread = "";
+  const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(e => { unread = e.message; return []; }),
+    api("/api/move/clusters").catch(() => [])]);
   if (!$("#fleetMovesCard")) return;
-  host.hidden = !moves.length && !clusters.length;
+  host.hidden = !unread && !moves.length && !clusters.length;
   host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
-    <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
+    <div id="movesList">${unread ? movesUnreadHtml(unread) : moves.length ? movesHtml(moves) : ""}</div>
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();
   // Each check waits on the other Homestead answering, so after the card is up.

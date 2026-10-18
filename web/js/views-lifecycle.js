@@ -2740,14 +2740,22 @@ function movesHtml(moves) {
   }).join("");
 }
 
+/* A failed read of the moves is not "no moves": say so, with Retry. */
+function movesUnreadHtml(error) {
+  return `<div class="note bad">The moves could not be read: ${esc(error)}
+    <button class="btn sm" onclick="movesRepaint()">Retry</button></div>`;
+}
+window.movesUnreadHtml = movesUnreadHtml;
+
 /* Only the moves section repaints while one runs, so a form half-filled
    elsewhere on the page is left alone. */
 async function watchMoves() {
   clearTimeout(window.__moveTimer);
   if (!$("#movesList")) return;
-  const moves = await api("/api/move/moves").catch(() => null);
+  const moves = await api("/api/move/moves").catch(e => ({ error: e.message }));
   const host = $("#movesList");
-  if (moves && host) host.innerHTML = movesHtml(moves);
+  if (host) host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+  if (moves.error) return;
   if (window.applyRole) window.applyRole();
   if ((moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending)) window.__moveTimer = setTimeout(watchMoves, 4000);
 }
@@ -2925,7 +2933,9 @@ window.confirmImport = async () => {
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
 window.moveDismiss = async (id = "") => {
-  const all = await api("/api/move/moves").catch(() => []);
+  let all;
+  try { all = await api("/api/move/moves"); }
+  catch (e) { return toast(`The moves could not be read, so nothing was cleared: ${e.message}`, "bad"); }
   const failed = id ? all.find(m => m.id === id && m.status === "failed") : null;
   const rows = all.filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
   if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
@@ -2939,7 +2949,7 @@ window.moveDismiss = async (id = "") => {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");
     const host = $("#movesList");
-    if (host) host.innerHTML = movesHtml(await api("/api/move/moves").catch(() => []));
+    if (host) host.innerHTML = await api("/api/move/moves").then(movesHtml, e => movesUnreadHtml(e.message));
     if (window.applyRole) applyRole();
   } catch (e) { toast(e.message, "bad"); }
 };
