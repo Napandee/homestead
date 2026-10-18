@@ -29,12 +29,13 @@ class RestoreTests(unittest.TestCase):
         ]
         self.live = {'app.conf': {'kind': 'file', 'size': 7, 'modified': 200}, 'conf.d': {'kind': 'dir', 'size': 0, 'modified': 50}}
         self.users = ([], ['ReadWriteOnce'])
+        self.unanswered = set()
         self.launched = []
         patches = [
             mock.patch.object(R.SNAP, 'status', side_effect=lambda ns, name: dict(self.state)),
             mock.patch.object(R.SNAP, '_verified', return_value=None),
             mock.patch.object(R, '_walk', side_effect=lambda ns, session, folder, names: ([dict(r) for r in self.walk], False)),
-            mock.patch.object(R, '_inspect', side_effect=lambda ns, pvc, folder, rels: {r: dict(self.live.get(r, {'kind': 'missing'})) for r in rels}),
+            mock.patch.object(R, '_inspect', side_effect=lambda ns, pvc, folder, rels: {r: dict(self.live.get(r, {'kind': 'missing'})) for r in rels if r not in self.unanswered}),
             mock.patch.object(R, '_users', side_effect=lambda ns, pvc: self.users),
             mock.patch.object(R.FILES, '_session', side_effect=lambda ns, pvc: (ns, 'homestead-files-' + pvc)),
             mock.patch.object(R, '_launch', side_effect=lambda *args: self.launched.append(args)),
@@ -105,6 +106,12 @@ class RestoreTests(unittest.TestCase):
         self.assertIn('outside the volume', skipped['root'])
         self.assertIn('link', skipped['conf.d'])
         self.assertEqual(['ok'], plan['adds'])  # nothing under conf.d is offered either
+
+    def test_an_entry_the_live_check_did_not_answer_is_skipped(self):
+        self.unanswered = {'conf.d/new.conf'}
+        plan = R.restore_plan(self.body())
+        self.assertEqual([], plan['adds'])
+        self.assertIn('conf.d/new.conf', [row['path'] for row in plan['skipped']])
 
     def test_expired_session_refuses(self):
         token = R.restore_plan(self.body())['review_token']
@@ -219,6 +226,12 @@ class HelperTests(unittest.TestCase):
                 self.assertNotEqual(0, self.reader(root, 'tarlist', 'config', json.dumps(bad)).returncode, bad)
             (root / 'config' / 'linkdir').symlink_to(Path(tmp))
             self.assertNotEqual(0, self.reader(root, 'tarlist', 'config', json.dumps(['linkdir/secret'])).returncode)
+
+    def test_inspection_records_split_only_on_newlines(self):
+        rows = R._parse_inspect('regular file|3|5|a\u2028link|0|0|b\rc\n'.encode())
+        self.assertEqual(['a\u2028link|0|0|b\rc'], list(rows))
+        odd = b'missing|0|0|caf\xe9\n'
+        self.assertEqual(['caf\udce9'], list(R._parse_inspect(odd)))
 
     def test_live_inspection_flags_links_on_the_way(self):
         with tempfile.TemporaryDirectory() as tmp:

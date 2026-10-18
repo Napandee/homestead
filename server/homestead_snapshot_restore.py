@@ -85,9 +85,11 @@ def _inspect_script(base):
 
 
 def _parse_inspect(out):
+    """Records end at a newline and nowhere else (names may hold \\r or
+    U+2028, which splitlines() would split on); names keep their bytes."""
     rows = {}
-    for line in out.decode("utf-8", "replace").splitlines():
-        parts = line.split("|", 3)
+    for line in out.split(b"\n"):
+        parts = line.decode("utf-8", "surrogateescape").split("|", 3)
         if len(parts) != 4:
             continue
         kind, size, modified, rel = parts
@@ -99,7 +101,7 @@ def _parse_inspect(out):
 
 def _inspect(namespace, pvc, folder, rels):
     ns, pod = FILES._session(namespace, pvc)
-    out, err = FILES._sh(ns, pod, _inspect_script(FILES._full(folder)), stdin="\n".join(rels).encode() + b"\n",
+    out, err = FILES._sh(ns, pod, _inspect_script(FILES._full(folder)), stdin="\n".join(rels).encode("utf-8", "surrogateescape") + b"\n",
                          timeout=120)
     if err and not out:
         raise ValueError(err[:200])
@@ -154,9 +156,11 @@ def _plan(body):
         rel = row["path"]
         if any(rel.startswith(p + "/") for p in held):
             continue
-        there = live.get(rel, {"kind": "missing"})
+        there = live.get(rel)
         if "\n" in rel:
             why = "its name has a line break"
+        elif there is None:
+            why = "the live volume could not be checked there"
         elif row["kind"] == "other":
             why = "it is not a file, folder or link"
         elif there["kind"] == "via-link":
