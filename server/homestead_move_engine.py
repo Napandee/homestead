@@ -129,11 +129,33 @@ def _find(move_id):
 
 
 def _store(move):
+    """Write a move, last writer wins: whoever changes an existing move holds
+    its step lock (_serialized). Each write bumps its rev, which tells a holder
+    of an older copy that someone has written since: updated_at has one-second
+    ties."""
     with _lock:
-        rows = [m for m in _read() if m["id"] != move["id"]]
+        rows = _read()
+        before = next((m for m in rows if m["id"] == move["id"]), {})
+        move["rev"] = int(before.get("rev", 0)) + 1
+        rows = [m for m in rows if m["id"] != move["id"]]
         rows.append(move)
         rows.sort(key=lambda m: m.get("created_at", ""))
         _write(rows)
+
+
+def _update(move, flags=None, **fields):
+    """Store the caller's copy if nobody has written the move since it was
+    read; otherwise write only these fields onto the newer record, so an older
+    copy never undoes someone else's write. A dismissed move stays dismissed."""
+    with _lock:
+        current = _find(move["id"])
+        if current is None:
+            return
+        if current.get("rev", 0) == move.get("rev", 0):
+            return _store(move)
+        current.setdefault("flags", {}).update(flags or {})
+        current.update(fields)
+        _store(current)
 
 
 def _public(move):
@@ -551,10 +573,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
     checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace, host_devices)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
-    active = [m for m in _read() if m.get("status") == "running"
-              and (m["cluster"], m["kind"], m["name"]) == (cluster, kind, name)]
-    if active:
-        raise ValueError(f"{name} is already being moved")
+    _refuse_second(cluster, kind, name)
     definition = _definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
     if kind == "vm":
         VM_DEVICES.prepare(definition, namespace, host_devices)
@@ -576,11 +595,39 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
                                         for c in definition.get("claims", [])],
         "origin": definition.get("origin") or {}, "flags": {},
         "previous_target": "", "failures": 0, "source_removed": False,
-        "created_at": _now(), "updated_at": _now(), "finished_at": "",
+        "created_at": _now(), "updated_at": _now(), "finished_at": "", "op": "",
     }
-    move["op"] = _operation(move)
-    _store(move)
+    # The step lock keeps the engine off this move until its Activity item is
+    # recorded, so no copy without one is written back over it.
+    with _serialized(move["id"]):
+        # Checked again where it is recorded: a second Start of the same
+        # workload may have passed the check above while this one asked the source.
+        with _lock:
+            _refuse_second(cluster, kind, name)
+            _store(move)
+        _add_operation(move)
+        if not move["op"]:
+            move["message"] = "Queued; Activity was busy, so this move appears there shortly"
+        _store(move)
     return _public(move)
+
+
+def _add_operation(move):
+    """Give a recorded move its Activity item. Outside the moves lock: the
+    Activity tray takes its own lock and then reads moves (op_state). The move
+    is already recorded and will run, so a busy tray must not make Start
+    report an error: the engine tries again on its next pass."""
+    try:
+        move["op"] = _operation(move)
+    except Exception:
+        move["op"] = ""
+
+
+def _refuse_second(cluster, kind, name):
+    with _lock:
+        if any(m.get("status") == "running" and (m["cluster"], m["kind"], m["name"]) == (cluster, kind, name)
+               for m in _read()):
+            raise ValueError(f"{name} is already being moved")
 
 
 def _operation(move):
@@ -1195,7 +1242,9 @@ def _cleanup_resources(move):
         return
     flags = move.setdefault("flags", {})
     flags["resource_cleanup_pending"] = True
-    _store(move)
+    # Only this function's own fields go onto the stored move: "Remove
+    # original" may have written source_removed since the caller read it.
+    _update(move, flags={"resource_cleanup_pending": True})
     try:
         cancelled = move["status"] == "cancelled"
         if cancelled:
@@ -1227,6 +1276,8 @@ def _cleanup_resources(move):
     except Exception:
         flags["resource_cleanup_pending"] = True
         move["cleanup_message"] = "Temporary resource cleanup pending; check both clusters. Homestead retries automatically"
+    _update(move, flags={"resource_cleanup_pending": flags["resource_cleanup_pending"]},
+            cleanup_message=move["cleanup_message"])
 
 
 def _kubernetes_reason(error):
@@ -1296,6 +1347,8 @@ def _tick_all():
             if not move:
                 continue
             if move.get("status") == "running":
+                if not move.get("op"):
+                    _add_operation(move)
                 _tick(move)
             elif move.get("status") in ("failed", "cancelled") and (move.get("flags") or {}).get("cancelling"):
                 try:
@@ -1309,7 +1362,7 @@ def _tick_all():
                 move["updated_at"] = _now()
             with _lock:
                 current = _find(move_id)
-                if current and current.get("updated_at") <= move.get("updated_at"):
+                if current and current.get("rev", 0) == move.get("rev", 0):
                     _store(move)
 
 
@@ -1490,6 +1543,11 @@ def dismiss(move_id=None):
 
 def finish(move_id, volumes=False):
     """Remove the stopped original from the source, once the move has landed."""
+    with _serialized(move_id):
+        return _remove_source(move_id, volumes)
+
+
+def _remove_source(move_id, volumes):
     move = _find(move_id)
     if not move:
         raise ValueError("no such move")
