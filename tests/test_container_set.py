@@ -156,7 +156,7 @@ class ContainerSetTests(unittest.TestCase):
         config = self.config()
         with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), mock.patch.object(server, "persist_icon_config"), \
                 mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
-                mock.patch.object(server, "prepare_lan", side_effect=lambda cfg: cfg), \
+                mock.patch.object(server.VM_ROUTES, "prepare_lan", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VOLOWNER, "prepare", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.STORAGE_ROUTES, "ensure_claim", return_value=False) as claim, \
                 mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=urllib.error.HTTPError("", 404, "missing", {}, None)), \

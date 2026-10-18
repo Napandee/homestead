@@ -49,7 +49,7 @@ class ClassChoiceTests(unittest.TestCase):
         server.storage_classes()
         self.assertEqual("longhorn-v1-1x", server.STORAGE_CLASS)
         self.assertEqual("longhorn-v1-1x", server.LC.STORAGE_CLASS)
-        self.assertEqual("longhorn-v1-1x", server.vm_default_class())
+        self.assertEqual("longhorn-v1-1x", server.VM_ROUTES.vm_default_class())
 
     def test_without_a_default_the_installed_class_stands(self):
         self.classes[1]["metadata"]["annotations"] = {}

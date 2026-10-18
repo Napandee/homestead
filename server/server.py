@@ -132,9 +132,9 @@ def _late(*names):
 # server patches it there too; server.py imports back the names it still uses.
 import homestead_overview_server as OVERVIEW_ROUTES
 from homestead_overview_server import (
-    _alerts_loop, api_scale, change_undo_plan, _diagnostic_read, _history_loop, is_self,
-    protection_issues, restart_workload, _sampler, scheduled_items, _schedules_loop, set_schedule,
-    set_uptime_setting, set_vm_monitoring, _uptime_loop,
+    _alerts_loop, _diagnostic_read, _history_loop, _sampler, _schedules_loop, _uptime_loop,
+    api_scale, change_undo_plan, is_self, protection_issues, restart_workload, scheduled_items,
+    set_schedule, set_uptime_setting, set_vm_monitoring,
 )
 MOVED.update(dict.fromkeys(("api_scale", "clear_unstarted_pods", "get_overview", "guard_managed_smb", "guard_self", "is_self", "restart_workload", "scale_workload", "workload_start_plan"), OVERVIEW_ROUTES))
 OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in OVERVIEW_ROUTES.VALUES})
@@ -154,20 +154,21 @@ from homestead_network_server import (
 NETWORK_ROUTES.bind_routes(_late(*NETWORK_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in NETWORK_ROUTES.VALUES})
 import homestead_storage_server as STORAGE_ROUTES
 from homestead_storage_server import (
-    _class_made_for, class_selectable, cleanup_restores, _files_loop, guard_smb_object,
-    homestead_part, _host_fix_loop, _internal_class, is_managed_nfs, is_managed_smb,
-    _longhorn_copies_loop, _prune_snapshot, _pvc_rows, _restore_tests_loop, _restore_then_tidy,
-    _samba_loop, serves_many, share_storage_options, shared_storage_classes, _snapshot_files_loop,
-    storage_class_facts, storage_legacy_cancel, storage_move_progress, _storage_pending_loop,
-    storage_runtime_check, _storage_runtime_loop, storage_volume_action,
+    _class_made_for, _files_loop, _host_fix_loop, _internal_class, _longhorn_copies_loop,
+    _prune_snapshot, _pvc_rows, _restore_tests_loop, _restore_then_tidy, _samba_loop,
+    _snapshot_files_loop, _storage_pending_loop, _storage_runtime_loop, class_selectable,
+    cleanup_restores, guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb, serves_many,
+    share_storage_options, shared_storage_classes, storage_class_facts, storage_legacy_cancel,
+    storage_move_progress, storage_runtime_check, storage_volume_action,
 )
 MOVED.update(dict.fromkeys(("cleanup_restores", "ensure_claim", "storage_helper_admission", "storage_restart_admission"), STORAGE_ROUTES))
 STORAGE_ROUTES.bind_routes(_late(*STORAGE_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in STORAGE_ROUTES.VALUES})
 import homestead_vm_server as VM_ROUTES
 from homestead_vm_server import (
     _remove_cluster_vm, _vm_image_disks, _vmstore_loop, api_vm_power, create_vm_with_address,
-    set_vm_logos, vm_create_options,
+    set_vm_logos, vm_create_options, vm_default_class,
 )
+MOVED.update(dict.fromkeys(("prepare_lan", "vm_address_problem", "vm_default_class"), VM_ROUTES))
 VM_ROUTES.bind_routes(_late(*VM_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in VM_ROUTES.VALUES})
 import homestead_deploy_server as DEPLOY_ROUTES
 from homestead_deploy_server import (
@@ -181,9 +182,8 @@ from homestead_deploy_server import (
 DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 import homestead_self_data_server as SELF_DATA_ROUTES
 from homestead_self_data_server import (
-    _data_move_status, fit_own_strategy, fleet_address, homestead_running_on, own_node,
-    _reconcile_permissions, _replace_own_pod, self_data_file_scope, self_data_preparation_progress,
-    self_stop_warning,
+    _data_move_status, _reconcile_permissions, _replace_own_pod, fit_own_strategy, fleet_address,
+    homestead_running_on, own_node, self_data_file_scope, self_data_preparation_progress, self_stop_warning,
 )
 MOVED.update(dict.fromkeys(("_require_no_data_handoff", "_self_data_helper_image", "homestead_data_volume"), SELF_DATA_ROUTES))
 SELF_DATA_ROUTES.bind_routes(_late(*SELF_DATA_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in SELF_DATA_ROUTES.VALUES})
@@ -336,19 +336,6 @@ def new_claims(volumes):
     return list(claims.values())
 
 
-def prepare_lan(cfg):
-    """A container's own LAN address, checked as free and its network made,
-    before the Deployment that joins it."""
-    if cfg.get("network_mode") != "lan":
-        return cfg
-    lan = LAN.clean(cfg.get("lan") or {})
-    problem = vm_address_problem(lan["address"])
-    if problem:
-        raise ValueError(problem)
-    cfg["lan"] = lan
-    return cfg
-
-
 import homestead_share_servers as SHARE_SERVERS
 SMB_NAME = SHARE_SERVERS.SMB_NAME
 
@@ -418,51 +405,6 @@ def _note_default_class(rows):
 
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage as STORAGE
-
-
-def vm_default_class(rows=None):
-    """The class a new VM disk lands on: the cluster's default, else Longhorn's
-    usual one, else none named - the API server then applies its own default."""
-    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
-    for row in rows:
-        if row["default"]:
-            return row["name"]
-    names = [row["name"] for row in rows]
-    return next((name for name in ("longhorn-r2", "harvester-longhorn", "longhorn") if name in names), "")
-
-
-def vm_address_problem(ip):
-    """Why a VM cannot have this address, or "": something already has it."""
-    import ipaddress
-    try:
-        view = IPAM.view()
-    except Exception:
-        view = {"subnets": []}
-    for subnet in view.get("subnets") or []:
-        if ipaddress.ip_address(ip) not in ipaddress.ip_network(subnet["cidr"]):
-            continue
-        if subnet.get("gateway") == ip:
-            return f"{ip} is the gateway of {subnet['cidr']}"
-        row = next((r for r in subnet.get("rows") or [] if r["ip"] == ip), None)
-        if row and (row.get("name") or row.get("kind") or row.get("cluster")):
-            return f"{ip} is taken: {row.get('name') or row.get('cluster') or row.get('kind')} in IP addresses"
-        if row and (row.get("scan") or {}).get("up"):
-            return f"{ip} answered the last scan: something is already there"
-        start, end = subnet.get("dhcp_start"), subnet.get("dhcp_end")
-        if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
-            return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
-    try:
-        network = CACHE.cached("network", 5, NETWORK.inventory)
-    except Exception:
-        network = {}
-    if ip in (network.get("node_ips") or []) or ip in (network.get("platform_addresses") or {}):
-        return f"{ip} is one of the cluster's own addresses"
-    if any(v.get("ip") == ip for v in network.get("vips") or []):
-        return f"{ip} is a Service's address"
-    # A few ports a machine usually has, quickly: a free address answers none.
-    if IPAM._probe(ip, ports=(22, 80, 443, 3389, 6443), timeout=0.4).get("up"):
-        return f"{ip} answers on the network: something is already there"
-    return ""
 
 
 def selectable_storage_classes(rows=None):
@@ -600,7 +542,7 @@ def _resolve_storage_class():
     if STORAGE_CLASS:
         return STORAGE_CLASS
     try:
-        return vm_default_class() or "longhorn-r2"
+        return VM_ROUTES.vm_default_class() or "longhorn-r2"
     except Exception:
         return "longhorn-r2"
 
@@ -639,7 +581,7 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(im
 
 
 UPDATES.pull_progress = _pull_progress
-K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
+K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
 OPS.RESOLVERS[REBALANCE.KIND] = REBALANCE.status
@@ -795,7 +737,7 @@ VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(ann
 # Looked up as each call is made, so what a test puts in their place is used.
 VM_REVIEW.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), DEFAULT_NS,
                lambda *a, **k: _dns_name(*a, **k), lambda current: rollout_review_context(current),
-               lambda: SETTINGS_HELPERS.get_app_settings(), lambda *a: vm_default_class(*a), lambda ip: vm_address_problem(ip),
+               lambda: SETTINGS_HELPERS.get_app_settings(), lambda *a: VM_ROUTES.vm_default_class(*a), lambda ip: VM_ROUTES.vm_address_problem(ip),
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
@@ -1170,7 +1112,7 @@ def iso_storage_class():
         return ISO_CLASS, True
     if base:
         return base, True
-    return vm_default_class(rows), False
+    return VM_ROUTES.vm_default_class(rows), False
 
 
 ISOS.bind(kget, ksend, SHARES.list_shares, FILES.list_files, iso_storage_class, SHARES._samba_node,
