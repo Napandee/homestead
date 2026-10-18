@@ -102,9 +102,9 @@ class CleanupTests(unittest.TestCase):
         with mock.patch.object(server, "DATA_DIR", self.directory), \
              mock.patch.object(server.SELF_DATA_ROUTES, "DATA_DIR", self.directory), \
              mock.patch.object(server.SELF, "NS", "lab"), \
-             mock.patch.object(server, "_require_no_data_handoff"), \
-             mock.patch.object(server, "homestead_data_volume", return_value={"classes": [{"name": "next", "shareable": False}]}), \
-             mock.patch.object(server, "_self_data_helper_image", return_value=({}, "image")), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "_require_no_data_handoff"), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"classes": [{"name": "next", "shareable": False}]}), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "_self_data_helper_image", return_value=({}, "image")), \
              mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}), \
              mock.patch.object(server.SELF_DATA_PREPARE, "review", return_value=({}, {}, {}, {"destination": "next"})), \
              mock.patch.object(server.SELF_DATA_PREPARE, "start", side_effect=start), \

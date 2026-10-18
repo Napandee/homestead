@@ -178,9 +178,11 @@ from homestead_deploy_server import (
 DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 import homestead_self_data_server as SELF_DATA_ROUTES
 from homestead_self_data_server import (
-    _data_move_status, _reconcile_permissions, _replace_own_pod, fit_own_strategy, fleet_address,
-    homestead_running_on, own_node, self_data_file_scope, self_data_preparation_progress, self_stop_warning,
+    _data_move_status, fit_own_strategy, fleet_address, homestead_running_on, own_node,
+    _reconcile_permissions, _replace_own_pod, self_data_file_scope, self_data_preparation_progress,
+    self_stop_warning,
 )
+MOVED.update(dict.fromkeys(("_require_no_data_handoff", "_self_data_helper_image", "homestead_data_volume"), SELF_DATA_ROUTES))
 SELF_DATA_ROUTES.bind_routes(_late(*SELF_DATA_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in SELF_DATA_ROUTES.VALUES})
 import homestead_kube_helpers as KUBE_HELPERS
 from homestead_kube_helpers import (
@@ -861,7 +863,7 @@ PLACE.bind(kget, ksend, lambda: cached("nodes", 5, NODES.get_nodes), _cache, HW.
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 # The helper image is read from Homestead's own pod, defined further down.
-POWER_JOBS.bind(kget, ksend, lambda read, ns: _self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
+POWER_JOBS.bind(kget, ksend, lambda read, ns: SELF_DATA_ROUTES._self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
 
 
@@ -1202,54 +1204,6 @@ class Query(dict):
         raise MissingParameter(f"missing parameter: {key}")
 
 
-def homestead_data_volume(dep=None):
-    """Homestead's data claim, and whether pods on several nodes can mount it.
-
-    Copies of Homestead on different nodes all mount this one claim, so it has
-    to be ReadWriteMany on a class Longhorn serves through its share manager.
-    A migratable class - Harvester's own, and longhorn-r2 - hands out a VM-disk
-    volume that one node attaches, and a pod on a second node waits forever."""
-    ns, name = SELF.NS, NAMES.BRAND
-    dep = dep or KUBE_HELPERS.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    volumes = (dep["spec"]["template"]["spec"].get("volumes") or [])
-    claim = next(((v.get("persistentVolumeClaim") or {}).get("claimName") for v in volumes
-                  if v.get("name") == "data" and v.get("persistentVolumeClaim")), "")
-    if not claim:
-        return {"pvc": "", "shareable": False, "reason": "Homestead keeps no data claim", "candidates": []}
-    pvc = KUBE_HELPERS.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
-    spec = pvc.get("spec") or {}
-    klass = spec.get("storageClassName") or ""
-    modes = spec.get("accessModes") or []
-    rows = storage_classes()
-    row = next((r for r in rows if r["name"] == klass), None)
-    size = str(((pvc.get("status") or {}).get("capacity") or {}).get("storage")
-               or ((spec.get("resources") or {}).get("requests") or {}).get("storage") or "2Gi")
-    if "ReadWriteMany" not in modes:
-        reason = f"{claim} is ReadWriteOnce: one node at a time can mount it"
-    elif row and row.get("migratable"):
-        reason = (f"{claim} is on {klass}, a migratable class: Longhorn gives it a VM-disk volume that "
-                  "only one node can mount, so a copy on a second node would never start")
-    else:
-        reason = ""
-    # Do not request RWX merely because a non-Longhorn class has no
-    # migratable flag. k3s local-path (and many block CSI drivers) cannot
-    # provision it. Unknown drivers get the conservative single-node mode.
-    shared = shared_storage_classes(rows)
-    # Every class it could move to, and whether copies on several nodes could
-    # then share it: the move is not only for redundancy.
-    classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
-               if class_selectable(r) and r["name"] != klass]
-    # Data volumes an earlier move left behind: kept until deleted, so they
-    # are said out loud rather than found later as a mystery.
-    try:
-        kept = [p["metadata"]["name"] for p in KUBE_HELPERS.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])
-                if p["metadata"]["name"].startswith(f"{name}-data") and p["metadata"]["name"] != claim]
-    except Exception:
-        kept = []
-    return {"pvc": claim, "storage_class": klass, "access_modes": modes, "size": size,
-            "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes, "kept": kept}
-
-
 def self_data_handoff_status(operation):
     """Read only the control record identified by this installation's receipt.
 
@@ -1320,28 +1274,6 @@ def abandon_self_data_preparation(body):
 CLUSTER_SHUTDOWN.bind(cluster_shutdown)
 
 
-def _self_data_helper_image(read, ns):
-    pod_name = _dns_name(SELF.POD, "Homestead pod")
-    pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
-    containers = [c for c in pod.get("spec", {}).get("containers", []) if c.get("name") == NAMES.BRAND]
-    statuses = [c for c in pod.get("status", {}).get("containerStatuses", []) if c.get("name") == NAMES.BRAND]
-    if len(containers) != 1 or len(statuses) != 1 or not statuses[0].get("ready") or not statuses[0].get("state", {}).get("running"):
-        raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
-    digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
-    if not digest_match:
-        raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
-    return pod, UPDATES._immutable(containers[0]["image"], digest_match.group(1))
-
-
-def _require_no_data_handoff(read, ns):
-    try:
-        read(f"/api/v1/namespaces/{ns}/configmaps/{NAMES.BRAND}-data-handoff")
-    except urllib.error.HTTPError as error:
-        if error.code == 404: return
-        raise
-    raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
-
-
 OPS.RESOLVERS[SELF_DATA_PREPARE.KIND] = self_data_preparation_progress
 OPS.CANCELLERS[SELF_DATA_PREPARE.KIND] = (SELF_DATA_PREPARE.cancel_plan, SELF_DATA_PREPARE.cancel_run)
 
@@ -1352,7 +1284,7 @@ def start_self_data_move(body, actor):
         raise SELF_DATA_FENCE.Held("Data moves require the mounted-data safety guard")
     ns = SELF.NS
     def reviewer(read):
-        pod, image = _self_data_helper_image(read, ns)
+        pod, image = SELF_DATA_ROUTES._self_data_helper_image(read, ns)
         def runtimes(pods, claim):
             return STORAGE_RUNTIME.require_self_data(OPS, pods, ns, NAMES.BRAND, HOMESTEAD_VERSION, claim,
                 own_uid=pod["metadata"]["uid"], data_mount=DATA_DIR)
@@ -1360,7 +1292,7 @@ def start_self_data_move(body, actor):
             threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
             runtime_check=runtimes, clock=time.time, route_check=SELF_DATA_ROUTE.review)
     with OPS._lock:
-        _require_no_data_handoff(KUBE_HELPERS.kget, ns)
+        SELF_DATA_ROUTES._require_no_data_handoff(KUBE_HELPERS.kget, ns)
         SELF_DATA_EXECUTE.idle(OPS)
         execution = reviewer(KUBE_HELPERS.kget).approve(body)
         job = SELF_DATA_EXECUTE.enqueue(OPS, execution)
@@ -1395,7 +1327,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 # Looked up when asked, so a test that patches one is the one used.
 SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
-                 lambda dep=None: homestead_data_volume(dep), _heartbeats,
+                 lambda dep=None: SELF_DATA_ROUTES.homestead_data_volume(dep), _heartbeats,
                  lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
@@ -1464,7 +1396,7 @@ CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, NODES.get_nodes), lambda: 
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
-SNAPSHOT_FILES.bind(kget, ksend, lambda: _self_data_helper_image(KUBE_HELPERS.kget, SELF.NS)[1], SYS_NS)
+SNAPSHOT_FILES.bind(kget, ksend, lambda: SELF_DATA_ROUTES._self_data_helper_image(KUBE_HELPERS.kget, SELF.NS)[1], SYS_NS)
 
 
 ISO_CLASS = NAMES.object_name("isos")

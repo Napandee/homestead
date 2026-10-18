@@ -113,7 +113,7 @@ class PreparationArchiveTests(unittest.TestCase):
 
     def test_settings_labels_historical_and_current_volume_preparations_and_hides_archived(self):
         info = {"pvc": "destination", "classes": []}
-        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "homestead_data_volume", return_value=info), mock.patch.object(server.KUBE_HELPERS, "kget", return_value={"items": []}):
+        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value=info), mock.patch.object(server.KUBE_HELPERS, "kget", return_value={"items": []}):
             state = server.SELF_DATA_ROUTES.self_data_preparation_state()
             item = state["preparations"][0]
             self.assertFalse(item["prepared"])

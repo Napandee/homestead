@@ -259,8 +259,8 @@ class PreparationTests(unittest.TestCase):
         with mock.patch.object(OPS, "DATA_DIR", temp.name), mock.patch.object(server, "_self_data_fence", None), \
              mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.f.read), \
              mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=send), \
-             mock.patch.object(server, "_self_data_helper_image", return_value=({}, IMAGE)), \
-             mock.patch.object(server, "homestead_data_volume", return_value={"pvc": "source", "classes": [{"name": "destination-class", "shareable": False}]}), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "_self_data_helper_image", return_value=({}, IMAGE)), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "source", "classes": [{"name": "destination-class", "shareable": False}]}), \
              mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             preview = post("/api/self/data/prepare/preview", self.body)
             self.assertEqual([], OPS._read())
@@ -324,7 +324,7 @@ class PreparationTests(unittest.TestCase):
         item["ref"]["prepared"] = {"claim_uid": "kept"}
         foreign = copy.deepcopy(item); foreign["ref"]["namespace"] = "foreign"
         with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.f.read), \
-             mock.patch.object(server, "homestead_data_volume", return_value={"pvc": "different"}), \
+             mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "different"}), \
              mock.patch.object(server.OPS, "_read", return_value=[item, foreign]):
             state = server.SELF_DATA_ROUTES.self_data_preparation_state()
         self.assertEqual(1, len(state["preparations"]))
@@ -332,7 +332,7 @@ class PreparationTests(unittest.TestCase):
         self.assertTrue(state["execution_ready"])
 
     def test_status_error_is_safe_and_never_mutates(self):
-        with mock.patch.object(server, "homestead_data_volume", side_effect=RuntimeError("private-secret")), \
+        with mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", side_effect=RuntimeError("private-secret")), \
              mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             with self.assertRaises(Held) as error: server.SELF_DATA_ROUTES.self_data_preparation_state()
             self.assertNotIn("private-secret", str(error.exception)); send.assert_not_called()
