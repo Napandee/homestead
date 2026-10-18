@@ -186,6 +186,14 @@ the link** instead.
   Homestead's namespace on each cluster.
 - Requests between clusters travel over the address you give. On a LAN you do
   not trust, give each cluster an `https://` address.
+- Linking is the one time secrets cross the network: the admin password signs
+  in once, and the shared key is sent to the new member; unlinking sends a new
+  key to every remaining member. Over a plain `http://` address (the other
+  cluster's, or this one's own) anyone on that
+  network path could read them, so **Link** asks you to tick that they may be
+  sent unencrypted, and clusters at a plain `http://` address are marked
+  **plain HTTP** (clusters added before linking: **password sent
+  unencrypted**, since each new session signs in with it).
 
 ## Troubleshooting
 
