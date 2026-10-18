@@ -585,8 +585,9 @@ window.nodeDetail = (name, fromRoute = false) => {
 /* The node page: one line of how it is, then its sections in a column as
    Settings has them - Overview with its picture, Workloads, Storage,
    Hardware, Network, Host OS - one shown at a time. */
-/* On this host: each app a chip that moves it, or - in select mode (#366) -
-   a tick box, with Select all, Clear and Move selected. */
+/* On this host: each app a chip that moves it. In select mode (#366) the
+   same chips toggle instead and light up when picked (#589), with Select
+   all, Clear and Move selected; Escape in the card ends it. */
 const NODE_PICK = { on: new Set(), picked: new Map(), node: new Map() };
 // The host page draws from its own answer, which STATE.data.nodes may not hold.
 window.nodeRemember = n => NODE_PICK.node.set(n.name, n);
@@ -596,8 +597,7 @@ function nodeWorkloadChips(n) {
   if (!ids.length) return '<span class="dim xs">nothing of yours is scheduled here</span>';
   const chips = ids.map(id => { const [ns, name] = id.split("/");
     return selecting
-      ? `<label class="tag movable"><input type="checkbox" value="${esc(id)}" ${picked.has(id) ? "checked" : ""}
-          onchange="nodePick(${jsq(n.name)},${jsq(id)},this.checked)"> ${esc(name)}</label>`
+      ? `<button type="button" class="tag movable" aria-pressed="${picked.has(id)}" data-id="${esc(id)}" onclick="nodeToggle(${jsq(n.name)},${jsq(id)})">${esc(name)}</button>`
       : `<button type="button" class="tag movable" title="Move ${esc(name)} to another host" onclick="moveWorkload(${jsq(name)},${jsq(ns)})">${esc(name)} <span class="mv" aria-hidden="true">⇄</span></button>`; }).join("");
   const bar = selecting
     ? `<div class="wg-selbar"><b aria-live="polite">${picked.size} selected</b>
@@ -606,13 +606,23 @@ function nodeWorkloadChips(n) {
         ${UI.button("Move selected…", `nodeMoveSelected(${jsArg(n.name)})`, { kind: "sm pri", disabled: !picked.size, attrs: 'data-need="operator"' })}
         ${UI.button("Done", `nodeSelect(${jsArg(n.name)},false)`, { kind: "sm" })}</div>`
     : `<div class="dim xs" style="margin-top:8px">Click one to move it to another host, or ${UI.button("Select", `nodeSelect(${jsArg(n.name)},true)`, { kind: "sm" })} several.</div>`;
-  return `<div id="nodeChips">${chips}</div>${bar}`;
+  return `<div onkeydown="nodeChipsKey(event,${jsq(n.name)})"><div id="nodeChips">${chips}</div>${bar}</div>`;
 }
 window.nodeWorkloadChips = nodeWorkloadChips;
 const nodeRedraw = name => { const n = NODE_PICK.node.get(name) || (STATE.data.nodes || []).find(x => x.name === name);
   const box = $("#nodeChipsCard"); if (n && box) box.innerHTML = nodeWorkloadChips(n); };
 window.nodeSelect = (name, on) => { on ? NODE_PICK.on.add(name) : (NODE_PICK.on.delete(name), NODE_PICK.picked.delete(name)); nodeRedraw(name); };
 window.nodePick = (name, id, on) => { const s = NODE_PICK.picked.get(name) || new Set(); on ? s.add(id) : s.delete(id); NODE_PICK.picked.set(name, s); nodeRedraw(name); };
+// A click in select mode: the chip toggles, and keeps focus once redrawn.
+window.nodeToggle = (name, id) => { const s = NODE_PICK.picked.get(name) || new Set();
+  nodePick(name, id, !s.has(id));
+  // ids are namespace/name, Kubernetes names: safe in a quoted selector.
+  $(`#nodeChips [data-id="${id}"]`)?.focus(); };
+window.nodeChipsKey = (event, name) => {
+  if (event.key !== "Escape" || !NODE_PICK.on.has(name) || (window.modalIsOpen && modalIsOpen())) return;
+  event.preventDefault(); event.stopPropagation(); nodeSelect(name, false);
+  // The chip that had focus is gone; Select takes it, so the keyboard keeps its place.
+  $('#nodeChipsCard button[onclick^="nodeSelect"]')?.focus(); };
 window.nodePickAll = (name, on, ids = []) => { NODE_PICK.picked.set(name, new Set(on ? ids : [])); nodeRedraw(name); };
 // The review opens on another host that takes work - never this one.
 window.nodeMoveSelected = name => { const s = NODE_PICK.picked.get(name); if (!s?.size) return;
