@@ -147,7 +147,8 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         "#cloud-config",
         f"hostname: {node['name']}",
         "ssh_pwauth: true",
-        f"password: {json.dumps(password)}",
+        # Not ASCII-escaped: PyYAML reads a surrogate pair as two characters.
+        f"password: {json.dumps(password, ensure_ascii=False)}",
         "chpasswd: {expire: false}",
         "package_update: true",
         "packages: [qemu-guest-agent, curl, python3]" if health else "packages: [qemu-guest-agent, curl]",

@@ -2441,7 +2441,10 @@ def prepare_vm(cfg, platform=None, default_class=""):
         "#cloud-config\n"
         f"hostname: {name}\n"
         "ssh_pwauth: true\n"
-        f"password: {password}\n"
+        # Quoted, as homestead_k3scluster.user_data does: bare, a "#", "*",
+        # ": " or all digits would make YAML read another value or none. Not
+        # ASCII-escaped: PyYAML reads a surrogate pair as two characters.
+        f"password: {json.dumps(password, ensure_ascii=False)}\n"
         "chpasswd: {expire: false}\n"))
 
     annotations, templates = {}, []
