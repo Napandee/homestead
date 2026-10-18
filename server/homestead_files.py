@@ -194,6 +194,8 @@ def close_session(namespace, pvc, wait=20, sleep=time.sleep):
     namespace, pvc = _name(namespace, "namespace"), _name(pvc, "volume name")
     if pvc.startswith("homestead-snapshot-files-"):
         raise PermissionError("Close snapshot copies through their snapshot browser")
+    if (namespace, pvc) in BUSY_CLAIMS:
+        return {"ok": True, "stopped": False, "busy": True}
     pod = pod_name(pvc)
     if _pod_status(namespace, pod) is None:
         return {"ok": True, "stopped": True}
@@ -837,6 +839,9 @@ def upload(namespace, pvc, path, name, data, offset=0, final=False, token=""):
 # Copies and moves between two volumes run in the background: the helper of
 # one sends a tar, the other's unpacks it. Progress is what has passed.
 _JOBS, _JOBS_LOCK = {}, threading.Lock()
+# Claims a restore is writing into (homestead_snapshot_restore): closing the
+# file manager leaves their helper running until the restore ends.
+BUSY_CLAIMS = set()
 
 
 def transfer(source, target, paths, move=False):

@@ -130,3 +130,14 @@ test("closing the manager ends the snapshot session and stops only the live help
   assert.deepEqual(closes.find(c => c.path === "/api/snapshot-files/close").body, { namespace: "lab", session: STATE.session });
   assert.equal(closes.find(c => c.path === "/api/files/close").body.pvc, "data");
 });
+
+test("closing while a restore runs asks first, and says the restore carries on", async () => {
+  const { ctx, calls } = await open();
+  const asked = [];
+  ctx.ask = async (message, options) => { asked.push({ message, options }); return false; };
+  vm.runInContext("FM.restoring = true", ctx);
+  await ctx.fmClose();
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].message, /restore is still running/);
+  assert.equal(calls.filter(c => /close$/.test(c.path)).length, 0, "nothing is closed when the answer is no");
+});

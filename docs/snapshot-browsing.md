@@ -50,9 +50,12 @@ not in the snapshot stay, and existing live folders keep their owner and
 permissions. Symbolic links are restored as links only when they point inside
 the volume. Running it plans again first: if anything reviewed changed (a live
 file was written, say), it shows the new review with **Review again** instead
-of running. It runs as a background copy, one restore into a volume at a time,
-and keeps the snapshot session open until it finishes. A review is refused
-when the snapshot's session has ended, or ends within 5 minutes.
+of running. It runs as a background copy, one restore into a volume at a time.
+Closing the file manager or the snapshot while it runs does not cut it off:
+the snapshot and the volume's helper stay until it ends, then the snapshot
+closes. The browsing session's 30 minutes still bound it, so a review is
+refused when what it copies would not fit in the time left (at a cautious
+10 MiB/s, plus 5 minutes); open the snapshot again to restore then.
 
 Closing the file manager (including X or Escape) ends the session and requests cleanup. Abandoned sessions
 expire 30 minutes after preparation starts, including time spent copying.

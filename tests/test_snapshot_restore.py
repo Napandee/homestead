@@ -45,6 +45,8 @@ class RestoreTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.addCleanup(R._RUNNING.clear)
         self.addCleanup(S.ACTIVE_RESTORES.clear)
+        self.addCleanup(S.CLOSE_AFTER_RESTORE.clear)
+        self.addCleanup(R.FILES.BUSY_CLAIMS.clear)
 
     def body(self, **extra):
         return {'namespace': 'lab', 'session': NAME, 'folder': 'config', 'paths': ['config/app.conf', 'config/conf.d'],
@@ -132,7 +134,7 @@ class RestoreTests(unittest.TestCase):
     def test_second_restore_into_the_claim_is_409(self):
         token = R.restore_plan(self.body())['review_token']
         self.assertEqual(202, R.restore(self.body(review_token=token)).code)
-        self.assertIn(('lab', NAME), S.ACTIVE_RESTORES)
+        self.assertEqual(1, S.ACTIVE_RESTORES[('lab', NAME)])
         reply = R.restore(self.body(review_token=token))
         self.assertEqual(409, reply.code)
         self.assertIn('running', reply.body['error'])
@@ -144,7 +146,7 @@ class RestoreTests(unittest.TestCase):
         job = self.launched[0][0]
         R._finished(job, 'lab', 'data', 'lab', NAME)
         self.assertEqual({}, R._RUNNING)
-        self.assertNotIn(('lab', NAME), S.ACTIVE_RESTORES)
+        self.assertEqual(0, S.ACTIVE_RESTORES[('lab', NAME)])
 
     def test_bad_input_is_refused_before_any_exec(self):
         for body in (self.body(paths=['other/app.conf']), self.body(paths=['config/../x']), self.body(paths=[]),
@@ -152,6 +154,44 @@ class RestoreTests(unittest.TestCase):
             with self.assertRaises((ValueError, PermissionError)):
                 R.restore_plan(body)
         R._walk.assert_not_called()
+
+    def test_two_restores_from_one_session_keep_it_until_both_end(self):
+        token = R.restore_plan(self.body())['review_token']
+        R.restore(self.body(review_token=token))
+        other = self.body(target={'namespace': 'lab', 'pvc': 'other', 'folder': 'config'})
+        R.restore(dict(other, review_token=R.restore_plan(other)['review_token']))
+        first, second = self.launched[0][0], self.launched[1][0]
+        R._finished(first, 'lab', 'data', 'lab', NAME)
+        self.assertEqual(1, S.ACTIVE_RESTORES[('lab', NAME)])
+        R._finished(second, 'lab', 'other', 'lab', NAME)
+        self.assertEqual(0, S.ACTIVE_RESTORES[('lab', NAME)])
+
+    def test_closing_during_a_restore_waits_for_it(self):
+        token = R.restore_plan(self.body())['review_token']
+        R.restore(self.body(review_token=token))
+        self.assertIn(('lab', 'data'), R.FILES.BUSY_CLAIMS)
+        with mock.patch.object(S, '_record', side_effect=AssertionError('nothing is removed yet')):
+            self.assertEqual('closing', S.close('lab', NAME)['state'])
+        with mock.patch.object(S, 'close') as close:
+            R._finished(self.launched[0][0], 'lab', 'data', 'lab', NAME)
+            close.assert_called_once_with('lab', NAME)
+        self.assertNotIn(('lab', 'data'), R.FILES.BUSY_CLAIMS)
+
+    def test_a_restore_that_could_not_start_frees_the_claim(self):
+        token = R.restore_plan(self.body())['review_token']
+        with mock.patch.object(R, '_launch', side_effect=RuntimeError('no thread')):
+            with self.assertRaises(RuntimeError):
+                R.restore(self.body(review_token=token))
+        self.assertEqual({}, R._RUNNING)
+        self.assertEqual(0, S.ACTIVE_RESTORES[('lab', NAME)])
+        self.assertNotIn(('lab', 'data'), R.FILES.BUSY_CLAIMS)
+
+    def test_a_restore_too_large_for_the_time_left_is_a_blocker(self):
+        self.state['expires'] = time.time() + 900
+        self.walk[0]['size'] = 20 * 1024 ** 3
+        plan = R.restore_plan(self.body())
+        self.assertFalse(plan['ready'])
+        self.assertIn('open it again', plan['blockers'][0])
 
     def test_restore_routes_are_admin(self):
         import homestead_storage_server as STORAGE
@@ -167,7 +207,7 @@ class CleanupTests(unittest.TestCase):
                   'spec': {'volumeSnapshotRef': {'namespace': 'lab'}}}
         with mock.patch.object(S, '_get', return_value={}), mock.patch.object(S, '_items', return_value=[record]), \
                 mock.patch.object(S, 'close') as close:
-            S.ACTIVE_RESTORES.add(('lab', NAME))
+            S.ACTIVE_RESTORES[('lab', NAME)] += 1
             try:
                 S.cleanup()
                 close.assert_not_called()
@@ -232,6 +272,13 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(['a\u2028link|0|0|b\rc'], list(rows))
         odd = b'missing|0|0|caf\xe9\n'
         self.assertEqual(['caf\udce9'], list(R._parse_inspect(odd)))
+
+    def test_tarlist_fails_when_a_reviewed_entry_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.tree(tmp)
+            run = self.reader(root, 'tarlist', 'config', json.dumps(['app.conf', 'vanished.conf']))
+            self.assertNotEqual(0, run.returncode)
+            self.assertIn(b'vanished.conf', run.stderr)
 
     def test_live_inspection_flags_links_on_the_way(self):
         with tempfile.TemporaryDirectory() as tmp:

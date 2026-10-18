@@ -21,7 +21,11 @@ import homestead_snapshot_files as SNAP
 ENDED = "this snapshot's browsing session ended; open it again"
 IN_USE = ("{app} is running and using this volume; it sees these files change while it runs. "
           "For a database, stop it first.")
-MIN_SECONDS_LEFT = 300     # the browsing pod stops at its deadline, restore or not
+# The browsing pod stops at its deadline, restore or not, and a file cut off
+# mid-copy is left short: a restore must fit in the time left, at a rate
+# well below what a homelab network and Longhorn manage.
+MIN_SECONDS_LEFT = 300
+SAFE_RATE = 10 * 1024 * 1024    # bytes a second
 _RUNNING, _LOCK = {}, threading.Lock()   # (namespace, pvc) -> job id, or "planning"
 
 
@@ -143,10 +147,6 @@ def _plan(body):
     namespace, session, folder, names, (target_ns, pvc, target_folder) = _request(body)
     state = _session_ready(namespace, session)
     blockers = []
-    left = state["expires"] - time.time()
-    if left < MIN_SECONDS_LEFT:
-        blockers.append(f"this snapshot's browsing session ends in {max(0, int(left // 60))} minutes; "
-                        "open it again to restore")
     rows, truncated = _walk(namespace, session, folder, names)
     if truncated:
         blockers.append("more than 20000 entries; restore a smaller folder")
@@ -183,6 +183,11 @@ def _plan(body):
             replaces.append({"path": rel, "live": {"size": there["size"], "modified": there["modified"]},
                              "snapshot": {"size": row["size"], "modified": row["modified"]}})
             send.append(rel)
+    size = sum(row["size"] for row in rows if row["kind"] == "file" and row["path"] in set(send))
+    left = state["expires"] - time.time()
+    if left < MIN_SECONDS_LEFT + size / SAFE_RATE:
+        blockers.insert(0, f"this snapshot's browsing session ends in {max(0, int(left // 60))} minutes, "
+                           f"too soon to copy {_size(size)}; open it again to restore")
     if not send and not truncated:
         blockers.append("nothing to restore: the live folder already has everything chosen")
     apps, modes = _users(target_ns, pvc)
@@ -198,6 +203,13 @@ def _plan(body):
     return plan, send
 
 
+def _size(n):
+    for unit, step in (("GiB", 1024 ** 3), ("MiB", 1024 ** 2), ("KiB", 1024)):
+        if n >= step:
+            return f"{n / step:.1f} {unit}"
+    return f"{n} bytes"
+
+
 def restore_plan(body):
     return _plan(body)[0]
 
@@ -209,6 +221,7 @@ def restore(body):
         if key in _RUNNING:
             return ROUTER.Reply(409, {"error": f"a restore into {pvc} is running; wait for it to finish"})
         _RUNNING[key] = "planning"
+    job = None
     try:
         plan, send = _plan(body)
         if body.get("review_token") != plan["review_token"]:
@@ -222,13 +235,19 @@ def restore(body):
                "title": f"Restore {count} file{'s' if count != 1 else ''} from snapshot {plan['snapshot']}"}
         with FILES._JOBS_LOCK:
             FILES._JOBS[job["id"]] = job
+        # Held together from here until _finished: the claim (no second
+        # restore, no helper stop), and the session (no close, no cleanup).
         with _LOCK:
             _RUNNING[key] = job["id"]
-        SNAP.ACTIVE_RESTORES.add((namespace, session))
+            SNAP.ACTIVE_RESTORES[(namespace, session)] += 1
+            FILES.BUSY_CLAIMS.add(key)
         reader = ["python3", "-c", SNAP.READER, "/data", "tarlist", folder, json.dumps(send)]
         _launch(job, namespace, session, dst_ns, dst_pod, target_folder, reader)
         return ROUTER.Reply(202, {"ok": True, "job": dict(job)})
-    except Exception:
+    except Exception as error:
+        if job and _RUNNING.get(key) == job["id"]:
+            job.update(status="failed", error=str(error)[:300], finished=time.time())
+            _finished(job, target_ns, pvc, namespace, session)
         with _LOCK:
             if _RUNNING.get(key) == "planning":
                 del _RUNNING[key]
@@ -254,6 +273,19 @@ def _finished(job, target_ns, pvc, namespace, session):
     """The claim is free for another restore, and the session for cleanup,
     which closes it now if it ran out while the restore ran."""
     with _LOCK:
-        if _RUNNING.get((target_ns, pvc)) == job["id"]:
-            del _RUNNING[(target_ns, pvc)]
-    SNAP.ACTIVE_RESTORES.discard((namespace, session))
+        if _RUNNING.get((target_ns, pvc)) != job["id"]:
+            return
+        del _RUNNING[(target_ns, pvc)]
+        FILES.BUSY_CLAIMS.discard((target_ns, pvc))
+        SNAP.ACTIVE_RESTORES[(namespace, session)] -= 1
+        last = SNAP.ACTIVE_RESTORES[(namespace, session)] <= 0
+        if last:
+            del SNAP.ACTIVE_RESTORES[(namespace, session)]
+        close = last and (namespace, session) in SNAP.CLOSE_AFTER_RESTORE
+        if close:
+            SNAP.CLOSE_AFTER_RESTORE.discard((namespace, session))
+    if close:
+        try:
+            SNAP.close(namespace, session)
+        except Exception:
+            pass   # the session expires and cleanup removes it

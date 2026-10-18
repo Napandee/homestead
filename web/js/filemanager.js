@@ -475,6 +475,7 @@ window.fmRestoreRun = async () => {
     }
     return toast(e.message, "bad");
   }
+  FM.restoring = true;
   await fmDo(`Restoring ${what} from the snapshot…`, async () => {
     let job = answer.job;
     while (job.status === "running") {
@@ -487,6 +488,7 @@ window.fmRestoreRun = async () => {
     if (job.status === "failed") throw new Error(job.error || "the restore did not finish");
     toast(`Restored ${what} into ${body.target.pvc}`, "ok");
   }, [0, 1]);
+  FM.restoring = false;
 };
 
 /* Edit a text file in place, in the manager; Back returns to the panes. */
@@ -578,6 +580,8 @@ async function fmRelease(keepalive = false) {
   }
 }
 window.fmClose = async () => {
+  // The server keeps the snapshot and the helper until a restore ends.
+  if (FM.restoring && !(await ask("A restore is still running. It finishes on its own, and the snapshot closes once it has; you just won't see when here.", { title: "Restore running", ok: "Close anyway" }))) return;
   if (FM.editing?.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   const closing = fmRelease();
   closeModal();

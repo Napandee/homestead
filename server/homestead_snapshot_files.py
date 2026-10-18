@@ -4,6 +4,7 @@ The retained CSI content is the durable session record. Cleanup never requests
 DeleteSnapshot: only our helper, restored claim and import metadata are removed.
 """
 import base64
+import collections
 import copy
 import hashlib
 import json
@@ -26,9 +27,10 @@ kget = ksend = image = None
 system_namespaces = set()
 SC = "/apis/storage.k8s.io/v1/storageclasses/"
 _lock = threading.RLock()
-# Sessions a restore is copying from (homestead_snapshot_restore): cleanup
-# leaves them until the restore ends.
-ACTIVE_RESTORES = set()
+# Sessions restores are copying from (homestead_snapshot_restore), counted:
+# cleanup leaves them, and a close waits, until the last restore ends.
+ACTIVE_RESTORES = collections.Counter()
+CLOSE_AFTER_RESTORE = set()
 
 
 def serialized(fn):
@@ -334,6 +336,11 @@ def _delete(path, obj, owner_uid=None):
 
 @serialized
 def close(namespace, name):
+    if ACTIVE_RESTORES[(namespace, name)]:
+        # Removing the copy now would cut a restore off mid-file; the
+        # restore closes the session when it ends.
+        CLOSE_AFTER_RESTORE.add((namespace, name))
+        return {"state": "closing"}
     record = _record(namespace, name)
     if record is None:
         return {"state": "closed"}
@@ -374,7 +381,7 @@ def cleanup():
     for record in _items(f"{CSI.API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue"):
         if not _owned(record):
             continue
-        if (record["spec"]["volumeSnapshotRef"].get("namespace"), record["metadata"]["name"]) in ACTIVE_RESTORES:
+        if ACTIVE_RESTORES[(record["spec"]["volumeSnapshotRef"].get("namespace"), record["metadata"]["name"])]:
             continue
         try:
             annotations = record["metadata"].get("annotations", {})
@@ -418,10 +425,11 @@ def member(fd, name, arcname):
         item.size = opened.st_size
         os.set_blocking(child, True)
     return item, child
-def add(tar, fd, name, arcname, recursive=True, links=False):
+def add(tar, fd, name, arcname, recursive=True, links=False, strict=False):
     try:
         item, child = member(fd, name, arcname)
-    except OSError:
+    except OSError as error:
+        if strict: sys.exit(f'cannot read {arcname}: {error.strerror}')
         return
     if item is None or (item.issym() and not links):
         return
@@ -499,7 +507,7 @@ try:
                     for step in steps[:-1]:
                         child = walk_into(parent, step, os.O_DIRECTORY)
                         os.close(parent); parent = child
-                    add(tar, parent, steps[-1], rel, recursive=False, links=True)
+                    add(tar, parent, steps[-1], rel, recursive=False, links=True, strict=True)
                 finally:
                     os.close(parent)
     else:
