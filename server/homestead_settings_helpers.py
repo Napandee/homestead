@@ -26,6 +26,9 @@ import homestead_updates as UPDATES
 ROUTE_NEEDS = ("kget", "ksend", "_settings_map")
 VALUES = ("DEFAULT_NS", "_cache")
 DEFAULT_APP_SETTINGS = APP_SETTINGS.DEFAULTS
+# The settings page's read is cached apart from the "settings" the rest of the
+# server caches, since those carry no revision; _forget() drops both.
+REVISION_KEY = "settings-revision"
 
 
 def bind_routes(helpers, **values):
@@ -39,21 +42,32 @@ def bind_routes(helpers, **values):
 
 
 def save_app_settings(value):
-    settings = APP_SETTINGS.validate(value)
+    """Save the sections value sends over the stored settings; any section, or
+    part of one, it leaves out is kept as it is. A value naming the revision
+    it was read at (GET /api/settings) is refused if the settings have changed
+    since: APP_SETTINGS.Stale, and nothing is saved (#601)."""
+    value = value if isinstance(value, dict) else {}
+    stored, revision = _read_settings()
+    if value.get("revision") is not None and str(value["revision"]) != revision:
+        _stale()
+    settings = APP_SETTINGS.validate(_merged(stored, value))
     name = _settings_map()
     body = {"apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": name, "namespace": DEFAULT_NS,
                          "labels": {NAMES.key("managed"): "true"}},
             "data": {"settings.json": json.dumps(settings, indent=2)}}
     try:
-        current = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{name}")
-        body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
-        ksend("PUT", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{name}", body)
+        if revision:
+            # Kubernetes refuses the write if anything saved in between.
+            body["metadata"]["resourceVersion"] = revision
+            ksend("PUT", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{name}", body)
+        else:
+            ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
     except urllib.error.HTTPError as e:
-        if e.code != 404:
+        if e.code != 409:
             raise
-        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
-    _cache.pop("settings", None)
+        _stale()
+    _forget()
     UPDATES.invalidate()
     PLACEMODE.saved(settings["placement"])
     # A different catalogue source is a different catalogue.
@@ -123,16 +137,52 @@ def enforce_update_policy(body, settings=None, now=None):
 
 
 def get_app_settings():
+    return _read_settings()[0]
+
+
+def app_settings_with_revision():
+    """The settings, with the revision a save based on them names."""
+    settings, revision = _read_settings()
+    return {**settings, "revision": revision}
+
+
+def _read_settings():
+    """The stored settings, and their revision: the ConfigMap's
+    resourceVersion, "" before they are first saved."""
     try:
         cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{_settings_map()}")
-        raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
-        return APP_SETTINGS.validate(raw)
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return APP_SETTINGS.validate({})
+            return APP_SETTINGS.validate({}), ""
         raise
+    revision = str((cm.get("metadata") or {}).get("resourceVersion") or "")
+    try:
+        raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
+        return APP_SETTINGS.validate(raw), revision
     except (ValueError, TypeError, json.JSONDecodeError):
-        return APP_SETTINGS.validate({})
+        return APP_SETTINGS.validate({}), revision
+
+
+def _merged(stored, change):
+    """change over stored, section by section and key by key; anything
+    else it sends (a list, a value) replaces what was there."""
+    out = dict(stored)
+    for key, value in change.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            value = _merged(out[key], value)
+        out[key] = value
+    return out
+
+
+def _forget():
+    for key in ("settings", REVISION_KEY):
+        _cache.pop(key, None)
+
+
+def _stale():
+    _forget()    # the 409 answers with the settings as they are now
+    raise APP_SETTINGS.Stale("The settings were changed since they were read here, "
+                             "so nothing was saved. Check them and save again.")
 
 
 def _fleet_rename():

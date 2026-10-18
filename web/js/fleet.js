@@ -427,11 +427,13 @@ window.fleetSettingsPaint = async () => {
 window.fleetMovesPaint = async () => {
   const host = $("#fleetMovesCard");
   if (!host) return;
-  const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(() => []), api("/api/move/clusters").catch(() => [])]);
+  let unread = "";
+  const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(e => { unread = e.message; return []; }),
+    api("/api/move/clusters").catch(() => [])]);
   if (!$("#fleetMovesCard")) return;
-  host.hidden = !moves.length && !clusters.length;
+  host.hidden = !unread && !moves.length && !clusters.length;
   host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
-    <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
+    <div id="movesList">${unread ? movesUnreadHtml(unread) : moves.length ? movesHtml(moves) : ""}</div>
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();
   // Each check waits on the other Homestead answering, so after the card is up.
@@ -460,7 +462,7 @@ window.fleetLinkLegacy = async name => {
     { title: "Link over plain HTTP", ok: "Send them unencrypted", danger: true }))) return;
   try {
     const result = await api("/api/fleet/link-legacy", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, own_url: FLEET.view?.address || "" }) });
+      body: JSON.stringify({ name, own_url: FLEET.view?.address || "", plain_ok: !!(row && fleetPlain(row.url)) }) });
     toast(`${name} is linked as ${result.member?.name || name}`, "ok");
     await fleetRefreshAfter();
   } catch (e) { toast(e.message, "bad"); }
@@ -501,12 +503,13 @@ window.fleetPlainShow = () => { const row = $("#fl_plain_row"); if (row) row.hid
 
 window.fleetLinkSave = async () => {
   const body = { url: $("#fl_url").value.trim(), username: $("#fl_user").value.trim(),
-    password: $("#fl_pass").value, own_url: $("#fl_own").value.trim() };
+    password: $("#fl_pass").value, own_url: $("#fl_own").value.trim(), plain_ok: false };
   if (!body.url || !body.username || !body.password) return toast("Its address, and an admin username and password there", "bad");
   if (fleetLinkPlain() && !$("#fl_plain")?.checked) {
     fleetPlainShow();
     return toast("An address is plain http://: tick that the password and key may be sent unencrypted, or use https://", "bad");
   }
+  body.plain_ok = fleetLinkPlain();
   const go = $("#fl_go");
   if (go) { go.disabled = true; go.textContent = "Linking…"; }
   try {
@@ -521,20 +524,28 @@ window.fleetLinkSave = async () => {
   }
 };
 
+// Who gets a new key at a plain http:// address, said before Unlink or Leave sends it.
+function fleetPlainKeyNote(leaving) {
+  const plain = (FLEET.view?.members || []).filter(m => !m.self && m.id !== leaving && fleetPlain(m.url));
+  return plain.length ? `${String.fromCharCode(10, 10)}The new key is sent unencrypted to ${plain.map(m => `${m.name} (${m.url})`).join(", ")}: a plain http:// address, so anyone on that network path could read it.` : "";
+}
+
 window.fleetUnlink = async (id, name) => {
-  if (!(await ask(`Unlink ${name}?${String.fromCharCode(10, 10)}It keeps running as it is. The linked clusters get a new key, so ${name} can no longer act for them.`, { title: "Unlink cluster", ok: "Unlink", danger: true }))) return;
+  const plain = fleetPlainKeyNote(id);
+  if (!(await ask(`Unlink ${name}?${String.fromCharCode(10, 10)}It keeps running as it is. The linked clusters get a new key, so ${name} can no longer act for them.${plain}`, { title: "Unlink cluster", ok: "Unlink", danger: true }))) return;
   try {
     const result = await api("/api/fleet/remove", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }) });
+      body: JSON.stringify({ id, plain_ok: !!plain }) });
     toast(result.told ? `${name} is unlinked` : `${name} is unlinked here; it did not answer, so it still lists the others until it does`, result.told ? "ok" : "warn");
     await fleetRefreshAfter();
   } catch (e) { toast(e.message, "bad"); }
 };
 
 window.fleetLeave = async () => {
-  if (!(await ask("Stop linking this Homestead to the others?" + String.fromCharCode(10, 10) + "The others stay linked to each other.", { title: "Leave linked clusters", ok: "Stop linking", danger: true }))) return;
+  const plain = fleetPlainKeyNote("");
+  if (!(await ask("Stop linking this Homestead to the others?" + String.fromCharCode(10, 10) + "The others stay linked to each other, under a new key." + plain, { title: "Leave linked clusters", ok: "Stop linking", danger: true }))) return;
   try {
-    await api("/api/fleet/leave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    await api("/api/fleet/leave", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plain_ok: !!plain }) });
     setFleetMode("one");
     toast("This Homestead stands alone again", "ok");
     await fleetRefreshAfter();

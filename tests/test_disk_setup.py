@@ -31,10 +31,11 @@ class Host:
     """What the host says: inspect output, then what set-up printed."""
 
     def __init__(self, inspect_out, setup_out="OK 1234 ext4 /mnt/nvme0n1\n"):
-        self.inspect_out, self.setup_out, self.scripts = inspect_out, setup_out, []
+        self.inspect_out, self.setup_out, self.scripts, self.changes = inspect_out, setup_out, [], {}
 
-    def run(self, node, script, timeout=60):
+    def run(self, node, script, timeout=60, change=""):
         self.scripts.append(script)
+        self.changes[script] = change
         return (self.setup_out if "set -e" in script else self.inspect_out), ""
 
 
@@ -94,6 +95,9 @@ class SetupTests(unittest.TestCase):
         for part in ("mkfs.ext4 -F", "wipefs -a", "chattr +i", "nofail", "x-systemd.device-timeout=10s", "UUID=$U",
                      "/etc/fstab.homestead-backup", "findmnt"):
             self.assertIn(part, script)
+        # Formatting takes the host's lease; looking at the disk first does not (#597).
+        self.assertEqual("Prepare /dev/nvme0n1 on k3s", host.changes[script])
+        self.assertEqual("", host.changes[host.scripts[0]])
 
     def test_longhorn_data_is_kept_without_formatting(self):
         host = Host(seen(FS="ext4", LONGHORN='{"diskUUID":"8f1c"}'))
@@ -177,7 +181,7 @@ class Host2:
     def __init__(self, before):
         self.state, self.scripts = before, []
 
-    def run(self, node, script, timeout=60):
+    def run(self, node, script, timeout=60, change=""):
         self.scripts.append(script)
         if "echo WIPED" in script:
             self.state = seen()
@@ -243,8 +247,8 @@ class OldDiskTests(unittest.TestCase):
 
     def test_a_disk_still_not_blank_after_the_wipe_is_not_formatted(self):
         host = Host2(old_ubuntu())
-        host.run = (lambda original: lambda node, script, timeout=60: (
-            ("WIPED\n", "") if "echo WIPED" in script else original(node, script, timeout)))(host.run)
+        host.run = (lambda original: lambda node, script, timeout=60, change="": (
+            ("WIPED\n", "") if "echo WIPED" in script else original(node, script, timeout, change)))(host.run)
         SETUP.bind(host)
         with self.assertRaisesRegex(ValueError, "wiped but is not blank"):
             SETUP.setup("k3s", "/dev/nvme0n1", "wipe", "ext4", "/dev/nvme0n1")

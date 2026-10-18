@@ -94,7 +94,50 @@ def _quote(value):
 
 # ------------------------------------------------------------------ session
 def pod_name(pvc):
+    """The claim's helper. A name too long to fit ends in a hash of the whole
+    claim name, so two claims that start the same never share one (#596)."""
+    name = POD_PREFIX + pvc
+    if len(name) <= 63:
+        return name
+    digest = hashlib.sha256(pvc.encode()).hexdigest()[:8]
+    return f"{(POD_PREFIX + pvc)[:54].rstrip('-')}-{digest}"
+
+
+def _old_pod_name(pvc):
+    """What helpers were called before #596, so the sweep still clears them."""
     return (POD_PREFIX + pvc)[:63].rstrip("-")
+
+
+def _stop_old_helper(namespace, pvc):
+    """A helper an older Homestead started for this claim under the cut-short
+    name still holds it: stop it, but only if it mounts exactly this claim."""
+    old = _old_pod_name(pvc)
+    if old == pod_name(pvc):
+        return
+    pod = _pod_status(namespace, old)
+    if pod is not None and _claim_of(pod) == pvc:
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{namespace}/pods/{old}",
+                  {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
+                   "preconditions": {"uid": (pod.get("metadata") or {}).get("uid")}}
+                  if (pod.get("metadata") or {}).get("uid") else None)
+        except Exception:
+            pass
+
+
+def _claim_of(pod):
+    return next((v.get("persistentVolumeClaim", {}).get("claimName")
+                 for v in ((pod or {}).get("spec") or {}).get("volumes", []) or [] if v.get("name") == "data"), None)
+
+
+def _helper(namespace, pvc):
+    """This claim's helper pod, or None; a pod under its name that mounts
+    another claim is refused, never used or stopped in its place."""
+    pod = _pod_status(namespace, pod_name(pvc))
+    if pod is not None and _claim_of(pod) != pvc:
+        raise ValueError(f"the file browser's helper for {pvc} is in use for another volume; "
+                         "close that volume's file browser and try again")
+    return pod
 
 
 def _pod_status(namespace, pod):
@@ -129,10 +172,11 @@ def open_session(namespace, pvc):
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not browse volumes in system namespaces")
     pod = pod_name(pvc)
-    existing = _pod_status(namespace, pod)
+    existing = _helper(namespace, pvc)
     phase = ((existing or {}).get("status", {}) or {}).get("phase", "")
     if existing and phase in ("Pending", "Running"):
         return _wait_ready(namespace, pod)
+    _stop_old_helper(namespace, pvc)
     if existing:
         try:
             ksend("DELETE", f"/api/v1/namespaces/{namespace}/pods/{pod}?gracePeriodSeconds=0")
@@ -197,7 +241,8 @@ def close_session(namespace, pvc, wait=20, sleep=time.sleep):
     if (namespace, pvc) in BUSY_CLAIMS:
         return {"ok": True, "stopped": False, "busy": True}
     pod = pod_name(pvc)
-    if _pod_status(namespace, pod) is None:
+    _stop_old_helper(namespace, pvc)
+    if _helper(namespace, pvc) is None:
         return {"ok": True, "stopped": True}
     ksend("DELETE", f"/api/v1/namespaces/{namespace}/pods/{pod}",
           {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0})
@@ -228,7 +273,11 @@ def keepalive(namespace, pvc):
     Says whether it is still running, so the browser can say it stopped."""
     namespace, pvc = _name(namespace, "namespace"), _name(pvc, "volume name")
     pod = pod_name(pvc)
-    running = (((_pod_status(namespace, pod) or {}).get("status") or {}).get("phase") == "Running")
+    try:
+        helper = _helper(namespace, pvc)
+    except ValueError:
+        helper = None
+    running = (((helper or {}).get("status") or {}).get("phase") == "Running")
     return {"ok": True, "running": running and _touch(namespace, pod, force=True), "idle_seconds": IDLE_SECONDS}
 
 
@@ -250,9 +299,8 @@ def cleanup(now=None):
                 or meta.get("deletionTimestamp") or not name.startswith(POD_PREFIX)
                 or NAMES.label_of(meta, "task") != "files"):
             continue
-        claim = next((v.get("persistentVolumeClaim", {}).get("claimName")
-                      for v in spec.get("volumes", []) if v.get("name") == "data"), None)
-        if not claim or name != pod_name(claim):
+        claim = _claim_of(pod)
+        if not claim or name not in (pod_name(claim), _old_pod_name(claim)):
             continue
         terminal = pod.get("status", {}).get("phase") in ("Succeeded", "Failed")
         try:

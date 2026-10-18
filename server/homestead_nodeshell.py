@@ -36,7 +36,7 @@ def bind(_kget, _ksend, namespace):
 
 def pod_name(node):
     safe = "".join(c if c.isalnum() or c == "-" else "-" for c in node.lower()).strip("-")
-    return f"homestead-shell-{safe}"[:63].rstrip("-")
+    return NAMES.fitted(f"homestead-shell-{safe}")
 
 
 def _get(path):
@@ -74,6 +74,10 @@ def open_shell(node, wait=60, sleep=time.sleep):
         raise ValueError(f"{node} is not Ready, so nothing can run on it to open a shell")
     path = f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}"
     pod = _get(path)
+    if pod and (pod.get("spec") or {}).get("nodeName") != node:
+        # Never a shell on another host than the one asked for.
+        raise ValueError(f"the shell helper for {node} is in use for {(pod.get('spec') or {}).get('nodeName')}; "
+                         "close that node's terminal and try again")
     phase = ((pod or {}).get("status") or {}).get("phase")
     if pod and (phase in ("Succeeded", "Failed") or (pod.get("metadata") or {}).get("deletionTimestamp")):
         # An old helper that has run its time: a fresh one.
@@ -112,6 +116,12 @@ def session_ended(node):
         _sessions[node] = max(0, _sessions.get(node, 0) - 1)
         last = _sessions[node] == 0
     if last:
+        try:
+            pod = _get(f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}")
+        except Exception:
+            return   # its deadline still ends it
+        if not pod or (pod.get("spec") or {}).get("nodeName") != node:
+            return
         try:
             ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}",
                   {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0})

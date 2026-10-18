@@ -32,7 +32,16 @@ def bind(_kget, _ksend):
 
 
 def nad_name(workload):
+    return NAMES.fitted(f"{workload}-lan")
+
+
+def _old_nad_name(workload):
+    """What a long-named app's network was called before names kept their hash."""
     return f"{workload[:59].rstrip('-')}-lan"
+
+
+def _owner(nad):
+    return ((nad or {}).get("metadata") or {}).get("labels", {}).get("app")
 
 
 def clean(lan):
@@ -89,6 +98,9 @@ def ensure_nad(ns, workload, lan):
         if error.code != 404:
             raise
         current = None
+    if current and _owner(current) != workload:
+        raise ValueError(f"the LAN network {body['metadata']['name']} belongs to {_owner(current) or 'something else'}; "
+                         "nothing was changed")
     if current:
         body["metadata"]["resourceVersion"] = current["metadata"].get("resourceVersion")
         ksend("PUT", f"{path}/{body['metadata']['name']}", body)
@@ -121,8 +133,14 @@ def read(dep):
 
 
 def remove_nad(ns, workload):
-    try:
-        ksend("DELETE", f"{NAD_API}/namespaces/{ns}/network-attachment-definitions/{nad_name(workload)}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
+    """This app's own LAN network goes, also one named the old way; never
+    another app's that has the same name."""
+    for name in dict.fromkeys((nad_name(workload), _old_nad_name(workload))):
+        path = f"{NAD_API}/namespaces/{ns}/network-attachment-definitions/{name}"
+        try:
+            if _owner(kget(path)) != workload:
+                continue
+            ksend("DELETE", path)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise

@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
 const vm = require("vm");
+const between = require("./helpers/between");
 
 function load(storageAt = 0) {
   const appended = [], replaced = [], timers = [], store = { "homestead.signInReload": String(storageAt) };
@@ -19,8 +20,7 @@ function load(storageAt = 0) {
   vm.createContext(ctx);
   // Only the wrapper and the sign-in handling: the rest of auth.js needs a page.
   const src = fs.readFileSync("web/js/auth.js", "utf8");
-  const start = src.indexOf("const _rawFetch"), end = src.indexOf("/* The last answer from /api/auth/state");
-  vm.runInContext(src.slice(start, end), ctx);
+  vm.runInContext(between(src, "const _rawFetch", "/* The last answer from /api/auth/state"), ctx);
   return { ctx, appended, replaced, timers, store, answers };
 }
 

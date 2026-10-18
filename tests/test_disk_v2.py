@@ -318,7 +318,7 @@ class DiskV2Tests(unittest.TestCase):
         item = self.c.tick(); self.assertEqual(item['status'], 'failed'); self.assertFalse(item['dismissible'])
         with self.assertRaises(ValueError): V.mutation_guard('node-1', 'data')
         V.mutation_guard('node-2', 'data')
-        for kind, ref in [('node-power', {'node': 'node-1'}), ('longhorn-v2-upgrade', {}), ('snapshot-delete', {'volume': 'volume-data'})]:
+        for kind, ref in [('node-power', {'node': 'node-1'}), ('platform-upgrade', {'component': 'longhorn'}), ('snapshot-delete', {'volume': 'volume-data'})]:
             with self.subTest(kind=kind), self.assertRaises(ValueError): CONFLICTS.require_clear(self.c.ops.items, kind, ref)
         self.assertEqual(V.logs(self.c.ops.items[0])[0]['text'], 'fixture helper output')
     def test_other_disk_actions_share_the_lock_and_cannot_change_reviewed_device(self):

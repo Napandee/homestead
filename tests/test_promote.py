@@ -132,15 +132,23 @@ import urllib.error
 import homestead_capacity as CAPACITY
 import homestead_lifecycle as LIFECYCLE
 import homestead_maintenance as MAINTENANCE
+import homestead_hostrun as HOSTRUN
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
 
 
 class Hostrun:
     def __init__(self, out="PASSWORD\nUNINSTALL\n"):
-        self.out, self.calls, self.stdins, self.waits = out, [], [], []
+        self.out, self.calls, self.stdins, self.waits, self.changes = out, [], [], [], []
 
-    def run(self, node, script, timeout=60, wait=60, stdin=b""):
+    def hold(self, node, what, seconds=60, holder=""):
+        return "this-replica/1"
+
+    def let_go(self, node, holder):
+        pass
+
+    def run(self, node, script, timeout=60, wait=60, stdin=b"", change=""):
+        self.changes.append(change)
         self.calls.append((node, script))
         self.stdins.append(stdin)
         self.waits.append(wait)
@@ -393,6 +401,8 @@ class JobTests(PlanBase):
         self.assertNotIn(self.token, self.host.calls[launch[0]][1])
         self.assertEqual(self.token.encode(), self.host.stdins[launch[0]])
         self.assertEqual("running", item["ref"]["phase"])
+        self.assertEqual("Make app-1 a server", self.host.changes[launch[0]], "the reinstall takes the host's lease")
+        self.assertEqual({""}, {c for i, c in enumerate(self.host.changes) if i != launch[0]}, "reads take none")
 
     def test_token_never_stored_or_reported(self):
         item = self.started()
@@ -412,6 +422,16 @@ class JobTests(PlanBase):
         self.assertNotIn("$(id)", item["message"])
         self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
         self.assertIn(("app-1", False), self.cordons)
+
+    def test_another_change_on_the_host_refuses_before_the_drain(self):
+        def held(node, what, seconds=60, holder=""):
+            raise HOSTRUN.Busy(f"another change is running on {node}: Prepare /dev/sdb on {node}; try again once it has finished")
+        self.host.hold = held
+        item = self.started()
+        self.assertEqual("failed", item["status"])
+        self.assertIn("another change is running on app-1: Prepare /dev/sdb on app-1", item["message"])
+        self.assertEqual([], self.drains, "nothing drained for a refusal")
+        self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
 
     def test_drain_failure_fails_and_uncordons(self):
         with mock.patch.object(LIFECYCLE, "drain", mock.Mock(side_effect=ValueError("drain timed out"))):

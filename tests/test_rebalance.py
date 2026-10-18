@@ -169,7 +169,7 @@ class JobTests(unittest.TestCase):
         self.assertFalse(any(m == "DELETE" for m, _, _ in self.c.sent), "nothing removed while the new copy is not whole")
         new = self.c.objects[f"{LH}/replicas"]["items"][-1]
         new["spec"]["healthyAt"] = "now"
-        self.c.objects[f"{LH}/engines"]["items"] = [{"spec": {"volumeName": "v0"}, "status": {"replicaModeMap": {new["metadata"]["name"]: "RW"}}}]
+        self.c.objects[f"{LH}/engines"]["items"] = [{"spec": {"volumeName": "v0"}, "status": {"replicaModeMap": {"v0-r-k2-0": "RW", new["metadata"]["name"]: "RW"}}}]
         R.status(self.item)
         self.assertIn(("DELETE", f"{LH}/replicas/v0-r-k3-0", None), self.c.sent)
         self.assertEqual(2, self.c.objects[f"{LH}/volumes"]["items"][0]["spec"]["numberOfReplicas"])
@@ -177,6 +177,54 @@ class JobTests(unittest.TestCase):
         state, progress, message = R.status(self.item)
         self.assertEqual(("succeeded", 100), (state, progress))
         self.assertIn("Moved 1 copy", message)
+
+    def _build_new_copy_while_k2_fails(self):
+        """The new copy on k1 builds; meanwhile the copy on k2 fails."""
+        replicas = self.c.objects[f"{LH}/replicas"]["items"]
+        R.status(self.item)
+        replicas.append(replica("v0", "k1", n=1))
+        replicas[0]["spec"]["failedAt"] = "now"
+        replicas[0]["status"]["currentState"] = "error"
+        self.c.objects[f"{LH}/engines"]["items"] = [{"spec": {"volumeName": "v0"}, "status": {"replicaModeMap": {
+            "v0-r-k3-0": "RW", "v0-r-k1-1": "RW"}}}]
+        return replicas
+
+    def test_a_copy_that_fails_while_the_new_one_builds_keeps_the_old_copy_until_it_is_rebuilt(self):
+        # Removing the old copy now would leave one whole copy of a volume
+        # that asks for two. Longhorn rebuilds the failed one (the count is
+        # still one over), then the move goes ahead.
+        replicas = self._build_new_copy_while_k2_fails()
+        state, _, message = R.status(self.item)
+        self.assertEqual("running", state)
+        self.assertIn("rebuild", message)
+        self.assertFalse(any(m == "DELETE" for m, _, _ in self.c.sent), "the old copy is kept")
+        self.assertEqual(3, self.c.objects[f"{LH}/volumes"]["items"][0]["spec"]["numberOfReplicas"])
+        replicas.append(replica("v0", "k2", n=2, healthy=False))   # Longhorn rebuilds on k2
+        R.status(self.item)
+        self.assertFalse(any(m == "DELETE" for m, _, _ in self.c.sent), "a copy still rebuilding is not whole")
+        replicas[-1]["spec"]["healthyAt"] = "now"
+        self.c.objects[f"{LH}/engines"]["items"][0]["status"]["replicaModeMap"]["v0-r-k2-2"] = "RW"
+        R.status(self.item)
+        self.assertIn(("DELETE", f"{LH}/replicas/v0-r-k3-0", None), self.c.sent)
+
+    def test_a_failed_copy_not_rebuilt_in_time_skips_the_move_and_keeps_the_old_copy(self):
+        self._build_new_copy_while_k2_fails()
+        R.status(self.item)
+        self.item["ref"]["started"] = time.time() - 3600 - 120 * 50 - 60
+        R.status(self.item)
+        self.assertFalse(any(m == "DELETE" for m, _, _ in self.c.sent))
+        self.assertIn("another copy failed during the move; the old copy is kept", " ".join(self.item["ref"]["skipped"]))
+        v = self.c.objects[f"{LH}/volumes"]["items"][0]
+        self.assertEqual(2, v["spec"]["numberOfReplicas"])
+        self.assertNotIn(R.MOVING, v["metadata"].get("annotations") or {})
+
+    def test_cancelling_while_a_failed_copy_rebuilds_puts_the_copy_count_back(self):
+        self._build_new_copy_while_k2_fails()
+        R.status(self.item)
+        R.cancel_run(self.item, {})
+        v = self.c.objects[f"{LH}/volumes"]["items"][0]
+        self.assertEqual(2, v["spec"]["numberOfReplicas"])
+        self.assertNotIn(R.MOVING, v["metadata"].get("annotations") or {})
 
     def test_the_volume_is_marked_as_moving_a_copy_until_it_settles(self):
         # Longhorn calls a volume asking for one more copy than it has
@@ -187,7 +235,7 @@ class JobTests(unittest.TestCase):
         self.c.objects[f"{LH}/replicas"]["items"].append(replica("v0", "k1", n=1, healthy=True))
         new = self.c.objects[f"{LH}/replicas"]["items"][-1]
         new["spec"]["healthyAt"] = "now"
-        self.c.objects[f"{LH}/engines"]["items"] = [{"spec": {"volumeName": "v0"}, "status": {"replicaModeMap": {new["metadata"]["name"]: "RW"}}}]
+        self.c.objects[f"{LH}/engines"]["items"] = [{"spec": {"volumeName": "v0"}, "status": {"replicaModeMap": {"v0-r-k2-0": "RW", new["metadata"]["name"]: "RW"}}}]
         R.status(self.item)                                  # old copy removed: still marked
         self.assertEqual("2", notes().get(R.MOVING))
         R.status(self.item)                                  # settled

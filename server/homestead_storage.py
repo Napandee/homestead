@@ -123,7 +123,8 @@ def claim_references():
 
     Longhorn knows only the pods using a volume now, so a stopped container's
     volume looked the same as one nothing uses at all - and only the second
-    is safe to think about deleting.
+    is safe to think about deleting. A kind that cannot be listed raises
+    rather than counting as unused; only KubeVirt being absent means no VMs.
     """
     refs = {}
 
@@ -140,10 +141,7 @@ def claim_references():
             ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
             ("DaemonSet", "/apis/apps/v1/daemonsets", lambda o: o["spec"]["template"]["spec"]),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
-        try:
-            items = kget(path).get("items", [])
-        except Exception:
-            continue
+        items = kget(path).get("items", [])
         for obj in items:
             try:
                 note(obj["metadata"]["namespace"], claims_of(spec_of(obj)), f"{kind}/{obj['metadata']['name']}")
@@ -159,7 +157,9 @@ def claim_references():
                     refs.setdefault(("__prefix__", ns, prefix), []).append(f"StatefulSet/{name}")
     try:
         vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
         vms = []
     for vm in vms:
         volumes = ((((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])

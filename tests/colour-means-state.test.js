@@ -4,12 +4,11 @@
 // healthy page is calm (#490).
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 const read = f => fs.readFileSync(f, "utf8");
 // A top-level `const NAME = {...};` object literal, evaluated.
 const map = (file, name) => {
-  const src = read(file), from = src.indexOf(`const ${name} = {`);
-  assert.ok(from >= 0, `${name} in ${file}`);
-  return Function(`return (${src.slice(src.indexOf("{", from), src.indexOf("};", from) + 1)})`)();
+  return Function(`${between(read(file), `const ${name} = {`, "};", { through: true })} return ${name};`)();
 };
 
 test("Image Cache: only active is green; rollback, stopped and scheduled are neutral", () => {

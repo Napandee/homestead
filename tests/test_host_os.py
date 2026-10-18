@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_os as HOST_OS
+import homestead_hostrun as HOSTRUN
 
 UBUNTU = """OS Ubuntu 24.04.3 LTS
 OSID ubuntu 24.04
@@ -77,11 +78,23 @@ class ParseTests(unittest.TestCase):
 
 
 class Host:
-    def __init__(self, out):
+    def __init__(self, out, held_by=""):
         self.out, self.scripts = out, []
+        self.held_by, self.holds, self.let_go_of, self.changes = held_by, [], [], []
 
-    def run(self, node, script, timeout=60):
+    def hold(self, node, what, seconds=60, holder=""):
+        if self.held_by:
+            raise HOSTRUN.Busy(f"another change is running on {node}: {self.held_by}")
+        self.holds.append((node, what, seconds))
+        return "this-replica/1"
+
+    def let_go(self, node, holder):
+        self.let_go_of.append((node, holder))
+
+    def run(self, node, script, timeout=60, change="", holder=""):
         self.scripts.append(script)
+        if change:
+            self.changes.append((change, holder))
         return self.out(script) if callable(self.out) else self.out, ""
 
 
@@ -174,6 +187,51 @@ class StateTests(unittest.TestCase):
         self.assertIn("--force-confold upgrade --with-new-pkgs", started)
         self.assertNotIn("dist-upgrade", started, "no package is ever removed")
         self.assertEqual(("host-os", "Install 3 updates on node-1"), ops.started[0][:2])
+
+    def test_updates_hold_the_host_until_the_job_ends(self):
+        host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU)
+        self.bind(host)
+        ops = Ops()
+        HOST_OS.upgrade_start("node-1", ops)
+        ref = ops.started[0][2]
+        self.assertEqual([("node-1", "Install 3 updates on node-1")], [h[:2] for h in host.holds])
+        self.assertGreater(host.holds[0][2], 7200, "held as long as an upgrade may run")
+        self.assertEqual([("Install 3 updates on node-1", "this-replica/1")], host.changes)
+        self.assertEqual([], host.let_go_of, "still held while the update installs")
+        host.out = lambda script: "RUNNING\n" if 'echo "CODE' in script else UBUNTU
+        self.assertEqual("running", HOST_OS.status({"ref": ref}, now=ref["since"] + 60)[0])
+        self.assertEqual([], host.let_go_of)
+        host.out = lambda script: "CODE 0\n" if 'echo "CODE' in script else UBUNTU
+        self.assertEqual("succeeded", HOST_OS.status({"ref": ref}, now=ref["since"] + 120)[0])
+        self.assertEqual([("node-1", "this-replica/1")], host.let_go_of)
+
+    def test_stopping_tracking_the_updates_lets_go_of_the_host_at_once(self):
+        host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU)
+        self.bind(host)
+        ops = Ops()
+        HOST_OS.upgrade_start("node-1", ops)
+        item = {"kind": "host-os", "ref": ops.started[0][2]}
+        plan, run = HOST_OS.OPS.CANCELLERS["host-os"]
+        keeps = " ".join(plan(item)["keeps"])
+        self.assertIn("keep installing on node-1", keeps)
+        self.assertIn("no longer wait", keeps)
+        run(item, {})
+        self.assertEqual([("node-1", "this-replica/1")], host.let_go_of)
+
+    def test_updates_wait_for_another_change_on_the_host(self):
+        host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU, held_by="Prepare /dev/sdb on node-1")
+        self.bind(host)
+        ops = Ops()
+        with self.assertRaisesRegex(ValueError, "another change is running on node-1: Prepare /dev/sdb on node-1"):
+            HOST_OS.upgrade_start("node-1", ops)
+        self.assertFalse([s for s in host.scripts if "systemd-run" in s])
+        self.assertFalse(ops.started)
+
+    def test_holding_automatic_updates_is_a_change(self):
+        host = Host("DONE\n")
+        self.bind(host)
+        HOST_OS.set_hold("node-1", True)
+        self.assertEqual([("Hold automatic updates on node-1", "")], host.changes)
 
     def test_a_finished_upgrade_says_whether_a_restart_is_needed(self):
         host = Host(lambda script: "CODE 0\n" if 'echo "CODE' in script else UBUNTU)

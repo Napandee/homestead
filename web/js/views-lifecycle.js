@@ -1485,13 +1485,23 @@ function jobNext(j) {
     ? `<span class="dim" data-tip="It runs on the host's clock, which the page cannot know. Saving it here pins it to UTC.">—</span>`
     : '<span class="dim">—</span>';
 }
+// A CronJob Homestead did not make (Helm, kubectl) is listed but not edited
+// here: a save would drop the volumes, env and account this page never shows.
+function jobOwner(j) {
+  if (j.managed !== false) return "";
+  return `<div class="dim xs" data-tip="Change it where it was made; Run now still works.">not made here · ${
+    j.managed_by ? `managed by ${esc(j.managed_by)}` : "read-only"}</div>`;
+}
+// The generation of the job the editor opened ("" for a new one): the
+// server refuses the save if its spec changed, or it appeared, since.
+let jobEditing = "";
 async function viewSchedules() {
   const js = await api("/api/schedules");
   paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · schedules in UTC, next runs in your time zone (${esc(yourZone())})`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
       <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>
-        <td><b>${esc(j.name)}</b></td>
+        <td><b>${esc(j.name)}</b>${jobOwner(j)}</td>
         <td class="small">${jobWhen(j)}</td>
         <td class="small">${jobNext(j)}</td>
         <td class="mono small dim">${esc(j.image)}</td>
@@ -1499,12 +1509,13 @@ async function viewSchedules() {
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill low">running</span>' : '<span class="pill ok">active</span>'}</td>
         <td data-actions>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
-          { label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
-          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
+          ...(j.managed === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
+          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }])], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
 }
 window.jobEdit = (j) => {
   j = j || { name: "", schedule: "0 3 * * *", image: "alpine:3.20", command: "" };
+  jobEditing = j.generation ?? "";
   modal(j.name ? "Edit · " + j.name : "New schedule", `
     <div class="f"><label>Name</label><input type="text" id="j_name" value="${esc(j.name)}" ${j.name ? "readonly" : ""} placeholder="nightly-prune"></div>
     ${scheduleBuilder(j.schedule, j.time_zone || "Etc/UTC")}
@@ -1519,7 +1530,8 @@ window.jobEdit = (j) => {
 };
 window.jobSave = async () => {
   const body = { name: $("#j_name").value.trim(), schedule: $("#lj_cron").value.trim(),
-    image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked };
+    image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked,
+    generation: jobEditing };
   if (!body.name || !body.command) return toast("Name and command are required", "bad");
   try {
     await api("/api/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -2740,14 +2752,22 @@ function movesHtml(moves) {
   }).join("");
 }
 
+/* A failed read of the moves is not "no moves": say so, with Retry. */
+function movesUnreadHtml(error) {
+  return `<div class="note bad">The moves could not be read: ${esc(error)}
+    <button class="btn sm" onclick="movesRepaint()">Retry</button></div>`;
+}
+window.movesUnreadHtml = movesUnreadHtml;
+
 /* Only the moves section repaints while one runs, so a form half-filled
    elsewhere on the page is left alone. */
 async function watchMoves() {
   clearTimeout(window.__moveTimer);
   if (!$("#movesList")) return;
-  const moves = await api("/api/move/moves").catch(() => null);
+  const moves = await api("/api/move/moves").catch(e => ({ error: e.message }));
   const host = $("#movesList");
-  if (moves && host) host.innerHTML = movesHtml(moves);
+  if (host) host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+  if (moves.error) return;
   if (window.applyRole) window.applyRole();
   if ((moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending)) window.__moveTimer = setTimeout(watchMoves, 4000);
 }
@@ -2925,7 +2945,9 @@ window.confirmImport = async () => {
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
 window.moveDismiss = async (id = "") => {
-  const all = await api("/api/move/moves").catch(() => []);
+  let all;
+  try { all = await api("/api/move/moves"); }
+  catch (e) { return toast(`The moves could not be read, so nothing was cleared: ${e.message}`, "bad"); }
   const failed = id ? all.find(m => m.id === id && m.status === "failed") : null;
   const rows = all.filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
   if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
@@ -2939,7 +2961,7 @@ window.moveDismiss = async (id = "") => {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");
     const host = $("#movesList");
-    if (host) host.innerHTML = movesHtml(await api("/api/move/moves").catch(() => []));
+    if (host) host.innerHTML = await api("/api/move/moves").then(movesHtml, e => movesUnreadHtml(e.message));
     if (window.applyRole) applyRole();
   } catch (e) { toast(e.message, "bad"); }
 };

@@ -18,6 +18,7 @@ import json
 import os
 import time
 
+import homestead_hostrun as HOSTRUN
 import homestead_shared as SHARED
 
 kget = None
@@ -80,7 +81,10 @@ def tick():
     for node, ready in servers():
         if not ready or node in state:
             continue
-        out, err = hostrun.run(node, script(), timeout=60)
+        try:
+            out, err = hostrun.run(node, script(), timeout=60, change=f"Mark the auto-deploy files on {node}")
+        except HOSTRUN.Busy:
+            continue    # another change has the host: next round, and the others go on (#597)
         if "done" not in out.split():
             raise ValueError(f"could not check {node}'s auto-deploy folder: {(err or out)[:200]}")
         marked = [line for line in out.splitlines() if line.startswith("/")]

@@ -1082,10 +1082,14 @@
     },
     "/api/schedules": [
       { name: "nightly-db-dump", namespace: "lab", schedule: "0 3 * * *", time_zone: "Etc/UTC", image: "docker.io/library/postgres:16",
-        command: "pg_dumpall -h db -U paperless > /backup/all.sql", last: "2026-09-22T03:00:04Z", suspend: false, active: 0 },
+        command: "pg_dumpall -h db -U paperless > /backup/all.sql", last: "2026-09-22T03:00:04Z", suspend: false, active: 0,
+        managed: true, managed_by: "", generation: 3 },
       { name: "prune-recordings-older-than-thirty-days", namespace: "lab", schedule: "*/30 * * * *",
         image: "ghcr.io/example/long-image-name-for-cleanup-tasks:2026.09.1", command: "find /media -mtime +30 -delete",
-        last: "2026-09-22T13:30:00Z", suspend: true, active: 0 }],
+        last: "2026-09-22T13:30:00Z", suspend: true, active: 0, managed: true, managed_by: "", generation: 7 },
+      { name: "restic-backup", namespace: "lab", schedule: "15 2 * * *", time_zone: "Etc/UTC", image: "docker.io/restic/restic:0.17.3",
+        command: "restic backup /data", last: "2026-09-22T02:15:02Z", suspend: false, active: 0,
+        managed: false, managed_by: "Helm", generation: 1 }],
     "/api/events": () => [
       { obj: "frigate-7d9f8c6b5-x2abc", ns: "lab", kind: "Pod", type: "Normal", reason: "Pulled",
         msg: "Successfully pulled image \"ghcr.io/blakeblackshear/frigate:stable\" in 12.4s", count: 1,
@@ -2965,6 +2969,7 @@ ssh_pwauth: true
   responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
     { name: "alex", role: "operator", last_login: "2026-09-28 07:06" }, { name: "kiosk", role: "viewer", last_login: "" }];
   responses["/api/auth/role"] = { ok: true };
+  responses["/api/auth/logout"] = { ok: true };
   responses["/api/auth/history"] = [
     { at: ago(4), event: "signin", user: "demo", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "kept signed in" },
     { at: ago(38), event: "signin", user: "alex", ok: true, ip: "172.70.4.18", device: "Safari on iOS", via: "Cloudflare", detail: "" },

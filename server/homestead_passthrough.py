@@ -368,7 +368,7 @@ def enable_iommu(node):
     facts = inspect(node)
     if facts["iommu"]:
         return {"ok": True, "detail": f"IOMMU is on on {node} already"}
-    out, err = hostrun.run(node, iommu_script(facts["cpu"]), timeout=120)
+    out, err = hostrun.run(node, iommu_script(facts["cpu"]), timeout=120, change=f"Turn on IOMMU on {node}")
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
     if not done:
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-200:]
@@ -453,7 +453,8 @@ def give(node, address):
     blocked = [f"{r['address']} ({'; '.join(r['problems'])})" for r in moving if r["problems"]]
     if blocked:
         raise ValueError(f"{address} shares IOMMU group {row['group']} with {', '.join(blocked)}, which stay with the host")
-    out, err = hostrun.run(node, vfio_script([r["address"] for r in moving], True), timeout=180)
+    out, err = hostrun.run(node, vfio_script([r["address"] for r in moving], True), timeout=180,
+                           change=f"Hand {address} on {node} to VMs")
     if "OK" not in out.split():
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-200:]
         raise ValueError(f"{address} was not handed over: {problem}")
@@ -484,7 +485,7 @@ def take_back(node, address):
     # (a GPU's HDMI audio) were handed over with it, in the same slot.
     slot = address.rsplit(".", 1)[0] + "."
     group += [a for a in listed if a.startswith(slot) and a not in group]
-    out, err = hostrun.run(node, vfio_script(group, False), timeout=120)
+    out, err = hostrun.run(node, vfio_script(group, False), timeout=120, change=f"Give {address} back to {node}")
     if "OK" not in out.split():
         raise ValueError(f"{address} was not given back: {(err or out)[-200:]}")
     # The vendor:device each was handed over as, as recorded then: a device

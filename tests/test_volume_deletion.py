@@ -20,7 +20,7 @@ class VolumeDeletionTests(unittest.TestCase):
             if path in self.objects:
                 return self.objects[path]
             if path.endswith(("/pods", "/deployments", "/statefulsets", "/daemonsets", "/jobs",
-                              "/virtualmachines")):
+                              "/cronjobs", "/virtualmachines")):
                 return {"items": []}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
@@ -32,9 +32,9 @@ class VolumeDeletionTests(unittest.TestCase):
                      lambda name: self.backup_rows, self.cache,
                      {"kube-system", "longhorn-system"}, "lab")
 
-    def claim(self, policy="Delete", state="detached", node="", actual=0, labels=None):
-        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/media"] = {
-            "metadata": {"name": "media", "namespace": "lab", "uid": "uid-1",
+    def claim(self, policy="Delete", state="detached", node="", actual=0, labels=None, name="media"):
+        self.objects[f"/api/v1/namespaces/lab/persistentvolumeclaims/{name}"] = {
+            "metadata": {"name": name, "namespace": "lab", "uid": "uid-1",
                          "resourceVersion": "10", "labels": labels or {}},
             "spec": {"volumeName": "pv-1", "storageClassName": "longhorn-r2",
                      "accessModes": ["ReadWriteOnce"],
@@ -197,6 +197,56 @@ class VolumeDeletionTests(unittest.TestCase):
         self.objects["/apis/apps/v1/namespaces/lab/deployments"] = None   # unreadable
         plan = volumes.deletion_plan("lab", "media")
         self.assertTrue(any("Homestead" in reason for reason in plan["blocking_reasons"]))
+
+    def test_a_cronjob_that_mounts_the_claim_blocks_the_delete(self):
+        """A CronJob between runs has no pod, so only its template says it
+        needs the claim; the next run would find it gone."""
+        self.claim()
+        self.objects["/apis/batch/v1/namespaces/lab/cronjobs"] = {"items": [{
+            "metadata": {"name": "nightly", "namespace": "lab"},
+            "spec": {"jobTemplate": {"spec": {"template": {"spec": {
+                "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "media"}}],
+                "containers": [{"name": "backup", "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
+            }}}}},
+        }]}
+        plan = volumes.deletion_plan("lab", "media")
+        self.assertEqual([("CronJob", "nightly")], [(row["kind"], row["name"]) for row in plan["consumers"]])
+        self.assertTrue(plan["blocked"])
+        self.assertTrue(any("object reference" in reason for reason in plan["blocking_reasons"]))
+
+    def test_a_powered_off_vms_data_volume_disk_blocks_the_delete(self):
+        """A VM disk given as dataVolume names the claim without a
+        persistentVolumeClaim entry; powered off, it is not attached either."""
+        self.claim()
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"] = {"items": [{
+            "metadata": {"name": "router", "namespace": "lab"},
+            "spec": {"runStrategy": "Halted", "template": {"spec": {
+                "volumes": [{"name": "rootdisk", "dataVolume": {"name": "media"}}]}}},
+        }]}
+        plan = volumes.deletion_plan("lab", "media")
+        self.assertEqual([("VirtualMachine", "router")], [(row["kind"], row["name"]) for row in plan["consumers"]])
+        self.assertTrue(plan["blocked"])
+
+    def test_a_statefulset_scaled_to_zero_still_owns_its_template_claim(self):
+        """data-db-0 comes from volumeClaimTemplates, not the pod template's
+        volumes; scaled back up, the set would make a new, empty claim."""
+        self.claim(name="data-db-0")
+        self.objects["/apis/apps/v1/namespaces/lab/statefulsets"] = {"items": [{
+            "metadata": {"name": "db", "namespace": "lab"},
+            "spec": {"replicas": 0, "template": {"spec": {
+                "containers": [{"name": "db", "volumeMounts": [{"name": "data", "mountPath": "/var/lib/db"}]}]}},
+                "volumeClaimTemplates": [{"metadata": {"name": "data"}}]},
+        }]}
+        plan = volumes.deletion_plan("lab", "data-db-0")
+        self.assertEqual([("StatefulSet", "db")], [(row["kind"], row["name"]) for row in plan["consumers"]])
+        self.assertEqual("/var/lib/db", plan["consumers"][0]["mounts"][0]["path"])
+        self.assertTrue(plan["blocked"])
+
+    def test_an_unreadable_cronjob_list_blocks_the_delete(self):
+        self.claim()
+        self.objects["/apis/batch/v1/namespaces/lab/cronjobs"] = None   # unreadable
+        plan = volumes.deletion_plan("lab", "media")
+        self.assertIn("workload dependency inventory is incomplete", plan["blocking_reasons"])
 
 
 if __name__ == "__main__":

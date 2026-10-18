@@ -6,9 +6,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 const source = fs.readFileSync("web/js/views-network.js", "utf8");
-const helpers = source.slice(source.indexOf("function networkAttention(data)"), source.indexOf("window.networkShow ="));
+const helpers = between(source, "function networkAttention(data)", "window.networkShow =");
 const ctx = { CSS: { escape: s => String(s) } };
 vm.createContext(ctx);
 vm.runInContext(helpers + "\nthis.networkAttention = networkAttention; this.networkAttentionCounts = networkAttentionCounts;", ctx);

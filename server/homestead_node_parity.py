@@ -165,7 +165,8 @@ def hosts(ready, state, longhorn=True):
         if (done.get(node) or {}).get("steps", 1) >= HOST_STEPS:
             continue
         try:
-            out, err = hostrun.run(node, f"LONGHORN={1 if longhorn else 0}\n" + HOST_SCRIPT, timeout=90)
+            out, err = hostrun.run(node, f"LONGHORN={1 if longhorn else 0}\n" + HOST_SCRIPT, timeout=90,
+                                   change=f"Set {node} up as the other hosts are")
         except Exception as error:
             out, err = "", str(error)
         words = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)

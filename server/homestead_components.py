@@ -33,6 +33,7 @@ import urllib.request
 
 import homestead_helm as HELM
 import homestead_operations as OPS
+import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_routes
 
 kget = ksend = None
@@ -394,6 +395,8 @@ def upgrade(component, target, options=None):
         detail = _start_cluster(target)
     elif component == "longhorn":
         import homestead_lhv2_upgrade as V2
+        # Before anything changes: the job is recorded only after the upgrade starts.
+        STORAGE_CONFLICTS.require_clear(OPS._read(), "platform-upgrade", {"component": "longhorn"})
         mode = (options or {}).get("v2_mode", "offline")
         V2.require_upgrade(target, mode)
         if mode == "live" and (options or {}).get("confirm_backup") is not True:

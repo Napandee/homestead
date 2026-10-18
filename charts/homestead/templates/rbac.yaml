@@ -215,10 +215,11 @@ rules:
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Replicas elect the one that raises alerts and advances moves.
+  # Replicas elect the one that raises alerts and advances moves; the leader
+  # lists every Lease to see which node answers for each kube-vip address.
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
-    verbs: [get, create, update]
+    verbs: [get, list, create, update]
   - apiGroups: ["certificates.k8s.io"]
     resources: [certificatesigningrequests]
     verbs: [get, list, watch]

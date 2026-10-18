@@ -6,6 +6,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 
 const bell = fs.readFileSync("web/js/homestead-update.js", "utf8");
 const ops = fs.readFileSync("web/js/operations.js", "utf8");
@@ -17,14 +18,14 @@ test("the bell's running and failed jobs open the job", () => {
 });
 
 test("a job with its own progress view opens there; the rest open on their card", () => {
-  const open = ops.slice(ops.indexOf("window.openJob = async id =>"), ops.indexOf("window.jobsDialog = () =>"));
+  const open = between(ops, "window.openJob = async id =>", "window.jobsDialog = () =>");
   assert.match(open, /cluster-shutdown[^\n]*clusterShutdown\(\)/);
   assert.match(open, /disk-v2-convert[^\n]*diskV2Watch\(id\)/);
   assert.match(open, /jobsDialog\(\);\s*selectJob\(id\);/);
 });
 
 test("Open on a card still goes where the job's work is, failed or not", () => {
-  const open = ops.slice(ops.indexOf("window.openOperation ="), ops.indexOf("window.openOperation =") + 2500);
+  const open = between(ops, "window.openOperation =", "\n};\n");
   assert.doesNotMatch(open, /status === "failed"\) return openJob/);
 });
 

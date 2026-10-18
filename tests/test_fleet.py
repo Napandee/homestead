@@ -106,8 +106,8 @@ def wire(clusters):
 
 class SigningTests(unittest.TestCase):
     def setUp(self):
-        self.a = Cluster("loft", "http://10.0.0.1:8088", {})
-        self.b = Cluster("shed", "http://10.0.0.2:8088", {})
+        self.a = Cluster("loft", "https://10.0.0.1:8088", {})
+        self.b = Cluster("shed", "https://10.0.0.2:8088", {})
         wire([self.a, self.b])
         self.a.fleet.join(self.b.url, "admin", "secret")
 
@@ -150,7 +150,7 @@ class SigningTests(unittest.TestCase):
             self.b.fleet.verify(headers, "GET", "/api/nodes")
 
     def test_an_unlinked_homestead_is_refused(self):
-        stranger = Cluster("barn", "http://10.0.0.9:8088", {})
+        stranger = Cluster("barn", "https://10.0.0.9:8088", {})
         stranger.fleet._ensure()
         headers = stranger.fleet.sign("GET", "/api/nodes")
         with self.assertRaises(PermissionError):
@@ -159,9 +159,9 @@ class SigningTests(unittest.TestCase):
 
 class LinkingTests(unittest.TestCase):
     def setUp(self):
-        self.a = Cluster("loft", "http://10.0.0.1:8088", {})
-        self.b = Cluster("shed", "http://10.0.0.2:8088", {})
-        self.c = Cluster("garage", "http://10.0.0.3:8088", {})
+        self.a = Cluster("loft", "https://10.0.0.1:8088", {})
+        self.b = Cluster("shed", "https://10.0.0.2:8088", {})
+        self.c = Cluster("garage", "https://10.0.0.3:8088", {})
         wire([self.a, self.b, self.c])
 
     def ids(self, cluster):
@@ -239,26 +239,26 @@ class LinkingTests(unittest.TestCase):
     def test_the_address_follows_homestead_onto_its_vip(self):
         where = {"url": self.a.url}
         self.a.fleet.bind(self.a.kube.get, self.a.kube.send, "lab", "2.8.300", site=lambda: "Loft",
-                          address=lambda: where["url"], earlier=lambda: ("http://10.0.0.1:8088",))
+                          address=lambda: where["url"], earlier=lambda: ("https://10.0.0.1:8088",))
         self.a.fleet.join(self.b.url, "admin", "secret")
-        self.assertEqual("http://10.0.0.1:8088", self.b.fleet.member("loft")["url"])
+        self.assertEqual("https://10.0.0.1:8088", self.b.fleet.member("loft")["url"])
         # Homestead moved onto its VIP: the node's address it was given gives way.
-        where["url"] = "http://10.0.0.200:8088"
+        where["url"] = "https://10.0.0.200:8088"
 
         self.a.fleet.summary()
-        self.assertEqual("http://10.0.0.1:8088", self.b.fleet.member("loft")["url"],
+        self.assertEqual("https://10.0.0.1:8088", self.b.fleet.member("loft")["url"],
                          "looking at the list changes nothing; the leader's loop does")
-        self.assertEqual("http://10.0.0.200:8088", self.a.fleet.follow_address())
-        self.assertEqual("http://10.0.0.200:8088", self.a.fleet.summary()["address"])
-        self.assertEqual("http://10.0.0.200:8088", self.b.fleet.member("loft")["url"], "the others are told")
+        self.assertEqual("https://10.0.0.200:8088", self.a.fleet.follow_address())
+        self.assertEqual("https://10.0.0.200:8088", self.a.fleet.summary()["address"])
+        self.assertEqual("https://10.0.0.200:8088", self.b.fleet.member("loft")["url"], "the others are told")
         # An address an admin typed is theirs.
         self.a.fleet.set_address("http://loft.lan:8088")
-        where["url"] = "http://10.0.0.201:8088"
+        where["url"] = "https://10.0.0.201:8088"
         self.assertEqual("", self.a.fleet.follow_address())
         self.assertEqual("http://loft.lan:8088", self.a.fleet.summary()["address"])
         # A VIP changed under it: the old VIP gives way to the new one.
-        self.a.fleet.set_address("http://10.0.0.200:8088")
-        self.assertEqual("http://10.0.0.201:8088", self.a.fleet.follow_address(("http://10.0.0.200:8088",)))
+        self.a.fleet.set_address("https://10.0.0.200:8088")
+        self.assertEqual("https://10.0.0.201:8088", self.a.fleet.follow_address(("https://10.0.0.200:8088",)))
 
     def test_the_summary_says_who_answers(self):
         self.a.fleet.join(self.b.url, "admin", "secret")
@@ -277,7 +277,8 @@ class RelayTests(unittest.TestCase):
         self.a = Cluster("loft", "http://127.0.0.1:1", {})
         self.b = Cluster("shed", "http://127.0.0.1:2", {})
         wire([self.a, self.b])
-        self.a.fleet.join(self.b.url, "admin", "secret")
+        # Real servers on the loopback: plain http://, agreed to as the Link dialog's tick does.
+        self.a.fleet.join(self.b.url, "admin", "secret", plain_ok=True)
 
     def test_the_request_loses_cookies_and_gains_a_signature(self):
         head = self.a.fleet.request_head(
@@ -450,8 +451,8 @@ class RelayTests(unittest.TestCase):
 class MoveClientTests(unittest.TestCase):
     def test_linked_clusters_are_move_sources_without_a_password(self):
         import homestead_move as move
-        a = Cluster("loft", "http://10.0.0.1:8088", {})
-        b = Cluster("shed", "http://10.0.0.2:8088", {})
+        a = Cluster("loft", "https://10.0.0.1:8088", {})
+        b = Cluster("shed", "https://10.0.0.2:8088", {})
         wire([a, b])
         a.fleet.join(b.url, "admin", "secret")
         move.bind(a.kube.get, a.kube.send, "lab", "2.8.300")
@@ -477,8 +478,8 @@ class LegacyClusterTests(unittest.TestCase):
     def setUp(self):
         import homestead_move as move
         self.move = move
-        self.a = Cluster("loft", "http://10.0.0.1:8088", {})
-        self.b = Cluster("shed", "http://10.0.0.2:8088", {})
+        self.a = Cluster("loft", "https://10.0.0.1:8088", {})
+        self.b = Cluster("shed", "https://10.0.0.2:8088", {})
         wire([self.a, self.b])
         move.bind(self.a.kube.get, self.a.kube.send, "lab", "2.8.300")
         move.FLEET = self.a.fleet
@@ -509,3 +510,51 @@ class LegacyClusterTests(unittest.TestCase):
             self.move.link_legacy("oldshed")
         join.assert_not_called()
         self.assertEqual(["shed"], [row["name"] for row in self.move.list_clusters()])
+
+
+class PlainHttpConsentTests(unittest.TestCase):
+    """Linking sends the admin password there and the clusters' key; unlinking
+    and leaving send a new key to the rest. Over plain http:// the server does
+    that only when the request says the person agreed (#602)."""
+
+    def setUp(self):
+        self.a = Cluster("loft", "https://198.51.100.1:8443", {})
+        self.b = Cluster("shed", "http://198.51.100.2:8088", {})
+        self.c = Cluster("garage", "https://198.51.100.3:8443", {})
+        wire([self.a, self.b, self.c])
+
+    def test_linking_a_plain_address_without_consent_sends_nothing(self):
+        with self.assertRaisesRegex(ValueError, "unencrypted.*plain http://"):
+            self.a.fleet.join(self.b.url, "admin", "secret")
+        self.assertEqual([], self.b.fleet.members(), "the password and key were never sent there")
+        self.assertEqual([self.a.fleet.self_id()], [m["id"] for m in self.a.fleet.members()], "nothing was linked")
+
+    def test_with_consent_it_links(self):
+        self.a.fleet.join(self.b.url, "admin", "secret", plain_ok=True)
+        self.assertEqual(2, len(self.b.fleet.members()))
+
+    def test_this_clusters_own_plain_address_needs_consent_too(self):
+        with self.assertRaisesRegex(ValueError, "plain http://"):
+            self.a.fleet.join(self.c.url, "admin", "secret", own_url="http://198.51.100.1:8088")
+
+    def test_unlinking_sends_a_new_key_to_a_plain_member_only_with_consent(self):
+        self.a.fleet.join(self.b.url, "admin", "secret", plain_ok=True)
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        with self.assertRaisesRegex(ValueError, "(?i)shed.*plain http://"):
+            self.a.fleet.remove(self.c.fleet.self_id())
+        self.assertEqual(3, len(self.a.fleet.members()), "nothing changed")
+        self.a.fleet.remove(self.c.fleet.self_id(), plain_ok=True)
+        self.assertEqual(2, len(self.a.fleet.members()))
+
+    def test_leaving_sends_a_new_key_to_a_plain_member_only_with_consent(self):
+        self.a.fleet.join(self.b.url, "admin", "secret", plain_ok=True)
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        with self.assertRaisesRegex(ValueError, "(?i)shed.*plain http://"):
+            self.c.fleet.leave()
+        self.assertEqual(3, len(self.c.fleet.members()), "nothing changed")
+        self.c.fleet.leave(plain_ok=True)
+        self.assertEqual(1, len(self.c.fleet.members()))
+
+    def test_https_only_needs_no_consent(self):
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        self.a.fleet.remove(self.c.fleet.self_id())

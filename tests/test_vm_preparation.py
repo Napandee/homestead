@@ -1,5 +1,7 @@
 """VM previews must never provision or modify a dependency."""
+import base64
 import copy
+import json
 import unittest
 import urllib.error
 from unittest import mock
@@ -8,6 +10,11 @@ import test_vm_edit as edit_fixtures
 import test_vm_create as create_fixtures
 import homestead_vms as vms
 import homestead_imports as imports
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 
 class EditPreparationTests(unittest.TestCase):
@@ -242,6 +249,25 @@ class CreatePreparationTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError):
                 imports.commit_vm(prepared)
         self.assertEqual(["POST", "POST"], [method for method, _, _ in self.fixture.sent])
+
+    def test_cloud_init_password_reaches_the_vm_as_typed(self):
+        # Unquoted, YAML reads these as a comment, null, an alias, a mapping
+        # or a number. A JSON string is a YAML double-quoted scalar.
+        for password in ("abc def #ghi12", "#secretpass1", "*secretpass1", "abc: defghij", "1234567890",
+                         "päss🔑word12"):
+            with self.subTest(password=password):
+                prepared = imports.prepare_vm({**self.body, "password": password}, create_fixtures.K3S_BARE, "storage")
+                userdata = base64.b64decode(prepared["secrets"][0]["data"]["userdata"]).decode()
+                line = next(line for line in userdata.splitlines() if line.startswith("password: "))
+                value = line[len("password: "):]
+                self.assertTrue(value.startswith('"'), line)
+                # PyYAML, as cloud-init uses, reads each \u escape on its own,
+                # so an emoji written as a surrogate pair comes back as two
+                # characters chpasswd cannot use.
+                self.assertNotRegex(value, r"\\u[dD][89a-fA-F]", line)
+                self.assertEqual(password, json.loads(value))
+                if yaml is not None:
+                    self.assertEqual(password, yaml.safe_load(userdata)["password"])
 
 
 if __name__ == "__main__":

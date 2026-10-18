@@ -200,7 +200,7 @@ class Sessions(unittest.TestCase):
         self.assertTrue(int(body["metadata"]["annotations"][files.SEEN]) > 0)
 
     def test_closing_waits_for_the_helper_to_go(self):
-        self.pods["homestead-files-data"] = {"status": {"phase": "Running"}}
+        self.pods["homestead-files-data"] = HELPER_FOR_DATA()
         checks = []
 
         def sleep(_):
@@ -210,16 +210,22 @@ class Sessions(unittest.TestCase):
         answer = files.close_session("lab", "data", wait=10, sleep=sleep)
         self.assertEqual({"ok": True, "stopped": True}, answer)
         self.assertEqual("DELETE", self.sent[0][0])
-        self.pods["homestead-files-data"] = {"status": {"phase": "Running"}}
+        self.pods["homestead-files-data"] = HELPER_FOR_DATA()
         self.assertFalse(files.close_session("lab", "data", wait=2, sleep=lambda _: None)["stopped"])
 
     def test_keepalive_says_whether_the_helper_is_still_there(self):
         self.assertFalse(files.keepalive("lab", "data")["running"])
-        self.pods["homestead-files-data"] = {"status": {"phase": "Running"}}
+        self.pods["homestead-files-data"] = HELPER_FOR_DATA()
         answer = files.keepalive("lab", "data")
         self.assertTrue(answer["running"])
         self.assertEqual(60, answer["idle_seconds"])
         self.assertEqual("PATCH", self.sent[-1][0])
+
+
+def HELPER_FOR_DATA():
+    """A running helper as Kubernetes returns it: it mounts the claim it is for."""
+    return {"status": {"phase": "Running"},
+            "spec": {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]}}
 
 
 class IdleCleanup(unittest.TestCase):

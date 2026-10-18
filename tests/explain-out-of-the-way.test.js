@@ -3,6 +3,7 @@
 // at the top of a page or the end of a card (#494).
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 const read = f => fs.readFileSync(f, "utf8");
 
 test("Image Cache explains how images are kept in a guide, not a note above the table", () => {
@@ -32,9 +33,8 @@ test("Data Protection explains restore tests in a guide and says when testing is
 });
 
 test("the NFS server's recovery detail is in UI.more, like the SMB card", () => {
-  const src = read("web/js/platform.js"), from = src.indexOf("window.nfsRecovery =");
-  assert.ok(from >= 0);
-  const body = src.slice(from, src.indexOf("\n};\n", from));
+  const src = read("web/js/platform.js");
+  const body = between(src, "window.nfsRecovery =", "\n};\n");
   assert.match(body, /UI\.more\(/);
   assert.doesNotMatch(body, /<details/);
   assert.doesNotMatch(read("web/js/views-storage.js"), /<div class="dim xs"[^>]*>NFS is a separate opt-in container/);

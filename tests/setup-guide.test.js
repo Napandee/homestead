@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 function fixture(demo = false) {
   const saved = new Map();
@@ -202,7 +203,7 @@ function rendered() {
 }
 /* The buttons of a step's own row, left to right, as their class lists. */
 const rowButtons = html => {
-  const row = html.slice(html.lastIndexOf('<div class="ui-actions'));
+  const row = between(html, /<div class="ui-actions(?![\s\S]*<div class="ui-actions)/, null);   // the last one
   return [...row.matchAll(/<button\b[^>]*class="([^"]*)"/g)].map(m => m[1]);
 };
 

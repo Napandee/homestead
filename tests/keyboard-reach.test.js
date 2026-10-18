@@ -3,6 +3,7 @@
 // Enter or Space, and every icon-only button has a name (#487).
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const read = f => fs.readFileSync(f, "utf8");
 const html = read("web/index.html");
 
@@ -19,8 +20,8 @@ test("port links and movable tags are buttons", () => {
 });
 
 test("a VM card's ⋯ menu is the shared action bar, named for its VM", () => {
-  const src = read("web/js/views-vms.js"), from = src.indexOf("function vmActions(");
-  const body = src.slice(from, src.indexOf("\n}\n", from));
+  const src = read("web/js/views-vms.js");
+  const body = between(src, "function vmActions(", "\n}\n");
   assert.match(body, /actionBar\(/);
   assert.doesNotMatch(body, /<details class="actionmenu">/);
 });

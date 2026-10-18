@@ -7,8 +7,19 @@ a privileged Alpine pod pinned to the node, sharing the host's namespaces,
 that runs one script through nsenter into PID 1 - the host as SSH gives it -
 and is deleted when the script ends. Only code in Homestead calls it, with
 scripts written here, never text from a request.
+
+A run that changes a host - a disk prepared, its network or OS changed -
+first takes that host's Lease (coordination.k8s.io), so two changes never
+run on one host at once: the second is refused, saying what holds it. A
+read takes nothing and is never held back. The lease is renewed while the
+run lasts and given back when it ends; one left by a replica that stopped
+runs out and is taken over (#597).
 """
+import datetime
+import hashlib
+import os
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -31,6 +42,16 @@ HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "sh", "-c"]
 # well after the host reports Ready; half a minute was not enough (e2e, bonds).
 EXEC_TRIES = 18
 EXEC_PAUSE = 5
+# A change's lease runs out this long after its last renewal, renewed this
+# often while its script runs: a replica that stops frees the host within a
+# minute. A hold over several runs (hold()) sets its own length.
+LEASE_SECONDS = 60
+RENEW_EVERY = 20
+IDENTITY = os.environ.get("HOSTNAME", "") or f"homestead-{os.getpid()}"
+
+
+class Busy(ValueError):
+    """Another change holds the host's lease."""
 
 
 def bind(_kget, _ksend, _exec_in, namespace):
@@ -38,11 +59,96 @@ def bind(_kget, _ksend, _exec_in, namespace):
     kget, ksend, exec_in, NS = _kget, _ksend, _exec_in, namespace
 
 
+def _safe(node):
+    return "".join(c if c.isalnum() or c == "-" else "-" for c in node.lower()).strip("-")
+
+
 def pod_name(node):
     """A helper's name: the node it runs on, and a part of its own, so two
     runs on one host never share (or delete) one helper (#597)."""
-    safe = "".join(c if c.isalnum() or c == "-" else "-" for c in node.lower()).strip("-")
-    return f"homestead-host-{safe}"[:56].rstrip("-") + "-" + secrets.token_hex(3)
+    return f"homestead-host-{_safe(node)}"[:56].rstrip("-") + "-" + secrets.token_hex(3)
+
+
+def lease_name(node):
+    """The one lease a host's changes take turns with. A part of the name's
+    hash keeps two long names that differ only past the cut apart."""
+    digest = hashlib.sha256(node.encode()).hexdigest()[:6]
+    return f"homestead-host-change-{_safe(node)}"[:56].rstrip("-") + "-" + digest
+
+
+def _lease_path(node=""):
+    base = f"/apis/coordination.k8s.io/v1/namespaces/{NS}/leases"
+    return f"{base}/{lease_name(node)}" if node else base
+
+
+def _stamp(moment):
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _parse(value):
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+
+
+def hold(node, what, seconds=LEASE_SECONDS, holder=""):
+    """Take node's change lease for what, or renew it when holder has it
+    already (keeping the length it was taken for). Returns the holder;
+    raises Busy when another change holds it and it has not run out."""
+    holder = holder or f"{IDENTITY}/{secrets.token_hex(4)}"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    lease = _get(_lease_path(node))
+    if lease is None:
+        body = {"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
+                "metadata": {"name": lease_name(node), "namespace": NS,
+                             "labels": {**NAMES.labels(TASK), NAMES.key("node"): node[:63].rstrip("-._")},
+                             "annotations": {NAMES.key("change"): what}},
+                "spec": {"holderIdentity": holder, "leaseDurationSeconds": int(seconds),
+                         "acquireTime": _stamp(now), "renewTime": _stamp(now), "leaseTransitions": 0}}
+        try:
+            ksend("POST", _lease_path(), body)
+        except urllib.error.HTTPError as error:
+            if error.code == 409:
+                raise Busy(f"another change is starting on {node}: try again in a moment") from None
+            raise
+        return holder
+    spec = lease.get("spec") or {}
+    current = spec.get("holderIdentity") or ""
+    renewed = _parse(spec.get("renewTime")) or _parse(spec.get("acquireTime"))
+    expired = not current or not renewed or (now - renewed).total_seconds() > int(spec.get("leaseDurationSeconds") or 0)
+    meta = lease.setdefault("metadata", {})
+    if current != holder:
+        if not expired:
+            raise Busy(f"another change is running on {node}: "
+                       f"{NAMES.annotation_of(meta, 'change') or 'started by ' + current.split('/')[0]}; "
+                       "try again once it has finished")
+        spec.update(holderIdentity=holder, leaseDurationSeconds=int(seconds), acquireTime=_stamp(now),
+                    leaseTransitions=int(spec.get("leaseTransitions") or 0) + 1)
+        meta.setdefault("annotations", {})[NAMES.key("change")] = what
+    spec["renewTime"] = _stamp(now)
+    lease["spec"] = spec
+    try:
+        # resourceVersion is kept, so two runs taking a lease that ran out at
+        # once cannot both have it: the second is refused with a conflict.
+        ksend("PUT", _lease_path(node), lease)
+    except urllib.error.HTTPError as error:
+        if error.code == 409:
+            raise Busy(f"another change is starting on {node}: try again in a moment") from None
+        raise
+    return holder
+
+
+def let_go(node, holder):
+    """Give node's change lease back, if holder still has it. Never raises:
+    a lease not given back runs out by itself."""
+    try:
+        lease = _get(_lease_path(node))
+        if lease and (lease.get("spec") or {}).get("holderIdentity") == holder:
+            lease["spec"]["holderIdentity"] = ""
+            ksend("PUT", _lease_path(node), lease)
+    except Exception:
+        pass
 
 
 def _get(path):
@@ -96,12 +202,43 @@ def _clear_ended():
                 pass
 
 
-def run(node, script, timeout=120, wait=60, sleep=time.sleep, stdin=b""):
+def run(node, script, timeout=120, wait=60, sleep=time.sleep, stdin=b"", change="", holder=""):
     """Run script as root on node's host; (stdout text, stderr text). The
     helper is made for this run and removed after it; another run on the
     same host has its own, which this one never touches (#597). stdin, when
     given, is what the script reads: a secret goes there, never on its
-    command line."""
+    command line.
+
+    change says what the script changes on the host, in words shown to a
+    change refused meanwhile; a read leaves it empty. A change takes the
+    host's lease for the run (Busy if another change holds it) and gives it
+    back after, or, with holder from hold(), runs inside that hold and leaves
+    it held."""
+    if not change and not holder:
+        return _run(node, script, timeout, wait, sleep, stdin)
+    own = not holder
+    holder = hold(node, change, holder=holder)
+    stop = threading.Event()
+
+    def renew():
+        while not stop.wait(RENEW_EVERY):
+            try:
+                hold(node, change, holder=holder)
+            except Exception:
+                pass
+
+    renewer = threading.Thread(target=renew, name=f"host-lease-{node}"[:40], daemon=True)
+    renewer.start()
+    try:
+        return _run(node, script, timeout, wait, sleep, stdin)
+    finally:
+        stop.set()
+        renewer.join()
+        if own:
+            let_go(node, holder)
+
+
+def _run(node, script, timeout, wait, sleep, stdin):
     _clear_ended()
     name = pod_name(node)
     path = f"/api/v1/namespaces/{NS}/pods/{name}"

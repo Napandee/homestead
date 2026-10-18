@@ -1,13 +1,14 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 function fixture() {
   const frames = new Map(); let id = 0;
   const ctx = { SET:{motion:"on"}, document:{hidden:false}, reduced:false,
     esc:String, requestAnimationFrame:fn=>{frames.set(++id,fn);return id}, cancelAnimationFrame:id=>frames.delete(id) };
   ctx.window=ctx;ctx.matchMedia=()=>({matches:ctx.reduced});vm.createContext(ctx);
   const core=fs.readFileSync("web/js/core.js","utf8");
-  vm.runInContext(core.slice(core.indexOf("const sparkAnimations"),core.indexOf("const POL")),ctx);
+  vm.runInContext(between(core,"const sparkAnimations","const POL"),ctx);
   const step=now=>{const callbacks=[...frames.values()];frames.clear();callbacks.forEach(fn=>fn(now))};
   const svg={sparkWindow:{before:[1,2,3],after:[2,3,4]},getAttribute:()=>"0 0 300 74"};
   const path={d:ctx.sparkPath([[0,10],[150,20],[300,30]]),isConnected:true,closest:()=>svg,
@@ -53,7 +54,7 @@ test("a newer target cancels old frames, and detached charts stop scheduling wor
 });
 test("a late history response cannot overwrite a new range or a different page",async()=>{
   const core=fs.readFileSync("web/js/views-stats.js","utf8");const ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},api:()=>new Promise(resolve=>ctx.resolve=resolve),historyRange:()=>ctx.range,$:()=>ctx.host};
-  vm.createContext(ctx);vm.runInContext(core.slice(core.indexOf("let historyRequest"),core.indexOf("window.historyPaint")),ctx);
+  vm.createContext(ctx);vm.runInContext(between(core,"let historyRequest","window.historyPaint"),ctx);
   ctx.range="24h";let pending=ctx.historyPaint();ctx.range="7d";ctx.resolve({});await pending;
   assert.deepEqual(ctx.STATE.data,{});
   ctx.range="24h";pending=ctx.historyPaint();ctx.host={};ctx.resolve({});await pending;assert.deepEqual(ctx.STATE.data,{});
@@ -69,7 +70,7 @@ test("an older history request cannot repaint over a newer range",async()=>{
   const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},range:"24h",esc:String,jsq:JSON.stringify,
     document:{createElement:()=>({})},morph:(_,next)=>painted.push(next.innerHTML),api:()=>new Promise(resolve=>requests.push(resolve))};
   ctx.$=()=>ctx.host;ctx.historyRange=()=>ctx.range;vm.createContext(ctx);
-  const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(between(code,"let historyRequest","window.historyPaint"),ctx);
   const older=ctx.historyPaint();ctx.range="7d";const newer=ctx.historyPaint();requests[1]({samples:0});await newer;
   const latest=ctx.STATE.data.historyHtml;requests[0]({samples:2});await older;
   assert.equal(ctx.STATE.data.historyHtml,latest);assert.equal(painted.length,1);
@@ -79,7 +80,7 @@ test("refreshing faster than history responds reuses its request and eventually 
   const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
     document:{createElement:()=>({})},morph:(_,next)=>painted.push(next.innerHTML),api:(_path,opts)=>new Promise(resolve=>requests.push({resolve,signal:opts.signal}))};
   ctx.$=()=>ctx.host;vm.createContext(ctx);
-  const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(between(code,"let historyRequest","window.historyPaint"),ctx);
   const refreshes=Array.from({length:6},()=>ctx.historyPaint());
   assert.equal(requests.length,1);assert.equal(requests[0].signal.aborted,false);
   requests[0].resolve({samples:0});await Promise.all(refreshes);
@@ -101,7 +102,7 @@ test("a timed out history request retains existing charts and shows an error",as
     document:{createElement:()=>note},api:(_path,opts)=>new Promise((_resolve,reject)=>{
       opts.signal.addEventListener("abort",()=>reject(new Error("timeout")));})};
   vm.createContext(ctx);const code=fs.readFileSync("web/js/views-stats.js","utf8");
-  vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  vm.runInContext(between(code,"let historyRequest","window.historyPaint"),ctx);
   const pending=ctx.historyPaint();timeout();await pending;
   assert.equal(ctx.STATE.data.historyHtml,"saved charts");assert.match(host.note.textContent,/could not refresh/);
   assert.equal(cleared,true);
@@ -113,7 +114,7 @@ test("history that fails before any chart is drawn is the Over time card's error
     UI:{error:(e,{title,retry})=>`<div class="ui-error">${title}: ${e.message} [${retry}]</div>`},
     document:{createElement:()=>({})},api:()=>Promise.reject(new Error("store unreachable"))};
   vm.createContext(ctx);const code=fs.readFileSync("web/js/views-stats.js","utf8");
-  vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  vm.runInContext(between(code,"let historyRequest","window.historyPaint"),ctx);
   await ctx.historyPaint();
   assert.match(host.innerHTML,/ui-error">Over time could not load: store unreachable \[historyPaint\(\)\]/);
 });
