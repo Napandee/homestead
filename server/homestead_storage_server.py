@@ -36,6 +36,7 @@ import homestead_shared as SHARED
 import homestead_shares as SHARES
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_snapshot_files as SNAPSHOT_FILES
+import homestead_snapshot_restore as SNAPSHOT_RESTORE
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_storage_pending as STORAGE_PENDING
@@ -552,6 +553,8 @@ ROUTES = {
     ("GET", "/api/snapshot-files/list"): ("admin", _snapshot_files_session),
     ("GET", "/api/snapshot-files/download"): ("admin", _snapshot_files_session),
     ("POST", "/api/snapshot-files/start"): ("admin", _snapshot_files_start),
+    ("POST", "/api/snapshot-files/restore/plan"): ("admin", lambda request: SNAPSHOT_RESTORE.restore_plan(request.body)),
+    ("POST", "/api/snapshot-files/restore"): ("admin", lambda request: SNAPSHOT_RESTORE.restore(request.body)),
     ("POST", "/api/snapshot-files/close"): ("admin", lambda request: SNAPSHOT_FILES.close(request.body.get("namespace"),
                                                                                        request.body.get("session"))),
     ("POST", "/api/self/samba"): ("admin", lambda request: SHARE_SERVERS.set_samba(

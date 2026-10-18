@@ -26,6 +26,9 @@ kget = ksend = image = None
 system_namespaces = set()
 SC = "/apis/storage.k8s.io/v1/storageclasses/"
 _lock = threading.RLock()
+# Sessions a restore is copying from (homestead_snapshot_restore): cleanup
+# leaves them until the restore ends.
+ACTIVE_RESTORES = set()
 
 
 def serialized(fn):
@@ -371,6 +374,8 @@ def cleanup():
     for record in _items(f"{CSI.API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue"):
         if not _owned(record):
             continue
+        if (record["spec"]["volumeSnapshotRef"].get("namespace"), record["metadata"]["name"]) in ACTIVE_RESTORES:
+            continue
         try:
             annotations = record["metadata"].get("annotations", {})
             if annotations.get("homestead.io/closing") or float(annotations.get("homestead.io/expires", "inf")) <= time.time():
@@ -392,32 +397,69 @@ parts = path.split('/') if path else []
 if any(p in ('', '.', '..') for p in parts): raise ValueError('Invalid path')
 def walk_into(fd, name, flags):
     return os.open(name, flags | os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-def add(tar, fd, name, arcname):
+def member(fd, name, arcname):
+    """A TarInfo for one entry and, for a file or folder, its open fd. Links
+    are described, never followed; other kinds come back as None."""
+    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    item = tarfile.TarInfo(arcname)
+    item.mode, item.uid, item.gid, item.mtime = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, int(info.st_mtime)
+    if stat.S_ISLNK(info.st_mode):
+        item.type, item.linkname = tarfile.SYMTYPE, os.readlink(name, dir_fd=fd)
+        return item, None
+    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        return None, None
+    child = walk_into(fd, name, 0)
+    opened = os.fstat(child)
+    if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+        os.close(child); raise ValueError('Entry changed while reading')
+    if stat.S_ISDIR(opened.st_mode):
+        item.type = tarfile.DIRTYPE
+    else:
+        item.size = opened.st_size
+        os.set_blocking(child, True)
+    return item, child
+def add(tar, fd, name, arcname, recursive=True, links=False):
     try:
-        child = walk_into(fd, name, 0)
+        item, child = member(fd, name, arcname)
     except OSError:
         return
+    if item is None or (item.issym() and not links):
+        return
+    if child is None:
+        tar.addfile(item); return
     try:
-        info = os.fstat(child)
-        item = tarfile.TarInfo(arcname)
-        item.mode, item.uid, item.gid, item.mtime = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, int(info.st_mtime)
-        if stat.S_ISDIR(info.st_mode):
-            item.type = tarfile.DIRTYPE
+        if item.isdir():
             tar.addfile(item)
-            for entry in sorted(os.listdir(child)):
-                add(tar, child, entry, arcname + '/' + entry)
-        elif stat.S_ISREG(info.st_mode):
-            item.size = info.st_size
-            os.set_blocking(child, True)
+            if recursive:
+                for entry in sorted(os.listdir(child)):
+                    add(tar, child, entry, arcname + '/' + entry, recursive, links)
+        else:
             with os.fdopen(os.dup(child), 'rb') as source:
                 tar.addfile(item, source)
     finally:
         os.close(child)
+def rows_of(fd, name, arcname, rows):
+    if len(rows) > 20000: return
+    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    kind = 'dir' if stat.S_ISDIR(info.st_mode) else 'file' if stat.S_ISREG(info.st_mode) else 'link' if stat.S_ISLNK(info.st_mode) else 'other'
+    row = dict(path=arcname, kind=kind, size=info.st_size if kind == 'file' else 0, modified=int(info.st_mtime))
+    if kind == 'link': row['target'] = os.readlink(name, dir_fd=fd)
+    rows.append(row)
+    if kind == 'dir':
+        child = walk_into(fd, name, os.O_DIRECTORY)
+        try:
+            for entry in sorted(os.listdir(child)):
+                rows_of(child, entry, arcname + '/' + entry, rows)
+        finally:
+            os.close(child)
+def single(name):
+    if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\x00' in name: raise ValueError('Invalid entry name')
+    return name
 fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 try:
     for i, part in enumerate(parts):
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        if i < len(parts)-1 or action in ('list', 'tar'): flags |= os.O_DIRECTORY
+        if i < len(parts)-1 or action in ('list', 'tar', 'walk', 'tarlist'): flags |= os.O_DIRECTORY
         child = os.open(part, flags, dir_fd=fd)
         os.close(fd); fd = child
     info = os.fstat(fd)
@@ -433,12 +475,33 @@ try:
                 if len(rows) > 500: break
         print(json.dumps(dict(entries=sorted(rows[:500], key=lambda r:(r['kind']!='dir', r['name'].lower())), truncated=len(rows)>500, path=path, read_only=True)))
     elif action == 'tar':
-        names = json.loads(extra)
-        if not names or any(not isinstance(n, str) or n in ('', '.', '..') or '/' in n or '\x00' in n for n in names):
-            raise ValueError('Invalid entry name')
+        names = [single(n) for n in json.loads(extra)]
+        if not names: raise ValueError('Invalid entry name')
         with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
             for name in names:
                 add(tar, fd, name, name)
+    elif action == 'walk':
+        rows = []
+        for name in [single(n) for n in json.loads(extra)]:
+            rows_of(fd, name, name, rows)
+        print(json.dumps(dict(entries=rows[:20000], truncated=len(rows) > 20000)))
+    elif action == 'tarlist':
+        # Exactly the reviewed entries, one each, links as links: a restore
+        # writes nothing it did not show.
+        wanted = json.loads(extra)
+        if not wanted: raise ValueError('Nothing to restore')
+        with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
+            for rel in wanted:
+                if not isinstance(rel, str): raise ValueError('Invalid entry name')
+                steps = [single(p) for p in rel.split('/')]
+                parent = os.dup(fd)
+                try:
+                    for step in steps[:-1]:
+                        child = walk_into(parent, step, os.O_DIRECTORY)
+                        os.close(parent); parent = child
+                    add(tar, parent, steps[-1], rel, recursive=False, links=True)
+                finally:
+                    os.close(parent)
     else:
         if action == 'stat' and stat.S_ISDIR(info.st_mode):
             print(json.dumps(dict(size=0, path=path, kind='dir'))); sys.exit(0)

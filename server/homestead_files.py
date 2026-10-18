@@ -866,17 +866,20 @@ def transfer(source, target, paths, move=False):
     return {"ok": True, "job": dict(job)}
 
 
-def _transfer(job, src_ns, src_pod, sources, dst_ns, dst_pod, folder):
+def _transfer(job, src_ns, src_pod, sources, dst_ns, dst_pod, folder, reader_argv=None, touch_source=True):
+    """reader_argv, when given, is what writes the tar instead of the source
+    helper's tar (a restore's snapshot reader, which is not a files helper)."""
     reader = writer = None
     try:
-        reader = _open_exec(src_ns, src_pod, _tar_argv(sources))
+        reader = _open_exec(src_ns, src_pod, reader_argv or _tar_argv(sources))
         writer = _open_exec(dst_ns, dst_pod, ["sh", "-c", f"cd {_quote(_full(folder))} && tar -xpf -"], stdin=True)
         errors = bytearray()
         for chunk in _stdout(reader, errors):
             for start in range(0, len(chunk), 1024 * 1024):
                 writer.sendall(_frame(b"\x00" + chunk[start:start + 1024 * 1024]))
             job["bytes"] += len(chunk)
-            _touch(src_ns, src_pod)
+            if touch_source:
+                _touch(src_ns, src_pod)
             _touch(dst_ns, dst_pod)
         # End of input: the receiving tar finishes, and says how it went.
         writer.sendall(_frame(b"\xff\x00"))
