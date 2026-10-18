@@ -523,9 +523,9 @@ def _snapshot_files_session(request):
     ns, session = (q.get("namespace") or [""])[0], (q.get("session") or [""])[0]
     if p.endswith("/status"):
         return SNAPSHOT_FILES.status(ns, session)
-    path = (q.get("path") or [""])[0]
     if p.endswith("/download"):
-        return SNAPSHOT_FILES.download(ns, session, path)
+        return SNAPSHOT_FILES.download(ns, session, q.get("path") or [""])
+    path = (q.get("path") or [""])[0]
     return SNAPSHOT_FILES.read(ns, session, "list", path)
 
 
