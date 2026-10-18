@@ -7,9 +7,9 @@ fence state server.py holds (_self_data_fence and the boot flags) stays in
 server.py.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value."""
 from contextlib import nullcontext
 import copy
 import os

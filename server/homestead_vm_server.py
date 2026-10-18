@@ -5,9 +5,10 @@ choices and Helm charts' logos, and the logo routes server.py's handler
 answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache)."""
 import time
 import homestead_api_v1 as API_V1
 import homestead_cancel as CANCEL

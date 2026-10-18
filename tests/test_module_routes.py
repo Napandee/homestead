@@ -224,6 +224,25 @@ class RouteLiterals(unittest.TestCase):
                 self.assertTrue(any(path.startswith("/api/x/new") for path in literals_in(f"if {form}:")), form)
 
 
+class MovedHelpers(unittest.TestCase):
+    def test_each_moved_helper_lives_in_its_module_and_is_not_late_bound_there(self):
+        """MOVED (#527 track 2) says which module a helper moved to; _late looks
+        it up there, so tests patch it there. That module must define it and must
+        not late-bind it too: bind_routes would replace the function with a
+        lookup that finds itself. A copy server.py imports back is the same."""
+        import server
+        self.assertTrue(server.MOVED)
+        for name, module in server.MOVED.items():
+            with self.subTest(name=name, module=module.__name__):
+                found = vars(module).get(name)
+                self.assertEqual(module.__name__, getattr(found, "__module__", None),
+                                 f"{module.__name__} defines {name}")
+                late = set(getattr(module, "ROUTE_NEEDS", ())) | set(getattr(module, "NEEDS", ()))
+                self.assertNotIn(name, late)
+                if name in vars(server):
+                    self.assertIs(found, vars(server)[name])
+
+
 class ServerStaysRouting(unittest.TestCase):
     """CONTRIBUTING.md: server.py is the composition root - imports, constants,
     each module's bind(), start-up and a thin handler - and each feature lives

@@ -4,9 +4,10 @@ installer's address, the VIP and UniFi loops, and MQTT's snapshot with the
 preview route server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache and _lock)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache and _lock)."""
 import json
 import time
 import urllib.request, urllib.parse, urllib.error

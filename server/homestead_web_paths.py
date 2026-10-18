@@ -1,11 +1,11 @@
 """Which request paths are pages, assets, vendored files or public (track 1,
 part 8): the checks server.py's handler runs before it answers.
 
-server.py binds what it still owns through bind_routes(), the same entry
-point every moved module has whether or not it declares ROUTES: each helper
-in ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value."""
+server.py binds what it still owns through bind_routes(), the same entry point
+every moved module has whether or not it declares ROUTES: each helper in
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value."""
 import os
 import re
 
