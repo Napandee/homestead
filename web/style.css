@@ -1764,6 +1764,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .wltable.stack tbody.grouphead tr{display:block}
   .wltable.stack tbody.grouphead td{display:block;padding:0 10px}
   .wltable.stack tbody.grouphead td::before{display:none}
+  .wltable.stack tbody.grouphead td:first-child>.wgroup-headrow{display:flex}
 }
 
 /* Data protection: a schedule in shapes rather than cron, and plans. */

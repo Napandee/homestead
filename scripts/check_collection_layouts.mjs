@@ -122,6 +122,8 @@ try {
       const shortRows=await page.locator('.wl-row:not(.wl-off)').evaluateAll(rows=>rows.filter(r=>!r.querySelector('.tag.warn')).map(r=>r.getBoundingClientRect().height));
       assert.ok(shortRows.every(h=>h<=64),`ordinary mobile rows remain compact: ${shortRows.join(', ')}`);
       assert.equal(await page.locator('.wl-row').first().locator('.wl-row-meta').isVisible(),false);
+      const heads=await page.locator('.wgroup-headrow').evaluateAll(rows=>rows.map(r=>[...r.children].map(c=>{const b=c.getBoundingClientRect();return b.top+b.height/2})));
+      assert.ok(heads.length&&heads.every(centres=>centres.every(c=>Math.abs(c-centres[0])<6)),'a group heading keeps its name, tier and Tier… on one row');
       assert.equal(await page.locator('.wl-detail-row').first().locator('.wl-detail-actions').isVisible(),true);
     }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
