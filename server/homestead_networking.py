@@ -45,12 +45,16 @@ def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip, _guard
     node_probes = _node_probes or node_probes
 
 
-def _items(path):
+def _items(path, strict=False):
+    """A list read. An optional one (strict=False) is [] when it fails: an
+    API the cluster may not have, such as Harvester's IP pools. A strict one
+    raises: Services, EndpointSlices, Deployments and Nodes decide which
+    address and port are free, and none seen is not none in use (#615)."""
     for attempt in range(2):
         try:
             return kget(path).get("items", [])
         except urllib.error.HTTPError as error:
-            if error.code in (403, 404):
+            if error.code in (403, 404) and not strict:
                 return []
             if error.code == 429 and attempt == 0:
                 try:
@@ -61,8 +65,32 @@ def _items(path):
                 continue
             raise
         except Exception:
+            if strict:
+                raise
             return []
     return []
+
+
+def _unread(state):
+    """What could not be read for this state, in words, or ""."""
+    unread = state.get("unread") or []
+    return f"could not read the cluster's {' and '.join(unread)}" if unread else ""
+
+
+def _complete(state, outcome):
+    """state, or a refusal naming what could not be read and what did not happen."""
+    if _unread(state):
+        raise ValueError(f"{_unread(state)}; {outcome}. Try again in a moment")
+    return state
+
+
+def _read(path, what):
+    """A strict list read whose failure says what could not be read."""
+    try:
+        return _items(path, strict=True)
+    except Exception as error:
+        print(f"Networking: could not read {what}: {str(error)[:160]}", flush=True)
+        raise ValueError(f"could not read the cluster's {what}; nothing was changed. Try again in a moment") from error
 
 
 def _name(value, label):
@@ -256,6 +284,8 @@ def _address_owners(raw_rows, node_ips):
 def address_problem(ip, state=None):
     """Why an address cannot be given to a Service here, or "" if it can."""
     state = state or inventory()
+    if _unread(state):
+        return f"{_unread(state)}, so whether {ip} is free is not known; try again in a moment"
     ip = str(ip or "").strip()
     owner = state.get("platform_addresses", {}).get(ip)
     if owner:
@@ -278,13 +308,39 @@ def check_address(ip, state=None):
     return ip
 
 
+def cluster_address_problem(ip, state):
+    """Why a VM's static address clashes with the cluster's own or a
+    Service's, or "" - from an inventory ({} when none could be had)."""
+    if not state or _unread(state):
+        return (f"{_unread(state) or 'could not read the cluster'}, so whether {ip} is free is not known; "
+                "try again in a moment")
+    if ip in (state.get("node_ips") or []) or ip in (state.get("platform_addresses") or {}):
+        return f"{ip} is one of the cluster's own addresses"
+    if any(v.get("ip") == ip for v in state.get("vips") or []):
+        return f"{ip} is a Service's address"
+    return ""
+
+
 def inventory(leaving=None):
     """leaving: (namespace, name) of a Service about to be replaced, whose
     addresses count as free (set_workload_address)."""
-    services = _items("/api/v1/services")
-    slices = _items("/apis/discovery.k8s.io/v1/endpointslices")
-    deployments = _items("/apis/apps/v1/deployments")
-    nodes = _items("/api/v1/nodes")
+    # What these four say decides a free address and port. One that cannot be
+    # read is named in "unread": the Networking page shows the rest, and
+    # anything that would choose an address refuses (_unread).
+    unread = []
+
+    def strict(path, what):
+        try:
+            return _items(path, strict=True)
+        except Exception as error:
+            unread.append(what)
+            print(f"Networking: could not read {what}: {str(error)[:160]}", flush=True)
+            return []
+
+    services = strict("/api/v1/services", "Services")
+    slices = strict("/apis/discovery.k8s.io/v1/endpointslices", "EndpointSlices")
+    deployments = strict("/apis/apps/v1/deployments", "Deployments")
+    nodes = strict("/api/v1/nodes", "Nodes")
     ingresses = _items("/apis/networking.k8s.io/v1/ingresses")
     pools_raw = _items("/apis/loadbalancer.harvesterhci.io/v1beta1/ippools") + PLATFORM.metallb_pools()
     endpoint_by_service = _endpoint_index(slices)
@@ -477,7 +533,7 @@ def inventory(leaving=None):
                    kind=place.get("kind", "vip"))
 
     return {"services": sorted(raw_rows, key=lambda row: (row["system"], row["namespace"], row["name"])),
-            "vips": vip_rows, "conflicts": conflicts, "pools": pools,
+            "unread": unread, "vips": vip_rows, "conflicts": conflicts, "pools": pools,
             "platform_addresses": platform, "foreign_addresses": foreign,
             "platform_clashes": clashes,
             "shared_vip": {"ip": default_vip,
@@ -605,7 +661,8 @@ def service_plan(cfg, require_workload=True):
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not create Services in system namespaces")
     service_name = _name(cfg.get("name") or cfg.get("service_name"), "service name")
-    state = inventory(leaving=(namespace, service_name) if cfg.get("replaces") else None)
+    state = _complete(inventory(leaving=(namespace, service_name) if cfg.get("replaces") else None),
+                      "nothing was changed")
     shared = state["shared_vip"]["ip"]
     workload_name = _name(cfg.get("workload") or service_name, "workload name")
     kind = cfg.get("workload_kind") or "Deployment"
@@ -774,7 +831,7 @@ def create_service(cfg):
     if plan["workload_kind"] == "VirtualMachine":
         selector = plan["selector"]
     else:
-        deployments = _items("/apis/apps/v1/deployments")
+        deployments = _read("/apis/apps/v1/deployments", "Deployments")
         deployment = next(item for item in deployments
                           if item.get("metadata", {}).get("namespace") == plan["namespace"] and
                           item.get("metadata", {}).get("name") == plan["workload"])
@@ -827,7 +884,7 @@ def workload_services(namespace, workload):
     if not selector:
         return []
     rows = []
-    for service in _items(f"/api/v1/namespaces/{namespace}/services"):
+    for service in _read(f"/api/v1/namespaces/{namespace}/services", "Services"):
         chosen = (service.get("spec", {}) or {}).get("selector") or {}
         if chosen and all(selector.get(key) == value for key, value in chosen.items()):
             rows.append(service)
@@ -838,7 +895,7 @@ def workload_services(namespace, workload):
 
 def _listener_owner(service, ports):
     """Another Service already answering on one of these VIP listeners."""
-    state = inventory()
+    state = _complete(inventory(), "the ports were not changed")
     mine = (service["metadata"]["namespace"], service["metadata"]["name"])
     spec = service.get("spec") or {}
     if servicelb_present() and spec.get("type") == "LoadBalancer" and not spec.get("loadBalancerClass"):
@@ -995,7 +1052,9 @@ def delete_service(namespace, name, force=False):
     name = _name(name, "service name")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not delete Services in system namespaces")
-    row = next((item for item in inventory()["services"]
+    # A Deployments read that failed leaves every Service with no targets:
+    # an app's own would look orphaned and go without force.
+    row = next((item for item in _complete(inventory(), "nothing was deleted")["services"]
                 if item["namespace"] == namespace and item["name"] == name), None)
     if not row:
         raise ValueError(f"Service {namespace}/{name} does not exist")
@@ -1093,7 +1152,7 @@ def add_vips(cfg, ipam_records=None):
     if last - first + 1 > MAX_ADD:
         raise ValueError(f"at most {MAX_ADD} addresses at once")
     label = " ".join(str(cfg.get("label") or "").split())[:60]
-    state = inventory()
+    state = _complete(inventory(), "nothing was added")
     nodes = set(state["node_ips"])
     rows = registered()
     have = {row["ip"] for row in rows}
@@ -1126,7 +1185,7 @@ def remove_vip(ip):
     ip = _ipv4(ip, "address")
     if any(row["ip"] == ip and row.get("default") for row in registered()):
         raise ValueError("Choose another default workload VIP before removing this address")
-    state = inventory()
+    state = _complete(inventory(), "nothing was removed")
     users = next((row for row in state["vips"] if row["ip"] == ip), None)
     if users:
         names = sorted({f"{l['namespace']}/{l['service']}" for l in users["listeners"]})
@@ -1150,7 +1209,7 @@ def change_vip(old, new, apply=False):
     old, new = _ipv4(old, "current address"), _ipv4(new, "new address")
     if old == new:
         raise ValueError("the new address is the same as the current one")
-    state = inventory()
+    state = _complete(inventory(), "nothing was moved")
     rows = registered()
     entry = next((row for row in rows if row["ip"] == old), None)
     if entry is None:
