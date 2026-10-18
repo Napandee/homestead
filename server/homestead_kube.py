@@ -4,18 +4,21 @@ homestead_kube_helpers; #619 grew it into this client).
 
 Reads: get, get_optional (None when the object is not there), items (a whole
 list or an error). Writes: send and delete_if_present, which go round
-WRITE_GUARDS in order before _ksend. Both reach the cluster through
-transport, the one place tests put a fake API (tests/fakes/kube.py). kget
-and ksend stay as the old names; the new functions call them, so a test that
-patches kget or ksend here reaches the new functions too. Also here: who may
-write to a workload, raw and table reads, path checks, log search reads, and
-CPU, memory and age parsing.
+WRITE_GUARDS in order before _ksend, and update_json, which changes JSON
+kept in a ConfigMap or Secret without losing another writer's change (#621).
+Both reach the cluster through transport, the one place tests put a fake API
+(tests/fakes/kube.py). kget and ksend stay as the old names; the new
+functions call them, so a test that patches kget or ksend here reaches the
+new functions too. Also here: who may write to a workload, raw and table
+reads, path checks, log search reads, and CPU, memory and age parsing.
 
 server.py binds what it still owns through bind_routes(), the same entry
 point every moved module has whether or not it declares ROUTES: each helper
 in ROUTE_NEEDS is looked up in server.py when it is called; each name in
 VALUES is server.py's own value. Tests patch kget and ksend here (server.py
 imports this module as KUBE_HELPERS)."""
+import base64
+import copy
 import json
 import re
 import time
@@ -288,6 +291,74 @@ def delete_if_present(path, body=None, **options):
             raise
         error.close()
         return None
+
+
+# A ConfigMap or Secret by name: where update_json keeps its JSON.
+_JSON_HOLDER = re.compile(r"^(/api/v1/namespaces/([a-z0-9.-]+)/(configmaps|secrets))/([a-z0-9.-]+)$")
+
+
+def update_json(path, key, fn, *, replace=False, attempts=4, labels=None, read=None, write=None, **dump):
+    """Change JSON kept in one key of a ConfigMap or Secret without undoing a
+    change another writer made meanwhile (#621). fn(current) gets the stored
+    value - None when the object or key is not there - and returns the new
+    one; it may raise to stop, and nothing is written. The write names the
+    resourceVersion read, so Kubernetes refuses it (409) if anything was saved
+    in between: then it reads again and calls fn again on what is there now,
+    up to attempts times. An object not there yet is created; if another
+    writer creates it first (409 on the create), that is an update next time
+    round, and one deleted before the write (404 on the update) is created.
+    Stored text that is not JSON is an error, unless replace says the new
+    value does not depend on the old: then fn gets None and a broken value
+    is written over. Other keys, labels and annotations are kept. Returns
+    what was written; dump goes to json.dumps (compact and sorted unless
+    given).
+    read(path) and write(method, path, body) are a module's own bound kget
+    and ksend, for the modules still bound with them; this client's by
+    default."""
+    match = _JSON_HOLDER.match(path)
+    if not match:
+        raise ValueError(f"update_json keeps JSON in a ConfigMap or Secret, not {path}")
+    collection, namespace, plural, name = match.groups()
+    secret = plural == "secrets"
+    dump = dump or {"separators": (",", ":"), "sort_keys": True}
+    write = write or send
+    for _ in range(attempts):
+        try:
+            current = (read or kget)(path)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            error.close()
+            current = None
+        raw = None if replace else ((current or {}).get("data") or {}).get(key)
+        try:
+            if raw is not None and secret:
+                raw = base64.b64decode(raw).decode("utf-8")
+            value = json.loads(raw) if raw is not None else None
+        except (ValueError, TypeError):
+            raise ValueError(f"{key} in {name} is not valid JSON; nothing was changed") from None
+        text = json.dumps(fn(copy.deepcopy(value)), **dump)
+        stored = base64.b64encode(text.encode("utf-8")).decode("ascii") if secret else text
+        try:
+            if current is None:
+                body = {"apiVersion": "v1", "kind": "Secret" if secret else "ConfigMap",
+                        "metadata": {"name": name, "namespace": namespace,
+                                     "labels": dict(labels or {NAMES.key("managed"): "true"})},
+                        "data": {key: stored}}
+                if secret:
+                    body["type"] = "Opaque"
+                write("POST", collection, body)
+            else:
+                body = dict(current, data={**(current.get("data") or {}), key: stored})
+                write("PUT", path, body)    # current's metadata carries the resourceVersion read
+            return json.loads(text)
+        except urllib.error.HTTPError as error:
+            # 409: saved or created meanwhile. 404 on the update: deleted
+            # meanwhile, so the next round creates it.
+            if error.code != 409 and not (error.code == 404 and current is not None):
+                raise
+            error.close()
+    raise RuntimeError(f"{name} kept changing while it was being saved, so this change was not saved; try again")
 
 
 def require_workload_target(ns, name):
