@@ -45,10 +45,14 @@ def bind(_kget, _ksend):
     kget, ksend = _kget, _ksend
 
 
-def _items(path):
+def _items(path, strict=False):
+    """A list read; [] when it fails unless strict. keep() reads strictly: a
+    Lease list that failed read as no lease held, and restarted kube-vip (#615)."""
     try:
         return (kget(path) or {}).get("items", []) or []
     except Exception:
+        if strict:
+            raise
         return []
 
 
@@ -326,6 +330,12 @@ def stranded(services, leases, slices, platform, now=None):
     restarting kube-vip for it would drop every VIP every ten minutes."""
     if (platform or {}).get("vip_service_election") is not True:
         return []
+    if not leases:
+        # Not one Lease in the cluster - not even the one each node renews in
+        # kube-node-lease - is a list that was not read, not a lease unheld.
+        # This relies on keep() listing Leases cluster-wide: a list from one
+        # namespace can be empty for real, and must not be passed here.
+        return []
     holders = live_holders(leases, now)
     ready = ready_services(slices)
     groups = {}
@@ -390,9 +400,11 @@ def keep(platform):
     recorded."""
     if (platform or {}).get("load_balancer") != "kube-vip":
         return []
-    services = _items("/api/v1/services")
-    leases = _items("/apis/coordination.k8s.io/v1/leases")
-    slices = _items("/apis/discovery.k8s.io/v1/endpointslices")
+    # Read strictly: a failure goes to _vip_loop's heartbeat, and nothing is
+    # restarted or recorded from a partial picture.
+    services = _items("/api/v1/services", strict=True)
+    leases = _items("/apis/coordination.k8s.io/v1/leases", strict=True)
+    slices = _items("/apis/discovery.k8s.io/v1/endpointslices", strict=True)
     try:
         revive(services, leases, slices, platform)
     except Exception as error:
