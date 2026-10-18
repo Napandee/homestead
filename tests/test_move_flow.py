@@ -7,6 +7,7 @@ import copy
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import urllib.error
@@ -915,6 +916,115 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn("containers", public)
         self.assertNotIn("credentials", public)
         self.assertNotIn("origin", public)
+
+    def test_two_starts_of_one_workload_at_once_make_one_move_and_one_refusal(self):
+        real_definition, outcomes, arrived = engine._definition, [], []
+
+        def start():
+            try:
+                outcomes.append(engine.start("shed", "container", "frigate", "moved", "automatic"))
+            except ValueError as error:
+                outcomes.append(error)
+
+        def definition(*args, **kwargs):
+            # The second Start arrives once the first has looked for a running
+            # move of frigate and is asking the source for its definition.
+            if sys._getframe(1).f_code.co_name == "start" and not arrived:
+                arrived.append(True)
+                worker = threading.Thread(target=start)
+                worker.start()
+                worker.join()
+            return real_definition(*args, **kwargs)
+
+        with mock.patch.object(engine, "_definition", definition):
+            start()
+
+        refused = [o for o in outcomes if isinstance(o, ValueError)]
+        self.assertEqual(1, len(refused), [o if isinstance(o, ValueError) else o["id"] for o in outcomes])
+        self.assertEqual("frigate is already being moved", str(refused[0]))
+        started = [o["id"] for o in outcomes if isinstance(o, dict)]
+        self.assertEqual(started, [m["id"] for m in engine.moves()])
+        self.assertEqual(1, len(self.ops.started), "one Activity item, for the move that started")
+
+    def test_a_busy_activity_tray_does_not_turn_a_started_move_into_an_error(self):
+        real_start = self.ops.start
+
+        def busy(*args, **kwargs):
+            raise TimeoutError("Shared job store is busy; no operation was started")
+
+        with mock.patch.object(self.ops, "start", busy):
+            move = engine.start("shed", "container", "frigate", "moved", "automatic")
+
+        self.assertEqual("running", move["status"])
+        self.assertIn("Activity", move["message"], "the person is told its Activity item follows")
+        self.assertEqual([], self.ops.started)
+        with mock.patch.object(self.ops, "start", real_start):
+            engine.tick_all()
+            engine.tick_all()
+        self.assertEqual(1, len(self.ops.started), "the engine adds the Activity item once")
+        self.assertEqual("op1", engine._find(move["id"])["op"])
+
+    def _landed_with_cleanup_pending(self):
+        engine.start("shed", "container", "frigate", "moved", "automatic")
+        move = self.run_until_settled()
+        self.assertEqual("succeeded", move["status"], move["message"])
+        stored = engine._find(move["id"])
+        stored["flags"]["resource_cleanup_pending"] = True
+        engine._store(stored)
+        return move["id"]
+
+    def test_removing_the_original_while_the_engine_tidies_up_is_not_undone(self):
+        move_id = self._landed_with_cleanup_pending()
+        real_destination = engine.CLEANUP.destination
+
+        def destination(*args, **kwargs):
+            # "Remove original" lands between the engine's read and its store,
+            # within the same second.
+            if not engine._find(move_id)["source_removed"]:
+                engine.finish(move_id)
+            return real_destination(*args, **kwargs)
+
+        with mock.patch.object(engine, "_now", lambda: "2026-10-18T12:00:00Z"), \
+                mock.patch.object(engine.CLEANUP, "destination", destination):
+            engine.tick_all()
+
+        move = engine._find(move_id)
+        self.assertTrue(move["source_removed"])
+        self.assertIn("lives here now", move["message"])
+        self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
+
+    def test_tidying_up_writes_only_its_own_fields_over_a_newer_record(self):
+        move_id = self._landed_with_cleanup_pending()
+        stale = engine._find(move_id)
+        newer = copy.deepcopy(stale)
+        newer.update(source_removed=True, message="frigate lives here now; removed on shed")
+        engine._store(newer)
+
+        engine._cleanup_resources(stale)
+
+        move = engine._find(move_id)
+        self.assertTrue(move["source_removed"])
+        self.assertEqual("frigate lives here now; removed on shed", move["message"])
+        self.assertFalse(move["flags"]["resource_cleanup_pending"], "its own outcome is still recorded")
+
+    def test_removing_the_original_waits_for_the_engine_step_on_that_move(self):
+        move_id = self._landed_with_cleanup_pending()
+        real_remote, asked = client.remote, threading.Event()
+
+        def remote(name, path, body=None):
+            if (body or {}).get("action") == "remove":
+                asked.set()
+            return real_remote(name, path, body)
+
+        with mock.patch.object(client, "remote", remote):
+            with engine._serialized(move_id):
+                worker = threading.Thread(target=engine.finish, args=(move_id,))
+                worker.start()
+                # Held by the engine's step: finish() must not reach the source.
+                self.assertFalse(asked.wait(0.3))
+            worker.join(10)
+        self.assertTrue(asked.is_set())
+        self.assertTrue(engine._find(move_id)["source_removed"])
 
 
 if __name__ == "__main__":
