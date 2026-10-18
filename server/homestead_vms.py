@@ -1244,15 +1244,18 @@ def edit(ns, name, cfg):
     return commit_edit(prepare_edit(ns, name, cfg))
 
 
-def _release(ns, claim, uid):
+def _release(ns, claim, uid, vm_name=""):
     """A disk made from the VM's dataVolumeTemplates belongs to the VM, and
     Kubernetes deletes what a deleted owner owned. A disk that is being kept
-    is let go of first: its DataVolume and claim stop naming the VM."""
+    is let go of first: its DataVolume and claim stop naming the VM.
+
+    Only "not found" is passed over (CDI may have cleaned up the DataVolume;
+    the claim holds the data). A disk that can't be read, or still names the
+    VM after letting go, stops the delete: kept means kept (#600)."""
     for path in (f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}",
                  f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}"):
-        try:
-            owners = (kget(path).get("metadata") or {}).get("ownerReferences") or []
-        except Exception:
+        owners = _owners(path, claim)
+        if owners is None:
             continue
         kept = [o for o in owners if o.get("uid") != uid]
         if len(kept) != len(owners):
@@ -1261,6 +1264,20 @@ def _release(ns, claim, uid):
                       ctype="application/merge-patch+json")
             except urllib.error.HTTPError as error:
                 raise ValueError(f"{claim} could not be kept, so nothing was deleted: {_refusal(error)}")
+            if any(o.get("uid") == uid for o in _owners(path, claim) or []):
+                raise ValueError(f"{claim} still belongs to {vm_name or 'the VM'}, so nothing was deleted; try again")
+
+
+def _owners(path, claim):
+    """Who owns the object at path; None when it isn't there."""
+    try:
+        return (kget(path).get("metadata") or {}).get("ownerReferences") or []
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise ValueError(f"{claim} could not be checked, so nothing was deleted: {_refusal(error)}") from None
+    except Exception as error:
+        raise ValueError(f"{claim} could not be checked, so nothing was deleted: {str(error)[:120]}") from None
 
 
 def delete(ns, name, with_disks=False):
@@ -1303,7 +1320,7 @@ def delete(ns, name, with_disks=False):
     uid = vm["metadata"].get("uid", "")
     for claim in (spared if with_disks else [c for c in every if c not in unfinished]):
         if uid:
-            _release(ns, claim, uid)
+            _release(ns, claim, uid, name)
     if claims:
         vm["metadata"].setdefault("annotations", {})["harvesterhci.io/removedPVCs"] = ",".join(claims)
         vm["metadata"].pop("managedFields", None)
