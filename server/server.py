@@ -154,13 +154,14 @@ from homestead_network_server import (
 NETWORK_ROUTES.bind_routes(_late(*NETWORK_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in NETWORK_ROUTES.VALUES})
 import homestead_storage_server as STORAGE_ROUTES
 from homestead_storage_server import (
-    _class_made_for, _files_loop, _host_fix_loop, _internal_class, _longhorn_copies_loop,
-    _prune_snapshot, _pvc_rows, _restore_tests_loop, _restore_then_tidy, _samba_loop,
-    _snapshot_files_loop, _storage_pending_loop, _storage_runtime_loop, class_selectable,
-    guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb, serves_many,
-    share_storage_options, shared_storage_classes, storage_class_facts, storage_legacy_cancel,
-    storage_move_progress, storage_runtime_check, storage_volume_action,
+    _class_made_for, class_selectable, cleanup_restores, _files_loop, guard_smb_object,
+    homestead_part, _host_fix_loop, _internal_class, is_managed_nfs, is_managed_smb,
+    _longhorn_copies_loop, _prune_snapshot, _pvc_rows, _restore_tests_loop, _restore_then_tidy,
+    _samba_loop, serves_many, share_storage_options, shared_storage_classes, _snapshot_files_loop,
+    storage_class_facts, storage_legacy_cancel, storage_move_progress, _storage_pending_loop,
+    storage_runtime_check, _storage_runtime_loop, storage_volume_action,
 )
+MOVED.update(dict.fromkeys(("cleanup_restores", "ensure_claim", "storage_helper_admission", "storage_restart_admission"), STORAGE_ROUTES))
 STORAGE_ROUTES.bind_routes(_late(*STORAGE_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in STORAGE_ROUTES.VALUES})
 import homestead_vm_server as VM_ROUTES
 from homestead_vm_server import (
@@ -493,34 +494,6 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=Non
     return (send or KUBE_HELPERS.ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
 
 
-def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
-    """A deploy's new volume - or the one of that name already there, when
-    nothing uses it.
-
-    A failed install leaves its volumes behind (deleting a container keeps
-    its data), and installing again then stopped at "already exists". One
-    that nothing refers to is taken as it is, data and all, and said so; one
-    another container, VM or job uses is refused by name.
-    """
-    try:
-        existing = KUBE_HELPERS.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        existing = None
-    if not existing:
-        create_pvc(ns, name, size_gb, sc, access_mode)
-        return ""
-    try:
-        users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
-    except Exception:
-        users = ["something"]
-    if users:
-        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
-                         "give this app's volume another name, or choose the existing one to share it")
-    return name
-
-
 # expose a tiny shim module so helper modules can reach raw_get without a cycle
 import types as _types
 _shim = _types.ModuleType("homestead_shim")
@@ -685,14 +658,6 @@ for _kind in ("vm-create", "vm-edit"):
     OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
-def cleanup_restores():
-    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, LH.cleanup_restore_snapshots):
-        try:
-            cleanup()
-        except Exception as error:
-            # Cleanup may be retried; it must not change a completed restore
-            # into a failed data operation. The cleanup itself fails closed.
-            print(f"Restore metadata cleanup deferred: {error}", flush=True)
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
@@ -716,19 +681,11 @@ import homestead_storage_recovery as STORAGE_RECOVERY
 import homestead_storage_runtime as STORAGE_RUNTIME
 
 
-def storage_restart_admission(item, proposals):
-    return STORAGE_ADMISSION.plan(item, proposals, KUBE_HELPERS.kget, PLACE.get_nodes(), SETTINGS_HELPERS.get_app_settings()["thresholds"]["memory"]["critical"])
-
-
-def storage_helper_admission(item, manifest):
-    return copy_admission(manifest)
-
-
 def _bind_recovery():
     """The job tray's recovery reviews read through server.py's reader, so a
     test that patches it is the one they use."""
-    OPS.bind_recovery(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a: storage_helper_admission(*a),
-                      lambda *a: storage_restart_admission(*a), lambda: storage_runtime_check())
+    OPS.bind_recovery(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a: STORAGE_ROUTES.storage_helper_admission(*a),
+                      lambda *a: STORAGE_ROUTES.storage_restart_admission(*a), lambda: storage_runtime_check())
 
 
 _bind_recovery()

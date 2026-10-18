@@ -158,7 +158,7 @@ class ContainerSetTests(unittest.TestCase):
                 mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server, "prepare_lan", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VOLOWNER, "prepare", side_effect=lambda cfg: cfg), \
-                mock.patch.object(server, "ensure_claim", return_value=False) as claim, \
+                mock.patch.object(server.STORAGE_ROUTES, "ensure_claim", return_value=False) as claim, \
                 mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=urllib.error.HTTPError("", 404, "missing", {}, None)), \
                 mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
                 mock.patch.object(server.OPS, "start", return_value={"id": "created"}):

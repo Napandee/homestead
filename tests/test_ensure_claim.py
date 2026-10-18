@@ -35,12 +35,12 @@ class EnsureClaimTests(unittest.TestCase):
         server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend, server.storage_classes = self.saved
 
     def test_a_new_name_is_created(self):
-        self.assertEqual("", server.ensure_claim("lab", "doublecommander-appdata", 5, "longhorn-r2"))
+        self.assertEqual("", server.STORAGE_ROUTES.ensure_claim("lab", "doublecommander-appdata", 5, "longhorn-r2"))
         self.assertEqual([("POST", "/api/v1/namespaces/lab/persistentvolumeclaims")], self.sent)
 
     def test_one_left_by_a_failed_install_is_taken_as_it_is(self):
         self.claim = {"metadata": {"name": "doublecommander-appdata"}}
-        self.assertEqual("doublecommander-appdata", server.ensure_claim("lab", "doublecommander-appdata", 5))
+        self.assertEqual("doublecommander-appdata", server.STORAGE_ROUTES.ensure_claim("lab", "doublecommander-appdata", 5))
         self.assertEqual([], self.sent)
 
     def test_one_another_container_uses_is_refused_by_name(self):
@@ -49,7 +49,7 @@ class EnsureClaimTests(unittest.TestCase):
                              "spec": {"template": {"spec": {"volumes": [
                                  {"name": "d", "persistentVolumeClaim": {"claimName": "doublecommander-appdata"}}]}}}}]
         with self.assertRaisesRegex(ValueError, "Deployment/krusader uses it"):
-            server.ensure_claim("lab", "doublecommander-appdata", 5)
+            server.STORAGE_ROUTES.ensure_claim("lab", "doublecommander-appdata", 5)
         self.assertEqual([], self.sent)
 
 
