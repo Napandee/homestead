@@ -184,6 +184,10 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", un
         if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         i.get("ref", {}).get("node") == ref.get("node") for i in items):
             raise ValueError("Host maintenance is already active; inspect its job before retrying")
+        if kind == "set-restart" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+                                         (i.get("ref", {}).get("ns"), i.get("ref", {}).get("name")) ==
+                                         (ref.get("ns"), ref.get("name")) for i in items):
+            raise ValueError("A restart for this StatefulSet is already active; inspect its job before retrying")
         if kind == "k3s-cluster" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                         (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
                                         (ref.get("namespace"), ref.get("name")) for i in items):
@@ -315,6 +319,11 @@ def _public(item):
                         "held": len(ref.get("held") or []),
                         "waiting": bool(ref.get("held")) and ref.get("restored") is None,
                         "restored": ref.get("restored")}
+    if item.get("kind") == "set-restart":
+        ref = item.get("ref") or {}
+        out["cancellable"] = False  # the delete is done when the job starts
+        out["set_restart"] = {"node": ref.get("node", ""), "set": ref.get("name", ""),
+                              "started_by": ref.get("started_by", ""), "stage": ref.get("stage", "")}
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")

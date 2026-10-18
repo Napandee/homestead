@@ -3,7 +3,7 @@
    which addresses move. Opened from a host's actions. */
 const shortHost = name => String(name || "").replace(/^harvester-/, "");
 
-function impactApp(r) {
+function impactApp(r, node = "") {
   const tone = { stops: "crit", waits: "warn", unknown: "neutral" }[r.outcome] || "ok";
   const avatar = r.kind === "vm" && typeof vmAvatar === "function" ? vmAvatar(r) : appAvatar(r.name, r.icon);
   const where = r.outcome === "moves" && r.to?.length ? `to ${r.to.slice(0, 3).map(shortHost).join(", ")}${r.to.length > 3 ? ` +${r.to.length - 3}` : ""} · ` : "";
@@ -13,10 +13,16 @@ function impactApp(r) {
   // A StatefulSet Longhorn's setting can help says so in one line; why it
   // waits, and where the setting is, sit behind a disclosure (word budget).
   const why = r.setting === "node_down" ? "waits until its pod is deleted." : r.why;
+  // A waiting StatefulSet on a host that is down can be started elsewhere (#441).
+  // Harvester does it itself, so the button isn't offered there.
+  const hostDown = node && STATE.data?.nodes?.find(n => n.name === node)?.status === "NotReady";
+  const restart = r.kind !== "set" || r.outcome !== "waits" || !hostDown ? ""
+    : STATE.platform?.harvester ? '<span class="dim xs">Harvester restarts these itself; see its VM force reset policy.</span>'
+    : `<span>${UI.button("Start on another host…", `setRestartReview(${jsArg(r.ns)},${jsArg(r.name)},${jsArg(node)})`, { attrs: 'data-need="admin"' })}</span>`;
   return `<div class="impact-row">${avatar}<div class="impact-text"><b>${esc(r.name)}</b>${r.kind === "set" ? ' <span class="tag">StatefulSet</span>' : ""}
       <span class="dim xs">${esc(r.ns + kind)}${r.keeps_answering ? " · keeps answering from its other copies" : ""}</span>
       <span class="small">${esc(where + why)}${setting}</span>${why !== r.why ? UI.more("Why it waits", `<p>${esc(r.why)}</p>`, false, `why:${r.ns}/${r.name}`) : ""}
-      ${(r.notes || []).map(n => `<span class="dim xs">${esc(n)}</span>`).join("")}</div>
+      ${(r.notes || []).map(n => `<span class="dim xs">${esc(n)}</span>`).join("")}${restart}</div>
     <span class="pill slim ${tone}">${esc(r.outcome)}</span></div>`;
 }
 
@@ -36,10 +42,10 @@ window.nodeIfDown = async (node, back = null) => {
     ${UI.lead(esc(`What becomes of what runs on ${node} if it stops answering - a failure, or a reboot without moving things first. ${p.others_ready.length ? `${p.others_ready.length} other host${p.others_ready.length === 1 ? " is" : "s are"} ready to take work.` : "No other host is ready."}`))}
     ${chips.length ? `<div class="row impact-chips">${chips.join("")}</div>` : '<div class="ui-empty">Nothing of yours runs here, and no volume keeps a copy here.</div>'}
     ${(p.unread || []).length ? `<div class="dim xs">Couldn't read ${esc(p.unread.join(", "))}, so none of them is listed.</div>` : ""}
-    ${section("Stops until it is back", by("stops"), by("stops").map(impactApp).join(""))}
-    ${section("Waits", by("waits"), by("waits").map(impactApp).join(""))}
-    ${section("Couldn't be checked", by("unknown"), by("unknown").map(impactApp).join(""))}
-    ${section("Moves to another host", by("moves"), by("moves").map(impactApp).join(""))}
+    ${section("Stops until it is back", by("stops"), by("stops").map(r => impactApp(r, node)).join(""))}
+    ${section("Waits", by("waits"), by("waits").map(r => impactApp(r, node)).join(""))}
+    ${section("Couldn't be checked", by("unknown"), by("unknown").map(r => impactApp(r, node)).join(""))}
+    ${section("Moves to another host", by("moves"), by("moves").map(r => impactApp(r, node)).join(""))}
     ${section("Volumes", [...p.at_risk, ...p.fewer_copies],
       p.at_risk.map(v => `<div class="impact-row"><div class="impact-text"><b>${esc(v.name)}</b><span class="dim xs">${esc(v.namespace)}</span>
         <span class="small">Its only healthy copy is here: unavailable until the host is back, and lost if its disk is.</span></div><span class="pill slim crit">at risk</span></div>`).join("")
@@ -50,6 +56,7 @@ window.nodeIfDown = async (node, back = null) => {
     <div id="ifDownRoom" data-node="${esc(node)}"></div>
     ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A StatefulSet's pod is never started elsewhere while the old one might still run: it waits until it is deleted, by hand or by Longhorn's Pods on a failed host setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
     ${UI.actions(ifDownClose())}</div>`;
+  window.applyRole?.();   // hides what this role may not use (data-need)
   ifDownRoom(node);
 };
 

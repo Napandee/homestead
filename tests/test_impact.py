@@ -229,6 +229,14 @@ class StatefulSetTests(unittest.TestCase):
         self.assertNotIn("setting", r)
         self.assertNotIn("to", r)
 
+    def test_set_row_carries_no_wait_mode_flag(self):
+        # The review reads the set's own setting (the plan's set.wait_mode);
+        # the impact row carries no flag for it.
+        forever = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute"}]}
+        chosen = self.row(self.preview([sts(spec=forever)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
+        self.assertEqual("waits", chosen["outcome"])
+        self.assertNotIn("mode", chosen)
+
     def test_a_set_set_to_move_moves_after_its_own_delay(self):
         fast = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15}]}
         r = self.row(self.preview([sts(spec=fast)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
