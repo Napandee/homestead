@@ -50,7 +50,7 @@ class HeartbeatTests(unittest.TestCase):
         server.beat("alerts", 20, leader_only=True)
         server.beat("hardware", 30, RuntimeError("probe timed out"), leader_only=True)
         server.HEART["history"] = {"every": 30, "leader_only": True, "last_ok": time.time() - 3600, "error": "", "error_at": 0}
-        with mock.patch.object(server, "kget", lambda path, **k: {}), \
+        with mock.patch.object(server.KUBE_HELPERS, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: True), \
                 mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}), \
                 mock.patch.object(server.NODES, "node_temps", lambda: {}), \
@@ -60,7 +60,7 @@ class HeartbeatTests(unittest.TestCase):
         states = {row["name"]: row["state"] for row in health["loops"]}
         self.assertEqual({"sampler": "ok", "alerts": "ok", "hardware": "failing", "history": "late", "moves": "starting", "samba": "starting", "vips": "starting", "baseline": "starting", "host-fixes": "starting", "host-console": "starting", "storage-pending": "starting", "os-updates": "starting", "uptime": "starting", "auto-updates": "starting", "restore-tests": "starting", "forecast": "starting", "usage": "starting", "recovery": "starting", "changes": "starting", "housekeeping": "starting", "schedules": "starting", "unifi": "starting"}, states)
         self.assertEqual("probe timed out", next(r for r in health["loops"] if r["name"] == "hardware")["error"])
-        with mock.patch.object(server, "kget", lambda path, **k: {}), \
+        with mock.patch.object(server.KUBE_HELPERS, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: False), \
                 mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {}), \
                 mock.patch.object(server.NODES, "node_temps", lambda: {}), \

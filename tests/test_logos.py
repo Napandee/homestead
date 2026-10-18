@@ -92,7 +92,7 @@ class SaveLogoTests(unittest.TestCase):
         from unittest import mock
         import server
         self.server, self.mock, self.sent = server, mock, []
-        self.patches = [mock.patch.object(server, "ksend", side_effect=lambda *a, **k: self.sent.append((a, k))),
+        self.patches = [mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: self.sent.append((a, k))),
                         mock.patch.object(server.ICONS, "persist", side_effect=lambda src, d: "/api/icons/abc.png")]
         for p in self.patches:
             p.start()

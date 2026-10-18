@@ -1,11 +1,11 @@
 """Names and icons that lived in server.py (track 1, part 8): a DNS-safe
 name, Homestead's own group, and an app's display icon with its repair.
 
-server.py binds what it still owns through bind_routes(), the same entry
-point every moved module has whether or not it declares ROUTES: each helper
-in ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value."""
+server.py binds what it still owns through bind_routes(), the same entry point
+every moved module has whether or not it declares ROUTES: each helper in
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value."""
 import re
 import threading
 import time

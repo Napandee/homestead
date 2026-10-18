@@ -24,7 +24,7 @@ class ThroughTheServer(unittest.TestCase):
     def test_a_refused_start_is_a_409_with_its_plan(self):
         server, handler = self.handler("POST", "/api/scale", {"ns": "lab", "name": "web", "replicas": 1})
         refused = server.WORKLOADS.WorkloadRefused("review node memory before starting", {"blocked": False})
-        with mock.patch.object(server, "scale_workload", side_effect=refused):
+        with mock.patch.object(server.OVERVIEW_ROUTES, "scale_workload", side_effect=refused):
             handler.do_POST()
         code, body = handler._send.call_args.args[:2]
         self.assertEqual(409, code)

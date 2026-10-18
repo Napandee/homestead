@@ -94,8 +94,8 @@ SYS_NS = {
 # the same parts run in harvester-system, which is not listed at all.)
 PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-upgrade-controller"}
 
-_cache = {}
-_lock = threading.Lock()
+import homestead_cache as CACHE
+_cache, _lock = CACHE._cache, CACHE._lock  # the same dict and lock, shared
 
 # Each background task's last beat, shared by the leader (homestead_heartbeats).
 from homestead_heartbeats import HEART, beat, heartbeats as _heartbeats
@@ -112,11 +112,19 @@ VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "fo
                 ".json": "application/json", ".svg": "image/svg+xml", ".map": "application/json",
                 ".md": "text/markdown; charset=utf-8"}
 
+# Helpers moved on (track 2) by name: the module each lives in now. A test
+# patches them there, so _late looks them up there.
+MOVED = {}
+MOVED.update(dict.fromkeys(("cached",), CACHE))
+
+
 def _late(*names):
     """server.py's helpers by name, each looked up when called, so a module's
     routes reach the same function server.py's own code does - and a test
-    that replaces one here replaces it there."""
-    return {name: (lambda name: lambda *args, **kwargs: globals()[name](*args, **kwargs))(name) for name in names}
+    that replaces one here (or, once moved, in its module) replaces it there."""
+    def find(name):
+        return getattr(MOVED[name], name) if name in MOVED else globals()[name]
+    return {name: (lambda name: lambda *args, **kwargs: find(name)(*args, **kwargs))(name) for name in names}
 
 
 # Feature code moved out of server.py (track 1). Each module reaches the
@@ -125,9 +133,10 @@ def _late(*names):
 import homestead_overview_server as OVERVIEW_ROUTES
 from homestead_overview_server import (
     _alerts_loop, _diagnostic_read, _history_loop, _sampler, _schedules_loop, _uptime_loop,
-    change_undo_plan, protection_issues, scheduled_items, set_schedule, set_uptime_setting,
-    set_vm_monitoring,
+    api_scale, change_undo_plan, is_self, protection_issues, restart_workload, scheduled_items,
+    set_schedule, set_uptime_setting, set_vm_monitoring,
 )
+MOVED.update(dict.fromkeys(("api_scale", "clear_unstarted_pods", "get_overview", "guard_managed_smb", "guard_self", "is_self", "restart_workload", "scale_workload", "workload_start_plan"), OVERVIEW_ROUTES))
 OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in OVERVIEW_ROUTES.VALUES})
 import homestead_cluster_server as CLUSTER_ROUTES
 from homestead_cluster_server import (
@@ -148,16 +157,18 @@ from homestead_storage_server import (
     _class_made_for, _files_loop, _host_fix_loop, _internal_class, _longhorn_copies_loop,
     _prune_snapshot, _pvc_rows, _restore_tests_loop, _restore_then_tidy, _samba_loop,
     _snapshot_files_loop, _storage_pending_loop, _storage_runtime_loop, class_selectable,
-    guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb, serves_many,
+    cleanup_restores, guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb, serves_many,
     share_storage_options, shared_storage_classes, storage_class_facts, storage_legacy_cancel,
     storage_move_progress, storage_runtime_check, storage_volume_action,
 )
+MOVED.update(dict.fromkeys(("cleanup_restores", "ensure_claim", "storage_helper_admission", "storage_restart_admission"), STORAGE_ROUTES))
 STORAGE_ROUTES.bind_routes(_late(*STORAGE_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in STORAGE_ROUTES.VALUES})
 import homestead_vm_server as VM_ROUTES
 from homestead_vm_server import (
     _remove_cluster_vm, _vm_image_disks, _vmstore_loop, api_vm_power, create_vm_with_address,
-    set_vm_logos, vm_create_options,
+    set_vm_logos, vm_create_options, vm_default_class,
 )
+MOVED.update(dict.fromkeys(("prepare_lan", "vm_address_problem", "vm_default_class"), VM_ROUTES))
 VM_ROUTES.bind_routes(_late(*VM_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in VM_ROUTES.VALUES})
 import homestead_deploy_server as DEPLOY_ROUTES
 from homestead_deploy_server import (
@@ -168,18 +179,21 @@ from homestead_deploy_server import (
     operation_item, prepare_deploy_network, preview_import, rebalance_move,
     redact_deployment_preview, reviewed_deploy, reviewed_import, rollout_review_context,
 )
+MOVED.update(dict.fromkeys(("persist_icon_config",), DEPLOY_ROUTES))
 DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 import homestead_self_data_server as SELF_DATA_ROUTES
 from homestead_self_data_server import (
     _data_move_status, _reconcile_permissions, _replace_own_pod, fit_own_strategy, fleet_address,
     homestead_running_on, own_node, self_data_file_scope, self_data_preparation_progress, self_stop_warning,
 )
+MOVED.update(dict.fromkeys(("_require_no_data_handoff", "_self_data_helper_image", "homestead_data_volume"), SELF_DATA_ROUTES))
 SELF_DATA_ROUTES.bind_routes(_late(*SELF_DATA_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in SELF_DATA_ROUTES.VALUES})
 import homestead_kube_helpers as KUBE_HELPERS
 from homestead_kube_helpers import (
-    _auth_ksend, _guarded_ksend, _never_started, age_secs, api_path, ktable,
+    _auth_ksend, _guarded_ksend, _never_started, age_secs, api_path, kget, ksend, ktable,
     logsearch_read, parse_cpu, parse_mem, raw_get,
 )
+MOVED.update(dict.fromkeys(("_ksend", "kget", "ksend", "require_workload_target"), KUBE_HELPERS))
 KUBE_HELPERS.bind_routes(_late(*KUBE_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in KUBE_HELPERS.VALUES})
 import homestead_names_helpers as NAMES_HELPERS
 from homestead_names_helpers import (
@@ -188,8 +202,9 @@ from homestead_names_helpers import (
 NAMES_HELPERS.bind_routes(_late(*NAMES_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in NAMES_HELPERS.VALUES})
 import homestead_settings_helpers as SETTINGS_HELPERS
 from homestead_settings_helpers import (
-    _config_restored, save_app_settings,
+    _config_restored, get_app_settings, save_app_settings,
 )
+MOVED.update(dict.fromkeys(("_fleet_rename", "enforce_update_policy", "get_app_settings", "update_policy_status"), SETTINGS_HELPERS))
 SETTINGS_HELPERS.bind_routes(_late(*SETTINGS_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in SETTINGS_HELPERS.VALUES})
 import homestead_web_paths as WEB_PATHS
 from homestead_web_paths import (
@@ -197,56 +212,6 @@ from homestead_web_paths import (
     is_vendor_path,
 )
 WEB_PATHS.bind_routes(_late(*WEB_PATHS.ROUTE_NEEDS), **{name: globals()[name] for name in WEB_PATHS.VALUES})
-
-
-
-KGET_RETRY = (0.5, 1.0, 2.0)  # a busy API server (priority and fairness) answers reads 429 for a moment
-
-
-def kget(path, timeout=10):
-    for attempt in range(len(KGET_RETRY) + 1):
-        req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
-        try:
-            with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except urllib.error.HTTPError as error:
-            # A read is safe to ask again; a write's 429 (an eviction a
-            # disruption budget refuses) is an answer, and ksend keeps it.
-            if error.code != 429 or attempt == len(KGET_RETRY):
-                raise
-            try:
-                delay = float((error.headers or {}).get("Retry-After") or KGET_RETRY[attempt])
-            except (TypeError, ValueError):
-                delay = KGET_RETRY[attempt]
-            error.close()
-            time.sleep(max(0.1, min(3.0, delay)))
-
-
-def ksend(method, path, body=None, ctype="application/json", timeout=15):
-    return _guarded_ksend(method, path, body, ctype, timeout)
-
-
-def require_workload_target(ns, name):
-    if HOSTACCESS.role() not in (None, "admin"):
-        HOSTACCESS.require_target(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"), ns)
-
-
-def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shutdown_bypass=False):
-    path = api_path(path)
-    # Fence the common Kubernetes transport, including callers that already
-    # own another feature's write lock. Local navigation and recovery reviews
-    # remain available. The shutdown coordinator and the narrowly scoped AUTH
-    # binding bypass this fence; authentication still uses the other guards.
-    if not shutdown_bypass and "SELF" in globals():
-        shutdown = cluster_shutdown().state()
-        if shutdown and shutdown["phase"] not in ("released", "failed"):
-            raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(API + path, data=data, method=method,
-                                 headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-        raw = r.read().decode()
-        return json.loads(raw) if raw.strip() else {}
 
 
 def require_self_data_write():
@@ -295,7 +260,7 @@ def initialize_self_data_fence():
         return
     with open(f"{SA}/namespace", encoding="utf-8") as handle:
         namespace = handle.read().strip()
-    _self_data_fence = SELF_DATA_FENCE.Fence(kget, namespace, NAMES.BRAND,
+    _self_data_fence = SELF_DATA_FENCE.Fence(KUBE_HELPERS.kget, namespace, NAMES.BRAND,
         os.environ.get("HOSTNAME", ""), NAMES.BRAND, DATA_DIR)
     state = _self_data_fence.inspect()  # unknown/source state must not reach feature imports
     _self_data_boot_pending = not state["writable"]
@@ -332,80 +297,14 @@ if __name__ == "__main__":
     initialize_self_data_fence()
 
 
-def cached(key, ttl, fn):
-    with _lock:
-        e = _cache.get(key)
-        if e and time.time() - e[0] < ttl:
-            return e[1]
-    try:
-        v = fn()
-    except Exception as ex:
-        with _lock:
-            e = _cache.get(key)
-        if e:
-            return e[1]
-        raise ex
-    with _lock:
-        _cache[key] = (time.time(), v)
-    return v
-
-
-def update_policy_status(settings=None, now=None):
-    """Return whether a manual managed update may start at the current UTC time."""
-    update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
-    policy = update.get("policy", "approval_required")
-    maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
-    duration = int(maintenance["duration_minutes"])
-    window_open = RECOVERY.window(maintenance, time.time() if now is None else now)[0]
-    if policy == "notify_only":
-        allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
-    elif policy == "maintenance_window" and not window_open:
-        allowed, reason = False, (f"Updates are limited to the {maintenance['start']} UTC "
-                                  f"maintenance window ({duration} minutes).")
-    else:
-        allowed, reason = True, "Explicit operator approval is required before rollout."
-    return {"policy": policy, "allows_install": allowed, "requires_approval": True,
-            "reason": reason, "window_open": window_open,
-            "maintenance": json.loads(json.dumps(maintenance))}
-
-
-def enforce_update_policy(body, settings=None, now=None):
-    status = update_policy_status(settings, now)
-    if not status["allows_install"]:
-        raise PermissionError(status["reason"])
-    if body.get("approved") is not True:
-        raise PermissionError("explicit approval is required before installing an image update")
-    return status
-
-
 def _settings_map():
     return NAMES.object_name("settings", DEFAULT_NS)
 
 
-def get_app_settings():
-    try:
-        cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{_settings_map()}")
-        raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
-        return APP_SETTINGS.validate(raw)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return APP_SETTINGS.validate({})
-        raise
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return APP_SETTINGS.validate({})
-
-
-def _fleet_rename():
-    try:
-        FLEET.refresh_name()
-    except Exception:
-        pass            # the next change, or their next look, carries it
-
-
 def app_settings_payload():
-    settings = json.loads(json.dumps(cached("settings", 15, get_app_settings)))
+    settings = json.loads(json.dumps(CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings)))
     try:
-        kube = kget("/version").get("gitVersion", "")
+        kube = KUBE_HELPERS.kget("/version").get("gitVersion", "")
     except Exception:
         kube = ""
     settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
@@ -417,156 +316,6 @@ def app_settings_payload():
 
 # Looked up when asked, so a test that patches either is the one the route calls.
 APP_SETTINGS.bind(lambda: app_settings_payload(), lambda value: save_app_settings(value))
-
-
-
-
-def clear_unstarted_pods(ns, name, stopping):
-    """Remove pods of a container that never started, so they cannot pile up.
-
-    A pod stuck before its first start - an image that will not pull, a
-    volume or network that will not attach - often never finishes stopping,
-    and every Stop and Start left one more behind. Nothing ran in it, so
-    removing it at once loses nothing. When stopping, every such pod goes;
-    when starting, those still stuck stopping from before."""
-    try:
-        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-        selector = ((dep.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
-        if not selector:
-            return []
-        query = urllib.parse.quote(",".join(f"{k}={v}" for k, v in selector.items()), safe="")
-        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={query}").get("items", [])
-    except Exception:
-        return []
-    removed = []
-    for pod in pods:
-        meta = pod.get("metadata") or {}
-        stuck_stopping = meta.get("deletionTimestamp") and age_secs(meta["deletionTimestamp"]) > 20
-        if not _never_started(pod) or not (stopping or stuck_stopping):
-            continue
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{ns}/pods/{meta['name']}?gracePeriodSeconds=0")
-            removed.append(meta["name"])
-        except Exception:
-            pass
-    return removed
-
-
-def is_self(ns, name):
-    """The Deployment this Homestead runs as."""
-    return (ns, name) == (SELF.NS, NAMES.BRAND)
-
-
-def guard_managed_smb(ns, name):
-    if is_managed_smb(ns, name):
-        raise ValueError("Homestead manages SMB and its mounts from Network Shares. "
-                         "Change shares or SMB settings there.")
-    if is_managed_nfs(ns, name):
-        raise ValueError("Homestead manages NFS and its mounts from Network Shares and Settings > Cluster > Add-ons.")
-
-
-def workload_start_plan(ns, name, replicas=1):
-    ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    return PLACE.start_plan(ns, name, replicas, threshold)
-
-
-def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
-    """A Deployment to n replicas, after the checks the app makes: never the
-    SMB server's, never Homestead's own unless confirmed, and a start only
-    where the capacity check allows it."""
-    if n < 0 or n > 100:
-        raise ValueError("replicas must be between 0 and 100")
-    guard_managed_smb(ns, name)
-    require_workload_target(ns, name)
-    guard_self(ns, name, stopping=n == 0, confirmed=confirm_self)
-    plan = None
-    if n > 0:
-        plan = workload_start_plan(ns, name, n)
-        if plan["blocked"]:
-            raise WORKLOADS.WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
-        if plan["requires_confirmation"] and not confirm_capacity:
-            raise WORKLOADS.WorkloadRefused("review node memory before starting", plan)
-    if n:
-        clear_unstarted_pods(ns, name, stopping=False)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
-          {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
-    if not n:
-        clear_unstarted_pods(ns, name, stopping=True)
-    _cache.pop("wl", None)
-    return {"ok": True, "plan": plan}
-
-
-def restart_workload(ns, name):
-    guard_managed_smb(ns, name)
-    require_workload_target(ns, name)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-          {"spec": {"template": {"metadata": {"annotations":
-           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
-          ctype="application/merge-patch+json")
-    _cache.pop("wl", None)
-    return {"ok": True}
-
-
-def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleting=False, moving=False):
-    """Changes that would take Homestead down from its own page.
-
-    Stopping is allowed once it has been said out loud and confirmed; deleting,
-    renaming and moving its storage never are from here - each needs the page
-    running to finish, and would leave it gone halfway.
-    """
-    if not is_self(ns, name):
-        return
-    if HOSTACCESS.role() not in (None, "admin"):
-        raise PermissionError("only an admin can change Homestead itself")
-    if deleting:
-        raise ValueError("Homestead cannot delete itself from its own page - that removes this page for good. "
-                         "Use helm uninstall, or kubectl, if that is what you want")
-    if renaming:
-        raise ValueError("Homestead cannot rename itself: its permissions, Service and data are tied to its name")
-    if moving:
-        raise ValueError("Homestead's own data moves from Settings > About > Redundancy, which restarts it safely; "
-                         "a storage move here would stop the page doing the move")
-    if stopping and not confirmed:
-        raise ValueError(self_stop_warning())
-
-
-def get_overview():
-    nodes = NODES.get_nodes()
-    wl = WORKLOADS.get_workloads()
-    vols = STORAGE.get_volumes()
-    pods = kget("/api/v1/pods").get("items", [])
-    sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
-    usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
-    deg = [v for v in vols if v["robustness"] == "degraded"]
-    flt = [v for v in vols if v["robustness"] == "faulted"]
-    try:
-        protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
-                                       cached("lhtarget-health", 60, LH.backup_target))
-    except Exception:
-        protection = []
-    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
-    tcap = sum(n["cpu_cap"] for n in nodes) or 1
-    tuse = sum(n["cpu_used"] for n in nodes)
-    mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
-    muse = sum(n["mem_used_gb"] for n in nodes)
-    return {
-        **health,
-        "nodes": nodes,
-        "nodes_ready": len([n for n in nodes if n["status"] == "Ready"]),
-        "nodes_total": len(nodes),
-        "workloads": len(wl),
-        "workload_pods": len(usrp),
-        "system_pods": len(sysp),
-        "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
-        "cpu_pct": round(tuse / tcap * 100, 1),
-        "mem_pct": round(muse / mcap * 100, 1),
-        "cpu_used": round(tuse, 2), "cpu_cap": tcap,
-        "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
-        "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
-        "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
-        "lb_ip": NETWORK.shared_vip(),
-    }
 
 
 # ---------------------------------------------------------------- mutations
@@ -588,20 +337,6 @@ def new_claims(volumes):
     return list(claims.values())
 
 
-
-def prepare_lan(cfg):
-    """A container's own LAN address, checked as free and its network made,
-    before the Deployment that joins it."""
-    if cfg.get("network_mode") != "lan":
-        return cfg
-    lan = LAN.clean(cfg.get("lan") or {})
-    problem = vm_address_problem(lan["address"])
-    if problem:
-        raise ValueError(problem)
-    cfg["lan"] = lan
-    return cfg
-
-
 import homestead_share_servers as SHARE_SERVERS
 SMB_NAME = SHARE_SERVERS.SMB_NAME
 
@@ -615,7 +350,7 @@ def storage_classes():
     pod - it binds happily and then strands whatever tries to use it.
     """
     rows = []
-    for item in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []):
+    for item in KUBE_HELPERS.kget("/apis/storage.k8s.io/v1/storageclasses").get("items", []):
         meta = item.get("metadata", {}) or {}
         parameters = item.get("parameters", {}) or {}
         annotations = meta.get("annotations", {}) or {}
@@ -673,60 +408,6 @@ import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage as STORAGE
 
 
-def vm_default_class(rows=None):
-    """The class a new VM disk lands on: the cluster's default, else Longhorn's
-    usual one, else none named - the API server then applies its own default."""
-    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
-    for row in rows:
-        if row["default"]:
-            return row["name"]
-    names = [row["name"] for row in rows]
-    return next((name for name in ("longhorn-r2", "harvester-longhorn", "longhorn") if name in names), "")
-
-
-def vm_address_problem(ip):
-    """Why a VM cannot have this address, or "": something already has it."""
-    import ipaddress
-    try:
-        view = IPAM.view()
-    except Exception:
-        view = {"subnets": []}
-    for subnet in view.get("subnets") or []:
-        if ipaddress.ip_address(ip) not in ipaddress.ip_network(subnet["cidr"]):
-            continue
-        if subnet.get("gateway") == ip:
-            return f"{ip} is the gateway of {subnet['cidr']}"
-        row = next((r for r in subnet.get("rows") or [] if r["ip"] == ip), None)
-        if row and (row.get("name") or row.get("kind") or row.get("cluster")):
-            return f"{ip} is taken: {row.get('name') or row.get('cluster') or row.get('kind')} in IP addresses"
-        if row and (row.get("scan") or {}).get("up"):
-            return f"{ip} answered the last scan: something is already there"
-        start, end = subnet.get("dhcp_start"), subnet.get("dhcp_end")
-        if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
-            return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
-    try:
-        network = cached("network", 5, NETWORK.inventory)
-    except Exception:
-        network = {}
-    if ip in (network.get("node_ips") or []) or ip in (network.get("platform_addresses") or {}):
-        return f"{ip} is one of the cluster's own addresses"
-    if any(v.get("ip") == ip for v in network.get("vips") or []):
-        return f"{ip} is a Service's address"
-    # A few ports a machine usually has, quickly: a free address answers none.
-    if IPAM._probe(ip, ports=(22, 80, 443, 3389, 6443), timeout=0.4).get("up"):
-        return f"{ip} answers on the network: something is already there"
-    return ""
-
-
-def api_scale(ns, name, n):
-    """Start or stop a container for /api/v1, under the app's own checks."""
-    try:
-        result = scale_workload(ns, name, n, confirm_capacity=True, confirm_self=False)
-    except WORKLOADS.WorkloadRefused as refused:
-        raise API_V1.ApiError(409, str(refused), blockers=list((refused.plan or {}).get("blockers") or [])) from None
-    return {"warnings": list((result.get("plan") or {}).get("warnings") or []), "job": None}
-
-
 def selectable_storage_classes(rows=None):
     """Classes a person may pick for their own workloads - the default first."""
     rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
@@ -753,35 +434,7 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=Non
             "spec": {"accessModes": [access_mode],
                      "storageClassName": sc,
                      "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
-    return (send or ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
-
-
-def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
-    """A deploy's new volume - or the one of that name already there, when
-    nothing uses it.
-
-    A failed install leaves its volumes behind (deleting a container keeps
-    its data), and installing again then stopped at "already exists". One
-    that nothing refers to is taken as it is, data and all, and said so; one
-    another container, VM or job uses is refused by name.
-    """
-    try:
-        existing = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        existing = None
-    if not existing:
-        create_pvc(ns, name, size_gb, sc, access_mode)
-        return ""
-    try:
-        users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
-    except Exception:
-        users = ["something"]
-    if users:
-        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
-                         "give this app's volume another name, or choose the existing one to share it")
-    return name
+    return (send or KUBE_HELPERS.ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
 
 
 # expose a tiny shim module so helper modules can reach raw_get without a cycle
@@ -815,7 +468,7 @@ import homestead_networking as NETWORK
 import homestead_flow as FLOW
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
-MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn), _cache)
+MODULE_ROUTES.bind(lambda key, seconds, fn: CACHE.cached(key, seconds, fn), _cache)
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -834,6 +487,7 @@ import homestead_cfaccess as CFACCESS
 import homestead_push as PUSH
 import homestead_alerts as ALERTS
 import homestead_self as SELF
+KUBE_HELPERS.FENCE_READY = True
 import homestead_namespaces as NSMOD
 import homestead_restructure as RESTRUCTURE
 import homestead_volowner as VOLOWNER
@@ -876,7 +530,7 @@ ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity, versio
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
-           site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
+           site=lambda: (CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
            address=fleet_address, earlier=lambda: (f"http://{LB_IP}:8088",) if LB_IP else ())
 MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
@@ -889,7 +543,7 @@ def _resolve_storage_class():
     if STORAGE_CLASS:
         return STORAGE_CLASS
     try:
-        return vm_default_class() or "longhorn-r2"
+        return VM_ROUTES.vm_default_class() or "longhorn-r2"
     except Exception:
         return "longhorn-r2"
 
@@ -901,11 +555,11 @@ IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every repl
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
-PLACE.bind(kget, ksend, lambda: cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
+PLACE.bind(kget, ksend, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 # The helper image is read from Homestead's own pod, defined further down.
-POWER_JOBS.bind(kget, ksend, lambda read, ns: _self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
+POWER_JOBS.bind(kget, ksend, lambda read, ns: SELF_DATA_ROUTES._self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
 
 
@@ -914,7 +568,7 @@ CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
-             channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
+             channel=lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
@@ -928,7 +582,7 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(im
 
 
 UPDATES.pull_progress = _pull_progress
-K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
+K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
 OPS.RESOLVERS[REBALANCE.KIND] = REBALANCE.status
@@ -936,25 +590,17 @@ OPS.RESOLVERS[CREBALANCE.KIND] = CREBALANCE.status
 OPS.CANCELLERS[CREBALANCE.KIND] = (CREBALANCE.cancel_plan, CREBALANCE.cancel_run)
 OPS.CANCELLERS[REBALANCE.KIND] = (REBALANCE.cancel_plan, REBALANCE.cancel_run)
 OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
-OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
+OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, KUBE_HELPERS.kget)
 OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
 OPS.RESOLVERS[RENAME.KIND] = lambda item: RENAME.status(item, OPS)
-OPS.CANCELLERS[RENAME.KIND] = (lambda item: RENAME.recovery_plan(item, kget, OPS),
-                              lambda item, options: RENAME.recovery_run(item, options, kget, OPS))
+OPS.CANCELLERS[RENAME.KIND] = (lambda item: RENAME.recovery_plan(item, KUBE_HELPERS.kget, OPS),
+                              lambda item, options: RENAME.recovery_run(item, options, KUBE_HELPERS.kget, OPS))
 OPS.CLEANUPS.add(RENAME.KIND)
 for _kind in ("vm-create", "vm-edit"):
     OPS.RESOLVERS[_kind] = VM_MUTATION_JOB.status
     OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
-def cleanup_restores():
-    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, LH.cleanup_restore_snapshots):
-        try:
-            cleanup()
-        except Exception as error:
-            # Cleanup may be retried; it must not change a completed restore
-            # into a failed data operation. The cleanup itself fails closed.
-            print(f"Restore metadata cleanup deferred: {error}", flush=True)
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
@@ -963,14 +609,14 @@ MOVE_ENGINE.after_finish = cleanup_restores
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
-PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, WORKLOADS.get_workloads),
+PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = COPY_JOB.legacy_status
-OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, kget, ksend, OPS, copy_admission)
-OPS.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, kget, OPS),
-                                lambda item, options: COPY_JOB.recovery_run(item, options, kget, ksend, OPS))
+OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, KUBE_HELPERS.kget, KUBE_HELPERS.ksend, OPS, copy_admission)
+OPS.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, KUBE_HELPERS.kget, OPS),
+                                lambda item, options: COPY_JOB.recovery_run(item, options, KUBE_HELPERS.kget, KUBE_HELPERS.ksend, OPS))
 OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
-OPS.RESOLVERS[IMPORT_JOB.KIND] = lambda item: IMPORT_JOB.status(item, kget)
+OPS.RESOLVERS[IMPORT_JOB.KIND] = lambda item: IMPORT_JOB.status(item, KUBE_HELPERS.kget)
 OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run)
 import homestead_reclass as RECLASS
 import homestead_storage_admission as STORAGE_ADMISSION
@@ -978,19 +624,11 @@ import homestead_storage_recovery as STORAGE_RECOVERY
 import homestead_storage_runtime as STORAGE_RUNTIME
 
 
-def storage_restart_admission(item, proposals):
-    return STORAGE_ADMISSION.plan(item, proposals, kget, PLACE.get_nodes(), get_app_settings()["thresholds"]["memory"]["critical"])
-
-
-def storage_helper_admission(item, manifest):
-    return copy_admission(manifest)
-
-
 def _bind_recovery():
     """The job tray's recovery reviews read through server.py's reader, so a
     test that patches it is the one they use."""
-    OPS.bind_recovery(lambda *a, **k: kget(*a, **k), lambda *a: storage_helper_admission(*a),
-                      lambda *a: storage_restart_admission(*a), lambda: storage_runtime_check())
+    OPS.bind_recovery(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a: STORAGE_ROUTES.storage_helper_admission(*a),
+                      lambda *a: STORAGE_ROUTES.storage_restart_admission(*a), lambda: storage_runtime_check())
 
 
 _bind_recovery()
@@ -1040,7 +678,7 @@ OPS.RESOLVERS["reclass"] = storage_move_progress
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
 OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
-MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: guard_managed_smb(ns, name))
+MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name))
 
 
 WORKLOADS.bind(_late(*WORKLOADS.NEEDS), api=API, token=TOKEN, ssl_context=CTX, default_ns=DEFAULT_NS,
@@ -1074,7 +712,7 @@ SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 DIAGNOSTICS.bind(DATA_DIR, _diagnostic_read, OPS, HOMESTEAD_VERSION, _own_namespace(), os.environ.get("HOSTNAME", ""))
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
-IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventory))
+IPAM.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("network", 5, NETWORK.inventory))
 HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
@@ -1098,9 +736,9 @@ RESOURCES.bind(kget, ksend, ktable, lambda kind, ns, name: guard_smb_object(kind
 VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(annotations), DEFAULT_NS,
          lambda b: set_vm_logos(b), lambda b: set_vm_monitoring(b))
 # Looked up as each call is made, so what a test puts in their place is used.
-VM_REVIEW.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k), DEFAULT_NS,
+VM_REVIEW.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), DEFAULT_NS,
                lambda *a, **k: _dns_name(*a, **k), lambda current: rollout_review_context(current),
-               lambda: get_app_settings(), lambda *a: vm_default_class(*a), lambda ip: vm_address_problem(ip),
+               lambda: SETTINGS_HELPERS.get_app_settings(), lambda *a: VM_ROUTES.vm_default_class(*a), lambda ip: VM_ROUTES.vm_address_problem(ip),
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
@@ -1108,7 +746,7 @@ STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node
                      selectable_storage_classes, shared_storage_classes, storage_class_facts)
 STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, storage_runtime_check)
 LHCAP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status)
-LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True),
+LHREBUILD.bind(kget, ksend, lambda: (SETTINGS_HELPERS.get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True),
                settings=get_app_settings, save_settings=save_app_settings)
 import homestead_lhv2_setup as LHV2_SETUP
 LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
@@ -1130,26 +768,26 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, NODES.node_temps, DATA_D
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR, setting=lambda b: set_uptime_setting(b))
-HOUSEKEEPING.bind(DATA_DIR, kget=lambda path: kget(path), portal_links=lambda: PORTAL.stored())
+HOUSEKEEPING.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), portal_links=lambda: PORTAL.stored())
 SCHEDULES.bind(DATA_DIR, items=lambda: scheduled_items(), setter=lambda b: set_schedule(b))
-OUTAGE.bind(DATA_DIR, kget=lambda path: kget(path), ksend=lambda *a, **k: ksend(*a, **k),
-            dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: guard_managed_smb(ns, name))
-CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
-             deployments=lambda: [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
-FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
-USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
+OUTAGE.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
+            dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name))
+CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
+             deployments=lambda: [d for d in KUBE_HELPERS.kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
+FORECAST.bind(DATA_DIR, lambda: (CACHE.cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
+USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: KUBE_HELPERS.kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
-PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, get_app_settings), SYS_NS)
+PLACEMODE.bind(kget, ksend, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
 CAPACITY.bind(kget, NODES.node_impact, NODES._impact_sources, FLOW._flow_owner, lambda pod: NAMES.label_of(pod["metadata"], "task"))
-RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS,
+RECOVERY.bind(DATA_DIR, kget, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), OPS,
               lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
               (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,
               UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
               HOSTACCESS.require_target_as, OPS)
-MCP.bind(DATA_DIR, lambda: cached("settings", 15, get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
-    require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "") if p in ROUTE_POLICY.TARGET_CHECKED else None),
+MCP.bind(DATA_DIR, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
+    KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "") if p in ROUTE_POLICY.TARGET_CHECKED else None),
     kget, lambda ns, name: delete_workload(ns, name))
 
 
@@ -1181,7 +819,7 @@ OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.check
 OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
                   LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
-                  lambda: cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
+                  lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 
 AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
@@ -1196,9 +834,9 @@ DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 
 VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
-             lambda url, display, reuse: HVIMAGE.download(kget, ksend, DEFAULT_NS, url, "", None, display, reuse),
+             lambda url, display, reuse: HVIMAGE.download(KUBE_HELPERS.kget, KUBE_HELPERS.ksend, DEFAULT_NS, url, "", None, display, reuse),
              IMP.list_vm_images, _vm_image_disks,
-             lambda ns, name: ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
+             lambda ns, name: KUBE_HELPERS.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
 
 
 OPS.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
@@ -1246,54 +884,6 @@ class Query(dict):
         raise MissingParameter(f"missing parameter: {key}")
 
 
-def homestead_data_volume(dep=None):
-    """Homestead's data claim, and whether pods on several nodes can mount it.
-
-    Copies of Homestead on different nodes all mount this one claim, so it has
-    to be ReadWriteMany on a class Longhorn serves through its share manager.
-    A migratable class - Harvester's own, and longhorn-r2 - hands out a VM-disk
-    volume that one node attaches, and a pod on a second node waits forever."""
-    ns, name = SELF.NS, NAMES.BRAND
-    dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    volumes = (dep["spec"]["template"]["spec"].get("volumes") or [])
-    claim = next(((v.get("persistentVolumeClaim") or {}).get("claimName") for v in volumes
-                  if v.get("name") == "data" and v.get("persistentVolumeClaim")), "")
-    if not claim:
-        return {"pvc": "", "shareable": False, "reason": "Homestead keeps no data claim", "candidates": []}
-    pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
-    spec = pvc.get("spec") or {}
-    klass = spec.get("storageClassName") or ""
-    modes = spec.get("accessModes") or []
-    rows = storage_classes()
-    row = next((r for r in rows if r["name"] == klass), None)
-    size = str(((pvc.get("status") or {}).get("capacity") or {}).get("storage")
-               or ((spec.get("resources") or {}).get("requests") or {}).get("storage") or "2Gi")
-    if "ReadWriteMany" not in modes:
-        reason = f"{claim} is ReadWriteOnce: one node at a time can mount it"
-    elif row and row.get("migratable"):
-        reason = (f"{claim} is on {klass}, a migratable class: Longhorn gives it a VM-disk volume that "
-                  "only one node can mount, so a copy on a second node would never start")
-    else:
-        reason = ""
-    # Do not request RWX merely because a non-Longhorn class has no
-    # migratable flag. k3s local-path (and many block CSI drivers) cannot
-    # provision it. Unknown drivers get the conservative single-node mode.
-    shared = shared_storage_classes(rows)
-    # Every class it could move to, and whether copies on several nodes could
-    # then share it: the move is not only for redundancy.
-    classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
-               if class_selectable(r) and r["name"] != klass]
-    # Data volumes an earlier move left behind: kept until deleted, so they
-    # are said out loud rather than found later as a mystery.
-    try:
-        kept = [p["metadata"]["name"] for p in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])
-                if p["metadata"]["name"].startswith(f"{name}-data") and p["metadata"]["name"] != claim]
-    except Exception:
-        kept = []
-    return {"pvc": claim, "storage_class": klass, "access_modes": modes, "size": size,
-            "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes, "kept": kept}
-
-
 def self_data_handoff_status(operation):
     """Read only the control record identified by this installation's receipt.
 
@@ -1335,12 +925,12 @@ def self_data_handoff_status(operation):
                         message=("Setup stopped; Homestead is still on its original volume. " + ref["setup_error"]) if ref.get("setup_error")
                             else "Preparing the move. Homestead is still online.")
                     return view
-                anchor = SELF_DATA_FENCE.A.Anchor(kget, None, SELF.NS, NAMES.BRAND)
+                anchor = SELF_DATA_FENCE.A.Anchor(KUBE_HELPERS.kget, None, SELF.NS, NAMES.BRAND)
                 anchor.load(operation=operation, uid=ref["anchor_uid"])
                 return SELF_DATA_WORKER.progress(anchor, time.time())
         if not marker or (marker["namespace"], marker["deployment"], marker["operation"]) != (SELF.NS, NAMES.BRAND, operation):
             return None
-        anchor = SELF_DATA_FENCE.A.Anchor(kget, None, SELF.NS, NAMES.BRAND)
+        anchor = SELF_DATA_FENCE.A.Anchor(KUBE_HELPERS.kget, None, SELF.NS, NAMES.BRAND)
         anchor.load(operation=operation, uid=marker["anchor_uid"])
         return SELF_DATA_WORKER.progress(anchor, time.time())
     except Exception:
@@ -1353,7 +943,7 @@ def abandon_self_data_preparation(body):
     recovery = _self_data_fence.recovery()
     if body.get("operation") != recovery["operation"]:
         raise SELF_DATA_FENCE.Held("The preparation changed; reload its status")
-    anchor = SELF_DATA_FENCE.A.Anchor(kget, _ksend, SELF.NS, NAMES.BRAND).load(operation=recovery["operation"], uid=recovery["anchor_uid"])
+    anchor = SELF_DATA_FENCE.A.Anchor(KUBE_HELPERS.kget, KUBE_HELPERS._ksend, SELF.NS, NAMES.BRAND).load(operation=recovery["operation"], uid=recovery["anchor_uid"])
     if not anchor.state.get("setup_aborted"):
         anchor.abort_setup()  # CAS disarms the publisher; never clears a published handoff.
     if not _self_data_boot_pending:
@@ -1362,28 +952,6 @@ def abandon_self_data_preparation(body):
 
 
 CLUSTER_SHUTDOWN.bind(cluster_shutdown)
-
-
-def _self_data_helper_image(read, ns):
-    pod_name = _dns_name(SELF.POD, "Homestead pod")
-    pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
-    containers = [c for c in pod.get("spec", {}).get("containers", []) if c.get("name") == NAMES.BRAND]
-    statuses = [c for c in pod.get("status", {}).get("containerStatuses", []) if c.get("name") == NAMES.BRAND]
-    if len(containers) != 1 or len(statuses) != 1 or not statuses[0].get("ready") or not statuses[0].get("state", {}).get("running"):
-        raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
-    digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
-    if not digest_match:
-        raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
-    return pod, UPDATES._immutable(containers[0]["image"], digest_match.group(1))
-
-
-def _require_no_data_handoff(read, ns):
-    try:
-        read(f"/api/v1/namespaces/{ns}/configmaps/{NAMES.BRAND}-data-handoff")
-    except urllib.error.HTTPError as error:
-        if error.code == 404: return
-        raise
-    raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
 
 
 OPS.RESOLVERS[SELF_DATA_PREPARE.KIND] = self_data_preparation_progress
@@ -1396,21 +964,21 @@ def start_self_data_move(body, actor):
         raise SELF_DATA_FENCE.Held("Data moves require the mounted-data safety guard")
     ns = SELF.NS
     def reviewer(read):
-        pod, image = _self_data_helper_image(read, ns)
+        pod, image = SELF_DATA_ROUTES._self_data_helper_image(read, ns)
         def runtimes(pods, claim):
             return STORAGE_RUNTIME.require_self_data(OPS, pods, ns, NAMES.BRAND, HOMESTEAD_VERSION, claim,
                 own_uid=pod["metadata"]["uid"], data_mount=DATA_DIR)
         return SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
-            threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
+            threshold=SETTINGS_HELPERS.get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
             runtime_check=runtimes, clock=time.time, route_check=SELF_DATA_ROUTE.review)
     with OPS._lock:
-        _require_no_data_handoff(kget, ns)
+        SELF_DATA_ROUTES._require_no_data_handoff(KUBE_HELPERS.kget, ns)
         SELF_DATA_EXECUTE.idle(OPS)
-        execution = reviewer(kget).approve(body)
+        execution = reviewer(KUBE_HELPERS.kget).approve(body)
         job = SELF_DATA_EXECUTE.enqueue(OPS, execution)
     def recheck(approved, worker):
         def read(path):
-            result = kget(path)
+            result = KUBE_HELPERS.kget(path)
             if path == "/api/v1/pods":
                 # Re-evaluate the same proposal, not two copies of our already
                 # running helper. Observed node memory is never subtracted.
@@ -1421,7 +989,7 @@ def start_self_data_move(body, actor):
     # Setup owns only its new anchor and helpers; the raw transport allows the
     # final anchor acknowledgement after local write fencing. No source writes
     # or Deployment changes are allowed through this callback after publication.
-    task = SELF_DATA_EXECUTE.Execution(kget, _ksend, OPS, execution, job, directory=DATA_DIR,
+    task = SELF_DATA_EXECUTE.Execution(KUBE_HELPERS.kget, KUBE_HELPERS._ksend, OPS, execution, job, directory=DATA_DIR,
         barrier=_self_data_barrier, recheck=recheck)
     try:
         threading.Thread(target=task.run, name="self-data-setup", daemon=True).start()
@@ -1431,15 +999,15 @@ def start_self_data_move(body, actor):
     return {"ok": True, "operation": job, "handoff": execution["scope"].operation}, execution["status_token"]
 
 
-OPS.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, kget, directory=DATA_DIR)
+OPS.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, KUBE_HELPERS.kget, directory=DATA_DIR)
 
 
 OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 # Looked up when asked, so a test that patches one is the one used.
-SELF_HEALTH.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k),
-                 lambda dep=None: homestead_data_volume(dep), _heartbeats,
+SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
+                 lambda dep=None: SELF_DATA_ROUTES.homestead_data_volume(dep), _heartbeats,
                  lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
@@ -1451,8 +1019,8 @@ SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
 SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,
                    shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
-NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: guard_managed_smb(ns, name), lambda: NODES.node_temps())
-FLOW.bind(lambda path: kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
+NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name), lambda: NODES.node_temps())
+FLOW.bind(lambda path: KUBE_HELPERS.kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
           parse_cpu, parse_mem, age_secs)
 FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)
@@ -1463,13 +1031,13 @@ import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
-API_KEYS.CLIENTADDR.bind(lambda path: kget(path))
+API_KEYS.CLIENTADDR.bind(lambda path: KUBE_HELPERS.kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
-SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
+SETUP.bind(DATA_DIR, overview=lambda: OVERVIEW_ROUTES.get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
            samba=lambda: SHARE_SERVERS.samba_state())
-API_V1.bind(nodes=lambda: cached("nodes", 5, NODES.get_nodes), workloads=lambda: cached("wl", 5, WORKLOADS.get_workloads),
-            vms=lambda: cached("vms", 5, VMS.list_vms),
+API_V1.bind(nodes=lambda: CACHE.cached("nodes", 5, NODES.get_nodes), workloads=lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
+            vms=lambda: CACHE.cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
             version=lambda: HOMESTEAD_VERSION)
@@ -1502,13 +1070,13 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
      "objects": [("configmaps", DEFAULT_NS, IMP._sources_map())]},
     {"id": "vmstore", "label": "VM image store", "detail": "The cloud images kept, and whether they refresh",
      "objects": [("configmaps", DEFAULT_NS, VMSTORE.CONFIGMAP)]},
-], site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
+], site=lambda: (CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
     after_restore=_config_restored)
-CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, NODES.get_nodes), lambda: get_overview())
+CLUSTER.bind(kget, SYS_NS, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), lambda: OVERVIEW_ROUTES.get_overview())
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
-SNAPSHOT_FILES.bind(kget, ksend, lambda: _self_data_helper_image(kget, SELF.NS)[1], SYS_NS)
+SNAPSHOT_FILES.bind(kget, ksend, lambda: SELF_DATA_ROUTES._self_data_helper_image(KUBE_HELPERS.kget, SELF.NS)[1], SYS_NS)
 
 
 ISO_CLASS = NAMES.object_name("isos")
@@ -1538,14 +1106,14 @@ def iso_storage_class():
                     "provisioner": "driver.longhorn.io", "parameters": parameters,
                     "reclaimPolicy": "Delete", "allowVolumeExpansion": True, "volumeBindingMode": "Immediate"}
             try:
-                ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
+                KUBE_HELPERS.ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
             except urllib.error.HTTPError as error:
                 if error.code != 409:      # another replica made it first
                     raise
         return ISO_CLASS, True
     if base:
         return base, True
-    return vm_default_class(rows), False
+    return VM_ROUTES.vm_default_class(rows), False
 
 
 ISOS.bind(kget, ksend, SHARES.list_shares, FILES.list_files, iso_storage_class, SHARES._samba_node,
@@ -1573,8 +1141,6 @@ CSP = "; ".join([
     "base-uri 'self'",
     "object-src 'none'",
 ])
-
-
 
 
 # Policies are explicitly declared in homestead_route_policy.py. These sets
@@ -1677,27 +1243,13 @@ def needed_role(path, method):
     return declared
 
 
-def persist_icon_config(cfg):
-    """Replace a remote logo with a persistent same-origin cache reference."""
-    if "icon" not in cfg:
-        return cfg
-    source = str(cfg.get("icon") or "").strip()
-    if not source:
-        cfg["icon"] = ""
-        cfg["icon_source"] = ""
-        return cfg
-    cfg["icon"] = ICONS.persist(source, DATA_DIR)
-    cfg["icon_source"] = source
-    return cfg
-
-
 # ---------------------------------------------------------------- linked clusters
 # The resources the combined view gathers, and how this cluster answers locally.
 FLEET_LISTS = {
-    "workloads": lambda: cached("wl", 5, WORKLOADS.get_workloads),
-    "vms": lambda: cached("vms", 5, VMS.list_vms),
-    "nodes": lambda: cached("nodes", 5, NODES.get_nodes),
-    "volumes": lambda: cached("vol", 8, STORAGE.get_volumes),
+    "workloads": lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
+    "vms": lambda: CACHE.cached("vms", 5, VMS.list_vms),
+    "nodes": lambda: CACHE.cached("nodes", 5, NODES.get_nodes),
+    "volumes": lambda: CACHE.cached("vol", 8, STORAGE.get_volumes),
     "flow": lambda: FLOW.view(),
 }
 
@@ -1710,7 +1262,6 @@ class H(HTTP.LimitedHandler):
     protocol_version = "HTTP/1.1"
     timeout = HTTP.IDLE_SECONDS
     max_body = MAX_BODY
-
 
 
     def log_message(self, fmt, *a):
@@ -2343,7 +1894,7 @@ class H(HTTP.LimitedHandler):
             if not isinstance(b, dict):
                 return self._send(400, {"error": "a JSON object is required"})
             if p in ROUTE_POLICY.TARGET_CHECKED:
-                require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
+                KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             addr = self._client_ip()
             if p.startswith("/api/v1/"):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
@@ -2521,7 +2072,7 @@ def finish_self_data_helpers():
     while True:
         try:
             with self_data_activity():
-                result = SELF_DATA_FINISH.finish(_self_data_fence, kget, ksend)
+                result = SELF_DATA_FINISH.finish(_self_data_fence, KUBE_HELPERS.kget, KUBE_HELPERS.ksend)
                 if result["done"]:
                     SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             if result["done"]: return

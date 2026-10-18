@@ -72,7 +72,7 @@ class SaveVmLogoTests(unittest.TestCase):
     def setUp(self):
         import server
         self.server, self.sent = server, []
-        self.patches = [mock.patch.object(server, "ksend", side_effect=lambda *a, **k: self.sent.append((a, k))),
+        self.patches = [mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: self.sent.append((a, k))),
                         mock.patch.object(server.ICONS, "persist", side_effect=lambda src, d: "/api/icons/" + "a" * 64 + ".png")]
         for p in self.patches:
             p.start()

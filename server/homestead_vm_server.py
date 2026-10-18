@@ -5,9 +5,10 @@ choices and Helm charts' logos, and the logo routes server.py's handler
 answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache)."""
 import time
 import homestead_api_v1 as API_V1
 import homestead_cancel as CANCEL
@@ -17,6 +18,7 @@ import homestead_icons as ICONS
 import homestead_imports as IMP
 import homestead_ipam as IPAM
 import homestead_isos as ISOS
+import homestead_lan as LAN
 import homestead_leader as LEADER
 import homestead_logos as LOGOS
 import homestead_names as NAMES
@@ -30,7 +32,9 @@ import homestead_vms as VMS
 import homestead_vmstore as VMSTORE
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_dns_name", "beat", "cached", "kget", "ksend", "selectable_storage_classes", "self_data_activity", "storage_class_facts", "storage_classes", "vm_address_problem", "vm_default_class", "vm_network_details", "vm_networks", "vm_subnets")
+ROUTE_NEEDS = ("beat", "cached", "class_selectable", "_dns_name", "kget", "ksend",
+               "selectable_storage_classes", "self_data_activity", "storage_class_facts",
+               "storage_classes", "vm_network_details", "vm_networks", "vm_subnets")
 VALUES = ("DATA_DIR", "_cache")
 
 
@@ -242,3 +246,61 @@ ROUTES = {
     ("GET", "/api/logos"): ("viewer", _logos),
     ("GET", "/api/logos/missing"): ("viewer", _logos_missing),
 }
+
+
+def prepare_lan(cfg):
+    """A container's own LAN address, checked as free and its network made,
+    before the Deployment that joins it."""
+    if cfg.get("network_mode") != "lan":
+        return cfg
+    lan = LAN.clean(cfg.get("lan") or {})
+    problem = vm_address_problem(lan["address"])
+    if problem:
+        raise ValueError(problem)
+    cfg["lan"] = lan
+    return cfg
+
+
+def vm_default_class(rows=None):
+    """The class a new VM disk lands on: the cluster's default, else Longhorn's
+    usual one, else none named - the API server then applies its own default."""
+    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
+    for row in rows:
+        if row["default"]:
+            return row["name"]
+    names = [row["name"] for row in rows]
+    return next((name for name in ("longhorn-r2", "harvester-longhorn", "longhorn") if name in names), "")
+
+
+def vm_address_problem(ip):
+    """Why a VM cannot have this address, or "": something already has it."""
+    import ipaddress
+    try:
+        view = IPAM.view()
+    except Exception:
+        view = {"subnets": []}
+    for subnet in view.get("subnets") or []:
+        if ipaddress.ip_address(ip) not in ipaddress.ip_network(subnet["cidr"]):
+            continue
+        if subnet.get("gateway") == ip:
+            return f"{ip} is the gateway of {subnet['cidr']}"
+        row = next((r for r in subnet.get("rows") or [] if r["ip"] == ip), None)
+        if row and (row.get("name") or row.get("kind") or row.get("cluster")):
+            return f"{ip} is taken: {row.get('name') or row.get('cluster') or row.get('kind')} in IP addresses"
+        if row and (row.get("scan") or {}).get("up"):
+            return f"{ip} answered the last scan: something is already there"
+        start, end = subnet.get("dhcp_start"), subnet.get("dhcp_end")
+        if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
+            return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
+    try:
+        network = cached("network", 5, NETWORK.inventory)
+    except Exception:
+        network = {}
+    if ip in (network.get("node_ips") or []) or ip in (network.get("platform_addresses") or {}):
+        return f"{ip} is one of the cluster's own addresses"
+    if any(v.get("ip") == ip for v in network.get("vips") or []):
+        return f"{ip} is a Service's address"
+    # A few ports a machine usually has, quickly: a free address answers none.
+    if IPAM._probe(ip, ports=(22, 80, 443, 3389, 6443), timeout=0.4).get("up"):
+        return f"{ip} answers on the network: something is already there"
+    return ""

@@ -198,8 +198,8 @@ class ChosenPortTests(unittest.TestCase):
     def test_the_route_takes_only_a_published_port(self):
         import server
         sent = []
-        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
-             mock.patch.object(server, "cached", return_value=[{"ns": "lab", "name": "sonarr", **two_ports()}]):
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
+             mock.patch.object(server.CACHE, "cached", return_value=[{"ns": "lab", "name": "sonarr", **two_ports()}]):
             result = server.OVERVIEW_ROUTES.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 9090})
             with self.assertRaises(ValueError):
                 server.OVERVIEW_ROUTES.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 7000})
@@ -209,7 +209,7 @@ class ChosenPortTests(unittest.TestCase):
     def test_a_vms_automatic_check_takes_no_port(self):
         import server
         sent = []
-        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)):
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)):
             server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto", "port": 22})
         self.assertIsNone(sent[0][2]["metadata"]["annotations"]["homestead.io/uptime"])
 
@@ -218,7 +218,7 @@ class VmSettingRouteTests(unittest.TestCase):
     def test_only_the_vms_annotation_changes_and_a_port_is_needed(self):
         import server
         sent = []
-        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)):
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)):
             server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "http", "port": 8123, "path": "/api/"})
             server.OVERVIEW_ROUTES.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto"})
             for bad in ({"mode": "tcp"}, {"mode": "http", "path": "/x"}, {"mode": "tcp", "port": 99999}, {"name": "../x", "mode": "off"}):

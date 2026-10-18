@@ -9,9 +9,10 @@ a workload; a rebalance move; the move engine's loop; and the Helm routes
 server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache)."""
 import copy
 import re
 import secrets
@@ -24,6 +25,7 @@ import homestead_env_secrets as ENVSEC
 import homestead_hardware as HW
 import homestead_helm as HELM
 import homestead_host_access as HOSTACCESS
+import homestead_icons as ICONS
 import homestead_import_job as IMPORT_JOB
 import homestead_imports as IMP
 import homestead_lan as LAN
@@ -40,8 +42,8 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_volowner as VOLOWNER
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_dns_name", "_pvc_rows", "beat", "create_pvc", "edit_lan", "get_app_settings", "guard_managed_smb", "guard_self", "kget", "ksend", "new_claims", "persist_icon_config", "require_workload_target", "selectable_storage_classes", "shared_storage_classes", "storage_class_facts", "storage_classes")
-VALUES = ("DEFAULT_NS", "SYS_NS", "_cache")
+ROUTE_NEEDS = ("_dns_name", "_pvc_rows", "beat", "create_pvc", "edit_lan", "get_app_settings", "guard_managed_smb", "guard_self", "kget", "ksend", "new_claims", "require_workload_target", "selectable_storage_classes", "shared_storage_classes", "storage_class_facts", "storage_classes")
+VALUES = ("DATA_DIR", "DEFAULT_NS", "SYS_NS", "_cache")
 
 
 def bind_routes(helpers, **values):
@@ -568,3 +570,17 @@ ROUTES = {
     ("POST", "/api/helm/upgrade"): ("admin", _helm),
     ("POST", "/api/helm/uninstall"): ("admin", _helm),
 }
+
+
+def persist_icon_config(cfg):
+    """Replace a remote logo with a persistent same-origin cache reference."""
+    if "icon" not in cfg:
+        return cfg
+    source = str(cfg.get("icon") or "").strip()
+    if not source:
+        cfg["icon"] = ""
+        cfg["icon_source"] = ""
+        return cfg
+    cfg["icon"] = ICONS.persist(source, DATA_DIR)
+    cfg["icon_source"] = source
+    return cfg

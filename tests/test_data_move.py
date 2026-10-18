@@ -51,7 +51,7 @@ class DataMoveTests(unittest.TestCase):
 
     def use(self, cluster):
         self.c = cluster
-        patches = [mock.patch.object(server, "kget", cluster.get), mock.patch.object(server, "ksend", cluster.send),
+        patches = [mock.patch.object(server.KUBE_HELPERS, "kget", cluster.get), mock.patch.object(server.KUBE_HELPERS, "ksend", cluster.send),
                    mock.patch.object(server.OPS, "start", lambda *a, **k: {"id": "op"}),
                    mock.patch.object(server.OPS, "list_operations", lambda: self.running)]
         for p in patches:
@@ -60,7 +60,7 @@ class DataMoveTests(unittest.TestCase):
 
     def test_a_migratable_data_volume_blocks_a_second_copy(self):
         self.use(Cluster())
-        info = server.homestead_data_volume()
+        info = server.SELF_DATA_ROUTES.homestead_data_volume()
         self.assertFalse(info["shareable"])
         self.assertIn("migratable", info["reason"])
         self.assertEqual(["longhorn"], info["candidates"])
@@ -71,9 +71,9 @@ class DataMoveTests(unittest.TestCase):
 
     def test_a_readwriteonce_volume_blocks_it_too_and_a_shared_one_allows_it(self):
         self.use(Cluster("longhorn", ("ReadWriteOnce",)))
-        self.assertIn("ReadWriteOnce", server.homestead_data_volume()["reason"])
+        self.assertIn("ReadWriteOnce", server.SELF_DATA_ROUTES.homestead_data_volume()["reason"])
         self.use(Cluster("longhorn"))
-        self.assertTrue(server.homestead_data_volume()["shareable"])
+        self.assertTrue(server.SELF_DATA_ROUTES.homestead_data_volume()["shareable"])
         server.SELF_HEALTH.set_replicas(2)
         self.assertEqual(2, self.c.sent[-1][2]["spec"]["replicas"])
 
@@ -89,7 +89,7 @@ class DataMoveTests(unittest.TestCase):
                 {"name": "unknown", "provisioner": "example.test", "migratable": False},
                 {"name": "longhorn", "provisioner": "driver.longhorn.io", "migratable": False}]
         with mock.patch.object(server, "storage_classes", return_value=rows):
-            info = server.homestead_data_volume()
+            info = server.SELF_DATA_ROUTES.homestead_data_volume()
         self.assertEqual(["longhorn"], info["candidates"])
         self.assertEqual({"local-path": False, "unknown": False, "longhorn": True}, {r["name"]: r["shareable"] for r in info["classes"]})
 

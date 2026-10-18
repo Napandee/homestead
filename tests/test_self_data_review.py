@@ -244,12 +244,12 @@ class ReviewTests(unittest.TestCase):
         handler._send = mock.Mock()
         with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.SELF, "POD", "old-0"), \
              mock.patch.object(server, "DATA_DIR", "/data"), mock.patch.object(server.SELF_DATA_ROUTES, "DATA_DIR", "/data"), \
-             mock.patch.object(server, "kget", side_effect=read), \
+             mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=read), \
              mock.patch.object(server.OPS, "_read", return_value=[]), \
              mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("must not poll resolvers")), \
              mock.patch.object(server.STORAGE_RUNTIME, "require_self_data", return_value=[{"protocol": 1}]) as runtime, \
-             mock.patch.object(server, "ksend", side_effect=AssertionError("review must not mutate")), \
-             mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
+             mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=AssertionError("review must not mutate")), \
+             mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             handler.do_POST()
         self.assertEqual(200, handler._send.call_args.args[0], handler._send.call_args.args)
         self.assertIn("capacity_token", handler._send.call_args.args[1])
@@ -271,14 +271,14 @@ class ReviewTests(unittest.TestCase):
     def test_api_holds_busy_or_recovery_jobs_without_reading_cluster(self):
         import server
         for job in ({"id": "busy-job", "title": "Busy job", "status": "running"}, {"id": "recovery-job", "title": "Recovery job", "status": "failed", "ref": {"retain_resources": True}}):
-            with mock.patch.object(server.OPS, "_read", return_value=[job]), mock.patch.object(server, "kget") as read:
+            with mock.patch.object(server.OPS, "_read", return_value=[job]), mock.patch.object(server.KUBE_HELPERS, "kget") as read:
                 with self.assertRaisesRegex(Held, job["id"]): server.SELF_DATA_ROUTES.preview_self_data_move(self.body, "admin")
                 read.assert_not_called()
 
     def test_api_sanitizes_unavailable_inventory_without_starting_anything(self):
         import server
         with mock.patch.object(server.OPS, "_read", side_effect=OSError("private upstream detail")), \
-             mock.patch.object(server, "ksend") as send:
+             mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             with self.assertRaises(Held) as caught: server.SELF_DATA_ROUTES.preview_self_data_move(self.body, "admin")
             self.assertNotIn("private", str(caught.exception)); send.assert_not_called()
 

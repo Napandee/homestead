@@ -142,7 +142,7 @@ class VolumeUsageIntegrationTests(unittest.TestCase):
                 return {"items": [self.claim]}
             return {"items": []}
         with patch.object(STORAGE, "kget", get), patch.object(STORAGE, "claim_references", return_value={}), \
-             patch.object(server, "cached", side_effect=lambda key, ttl, fn: fn()), \
+             patch.object(server.CACHE, "cached", side_effect=lambda key, ttl, fn: fn()), \
              patch.object(server.VOLUME_USAGE, "collect", return_value=self.metrics) as collect:
             return STORAGE.get_volumes()[0], collect
 

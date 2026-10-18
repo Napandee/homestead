@@ -6,12 +6,14 @@ and the host fixes, the storage loops, and the snapshot-file and share-server
 routes server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache and _lock)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache and _lock)."""
 import json
 import os
 import time
+import urllib.request, urllib.parse, urllib.error
 import homestead_cancel as CANCEL
 import homestead_disks as DISKS
 import homestead_files as FILES
@@ -27,6 +29,7 @@ import homestead_nfs as NFS
 import homestead_node_parity as NODE_PARITY
 import homestead_objectstore as OBJECTS
 import homestead_operations as OPS
+import homestead_place as PLACE
 import homestead_reclass as RECLASS
 import homestead_restore_test as RESTORE_TEST
 import homestead_root_guard as ROOT_GUARD
@@ -37,6 +40,8 @@ import homestead_shares as SHARES
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_snapshot_files as SNAPSHOT_FILES
 import homestead_snapshot_restore as SNAPSHOT_RESTORE
+import homestead_storage as STORAGE
+import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_storage_pending as STORAGE_PENDING
@@ -44,7 +49,10 @@ import homestead_storage_runtime as STORAGE_RUNTIME
 import homestead_storage_workflow as STORAGE_WORKFLOW
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("beat", "cached", "cleanup_restores", "get_app_settings", "guard_managed_smb", "is_self", "kget", "require_self_data_write", "selectable_storage_classes", "self_data_activity", "storage_classes", "storage_helper_admission", "storage_restart_admission", "update_policy_status")
+ROUTE_NEEDS = ("beat", "cached", "copy_admission", "create_pvc", "get_app_settings",
+               "guard_managed_smb", "is_self", "kget", "require_self_data_write",
+               "selectable_storage_classes", "self_data_activity", "storage_classes",
+               "update_policy_status")
 VALUES = ("DATA_DIR", "HOMESTEAD_VERSION", "SMB_NAMESPACE", "_cache", "_lock")
 
 
@@ -564,3 +572,49 @@ ROUTES = {
     ("POST", "/api/addons/smb/remove"): ("admin", _remove_samba),
     ("POST", "/api/addons/nfs/remove"): ("admin", _remove_nfs),
 }
+
+
+def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
+    """A deploy's new volume - or the one of that name already there, when
+    nothing uses it.
+
+    A failed install leaves its volumes behind (deleting a container keeps
+    its data), and installing again then stopped at "already exists". One
+    that nothing refers to is taken as it is, data and all, and said so; one
+    another container, VM or job uses is refused by name.
+    """
+    try:
+        existing = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        existing = None
+    if not existing:
+        create_pvc(ns, name, size_gb, sc, access_mode)
+        return ""
+    try:
+        users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
+    except Exception:
+        users = ["something"]
+    if users:
+        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
+                         "give this app's volume another name, or choose the existing one to share it")
+    return name
+
+
+def cleanup_restores():
+    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, LH.cleanup_restore_snapshots):
+        try:
+            cleanup()
+        except Exception as error:
+            # Cleanup may be retried; it must not change a completed restore
+            # into a failed data operation. The cleanup itself fails closed.
+            print(f"Restore metadata cleanup deferred: {error}", flush=True)
+
+
+def storage_restart_admission(item, proposals):
+    return STORAGE_ADMISSION.plan(item, proposals, kget, PLACE.get_nodes(), get_app_settings()["thresholds"]["memory"]["critical"])
+
+
+def storage_helper_admission(item, manifest):
+    return copy_admission(manifest)

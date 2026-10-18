@@ -15,8 +15,8 @@ class EnsureClaimTests(unittest.TestCase):
         # STORAGE reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
-            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
-        self.saved = server.kget, server.ksend, server.storage_classes
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
+        self.saved = server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend, server.storage_classes
         self.claim, self.deployments, self.sent = None, [], []
 
         def kget(path):
@@ -27,20 +27,20 @@ class EnsureClaimTests(unittest.TestCase):
             if path == "/apis/apps/v1/deployments":
                 return {"items": self.deployments}
             return {"items": []}
-        server.kget = kget
-        server.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path))
+        server.KUBE_HELPERS.kget = kget
+        server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path))
         server.storage_classes = lambda: []
 
     def tearDown(self):
-        server.kget, server.ksend, server.storage_classes = self.saved
+        server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend, server.storage_classes = self.saved
 
     def test_a_new_name_is_created(self):
-        self.assertEqual("", server.ensure_claim("lab", "doublecommander-appdata", 5, "longhorn-r2"))
+        self.assertEqual("", server.STORAGE_ROUTES.ensure_claim("lab", "doublecommander-appdata", 5, "longhorn-r2"))
         self.assertEqual([("POST", "/api/v1/namespaces/lab/persistentvolumeclaims")], self.sent)
 
     def test_one_left_by_a_failed_install_is_taken_as_it_is(self):
         self.claim = {"metadata": {"name": "doublecommander-appdata"}}
-        self.assertEqual("doublecommander-appdata", server.ensure_claim("lab", "doublecommander-appdata", 5))
+        self.assertEqual("doublecommander-appdata", server.STORAGE_ROUTES.ensure_claim("lab", "doublecommander-appdata", 5))
         self.assertEqual([], self.sent)
 
     def test_one_another_container_uses_is_refused_by_name(self):
@@ -49,7 +49,7 @@ class EnsureClaimTests(unittest.TestCase):
                              "spec": {"template": {"spec": {"volumes": [
                                  {"name": "d", "persistentVolumeClaim": {"claimName": "doublecommander-appdata"}}]}}}}]
         with self.assertRaisesRegex(ValueError, "Deployment/krusader uses it"):
-            server.ensure_claim("lab", "doublecommander-appdata", 5)
+            server.STORAGE_ROUTES.ensure_claim("lab", "doublecommander-appdata", 5)
         self.assertEqual([], self.sent)
 
 

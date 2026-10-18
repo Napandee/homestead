@@ -84,7 +84,7 @@ class NodeImpactWiringTests(unittest.TestCase):
         def preview(*args, **kw):
             captured["addresses"] = args[6]
             return {}
-        with mock.patch.object(server, "cached", side_effect=cached), \
+        with mock.patch.object(server.CACHE, "cached", side_effect=cached), \
                 mock.patch.object(server.NODES, "kget", return_value={"items": []}), \
                 mock.patch.object(server.NODES.IMPACT, "preview", side_effect=preview):
             server.NODES.node_impact("k3s-01")
@@ -165,7 +165,7 @@ class NodeImpactWiringTests(unittest.TestCase):
         def preview(*args, **kw):
             captured.update(kw)
             return {}
-        with mock.patch.object(server, "cached", side_effect=cached), \
+        with mock.patch.object(server.CACHE, "cached", side_effect=cached), \
                 mock.patch.object(server.NODES.IMPACT, "preview", side_effect=preview):
             server.NODES.node_impact("k3s-01", src)
         self.assertEqual({"sets": src["sets"], "pvs": src["pvs"], "node_down": None}, captured)

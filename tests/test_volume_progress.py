@@ -58,11 +58,11 @@ class VolumesListTests(unittest.TestCase):
         # STORAGE reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
-            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
-        self._kget = server.kget
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
+        self._kget = server.KUBE_HELPERS.kget
 
     def tearDown(self):
-        server.kget = self._kget
+        server.KUBE_HELPERS.kget = self._kget
 
     def serve(self, volumes, engines):
         def kget(path):
@@ -71,7 +71,7 @@ class VolumesListTests(unittest.TestCase):
             if path.endswith("/engines"):
                 return {"items": engines}
             return {"items": []}
-        server.kget = kget
+        server.KUBE_HELPERS.kget = kget
         return {row["name"]: row for row in STORAGE.get_volumes()}
 
     def test_the_list_carries_rebuild_and_restore_progress(self):
@@ -101,7 +101,7 @@ class VolumesListTests(unittest.TestCase):
             if path.endswith("/engines"):
                 raise PermissionError("forbidden")
             return {"items": [lh_volume("pvc-a")] if path.endswith("/volumes") else []}
-        server.kget = kget
+        server.KUBE_HELPERS.kget = kget
 
         rows = STORAGE.get_volumes()
 

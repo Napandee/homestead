@@ -796,7 +796,7 @@ class WorkloadListTests(unittest.TestCase):
         cluster = Cluster([app("ha", group="Home"), app("plex", group="Media"), app("web")], {"Home": "critical"})
         cluster.other = {"items": []}       # pods, metrics, services: none
         use(self, cluster)
-        with mock.patch.object(server, "kget", side_effect=cluster.kget):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=cluster.kget):
             rows = {w["name"]: w for w in server.WORKLOADS.get_workloads()}
         self.assertEqual(("critical", "", ""), (rows["ha"]["group_tier"], rows["plex"]["group_tier"], rows["web"]["group_tier"]))
 

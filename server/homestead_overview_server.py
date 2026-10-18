@@ -6,9 +6,10 @@ the change-undo plan and the portal's status, with the routes server.py's
 handler answered for them.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value (the same object, for _cache)."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value (the same
+object, for _cache)."""
 import copy
 import json
 import time
@@ -22,9 +23,11 @@ import homestead_diagnostics as DIAGNOSTICS
 import homestead_disks as DISKS
 import homestead_forecast as FORECAST
 import homestead_history as HISTORY
+import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
+import homestead_longhorn as LH
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_mcp as MCP
@@ -43,6 +46,8 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
 import homestead_routes as MODULE_ROUTES
 import homestead_schedules as SCHEDULES
+import homestead_self as SELF
+import homestead_storage as STORAGE
 import homestead_updates as UPDATES
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
@@ -51,8 +56,11 @@ import homestead_vms as VMS
 import homestead_vmusage as VMUSAGE
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("_dns_name", "api_path", "api_scale", "api_vm_power", "beat", "cached", "get_app_settings", "get_overview", "guard_managed_smb", "is_self", "kget", "ksend", "require_workload_target", "restart_workload", "rollout_review_context", "self_data_activity")
-VALUES = ("API", "CTX", "TOKEN", "_cache")
+ROUTE_NEEDS = ("age_secs", "api_path", "api_vm_power", "beat", "cached", "_dns_name",
+               "get_app_settings", "is_managed_nfs", "is_managed_smb", "kget", "ksend",
+               "_never_started", "require_workload_target", "rollout_review_context",
+               "self_data_activity", "self_stop_warning")
+VALUES = ("API", "CTX", "SYS_NS", "TOKEN", "_cache")
 
 
 def bind_routes(helpers, **values):
@@ -475,3 +483,160 @@ ROUTES = {
     ("POST", "/api/alerts/acknowledge"): ("viewer", _alerts_acknowledge),
     ("POST", "/api/alerts/delivered"): ("viewer", _alerts_delivered),
 }
+
+
+def clear_unstarted_pods(ns, name, stopping):
+    """Remove pods of a container that never started, so they cannot pile up.
+
+    A pod stuck before its first start - an image that will not pull, a
+    volume or network that will not attach - often never finishes stopping,
+    and every Stop and Start left one more behind. Nothing ran in it, so
+    removing it at once loses nothing. When stopping, every such pod goes;
+    when starting, those still stuck stopping from before."""
+    try:
+        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        selector = ((dep.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+        if not selector:
+            return []
+        query = urllib.parse.quote(",".join(f"{k}={v}" for k, v in selector.items()), safe="")
+        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={query}").get("items", [])
+    except Exception:
+        return []
+    removed = []
+    for pod in pods:
+        meta = pod.get("metadata") or {}
+        stuck_stopping = meta.get("deletionTimestamp") and age_secs(meta["deletionTimestamp"]) > 20
+        if not _never_started(pod) or not (stopping or stuck_stopping):
+            continue
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/pods/{meta['name']}?gracePeriodSeconds=0")
+            removed.append(meta["name"])
+        except Exception:
+            pass
+    return removed
+
+
+def is_self(ns, name):
+    """The Deployment this Homestead runs as."""
+    return (ns, name) == (SELF.NS, NAMES.BRAND)
+
+
+def guard_managed_smb(ns, name):
+    if is_managed_smb(ns, name):
+        raise ValueError("Homestead manages SMB and its mounts from Network Shares. "
+                         "Change shares or SMB settings there.")
+    if is_managed_nfs(ns, name):
+        raise ValueError("Homestead manages NFS and its mounts from Network Shares and Settings > Cluster > Add-ons.")
+
+
+def workload_start_plan(ns, name, replicas=1):
+    ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
+    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    return PLACE.start_plan(ns, name, replicas, threshold)
+
+
+def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
+    """A Deployment to n replicas, after the checks the app makes: never the
+    SMB server's, never Homestead's own unless confirmed, and a start only
+    where the capacity check allows it."""
+    if n < 0 or n > 100:
+        raise ValueError("replicas must be between 0 and 100")
+    guard_managed_smb(ns, name)
+    require_workload_target(ns, name)
+    guard_self(ns, name, stopping=n == 0, confirmed=confirm_self)
+    plan = None
+    if n > 0:
+        plan = workload_start_plan(ns, name, n)
+        if plan["blocked"]:
+            raise WORKLOADS.WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
+        if plan["requires_confirmation"] and not confirm_capacity:
+            raise WORKLOADS.WorkloadRefused("review node memory before starting", plan)
+    if n:
+        clear_unstarted_pods(ns, name, stopping=False)
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
+          {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
+    if not n:
+        clear_unstarted_pods(ns, name, stopping=True)
+    _cache.pop("wl", None)
+    return {"ok": True, "plan": plan}
+
+
+def restart_workload(ns, name):
+    guard_managed_smb(ns, name)
+    require_workload_target(ns, name)
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+          {"spec": {"template": {"metadata": {"annotations":
+           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
+          ctype="application/merge-patch+json")
+    _cache.pop("wl", None)
+    return {"ok": True}
+
+
+def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleting=False, moving=False):
+    """Changes that would take Homestead down from its own page.
+
+    Stopping is allowed once it has been said out loud and confirmed; deleting,
+    renaming and moving its storage never are from here - each needs the page
+    running to finish, and would leave it gone halfway.
+    """
+    if not is_self(ns, name):
+        return
+    if HOSTACCESS.role() not in (None, "admin"):
+        raise PermissionError("only an admin can change Homestead itself")
+    if deleting:
+        raise ValueError("Homestead cannot delete itself from its own page - that removes this page for good. "
+                         "Use helm uninstall, or kubectl, if that is what you want")
+    if renaming:
+        raise ValueError("Homestead cannot rename itself: its permissions, Service and data are tied to its name")
+    if moving:
+        raise ValueError("Homestead's own data moves from Settings > About > Redundancy, which restarts it safely; "
+                         "a storage move here would stop the page doing the move")
+    if stopping and not confirmed:
+        raise ValueError(self_stop_warning())
+
+
+def get_overview():
+    nodes = NODES.get_nodes()
+    wl = WORKLOADS.get_workloads()
+    vols = STORAGE.get_volumes()
+    pods = kget("/api/v1/pods").get("items", [])
+    sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
+    usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
+    deg = [v for v in vols if v["robustness"] == "degraded"]
+    flt = [v for v in vols if v["robustness"] == "faulted"]
+    try:
+        protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
+                                       cached("lhtarget-health", 60, LH.backup_target))
+    except Exception:
+        protection = []
+    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
+    tcap = sum(n["cpu_cap"] for n in nodes) or 1
+    tuse = sum(n["cpu_used"] for n in nodes)
+    mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
+    muse = sum(n["mem_used_gb"] for n in nodes)
+    return {
+        **health,
+        "nodes": nodes,
+        "nodes_ready": len([n for n in nodes if n["status"] == "Ready"]),
+        "nodes_total": len(nodes),
+        "workloads": len(wl),
+        "workload_pods": len(usrp),
+        "system_pods": len(sysp),
+        "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
+        "cpu_pct": round(tuse / tcap * 100, 1),
+        "mem_pct": round(muse / mcap * 100, 1),
+        "cpu_used": round(tuse, 2), "cpu_cap": tcap,
+        "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
+        "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
+        "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
+        "lb_ip": NETWORK.shared_vip(),
+    }
+
+
+def api_scale(ns, name, n):
+    """Start or stop a container for /api/v1, under the app's own checks."""
+    try:
+        result = scale_workload(ns, name, n, confirm_capacity=True, confirm_self=False)
+    except WORKLOADS.WorkloadRefused as refused:
+        raise API_V1.ApiError(409, str(refused), blockers=list((refused.plan or {}).get("blockers") or [])) from None
+    return {"warnings": list((result.get("plan") or {}).get("warnings") or []), "job": None}

@@ -154,13 +154,13 @@ class ContainerSetTests(unittest.TestCase):
 
     def test_execution_provisions_additional_claims_and_saves_one_complete_pod_template(self):
         config = self.config()
-        with mock.patch.object(server, "guard_managed_smb"), mock.patch.object(server, "persist_icon_config"), \
+        with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config"), \
                 mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
-                mock.patch.object(server, "prepare_lan", side_effect=lambda cfg: cfg), \
+                mock.patch.object(server.VM_ROUTES, "prepare_lan", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VOLOWNER, "prepare", side_effect=lambda cfg: cfg), \
-                mock.patch.object(server, "ensure_claim", return_value=False) as claim, \
-                mock.patch.object(server, "kget", side_effect=urllib.error.HTTPError("", 404, "missing", {}, None)), \
-                mock.patch.object(server, "ksend") as send, \
+                mock.patch.object(server.STORAGE_ROUTES, "ensure_claim", return_value=False) as claim, \
+                mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=urllib.error.HTTPError("", 404, "missing", {}, None)), \
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
                 mock.patch.object(server.OPS, "start", return_value={"id": "created"}):
             server.DEPLOY.run_deploy(config)
         claim.assert_called_once_with("lab", "metrics-data", 3, server.STORAGE_CLASS, "ReadWriteOnce")

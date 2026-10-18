@@ -7,12 +7,13 @@ fence state server.py holds (_self_data_fence and the boot flags) stays in
 server.py.
 
 server.py binds what it still owns through bind_routes(): each helper in
-ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value."""
+ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
+(server.MOVED), in the module it moved to, so a test that patches it there
+reaches it here too; each name in VALUES is server.py's own value."""
 from contextlib import nullcontext
 import copy
 import os
+import re
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
@@ -29,8 +30,11 @@ import homestead_self_data_review as SELF_DATA_REVIEW
 import homestead_self_data_route as SELF_DATA_ROUTE
 import homestead_self_health as SELF_HEALTH
 import homestead_storage_runtime as STORAGE_RUNTIME
+import homestead_updates as UPDATES
 
-ROUTE_NEEDS = ("_ksend", "_require_no_data_handoff", "_self_data_helper_image", "abandon_self_data_preparation", "cached", "get_app_settings", "homestead_data_volume", "kget", "ksend", "require_self_data_write", "self_data_activity")
+ROUTE_NEEDS = ("abandon_self_data_preparation", "cached", "class_selectable", "_dns_name",
+               "get_app_settings", "kget", "_ksend", "ksend", "require_self_data_write",
+               "self_data_activity", "shared_storage_classes", "storage_classes")
 VALUES = ("DATA_DIR", "HOMESTEAD_VERSION", "LB_IP", "POD_NAME")
 
 
@@ -309,3 +313,73 @@ ROUTES = {
     ("POST", "/api/self/data/prepare"): ("admin", _prepare),
     ("POST", "/api/self/data/prepare/preview"): ("admin", _prepare),
 }
+
+
+def homestead_data_volume(dep=None):
+    """Homestead's data claim, and whether pods on several nodes can mount it.
+
+    Copies of Homestead on different nodes all mount this one claim, so it has
+    to be ReadWriteMany on a class Longhorn serves through its share manager.
+    A migratable class - Harvester's own, and longhorn-r2 - hands out a VM-disk
+    volume that one node attaches, and a pod on a second node waits forever."""
+    ns, name = SELF.NS, NAMES.BRAND
+    dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    volumes = (dep["spec"]["template"]["spec"].get("volumes") or [])
+    claim = next(((v.get("persistentVolumeClaim") or {}).get("claimName") for v in volumes
+                  if v.get("name") == "data" and v.get("persistentVolumeClaim")), "")
+    if not claim:
+        return {"pvc": "", "shareable": False, "reason": "Homestead keeps no data claim", "candidates": []}
+    pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
+    spec = pvc.get("spec") or {}
+    klass = spec.get("storageClassName") or ""
+    modes = spec.get("accessModes") or []
+    rows = storage_classes()
+    row = next((r for r in rows if r["name"] == klass), None)
+    size = str(((pvc.get("status") or {}).get("capacity") or {}).get("storage")
+               or ((spec.get("resources") or {}).get("requests") or {}).get("storage") or "2Gi")
+    if "ReadWriteMany" not in modes:
+        reason = f"{claim} is ReadWriteOnce: one node at a time can mount it"
+    elif row and row.get("migratable"):
+        reason = (f"{claim} is on {klass}, a migratable class: Longhorn gives it a VM-disk volume that "
+                  "only one node can mount, so a copy on a second node would never start")
+    else:
+        reason = ""
+    # Do not request RWX merely because a non-Longhorn class has no
+    # migratable flag. k3s local-path (and many block CSI drivers) cannot
+    # provision it. Unknown drivers get the conservative single-node mode.
+    shared = shared_storage_classes(rows)
+    # Every class it could move to, and whether copies on several nodes could
+    # then share it: the move is not only for redundancy.
+    classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
+               if class_selectable(r) and r["name"] != klass]
+    # Data volumes an earlier move left behind: kept until deleted, so they
+    # are said out loud rather than found later as a mystery.
+    try:
+        kept = [p["metadata"]["name"] for p in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])
+                if p["metadata"]["name"].startswith(f"{name}-data") and p["metadata"]["name"] != claim]
+    except Exception:
+        kept = []
+    return {"pvc": claim, "storage_class": klass, "access_modes": modes, "size": size,
+            "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes, "kept": kept}
+
+
+def _self_data_helper_image(read, ns):
+    pod_name = _dns_name(SELF.POD, "Homestead pod")
+    pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
+    containers = [c for c in pod.get("spec", {}).get("containers", []) if c.get("name") == NAMES.BRAND]
+    statuses = [c for c in pod.get("status", {}).get("containerStatuses", []) if c.get("name") == NAMES.BRAND]
+    if len(containers) != 1 or len(statuses) != 1 or not statuses[0].get("ready") or not statuses[0].get("state", {}).get("running"):
+        raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
+    digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
+    if not digest_match:
+        raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
+    return pod, UPDATES._immutable(containers[0]["image"], digest_match.group(1))
+
+
+def _require_no_data_handoff(read, ns):
+    try:
+        read(f"/api/v1/namespaces/{ns}/configmaps/{NAMES.BRAND}-data-handoff")
+    except urllib.error.HTTPError as error:
+        if error.code == 404: return
+        raise
+    raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")

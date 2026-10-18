@@ -100,7 +100,7 @@ class ShutdownAuthenticationTests(unittest.TestCase):
                 ("PUT", "/api/v1/namespaces/lab/secrets/another-secret", self.body()),
                 ("PATCH", "/apis/apps/v1/namespaces/lab/deployments/app", {})):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "shutdown is active"):
-                server.ksend(method, path, body)
+                server.KUBE_HELPERS.ksend(method, path, body)
         self.network.assert_not_called()
 
     def test_auth_binding_rejects_other_resources_and_request_shapes(self):
@@ -120,7 +120,7 @@ class ShutdownAuthenticationTests(unittest.TestCase):
         self.network.assert_not_called()
 
     def test_auth_secret_creation_is_allowed_only_through_internal_binding(self):
-        with mock.patch.object(server, "_ksend", return_value={}) as transport:
+        with mock.patch.object(server.KUBE_HELPERS, "_ksend", return_value={}) as transport:
             server.KUBE_HELPERS._auth_ksend("POST", "/api/v1/namespaces/lab/secrets", self.body())
         self.assertTrue(transport.call_args.kwargs["shutdown_bypass"])
 

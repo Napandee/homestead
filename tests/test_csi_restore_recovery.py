@@ -49,7 +49,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.item["ref"]["restore_started"] = True
         with patch.object(server.LH, "_get_or_none", return_value=None), \
              patch.object(server.LH, "restore_backup") as restore, \
-             patch.object(server, "cleanup_restores"):
+             patch.object(server.STORAGE_ROUTES, "cleanup_restores"):
             result = server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("failed", 0, "Destination deleted"))
         self.assertEqual("failed", result[0])
         restore.assert_not_called()
