@@ -74,7 +74,7 @@ class SessionPodTests(unittest.TestCase):
             if method == "POST" and body:
                 self.pods[body["metadata"]["name"]] = {
                     "metadata": {"name": body["metadata"]["name"]},
-                    "status": {"phase": "Running"}}
+                    "spec": body["spec"], "status": {"phase": "Running"}}
             return body or {}
 
         files.bind(get, send, None, "", None, {"kube-system"})
@@ -142,6 +142,64 @@ class SessionPodTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             files.open_session("kube-system", "anything")
 
+    # Two StatefulSet claims that differ only after their 47th character (#596).
+    FIRST = "data-postgres-cluster-production-database-instance-0"
+    SECOND = "data-postgres-cluster-production-database-instance-1"
+
+    def test_claims_that_start_the_same_get_helpers_of_their_own(self):
+        first, second = files.pod_name(self.FIRST), files.pod_name(self.SECOND)
+        self.assertNotEqual(first, second)
+        for name in (first, second):
+            self.assertLessEqual(len(name), 63)
+            self.assertTrue(name.startswith("homestead-files-data-postgres"), name)
+
+    def test_opening_the_second_volume_never_shows_the_first_ones_files(self):
+        files.open_session("lab", self.FIRST)
+        session = files.open_session("lab", self.SECOND)
+
+        posted = [body for method, _, body in self.sent if method == "POST"]
+        self.assertEqual([self.FIRST, self.SECOND],
+                         [b["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] for b in posted])
+        self.assertEqual(files.pod_name(self.SECOND), session["pod"])
+
+    def old_helper(self, claim):
+        """A helper an older Homestead started for this claim, under the cut-short name."""
+        name = ("homestead-files-" + claim)[:63].rstrip("-")
+        self.pods[name] = {"metadata": {"name": name}, "status": {"phase": "Running"},
+                           "spec": {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": claim}}]}}
+        return name
+
+    def test_a_helper_left_under_the_old_name_is_stopped_before_a_new_one_starts(self):
+        old = self.old_helper(self.FIRST)
+        files.open_session("lab", self.FIRST)
+        methods = [(m, p.rsplit("/", 1)[-1].split("?")[0]) for m, p, _ in self.sent if m in ("DELETE", "POST")]
+        self.assertEqual(("DELETE", old), methods[0], "the old helper lets go of the claim first")
+        self.assertEqual("POST", methods[1][0])
+
+    def test_closing_also_stops_a_helper_left_under_the_old_name(self):
+        old = self.old_helper(self.FIRST)
+        files.close_session("lab", self.FIRST, wait=1, sleep=lambda _: None)
+        self.assertIn(("DELETE", old), [(m, p.rsplit("/", 1)[-1]) for m, p, _ in self.sent])
+
+    def test_an_old_name_mounting_another_claim_is_left_alone(self):
+        other = self.old_helper(self.FIRST)
+        files.open_session("lab", self.SECOND)   # shares FIRST's old name
+        self.assertNotIn(other, [p.rsplit("/", 1)[-1].split("?")[0] for m, p, _ in self.sent if m == "DELETE"])
+
+    def test_a_helper_mounting_another_claim_is_never_used(self):
+        # A helper left under this name by an older Homestead, or anything else, for another claim.
+        self.pods[files.pod_name(self.SECOND)] = {
+            "metadata": {"name": files.pod_name(self.SECOND)}, "status": {"phase": "Running"},
+            "spec": {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": self.FIRST}}]}}
+
+        with self.assertRaisesRegex(ValueError, "another volume"):
+            files.open_session("lab", self.SECOND)
+        self.assertEqual([], [m for m, _, _ in self.sent if m in ("POST", "DELETE")], "nothing is reused or removed")
+        self.assertFalse(files.keepalive("lab", self.SECOND)["running"])
+        with self.assertRaisesRegex(ValueError, "another volume"):
+            files.close_session("lab", self.SECOND)
+        self.assertEqual([], [m for m, _, _ in self.sent if m == "DELETE"], "closing never stops another volume's helper")
+
 
 class CleanupTests(unittest.TestCase):
     def setUp(self):
@@ -177,6 +235,12 @@ class CleanupTests(unittest.TestCase):
     def test_an_unscheduled_helper_also_expires(self):
         self.pod["status"] = {"phase": "Pending"}
         self.assertEqual(["homestead-files-data"], files.cleanup(self.created + 1801))
+
+    def test_a_helper_named_the_old_way_is_still_cleared_away(self):
+        claim = "data-postgres-cluster-production-database-instance-0"
+        self.pod["metadata"]["name"] = ("homestead-files-" + claim)[:63].rstrip("-")
+        self.pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = claim
+        self.assertEqual([self.pod["metadata"]["name"]], files.cleanup(self.created + 1800))
 
     def test_only_identifiable_managed_helpers_are_deleted(self):
         mutations = [
