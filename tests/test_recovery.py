@@ -281,7 +281,7 @@ class AutoUpdateTests(unittest.TestCase):
         running = [{"kind": server.CREBALANCE.KIND, "status": "running"}]
         with mock.patch.object(server.OPS, "list_operations", return_value=running), \
                 mock.patch.object(server.SETTINGS_HELPERS, "update_policy_status", return_value={"window_open": True, "policy": "maintenance_window"}), \
-                mock.patch.object(server, "cached", return_value=[]), \
+                mock.patch.object(server.CACHE, "cached", return_value=[]), \
                 mock.patch.object(server.UPTIME, "report", return_value={}), \
                 mock.patch.object(server.AUTOUPDATE, "tidy"), \
                 mock.patch.object(server.AUTOUPDATE, "candidates", return_value=[{"ns": "lab", "name": "web"}]), \

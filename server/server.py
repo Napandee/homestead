@@ -94,8 +94,8 @@ SYS_NS = {
 # the same parts run in harvester-system, which is not listed at all.)
 PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-upgrade-controller"}
 
-_cache = {}
-_lock = threading.Lock()
+import homestead_cache as CACHE
+_cache, _lock = CACHE._cache, CACHE._lock  # the same dict and lock, shared
 
 # Each background task's last beat, shared by the leader (homestead_heartbeats).
 from homestead_heartbeats import HEART, beat, heartbeats as _heartbeats
@@ -115,6 +115,7 @@ VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "fo
 # Helpers moved on (track 2) by name: the module each lives in now. A test
 # patches them there, so _late looks them up there.
 MOVED = {}
+MOVED.update(dict.fromkeys(("cached",), CACHE))
 
 
 def _late(*names):
@@ -293,30 +294,12 @@ if __name__ == "__main__":
     initialize_self_data_fence()
 
 
-def cached(key, ttl, fn):
-    with _lock:
-        e = _cache.get(key)
-        if e and time.time() - e[0] < ttl:
-            return e[1]
-    try:
-        v = fn()
-    except Exception as ex:
-        with _lock:
-            e = _cache.get(key)
-        if e:
-            return e[1]
-        raise ex
-    with _lock:
-        _cache[key] = (time.time(), v)
-    return v
-
-
 def _settings_map():
     return NAMES.object_name("settings", DEFAULT_NS)
 
 
 def app_settings_payload():
-    settings = json.loads(json.dumps(cached("settings", 15, SETTINGS_HELPERS.get_app_settings)))
+    settings = json.loads(json.dumps(CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings)))
     try:
         kube = KUBE_HELPERS.kget("/version").get("gitVersion", "")
     except Exception:
@@ -452,8 +435,8 @@ def get_overview():
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
     try:
-        protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
-                                       cached("lhtarget-health", 60, LH.backup_target))
+        protection = protection_issues(CACHE.cached("lhjobs-health", 60, LH.list_jobs),
+                                       CACHE.cached("lhtarget-health", 60, LH.backup_target))
     except Exception:
         protection = []
     health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
@@ -615,7 +598,7 @@ def vm_address_problem(ip):
         if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
             return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
     try:
-        network = cached("network", 5, NETWORK.inventory)
+        network = CACHE.cached("network", 5, NETWORK.inventory)
     except Exception:
         network = {}
     if ip in (network.get("node_ips") or []) or ip in (network.get("platform_addresses") or {}):
@@ -725,7 +708,7 @@ import homestead_networking as NETWORK
 import homestead_flow as FLOW
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
-MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn), _cache)
+MODULE_ROUTES.bind(lambda key, seconds, fn: CACHE.cached(key, seconds, fn), _cache)
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -787,7 +770,7 @@ ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity, versio
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
-           site=lambda: (cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
+           site=lambda: (CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
            address=fleet_address, earlier=lambda: (f"http://{LB_IP}:8088",) if LB_IP else ())
 MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
@@ -812,7 +795,7 @@ IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every repl
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
-PLACE.bind(kget, ksend, lambda: cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
+PLACE.bind(kget, ksend, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 # The helper image is read from Homestead's own pod, defined further down.
@@ -825,7 +808,7 @@ CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
-             channel=lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings)["updates"]["channel"])
+             channel=lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
@@ -874,7 +857,7 @@ MOVE_ENGINE.after_finish = cleanup_restores
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
 OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
-PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, WORKLOADS.get_workloads),
+PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
 OPS.RESOLVERS["restructure"] = COPY_JOB.legacy_status
 OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, KUBE_HELPERS.kget, KUBE_HELPERS.ksend, OPS, copy_admission)
@@ -985,7 +968,7 @@ SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 DIAGNOSTICS.bind(DATA_DIR, _diagnostic_read, OPS, HOMESTEAD_VERSION, _own_namespace(), os.environ.get("HOSTNAME", ""))
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
-IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventory))
+IPAM.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("network", 5, NETWORK.inventory))
 HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
@@ -1047,19 +1030,19 @@ OUTAGE.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), ksend=lambda *a
             dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: guard_managed_smb(ns, name))
 CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
              deployments=lambda: [d for d in KUBE_HELPERS.kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
-FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
+FORECAST.bind(DATA_DIR, lambda: (CACHE.cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: KUBE_HELPERS.kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
-PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
+PLACEMODE.bind(kget, ksend, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
 CAPACITY.bind(kget, NODES.node_impact, NODES._impact_sources, FLOW._flow_owner, lambda pod: NAMES.label_of(pod["metadata"], "task"))
-RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings), OPS,
+RECOVERY.bind(DATA_DIR, kget, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), OPS,
               lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
               (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,
               UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
               HOSTACCESS.require_target_as, OPS)
-MCP.bind(DATA_DIR, lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
+MCP.bind(DATA_DIR, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
     KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "") if p in ROUTE_POLICY.TARGET_CHECKED else None),
     kget, lambda ns, name: delete_workload(ns, name))
 
@@ -1092,7 +1075,7 @@ OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.check
 OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
                   LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
-                  lambda: cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
+                  lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 
 AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
@@ -1309,8 +1292,8 @@ API_KEYS.CLIENTADDR.bind(lambda path: KUBE_HELPERS.kget(path))
 SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: NODES.get_nodes(), workloads=lambda: WORKLOADS.get_workloads(),
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
            samba=lambda: SHARE_SERVERS.samba_state())
-API_V1.bind(nodes=lambda: cached("nodes", 5, NODES.get_nodes), workloads=lambda: cached("wl", 5, WORKLOADS.get_workloads),
-            vms=lambda: cached("vms", 5, VMS.list_vms),
+API_V1.bind(nodes=lambda: CACHE.cached("nodes", 5, NODES.get_nodes), workloads=lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
+            vms=lambda: CACHE.cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
             version=lambda: HOMESTEAD_VERSION)
@@ -1343,9 +1326,9 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
      "objects": [("configmaps", DEFAULT_NS, IMP._sources_map())]},
     {"id": "vmstore", "label": "VM image store", "detail": "The cloud images kept, and whether they refresh",
      "objects": [("configmaps", DEFAULT_NS, VMSTORE.CONFIGMAP)]},
-], site=lambda: (cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
+], site=lambda: (CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
     after_restore=_config_restored)
-CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, NODES.get_nodes), lambda: get_overview())
+CLUSTER.bind(kget, SYS_NS, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), lambda: get_overview())
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
@@ -1533,10 +1516,10 @@ def persist_icon_config(cfg):
 # ---------------------------------------------------------------- linked clusters
 # The resources the combined view gathers, and how this cluster answers locally.
 FLEET_LISTS = {
-    "workloads": lambda: cached("wl", 5, WORKLOADS.get_workloads),
-    "vms": lambda: cached("vms", 5, VMS.list_vms),
-    "nodes": lambda: cached("nodes", 5, NODES.get_nodes),
-    "volumes": lambda: cached("vol", 8, STORAGE.get_volumes),
+    "workloads": lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
+    "vms": lambda: CACHE.cached("vms", 5, VMS.list_vms),
+    "nodes": lambda: CACHE.cached("nodes", 5, NODES.get_nodes),
+    "volumes": lambda: CACHE.cached("vol", 8, STORAGE.get_volumes),
     "flow": lambda: FLOW.view(),
 }
 

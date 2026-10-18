@@ -199,7 +199,7 @@ class ChosenPortTests(unittest.TestCase):
         import server
         sent = []
         with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
-             mock.patch.object(server, "cached", return_value=[{"ns": "lab", "name": "sonarr", **two_ports()}]):
+             mock.patch.object(server.CACHE, "cached", return_value=[{"ns": "lab", "name": "sonarr", **two_ports()}]):
             result = server.OVERVIEW_ROUTES.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 9090})
             with self.assertRaises(ValueError):
                 server.OVERVIEW_ROUTES.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 7000})

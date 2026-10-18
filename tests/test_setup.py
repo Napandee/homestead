@@ -150,7 +150,7 @@ class UniFiSetupStateTests(unittest.TestCase):
         for obj, name, value in observations:
             patch = mock.patch.object(obj, name, value) if name == "DATA_DIR" else mock.patch.object(obj, name, return_value=value)
             patch.start(); self.addCleanup(patch.stop)
-        patch = mock.patch.object(server, "cached", side_effect=lambda key, *_: {} if key in ("ov", "network") else [])
+        patch = mock.patch.object(server.CACHE, "cached", side_effect=lambda key, *_: {} if key in ("ov", "network") else [])
         patch.start(); self.addCleanup(patch.stop)
 
     def test_unifi_observes_saved_configuration_without_a_tuple_error_or_connection_probe(self):
@@ -246,7 +246,7 @@ class NetworkSetupStateTests(unittest.TestCase):
         for obj, name, value in observations:
             patch = mock.patch.object(obj, name, value) if name == "DATA_DIR" else mock.patch.object(obj, name, return_value=value)
             patch.start(); self.addCleanup(patch.stop)
-        patch = mock.patch.object(server, "cached", side_effect=lambda key, *_: {} if key in ("ov", "network") else [])
+        patch = mock.patch.object(server.CACHE, "cached", side_effect=lambda key, *_: {} if key in ("ov", "network") else [])
         patch.start(); self.addCleanup(patch.stop)
         self.networks, self.samba = [], {"installed": False, "enabled": False}
         patch = mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda _: {"items": self.networks})

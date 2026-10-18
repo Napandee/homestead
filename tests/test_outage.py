@@ -160,7 +160,7 @@ class ServerTests(unittest.TestCase):
     def test_busy_while_a_job_runs_on_it(self):
         import server
         restarted = []
-        with mock.patch.object(server, "cached", side_effect=lambda key, ttl, fn: [{"ns": "lab", "name": "frigate", "outage_actions": APP["actions"]}] if key == "wl" else []), \
+        with mock.patch.object(server.CACHE, "cached", side_effect=lambda key, ttl, fn: [{"ns": "lab", "name": "frigate", "outage_actions": APP["actions"]}] if key == "wl" else []), \
              mock.patch.object(server.OPS, "list_operations", return_value=[{"status": "running", "resource": {"namespace": "lab", "name": "frigate"}}]), \
              mock.patch.object(server.UPTIME, "report", return_value=down(0)), \
              mock.patch.object(server, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
