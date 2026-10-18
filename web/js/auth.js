@@ -1,6 +1,17 @@
 /* Sign-in gate, account controls, and the 401 handler that wraps every call */
 
 let ME = null, ROLE = null;
+/* Whose session last ended in this page without reloading it (a 401), and
+   with which role: a role change ends a user's sessions too. */
+let lapsedUser = null, lapsedRole = null;
+
+/* A fresh page at the app's start: in its own base (the demo under
+   /homestead/), keeping the screenshot demo's ?demo=1 so it reloads into
+   itself. */
+function freshPage() {
+  const demo = new URLSearchParams(location.search).get("demo") === "1";
+  location.replace(HomesteadRouter.href("/") + (demo ? location.search : ""));
+}
 // A response sent by an old session must not sign out a newly signed-in user.
 let authGeneration = 0;
 const RANK = { viewer: 0, operator: 1, admin: 2 };
@@ -182,6 +193,7 @@ function stopAuthenticatedWork() {
   window.Dashboard?.invalidate();
   window.stopAlertChecks?.();
   authGeneration++;
+  if (ME) { lapsedUser = ME; lapsedRole = ROLE; }
   ME = null; ROLE = null;
   clearInterval(window.__loopTimer);
   clearInterval(window.__imageUpdateLoop);
@@ -235,6 +247,12 @@ async function doLogin() {
       body: JSON.stringify({ username, password, remember }) });
     const b = await r.json();
     if (!r.ok) return loginForm(b.error || "Sign-in failed");
+    // The page still holds what the expired session loaded - its last pages,
+    // settings and lists. Someone else, or the same name with another role,
+    // starts from a fresh page; the same person carries on, with any dialog
+    // they had open.
+    if (lapsedUser && (lapsedUser !== b.user || lapsedRole !== (b.role || "admin"))) return freshPage();
+    lapsedUser = lapsedRole = null;
     ME = b.user; ROLE = b.role || "admin"; ungate(); afterAuth();
   } catch (e) { loginForm(e.message); }
 }
@@ -257,9 +275,16 @@ async function doSetup() {
 
 window.doLogout = async () => {
   try { await pwaForgetDevice(); } catch (e) { }
-  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { }
+  // Reloading while the session still stands would sign straight back in.
+  // A 401 means it had already ended.
+  let r = null;
+  try { r = await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { }
+  if (!r || (!r.ok && r.status !== 401))
+    return toast("Could not sign out. Check the connection to Homestead and try again.", "bad");
   stopAuthenticatedWork();
-  loginForm();
+  // A fresh page, as signing out everywhere does: the next person to sign in
+  // must not first see this session's pages, settings or lists.
+  freshPage();
 };
 
 window.pwChange = () => modal("Change password", `
