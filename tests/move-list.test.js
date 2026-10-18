@@ -1,5 +1,6 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 /* The list of moves from linked clusters. A failed read used to show as no
    moves at all - the card even hid itself - and "Clear finished" went ahead
@@ -17,9 +18,7 @@ function setup(answers) {
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq = value => ctx.esc(JSON.stringify(value));
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), ctx);
   const fleet = fs.readFileSync("web/js/fleet.js", "utf8");
-  const from = fleet.indexOf("window.fleetMovesPaint = async"), to = fleet.indexOf("\nwindow.fleetSetMode", from);
-  assert.ok(from >= 0 && to > from);
-  vm.runInContext(fleet.slice(from, to), ctx);
+  vm.runInContext(between(fleet, "window.fleetMovesPaint = async", "\nwindow.fleetSetMode"), ctx);
   Object.assign(ctx, { moveSourceRow: () => "", moveSourceCheck() {}, fleetPendingMove() {} });
   return { ctx, els, sent, toasts };
 }
