@@ -620,7 +620,9 @@ window.nodeToggle = (name, id) => { const s = NODE_PICK.picked.get(name) || new 
   $(`#nodeChips [data-id="${id}"]`)?.focus(); };
 window.nodeChipsKey = (event, name) => {
   if (event.key !== "Escape" || !NODE_PICK.on.has(name) || (window.modalIsOpen && modalIsOpen())) return;
-  event.preventDefault(); event.stopPropagation(); nodeSelect(name, false); };
+  event.preventDefault(); event.stopPropagation(); nodeSelect(name, false);
+  // The chip that had focus is gone; Select takes it, so the keyboard keeps its place.
+  $('#nodeChipsCard button[onclick^="nodeSelect"]')?.focus(); };
 window.nodePickAll = (name, on, ids = []) => { NODE_PICK.picked.set(name, new Set(on ? ids : [])); nodeRedraw(name); };
 // The review opens on another host that takes work - never this one.
 window.nodeMoveSelected = name => { const s = NODE_PICK.picked.get(name); if (!s?.size) return;

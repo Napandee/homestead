@@ -34,6 +34,7 @@ try{for(const width of [1440,390])for(const theme of ['dark','light']){
  await page.screenshot({path:`${out}/selected-${width}-${theme}.png`});
  await page.keyboard.press('Escape');
  assert.equal(await card.locator('[aria-pressed]').count(),0,'Escape ends select mode');
+ assert.equal(await page.evaluate(()=>document.activeElement?.textContent.trim()),'Select','focus lands on Select after Escape');
  await card.getByRole('button',{name:'Select',exact:true}).click();
  await chip('home-assistant').click();await chip('mosquitto').click();
  await card.getByRole('button',{name:'Move selected…'}).click();

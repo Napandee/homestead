@@ -65,6 +65,7 @@ test("Escape in the card ends select mode, but not while a dialog is open", () =
   assert.equal(press().prevented, true);
   assert.doesNotMatch(t.html(), /selected/);
   assert.match(t.html(), /moveWorkload/);
+  assert.match(t.focused.at(-1), /nodeSelect/, "focus lands on Select, not the top of the page");
 });
 
 test("Select all ticks every app on the host", () => {
