@@ -41,6 +41,7 @@ class Cluster:
         self.vmi = copy.deepcopy(VMI) if running else None
         self.refuse_start = refuse_start
         self.sent = []
+        self.patched = {}   # owners a PATCH set, as the API server keeps them
 
     def get(self, path):
         if path.endswith("/virtualmachines"):
@@ -57,7 +58,15 @@ class Cluster:
             return PVCS
         if path.endswith("/datavolumes/win11-disk-0") or path.endswith("/persistentvolumeclaims/win11-disk-0"):
             # Made from dataVolumeTemplates: owned by the VM.
+            if path in self.patched:
+                return {"metadata": {"ownerReferences": self.patched[path]}}
             return {"metadata": {"ownerReferences": [{"kind": "VirtualMachine", "uid": "u1"}, {"kind": "Other", "uid": "x"}]}}
+        # Any other disk (an ISO from the library, say) is a claim no VM owns,
+        # with no DataVolume behind it: a delete now reads both before going on.
+        if "/persistentvolumeclaims/" in path:
+            return {"metadata": {}}
+        if "/datavolumes/" in path:
+            raise urllib.error.HTTPError(path, 404, "missing", None, None)
         raise AssertionError(path)
 
     def send(self, method, path, body=None, **kw):
@@ -66,6 +75,8 @@ class Cluster:
             raise urllib.error.HTTPError(path, 400, "no", None, io.BytesIO(b'{"message":"Always does not support manual start requests"}'))
         if method == "PUT" and path.endswith("/virtualmachines/win11"):
             self.vm = body
+        if method == "PATCH":
+            self.patched[path] = (body.get("metadata") or {}).get("ownerReferences") or []
         return body
 
 
