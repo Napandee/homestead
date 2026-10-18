@@ -55,3 +55,11 @@ test('snapshot download URL encodes path characters instead of executing markup'
   assert.equal(new URL(url,'https://example.test').searchParams.get('path'),'dir/a&b?<script>.txt');
   assert.doesNotMatch(url,/<script>/);
 });
+test('a ready snapshot opens in the file manager, which then owns its session',async()=>{
+  const t=setup();const opened=[];t.c.fileManagerSnapshot=state=>{opened.push(state);};
+  await t.c.snapshotFiles('vol','daily');await t.c.snapshotFilesStart();
+  t.c.snapshotFilesPaint({state:'ready',namespace:'lab',session:'homestead-snapshot-files-s1',source:t.plan});
+  assert.equal(opened.length,1);assert.equal(opened[0].session,'homestead-snapshot-files-s1');
+  await t.c.snapshotFilesDismiss();
+  assert.equal(t.sent.filter(x=>x.path.endsWith('/close')).length,0);
+});

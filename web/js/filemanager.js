@@ -53,9 +53,24 @@ window.fileManager = async (namespace, pvc, attached, modes = []) => {
     closeModal();
     return;
   }
-  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(),
-    panes: [{ namespace, pvc, path: "", listing: null, selected: new Set(), state: "starting" },
-            { namespace, pvc, path: "", listing: null, selected: new Set(), state: "starting" }] });
+  await fmStart([fmPane(namespace, pvc), fmPane(namespace, pvc)]);
+};
+
+/* A snapshot, opened from Data protection: its read-only copy on the left
+   (snapshot-files.js prepared it; closing here ends that session), the live
+   volume it was taken from on the right, to restore into. */
+window.fileManagerSnapshot = async state => {
+  if (window.filesDismiss) await window.filesDismiss();
+  const source = state.source || {};
+  modal(`Files · ${source.claim} · snapshot`, `<div class="empty"><span class="spin2"></span>opening ${esc(source.snapshot)}</div>`, true, "volume-files");
+  const snapshot = { session: state.session, namespace: state.namespace, name: source.snapshot, taken: source.created, endsAt: state.expires };
+  await fmStart([fmPane(state.namespace, source.claim, { snapshot }), fmPane(state.namespace, source.claim)]);
+};
+
+const fmPane = (namespace, pvc, extra = {}) => ({ namespace, pvc, path: "", listing: null, selected: new Set(), state: "starting", ...extra });
+
+async function fmStart(panes) {
+  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(), panes });
   $("#mbody").innerHTML = `<div class="fm" id="fm">${fmShellHtml()}</div>`;
   fmBindActivity();
   api("/api/volumes", { keep: true }).then(rows => {
@@ -63,7 +78,7 @@ window.fileManager = async (namespace, pvc, attached, modes = []) => {
     fmPaint();
   }).catch(() => {});
   await Promise.all([fmLoad(0), fmLoad(1)]);
-};
+}
 
 function fmShellHtml() {
   return `<div class="fm-tabs" role="tablist">${[0, 1].map(i => `<button type="button" role="tab" id="fm_tab${i}" onclick="fmFocus(${i})"></button>`).join("")}</div>
@@ -81,7 +96,9 @@ async function fmLoad(index, path) {
   pane.state = pane.listing ? "loading" : "starting";
   fmPaintPane(index);
   try {
-    const listing = await fmGet(`/api/files/entries?${fmQuery(pane, { path: pane.path })}`);
+    const listing = await fmGet(pane.snapshot
+      ? `/api/snapshot-files/list?${new URLSearchParams({ namespace: pane.snapshot.namespace, session: pane.snapshot.session, path: pane.path })}`
+      : `/api/files/entries?${fmQuery(pane, { path: pane.path })}`);
     if (!FM.open || FM.panes[index] !== pane) return;
     Object.assign(pane, { listing, path: listing.path || "", state: "ready", error: "" });
     pane.selected = new Set([...pane.selected].filter(name => listing.entries.some(e => e.name === name)));
@@ -112,10 +129,10 @@ function fmPaintPane(index) {
   if (tab) {
     tab.classList.toggle("on", FM.active === index);
     tab.setAttribute("aria-selected", String(FM.active === index));
-    tab.textContent = `${index ? "Right" : "Left"} · ${pane.pvc}`;
+    tab.textContent = `${index ? "Right" : "Left"} · ${pane.snapshot ? `snapshot ${pane.snapshot.name}` : pane.pvc}`;
   }
   const parts = (pane.path || "").split("/").filter(Boolean);
-  const crumbs = [`<button type="button" class="linkish" onclick="fmLoad(${index}, '')">${esc(pane.pvc)}</button>`,
+  const crumbs = [`<button type="button" class="linkish" onclick="fmLoad(${index}, '')">${esc(pane.snapshot ? pane.snapshot.name : pane.pvc)}</button>`,
     ...parts.map((part, i) => `<span class="dim">/</span><button type="button" class="linkish" onclick="fmLoad(${index}, ${jsq(parts.slice(0, i + 1).join("/"))})">${esc(part)}</button>`)].join("");
   const entries = pane.listing?.entries || [];
   const all = entries.length && entries.every(e => pane.selected.has(e.name));
@@ -134,18 +151,27 @@ function fmPaintPane(index) {
             ? `<button type="button" class="linkish" onclick="event.stopPropagation();fmOpen(${index}, ${jsq(e.name)})">${esc(e.name)}</button>` : `<span>${esc(e.name)}</span>`}</span>
           <span class="fm-size dim xs">${e.kind === "dir" ? "folder" : fileSize(e.size)}</span>
           <span class="fm-perm mono xs" title="${esc(e.mode)}">${fmMode(e.mode)}</span>
-          <span class="fm-own xs">${esc(e.user)}:${esc(e.group)}</span>
+          <span class="fm-own xs">${esc(e.user ?? e.uid)}:${esc(e.group ?? e.gid)}</span>
           <span class="fm-when dim xs">${fmWhen(e.modified)}</span></div>`).join("") || '<div class="fm-empty dim">This folder is empty.</div>'}
       </div>${pane.listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}`;
+  // A snapshot pane names its snapshot instead of offering other volumes, and
+  // has no way to change anything: its write tools are not drawn at all.
+  const snap = pane.snapshot;
   host.innerHTML = `<div class="fm-panehead">
-      <select aria-label="Volume in this pane" onchange="fmVolume(${index}, this.value)">${fmVolumeOptions(pane)}</select>
+      ${snap
+        ? `<span class="fm-snaptitle"><b>${esc(fmSnapshotTitle(snap))}</b> <span class="dim xs">read-only${snap.endsAt ? ` · open until ${esc(fmtAt(snap.endsAt))}` : ""}</span></span>`
+        : `<select aria-label="Volume in this pane" onchange="fmVolume(${index}, this.value)">${fmVolumeOptions(pane)}</select>`}
       <span class="fm-state ${pane.state}">${pane.state === "ready" ? "" : pane.state === "error" ? "" : pane.state === "stopped" ? "helper stopped · it starts again when you act" : "working…"}</span>
       <div class="fm-tools">
-        <button type="button" class="iconbtn" title="New folder" aria-label="New folder" data-need="admin" onclick="fmNewFolder(${index})">${icon("plus")}</button>
-        <label class="iconbtn" title="Upload files" aria-label="Upload files" data-need="admin">${icon("import")}<input type="file" multiple hidden onchange="fmUpload(${index}, this)"></label>
+        ${snap ? "" : `<button type="button" class="iconbtn" title="New folder" aria-label="New folder" data-need="admin" onclick="fmNewFolder(${index})">${icon("plus")}</button>
+        <label class="iconbtn" title="Upload files" aria-label="Upload files" data-need="admin">${icon("import")}<input type="file" multiple hidden onchange="fmUpload(${index}, this)"></label>`}
         <button type="button" class="iconbtn" title="Refresh" aria-label="Refresh this folder" onclick="fmLoad(${index})">${icon("refresh")}</button>
       </div></div>
     <div class="filecrumbs">${crumbs}</div>${body}`;
+}
+
+function fmSnapshotTitle(snap) {
+  return `Snapshot · ${snap.name} · ${snap.taken ? fmtAt(snap.taken) : "time unknown"}`;
 }
 
 function fmSelected(index = FM.active) {
@@ -158,8 +184,16 @@ function fmPaintActions() {
   if (!host) return;
   const pane = FM.panes[FM.active], picked = fmSelected(), other = fmOther();
   const one = picked.length === 1 ? picked[0] : null;
-  const across = other && (other.namespace !== pane.namespace || other.pvc !== pane.pvc || other.path !== pane.path);
+  const across = other && !other.snapshot && (other.namespace !== pane.namespace || other.pvc !== pane.pvc || other.path !== pane.path);
   const to = other ? `${other.pvc}/${other.path}`.replace(/\/$/, "") : "";
+  if (pane.snapshot) {
+    host.innerHTML = picked.length ? `<span class="fm-count">${picked.length} selected</span>
+        ${UI.button(picked.length === 1 && one.kind === "file" ? "Download" : "Download zip", "fmDownload()")}
+        ${other && !other.snapshot ? UI.button(`Restore to ${to}`, "fmRestoreReview()", { kind: "pri", attrs: 'data-need="admin"' }) : ""}
+        <button type="button" class="btn quiet" onclick="fmSelectAll(${FM.active}, false)">Clear</button>`
+      : `<span class="dim xs">${FM.busy ? esc(FM.busy) : "This is the snapshot, read-only. Select files to download them, or to restore them into the folder open on the other side."}</span>`;
+    return;
+  }
   host.innerHTML = picked.length ? `<span class="fm-count">${picked.length} selected</span>
       ${UI.button(picked.length === 1 && one.kind === "file" ? "Download" : "Download zip", "fmDownload()")}
       ${one && one.editable ? UI.button("Edit", `fmEdit(${FM.active}, ${jsArg(one.name)})`, { attrs: 'data-need="admin"' }) : ""}
@@ -221,7 +255,7 @@ async function fmDo(label, work, refresh = [FM.active]) {
 }
 const fmTarget = () => { const pane = FM.panes[FM.active]; return { namespace: pane.namespace, pvc: pane.pvc }; };
 const fmPaths = () => { const pane = FM.panes[FM.active]; return fmSelected().map(e => fmJoin(pane.path, e.name)); };
-const fmSameVolume = (a, b) => a.namespace === b.namespace && a.pvc === b.pvc;
+const fmSameVolume = (a, b) => !a.snapshot && !b.snapshot && a.namespace === b.namespace && a.pvc === b.pvc;
 const fmBoth = () => [FM.active, ...(fmSameVolume(FM.panes[0], FM.panes[1]) ? [1 - FM.active] : [])];
 
 window.fmNewFolder = async index => {
@@ -309,11 +343,12 @@ window.fmPanelGo = () => {
 /* Download: a file as it is, a folder or several as a zip, through the
    browser's own download so a large one never sits in this page. */
 window.fmDownload = () => {
-  const pane = FM.panes[FM.active], query = new URLSearchParams({ namespace: pane.namespace, pvc: pane.pvc });
+  const pane = FM.panes[FM.active], snap = pane.snapshot;
+  const query = new URLSearchParams(snap ? { namespace: snap.namespace, session: snap.session } : { namespace: pane.namespace, pvc: pane.pvc });
   fmPaths().forEach(path => query.append("path", path));
   const cluster = window.FLEET?.target || window.FLEET?.view?.self;
   if (cluster) query.set("hs_cluster", cluster);
-  const link = Object.assign(document.createElement("a"), { href: `/api/files/download?${query}`, download: "" });
+  const link = Object.assign(document.createElement("a"), { href: `${snap ? "/api/snapshot-files/download" : "/api/files/download"}?${query}`, download: "" });
   document.body.appendChild(link); link.click(); link.remove();
   toast("Download started; a folder is zipped as it downloads", "ok");
 };
@@ -375,6 +410,84 @@ window.fmTransfer = async move => {
   }, [0, 1]);
 };
 
+/* Restore: from the snapshot pane into the folder open on the other side,
+   after a review of what it adds and which live files it replaces. The run
+   sends the review's token; if anything reviewed changed it answers with a
+   fresh review instead of running. Nothing is deleted: folders merge. */
+function fmRestoreBody() {
+  const pane = FM.panes[FM.active], other = fmOther();
+  return { namespace: pane.snapshot.namespace, session: pane.snapshot.session, folder: pane.path, paths: fmPaths(),
+           target: { namespace: other.namespace, pvc: other.pvc, folder: other.path } };
+}
+function fmRestoreList(title, rows, line) {
+  if (!rows.length) return "";
+  const shown = rows.slice(0, 50).map(row => `<li>${line(row)}</li>`).join("");
+  return `<div class="fm-restore-list"><b>${esc(title)}</b><ul>${shown}${rows.length > 50 ? `<li class="dim">and ${rows.length - 50} more</li>` : ""}</ul></div>`;
+}
+function fmRestoreHtml(plan, body, notice = "") {
+  const to = `${body.target.pvc}/${body.target.folder}`.replace(/\/$/, "");
+  const count = plan.adds.length + plan.replaces.length;
+  const blockers = plan.blockers.length
+    ? UI.callout("bad", "This restore can't run yet", `<ul class="ui-list">${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : "";
+  const lists = fmRestoreList("Replaces", plan.replaces, r => `<span class="mono">${esc(r.path)}</span> <span class="dim xs">now ${esc(fileSize(r.live.size))}, ${esc(fmWhen(r.live.modified))} → snapshot ${esc(fileSize(r.snapshot.size))}, ${esc(fmWhen(r.snapshot.modified))}</span>`)
+    + fmRestoreList("Adds", plan.adds, path => `<span class="mono">${esc(path)}</span>`)
+    + fmRestoreList("Skipped", plan.skipped, s => `<span class="mono">${esc(s.path)}</span> <span class="dim xs">${esc(s.why)}</span>`);
+  const run = notice
+    ? UI.button("Review again", "fmRestoreReview()", { kind: "pri", attrs: 'data-need="admin"' })
+    : plan.ready ? UI.button(`Restore ${count} ${count === 1 ? "entry" : "entries"}`, "fmRestoreRun()", { kind: "pri", attrs: 'data-need="admin"' }) : "";
+  return `${notice ? UI.callout("warn", notice) : ""}${UI.section(`Restore to ${to}`, `${UI.facts([
+      ["Adds", esc(plan.adds.length)], ["Replaces", esc(plan.replaces.length)], ["Skipped", esc(plan.skipped.length)],
+      ["Snapshot open until", esc(fmtAt(plan.session_ends_at))]])}
+    ${plan.warning ? UI.callout("warn", "In use", `<p>${esc(plan.warning)}</p>`) : ""}${blockers}${lists}
+    <p class="dim xs">Nothing in ${esc(to)} is deleted: folders merge, and files that are not in the snapshot stay as they are.</p>`)}
+    ${UI.actions(`${UI.button("Cancel", "fmPanel()", { attrs: 'data-dialog-dismiss="true"' })}${run}`)}`;
+}
+window.fmRestoreReview = async () => {
+  const body = fmRestoreBody();
+  FM.restore = { body, plan: null };
+  fmPanel(`<div class="empty"><span class="spin2"></span>Checking what the restore would change…</div>`);
+  try {
+    const plan = await fmPost("/api/snapshot-files/restore/plan", body);
+    if (FM.restore?.body !== body) return;
+    FM.restore.plan = plan;
+    fmPanel(fmRestoreHtml(plan, body));
+  } catch (e) {
+    fmPanel(`${UI.callout("bad", "The restore could not be reviewed", `<p>${esc(e.message)}</p>`)}${UI.actions(UI.button("Close", "fmPanel()", { attrs: 'data-dialog-dismiss="true"' }))}`);
+  }
+  if (window.applyRole) applyRole();
+};
+window.fmRestoreRun = async () => {
+  const restore = FM.restore;
+  if (!restore?.plan) return;
+  const { body, plan } = restore, what = `${plan.adds.length + plan.replaces.length} entries`;
+  FM.restore = null;
+  fmPanel();
+  let answer;
+  try {
+    answer = await fmPost("/api/snapshot-files/restore", { ...body, review_token: plan.review_token });
+  } catch (e) {
+    if (e.status === 409 && e.body?.plan) {
+      FM.restore = { body, plan: e.body.plan };
+      fmPanel(fmRestoreHtml(e.body.plan, body, e.body.error || e.message));
+      if (window.applyRole) applyRole();
+      return;
+    }
+    return toast(e.message, "bad");
+  }
+  await fmDo(`Restoring ${what} from the snapshot…`, async () => {
+    let job = answer.job;
+    while (job.status === "running") {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (!FM.open) return;
+      job = await fmGet(`/api/files/transfer?id=${encodeURIComponent(job.id)}`);
+      FM.busy = `${job.title || "Restoring"} · ${fileSize(job.bytes)}`; fmPaintActions();
+      fmTouch(true);
+    }
+    if (job.status === "failed") throw new Error(job.error || "the restore did not finish");
+    toast(`Restored ${what} into ${body.target.pvc}`, "ok");
+  }, [0, 1]);
+};
+
 /* Edit a text file in place, in the manager; Back returns to the panes. */
 window.fmEdit = async (index, name) => {
   const pane = FM.panes[index], path = fmJoin(pane.path, name);
@@ -430,7 +543,7 @@ function fmTouch(force = false) {
   const seen = new Set();
   FM.panes.forEach((pane, index) => {
     const key = `${pane.namespace}/${pane.pvc}`;
-    if (seen.has(key) || pane.state === "error") return;
+    if (pane.snapshot || seen.has(key) || pane.state === "error") return;
     seen.add(key);
     fmPost("/api/files/keepalive", { namespace: pane.namespace, pvc: pane.pvc }).then(answer => {
       if (!answer.running && pane.state === "ready") { pane.state = "stopped"; fmPaintPane(index); }
@@ -444,12 +557,17 @@ function fmBindActivity() {
   ["pointerdown", "keydown", "wheel", "scroll", "touchstart"].forEach(kind => host.addEventListener(kind, () => fmTouch(), { passive: true, capture: true }));
 }
 
-/* Closing stops every helper this opened, and says when they have gone. */
+/* Closing stops every helper this opened, and says when they have gone. A
+   snapshot pane's session is ended too: its temporary copy is removed. */
 async function fmRelease(keepalive = false) {
   if (!FM.open) return;
   FM.open = false;
   const seen = new Map();
-  FM.panes.forEach(pane => seen.set(`${pane.namespace}/${pane.pvc}`, pane));
+  FM.panes.filter(pane => !pane.snapshot).forEach(pane => seen.set(`${pane.namespace}/${pane.pvc}`, pane));
+  FM.panes.filter(pane => pane.snapshot).forEach(pane =>
+    api("/api/snapshot-files/close", { method: "POST", headers: fmHeaders(), keepalive,
+      body: JSON.stringify({ namespace: pane.snapshot.namespace, session: pane.snapshot.session }) })
+      .catch(e => { if (!keepalive) toast(`The snapshot copy is removed when it expires. ${e.message}`, "warn"); }));
   const results = await Promise.all([...seen.values()].map(pane =>
     api("/api/files/close", { method: "POST", headers: fmHeaders(), keepalive, body: JSON.stringify({ namespace: pane.namespace, pvc: pane.pvc }) })
       .then(answer => answer.stopped).catch(() => false)));

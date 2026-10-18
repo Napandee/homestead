@@ -40,10 +40,9 @@ window.snapshotFilesStart = async () => {
 function snapshotFilesPaint(state) {
   if (state.state === 'ready') {
     clearTimeout(snapshotFilesTimer);
-    snapshotFilesSession = state;
-    Object.assign(FILEVIEW, {namespace:state.namespace, pvc:state.session, path:'', file:'', dirty:false, snapshotSession:state});
-    modal(`Snapshot files · ${state.source.claim}`, '<div class="empty"><span class="spin2"></span>Reading folders</div>', true, 'snapshot-files');
-    fileBrowse('');
+    // The file manager owns the session from here: closing it ends the session.
+    snapshotFilesSession = null;
+    window.fileManagerSnapshot(state);
     return;
   }
   const host = $('#snapshotFilesProgress');
