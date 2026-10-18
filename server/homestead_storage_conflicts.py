@@ -65,9 +65,16 @@ def conflicts(items, kind, ref, resource=None):
             and unresolved(item) and wanted & targets(item.get("kind"), item.get("ref", {}), item.get("resource"))]
 
 
+def _holds_v2(kind, ref):
+    """Jobs a V2 disk conversion must not overlap: a Longhorn upgrade (a
+    platform-upgrade of the longhorn component) restarts the instance
+    managers it depends on; a shut-down or OS rollout stops its host."""
+    return kind in ("cluster-shutdown", "os-rollout") or kind == "platform-upgrade" and (ref or {}).get("component") == "longhorn"
+
+
 def require_clear(items, kind, ref, resource=None):
-    if (kind in ("longhorn-v2-upgrade", "cluster-shutdown", "os-rollout") and any(i.get("kind") == "disk-v2-convert" and unresolved(i) for i in items)
-            or kind == "disk-v2-convert" and any(i.get("kind") in ("longhorn-v2-upgrade", "cluster-shutdown", "os-rollout") and i.get("status") not in TERMINAL for i in items)):
+    if (_holds_v2(kind, ref) and any(i.get("kind") == "disk-v2-convert" and unresolved(i) for i in items)
+            or kind == "disk-v2-convert" and any(_holds_v2(i.get("kind"), i.get("ref")) and i.get("status") not in TERMINAL for i in items)):
         raise ValueError("Finish disk preparation before upgrading V2 instance managers or shutting down hosts.")
     host_kinds = {"disk-v2-convert", "node-power", "host-os", "host-promote", "longhorn-v2-prepare", "disk-retire"}
     if kind in host_kinds and any(i.get("ref", {}).get("node") == ref.get("node")
