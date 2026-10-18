@@ -4,6 +4,7 @@
 // call; a saved value can also be damaged. Homestead must still load and sign
 // in, with its defaults, and simply not remember settings (#618).
 const test = require("node:test"), assert = require("node:assert/strict");
+const between = require("./helpers/between");
 const fs = require("node:fs"), vm = require("node:vm");
 
 const blocked = () => {
@@ -58,8 +59,7 @@ test("the image update check after sign-in still works with blocked storage", as
   ctx.window = ctx;
   vm.createContext(ctx);
   const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
-  vm.runInContext(source.slice(source.indexOf("async function loadImageUpdates("),
-    source.indexOf("window.loadImageUpdates = loadImageUpdates;")), ctx);
+  vm.runInContext(between(source, "async function loadImageUpdates(", "window.loadImageUpdates = loadImageUpdates;"), ctx);
   const report = await ctx.loadImageUpdates();
   assert.equal(report?.updates, 2);
   await ctx.loadImageUpdates(); // the next check, a quarter of an hour on, says nothing new
