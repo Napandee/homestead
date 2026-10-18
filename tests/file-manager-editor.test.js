@@ -31,7 +31,7 @@ async function open() {
   for (const file of ["web/js/views-storage.js", "web/js/filemanager.js"]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
   vm.runInContext(`FM.panes = [{ namespace: "apps", pvc: "data", path: "conf" }, { namespace: "apps", pvc: "data", path: "" }];`, ctx);
   await ctx.fmEdit(0, "app.conf");
-  const view = vm.runInContext("({ FILEVIEW, FM })", ctx);
+  const view = vm.runInContext("({ FM })", ctx);
   return { calls, keys, changes, view, state };
 }
 
@@ -48,11 +48,10 @@ test("Ctrl+S in the file manager's editor saves the open file to its own volume"
   assert.equal(writes[0].body.content, "edited");
 });
 
-test("typing in the file manager's editor marks its own edit dirty, not the old browser's", async () => {
+test("typing in the file manager's editor marks its own edit dirty", async () => {
   const { changes, view, state } = await open();
   assert.equal(view.FM.editing.dirty, false);
   changes.forEach(fn => fn());
   assert.equal(view.FM.editing.dirty, true);
   assert.equal(state.textContent, "unsaved changes");
-  assert.equal(view.FILEVIEW.dirty, false);
 });

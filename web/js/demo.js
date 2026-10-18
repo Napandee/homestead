@@ -1260,12 +1260,30 @@ ssh_pwauth: true
     "/api/snapshot-files/start": (url, opts) => {
       const body = JSON.parse(opts.body || '{}');
       return window.__demoSnapshotFiles = {namespace:'lab', session:'homestead-snapshot-files-' + body.request_id, state:'preparing', stage:'clone', percent:42,
-        source:{claim:'frigate-config', snapshot:body.snapshot, method:window.__demoSnapshotV2 ? 'linked-clone' : 'full-copy'}, message:'Preparing the selected snapshot; the live volume stays online'};
+        expires:Math.floor(Date.now() / 1000) + 1800, source:{claim:'frigate-config', snapshot:body.snapshot, created:'2026-10-18T03:00:00Z',
+        method:window.__demoSnapshotV2 ? 'linked-clone' : 'full-copy'}, message:'Preparing the selected snapshot; the live volume stays online'};
     },
     "/api/snapshot-files/status": () => ({...window.__demoSnapshotFiles, state:window.__demoSnapshotWaiting ? 'preparing' : 'ready'}),
     "/api/snapshot-files/list": url => ({path:url.searchParams.get('path') || '', read_only:true, entries:[
-      {name:'config',kind:'dir',size:0,editable:false}, {name:'frigate.db',kind:'file',size:5242880,editable:false}, {name:'config.yml',kind:'file',size:4210,editable:false}]}),
+      {name:'config',kind:'dir',size:0,mode:'755',uid:1000,gid:1000,modified:1791500000,editable:false},
+      {name:'frigate.db',kind:'file',size:5242880,mode:'644',uid:1000,gid:1000,modified:1791500000,editable:false},
+      {name:'config.yml',kind:'file',size:4100,mode:'644',uid:1000,gid:1000,modified:1791500000,editable:false}]}),
     "/api/snapshot-files/close": {state:'closing'},
+    // A restore's review: the live volume (the file manager's demo) has
+    // config.yml and frigate.db, so those are replaced and the rest added.
+    "/api/snapshot-files/restore/plan": (url, opts) => {
+      const body = JSON.parse(opts?.body || '{}'), live = {'config.yml':4210, 'frigate.db':5242880};
+      const names = (body.paths || []).map(p => p.split('/').pop());
+      return {ready:true, blockers:[], adds:names.filter(n => !(n in live)),
+        replaces:names.filter(n => n in live).map(n => ({path:n, live:{size:live[n], modified:1791600000}, snapshot:{size:n === 'config.yml' ? 4100 : live[n], modified:1791500000}})),
+        skipped:[], in_use:['frigate'], warning:'frigate is running and using this volume; it sees these files change while it runs. For a database, stop it first.',
+        session_ends_at:window.__demoSnapshotFiles?.expires || Math.floor(Date.now() / 1000) + 1800, snapshot:'daily-snapshot', review_token:'0123456789abcdef0123'};
+    },
+    "/api/snapshot-files/restore": (url, opts) => {
+      const count = (JSON.parse(opts?.body || '{}').paths || []).length;
+      return {ok:true, job:{id:'demo-restore', status:'done', bytes:4100, from:'snapshot daily-snapshot', to:'frigate-config',
+        title:`Restore ${count} file${count === 1 ? '' : 's'} from snapshot daily-snapshot`}};
+    },
     "/api/files/list": url => {
       const path = url.searchParams.get("path") || "";
       if (path === "config") {

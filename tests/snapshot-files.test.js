@@ -6,7 +6,7 @@ function setup(method='full-copy') {
   let html='', pending, timer;
   const fields={'#snapshotFilesProgress':{innerHTML:''}}, sent=[];
   const plan={volume:'vol',snapshot:'daily',claim:'data',namespace:'lab',size:'1073741824',method,engine:method==='linked-clone'?'v2':'v1',review_token:'token'};
-  const c={console,crypto:webcrypto,window:null,FILEVIEW:{},fileSize:()=> '1 GiB',fileBrowse(){},
+  const c={console,crypto:webcrypto,window:null,fileSize:()=> '1 GiB',fileManagerSnapshot(){},
     $:s=>fields[s],esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
     modal:(_,body)=>{html=body;},closeModal(){},toast(){},setTimeout:f=>{timer=f;return 1;},clearTimeout(){timer=null;},
     api:async(path,opts)=> {
@@ -47,13 +47,6 @@ test('a late start after closing requests cleanup without reopening the browser'
   done({state:'ready',namespace:'lab',session:'late',source:t.plan});await starting;
   assert.equal(t.html(),before);
   assert.equal(t.sent.filter(x=>x.path.endsWith('/close')).length,2);
-  assert.equal(t.c.FILEVIEW.snapshotSession,null);
-});
-test('snapshot download URL encodes path characters instead of executing markup',()=>{
-  const t=setup();t.c.FILEVIEW.snapshotSession={namespace:'lab',session:'session'};
-  const url=t.c.snapshotFileUrl('dir/a&b?<script>.txt');
-  assert.equal(new URL(url,'https://example.test').searchParams.get('path'),'dir/a&b?<script>.txt');
-  assert.doesNotMatch(url,/<script>/);
 });
 test('a ready snapshot opens in the file manager, which then owns its session',async()=>{
   const t=setup();const opened=[];t.c.fileManagerSnapshot=state=>{opened.push(state);};

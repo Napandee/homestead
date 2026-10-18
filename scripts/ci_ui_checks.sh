@@ -26,6 +26,7 @@ case "${1:-}" in
     node scripts/check_import_admission.mjs
     node scripts/check_dialog_focus.mjs
     SET_RESTART_SCREENSHOTS=release-assets/dialogs/set-restart node tests/integration/set-restart.mjs
+    SNAPSHOT_RESTORE_SCREENSHOTS=release-assets/dialogs/snapshot-restore node tests/integration/snapshot-restore.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs

@@ -159,6 +159,9 @@ const DIALOGS = [
   ["snapshot-files-v2", "storage", "window.__demoSnapshotV2=true;snapshotFiles('pvc-demo-frigate','daily-snapshot')"],
   ["snapshot-files-progress", "storage", "window.__demoSnapshotV2=false;window.__demoSnapshotWaiting=true;snapshotFiles('pvc-demo-frigate','daily-snapshot')", "snapshotFilesStart()"],
   ["snapshot-files-ready", "storage", "window.__demoSnapshotV2=true;window.__demoSnapshotWaiting=false;snapshotFiles('pvc-demo-frigate','daily-snapshot')", "snapshotFilesStart().then(()=>snapshotFilesPoll())"],
+  // A ready snapshot opens in the file manager; restoring a file shows its review.
+  ["snapshot-restore-in-manager", "storage", "window.__demoSnapshotV2=true;window.__demoSnapshotWaiting=false;snapshotFiles('pvc-demo-frigate','daily-snapshot')", "snapshotFilesStart().then(()=>snapshotFilesPoll())",
+    "new Promise(done=>{const t=setInterval(()=>{if(FM.panes[0]?.listing){clearInterval(t);done();}},100);}).then(()=>{fmClick({},0,'config.yml');return fmRestoreReview();})"],
   ["backups", "storage", "lhBackupList('pvc-demo-frigate','frigate-config')"],
   ["backup-restore", "storage", "lhBackupList('pvc-demo-frigate','frigate-config')", "click:lhRestore"],
   ["backup-target", "protect", "lhTarget()"],

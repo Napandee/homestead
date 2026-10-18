@@ -69,10 +69,6 @@ async function snapshotFilesPoll() {
   }
   if ($('#snapshotFilesProgress') && !['failed','closed','closing'].includes(snapshotFilesSession?.state)) snapshotFilesTimer = setTimeout(snapshotFilesPoll, 3000);
 }
-function snapshotFileUrl(path) {
-  const s = FILEVIEW.snapshotSession;
-  return `/api/snapshot-files/download?namespace=${encodeURIComponent(s.namespace)}&session=${encodeURIComponent(s.session)}&path=${encodeURIComponent(path)}`;
-}
 async function snapshotFilesRelease(session) {
   if (!session) return;
   try {
@@ -84,8 +80,6 @@ window.snapshotFilesDismiss = () => {
   ++snapshotFilesSequence;
   clearTimeout(snapshotFilesTimer);
   const session = snapshotFilesSession;
-  if (FILEVIEW.snapshotSession) FILEVIEW.pvc = '';
-  FILEVIEW.snapshotSession = null;
   snapshotFilesSession = null;
   snapshotFilesReview = null;
   return snapshotFilesRelease(session);

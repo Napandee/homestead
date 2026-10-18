@@ -46,7 +46,7 @@ function filesInUseQuestion(pvc, attached, modes = []) {
     message: `An app is using ${pvc}. You can browse it while the app runs; edits change its live files.` };
 }
 window.fileManager = async (namespace, pvc, attached, modes = []) => {
-  if (window.filesDismiss) await window.filesDismiss();
+  await fileManagerDismiss();
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>opening ${esc(pvc)}</div>`, true, "volume-files");
   const question = filesInUseQuestion(pvc, attached, modes);
   if (question && !(await ask(question.message, { title: question.title, ok: question.ok }))) {
@@ -60,7 +60,7 @@ window.fileManager = async (namespace, pvc, attached, modes = []) => {
    (snapshot-files.js prepared it; closing here ends that session), the live
    volume it was taken from on the right, to restore into. */
 window.fileManagerSnapshot = async state => {
-  if (window.filesDismiss) await window.filesDismiss();
+  await fileManagerDismiss();
   const source = state.source || {};
   modal(`Files · ${source.claim} · snapshot`, `<div class="empty"><span class="spin2"></span>opening ${esc(source.snapshot)}</div>`, true, "volume-files");
   const snapshot = { session: state.session, namespace: state.namespace, name: source.snapshot, taken: source.created, endsAt: state.expires };
@@ -70,7 +70,8 @@ window.fileManagerSnapshot = async state => {
 const fmPane = (namespace, pvc, extra = {}) => ({ namespace, pvc, path: "", listing: null, selected: new Set(), state: "starting", ...extra });
 
 async function fmStart(panes) {
-  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(), panes });
+  // Closing goes to the cluster this opened on, even if the selection changes.
+  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(), headers: fmHeaders(), panes });
   $("#mbody").innerHTML = `<div class="fm" id="fm">${fmShellHtml()}</div>`;
   fmBindActivity();
   api("/api/volumes", { keep: true }).then(rows => {
@@ -459,7 +460,7 @@ window.fmRestoreReview = async () => {
 window.fmRestoreRun = async () => {
   const restore = FM.restore;
   if (!restore?.plan) return;
-  const { body, plan } = restore, what = `${plan.adds.length + plan.replaces.length} entries`;
+  const { body, plan } = restore, count = plan.adds.length + plan.replaces.length, what = `${count} ${count === 1 ? "entry" : "entries"}`;
   FM.restore = null;
   fmPanel();
   let answer;
@@ -565,11 +566,11 @@ async function fmRelease(keepalive = false) {
   const seen = new Map();
   FM.panes.filter(pane => !pane.snapshot).forEach(pane => seen.set(`${pane.namespace}/${pane.pvc}`, pane));
   FM.panes.filter(pane => pane.snapshot).forEach(pane =>
-    api("/api/snapshot-files/close", { method: "POST", headers: fmHeaders(), keepalive,
+    api("/api/snapshot-files/close", { method: "POST", headers: FM.headers || fmHeaders(), keepalive,
       body: JSON.stringify({ namespace: pane.snapshot.namespace, session: pane.snapshot.session }) })
       .catch(e => { if (!keepalive) toast(`The snapshot copy is removed when it expires. ${e.message}`, "warn"); }));
   const results = await Promise.all([...seen.values()].map(pane =>
-    api("/api/files/close", { method: "POST", headers: fmHeaders(), keepalive, body: JSON.stringify({ namespace: pane.namespace, pvc: pane.pvc }) })
+    api("/api/files/close", { method: "POST", headers: FM.headers || fmHeaders(), keepalive, body: JSON.stringify({ namespace: pane.namespace, pvc: pane.pvc }) })
       .then(answer => answer.stopped).catch(() => false)));
   if (!keepalive) {
     const left = results.filter(stopped => !stopped).length;
@@ -582,7 +583,7 @@ window.fmClose = async () => {
   closeModal();
   await closing;
 };
-// Every way out of the dialog - the ×, Escape, another page - closes it too.
-const fmLegacyDismiss = window.filesDismiss;
-window.filesDismiss = (keepalive = false) => Promise.all([fmRelease(keepalive), fmLegacyDismiss ? fmLegacyDismiss(keepalive) : null]);
+// Every way out of the dialog - the ×, Escape, another page - closes it too
+// (core.js calls this from modal, modalBack and closeModal).
+window.fileManagerDismiss = (keepalive = false) => fmRelease(keepalive);
 window.addEventListener?.("pagehide", () => { if (FM.open) fmRelease(true); });
