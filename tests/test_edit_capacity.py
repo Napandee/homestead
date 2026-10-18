@@ -202,7 +202,7 @@ class EditCapacityTests(unittest.TestCase):
         self.config = {"ns": "lab", "name": "shared", "workload_name": "renamed"}
         config = self.reviewed()
         with mock.patch.object(server.RENAME, "dispatch", return_value={"ok": True, "renamed": True}) as rename, \
-                mock.patch.object(server, "ksend") as send, mock.patch.object(lifecycle, "edit_workload") as edit:
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(lifecycle, "edit_workload") as edit:
             result, _, create, icons = self.call("/api/edit", config)
         self.assertEqual(200, result[0], result)
         rename.assert_called_once()

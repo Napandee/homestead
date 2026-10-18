@@ -39,7 +39,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
         with mock.patch.object(updates, "ksend", side_effect=lambda method, path, dep: dep) as send, \
-                mock.patch.object(server, "ksend") as other_send, \
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as other_send, \
                 mock.patch.object(server.OPS, "start", return_value={}) as job:
             handler.do_POST()
         other_send.assert_not_called()

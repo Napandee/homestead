@@ -27,7 +27,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
         self.objects["/apis/storage.k8s.io/v1/storageclasses/storage"] = {
             "metadata": {"name": "storage", "uid": "sc-uid", "resourceVersion": "1"},
             "provisioner": "example.test/storage", "volumeBindingMode": "WaitForFirstConsumer"}
-        for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+        for patch in (mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.IMP, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.PLATFORM, "detect", side_effect=lambda: self.platform),
                       mock.patch.object(server, "vm_default_class", return_value="storage"),
@@ -56,7 +56,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
                 value["metadata"].setdefault("name", path.rsplit("/", 1)[-1])
             return value
         with mock.patch.object(server.IMP, "ksend", side_effect=send) as writes, \
-                mock.patch.object(server, "ksend") as other_writes, \
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as other_writes, \
                 mock.patch.object(server.IPAM, "save_record") as records:
             handler.do_POST()
         other_writes.assert_not_called()

@@ -26,15 +26,15 @@ class StorageClassTests(unittest.TestCase):
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
-            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
         for name in ("kget", "ksend"):
-            self.addCleanup(setattr, server, name, getattr(server, name))
+            self.addCleanup(setattr, server.KUBE_HELPERS, name, getattr(server.KUBE_HELPERS, name))
         self.sent = []
         self.claims = {"items": [{"spec": {"storageClassName": "longhorn-r2"}}]}
-        server.kget = lambda path, **kw: (copy.deepcopy(CLASSES) if "storageclasses" in path
+        server.KUBE_HELPERS.kget = lambda path, **kw: (copy.deepcopy(CLASSES) if "storageclasses" in path
                                           else copy.deepcopy(self.claims) if "persistentvolumeclaims" in path
                                           else {"items": []})
-        server.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
+        server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
 
     def test_internal_classes_are_never_offered(self):
         self.assertEqual(["harvester-longhorn", "longhorn", "longhorn-r2"],
@@ -47,12 +47,12 @@ class StorageClassTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def test_class_deletion_keeps_retained_volumes_without_claims(self):
-        original = server.kget
+        original = server.KUBE_HELPERS.kget
         def read(path, **kwargs):
             if path == "/api/v1/persistentvolumes":
                 return {"items": [{"spec": {"storageClassName": "longhorn", "persistentVolumeReclaimPolicy": "Retain"}}]}
             return original(path, **kwargs)
-        server.kget = read
+        server.KUBE_HELPERS.kget = read
         with self.assertRaisesRegex(ValueError, "retained data"):
             STORAGE_CLASSES.delete_storage_class("longhorn")
         self.assertEqual([], self.sent)
@@ -141,9 +141,9 @@ class LonghornV2Tests(unittest.TestCase):
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
-            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
         for name in ("kget", "ksend"):
-            self.addCleanup(setattr, server, name, getattr(server, name))
+            self.addCleanup(setattr, server.KUBE_HELPERS, name, getattr(server.KUBE_HELPERS, name))
         self.sent = []
         self.enabled = "true"
         self.objects = {
@@ -165,8 +165,8 @@ class LonghornV2Tests(unittest.TestCase):
                 return copy.deepcopy(CLASSES)
             return copy.deepcopy(self.objects.get(path, {"items": []}))
 
-        server.kget = get
-        server.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
+        server.KUBE_HELPERS.kget = get
+        server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
 
     def test_quantities_read_in_mebibytes(self):
         self.assertEqual([2048, 1024, 0, 0], [STORAGE_CLASSES._quantity_mb(v) for v in ("2Gi", "1024Mi", "0", "bogus")])

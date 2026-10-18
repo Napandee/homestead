@@ -19,8 +19,8 @@ class ClassChoiceTests(unittest.TestCase):
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
-            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
-        self.saved = server.kget, server.ksend, server.STORAGE_CLASS, server.LC.STORAGE_CLASS, server.LH.STORAGE_CLASS
+            setattr(STORAGE_CLASSES, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
+        self.saved = server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend, server.STORAGE_CLASS, server.LC.STORAGE_CLASS, server.LH.STORAGE_CLASS
         self.classes = [klass("longhorn-r2"), klass("longhorn-v1-1x", default=True, numberOfReplicas="1"),
                         klass("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", backingImage="default-image-151065"),
                         klass("longhorn-image-ubuntu", backingImage="default-image-ubuntu"),
@@ -35,11 +35,11 @@ class ClassChoiceTests(unittest.TestCase):
             if path == "/api/v1/persistentvolumes":
                 return {"items": self.pvs}
             return {"items": []}
-        server.kget = kget
-        server.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path))
+        server.KUBE_HELPERS.kget = kget
+        server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path))
 
     def tearDown(self):
-        (server.kget, server.ksend, server.STORAGE_CLASS, server.LC.STORAGE_CLASS,
+        (server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend, server.STORAGE_CLASS, server.LC.STORAGE_CLASS,
          server.LH.STORAGE_CLASS) = self.saved
 
     def test_image_and_restore_classes_are_never_offered(self):
@@ -73,12 +73,12 @@ class ClassChoiceTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def test_failed_claim_inventory_never_deletes_classes(self):
-        server.kget = lambda path: (_ for _ in ()).throw(RuntimeError("API unavailable"))
+        server.KUBE_HELPERS.kget = lambda path: (_ for _ in ()).throw(RuntimeError("API unavailable"))
         self.assertEqual([], STORAGE_CLASSES.cleanup_restore_classes())
         self.assertEqual([], self.sent)
 
     def test_incomplete_claim_inventory_never_deletes_classes(self):
-        server.kget = lambda path: {"items": [], "metadata": {"continue": "next-page"}}
+        server.KUBE_HELPERS.kget = lambda path: {"items": [], "metadata": {"continue": "next-page"}}
         self.assertEqual([], STORAGE_CLASSES.cleanup_restore_classes())
         self.assertEqual([], self.sent)
 

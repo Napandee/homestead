@@ -119,6 +119,6 @@ class RuntimeTests(unittest.TestCase):
     def test_real_server_transport_enforces_self_update_interlock(self):
         with ops._lock:
             ops._write([{"id": "move", "kind": "reclass", "status": "running", "ref": {"namespace": "lab", "claim": "data"}}])
-        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server, "_ksend") as raw:
-            with self.assertRaises(ValueError): server.ksend("PUT", "/apis/apps/v1/namespaces/lab/deployments/homestead", {})
+        with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "_ksend") as raw:
+            with self.assertRaises(ValueError): server.KUBE_HELPERS.ksend("PUT", "/apis/apps/v1/namespaces/lab/deployments/homestead", {})
             raw.assert_not_called()

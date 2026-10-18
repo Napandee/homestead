@@ -52,7 +52,7 @@ class ImportCapacityTests(unittest.TestCase):
                                                      namespace=result["metadata"].get("namespace") or "lab")
             self.objects[path + ("/" + result["metadata"]["name"] if method == "POST" else "")] = copy.deepcopy(result)
             return result
-        with mock.patch.object(server, "ksend", side_effect=send) as writes, \
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=send) as writes, \
              mock.patch.object(server, "create_pvc", wraps=server.create_pvc) as pvc, \
              mock.patch.object(server, "persist_icon_config") as icons, \
              mock.patch.object(server.OPS, "start", wraps=server.OPS.start) as jobs:

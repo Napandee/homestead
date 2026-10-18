@@ -26,7 +26,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.body = {"ns": "lab", "name": "guest", "action": "start"}
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+        for patch in (mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.VMS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.OPS, "DATA_DIR", self.tmp.name),
                       mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
@@ -44,7 +44,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
         with mock.patch.object(server.VMS, "ksend", return_value={}, side_effect=error) as vm_writes, \
-                mock.patch.object(server, "ksend") as other_writes:
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as other_writes:
             handler.do_POST()
         other_writes.assert_not_called()
         return handler._send.call_args.args, vm_writes
@@ -471,7 +471,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
 
     def test_identity_change_during_final_check_stops_dispatch(self):
         signed = self.reviewed()
-        get = server.kget
+        get = server.KUBE_HELPERS.kget
         reads = 0
         def racing_get(path):
             nonlocal reads
@@ -481,7 +481,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
                 if reads == 2:
                     value["metadata"]["uid"] = "replacement"
             return value
-        with mock.patch.object(server, "kget", side_effect=racing_get):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=racing_get):
             result, writes = self.call("/api/vm/power", signed)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()

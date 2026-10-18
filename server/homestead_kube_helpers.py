@@ -1,14 +1,12 @@
-"""Kubernetes API helpers that lived in server.py (track 1, part 8): the
-guarded write path ksend takes, who may write to a workload, raw and table
-reads, path checks, log search reads, and CPU, memory and age
-parsing. kget, ksend and _ksend themselves stay in server.py for now: tests
-patch them there.
+"""Kubernetes API helpers that lived in server.py: the reads and writes
+everything goes through (kget, ksend and the transport _ksend), the guarded
+write path ksend takes, who may write to a workload, raw and table reads,
+path checks, log search reads, and CPU, memory and age parsing.
 
 server.py binds what it still owns through bind_routes(), the same entry
 point every moved module has whether or not it declares ROUTES: each helper
-in ROUTE_NEEDS is looked up in server.py when it is called, so a test that
-patches server.kget patches it here too; each name in VALUES is server.py's
-own value."""
+in ROUTE_NEEDS is looked up in server.py when it is called; each name in
+VALUES is server.py's own value. Tests patch kget and ksend here."""
 import json
 import re
 import time
@@ -21,8 +19,12 @@ import homestead_operations as OPS
 import homestead_self as SELF
 import homestead_storage_guard as STORAGE_GUARD
 
-ROUTE_NEEDS = ("_ksend", "kget", "require_self_data_write", "self_data_activity")
+ROUTE_NEEDS = ("cluster_shutdown", "require_self_data_write", "self_data_activity")
 VALUES = ("API", "CTX", "TOKEN")
+KGET_RETRY = (0.5, 1.0, 2.0)  # a busy API server (priority and fairness) answers reads 429 for a moment
+# Set once server.py has imported what the cluster shutdown fence reads: a
+# write before then (while server.py is still importing) is not fenced.
+FENCE_READY = False
 
 
 def bind_routes(helpers, **values):
@@ -154,3 +156,49 @@ def ktable(path, timeout=20):
         "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"})
     with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
         return json.loads(r.read().decode())
+
+
+def kget(path, timeout=10):
+    for attempt in range(len(KGET_RETRY) + 1):
+        req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
+        try:
+            with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as error:
+            # A read is safe to ask again; a write's 429 (an eviction a
+            # disruption budget refuses) is an answer, and ksend keeps it.
+            if error.code != 429 or attempt == len(KGET_RETRY):
+                raise
+            try:
+                delay = float((error.headers or {}).get("Retry-After") or KGET_RETRY[attempt])
+            except (TypeError, ValueError):
+                delay = KGET_RETRY[attempt]
+            error.close()
+            time.sleep(max(0.1, min(3.0, delay)))
+
+
+def ksend(method, path, body=None, ctype="application/json", timeout=15):
+    return _guarded_ksend(method, path, body, ctype, timeout)
+
+
+def require_workload_target(ns, name):
+    if HOSTACCESS.role() not in (None, "admin"):
+        HOSTACCESS.require_target(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"), ns)
+
+
+def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shutdown_bypass=False):
+    path = api_path(path)
+    # Fence the common Kubernetes transport, including callers that already
+    # own another feature's write lock. Local navigation and recovery reviews
+    # remain available. The shutdown coordinator and the narrowly scoped AUTH
+    # binding bypass this fence; authentication still uses the other guards.
+    if not shutdown_bypass and FENCE_READY:
+        shutdown = cluster_shutdown().state()
+        if shutdown and shutdown["phase"] not in ("released", "failed"):
+            raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method,
+                                 headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
+    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
+        raw = r.read().decode()
+        return json.loads(raw) if raw.strip() else {}

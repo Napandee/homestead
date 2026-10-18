@@ -36,7 +36,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.sets = [{"metadata": {"name": "shared-old-rs", "namespace": "lab", "uid": "rs-one",
                                   "ownerReferences": [owner("Deployment", "dep-one")]}}]
         self.objects = {}
-        for patch in (mock.patch.object(server, "kget", side_effect=self.get),
+        for patch in (mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.get),
                       mock.patch.object(place, "kget", side_effect=self.get),
                       mock.patch.object(place, "get_nodes", side_effect=lambda: self.nodes),
                       mock.patch.object(place, "hardware_features", return_value=[]),
@@ -61,7 +61,7 @@ class RolloutCapacityTests(unittest.TestCase):
         raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
     def plan(self):
-        with mock.patch.object(server, "ksend") as send:
+        with mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             result = server.DEPLOY_ROUTES.deploy_capacity_plan(self.cfg)
         send.assert_not_called()
         return result
@@ -289,8 +289,8 @@ class RolloutCapacityTests(unittest.TestCase):
 
     def test_final_put_preserves_reviewed_resource_version_without_second_read(self):
         with mock.patch.object(server, "persist_icon_config"), mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
-                mock.patch.object(server, "ksend") as send, mock.patch.object(server.OPS, "start", return_value={}), \
-                mock.patch.object(server, "kget", side_effect=AssertionError("unreviewed second read")):
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(server.OPS, "start", return_value={}), \
+                mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=AssertionError("unreviewed second read")):
             server.DEPLOY.run_deploy(copy.deepcopy(self.cfg), reviewed_current=copy.deepcopy(self.current))
         deployment_put = next(call for call in send.call_args_list if call.args[0] == "PUT")
         self.assertEqual("10", deployment_put.args[2]["metadata"]["resourceVersion"])

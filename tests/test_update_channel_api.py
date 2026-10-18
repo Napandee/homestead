@@ -20,8 +20,8 @@ class ChannelAPITests(unittest.TestCase):
         handler._body = lambda: {"channel": channel}
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server, "kget", return_value=copy.deepcopy(current)), \
-             mock.patch.object(server, "ksend") as send, \
+        with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=copy.deepcopy(current)), \
+             mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
              mock.patch.object(server.UPDATES, "invalidate") as invalidate, \
              mock.patch.object(server, "_fleet_rename"):
             handler.do_POST()

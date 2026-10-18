@@ -51,7 +51,7 @@ class DataMoveTests(unittest.TestCase):
 
     def use(self, cluster):
         self.c = cluster
-        patches = [mock.patch.object(server, "kget", cluster.get), mock.patch.object(server, "ksend", cluster.send),
+        patches = [mock.patch.object(server.KUBE_HELPERS, "kget", cluster.get), mock.patch.object(server.KUBE_HELPERS, "ksend", cluster.send),
                    mock.patch.object(server.OPS, "start", lambda *a, **k: {"id": "op"}),
                    mock.patch.object(server.OPS, "list_operations", lambda: self.running)]
         for p in patches:

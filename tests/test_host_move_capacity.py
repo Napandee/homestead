@@ -22,7 +22,7 @@ class HostMoveCapacityTests(unittest.TestCase):
         handler._body = lambda: copy.deepcopy(config)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server, "ksend") as send, mock.patch.object(server.OPS, "start", return_value={}) as job:
+        with mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(server.OPS, "start", return_value={}) as job:
             handler.do_POST()
         return handler._send.call_args.args, send, job
 
@@ -102,7 +102,7 @@ class HostMoveCapacityTests(unittest.TestCase):
 
     def test_unavailable_inventory_never_writes(self):
         self.objects["/api/v1/pods"] = urllib.error.HTTPError("pods", 503, "unavailable", {}, None)
-        with mock.patch.object(server, "ksend") as send:
+        with mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             with self.assertRaises(urllib.error.HTTPError):
                 server.WORKLOADS.reviewed_host_move({**self.config, "confirm_capacity": True})
         send.assert_not_called()
@@ -201,7 +201,7 @@ class HostMoveCapacityTests(unittest.TestCase):
     def test_put_conflict_propagates_without_retry_or_second_fetch(self):
         config = self.reviewed()
         conflict = urllib.error.HTTPError("deployment", 409, "changed", {}, None)
-        with mock.patch.object(server, "ksend", side_effect=conflict) as send:
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=conflict) as send:
             with self.assertRaises(urllib.error.HTTPError):
                 server.WORKLOADS.reviewed_host_move(config)
         send.assert_called_once()

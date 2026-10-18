@@ -107,6 +107,8 @@ def server_references(tree, text, names, skip):
         if isinstance(x, ast.Name) and x.id in names and not inside(x.lineno):
             hits.setdefault(x.id, set()).add(x.lineno)
     for number, line in enumerate(text.splitlines(), 1):
+        if line.startswith("MOVED.update("):
+            continue  # registers where a moved name lives; not a use of it
         for name in re.findall(r'["\'](\w+)["\']', line):
             if name in names and not inside(number):
                 hits.setdefault(name, set()).add(number)
@@ -225,8 +227,14 @@ def verify(dest, names):
             imported.update(a.name for a in node.names)
     refs = server_references(server_tree, server_text, set(names), set())
     uses = other_needs()
+    # Track 2: names registered in MOVED reach the modules that late-bind them
+    # through _late, which looks them up in their module; only server.py's own
+    # import-time references need them imported back.
+    moved = set()
+    for match in re.finditer(r"^MOVED\.update\(dict\.fromkeys\(\(([^)]*)\), (\w+)\)\)", server_text, re.M):
+        moved.update(re.findall(r"[\"'](\w+)[\"']", match.group(1)))
     for name in names:
-        if (name in refs or name in uses) and name not in imported:
+        if (name in refs or (name in uses and name not in moved)) and name not in imported:
             problems.append(f"server.py still names {name} (lines {sorted(refs.get(name, []))} {uses.get(name, '')}): "
                             f"add it to `from {dest} import (...)`")
         if name in imported and name not in refs and name not in uses:

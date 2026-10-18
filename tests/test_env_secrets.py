@@ -110,12 +110,12 @@ class EditRoundTripTests(unittest.TestCase):
 
     def payload(self):
         dep = self.store.objects["/apis/apps/v1/namespaces/lab/deployments/tunnel"]
-        original = server.kget
-        server.kget = self.store.read
+        original = server.KUBE_HELPERS.kget
+        server.KUBE_HELPERS.kget = self.store.read
         try:
             return server.WORKLOADS.workload_edit_payload("lab", "tunnel", dep, [], services=[])["containers"][0]
         finally:
-            server.kget = original
+            server.KUBE_HELPERS.kget = original
 
     def test_the_form_shows_the_value_and_saving_a_change_updates_the_secret(self):
         container = self.payload()

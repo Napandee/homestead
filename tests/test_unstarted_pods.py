@@ -19,18 +19,18 @@ class UnstartedPodTests(unittest.TestCase):
     that never started seldom finish stopping."""
 
     def setUp(self):
-        self.saved = server.kget, server.ksend
+        self.saved = server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend
         self.pods, self.deleted = [], []
 
         def kget(path):
             if "/deployments/" in path:
                 return {"spec": {"selector": {"matchLabels": {"app": "doublecommander"}}}}
             return {"items": self.pods}
-        server.kget = kget
-        server.ksend = lambda method, path, body=None, **kw: self.deleted.append(path.split("/pods/")[1].split("?")[0])
+        server.KUBE_HELPERS.kget = kget
+        server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.deleted.append(path.split("/pods/")[1].split("?")[0])
 
     def tearDown(self):
-        server.kget, server.ksend = self.saved
+        server.KUBE_HELPERS.kget, server.KUBE_HELPERS.ksend = self.saved
 
     def test_stopping_clears_pods_that_never_started(self):
         self.pods = [pod("stuck-pull", [WAITING]), pod("creating", []), pod("was-running", [RUNNING])]

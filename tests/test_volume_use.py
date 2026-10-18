@@ -31,8 +31,8 @@ class VolumeUseTests(unittest.TestCase):
         # STORAGE reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))
-            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server, _name)(*a, **k))
-        self.saved = server.kget
+            setattr(STORAGE, name, lambda *a, _name=name, **k: getattr(server.KUBE_HELPERS, _name)(*a, **k))
+        self.saved = server.KUBE_HELPERS.kget
         world = {
             "/apis/longhorn.io/v1beta2/volumes": [lh("pv-nc", "nextcloud-data"), lh("pv-scratch", "scratch"),
                                                   lh("pv-old", "mosquitto-appdata", "Released"),
@@ -53,10 +53,10 @@ class VolumeUseTests(unittest.TestCase):
             if "engines" in path:
                 return {"items": []}
             return {"items": []}
-        server.kget = kget
+        server.KUBE_HELPERS.kget = kget
 
     def tearDown(self):
-        server.kget = self.saved
+        server.KUBE_HELPERS.kget = self.saved
 
     def rows(self):
         return {row["pvc_name"] + ("(old)" if row["name"] == "pv-old" else ""): row for row in STORAGE.get_volumes()}

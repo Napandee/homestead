@@ -23,7 +23,7 @@ class PlatformWorkloadTests(unittest.TestCase):
                      deployment("harvester-system", "virt-api", "registry.suse.com/virt-api:v1.4.0"),
                      deployment("lab", "plex", "lscr.io/linuxserver/plex:latest")]},
                  "/api/v1/pods": {"items": []}}
-        with mock.patch.object(server, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})):
             rows = {(w["ns"], w["name"]): w for w in server.WORKLOADS.get_workloads()}
         self.assertNotIn(("harvester-system", "virt-api"), rows)
         virt = rows[("kubevirt", "virt-api")]
@@ -41,7 +41,7 @@ class PlatformWorkloadTests(unittest.TestCase):
             {"name": "media", "persistentVolumeClaim": {"claimName": "media"}},
             {"name": "scratch", "emptyDir": {}}]
         items = {"/apis/apps/v1/deployments": {"items": [plex]}, "/api/v1/pods": {"items": []}}
-        with mock.patch.object(server, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})):
             row = next(w for w in server.WORKLOADS.get_workloads() if w["name"] == "plex")
         self.assertEqual(["media", "plex-config"], row["claims"])
 

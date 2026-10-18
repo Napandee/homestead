@@ -52,7 +52,7 @@ class PlexOnK3sTests(unittest.TestCase):
                "spec": {"type": "LoadBalancer", "selector": {"app": "plex"}, "ports": [{"port": 32400}]}}
         items = {"/apis/apps/v1/deployments": {"items": [dep]}, "/api/v1/pods": {"items": [pod]},
                  "/api/v1/services": {"items": [svc]}}
-        with mock.patch.object(server, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})), \
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})), \
                 mock.patch.object(server.NETWORK, "servicelb_present", return_value=True):
             plex = server.WORKLOADS.get_workloads()[0]
         self.assertIn("ServiceLB, publishing this app's own Service", plex["pods"][0]["unplaced"])

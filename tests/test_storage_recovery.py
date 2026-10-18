@@ -204,7 +204,7 @@ class StorageRecoveryTests(unittest.TestCase):
             handler._client_ip = lambda: "127.0.0.1"
             handler._send = mock.Mock()
             with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
-                    mock.patch.object(server, "kget", self.cluster.read), \
+                    mock.patch.object(server.KUBE_HELPERS, "kget", self.cluster.read), \
                     mock.patch.object(server, "storage_helper_admission", self.helper), \
                     mock.patch.object(server, "storage_restart_admission", self.restart), \
                     mock.patch.object(rc, "ksend") as send:

@@ -28,7 +28,7 @@ class ComposeApplyTests(unittest.TestCase):
         self.controllers = {}
         self.pods = []
         self.sets = []
-        get = mock.patch.object(server, "kget", side_effect=self.get)
+        get = mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.get)
         features = mock.patch.object(server.HW, "features", return_value=[])
         deploy = mock.patch.object(server.DEPLOY, "run_deploy", side_effect=self._deploy)
         nodes = [{"name": "host", "status": "Ready", "schedulable": True, "hardware": {},
@@ -124,7 +124,7 @@ class ComposeApplyTests(unittest.TestCase):
 
     def test_parser_refuses_missing_or_paginated_inventory(self):
         for result in ({}, {"items": [], "metadata": {"continue": "next"}}):
-            with mock.patch.object(server, "kget", return_value=result), self.assertRaises(ValueError):
+            with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=result), self.assertRaises(ValueError):
                 server.DEPLOY_ROUTES.compose_report({"text": STACK, "namespace": "lab"})
 
     def test_unknown_selected_service_does_not_silently_create_subset(self):
@@ -179,7 +179,7 @@ class ComposeApplyTests(unittest.TestCase):
         handler._body = lambda: {"text": STACK, "namespace": "lab"}
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server, "ksend") as send:
+        with mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             handler.do_POST()
         send.assert_not_called()
         self.assertEqual([], self.created)

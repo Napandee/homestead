@@ -352,7 +352,7 @@ class ImportJobTests(unittest.TestCase):
         handler._send = mock.Mock()
         with mock.patch.object(imports, "import_cleanup_plan", return_value=plan), \
              mock.patch.object(imports, "delete_import", return_value=result) as cleanup, \
-             mock.patch.object(server, "ksend") as send, mock.patch.object(server, "guard_managed_smb"):
+             mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(server, "guard_managed_smb"):
             handler.do_POST()
         send.assert_not_called()
         return handler._send.call_args.args, cleanup

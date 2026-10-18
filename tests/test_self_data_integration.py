@@ -32,13 +32,13 @@ class MutationHooksTests(unittest.TestCase):
 
     def test_kubernetes_mutation_is_blocked_before_any_dispatch(self):
         self.held()
-        with mock.patch.object(server.STORAGE_GUARD, "send") as guarded, mock.patch.object(server, "_ksend") as raw:
-            with self.assertRaises(Held): server.ksend("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/source")
+        with mock.patch.object(server.STORAGE_GUARD, "send") as guarded, mock.patch.object(server.KUBE_HELPERS, "_ksend") as raw:
+            with self.assertRaises(Held): server.KUBE_HELPERS.ksend("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/source")
             guarded.assert_not_called(); raw.assert_not_called()
 
     def test_unfenced_install_keeps_existing_storage_guard(self):
         with mock.patch.object(server.STORAGE_GUARD, "send", return_value={"ok": True}) as guarded:
-            self.assertEqual({"ok": True}, server.ksend("POST", "/api/v1/namespaces/lab/pods", {}))
+            self.assertEqual({"ok": True}, server.KUBE_HELPERS.ksend("POST", "/api/v1/namespaces/lab/pods", {}))
             guarded.assert_called_once()
 
     def test_job_start_cannot_persist_after_freeze(self):
@@ -108,9 +108,9 @@ class MutationHooksTests(unittest.TestCase):
         marker = server.SELF_DATA_FENCE.A.pointer("lab", c.anchor.state, c.handle["uid"])
         with mock.patch.object(server.SELF, "NS", "lab"), \
                 mock.patch.object(server.SELF_DATA_FENCE, "read_marker", return_value=marker), \
-                mock.patch.object(server, "kget", side_effect=c.read), \
+                mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=c.read), \
                 mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("no resolver polling")), \
-                mock.patch.object(server, "ksend", side_effect=AssertionError("status must not mutate")):
+                mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=AssertionError("status must not mutate")):
             handler = object.__new__(server.H)
             handler.path = "/api/self/data/handoff/" + c.handle["operation"]
             handler._guard = mock.Mock(return_value=False)
@@ -125,7 +125,7 @@ class MutationHooksTests(unittest.TestCase):
 
     def test_status_route_does_not_discover_move_by_name_without_local_receipt(self):
         with mock.patch.object(server.SELF_DATA_FENCE, "read_marker", return_value=None), \
-                mock.patch.object(server, "kget") as read:
+                mock.patch.object(server.KUBE_HELPERS, "kget") as read:
             self.assertIsNone(server.self_data_handoff_status("a" * 24))
             read.assert_not_called()
 
@@ -134,7 +134,7 @@ class MutationHooksTests(unittest.TestCase):
         marker = server.SELF_DATA_FENCE.A.pointer("lab", c.anchor.state, c.handle["uid"])
         with mock.patch.object(server.SELF, "NS", "lab"), \
                 mock.patch.object(server.SELF_DATA_FENCE, "read_marker", return_value=marker), \
-                mock.patch.object(server, "kget", side_effect=OSError("private upstream error")) as read:
+                mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=OSError("private upstream error")) as read:
             self.assertIsNone(server.self_data_handoff_status("f" * 24))
             read.assert_not_called()
             status = server.self_data_handoff_status(c.handle["operation"])

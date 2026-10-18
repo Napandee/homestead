@@ -147,7 +147,7 @@ class StorageGuardTests(unittest.TestCase):
 
     def test_snapshot_orchestration_cannot_stop_workloads_or_call_longhorn_rest(self):
         item = {"id": "snapshot", "kind": "snapshot-revert", "ref": {"volume": "longhorn-different-name"}}
-        with mock.patch.object(server, "kget", self.read), \
+        with mock.patch.object(server.KUBE_HELPERS, "kget", self.read), \
                 mock.patch.object(server.REVERT, "resolve") as revert, \
                 mock.patch.object(server.REVERT, "cancel_run") as cancel, \
                 mock.patch.object(server.SNAPSHOT_DELETE, "resume_resolve") as delete:
@@ -180,8 +180,8 @@ class StorageGuardTests(unittest.TestCase):
         plan = {"namespace": "lab", "name": "source", "pv": {}, "longhorn": {}, "actions": {}}
         self.assertTrue(guard.review(plan, ops, self.read)["blocked"])
         self.assertFalse(plan["actions"]["delete_data"]["enabled"])
-        with mock.patch.object(server, "_ksend") as raw:
-            with self.assertRaises(ValueError): server.ksend("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/source")
+        with mock.patch.object(server.KUBE_HELPERS, "_ksend") as raw:
+            with self.assertRaises(ValueError): server.KUBE_HELPERS.ksend("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/source")
             raw.assert_not_called()
 
     def test_unreadable_history_or_partial_pv_list_never_authorizes_deletion(self):

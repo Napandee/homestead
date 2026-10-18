@@ -26,7 +26,7 @@ class DeployCapacityTests(unittest.TestCase):
         for patch in (mock.patch.object(review, "_key", return_value=b"unit-test-review-key"),
                       mock.patch.object(place, "kget", side_effect=self.get),
                       mock.patch.object(place, "ksend", self.send),
-                      mock.patch.object(server, "ksend", self.send),
+                      mock.patch.object(server.KUBE_HELPERS, "ksend", self.send),
                       mock.patch.object(place, "get_nodes", side_effect=lambda: self.nodes),
                       mock.patch.object(place, "hardware_features", return_value=[]),
                       mock.patch.object(server.HW, "features", return_value=[]),

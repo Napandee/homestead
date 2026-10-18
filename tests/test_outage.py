@@ -139,7 +139,7 @@ class ServerTests(unittest.TestCase):
     def test_only_the_annotation_changes(self):
         import server
         sent = []
-        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
+        with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
              mock.patch.object(server, "guard_managed_smb"):
             r = server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate",
                                            "actions": {"restart": {"after_min": 5, "max": 3}}})
@@ -151,7 +151,7 @@ class ServerTests(unittest.TestCase):
     def test_a_vm_on_automatic_monitoring_cannot_be_restarted(self):
         import server
         vm = {"metadata": {"annotations": {}}}
-        with mock.patch.object(server, "kget", return_value=vm), mock.patch.object(server, "ksend"):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=vm), mock.patch.object(server.KUBE_HELPERS, "ksend"):
             with self.assertRaises(ValueError):
                 server.OUTAGE.set_actions({"kind": "vm", "ns": "lab", "name": "ha", "actions": {"restart": {"after_min": 5, "max": 1}}})
             vm["metadata"]["annotations"]["homestead.io/uptime"] = "tcp:22"

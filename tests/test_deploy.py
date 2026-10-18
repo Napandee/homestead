@@ -389,7 +389,7 @@ class DeployOptionsTests(unittest.TestCase):
                 return {"items": [{"metadata": {"name": "longhorn-r2"}}]}
             raise AssertionError(path)
 
-        with mock.patch.object(server, "kget", side_effect=get):
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=get):
             options = server.DEPLOY_ROUTES.deploy_options("lab")
         self.assertEqual(["ReadWriteMany"], options["pvcs"][0]["access_modes"])
         self.assertEqual("pvc", options["deployments"][0]["volumes"][0]["kind"])
