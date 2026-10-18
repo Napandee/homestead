@@ -1,12 +1,20 @@
-"""Kubernetes API helpers that lived in server.py: the reads and writes
-everything goes through (kget, ksend and the transport _ksend), the guarded
-write path ksend takes, who may write to a workload, raw and table reads,
-path checks, log search reads, and CPU, memory and age parsing.
+"""Homestead's Kubernetes client: the reads and writes everything goes
+through, and the API helpers that lived in server.py (#594 moved them here as
+homestead_kube_helpers; #619 grew it into this client).
+
+Reads: get, get_optional (None when the object is not there), items (a whole
+list or an error). Writes: send and delete_if_present, which go round
+WRITE_GUARDS in order before the transport _ksend. kget and ksend stay as the
+old names; the new functions call them, so a test that patches kget or ksend
+here reaches the new functions too. Also here: who may write to a workload,
+raw and table reads, path checks, log search reads, and CPU, memory and age
+parsing.
 
 server.py binds what it still owns through bind_routes(), the same entry
 point every moved module has whether or not it declares ROUTES: each helper
 in ROUTE_NEEDS is looked up in server.py when it is called; each name in
-VALUES is server.py's own value. Tests patch kget and ksend here."""
+VALUES is server.py's own value. Tests patch kget and ksend here (server.py
+imports this module as KUBE_HELPERS)."""
 import json
 import re
 import time
@@ -30,9 +38,9 @@ FENCE_READY = False
 def bind_routes(helpers, **values):
     missing = set(ROUTE_NEEDS) - set(helpers)
     if missing:
-        raise TypeError("homestead_kube_helpers needs " + ", ".join(sorted(missing)))
+        raise TypeError("homestead_kube needs " + ", ".join(sorted(missing)))
     if set(values) != set(VALUES):
-        raise TypeError("homestead_kube_helpers is bound with " + ", ".join(sorted(set(values) ^ set(VALUES))))
+        raise TypeError("homestead_kube is bound with " + ", ".join(sorted(set(values) ^ set(VALUES))))
     globals().update({name: helpers[name] for name in ROUTE_NEEDS})
     globals().update(values)
 
@@ -52,14 +60,59 @@ def api_path(path):
     return path
 
 
-def _guarded_ksend(method, path, body=None, ctype="application/json", timeout=15, *, shutdown_bypass=False):
+# Each write guard is guard(method, path, body, proceed): it checks or records
+# the write and returns proceed(), or wraps it, or raises to stop the write.
+# They run in this order around every write; the last one hands over to the
+# transport.
+def self_data_fence(method, path, body, proceed):
+    # Holds Homestead's own data still while the write runs, and refuses
+    # writes while that data is being moved.
     with self_data_activity():
         require_self_data_write()
-        authorize_workload_write(method, path, body)
-        CHANGES.note_write(method, path, body)
-        return STORAGE_GUARD.send(method, path, body,
-                                  lambda: _ksend(method, path, body, ctype, timeout, shutdown_bypass=shutdown_bypass), OPS, kget,
-                                  own_controller=(SELF.NS, NAMES.BRAND))
+        return proceed()
+
+
+def workload_access(method, path, body, proceed):
+    authorize_workload_write(method, path, body)
+    return proceed()
+
+
+def change_note(method, path, body, proceed):
+    CHANGES.note_write(method, path, body)
+    return proceed()
+
+
+def storage_guard(method, path, body, proceed):
+    return STORAGE_GUARD.send(method, path, body, proceed, OPS, kget, own_controller=(SELF.NS, NAMES.BRAND))
+
+
+WRITE_GUARDS = [self_data_fence, workload_access, change_note, storage_guard]
+
+
+def add_write_guard(guard, *, before=None):
+    """Register a write guard: last, or just before the guard named before."""
+    if before is None:
+        WRITE_GUARDS.append(guard)
+        return
+    names = [existing.__name__ for existing in WRITE_GUARDS]
+    if before not in names:
+        raise ValueError(f"no write guard named {before}")
+    WRITE_GUARDS.insert(names.index(before), guard)
+
+
+def run_write_guards(method, path, body, dispatch):
+    guards = tuple(WRITE_GUARDS)
+
+    def step(index):
+        if index == len(guards):
+            return dispatch()
+        return guards[index](method, path, body, lambda: step(index + 1))
+    return step(0)
+
+
+def _guarded_ksend(method, path, body=None, ctype="application/json", timeout=15, *, shutdown_bypass=False):
+    return run_write_guards(method, path, body,
+                            lambda: _ksend(method, path, body, ctype, timeout, shutdown_bypass=shutdown_bypass))
 
 
 def _auth_ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -179,6 +232,63 @@ def kget(path, timeout=10):
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
     return _guarded_ksend(method, path, body, ctype, timeout)
+
+
+def get(path, **options):
+    return kget(path, **options)
+
+
+def get_optional(path, **options):
+    """The object, or None when it is not there (404). Any other failure
+    raises: a read that failed is not an object that is missing."""
+    try:
+        return kget(path, **options)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        error.close()
+        return None
+
+
+def items(path, optional_group=None):
+    """Every row of a list, or an error: never a list that failed, came back
+    without items, or was cut short (continue). A 429 is retried by kget.
+    optional_group names an API group that may not be installed (say
+    snapshot.storage.k8s.io): a 404 is then an empty list if API discovery
+    confirms the group is absent, and an error if the group is there."""
+    try:
+        listing = kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code != 404 or not optional_group:
+            raise
+        groups = kget("/apis").get("groups")
+        if not isinstance(groups, list) or any(not isinstance(g, dict) or not g.get("name") for g in groups):
+            raise ValueError("Kubernetes did not say which APIs it serves; refresh and try again")
+        if any(g["name"] == optional_group for g in groups):
+            raise
+        error.close()
+        return []
+    if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
+            or (listing.get("metadata") or {}).get("continue")):
+        raise ValueError(f"Kubernetes returned an incomplete list for {path}; refresh and try again")
+    if any(not isinstance(row, dict) for row in listing["items"]):
+        raise ValueError(f"Kubernetes returned a list with invalid entries for {path}; refresh and try again")
+    return listing["items"]
+
+
+def send(method, path, body=None, **options):
+    return ksend(method, path, body, **options)
+
+
+def delete_if_present(path, body=None, **options):
+    """Delete it; None when it was already gone (404). Any other failure raises."""
+    try:
+        return ksend("DELETE", path, body, **options)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        error.close()
+        return None
 
 
 def require_workload_target(ns, name):

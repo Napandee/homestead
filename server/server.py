@@ -188,8 +188,8 @@ from homestead_self_data_server import (
 )
 MOVED.update(dict.fromkeys(("_require_no_data_handoff", "_self_data_helper_image", "homestead_data_volume"), SELF_DATA_ROUTES))
 SELF_DATA_ROUTES.bind_routes(_late(*SELF_DATA_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in SELF_DATA_ROUTES.VALUES})
-import homestead_kube_helpers as KUBE_HELPERS
-from homestead_kube_helpers import (
+import homestead_kube as KUBE_HELPERS
+from homestead_kube import (
     _auth_ksend, _guarded_ksend, _never_started, age_secs, api_path, kget, ksend, ktable,
     logsearch_read, parse_cpu, parse_mem, raw_get,
 )
