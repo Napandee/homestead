@@ -41,7 +41,7 @@ class RolloutCapacityTests(unittest.TestCase):
                       mock.patch.object(place, "get_nodes", side_effect=lambda: self.nodes),
                       mock.patch.object(place, "hardware_features", return_value=[]),
                       mock.patch.object(server.HW, "features", return_value=[]),
-                      mock.patch.object(server, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
+                      mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
                       mock.patch.object(review, "_key", return_value=b"test-review-key")):
             patch.start()
             self.addCleanup(patch.stop)

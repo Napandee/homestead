@@ -33,7 +33,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
                       mock.patch.object(server, "vm_default_class", return_value="storage"),
                       mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
                       mock.patch.object(server.PLACE, "hardware_features", return_value=[]),
-                      mock.patch.object(server, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
+                      mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS),
                       mock.patch.object(review, "_key", return_value=b"create-review-tests")):
             patch.start()
             self.addCleanup(patch.stop)

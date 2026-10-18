@@ -249,7 +249,7 @@ class ReviewTests(unittest.TestCase):
              mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("must not poll resolvers")), \
              mock.patch.object(server.STORAGE_RUNTIME, "require_self_data", return_value=[{"protocol": 1}]) as runtime, \
              mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=AssertionError("review must not mutate")), \
-             mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
+             mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             handler.do_POST()
         self.assertEqual(200, handler._send.call_args.args[0], handler._send.call_args.args)
         self.assertIn("capacity_token", handler._send.call_args.args[1])

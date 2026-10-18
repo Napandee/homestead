@@ -13,16 +13,19 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_app_settings as APP_SETTINGS
 import homestead_auth as AUTH
 import homestead_config_backup as CONFIG
+import homestead_fleet as FLEET
 import homestead_hardware as HW
 import homestead_imports as IMP
 import homestead_names as NAMES
 import homestead_placement_mode as PLACEMODE
+import homestead_recovery as RECOVERY
 import homestead_routes as MODULE_ROUTES
 import homestead_setup as SETUP
 import homestead_updates as UPDATES
 
-ROUTE_NEEDS = ("_fleet_rename", "_settings_map", "kget", "ksend")
+ROUTE_NEEDS = ("kget", "ksend", "_settings_map")
 VALUES = ("DEFAULT_NS", "_cache")
+DEFAULT_APP_SETTINGS = APP_SETTINGS.DEFAULTS
 
 
 def bind_routes(helpers, **values):
@@ -89,3 +92,51 @@ ROUTES = {
     ("POST", "/api/config/backup"): ("admin", _config),
     ("POST", "/api/config/restore"): ("admin", _config),
 }
+
+
+def update_policy_status(settings=None, now=None):
+    """Return whether a manual managed update may start at the current UTC time."""
+    update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
+    policy = update.get("policy", "approval_required")
+    maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
+    duration = int(maintenance["duration_minutes"])
+    window_open = RECOVERY.window(maintenance, time.time() if now is None else now)[0]
+    if policy == "notify_only":
+        allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
+    elif policy == "maintenance_window" and not window_open:
+        allowed, reason = False, (f"Updates are limited to the {maintenance['start']} UTC "
+                                  f"maintenance window ({duration} minutes).")
+    else:
+        allowed, reason = True, "Explicit operator approval is required before rollout."
+    return {"policy": policy, "allows_install": allowed, "requires_approval": True,
+            "reason": reason, "window_open": window_open,
+            "maintenance": json.loads(json.dumps(maintenance))}
+
+
+def enforce_update_policy(body, settings=None, now=None):
+    status = update_policy_status(settings, now)
+    if not status["allows_install"]:
+        raise PermissionError(status["reason"])
+    if body.get("approved") is not True:
+        raise PermissionError("explicit approval is required before installing an image update")
+    return status
+
+
+def get_app_settings():
+    try:
+        cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{_settings_map()}")
+        raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
+        return APP_SETTINGS.validate(raw)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return APP_SETTINGS.validate({})
+        raise
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return APP_SETTINGS.validate({})
+
+
+def _fleet_rename():
+    try:
+        FLEET.refresh_name()
+    except Exception:
+        pass            # the next change, or their next look, carries it

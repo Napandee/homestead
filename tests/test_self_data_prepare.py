@@ -261,7 +261,7 @@ class PreparationTests(unittest.TestCase):
              mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=send), \
              mock.patch.object(server.SELF_DATA_ROUTES, "_self_data_helper_image", return_value=({}, IMAGE)), \
              mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "source", "classes": [{"name": "destination-class", "shareable": False}]}), \
-             mock.patch.object(server, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
+             mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             preview = post("/api/self/data/prepare/preview", self.body)
             self.assertEqual([], OPS._read())
             started = post("/api/self/data/prepare", {**self.body, "confirm_capacity": True, "capacity_token": preview["capacity_token"]})

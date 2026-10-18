@@ -198,8 +198,9 @@ from homestead_names_helpers import (
 NAMES_HELPERS.bind_routes(_late(*NAMES_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in NAMES_HELPERS.VALUES})
 import homestead_settings_helpers as SETTINGS_HELPERS
 from homestead_settings_helpers import (
-    _config_restored, save_app_settings,
+    _config_restored, get_app_settings, save_app_settings,
 )
+MOVED.update(dict.fromkeys(("_fleet_rename", "enforce_update_policy", "get_app_settings", "update_policy_status"), SETTINGS_HELPERS))
 SETTINGS_HELPERS.bind_routes(_late(*SETTINGS_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in SETTINGS_HELPERS.VALUES})
 import homestead_web_paths as WEB_PATHS
 from homestead_web_paths import (
@@ -310,60 +311,12 @@ def cached(key, ttl, fn):
     return v
 
 
-def update_policy_status(settings=None, now=None):
-    """Return whether a manual managed update may start at the current UTC time."""
-    update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
-    policy = update.get("policy", "approval_required")
-    maintenance = update.get("maintenance") or DEFAULT_APP_SETTINGS["updates"]["maintenance"]
-    duration = int(maintenance["duration_minutes"])
-    window_open = RECOVERY.window(maintenance, time.time() if now is None else now)[0]
-    if policy == "notify_only":
-        allowed, reason = False, "Cluster policy is notify only; an admin must change it before installing."
-    elif policy == "maintenance_window" and not window_open:
-        allowed, reason = False, (f"Updates are limited to the {maintenance['start']} UTC "
-                                  f"maintenance window ({duration} minutes).")
-    else:
-        allowed, reason = True, "Explicit operator approval is required before rollout."
-    return {"policy": policy, "allows_install": allowed, "requires_approval": True,
-            "reason": reason, "window_open": window_open,
-            "maintenance": json.loads(json.dumps(maintenance))}
-
-
-def enforce_update_policy(body, settings=None, now=None):
-    status = update_policy_status(settings, now)
-    if not status["allows_install"]:
-        raise PermissionError(status["reason"])
-    if body.get("approved") is not True:
-        raise PermissionError("explicit approval is required before installing an image update")
-    return status
-
-
 def _settings_map():
     return NAMES.object_name("settings", DEFAULT_NS)
 
 
-def get_app_settings():
-    try:
-        cm = KUBE_HELPERS.kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{_settings_map()}")
-        raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
-        return APP_SETTINGS.validate(raw)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return APP_SETTINGS.validate({})
-        raise
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return APP_SETTINGS.validate({})
-
-
-def _fleet_rename():
-    try:
-        FLEET.refresh_name()
-    except Exception:
-        pass            # the next change, or their next look, carries it
-
-
 def app_settings_payload():
-    settings = json.loads(json.dumps(cached("settings", 15, get_app_settings)))
+    settings = json.loads(json.dumps(cached("settings", 15, SETTINGS_HELPERS.get_app_settings)))
     try:
         kube = KUBE_HELPERS.kget("/version").get("gitVersion", "")
     except Exception:
@@ -425,7 +378,7 @@ def guard_managed_smb(ns, name):
 
 def workload_start_plan(ns, name, replicas=1):
     ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
-    threshold = get_app_settings()["thresholds"]["memory"]["critical"]
+    threshold = SETTINGS_HELPERS.get_app_settings()["thresholds"]["memory"]["critical"]
     return PLACE.start_plan(ns, name, replicas, threshold)
 
 
@@ -834,7 +787,7 @@ ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity, versio
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
-           site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
+           site=lambda: (cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
            address=fleet_address, earlier=lambda: (f"http://{LB_IP}:8088",) if LB_IP else ())
 MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
@@ -872,7 +825,7 @@ CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
-             channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
+             channel=lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
@@ -937,7 +890,7 @@ import homestead_storage_runtime as STORAGE_RUNTIME
 
 
 def storage_restart_admission(item, proposals):
-    return STORAGE_ADMISSION.plan(item, proposals, KUBE_HELPERS.kget, PLACE.get_nodes(), get_app_settings()["thresholds"]["memory"]["critical"])
+    return STORAGE_ADMISSION.plan(item, proposals, KUBE_HELPERS.kget, PLACE.get_nodes(), SETTINGS_HELPERS.get_app_settings()["thresholds"]["memory"]["critical"])
 
 
 def storage_helper_admission(item, manifest):
@@ -1058,7 +1011,7 @@ VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(ann
 # Looked up as each call is made, so what a test puts in their place is used.
 VM_REVIEW.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), DEFAULT_NS,
                lambda *a, **k: _dns_name(*a, **k), lambda current: rollout_review_context(current),
-               lambda: get_app_settings(), lambda *a: vm_default_class(*a), lambda ip: vm_address_problem(ip),
+               lambda: SETTINGS_HELPERS.get_app_settings(), lambda *a: vm_default_class(*a), lambda ip: vm_address_problem(ip),
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
@@ -1066,7 +1019,7 @@ STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node
                      selectable_storage_classes, shared_storage_classes, storage_class_facts)
 STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, storage_runtime_check)
 LHCAP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status)
-LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True),
+LHREBUILD.bind(kget, ksend, lambda: (SETTINGS_HELPERS.get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True),
                settings=get_app_settings, save_settings=save_app_settings)
 import homestead_lhv2_setup as LHV2_SETUP
 LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
@@ -1098,15 +1051,15 @@ FORECAST.bind(DATA_DIR, lambda: (cached("vol", 8, STORAGE.get_volumes), LHCAP.st
 USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: KUBE_HELPERS.kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
-PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, get_app_settings), SYS_NS)
+PLACEMODE.bind(kget, ksend, lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
 CAPACITY.bind(kget, NODES.node_impact, NODES._impact_sources, FLOW._flow_owner, lambda pod: NAMES.label_of(pod["metadata"], "task"))
-RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, get_app_settings), OPS,
+RECOVERY.bind(DATA_DIR, kget, lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings), OPS,
               lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
               (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,
               UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
               HOSTACCESS.require_target_as, OPS)
-MCP.bind(DATA_DIR, lambda: cached("settings", 15, get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
+MCP.bind(DATA_DIR, lambda: cached("settings", 15, SETTINGS_HELPERS.get_app_settings), HOMESTEAD_VERSION, ROUTE_POLICY.role, lambda m, p, b: (
     KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "") if p in ROUTE_POLICY.TARGET_CHECKED else None),
     kget, lambda ns, name: delete_workload(ns, name))
 
@@ -1289,7 +1242,7 @@ def start_self_data_move(body, actor):
             return STORAGE_RUNTIME.require_self_data(OPS, pods, ns, NAMES.BRAND, HOMESTEAD_VERSION, claim,
                 own_uid=pod["metadata"]["uid"], data_mount=DATA_DIR)
         return SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
-            threshold=get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
+            threshold=SETTINGS_HELPERS.get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
             runtime_check=runtimes, clock=time.time, route_check=SELF_DATA_ROUTE.review)
     with OPS._lock:
         SELF_DATA_ROUTES._require_no_data_handoff(KUBE_HELPERS.kget, ns)
@@ -1390,7 +1343,7 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
      "objects": [("configmaps", DEFAULT_NS, IMP._sources_map())]},
     {"id": "vmstore", "label": "VM image store", "detail": "The cloud images kept, and whether they refresh",
      "objects": [("configmaps", DEFAULT_NS, VMSTORE.CONFIGMAP)]},
-], site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
+], site=lambda: (cached("settings", 15, SETTINGS_HELPERS.get_app_settings) or {}).get("site_name", ""),
     after_restore=_config_restored)
 CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, NODES.get_nodes), lambda: get_overview())
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)

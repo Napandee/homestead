@@ -103,14 +103,14 @@ class ImageUpdateCapacityTests(unittest.TestCase):
 
     def test_policy_change_after_review_blocks(self):
         body = self.reviewed()
-        with mock.patch.object(server, "enforce_update_policy", side_effect=PermissionError("window closed")):
+        with mock.patch.object(server.SETTINGS_HELPERS, "enforce_update_policy", side_effect=PermissionError("window closed")):
             result, send, _ = self.call("/api/image-updates/apply", body)
         self.assertEqual(403, result[0])
         send.assert_not_called()
 
     def test_policy_is_rechecked_after_slow_preparation(self):
         body = self.reviewed()
-        with mock.patch.object(server, "enforce_update_policy", side_effect=[{}, PermissionError("window closed")]), \
+        with mock.patch.object(server.SETTINGS_HELPERS, "enforce_update_policy", side_effect=[{}, PermissionError("window closed")]), \
                 mock.patch.object(updates, "ksend") as send:
             with self.assertRaisesRegex(PermissionError, "window closed"):
                 server.CLUSTER_ROUTES.reviewed_image_update(body, "update")

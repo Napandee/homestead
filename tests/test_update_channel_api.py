@@ -23,7 +23,7 @@ class ChannelAPITests(unittest.TestCase):
         with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=copy.deepcopy(current)), \
              mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
              mock.patch.object(server.UPDATES, "invalidate") as invalidate, \
-             mock.patch.object(server, "_fleet_rename"):
+             mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
             handler.do_POST()
         return handler._send.call_args.args, send, invalidate
 
