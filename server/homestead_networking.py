@@ -589,20 +589,14 @@ def node_addresses_only():
     """k3s's ServiceLB: every LoadBalancer Service is published on every
     node's own address, and a VIP asked for is ignored. There is no address
     to choose, only a port, which must be free across all of them."""
-    try:
-        return PLATFORM.detect().get("load_balancer") == "servicelb"
-    except Exception:
-        return False
+    return PLATFORM.detect().get("load_balancer") == "servicelb"
 
 
 def servicelb_present():
     """ServiceLB is there to put a Service on the nodes' own addresses -
     alone, or beside kube-vip, which then gives VIPs to the Services that
     ask for one."""
-    try:
-        return bool(PLATFORM.detect().get("servicelb"))
-    except Exception:
-        return False
+    return bool(PLATFORM.detect().get("servicelb"))
 
 
 def _node_port_owner(state, namespace, service_name, ports):

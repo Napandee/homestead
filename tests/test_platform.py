@@ -1,6 +1,7 @@
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,6 +125,107 @@ class PlatformTests(unittest.TestCase):
         guide = self.with_args("not json")
         self.assertEqual(([], False), (guide["shared_settings"], guide["settings_known"]))
         self.assertIn("--default-local-storage-path", guide["shared_flags"])
+
+
+def failing(path_failing, base, error=None):
+    """base, except that one read fails the way a timeout or a 500 does."""
+    def get(path):
+        if path == path_failing:
+            raise error or OSError("timed out")
+        return base(path)
+    return get
+
+
+class FailedReadTests(unittest.TestCase):
+    """A read that failed is not "absent", and is never kept as the answer (#620)."""
+    LONGHORN_K3S = ({"helm.cattle.io", "longhorn.io", "kubevirt.io"}, "v1.31.4+k3s1")
+
+    def setUp(self):
+        self.addCleanup(PLATFORM.bind, None)
+        self.addCleanup(PLATFORM._cached.update, at=0.0, value=None, failed_at=0.0)
+        PLATFORM._cached.update(at=0.0, value=None, failed_at=0.0)
+
+    def good(self):
+        PLATFORM.bind(fake(*self.LONGHORN_K3S))
+        first = PLATFORM.detect()
+        PLATFORM._cached["at"] = 0.0          # past its five minutes
+        return first
+
+    def test_a_failed_read_keeps_the_last_good_answer(self):
+        first = self.good()
+        for path in ("/apis", "/api/v1/nodes"):
+            with self.subTest(path=path):
+                PLATFORM._cached["failed_at"] = 0.0
+                PLATFORM.bind(failing(path, fake(*self.LONGHORN_K3S)))
+                self.assertEqual(first, PLATFORM.detect())
+                self.assertTrue(PLATFORM.detect()["longhorn"])
+
+    def test_the_failure_is_not_kept_and_the_next_read_counts(self):
+        self.good()
+        PLATFORM.bind(failing("/apis", fake(*self.LONGHORN_K3S)))
+        PLATFORM.detect()
+        PLATFORM._cached["failed_at"] = 0.0   # 15 s later
+        PLATFORM.bind(fake({"helm.cattle.io", "longhorn.io", "kubevirt.io", "cdi.kubevirt.io"}, "v1.31.4+k3s1"))
+        self.assertTrue(PLATFORM.detect()["cdi"])
+
+    def test_after_a_failure_the_cluster_is_asked_again_only_after_a_while(self):
+        self.good()
+        calls = []
+        broken = failing("/apis", fake(*self.LONGHORN_K3S))
+        PLATFORM.bind(lambda path: calls.append(path) or broken(path))
+        PLATFORM.detect()
+        asked = len(calls)
+        PLATFORM.detect()
+        self.assertEqual(asked, len(calls), "asked again at once")
+        PLATFORM.detect(force=True)
+        self.assertGreater(len(calls), asked, "a forced look asks again")
+
+    def test_a_read_that_hangs_before_failing_still_waits_before_asking_again(self):
+        self.good()
+        clock, calls = [1000.0], []
+        broken = failing("/apis", fake(*self.LONGHORN_K3S))
+
+        def slow(path):
+            calls.append(path)
+            clock[0] += 20                    # each read hangs until it times out
+            return broken(path)
+        PLATFORM.bind(slow)
+        with mock.patch.object(PLATFORM.time, "time", lambda: clock[0]):
+            PLATFORM.detect()
+            asked = len(calls)
+            PLATFORM.detect()
+        self.assertEqual(asked, len(calls), "asked again at once after a slow failure")
+
+    def test_callers_that_act_on_it_do_not_guess_either(self):
+        import homestead_networking as NETWORKING
+        import homestead_runtime as RUNTIME
+        PLATFORM.bind(failing("/apis", fake(*self.LONGHORN_K3S)))
+        for ask in (RUNTIME.binaries, NETWORKING.node_addresses_only, NETWORKING.servicelb_present):
+            with self.subTest(ask=ask.__name__):
+                PLATFORM._cached.update(at=0.0, value=None, failed_at=0.0)
+                with self.assertRaisesRegex(ValueError, "could not read"):
+                    ask()
+
+    def test_with_no_good_answer_yet_it_says_so_instead_of_guessing(self):
+        for path in ("/apis", "/api/v1/nodes"):
+            with self.subTest(path=path):
+                PLATFORM._cached.update(at=0.0, value=None, failed_at=0.0)
+                PLATFORM.bind(failing(path, fake(*self.LONGHORN_K3S)))
+                with self.assertRaisesRegex(ValueError, "could not read"):
+                    PLATFORM.detect()
+
+    def test_kube_vip_that_could_not_be_read_is_not_absent(self):
+        base = fake({"helm.cattle.io"}, "v1.31.4+k3s1")
+        error = urllib.error.HTTPError(PLATFORM.KUBE_VIP_DAEMONSETS[0], 500, "boom", None, None)
+        PLATFORM.bind(failing(PLATFORM.KUBE_VIP_DAEMONSETS[0], base, error))
+        with self.assertRaisesRegex(ValueError, "could not read"):
+            PLATFORM.detect()
+
+    def test_servicelb_on_rke2_that_could_not_be_read_is_not_off(self):
+        base = fake({"helm.cattle.io"}, "v1.31.4+rke2r1", daemonsets=("svclb-homestead-abc",))
+        PLATFORM.bind(failing("/apis/apps/v1/namespaces/kube-system/daemonsets", base))
+        with self.assertRaisesRegex(ValueError, "could not read"):
+            PLATFORM.detect()
 
 if __name__ == "__main__":
     unittest.main()

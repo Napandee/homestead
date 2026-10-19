@@ -12,10 +12,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_console as CONSOLE
 import homestead_operations as OPS
+from fakes.platform import plain_platform
 
 
 class ConsoleSettingsTests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

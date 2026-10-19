@@ -29,11 +29,9 @@ K3S_BIN = "/var/lib/rancher/k3s/data/current/bin"
 
 
 def binaries():
-    try:
-        distribution = PLATFORM.detect().get("distribution", "")
-    except Exception:
-        distribution = ""
-    if distribution == "k3s":
+    # k3s and RKE2 keep them in different places: not knowing which is an
+    # error, not RKE2.
+    if PLATFORM.detect().get("distribution", "") == "k3s":
         return {"crictl": K3S_BIN + "/crictl", "ctr": K3S_BIN + "/ctr"}
     return {"crictl": "/var/lib/rancher/rke2/bin/crictl", "ctr": "/var/lib/rancher/rke2/bin/ctr"}
 

@@ -15,6 +15,7 @@ class ServiceLbTests(unittest.TestCase):
     def setUp(self):
         base = test_networking.NetworkingTests("setUp")
         base.setUp()
+        self.addCleanup(base.doCleanups)
         self.sent = base.sent
         # A k3s cluster: Traefik and Homestead published on the node's address.
         node = "192.0.2.210"
