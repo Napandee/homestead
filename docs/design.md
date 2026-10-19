@@ -617,7 +617,11 @@ file and line, when it finds:
   used outside `views-workloads.js`;
 - more uses than today of older markup - `.note`, `.sec`, `deployCapacityHtml`,
   hand-written acknowledgement checkboxes and "I accept" wording. That count
-  only shrinks: lower it in the same change that removes some.
+  only shrinks: lower it in the same change that removes some;
+- more reads than today that turn a failure into an empty answer
+  (`.catch(() => [])` and the like). A read that failed is not "nothing
+  there": say it could not be read, and offer nothing that acts on a guess.
+  That count only shrinks too.
 
 It also checks this file still states those rules. Change a rule in both
 places at once; never quiet the test for one screen.

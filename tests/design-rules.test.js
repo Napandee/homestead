@@ -133,6 +133,13 @@ const LEGACY = [
   [/class="sec"/g, 66, "UI.section"],
   [/deployCapacityHtml\(/g, 14, "startReview or capacityHostTable for a new review"],
   [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],
+  // design.md, Reading the cluster (#620): a read that failed is not an empty
+  // answer. The page says it could not read, and offers nothing that acts on a guess.
+  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 94,
+    'catch(e => …) that marks what could not be read, or let the view show the error'],
+  // The same with the error named but dropped: catch(e => ({ error: e.message })) keeps it.
+  [/\.catch\(\s*(\w+)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{(?:(?!\b\1\b)[^)])*\}\))\s*\)/g, 0,
+    'catch(e => …) that keeps e.message, so the view can say what could not be read'],
   // design.md, Reviews (#500): an acknowledgement names what is accepted in a
   // few words, and a button names the result, never "…reviewed…".
   [/I accept\b/g, 0, 'a short UI.ack sentence that names what is accepted ("Start it anyway")'],

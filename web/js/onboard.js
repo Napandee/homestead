@@ -189,7 +189,14 @@ window.clusterCleanup = async (kind, name, force = false) => {
    a running node registers itself again. */
 window.clusterRemovePick = async () => {
   modal("Remove a host", '<div class="empty"><span class="spin2"></span>reading the hosts</div>', true);
-  const nodes = await api("/api/nodes").catch(() => []);
+  let nodes;
+  try { nodes = await api("/api/nodes"); }
+  catch (e) {
+    // Hosts that could not be read are not hosts that are all Ready (#620).
+    $("#mbody").innerHTML = `<div class="empty"><b>Could not read the hosts</b><br><span class="dim small">${esc(e.message)}</span></div>
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`;
+    return;
+  }
   const down = nodes.filter(n => n.status !== "Ready"), up = nodes.filter(n => n.status === "Ready");
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned apps and VMs before confirming.</p>

@@ -124,7 +124,8 @@ async function viewProtect() {
   if (platformLacks("longhorn", "Data protection")) return;
   const [d, objects, backupVolumes] = await Promise.all([
     api("/api/lh/overview"),
-    api("/api/objectstore").catch(() => ({ deployed: false })),
+    // Unread is not "not deployed": that would offer to set it up again (#620).
+    api("/api/objectstore").catch(e => ({ unread: e.message })),
     api("/api/lh/backupvolumes").catch(() => []),
   ]);
   STATE.data.lh = d;
@@ -139,10 +140,11 @@ async function viewProtect() {
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       `)}
 
-  ${objects.deployed ? "" : objectStoreCard(objects, tgt)}
+  ${objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [
       `<span class="tag ${cover === 100 ? "ok" : cover ? "warn" : "bad"}">${cover}% covered</span> ${d.protected} of ${d.total} volumes`,
-      objects.deployed ? `Backup storage <span class="tag ${objects.ready ? "ok" : "warn"}">${objects.ready ? "serving" : "starting"}</span>` : "",
+      objects.deployed ? `Backup storage <span class="tag ${objects.ready ? "ok" : "warn"}">${objects.ready ? "serving" : "starting"}</span>`
+        : objects.unread ? `Backup storage <span class="tag warn" data-tip="${esc("Could not read it: " + objects.unread)}">unknown</span>` : "",
       tgt.configured ? `Target <span class="tag ${tgt.available ? "ok" : "bad"}">${tgt.available ? "reachable" : "unavailable"}</span>` : '<span class="tag warn">no backup target</span>',
       `${d.backed_up ?? 0} backed up off the cluster`],
     `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
