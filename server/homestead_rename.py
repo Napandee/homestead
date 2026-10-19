@@ -236,12 +236,12 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 if time.monotonic() >= deadline:
                     raise Stopped("Original Deployment removal is still pending")
                 sleep(2)
-            with ops._lock:
-                items = ops._read()
+            with ops.transaction() as t:
+                items = t.items
                 item = next(row for row in items if row["id"] == ident)
                 item["ref"].update(phase="complete", retain_resources=False)
                 ops._finish(item, "succeeded", 100, "Rename complete. Volumes and service addresses were kept.")
-                ops._write(items)
+                t.save(items)
                 return {"ok": True, "renamed": True, "name": new, "renamed_from": old, "operation": ops._public(item)}
         except Exception as error:
             reason = str(error) if isinstance(error, Stopped) else "Cluster state or job storage could not be verified"

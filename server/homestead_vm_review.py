@@ -77,7 +77,7 @@ def vm_power_capacity_plan(body):
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     # A reset replaces the instance as a restart does, only without waiting for the guest.
     plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action="restart" if action == "reset" else action, current=current,
-                            warning_percent=threshold, expanded_spec=expanded_spec, power_intents=OPS._read())
+                            warning_percent=threshold, expanded_spec=expanded_spec, power_intents=OPS.stored())
     strategy = VMS._strategy(current)
     policy_after = "Always" if action == "start" and strategy == "Halted" else strategy
     plan["vm"]["policy_before"], plan["vm"]["policy_after"] = strategy, policy_after

@@ -242,7 +242,7 @@ def storage_volume_action(volume, action):
 def storage_legacy_cancel(item, options):
     if "storage_protocol" in item.get("ref", {}):
         raise ValueError("Use the storage move recovery review; legacy rollback is not supported for this job")
-    with OPS._lock, STORAGE_GUARD.dispatching(item):
+    with OPS.transaction(), STORAGE_GUARD.dispatching(item):
         return CANCEL.reclass_cancel(item, options)
 
 

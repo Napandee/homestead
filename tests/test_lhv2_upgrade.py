@@ -311,7 +311,7 @@ class UpgradeTests(unittest.TestCase):
         found = {'name': 'Longhorn', 'installed': 'v1.12.2', 'next': 'v1.13.0'}
         converting = {'kind': 'disk-v2-convert', 'status': 'running', 'ref': {'node': 'node-1', 'phase': 'erasing'}}
         with patch.object(C, '_component', return_value=found), patch.object(C, 'helm_upgrade') as helm, \
-                patch.object(C, 'OPS', SimpleNamespace(_read=lambda: [converting]), create=True):
+                patch.object(C, 'OPS', SimpleNamespace(stored=lambda: [converting]), create=True):
             with self.assertRaisesRegex(ValueError, 'Finish disk preparation'):
                 C.upgrade('longhorn', 'v1.13.0', {'v2_mode': 'live', 'confirm_backup': True})
             helm.assert_not_called()

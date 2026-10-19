@@ -266,8 +266,8 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
                     not identity.get("uid") or not identity.get("resourceVersion")):
                 raise ValueError("VM creation identity was not returned")
             if writer:
-                with ops._lock:
-                    current = next(row for row in ops._read() if row["id"] == operation["id"])
+                with ops.transaction() as t:
+                    current = next(row for row in t.items if row["id"] == operation["id"])
                     receipts = [entry for entry in current["ref"]["writes"] if entry["resource"] == {
                         "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ns, "name": node["name"]}]
                     if (not receipts or receipts[-1]["phase"] != "accepted" or receipts[-1]["identity"] != {

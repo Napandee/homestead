@@ -476,7 +476,7 @@ def _review(plan):
 def delete_reviewed(cfg):
     """Delete as reviewed, recorded as a job, under the jobs' lock so no
     storage job starts on the volume meanwhile."""
-    with OPS._lock:
+    with OPS.transaction():
         result = delete(cfg, validate=_review)
         result["operation"] = OPS.start(
             "volume-delete", f"Delete volume {result['name']}",
