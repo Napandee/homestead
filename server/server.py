@@ -584,12 +584,6 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(im
 UPDATES.pull_progress = _pull_progress
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
-OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, KUBE_HELPERS.kget)
-OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
-OPS.RESOLVERS[RENAME.KIND] = lambda item: RENAME.status(item, OPS)
-OPS.CANCELLERS[RENAME.KIND] = (lambda item: RENAME.recovery_plan(item, KUBE_HELPERS.kget, OPS),
-                              lambda item, options: RENAME.recovery_run(item, options, KUBE_HELPERS.kget, OPS))
-OPS.CLEANUPS.add(RENAME.KIND)
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
@@ -605,8 +599,6 @@ OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, KUBE_HELPERS.
 OPS.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, KUBE_HELPERS.kget, OPS),
                                 lambda item, options: COPY_JOB.recovery_run(item, options, KUBE_HELPERS.kget, KUBE_HELPERS.ksend, OPS))
 OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
-OPS.RESOLVERS[IMPORT_JOB.KIND] = lambda item: IMPORT_JOB.status(item, KUBE_HELPERS.kget)
-OPS.CANCELLERS[IMPORT_JOB.KIND] = (IMPORT_JOB.cancel_plan, IMPORT_JOB.cancel_run)
 import homestead_reclass as RECLASS
 import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_recovery as STORAGE_RECOVERY
@@ -795,10 +787,9 @@ HOST_BONDS.bind(HOSTRUN, kget, ksend, PLATFORM.detect)
 
 UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
 # Each module registers its own kinds of job (#622).
-for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS):
+for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS,
+                VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISKS, HELM, ADDONS):
     _module.register(OPS)
-OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
-OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
                   LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
                   lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
@@ -830,13 +821,6 @@ OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
 DISKS.bind(kget, ksend, NODES.node_temps)
 DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
 DISK_V2.protect_mutations(DISKS)
-OPS.RESOLVERS[DISK_V2.KIND] = DISK_V2.progress
-OPS.CANCELLERS[DISK_V2.KIND] = (DISK_V2.cancel_plan, DISK_V2.cancel_run)
-OPS.LOGGERS[DISK_V2.KIND] = DISK_V2.logs
-OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
-OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
-OPS.RESOLVERS["helm"] = HELM.job_status
-OPS.RESOLVERS["multus"] = ADDONS.multus_progress
 
 
 # Every job can be cancelled; what that does for each kind is said there.

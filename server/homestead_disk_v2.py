@@ -838,3 +838,10 @@ ROUTES = {
     ("POST", "/api/disks/v2/prepare-review"): ("admin", lambda request: prepare_review(request.body.get("id", ""))),
     ("POST", "/api/disks/v2/prepare"): ("admin", lambda request: prepare(request.body)),
 }
+
+
+def register(ops):
+    """The job store's entries for converting a disk to Longhorn V2 (#622)."""
+    ops.RESOLVERS[KIND] = progress
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)
+    ops.LOGGERS[KIND] = logs

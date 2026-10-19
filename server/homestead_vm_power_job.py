@@ -5,6 +5,7 @@ import time
 import urllib.error
 from urllib.parse import quote
 import homestead_shared as SHARED
+import homestead_kube as KUBE
 
 API = "/apis/kubevirt.io/v1"
 
@@ -133,3 +134,10 @@ def cancel_run(item, options):
     if item["ref"]["phase"] == "prepared":
         return "Cancelled before power dispatch; the approval remains consumed"
     return "Stopped tracking the accepted request; KubeVirt is unchanged and the approval remains consumed"
+
+
+def register(ops):
+    """The job store's entries for a VM power request (#622). The client is
+    looked up when asked, so a test that patches homestead_kube is the one used."""
+    ops.RESOLVERS["vm-power"] = lambda item: status(item, KUBE.kget)
+    ops.CANCELLERS["vm-power"] = (cancel_plan, cancel_run)

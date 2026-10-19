@@ -1005,3 +1005,9 @@ ROUTES = {
     ("POST", "/api/disks/inspect"): ("admin", lambda request: inspect_disk(str(request.body.get("node") or ""), str(request.body.get("device") or ""))),
     ("GET", "/api/disks"): ("viewer", lambda request: homestead_routes.cached("disks", 10, inventory)),
 }
+
+
+def register(ops):
+    """The job store's entries for retiring a disk (#622)."""
+    ops.RESOLVERS["disk-retire"] = retire_step
+    ops.RESUMABLE["disk-retire"] = retire_resumable

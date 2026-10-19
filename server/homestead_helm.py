@@ -377,3 +377,8 @@ ROUTES = {
     ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached("helm", 10, releases)),
     ("GET", "/api/helm/release"): ("viewer", lambda request: release((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
 }
+
+
+def register(ops):
+    """The job store's entry for a Helm install or upgrade (#622)."""
+    ops.RESOLVERS["helm"] = job_status
