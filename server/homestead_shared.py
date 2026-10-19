@@ -10,6 +10,7 @@ file beside the data, which Longhorn's RWX share (NFS) carries between pods.
 Writes go to a temporary name of their own before replacing the file, so two
 copies never write into the same half-finished file.
 """
+import copy
 import json
 import os
 import threading
@@ -155,6 +156,30 @@ class SharedLock:
 def temporary(path):
     """A temporary name no other thread or replica is writing."""
     return f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+
+
+class Unreadable(ValueError):
+    """A store on the data volume that is there but could not be read."""
+
+
+def read_json(path, default):
+    """A JSON store on the data volume. A missing file is a fresh copy of
+    default; a file that is there but cannot be read, is not JSON or holds
+    another kind of value raises Unreadable, so nothing is saved over it."""
+    name = os.path.basename(path)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except FileNotFoundError:
+        return copy.deepcopy(default)
+    except (OSError, ValueError) as error:
+        reason = getattr(error, "strerror", None) or "it is not valid JSON"
+        raise Unreadable(f"Homestead could not read {name} on its data volume ({reason}), so it changed nothing; "
+                         "the saved data is kept") from error
+    if not isinstance(value, type(default)):
+        raise Unreadable(f"{name} on Homestead's data volume does not hold what Homestead saved there, "
+                         "so it changed nothing; the saved data is kept")
+    return value
 
 
 def write_json(path, value, *, durable=False, mode=None, **dump):

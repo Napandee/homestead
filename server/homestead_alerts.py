@@ -378,9 +378,17 @@ DEVICES = [lambda user: []]
 # homestead_mcp sets it - so the bell and the sidebar can lead to /agents.
 AGENTS = [lambda: {"enabled": False, "pending": 0}]
 
+def _unknown(read, *args):
+    """The bell still answers when a store it shows could not be read: that part is unknown (None), not empty."""
+    try:
+        return read(*args)
+    except SHARED.Unreadable:
+        return None
+
+
 ROUTES = {
     ("GET", "/api/alerts"): ("viewer", lambda request: {
         "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
         "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
-        "devices": DEVICES[0](request.user), "agents": AGENTS[0]()}),
+        "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0])}),
 }
