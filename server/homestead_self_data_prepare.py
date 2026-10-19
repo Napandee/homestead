@@ -140,7 +140,7 @@ def start(body, reviewed, ops):
     cfg, public, context, ref = reviewed
     if body.get("confirm_capacity") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
         raise J.Held("Review destination preparation and acknowledge its capacity warnings before creating anything")
-    # The caller holds ops._lock while recomputing review and starting the job.
+    # The caller holds the job store's transaction() while recomputing review and starting the job.
     jobs = blocking_jobs(ops)
     if jobs:
         raise J.Held(blocked_message("Finish running or recovery jobs before preparing Homestead's destination", jobs))
@@ -263,8 +263,8 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
     if (not isinstance(body, dict) or not {"id"} <= set(body) <= {"id", "capacity_token", "confirm_close"}
             or not isinstance(body["id"], str) or not body["id"] or len(body["id"]) > 120):
         raise J.Held("Choose the cancelled data move to close")
-    with ops._lock:
-        items = ops._read()
+    with ops.transaction() as t:
+        items = t.items
         item = next((i for i in items if i["id"] == body["id"] and i.get("kind") == HANDOFF
                      and i.get("ref", {}).get("namespace") == namespace), None)
         if not item or not can_close_recovery(item):
@@ -292,14 +292,14 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
         item["updated_at"] = ops._now()
         ops._note(item, item["status"], item.get("progress", 100),
                   f"Recovery closed: Homestead runs on {ref.get('source')}; both volumes and the recovery audit retained")
-        ops._write(items)
+        t.save(items)
         return {"ok": True, "id": item["id"],
                 "detail": f"Closed. {ref.get('destination')} is kept and unused; remove it from Volumes when you no longer need it."}
 
 
 def blocking_jobs(ops, own_id=None):
     jobs = []
-    for item in ops._read():
+    for item in ops.stored():
         if item["id"] == own_id or (item.get("status") in ops.TERMINAL and not item.get("ref", {}).get("retain_resources")):
             continue
         if item.get("ref", {}).get("recovery_closed"):
@@ -331,8 +331,8 @@ def archive(body, actor, namespace, deployment, ops, *, start=False):
     if (not isinstance(body, dict) or not {"id"} <= set(body) <= {"id", "capacity_token", "confirm_archive"}
             or not isinstance(body["id"], str) or not body["id"] or len(body["id"]) > 120):
         raise J.Held("Choose a completed preparation to archive")
-    with ops._lock:
-        items = ops._read()
+    with ops.transaction() as t:
+        items = t.items
         item = next((i for i in items if i["id"] == body["id"] and i.get("kind") == KIND
                      and i.get("ref", {}).get("namespace") == namespace
                      and i.get("ref", {}).get("deployment", {}).get("name") == deployment), None)
@@ -352,5 +352,5 @@ def archive(body, actor, namespace, deployment, ops, *, start=False):
         ref["preparation_archived"] = True
         item["updated_at"] = ops._now()
         ops._note(item, item["status"], item.get("progress", 100), "Preparation record archived; volumes and receipts retained")
-        ops._write(items)
+        t.save(items)
         return {"ok": True, "id": item["id"], "detail": "Preparation archived. Both volumes and their creation receipts are retained."}
