@@ -5,8 +5,8 @@ until another snapshot exists; report that wait rather than promising space.
 """
 import re
 import time
-import urllib.error
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 
@@ -24,15 +24,6 @@ def identity(value):
     if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", str(value or "")):
         raise ValueError("invalid snapshot or volume name")
     return value
-
-
-def optional(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def source(snapshot):
@@ -83,7 +74,7 @@ def plan(volume, name):
         blockers.append("Longhorn has not identified this snapshot's source yet")
     if not snap.get("metadata", {}).get("uid") or not vol.get("metadata", {}).get("uid"):
         blockers.append("Snapshot or volume identity is unavailable")
-    purge = optional(f"{API}/settings/disable-snapshot-purge")
+    purge = KUBE.get_optional(f"{API}/settings/disable-snapshot-purge", read=kget)
     if purge and str(purge.get("value")).lower() == "true":
         blockers.append("Longhorn snapshot purge is disabled; enable it in Longhorn before requesting cleanup")
     return {"volume": volume, "name": name, "uid": snap["metadata"].get("uid", ""),
@@ -113,10 +104,10 @@ def resolve(item):
     ref = item["ref"]
     if time.time() - ref["since"] > TIMEOUT:
         return "failed", item.get("progress", 0), "Cleanup still pending after one hour. Longhorn may continue; inspect the snapshot/head dependency, then Carry on to monitor again."
-    volume = optional(f"{API}/volumes/{ref['volume']}")
+    volume = KUBE.get_optional(f"{API}/volumes/{ref['volume']}", read=kget)
     if not volume or volume["metadata"].get("uid") != ref["volume_uid"]:
         return "failed", 0, "Backing volume disappeared or changed; no further actions taken"
-    snap = optional(f"{API}/snapshots/{ref['name']}")
+    snap = KUBE.get_optional(f"{API}/snapshots/{ref['name']}", read=kget)
     if snap and snap["metadata"].get("uid") != ref["uid"]:
         return "failed", 0, "Snapshot identity changed; replacement left untouched"
     if ref["phase"] == "request" and snap and not snap["metadata"].get("deletionTimestamp"):

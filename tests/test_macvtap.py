@@ -165,7 +165,7 @@ class NetworkTests(network_fixture.HostInterfaceNetworkTests):
 class VmJoinTests(unittest.TestCase):
     def join(self, config):
         nad = {"spec": {"config": json.dumps(config)}}
-        with mock.patch.object(VMS, "_optional", lambda path: nad):
+        with mock.patch.object(VMS.KUBE, "get_optional", lambda path, read=None: nad):
             iface, net = {"name": "nic-0", "masquerade": {}}, {"name": "nic-0", "pod": {}}
             VMS._set_network(iface, net, "default/lan")
         return iface, net

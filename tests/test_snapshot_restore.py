@@ -205,7 +205,7 @@ class CleanupTests(unittest.TestCase):
         record = {'metadata': {'name': NAME, 'labels': {S.LABEL: 'true', 'app.kubernetes.io/managed-by': 'homestead'},
                                'annotations': {'homestead.io/expires': '1'}},
                   'spec': {'volumeSnapshotRef': {'namespace': 'lab'}}}
-        with mock.patch.object(S, '_get', return_value={}), mock.patch.object(S, '_items', return_value=[record]), \
+        with mock.patch.object(S.KUBE, 'get_optional', return_value={}), mock.patch.object(S, '_items', return_value=[record]), \
                 mock.patch.object(S, 'close') as close:
             S.ACTIVE_RESTORES[('lab', NAME)] += 1
             try:

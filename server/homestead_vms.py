@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_logos as LOGOS
 import homestead_names as NAMES
 import homestead_schedules as SCHEDULES
@@ -692,7 +693,7 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects
             v.update({"name": d["name"], **volume})
             # A DataVolume CDI took but could not fill is made again from the new source.
             path = f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"
-            current = _optional(path)
+            current = KUBE.get_optional(path, read=kget)
             effects.append({"kind": "replace-datavolume", "path": path,
                             "current": current, "claim": claim})
             changed = True
@@ -787,7 +788,7 @@ def _network_kind(network):
     # onto it has its own, so it never hears DHCP or anything else. macvtap
     # is joined through KubeVirt's binding for it; anything else is bridged.
     ns, name = network.split("/", 1)
-    found = _optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{ns}/network-attachment-definitions/{urllib.parse.quote(name)}")
+    found = KUBE.get_optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{ns}/network-attachment-definitions/{urllib.parse.quote(name)}", read=kget)
     config = ((found or {}).get("spec") or {}).get("config") or ""
     if '"macvlan"' in config:
         raise ValueError(f"{network} is a macvlan network, which carries containers only: "
@@ -883,15 +884,6 @@ def _read_cloud_init(vm, ns):
     except Exception:
         source = "unreadable"
     return {"user_data": user, "network_data": network, "source": source}
-
-
-def _optional(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def _identity(obj):
@@ -1116,7 +1108,7 @@ def prepare_edit(ns, name, cfg, current=None):
     vm["metadata"].pop("managedFields", None)
     for effect in effects:
         if effect["kind"] == "configmap":
-            current_map = _optional(effect["path"])
+            current_map = KUBE.get_optional(effect["path"], read=kget)
             if current_map:
                 labels = (current_map.get("metadata") or {}).get("labels") or {}
                 if labels.get("homestead.io/managed") != "true" or labels.get("app") != name:
@@ -1139,12 +1131,12 @@ def _recheck_edit(prepared):
     for effect in prepared["effects"]:
         if effect["kind"] in ("image-download", "kubevirt-gates"):
             continue
-        current = _optional(effect["path"])
+        current = KUBE.get_optional(effect["path"], read=kget)
         if (None if current is None else _identity(current)) != effect.get("identity"):
             raise ValueError("A VM dependency changed; review its edit again")
         if effect["kind"] == "replace-datavolume":
             path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(effect['claim'])}"
-            if _optional(path) is not None:
+            if KUBE.get_optional(path, read=kget) is not None:
                 raise ValueError("The disk now has a PVC; its source cannot be replaced")
     for claim, _ in prepared["resize"]:
         current = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
@@ -1156,7 +1148,7 @@ def _recheck_edit(prepared):
     for claim in new_names:
         for path in (f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
                      f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{urllib.parse.quote(claim)}"):
-            found = _optional(path)
+            found = KUBE.get_optional(path, read=kget)
             # An ISO from the library is one shared copy that exists before
             # any VM holds it; attaching it is the point, not an adoption.
             if found is not None and ((found.get("metadata") or {}).get("labels") or {}).get("homestead.io/iso") == "true":
