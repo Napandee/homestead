@@ -1389,6 +1389,22 @@ def _drop_source_copy(job, ns):
             raise
 
 
+def _drop_finished_copies():
+    """Each finished copy in another namespace gives back the source password
+    it borrowed. The leader's, once a minute (tick): reading the imports does
+    not (#622)."""
+    for job in NAMES.find("/apis/batch/v1/jobs", "task"):
+        meta, status = job["metadata"], job.get("status", {})
+        ns = meta.get("namespace") or NS
+        if NAMES.label_of(meta, "task") not in ("import", "chown") or ns == NS or status.get("active") \
+                or not (status.get("succeeded") or status.get("failed")):
+            continue
+        try:
+            _drop_source_copy(meta["name"], ns)
+        except Exception as error:
+            print(f"import {ns}/{meta['name']}: its source password was not removed: {str(error)[:160]}", flush=True)
+
+
 def _job_pod(job, ns=None):
     try:
         pods = kget(f"/api/v1/namespaces/{ns or NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
@@ -1412,11 +1428,6 @@ def import_status():
         ns = j["metadata"].get("namespace") or NS
         state = ("running" if st.get("active") else "done" if st.get("succeeded")
                  else "failed" if st.get("failed") else "pending")
-        if state in ("done", "failed") and ns != NS:
-            try:
-                _drop_source_copy(j["metadata"]["name"], ns)
-            except Exception:
-                pass
         row = {
             "name": j["metadata"]["name"], "namespace": ns,
             "kind": NAMES.label_of(j["metadata"], "task", "import"),
@@ -1586,9 +1597,9 @@ def image_cache():
     nodes = kget("/api/v1/nodes").get("items", [])
     retained = image_retention_inventory()
     _load_scans()
+    # Reading only: the leader's tick saves scans, removes their pods and
+    # starts the next one (#622).
     scanning = _collect_scans()
-    if not scanning:
-        scanning = _rescan_if_stale(nodes)
     per_node, totals = [], {}
     full = True
     for n in nodes:
@@ -1624,10 +1635,9 @@ def image_cache():
                        "system": _system_image(value["name"]),
                        "protected": bool(reasons), "retained_by": reasons})
     shared.sort(key=lambda x: -x["size_mb"])
-    # Read here rather than on its own timer: whoever is looking at the image
-    # cache is exactly who wants to know a pull is running, or has finished and
-    # been cleared away.
-    pulls = prepull_status()
+    # Whoever is looking at the image cache wants to know a pull is running,
+    # or has finished; the leader's tick clears a finished one away.
+    pulls = prepull_status(sweep=False)
     return {"nodes": per_node, "images": shared, "complete": full, "scanning": scanning,
             "pulls": pulls["pulls"], "pulls_finished": pulls["finished"],
             "distinct": len(shared),
@@ -1653,6 +1663,7 @@ SCAN_RETRY = 5 * 60
 SCAN_DIR = ""        # set by the server; empty keeps scans in memory only
 SCAN_STORE = "image-scans.json"
 _SCANS = {}          # node -> {"at": time, "images": [...]}
+_SCAN_FAILED = {}    # node -> when its last scan failed; it waits as a fresh one would
 _SCAN_STARTED = [0.0]
 _scan_lock = SHARED.SharedLock("image-scans")
 
@@ -1698,14 +1709,35 @@ def _merged(scanned, listed):
     return scanned + [image for image in listed if not seen & set(image.get("names") or [])]
 
 
+def tick():
+    """The leader's minute (#622): what looking at the image cache or the
+    imports used to do as it read. Finished scans are saved and their pods
+    removed, a host whose scan is old is scanned again, finished pre-pulls are
+    cleared away, and a finished copy gives back the password it borrowed."""
+    _load_scans()
+    if not _collect_scans(tidy=True):
+        _rescan_if_stale(kget("/api/v1/nodes").get("items", []))
+    prepull_status(sweep=True)
+    _drop_finished_copies()
+    _bust("imgcache")
+
+
+def _scannable(node):
+    """A node a scan pod can run on: Ready and not cordoned. Only these count
+    towards a scan being due, or one host that is never scanned would have
+    every host scanned again at each retry (#622)."""
+    conditions = {c.get("type"): c.get("status") for c in (node.get("status") or {}).get("conditions") or []}
+    return conditions.get("Ready") == "True" and not (node.get("spec") or {}).get("unschedulable")
+
+
 def _rescan_if_stale(nodes):
     """Start a scan when a Ready node has none, or an old one, so the list is
-    whole for whoever looks - not only an admin who presses Scan."""
+    whole for whoever looks - not only an admin who presses Scan. A node whose
+    last scan failed waits as long as one whose scan worked."""
     now = time.time()
-    ready = [n["metadata"]["name"] for n in nodes
-             if any(c.get("type") == "Ready" and c.get("status") == "True"
-                    for c in (n.get("status") or {}).get("conditions") or [])]
-    stale = [name for name in ready if now - float((_SCANS.get(name) or {}).get("at") or 0) > SCAN_FRESH]
+    ready = [n["metadata"]["name"] for n in nodes if _scannable(n)]
+    stale = [name for name in ready
+             if now - max(float((_SCANS.get(name) or {}).get("at") or 0), _SCAN_FAILED.get(name, 0)) > SCAN_FRESH]
     if not stale or now - _SCAN_STARTED[0] < SCAN_RETRY:
         return []
     try:
@@ -1718,27 +1750,32 @@ def start_image_scan():
     """One pod per Ready node, printing everything its containerd holds."""
     started = []
     attempt = format(int(time.time()), "x")[-6:]
-    for node in kget("/api/v1/nodes").get("items", []):
-        conditions = {c.get("type"): c.get("status") for c in (node.get("status") or {}).get("conditions") or []}
-        if conditions.get("Ready") != "True" or (node.get("spec") or {}).get("unschedulable"):
-            continue
-        name = node["metadata"]["name"]
-        suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
-        body = RUNTIME.pod(f"homestead-image-scan-{suffix}-{attempt}", NS, name,
-                           f"{RUNTIME.CRICTL} images -o json", SCAN_TASK,
-                           {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
-        body["spec"]["automountServiceAccountToken"] = False
-        ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
-        started.append(name)
+    # Counted as started even if a pod cannot be made part way, so the next
+    # tick does not start the ones that were made again.
     _SCAN_STARTED[0] = time.time()
-    _save_scans()
-    _bust("imgcache")
+    try:
+        for node in kget("/api/v1/nodes").get("items", []):
+            if not _scannable(node):
+                continue
+            name = node["metadata"]["name"]
+            suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
+            body = RUNTIME.pod(f"homestead-image-scan-{suffix}-{attempt}", NS, name,
+                               f"{RUNTIME.CRICTL} images -o json", SCAN_TASK,
+                               {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
+            body["spec"]["automountServiceAccountToken"] = False
+            ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
+            started.append(name)
+    finally:
+        _save_scans()
+        _bust("imgcache")
     return {"ok": True, "nodes": started,
             "detail": f"asking containerd on {len(started)} node{'s' if len(started) != 1 else ''} for every image"}
 
 
-def _collect_scans():
-    """Read finished scan pods into _SCANS and remove them; say which run."""
+def _collect_scans(tidy=False):
+    """Read finished scan pods into _SCANS; say which nodes are still being
+    scanned. Only the leader's tick (tidy) saves them and removes the pods: a
+    viewer's read writes nothing (#622)."""
     running = []
     for pod in NAMES.find(f"/api/v1/namespaces/{NS}/pods", "task", SCAN_TASK):
         meta, phase = pod.get("metadata") or {}, (pod.get("status") or {}).get("phase")
@@ -1750,10 +1787,15 @@ def _collect_scans():
                 _SCANS[node] = {"at": time.time(), "images": [
                     {key: image.get(key) for key in ("repoTags", "repoDigests", "size")}
                     for image in listed.get("images") or []]}
-                _save_scans()
+                if tidy:
+                    _save_scans()
             except Exception:
                 pass
         if phase in ("Succeeded", "Failed"):
+            if not tidy:
+                continue
+            if phase == "Failed":
+                _SCAN_FAILED[node] = time.time()
             try:
                 ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}")
             except Exception:
@@ -1861,8 +1903,9 @@ def prepull_status(sweep=True):
             image = container.get("image", "") or image
         row = {"name": name, "image": image, "desired": desired, "ready": ready,
                "complete": bool(desired) and ready >= desired}
-        if row["complete"] and sweep:
-            stop_prepull(name)
+        if row["complete"]:
+            if sweep:
+                stop_prepull(name)
             finished.append(row)
         else:
             pulls.append(row)

@@ -121,12 +121,12 @@ class ScanTests(Fixture):
     def test_an_old_scan_is_asked_again_but_not_over_and_over(self):
         self.scanned(time.time() - imports.SCAN_FRESH - 60)
         with mock.patch.object(imports.RUNTIME, "pod", lambda *a, **k: {"spec": {}}):
-            first = imports.image_cache()
-            again = imports.image_cache()
+            imports.image_cache()
+            self.assertEqual([], [p for m, p, _ in self.sent if m == "POST"], "looking starts nothing (#622)")
+            imports.tick()
+            imports.tick()
         posts = [path for method, path, _ in self.sent if method == "POST" and path.endswith("/pods")]
-        self.assertEqual(["node1"], first["scanning"])
-        self.assertEqual(1, len(posts))
-        self.assertEqual([], again["scanning"])
+        self.assertEqual(1, len(posts), "the leader's tick asks once, not every minute")
 
     def test_a_cleaned_image_leaves_the_saved_scan(self):
         self.scanned(time.time())

@@ -268,6 +268,8 @@ class ImportStatusNamespaceTests(unittest.TestCase):
              mock.patch.object(imports, "ksend", side_effect=lambda *a, **k: sent.append(a[:2])), \
              mock.patch.object(imports, "NS", "lab"):
             rows = imports.import_status()
+            self.assertEqual([], sent, "listing the imports removes nothing (#622)")
+            imports._drop_finished_copies()
         self.assertEqual({("lab", "homestead-import-a"), ("media", "homestead-import-b"), ("media", "homestead-import-c")},
                          {(r["namespace"], r["name"]) for r in rows})
         self.assertEqual([("DELETE", "/api/v1/namespaces/media/secrets/homestead-import-b-source")], sent,
