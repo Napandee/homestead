@@ -535,23 +535,23 @@ def _permitted(kv=None):
 
 
 def ensure_gates(*gates, send=None):
-    """KubeVirt's feature gates, with these on."""
+    """KubeVirt's feature gates, with these on. Worked out from the gates as
+    stored when it saves, so a gate switched on meanwhile stays on (#621)."""
     reviewed = send is not None
-    send = send or ksend
-    kv = _kubevirt()
-    if not kv:
-        raise ValueError("KubeVirt is not installed")
-    developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
-    current = list(developer.get("featureGates") or [])
-    missing = [g for g in gates if g not in current]
-    if missing:
+    missing = []
+
+    def change(kv):
+        developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
+        current = list(developer.get("featureGates") or [])
+        missing[:] = [g for g in gates if g not in current]
+        if not missing:
+            return None
         meta = kv.get("metadata") or {}
         if reviewed and not all(meta.get(key) for key in ("uid", "resourceVersion")):
             raise ValueError("KubeVirt identity/version is unavailable; review the device settings again")
-        identity = {key: meta[key] for key in ("uid", "resourceVersion") if meta.get(key)}
-        send("PATCH", _kv_path(kv), {"metadata": identity, "spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}},
-              ctype="application/merge-patch+json")
-    return missing
+        return {"spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}}
+    KUBEVIRT_CR.update(change, current=_kubevirt, write=send or ksend)
+    return list(missing)
 
 
 def _permit(pci=None, usb=None, remove=False):
