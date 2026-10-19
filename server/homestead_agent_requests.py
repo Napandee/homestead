@@ -16,7 +16,6 @@ A request waits TTL at most, and a key may have MAX_PENDING waiting. They
 are kept on the data volume, so every Homestead replica sees the same list,
 and are dropped KEEP after they end.
 """
-import json
 import os
 import re
 import secrets
@@ -46,12 +45,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            found = json.load(handle)
-        return found if isinstance(found, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _save(rows):
