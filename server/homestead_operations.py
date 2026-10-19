@@ -12,6 +12,7 @@ import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_cdi_cleanup as CDI_CLEANUP
 from homestead_storage_journal import Held as StorageHeld
 import json
+import contextlib
 import copy
 import os
 import secrets
@@ -134,6 +135,43 @@ def _write(items):
         SHARED.write_json(os.path.join(DATA_DIR, LEGACY_STORE), legacy, durable=True, separators=(",", ":"))
         if not _initialized(LEGACY_MARKER):
             SHARED.write_json(os.path.join(DATA_DIR, LEGACY_MARKER), {"version": 1}, durable=True)
+
+
+def stored():
+    """The jobs as stored now, with every field: a strict read. A failed or
+    damaged store raises; it is never an empty list. It takes no lock - writes
+    replace the file whole, so a read sees one version or the next - as reads
+    outside a transaction always have. It always reads the file, so inside a
+    transaction it does not see that transaction's unsaved changes. (snapshot(),
+    further down, is what the page shows.)"""
+    return _read()
+
+
+class Transaction:
+    """The jobs, read on first use, while the lock is held; written only by save()."""
+    def __init__(self):
+        self._items = None
+
+    @property
+    def items(self):
+        if self._items is None:
+            self._items = _read()
+        return self._items
+
+    def save(self, items=None):
+        if items is not None:
+            self._items = items
+        _write(self.items)
+
+
+@contextlib.contextmanager
+def transaction():
+    """Check the store and act on it atomically, across replicas: the lock is
+    held for the whole block, re-entrantly. Nothing is written unless the
+    block calls save(); if the block raises, nothing is written and the lock
+    is released."""
+    with _lock:
+        yield Transaction()
 
 
 def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", unless=()):

@@ -396,7 +396,7 @@ def upgrade(component, target, options=None):
     elif component == "longhorn":
         import homestead_lhv2_upgrade as V2
         # Before anything changes: the job is recorded only after the upgrade starts.
-        STORAGE_CONFLICTS.require_clear(OPS._read(), "platform-upgrade", {"component": "longhorn"})
+        STORAGE_CONFLICTS.require_clear(OPS.stored(), "platform-upgrade", {"component": "longhorn"})
         mode = (options or {}).get("v2_mode", "offline")
         V2.require_upgrade(target, mode)
         if mode == "live" and (options or {}).get("confirm_backup") is not True:

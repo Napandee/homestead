@@ -94,7 +94,7 @@ def report(ops, read, namespace, pod_name, container_name, version, data_mount="
         except Held:
             pass
     key = identity["pod_uid"] + "/" + container_name
-    with ops._lock:
+    with ops.transaction():
         members = _records(ops.DATA_DIR)
         if members.get(key) != row:
             members[key] = row
@@ -112,7 +112,7 @@ def require(ops, read, namespace, pod_name, container_name, version, data_mount=
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or listing.get("metadata", {}).get("continue")):
         raise Held("Homestead replica inventory is incomplete; refresh before moving storage")
-    with ops._lock:
+    with ops.transaction():
         members = _records(ops.DATA_DIR)
     seen = set()
     for pod in listing["items"]:

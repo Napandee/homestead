@@ -37,8 +37,8 @@ def operation_recorder(ops, ident):
     Sequence checks prevent reusing a job's write stream after interruption.
     """
     def record(event):
-        with ops._lock:
-            items = ops._read()
+        with ops.transaction() as t:
+            items = t.items
             item = next((row for row in items if row.get("id") == ident), None)
             if not item or item.get("status") in ops.TERMINAL or item.get("status") == ops.CANCELLING:
                 raise WriteFailure("VM mutation job has ended or is unavailable")
@@ -70,7 +70,7 @@ def operation_recorder(ops, ident):
             if item["kind"] != "k3s-cluster":
                 progress = max(progress, 10 if phase == "intent" else 20)
             ops._finish(item, "failed" if failed else "running", progress, message)
-            ops._write(items)
+            t.save(items)
     return record
 
 

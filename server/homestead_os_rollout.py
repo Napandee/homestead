@@ -164,7 +164,7 @@ def _rebalancing():
     rollout drains and reboots the hosts it is moving them to, so the
     scheduled one waits for it. An unreadable job list does not hold it up."""
     try:
-        return any(i.get("kind") == "container-rebalance" and i.get("status") not in OPS.TERMINAL for i in OPS._read())
+        return any(i.get("kind") == "container-rebalance" and i.get("status") not in OPS.TERMINAL for i in OPS.stored())
     except Exception:
         return False
 

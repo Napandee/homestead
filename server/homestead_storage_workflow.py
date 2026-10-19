@@ -35,7 +35,7 @@ def preview(body, actor, ops, *, runtime_check=None):
 
 def start_reviewed(body, actor, ops, *, runtime_check=None):
     """Persist the approved initial stop, without stopping any workload here."""
-    with ops._lock:
+    with ops.transaction():
         if runtime_check is not None:
             runtime_check()
         cfg, result, context = _initial_review(body, actor, ops)

@@ -138,7 +138,7 @@ def self_data_preparation(body, actor, *, start=False):
         if not start:
             cfg, public, context, _ = reviewed()
             return {**public, "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
-        with OPS._lock:
+        with OPS.transaction():
             result = reviewed()
             # Cleanup may have finished before Jobs' next refresh. Reconcile
             # only the verified completed handoff; do not advance other jobs.
@@ -166,7 +166,7 @@ def self_data_preparation_state():
         info = homestead_data_volume()
         nodes = SELF_DATA_PREPARE.D._inventory(kget, "/api/v1/nodes")
         jobs = []
-        for item in OPS._read():
+        for item in OPS.stored():
             ref = item.get("ref", {})
             if (item.get("kind") != SELF_DATA_PREPARE.KIND or ref.get("namespace") != SELF.NS
                     or OPS._archived_preparation(item)):

@@ -364,7 +364,7 @@ def _plan(request):
 
 def _active(ns, name):
     # The stored records: the public list leaves each job's ref out.
-    for item in OPS._read():
+    for item in OPS.stored():
         ref = item.get("ref") or {}
         if item.get("kind") == KIND and (ref.get("ns"), ref.get("name")) == (ns, name) and item.get("status") not in OPS.TERMINAL:
             return item["id"]

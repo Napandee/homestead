@@ -326,7 +326,7 @@ _ACTIVE, _ACTIVE_LOCK = set(), threading.Lock()
 # Seams the tests replace.
 OPS_START = OPS.start
 OPS_RECORD = OPS.record_phase
-OPS_READ = OPS._read
+OPS_READ = OPS.stored
 POD = os.environ.get("HOSTNAME", "")
 SETTLE = 20          # seconds before the first look at a unit just started
 PROBE_EVERY = 30     # seconds between looks at the host while it reinstalls

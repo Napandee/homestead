@@ -1177,7 +1177,7 @@ def backup_now(b):
 def restore_reviewed(b):
     """Restore a backup as a job, or a 409 with the plan when what it would
     make is already there. Planned and started under the jobs' lock."""
-    with OPS._lock:
+    with OPS.transaction():
         plan = restore_plan(b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
         if plan.get("conflict"):
             return homestead_routes.Reply(409, {"error": plan["conflict"]["message"], "plan": plan})

@@ -281,7 +281,7 @@ def self_data_boot_status():
         state = _self_data_fence.inspect()
         if state.get("mode") not in ("start", "done", "recovery"):
             raise SELF_DATA_FENCE.Held("Destination startup state changed")
-        OPS._read()
+        OPS.stored()
         AUTH.review_signing_key()
         return state
     except Exception:
@@ -900,7 +900,7 @@ def self_data_handoff_status(operation):
                     view = SELF_DATA_WORKER.unavailable_status(operation)
                     view.update(status="preparing", can_abandon=True, requires_review=False,
                         message="Homestead is still on its original volume. You can wait for preparation or abandon it safely before the move starts.")
-                    job = next((i for i in OPS._read() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
+                    job = next((i for i in OPS.stored() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
                     error = (job or {}).get("ref", {}).get("setup_error")
                     if error:
                         view.update(status="held", requires_review=True, message=error)
@@ -912,7 +912,7 @@ def self_data_handoff_status(operation):
             return SELF_DATA_WORKER.progress(completed[1], time.time())
         marker = SELF_DATA_FENCE.read_marker(DATA_DIR)
         if not marker:
-            job = next((i for i in OPS._read() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
+            job = next((i for i in OPS.stored() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
             if job:
                 ref = job["ref"]
                 if not ref.get("anchor_uid") or ref.get("setup_error"):
@@ -971,7 +971,7 @@ def start_self_data_move(body, actor):
         return SELF_DATA_REVIEW.Review(read, ns, NAMES.BRAND, actor=actor, image=image,
             threshold=SETTINGS_HELPERS.get_app_settings()["thresholds"]["memory"]["critical"], source_pod=pod, data_dir=DATA_DIR,
             runtime_check=runtimes, clock=time.time, route_check=SELF_DATA_ROUTE.review)
-    with OPS._lock:
+    with OPS.transaction():
         SELF_DATA_ROUTES._require_no_data_handoff(KUBE_HELPERS.kget, ns)
         SELF_DATA_EXECUTE.idle(OPS)
         execution = reviewer(KUBE_HELPERS.kget).approve(body)
