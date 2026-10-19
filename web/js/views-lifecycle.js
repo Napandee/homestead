@@ -971,10 +971,15 @@ function vmNetworkNote(opts, forVm = false) {
    Networks > VM Networks, so it shows there too. When made from a form that
    needed one, that form opens again with it to choose. */
 window.vmNetworkAdd = async (reopen = null) => {
-  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
+  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(e => ({ unread: e.message }));
   const back = reopen || window.__vmNetworkReopen || null;
   const o = opts.vm_network_options || {};
   const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
+  // Unread options are not "Multus is needed first" (#620).
+  if (opts.unread) {
+    open("New LAN network", UI.callout("bad", "Could not read the network options", esc(opts.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   if (!o.harvester && !o.multus) {
     open("New LAN network", `<div class="note"><b>Multus is needed first.</b> A container or VM joins the LAN as a second network,
         which Kubernetes does through Multus - k3s and RKE2 leave it out unless asked.</div>
@@ -1086,14 +1091,19 @@ window.vmNetChanged = () => {
 };
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
-  window.__vmNetworkReopen = "vm";
   const [opts, disks, vipOptions, devices, namespaces] = await Promise.all([
-    api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
+    api("/api/vm/create-options").catch(e => ({ unread: e.message })),
     api("/api/vm-disks").catch(() => []),
     vipChoices(),
     api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
     api("/api/namespaces").catch(() => [defaultNamespace()]),
   ]);
+  // A form built on invented options would offer classes and images that may not be there (#620).
+  if (opts.unread) {
+    modal("New virtual machine", UI.callout("bad", "Could not read what a new VM can use", esc(opts.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
+  window.__vmNetworkReopen = "vm";
   // Imports are CDI DataVolumes, so without CDI there are none to attach.
   const readyDisks = opts.cdi ? disks.filter(d => d.phase === "Succeeded" && !d.in_use) : [];
   const selected = selectedDisk ? `disk:${selectedNamespace || defaultNamespace()}/${selectedDisk}` : "";
@@ -1573,9 +1583,13 @@ function importProgressCell(job) {
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
+  // What could not be read is named on the page, and no class or namespace
+  // list is invented for the dialogs that use these (#620).
+  const missed = [];
+  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
   const [srcs, jobs, namespaces, storageClasses] = await Promise.all([
-    api("/api/sources"), api("/api/imports").catch(() => []),
-    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/sources"), part("/api/imports", "recent imports", []),
+    part("/api/namespaces", "namespaces", null), part("/api/storageclasses", "storage classes", null),
   ]);
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
@@ -1583,6 +1597,7 @@ async function viewImport() {
         { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
         // VM imports moved to their own page; this points there for a release or so.
         { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "Now under Virtual machines › Import" }])}`)}
+    ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
 
     <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
     ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>
@@ -1649,7 +1664,12 @@ function importSourceSteps() {
 window.importRemove = async (name, state, namespace = defaultNamespace()) => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, namespace }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
+    body: JSON.stringify({ name, namespace }) }).catch(e => ({ unread: e.message }));
+  // Without the plan there is nothing safe to offer: not "it created nothing" (#620).
+  if (plan.unread) {
+    modal(`Remove import · ${name}`, UI.callout("bad", "Could not check what this import created", esc(plan.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   if (plan.journalled) {
     modal(`Remove import Job · ${name}`, UI.lead("Remove the copy Job after a verified successful import. The app, Services and all volumes stay in place.") +
       UI.callout("info", "Incomplete import?", "Open Recent jobs → Inspect import. An active or uncertain copy cannot be removed here.") +
@@ -1704,6 +1724,11 @@ window.importRemoveNow = async (name, button, namespace = defaultNamespace()) =>
 };
 
 window.vmDiskImport = () => {
+  if (STATE.data.importStorageClasses === null || STATE.data.importNamespaces === null) {
+    modal("Import VM disk", UI.callout("bad", `Could not read the ${STATE.data.importStorageClasses === null ? "storage classes" : "namespaces"}`,
+      "Refresh the Import page and try again.") + UI.actions(UI.cancel("Close")));
+    return;
+  }
   const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = STATE.data.importStorageClasses || ["longhorn-r2"];
   modal("Import VM disk", `
@@ -1846,7 +1871,7 @@ window.srcBrowse = async name => {
   try {
     const [r, dc] = await Promise.all([
       api("/api/sources/browse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
-      api("/api/sources/containers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => ({ containers: [] })),
+      api("/api/sources/containers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(e => ({ containers: [], unread: e.message })),
     ]);
     const src = (STATE.data.srcs || []).find(s => s.name === name) || {};
     const entries = r.entries.filter(e => !e.startsWith("==") && !/^(WARNING|Permission|Warning)/i.test(e));
@@ -1865,7 +1890,8 @@ window.srcBrowse = async name => {
              onclick="importSetup(${jsq(name)},${jsq(e)})">Import</button></div>`).join("")}</div>`
       : `<div class="empty">No appdata folders returned. Check the credentials and that
          <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`)
-      + (dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
+      + (dc.unread ? UI.callout("warn", `Could not list the Docker containers on ${name}`, `${esc(dc.unread)} Only its appdata folders are offered.`)
+        : dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
          appdata folders are offered. Check that Docker is running there and the SSH user may use it.</div>`);
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `srcBrowse(${jsArg(name)})`, dialog: true }); }
 };
@@ -2186,8 +2212,13 @@ window.importSetup = async (source, dir, cfg = {}) => {
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
   const [storage, liveNodes] = await Promise.all([
-    api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(() => ({ pvcs: [], storage_classes: [] })),
+    api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(e => ({ unread: e.message })),
     api("/api/nodes").catch(() => [])]);
+  // No class list is not "pick none": the server would choose one (#620).
+  if (storage.unread) {
+    childModal("Import · " + dir, UI.callout("bad", "Could not read the storage options", esc(storage.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
   // A container that mounts nothing needs no storage: the folders and volumes

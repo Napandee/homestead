@@ -84,6 +84,75 @@ try {
     assert.equal(await card.isVisible(), true, "the card stays");
     assert.match(await card.innerText(), /Could not read the storage classes[\s\S]*timed out/);
 
+    // VMs and imports (views-lifecycle.js).
+    const body = () => page.locator("#mbody").innerText();
+    const close = () => page.evaluate(() => closeModal());
+
+    // New LAN network: unread options are not "Multus is needed first".
+    await page.evaluate(() => { window.api = window.__realApi; window.__vmCreateOptions = undefined; });
+    await page.evaluate(failing, "/api/vm/create-options");
+    await page.evaluate(() => vmNetworkAdd());
+    await settled(page);
+    assert.match(await body(), /Could not read the network options[\s\S]*timed out/);
+    assert.doesNotMatch(await body(), /Multus is needed first/);
+    await close();
+
+    // New VM: no form built on invented options.
+    await page.evaluate(() => vmNew());
+    await settled(page);
+    assert.match(await body(), /Could not read what a new VM can use[\s\S]*timed out/);
+    assert.equal(await page.locator("#v_steps").count(), 0);
+    await close();
+
+    // Remove an import: no removal offered without knowing what it created.
+    await page.evaluate(failing, "/api/imports/cleanup-plan");
+    await page.evaluate(() => importRemove("media-server", "succeeded"));
+    await settled(page);
+    assert.match(await body(), /Could not check what this import created[\s\S]*timed out/);
+    assert.equal(await page.locator("#imr_workload, .imr-volume").count(), 0);
+    await close();
+
+    // A source's Docker containers that could not be listed say so.
+    await page.evaluate(failing, "/api/sources/containers");
+    await page.evaluate(async () => { STATE.data.srcs = await window.__realApi("/api/sources"); await srcBrowse("unraid"); });
+    await page.waitForFunction(() => !document.querySelector("#mbody .spin2"));
+    assert.match(await body(), /Could not list the Docker containers on unraid[\s\S]*timed out/);
+    await close();
+
+    // Import: no invented storage class or namespace list.
+    await page.evaluate(failing, "/api/storageclasses");
+    await page.evaluate(() => viewImport());
+    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Import"));
+    assert.match(await page.locator("body").innerText(), /could not be read[\s\S]*storage classes[\s\S]*timed out/i);
+    // Virtual machines › Import, where Import VM disk is offered: the same.
+    await page.evaluate(() => viewVmImport());
+    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Virtual machines"));
+    assert.match(await page.locator("body").innerText(), /could not be read[\s\S]*storage classes[\s\S]*timed out/i);
+    await page.evaluate(() => vmDiskImport());
+    assert.match(await body(), /Could not read the storage classes/);
+    assert.equal(await page.locator("#vd_name").count(), 0);
+    await close();
+
+    // A VM from an Unraid server: no invented options or class.
+    await page.evaluate(failing, "/api/vm/create-options");
+    await page.evaluate(() => {
+      STATE.data.importStorageClasses = null;
+      STATE.data.uvms = { unraid: { vms: [{ id: "v1", name: "vm1", slug: "vm1" }] } };
+      return uvmImport("unraid", "v1");
+    });
+    await settled(page);
+    assert.match(await body(), /Could not read what this import needs[\s\S]*timed out/);
+    await close();
+
+    // The import wizard's storage step: no form when the storage options are unread.
+    await page.evaluate(failing, "/api/deploy/options");
+    await page.evaluate(() => importSetup("unraid", "media-server"));
+    await settled(page);
+    assert.match(await body(), /Could not read the storage options[\s\S]*timed out/);
+    assert.equal(await page.locator("#im_steps").count(), 0);
+    await close();
+    await page.evaluate(() => { window.api = window.__realApi; });
+
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);
     await context.close();
