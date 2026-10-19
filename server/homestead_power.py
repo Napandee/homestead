@@ -514,3 +514,11 @@ def _status(item):
                 return "running", 20, f"Power helper waiting: {reason}. It may retry automatically; inspect Recent jobs logs, do not send another power request"
             return "running", 35 if phase == "Running" else 20, f"Power helper {phase.lower()}{': ' + reason if reason else ''}; waiting for host transition"
     return "running", 20, "Waiting for the host to leave Ready"
+
+
+def register(ops):
+    """The job store's entry for a host power command (#622)."""
+    ops.RESOLVERS["node-power"] = status
+    # Sent is sent: a host that is powering off or restarting cannot be called back.
+    ops.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
+        "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")

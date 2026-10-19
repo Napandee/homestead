@@ -458,3 +458,8 @@ ROUTES = {
     ("POST", "/api/os-updates/settings"): ("admin", lambda request: {"ok": True, "settings": save_settings(request.body)}),
     ("POST", "/api/os-updates/stop"): ("admin", lambda request: {"ok": True, "rollout": stop(), "detail": "Stopping once the host being updated is done"}),
 }
+
+
+def register(ops):
+    """The job store's entry for an OS update rolled across the hosts (#622)."""
+    ops.RESOLVERS["os-rollout"] = status

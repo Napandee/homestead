@@ -346,3 +346,8 @@ def status(item):
         return "running", 80, f"k3s is up; installing {'Longhorn and ' if ref.get('setup') == 'homestead' else ''}Homestead inside it"
     return "succeeded", 100, (f"The cluster is up: its Homestead answers at http://{first}:8088 - open it and "
                               "create the first account there. The nodes' login is ubuntu with your password")
+
+
+def register(ops):
+    """The job store's entry for a k3s cluster made from VMs (#622)."""
+    ops.RESOLVERS["k3s-cluster"] = status

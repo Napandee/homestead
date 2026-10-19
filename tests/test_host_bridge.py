@@ -157,6 +157,7 @@ class HostLeaseTests(unittest.TestCase):
         self.bind(host)
         BRIDGE.start("k3s", ops)
         item = {"kind": "host-bridge", "ref": ops.started[0]}
+        BRIDGE.register(BRIDGE.OPS)  # its canceller is added by register (#622)
         plan, run = BRIDGE.OPS.CANCELLERS["host-bridge"]
         self.assertTrue(any("puts its old network back" in line for line in plan(item)["keeps"]))
         self.assertIn("other changes on k3s can start", run(item, {}))

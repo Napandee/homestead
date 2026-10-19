@@ -583,8 +583,6 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(im
 
 UPDATES.pull_progress = _pull_progress
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
-OPS.RESOLVERS["k3s-cluster"] = K3SC.status
-OPS.RESOLVERS["node-power"] = POWER.status
 OPS.RESOLVERS[REBALANCE.KIND] = REBALANCE.status
 OPS.RESOLVERS[CREBALANCE.KIND] = CREBALANCE.status
 OPS.CANCELLERS[CREBALANCE.KIND] = (CREBALANCE.cancel_plan, CREBALANCE.cancel_run)
@@ -599,8 +597,6 @@ OPS.CLEANUPS.add(RENAME.KIND)
 for _kind in ("vm-create", "vm-edit"):
     OPS.RESOLVERS[_kind] = VM_MUTATION_JOB.status
     OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
-OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
-    "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
@@ -758,7 +754,6 @@ HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
 import homestead_host_console as HOST_CONSOLE
 HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
 HOST_CONSOLE.platform = lambda: PLATFORM.detect()
-OPS.RESOLVERS["host-console"] = HOST_CONSOLE.status
 import homestead_unraid_vms as UNRAID_VMS
 UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect(), (storage_classes, LHCAP.capacity, vm_default_class))
 OPS.RESOLVERS[UNRAID_VMS.KIND] = UNRAID_VMS.status
@@ -791,7 +786,6 @@ MCP.bind(DATA_DIR, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app
     kget, lambda ns, name: delete_workload(ns, name))
 
 
-OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, NODES.node_temps, DATA_DIR)
 PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
 SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME,
@@ -805,16 +799,15 @@ OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, opera
                                           {"rollout": rollout["id"]},
                                           "In the weekly window" if rollout["reason"] == "schedule" else "Starting"),
                 lambda node, since: POWER_JOBS.rollout_power_job(node, since))
-OPS.RESOLVERS["os-rollout"] = OS_ROLLOUT.status
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
-OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
 HOST_BONDS.bind(HOSTRUN, kget, ksend, PLATFORM.detect)
-OPS.RESOLVERS[HOST_BONDS.KIND] = HOST_BONDS.status
 
 
 UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
-OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
+# Each module registers its own kinds of job (#622).
+for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS):
+    _module.register(OPS)
 OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
 OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,

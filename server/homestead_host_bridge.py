@@ -364,4 +364,9 @@ def cancel_run(item, options):
     return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
 
 
-OPS.CANCELLERS["host-bridge"] = (cancel_plan, cancel_run)
+
+
+def register(ops):
+    """The job store's entry for a host's LAN bridge (#622)."""
+    ops.RESOLVERS["host-bridge"] = status
+    ops.CANCELLERS["host-bridge"] = (cancel_plan, cancel_run)

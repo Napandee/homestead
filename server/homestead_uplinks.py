@@ -383,3 +383,8 @@ ROUTES = {
     ("POST", "/api/network/uplinks/preview"): ("admin", lambda request: preview(request.body, node_probes())),
     ("POST", "/api/network/uplinks/apply"): ("admin", _apply_route),
 }
+
+
+def register(ops):
+    """The job store's entry for a Harvester uplink change (#622)."""
+    ops.RESOLVERS[KIND] = status
