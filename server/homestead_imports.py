@@ -1473,13 +1473,27 @@ def _system_image(ref):
         r"suse/sles/)", str(ref or ""), re.I))
 
 
-def image_retention_inventory():
-    """Images Kubernetes still needs now or for the immediate managed rollback."""
-    retained = []
+def _needed_list(path):
+    """Every row of one list the image cache asks "still needed?" of, or an
+    error: a list that failed or was cut short must not read as nothing
+    needing an image, or clean-up would remove one a workload still runs on."""
     try:
-        pods = kget("/api/v1/pods").get("items", [])
-    except Exception:
-        pods = []
+        listing = kget(path)
+    except Exception as error:
+        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
+                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+    if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
+            or (listing.get("metadata") or {}).get("continue")):
+        raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
+                         "are still needed, and no image is cleaned up until it can. Try again in a moment.")
+    return listing["items"]
+
+
+def image_retention_inventory():
+    """Images Kubernetes still needs now or for the immediate managed rollback.
+    Raises when any of its lists cannot be read in full."""
+    retained = []
+    pods = _needed_list("/api/v1/pods")
     for pod in pods:
         meta, spec, status = pod.get("metadata", {}), pod.get("spec", {}), pod.get("status", {})
         if status.get("phase") in ("Succeeded", "Failed") or meta.get("deletionTimestamp"):
@@ -1497,11 +1511,7 @@ def image_retention_inventory():
                 "reason": "active", "namespace": meta.get("namespace", ""),
                 "workload": workload, "container": container.get("name", ""),
             })
-    try:
-        deployments = kget("/apis/apps/v1/deployments").get("items", [])
-    except Exception:
-        deployments = []
-    for dep in deployments:
+    for dep in _needed_list("/apis/apps/v1/deployments"):
         meta = dep.get("metadata", {})
         try:
             previous = json.loads(NAMES.annotation_of(meta, "update-previous", "{}"))
@@ -1539,11 +1549,7 @@ def _stopped_references():
             ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
             ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
-        try:
-            items = kget(path).get("items", [])
-        except Exception:
-            continue
-        for obj in items:
+        for obj in _needed_list(path):
             meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
             if kind != "CronJob" and int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1) > 0:
                 continue          # running ones are named by their pods

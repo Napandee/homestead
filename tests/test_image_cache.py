@@ -52,6 +52,8 @@ class ImageCacheTests(unittest.TestCase):
                 return {"items": pods}
             if path == "/apis/apps/v1/deployments":
                 return {"items": deployments}
+            if path in ("/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs"):
+                return {"items": []}
             raise AssertionError(path)
 
         # Scans saved to disk belong to the tests that ask for it.
