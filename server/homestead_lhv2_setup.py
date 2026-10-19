@@ -405,3 +405,8 @@ ROUTES = {
     ("POST", "/api/longhorn/v2/prepare"): ("admin", lambda request: prepare(request.body)),
     ("POST", "/api/longhorn/v2/enable"): ("admin", lambda request: _enable(request.body)),
 }
+
+
+def register(ops):
+    """The job store's entry for preparing hosts for Longhorn V2 (#622)."""
+    ops.RESOLVERS["longhorn-v2-prepare"] = progress

@@ -1218,3 +1218,8 @@ ROUTES = {
     ("POST", "/api/lh/job/run"): ("operator", lambda request: run_job_now(request.body)),
     ("POST", "/api/lh/backup"): ("operator", lambda request: backup_now(request.body)),
 }
+
+
+def register(ops):
+    """The job store's entry for a protection run (#622)."""
+    ops.RESOLVERS["protect-run"] = run_status

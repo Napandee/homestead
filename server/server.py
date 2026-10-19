@@ -583,10 +583,6 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(im
 
 UPDATES.pull_progress = _pull_progress
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
-OPS.RESOLVERS[REBALANCE.KIND] = REBALANCE.status
-OPS.RESOLVERS[CREBALANCE.KIND] = CREBALANCE.status
-OPS.CANCELLERS[CREBALANCE.KIND] = (CREBALANCE.cancel_plan, CREBALANCE.cancel_run)
-OPS.CANCELLERS[REBALANCE.KIND] = (REBALANCE.cancel_plan, REBALANCE.cancel_run)
 OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
 OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, KUBE_HELPERS.kget)
 OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
@@ -594,9 +590,6 @@ OPS.RESOLVERS[RENAME.KIND] = lambda item: RENAME.status(item, OPS)
 OPS.CANCELLERS[RENAME.KIND] = (lambda item: RENAME.recovery_plan(item, KUBE_HELPERS.kget, OPS),
                               lambda item, options: RENAME.recovery_run(item, options, KUBE_HELPERS.kget, OPS))
 OPS.CLEANUPS.add(RENAME.KIND)
-for _kind in ("vm-create", "vm-edit"):
-    OPS.RESOLVERS[_kind] = VM_MUTATION_JOB.status
-    OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
@@ -672,7 +665,6 @@ import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = storage_move_progress
 OPS.RESUMABLE["reclass"] = RECLASS.resumable
-OPS.RESOLVERS["protect-run"] = LH.run_status
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name))
 
@@ -684,8 +676,6 @@ DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSI
 UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS))
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
                  "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
-# A move reads in the Activity tray like every other long job.
-OPS.RESOLVERS["move"] = MOVE_ENGINE.op_state
 ONBOARD.bind(kget, ksend, DEFAULT_NS, OPS)
 # Published through a Cloudflare Tunnel behind Access: name the Access team and
 # application, and a request that came through Cloudflare without Access's
@@ -721,8 +711,6 @@ import homestead_lhv2_upgrade as LHV2_UPGRADE
 LHV2_UPGRADE.bind(kget, ksend, PLATFORM.detect, COMPONENTS.longhorn_version, COMPONENTS.parse)
 STORAGE_RESIZE.upgrade_guard = LHV2_UPGRADE.ensure_resize_idle
 LC.vm_migration_guard = LHV2_UPGRADE.ensure_vm_idle
-OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
-OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
 
 
 OPS.RESOLVERS["harvester-upgrade"] = _harvester_upgrade_status
@@ -746,7 +734,6 @@ LHREBUILD.bind(kget, ksend, lambda: (SETTINGS_HELPERS.get_app_settings().get("lo
                settings=get_app_settings, save_settings=save_app_settings)
 import homestead_lhv2_setup as LHV2_SETUP
 LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
-OPS.RESOLVERS["longhorn-v2-prepare"] = LHV2_SETUP.progress
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
@@ -756,7 +743,9 @@ HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
 HOST_CONSOLE.platform = lambda: PLATFORM.detect()
 import homestead_unraid_vms as UNRAID_VMS
 UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect(), (storage_classes, LHCAP.capacity, vm_default_class))
-OPS.RESOLVERS[UNRAID_VMS.KIND] = UNRAID_VMS.status
+# Each module registers its own kinds of job (#622).
+for _module in (REBALANCE, CREBALANCE, VM_MUTATION_JOB, COMPONENTS, LH, MOVE_ENGINE, LHV2_SETUP, SHARES, UNRAID_VMS):
+    _module.register(OPS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, NODES.node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
@@ -836,7 +825,6 @@ OPS.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"
 SNAPSHOT_DELETE.bind(kget, ksend)
 OPS.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
 OPS.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
-OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
 OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
     lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
 DISKS.bind(kget, ksend, NODES.node_temps)

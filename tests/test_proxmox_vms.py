@@ -320,6 +320,7 @@ class StuckImportTests(unittest.TestCase):
             self.objects.pop(path, None)
             return {}
         UVMS.bind(mock.Mock(), kget, ksend, OPS)
+        UVMS.register(OPS)
         self.item = {"id": "op1", "kind": UVMS.KIND, "status": "running", "message": "Import paused: Import claim was replaced; its resources were preserved",
                      "ref": {"namespace": "lab", "kind": "proxmox", "source": "pve", "vm": "100", "vm_name": "test", "phase": "copy",
                              "cdi_cleanup": {"id": "w1", "disks": {}},

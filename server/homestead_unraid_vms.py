@@ -64,9 +64,6 @@ def bind(imports, _kget, _ksend, ops, _platform=None, storage=None):
         platform = _platform
     if storage:
         storage_classes, lh_capacity, default_class = storage
-    if isinstance(getattr(OPS, "CANCELLERS", None), dict):     # not a test's stand-in
-        OPS.CANCELLERS[KIND] = (cancel_plan, cancel_run)
-        OPS.CDI_CANCELLABLE.add(KIND)
 
 
 # ------------------------------------------------------------ cancelling
@@ -1013,3 +1010,11 @@ ROUTES = {
     ("POST", "/api/vms/import-unraid/room"): ("admin", lambda request: room(request.body)),
     ("POST", "/api/vms/import-unraid"): ("admin", lambda request: {"ok": True, "operation": start(request.body, request.user or "")}),
 }
+
+
+def register(ops):
+    """The job store's entry for a VM import from Unraid or Proxmox (#622).
+    Cancelling one also removes what CDI made for it."""
+    ops.RESOLVERS[KIND] = status
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)
+    ops.CDI_CANCELLABLE.add(KIND)
