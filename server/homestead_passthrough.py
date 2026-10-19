@@ -384,17 +384,18 @@ def _state_path():
     return f"{DATA_DIR}/passthrough.json"
 
 
+# Every copy of Homestead changes the same file, so they share the lock.
+_state_lock = SHARED.SharedLock("passthrough", directory=lambda: DATA_DIR)
+
+
 def _load():
-    try:
-        with open(_state_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_state_path(), {})
 
 
-def _save(state):
-    SHARED.write_json(_state_path(), state, indent=1, sort_keys=True)
+def _update(fn):
+    """Change the hand-over record as it is now, under the shared lock: never
+    a copy read before a host script ran."""
+    return SHARED.update_file(_state_path(), fn, _state_lock, {}, indent=1, sort_keys=True)
 
 
 def vfio_script(addresses, give):
@@ -458,10 +459,10 @@ def give(node, address):
     if "OK" not in out.split():
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-200:]
         raise ValueError(f"{address} was not handed over: {problem}")
-    state = _load()
-    for r in moving:
-        state.setdefault("pci", {}).setdefault(node, {})[r["address"]] = f"{r['vendor']}:{r['device']}"
-    _save(state)
+    def record(state):
+        for r in moving:
+            state.setdefault("pci", {}).setdefault(node, {})[r["address"]] = f"{r['vendor']}:{r['device']}"
+    _update(record)
     for r in moving:
         _permit(pci=(r["vendor"], r["device"]))
     return {"ok": True, "resource": row["resource"], "moved": [r["address"] for r in moving],
@@ -490,9 +491,11 @@ def take_back(node, address):
         raise ValueError(f"{address} was not given back: {(err or out)[-200:]}")
     # The vendor:device each was handed over as, as recorded then: a device
     # no longer on the host has no facts to read it from.
-    pairs = {listed.pop(a) for a in group if a in listed}
-    _save(state)
-    still = {v for rows in state.get("pci", {}).values() for v in rows.values()}
+    def forget(state):
+        now = state.get("pci", {}).get(node, {})
+        gone = {now.pop(a) for a in group if a in now}
+        return gone, {v for rows in state.get("pci", {}).values() for v in rows.values()}
+    pairs, still = _update(forget)
     for pair in pairs - still:
         vendor, _, device = str(pair).partition(":")
         if HEX4.fullmatch(vendor) and HEX4.fullmatch(device):

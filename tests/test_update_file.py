@@ -9,11 +9,15 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_agent_requests as REQUESTS
 import homestead_api_keys as KEYS
+import homestead_passthrough as PASS
+import homestead_setup as SETUP
 import homestead_shared as SHARED
+from test_passthrough import Cluster, Host
 
 
 class OtherCopy:
@@ -118,6 +122,56 @@ class KeyUsageTests(Folder):
                   lambda: KEYS._note_use("k1", "192.0.2.10", 10_000))
         self.assertEqual({"k0": {"at": 1, "ip": "192.0.2.9"}, "k1": {"at": 10000, "ip": "192.0.2.10"}},
                          self.stored("api-key-usage.json"))
+
+
+class SetupTests(Folder):
+    def setUp(self):
+        super().setUp()
+        SETUP.bind(self.dir.name)
+
+    def test_skipping_a_step_waits_for_another_copy(self):
+        waits_for(self, OtherCopy(self.dir.name, "setup"), lambda: SETUP.skip("health", True, "ada", True))
+        self.assertEqual(["health"], self.stored("setup.json")["skips"])
+
+    def test_a_note_on_an_unreadable_guide_file_is_skipped_not_an_error(self):
+        # A config backup notes when it was made; the backup still goes to the person.
+        with open(self.path("setup.json"), "w", encoding="utf-8") as handle:
+            handle.write("{half")
+        SETUP.note("config_backup_at", 1000)
+        with open(self.path("setup.json"), encoding="utf-8") as handle:
+            self.assertEqual("{half", handle.read())
+
+
+class PassthroughTests(Folder):
+    def setUp(self):
+        super().setUp()
+        self.cluster, self.host = Cluster(), Host()
+        storage = mock.patch.object(PASS, "longhorn_block_paths", return_value=[])
+        storage.start()
+        self.addCleanup(storage.stop)
+        PASS.bind(self.cluster.kget, self.cluster.ksend, self.host,
+                  lambda force=False: {"harvester": False, "distribution": "k3s"}, self.dir.name)
+
+    def test_handing_over_waits_for_another_copy(self):
+        waits_for(self, OtherCopy(self.dir.name, "passthrough"), lambda: PASS.give("node-1", "0000:01:00.0"))
+        self.assertIn("0000:01:00.0", self.stored("passthrough.json")["pci"]["node-1"])
+
+    def test_giving_back_keeps_a_device_another_copy_handed_over_meanwhile(self):
+        PASS.give("node-1", "0000:01:00.0")
+        run = self.host.run
+
+        def meanwhile(node, script, timeout=60, change=""):
+            if change.startswith("Give"):
+                # Another copy hands over a device on another host while this one runs.
+                state = self.stored("passthrough.json")
+                state["pci"]["node-2"] = {"0000:05:00.0": "8086:1533"}
+                SHARED.write_json(self.path("passthrough.json"), state)
+            return run(node, script, timeout=timeout, change=change)
+        self.host.run = meanwhile
+        PASS.take_back("node-1", "0000:01:00.0")
+        pci = self.stored("passthrough.json")["pci"]
+        self.assertEqual({"0000:05:00.0": "8086:1533"}, pci["node-2"])
+        self.assertNotIn("0000:01:00.0", pci.get("node-1", {}))
 
 
 if __name__ == "__main__":
