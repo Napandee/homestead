@@ -322,15 +322,20 @@ document.addEventListener("change", event => { if (event.target.closest(".placem
 window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  // Placement, storage, its neighbours and its address are built from these
+  // reads; a form built without one would save a change nobody made (#620).
+  const need = (path, what) => api(path).catch(e => { throw new Error(`Could not read ${what}: ${e.message}`); });
   try {
-    const [w, liveNodes, options, others] = await Promise.all([
+    const [w, liveNodes, options, others, network] = await Promise.all([
       api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
-      loadHardwareFeatures().then(() => api("/api/nodes").catch(() => [])),
-      api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
-      STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => []),
+      loadHardwareFeatures().catch(e => { throw new Error(`Could not read the hardware features: ${e.message}`); })
+        .then(() => need("/api/nodes", "the hosts")),
+      need(`/api/deploy/options?ns=${encodeURIComponent(ns)}`, "the storage options"),
+      STATE.data.wl ? Promise.resolve(STATE.data.wl) : need("/api/workloads", "the other apps"),
+      need("/api/network", "the network"),
     ]);
-    const [vips, network] = await Promise.all([vipChoices(), api("/api/network").catch(() => null)]);
-    if (network) STATE.data.network = network;
+    const vips = await vipChoices(network);
+    STATE.data.network = network;
     EDIT_SAVE_UNCERTAIN = false;
     // What it uses now, beside what it reserves: with one container, all of it is that container's.
     const listed = (others || []).find(x => x.ns === ns && x.name === name);
