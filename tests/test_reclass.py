@@ -2,12 +2,11 @@ import copy
 import sys
 import unittest
 import urllib.error
-from contextlib import nullcontext
-from types import SimpleNamespace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_reclass as RC
+from fakes.job_store import JobStore, Store
 
 CLASSES = [{"name": "longhorn-r2", "provisioner": "driver.longhorn.io", "replicas": "2", "migratable": True,
             "internal": False, "reclaim": "Delete"},
@@ -109,7 +108,7 @@ class Cluster:
         return body
 
 
-class OPS:
+class OPS(JobStore):
     def __init__(self):
         import threading
         self._lock = threading.RLock()
@@ -226,7 +225,7 @@ class ReclassTests(unittest.TestCase):
         c = Cluster()
         run(RC.start("lab", "frigate-config", "longhorn-r3", OPS()))
         c.pvs["pv-old"]["metadata"].update(uid="old-uid", resourceVersion="1")
-        history = SimpleNamespace(_lock=nullcontext(), _read=lambda: [])
+        history = Store()
         RC.remove_old_copy("pv-old", history)
         self.assertEqual("Delete", c.pvs["pv-old"]["spec"]["persistentVolumeReclaimPolicy"])
         with self.assertRaisesRegex(ValueError, "not an old copy"):

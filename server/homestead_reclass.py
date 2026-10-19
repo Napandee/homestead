@@ -429,8 +429,8 @@ def _config(body):
 def _review(body, actor, ops):
     cfg = _config(body)
     result = plan(cfg["namespace"], cfg["claim"], cfg["target"], capture=True)
-    with ops._lock:
-        conflicts = CONFLICTS.conflicts(ops._read(), "reclass", {
+    with ops.transaction():
+        conflicts = CONFLICTS.conflicts(ops.stored(), "reclass", {
             "namespace": cfg["namespace"], "claim": cfg["claim"],
             "temp": cfg["claim"][:63 - len(TEMP_SUFFIX)].rstrip("-") + TEMP_SUFFIX,
             "copy_claims": {cfg["claim"]: result["_source_binding"]}})
@@ -461,7 +461,7 @@ def preview(body, actor, ops):
 
 
 def start_reviewed(body, actor, ops):
-    with ops._lock:
+    with ops.transaction():
         cfg, result, context = _review(body, actor, ops)
         if not result["ok"] or body.get("confirm_capacity") is not True or not REVIEW.valid({**cfg, "capacity_token":body.get("capacity_token")}, context):
             raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
@@ -984,8 +984,8 @@ def remove_old_copy(pv, ops):
     # Serialize with handoff progression and job creation. A failed/cancelled
     # move still needs its original until recovery explicitly completes; hiding
     # its job is not permission to destroy that recovery copy.
-    with ops._lock:
-        for item in ops._read():
+    with ops.transaction():
+        for item in ops.stored():
             ref = item.get("ref", {})
             if (item.get("kind") == "reclass" and pv in (ref.get("old_pv"), ref.get("cutover", {}).get("old_pv")) and
                     (item.get("status") != "succeeded" or ref.get("retain_resources"))):

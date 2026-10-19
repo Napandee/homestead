@@ -130,7 +130,7 @@ def plan():
     jobs = _items(f"/apis/batch/v1/namespaces/{NS}/jobs?labelSelector={LABEL}%3Dtrue")
     pods = _items("/api/v1/pods")
     managers = _items(LH + "/instancemanagers")
-    saved = {i.get("ref", {}).get("name"): i.get("ref", {}) for i in ops._read() if i.get("kind") == KIND}
+    saved = {i.get("ref", {}).get("name"): i.get("ref", {}) for i in ops.stored() if i.get("kind") == KIND}
     cpu_percent = v2_cpu_percent()
     rows = []
     for lh_node in sorted(lh_nodes, key=lambda n: n["metadata"]["name"]):
@@ -337,13 +337,13 @@ def _ensure(ref, create=False):
 def prepare(body):
     if body.get('confirm') is not True or not re.fullmatch(r'[a-f0-9]{24}', str(body.get('request_id', ''))):
         raise ValueError('Review and confirm the host preparation tasks first')
-    with ops._lock:
+    with ops.transaction():
         current = plan()
         row = next((n for n in current['nodes'] if n['node'] == body.get('node')), None)
         if not row or row['review_token'] != body.get('review_token'):
             raise ValueError('Host setup requirements changed; review again')
         name = 'homestead-v2-' + body['request_id']
-        saved = ops._read()
+        saved = ops.stored()
         existing = next((i for i in saved if i.get('kind') == KIND and i.get('ref', {}).get('name') == name), None)
         if existing:
             if existing['ref'].get('approval') != row['review_token']:

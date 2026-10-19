@@ -107,10 +107,9 @@ class StoreApiTests(unittest.TestCase):
 
 # Modules that still reach into the store; each PR of #622 step 1 takes some out.
 STILL_PRIVATE = {
-    "homestead_disk_v2.py", "homestead_self_data_execute.py", "homestead_self_data_prepare.py",
-    "homestead_import_job.py", "homestead_storage_guard.py", "homestead_vm_mutation_job.py",
-    "homestead_vm_power_recovery.py", "homestead_vm_mutation_recovery.py", "homestead_storage_recovery.py",
-    "homestead_reclass.py", "homestead_power_jobs.py", "homestead_lhv2_upgrade.py", "homestead_lhv2_setup.py",
+    "homestead_self_data_execute.py", "homestead_self_data_prepare.py", "homestead_import_job.py",
+    "homestead_vm_mutation_job.py", "homestead_vm_power_recovery.py", "homestead_vm_mutation_recovery.py",
+    "homestead_power_jobs.py",
 }
 PRIVATE = re.compile(r"\b[A-Za-z_]*(?:ops|OPS|operations|OPERATIONS)[A-Za-z_]*\.(?:_lock|_read|_write)\b")
 
