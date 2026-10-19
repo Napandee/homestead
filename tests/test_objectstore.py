@@ -33,6 +33,14 @@ class ObjectStoreTests(unittest.TestCase):
                                  side_effect=lambda cfg, **kw: self.plans.append(cfg) or {"vip": "192.0.2.242"})
         plan.start()
         self.addCleanup(plan.stop)
+        # Networking checks the store's address against what the cluster holds,
+        # through its own client: the same fake, with nothing else in use.
+        for path in ("/api/v1/services", "/apis/discovery.k8s.io/v1/endpointslices",
+                     "/apis/apps/v1/deployments", "/api/v1/nodes"):
+            self.objects[path] = {"items": []}
+        reads = mock.patch.object(store.NETWORK, "kget", side_effect=lambda path, **kw: self._get(path))
+        reads.start()
+        self.addCleanup(reads.stop)
 
     def _get(self, path):
         key = path.split("?")[0]

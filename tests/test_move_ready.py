@@ -140,7 +140,9 @@ class MoveReadinessTests(unittest.TestCase):
             if path.startswith("/api/move/definition"):
                 return {"claims": []}
             raise ValueError("oldcluster: this cluster has no Longhorn backup target; set up backup storage first")
-        with mock.patch.object(engine.CLIENT, "check_cluster", lambda name: {"compatible": True, "state": "same"}), \
+        # server.py binds the engine's client to homestead_move; do the same here.
+        with mock.patch.object(engine, "CLIENT", move), \
+                mock.patch.object(engine.CLIENT, "check_cluster", lambda name: {"compatible": True, "state": "same"}), \
                 mock.patch.object(engine.CLIENT, "remote", remote):
             plan = engine.plan("oldcluster", "container", "ha-screenshot")
         self.assertFalse(plan["ok"])

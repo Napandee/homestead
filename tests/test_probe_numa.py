@@ -1,10 +1,13 @@
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+# probe.py imports homestead_http, which ships beside it in the probe's manifest.
+sys.path.insert(0, str(ROOT / "server"))
 SPEC = importlib.util.spec_from_file_location("numa_probe", ROOT / "server/probe/probe.py")
 probe = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(probe)
