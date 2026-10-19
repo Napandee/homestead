@@ -39,6 +39,7 @@ import time
 import urllib.error
 
 import homestead_agent_audit as AUDIT
+import homestead_kube as KUBE
 import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
 
@@ -317,12 +318,12 @@ def clean(cfg):
 
 
 def save(cfg):
-    current = load()
     clean_cfg = clean(cfg)
-    for key in CONTROL_KEYS:
-        clean_cfg[key] = current.get(key, DEFAULTS[key])
     password = cfg.get("password")
-    if password is not None and str(password) != "":
+    new_password = password is not None and str(password) != ""
+    # Settings that cannot be saved stop this before the password changes.
+    _readable()
+    if new_password:
         import base64
         body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
                 "metadata": {"name": _secret(), "namespace": NAMESPACE, "labels": {NAMES.key("managed"): "true"}},
@@ -333,31 +334,52 @@ def save(cfg):
             if error.code != 409:
                 raise
             ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/secrets/{_secret()}", body)
-        clean_cfg["has_password"] = True
-    else:
-        clean_cfg["has_password"] = bool(current.get("has_password")) and not cfg.get("clear_password")
-        if cfg.get("clear_password"):
-            try:
-                ksend("DELETE", f"/api/v1/namespaces/{NAMESPACE}/secrets/{_secret()}")
-            except urllib.error.HTTPError:
-                pass
-    _store(clean_cfg)
+    elif cfg.get("clear_password"):
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{NAMESPACE}/secrets/{_secret()}")
+        except urllib.error.HTTPError:
+            pass
+
+    def change(current):
+        # Power control's keys are its own save's: kept as they are stored now.
+        out = {**clean_cfg, **{key: current.get(key, DEFAULTS[key]) for key in CONTROL_KEYS}}
+        out["has_password"] = new_password or (bool(current.get("has_password")) and not cfg.get("clear_password"))
+        return out
+    saved = _update(change)
     _restart.set()
-    return {"ok": True, "config": public(clean_cfg)}
+    return {"ok": True, "config": public(saved)}
 
 
-def _store(clean_cfg):
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": _map(), "namespace": NAMESPACE, "labels": {NAMES.key("managed"): "true"}},
-            "data": {"mqtt.json": json.dumps(clean_cfg, indent=1)}}
+def _readable():
+    """Raise, as _update would, when the stored settings are there but are not
+    an object of JSON; a missing ConfigMap or key is fine."""
     try:
-        existing = kget(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}")
-        body["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
-        ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}", body)
+        cm = kget(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}")
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
+        error.close()
+        return
+    raw = (cm.get("data") or {}).get("mqtt.json")
+    try:
+        if raw is not None and not isinstance(json.loads(raw), dict):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError("The MQTT settings could not be read (mqtt.json is not an object of JSON); nothing was changed") from None
+
+
+def _update(change):
+    """Change the settings as they are stored when the change is saved (#621):
+    change(current) gets them, defaults filled in, and returns the new ones;
+    it runs again on the newer settings if another copy saved meanwhile.
+    Settings that cannot be read stop the change rather than be saved over."""
+    def apply(stored):
+        if stored is not None and not isinstance(stored, dict):
+            raise ValueError("The MQTT settings could not be read (mqtt.json is not an object); nothing was changed")
+        current = {**DEFAULTS, **{k: v for k, v in (stored or {}).items() if k in DEFAULTS or k == "has_password"}}
+        return change(current)
+    return KUBE.update_json(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}", "mqtt.json", apply,
+                            read=kget, write=ksend, indent=1)
 
 
 def public(cfg=None):
@@ -606,12 +628,15 @@ def save_control(body):
     if len(ids) > MAX_CONTROLLED:
         raise ValueError(f"at most {MAX_CONTROLLED} containers and VMs")
     on = bool(body.get("control"))
-    was = set(current.get("controlled") or []) if current.get("control") else set()
-    now = set(ids) if on else set()
-    retire = [i for i in current.get("retire") or [] if i not in now] + sorted(was - now)
-    retire = list(dict.fromkeys(retire))[-MAX_RETIRE:]
-    cfg = {**current, "control": on, "controlled": ids, "retire": retire}
-    _store(cfg)
+
+    def change(current):
+        # What is retired follows what is stored now, not what was read above.
+        was = set(current.get("controlled") or []) if current.get("control") else set()
+        now = set(ids) if on else set()
+        retire = [i for i in current.get("retire") or [] if i not in now] + sorted(was - now)
+        retire = list(dict.fromkeys(retire))[-MAX_RETIRE:]
+        return {**current, "control": on, "controlled": ids, "retire": retire}
+    cfg = _update(change)
     _restart.set()
     return {"ok": True, **control_public(cfg)}
 
