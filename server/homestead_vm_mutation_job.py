@@ -29,8 +29,8 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
             writer.check()  # a low-level warning must not hide a failed write
             if not writer.count:
                 raise ValueError("VM commit did not produce a verified resource receipt")
-            with ops._lock:
-                items = ops._read()
+            with ops.transaction() as t:
+                items = t.items
                 item = next(row for row in items if row["id"] == ident)
                 if item["status"] in ops.TERMINAL or item["status"] == ops.CANCELLING:
                     raise ValueError("VM mutation job ended before completion could be recorded")
@@ -44,21 +44,21 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
                 item["ref"].update(phase="saved", retain_resources=False)
                 ops._finish(item, "succeeded", 100,
                             "Configuration writes acknowledged by Kubernetes; guest readiness and application health are not verified")
-                ops._write(items)
+                t.save(items)
                 return {**result, "operation": ops._public(item)}
         except Exception:
             # Preserve partial/uncertain receipts, never delete resources or
             # retry a mutation. Raw errors may contain Secret/config content.
             try:
-                with ops._lock:
-                    items = ops._read()
+                with ops.transaction() as t:
+                    items = t.items
                     item = next(row for row in items if row["id"] == ident)
                     if item["status"] not in ops.TERMINAL:
                         item["ref"].update(phase="failed", retain_resources=bool(writer.count))
                         ops._finish(item, "failed", item.get("progress", 0),
                                     "VM save stopped; inspect retained write receipts. Nothing was retried." if writer.count else
                                     "VM save stopped before any resource write; obtain a fresh review.")
-                        ops._write(items)
+                        t.save(items)
             except Exception:
                 pass  # existing durable intent remains the recovery authority
             if not writer.count:

@@ -17,6 +17,7 @@ import server
 import homestead_self_data_worker as W
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
+from fakes.job_store import JobStore
 from test_self_data_coordinator import Cluster
 import test_self_data_execute as execute_fixture
 
@@ -202,7 +203,7 @@ class SupersededHoldTests(unittest.TestCase):
     its hold for good: the next move's receipt replaced the one that would
     have released it, and Jobs could never clear it (seen on a real cluster)."""
 
-    class Store:
+    class Store(JobStore):
         def __init__(self, items):
             import threading
             self._lock, self.items, self.writes = threading.RLock(), items, 0

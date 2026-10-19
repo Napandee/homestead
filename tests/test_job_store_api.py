@@ -105,12 +105,6 @@ class StoreApiTests(unittest.TestCase):
             t.items
 
 
-# Modules that still reach into the store; each PR of #622 step 1 takes some out.
-STILL_PRIVATE = {
-    "homestead_self_data_execute.py", "homestead_self_data_prepare.py", "homestead_import_job.py",
-    "homestead_vm_mutation_job.py", "homestead_vm_power_recovery.py", "homestead_vm_mutation_recovery.py",
-    "homestead_power_jobs.py",
-}
 PRIVATE = re.compile(r"\b[A-Za-z_]*(?:ops|OPS|operations|OPERATIONS)[A-Za-z_]*\.(?:_lock|_read|_write)\b")
 
 
@@ -119,12 +113,9 @@ class GuardTests(unittest.TestCase):
         return {path.name for path in (ROOT / "server").glob("*.py")
                 if path.name != "homestead_operations.py" and PRIVATE.search(path.read_text(encoding="utf-8"))}
 
-    def test_only_the_listed_modules_still_use_the_private_store(self):
-        self.assertEqual(set(), self.users() - STILL_PRIVATE,
+    def test_no_module_uses_the_private_store(self):
+        self.assertEqual(set(), self.users(),
                          "use OPS.stored() or OPS.transaction(), not the store's private lock, read or write")
-
-    def test_the_list_is_exact(self):
-        self.assertEqual(set(), STILL_PRIVATE - self.users(), "this module no longer uses them: take it off STILL_PRIVATE")
 
 
 if __name__ == "__main__":
