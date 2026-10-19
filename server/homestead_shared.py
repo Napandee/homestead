@@ -182,6 +182,18 @@ def read_json(path, default):
     return value
 
 
+def update_file(path, fn, lock, default, **dump):
+    """Read, change and save one JSON store on the data volume as one step:
+    under lock (a SharedLock, which every copy of Homestead takes), read it
+    strictly, let fn change the value in place and return fn's answer. If fn
+    raises, nothing is saved."""
+    with lock:
+        value = read_json(path, default)
+        result = fn(value)
+        write_json(path, value, **dump)
+        return result
+
+
 def write_json(path, value, *, durable=False, mode=None, **dump):
     with write_scope(path):
         _write_json(path, value, durable=durable, mode=mode, **dump)
