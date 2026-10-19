@@ -218,7 +218,14 @@ async function api(path, opts) {
   if (diagnostic) opts = { ...opts, headers: { ...opts?.headers, ...diagnostic.headers } };
   let r;
   try { r = await fetch(path, opts); }
-  catch (error) { diagnostic?.done(0); throw error; }
+  catch (error) {
+    diagnostic?.done(0);
+    // A connection that broke after you left the page is for a page nobody is
+    // looking at too: dropped like a late answer, so its error is not shown on
+    // the page you went to.
+    if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
+    throw error;
+  }
   const missing = r.headers.get("x-homestead-fleet-missing");
   if (missing && window.fleetNoteMissing) window.fleetNoteMissing(missing);
   const ct = r.headers.get("content-type") || "";

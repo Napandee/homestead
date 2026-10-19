@@ -273,6 +273,59 @@ try {
     await page.evaluate(platform => { STATE.platform = JSON.parse(platform); }, platform);
     await page.evaluate(() => { window.api = window.__realApi; });
 
+    // A read that fails after you have left its page is dropped, like one that
+    // answers late; a write still says it failed.
+    const late = await page.evaluate(async () => {
+      const realFetch = window.fetch, failures = [];
+      window.fetch = () => new Promise((_, reject) => failures.push(reject));
+      const read = window.__realApi("/api/network").then(() => "answered", () => "rejected");
+      const write = window.__realApi("/api/network", { method: "POST", body: "{}" }).then(() => "answered", () => "rejected");
+      window.NAV_TOKEN++;
+      failures.forEach(reject => reject(new TypeError("connection reset")));
+      window.fetch = realFetch;
+      const later = new Promise(resolve => setTimeout(() => resolve("dropped"), 300));
+      return [await Promise.race([read, later]), await Promise.race([write, later])];
+    });
+    assert.deepEqual(late, ["dropped", "rejected"]);
+
+    // Edit an app: a pinned host that is cordoned stays its host, rather than
+    // the form falling back to "any host" and Save unpinning it.
+    await page.evaluate(() => {
+      const read = window.__realApi;
+      window.api = (path, ...rest) => {
+        const base = String(path).split("?")[0];
+        if (base === "/api/workload") return read(path, ...rest).then(w => ({ ...w, node: "harvester-node2" }));
+        if (base === "/api/nodes") return read(path, ...rest).then(nodes => nodes.map(n => n.name === "harvester-node2" ? { ...n, schedulable: false } : n));
+        return read(path, ...rest);
+      };
+      STATE.data.wl = null;
+      return wlEdit("lab", "frigate", true);
+    });
+    await page.waitForSelector("#e_node", {state: "attached"});
+    assert.equal(await page.locator("#e_node").inputValue(), "harvester-node2", "the cordoned pinned host stays chosen");
+    assert.match(await page.locator("#e_node option:checked").innerText(), /not schedulable/);
+    await close();
+
+    // Turning autostart off for Homestead itself asks first, even when the
+    // dialog fetched the list of apps itself.
+    const asked = await page.evaluate(async () => {
+      const read = window.__realApi, questions = [];
+      window.api = (path, ...rest) => String(path).split("?")[0] === "/api/workload"
+        ? read(path, ...rest).then(w => ({ ...w, priority: "self" })) : read(path, ...rest);
+      STATE.data.wl = null;
+      await wlEdit("lab", "frigate", true);
+      STATE.data.wl = null;
+      const realAsk = window.ask;
+      window.ask = async message => { questions.push(message); return false; };
+      $("#e_autostart").checked = false;
+      await editSave("lab", "frigate");
+      window.ask = realAsk;
+      return questions.join("\n");
+    });
+    assert.match(asked, /Turning autostart off stops Homestead/);
+    await close();
+    await page.evaluate(() => { window.api = window.__realApi; });
+
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);
     await context.close();
