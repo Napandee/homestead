@@ -76,8 +76,8 @@ def _snapshot(item, read, actor, helper_admission, restart_admission, runtime_ch
 
 
 def preview(ident, ops, read, actor, helper_admission, restart_admission, *, runtime_check=None):
-    with ops._lock:
-        plan, context, _ = _snapshot(_job(ops._read(), ident), read, actor, helper_admission, restart_admission, runtime_check)
+    with ops.transaction():
+        plan, context, _ = _snapshot(_job(ops.stored(), ident), read, actor, helper_admission, restart_admission, runtime_check)
         tokens = {action: REVIEW.issue({"id": ident, "action": action}, context) for action in ("continue", "pause")
                   if plan["can_" + action]}
         return {"plan": plan, "tokens": tokens}
@@ -87,8 +87,8 @@ def act(body, ops, read, actor, helper_admission, restart_admission, *, runtime_
     ident, action = str(body.get("id") or ""), body.get("action")
     if action not in ("continue", "pause"):
         raise ValueError("Choose Continue or Pause")
-    with ops._lock:
-        items = ops._read()
+    with ops.transaction() as t:
+        items = t.items
         item = _job(items, ident)
         plan, context, decisions = _snapshot(item, read, actor, helper_admission, restart_admission, runtime_check)
         config = {"id": ident, "action": action, "capacity_token": body.get("capacity_token")}
@@ -109,6 +109,6 @@ def act(body, ops, read, actor, helper_admission, restart_admission, *, runtime_
             ref.pop("storage_hold", None)
             item["finished_at"] = ""
             ops._finish(item, "running", item.get("progress", 0), "Review accepted; continuing from confirmed steps with fresh checks")
-        ops._write(items)
+        t.save(items)
         return {"ok": True, "operation": ops._public(item),
                 "detail": "Move paused; data and running copy jobs retained" if action == "pause" else "Move queued to continue with fresh safety checks"}

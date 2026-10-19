@@ -2,7 +2,6 @@
 import copy
 import json
 import sys
-import threading
 from types import SimpleNamespace
 import unittest
 import urllib.error
@@ -12,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_components as C
 import homestead_lhv2_upgrade as V
 import homestead_capacity_review as R
+from fakes.job_store import Store
 
 
 def ready():
@@ -277,8 +277,7 @@ class UpgradeTests(unittest.TestCase):
         store = [copy.deepcopy(item), unrelated]
         def write(items):
             store[:] = copy.deepcopy(items)
-        ops = SimpleNamespace(_lock=threading.RLock(), require_write=lambda: None,
-                              _read=lambda: copy.deepcopy(store), _write=write)
+        ops = Store(read=lambda: copy.deepcopy(store), write=write, require_write=lambda: None)
         body = self.c.body(False)
         V.configure(body, ops)
         self.assertTrue(store[0]['ref']['v2_enabled'])
@@ -292,7 +291,7 @@ class UpgradeTests(unittest.TestCase):
         self.c.installed = 'v1.13.0'
         body = self.c.body(False)
         body['confirm_capacity'] = False
-        ops = SimpleNamespace(_lock=threading.RLock(), require_write=lambda: None)
+        ops = Store(require_write=lambda: None)
         with self.assertRaisesRegex(ValueError, 'Review'):
             V.configure(body, ops)
         self.assertFalse(self.c.sent)

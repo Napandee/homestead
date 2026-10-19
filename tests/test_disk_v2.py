@@ -18,6 +18,7 @@ import homestead_disk_v2 as V
 import homestead_disks as DISKS
 import homestead_operations as OPS
 import homestead_storage_conflicts as CONFLICTS
+from fakes.job_store import JobStore
 
 GB = 1024 ** 3
 READY = [{'type': 'Ready', 'status': 'True'}, {'type': 'Schedulable', 'status': 'True'}]
@@ -26,7 +27,7 @@ HOST_FACTS = '\n'.join(['DEVICE /dev/sdb', 'SIZE ' + str(1000 * GB), 'UUID fs-da
     'CONFIG {"diskUUID":"disk-source-uuid"}', 'END'])
 
 
-class Operations:
+class Operations(JobStore):
     TERMINAL = OPS.TERMINAL
     def __init__(self): self.items = []; self._lock = threading.RLock()
     def _read(self): return copy.deepcopy(self.items)

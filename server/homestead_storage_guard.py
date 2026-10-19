@@ -84,8 +84,8 @@ def reasons(items, *, namespace="", claim="", pv="", handle="", job="", read=Non
 
 
 def review(plan, ops, read):
-    with ops._lock:
-        jobs = reasons(ops._read(), namespace=plan.get("namespace"), claim=plan.get("name"),
+    with ops.transaction():
+        jobs = reasons(ops.stored(), namespace=plan.get("namespace"), claim=plan.get("name"),
                        pv=plan.get("pv", {}).get("name"), handle=plan.get("longhorn", {}).get("name"), read=read)
     if jobs:
         plan["blocked"] = True
@@ -100,8 +100,8 @@ def volume(ops, read, handle):
     """Fence the whole snapshot workflow, including stops and Longhorn REST calls."""
     if not handle:
         raise ValueError("Backing volume identity is missing; nothing was changed")
-    with ops._lock:
-        if reasons(ops._read(), handle=handle, read=read):
+    with ops.transaction():
+        if reasons(ops.stored(), handle=handle, read=read):
             raise ValueError(PROTECTED)
         yield
 
@@ -124,12 +124,12 @@ def send(method, path, body, dispatch, ops, read, own_controller=None):
     if pv: volume = pv[1] or name
     if lh: handle = lh[2] or name
     if job_match: namespace, job = job_match[1], job_match[2] or name
-    with ops._lock:
+    with ops.transaction():
         if own_change:
-            if _active(ops._read()):
+            if _active(ops.stored()):
                 raise ValueError("Finish or recover the storage move before updating, restarting or changing Homestead's replicas")
             return dispatch()
-        items = [item for item in ops._read() if item["id"] != getattr(_local, "job", None)]
+        items = [item for item in ops.stored() if item["id"] != getattr(_local, "job", None)]
         if snapshot and _active(items) and (snapshot[2] or method == "POST"):
             obj = body if method == "POST" else read(path_only)
             handle = (obj.get("spec") or {}).get("volume") if isinstance(obj, dict) else None

@@ -13,11 +13,12 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_lhv2_setup as V
+from fakes.job_store import JobStore
 
 BOOT = '01234567-89ab-cdef-0123-456789abcdef'
 
 
-class Operations:
+class Operations(JobStore):
     TERMINAL = {'succeeded', 'failed', 'cancelled'}
     def __init__(self):
         self._lock = threading.RLock()

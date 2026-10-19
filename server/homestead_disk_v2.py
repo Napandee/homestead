@@ -290,7 +290,7 @@ def _context(inv, facts, rows):
 
 def review(body):
     node, disk = _name(body.get('node')), _name(body.get('disk'))
-    with ops._lock:
+    with ops.transaction():
         existing = _active_for(node, disk)
         if existing:
             return {'operation': public(existing)}
@@ -308,7 +308,7 @@ def review(body):
 
 
 def _active_for(node, disk):
-    return next((i for i in ops._read() if i.get('kind') == KIND and i.get('ref', {}).get('node') == node
+    return next((i for i in ops.stored() if i.get('kind') == KIND and i.get('ref', {}).get('node') == node
                  and i.get('ref', {}).get('disk') == disk and i.get('ref', {}).get('phase') not in ('complete', 'cancelled')), None)
 
 
@@ -328,8 +328,8 @@ def start(body):
     node, disk, request_id = _name(body.get('node')), _name(body.get('disk')), str(body.get('request_id', ''))
     if body.get('confirm_capacity') is not True or not re.fullmatch(r'[a-f0-9]{24}', request_id):
         raise ValueError('Review and confirm disk evacuation first')
-    with ops._lock:
-        saved = ops._read()
+    with ops.transaction():
+        saved = ops.stored()
         prior = next((i for i in saved if i.get('kind') == KIND and i.get('ref', {}).get('request_id') == request_id), None)
         if prior:
             if prior['ref'].get('approval') != body.get('capacity_token') or (prior['ref']['node'], prior['ref']['disk']) != (node, disk):
@@ -352,11 +352,11 @@ def start(body):
                'original_disk': copy.deepcopy(inv['spec']), 'hardware': facts, 'volumes': rows}
         op = ops.start(KIND, 'Prepare ' + facts['device'] + ' for Longhorn V2', {'kind': 'Node', 'name': node},
                        '/nodes?node=' + quote(node, safe='') + '&section=storage', ref, 'Queued replica evacuation; no device erase is authorized')
-        return public(next(i for i in ops._read() if i['id'] == op['id']))
+        return public(next(i for i in ops.stored() if i['id'] == op['id']))
 
 
 def _saved(operation_id):
-    item = next((i for i in ops._read() if i.get('id') == operation_id and i.get('kind') == KIND), None)
+    item = next((i for i in ops.stored() if i.get('id') == operation_id and i.get('kind') == KIND), None)
     if not item:
         raise ValueError('Disk preparation task not found')
     return item
@@ -371,7 +371,7 @@ def public(item):
 
 def status(operation_id):
     ops.list_operations()
-    with ops._lock:
+    with ops.transaction():
         return public(_saved(operation_id))
 
 
@@ -412,7 +412,7 @@ def _same_volume(volume, row):
 
 
 def prepare_review(operation_id):
-    with ops._lock:
+    with ops.transaction():
         item = _saved(operation_id)
         ref = item['ref']
         if item.get('status') in ops.TERMINAL or ref['phase'] != 'awaiting-erase':
@@ -438,7 +438,7 @@ def prepare(body):
     request_id = str(body.get('request_id', ''))
     if body.get('confirm_capacity') is not True or not re.fullmatch(r'[a-f0-9]{24}', request_id):
         raise ValueError('Review and confirm device preparation first')
-    with ops._lock:
+    with ops.transaction():
         item = _saved(body.get('operation_id'))
         ref = item['ref']
         if ref.get('prepare_request_id') == request_id:
@@ -764,7 +764,7 @@ def cancel_run(item, options):
     _patch_disk(inv, desired)
     ref['phase'] = 'cancelled'
     # The generic canceller persists its original record separately.
-    with ops._lock:
+    with ops.transaction():
         saved = _saved(item['id'])
         saved['ref']['phase'] = 'cancelled'
         ops.checkpoint(saved)
@@ -772,8 +772,8 @@ def cancel_run(item, options):
 
 
 def mutation_guard(node, disk=None, device=None):
-    with ops._lock:
-        for item in ops._read():
+    with ops.transaction():
+        for item in ops.stored():
             ref = item.get('ref') or {}
             if (item.get('kind') == KIND and ref.get('node') == node and ref.get('phase') not in ('complete', 'cancelled')
                     and (disk is None and device is None or disk is not None and disk in (ref.get('disk'), ref.get('v2_disk'))
@@ -782,9 +782,9 @@ def mutation_guard(node, disk=None, device=None):
 
 
 def tasks():
-    with ops._lock:
+    with ops.transaction():
         return [{'id': i['id'], 'node': i['ref']['node'], 'disk': i['ref']['disk'], 'device': i['ref']['hardware']['device'],
-                 'phase': i['ref']['phase']} for i in ops._read() if i.get('kind') == KIND and i.get('ref', {}).get('phase') not in ('complete', 'cancelled')]
+                 'phase': i['ref']['phase']} for i in ops.stored() if i.get('kind') == KIND and i.get('ref', {}).get('phase') not in ('complete', 'cancelled')]
 
 
 def logs(item):
@@ -802,7 +802,7 @@ def protect_mutations(disks):
     """Keep the saved approval and ordinary disk writes mutually exclusive."""
     @contextmanager
     def scope(node, disk, device):
-        with ops._lock:
+        with ops.transaction():
             mutation_guard(node, disk, device)
             yield
     disks.mutation_scope = scope
