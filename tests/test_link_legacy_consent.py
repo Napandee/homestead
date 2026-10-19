@@ -17,7 +17,7 @@ class LinkLegacyConsentTests(unittest.TestCase):
         row = {"name": "old", "url": "http://192.0.2.9:8088", "user": "admin"}
         with mock.patch.object(MOVE, "FLEET", fleet), \
                 mock.patch.object(MOVE, "_stored_clusters", return_value=[row]), \
-                mock.patch.object(MOVE, "_save_clusters"), \
+                mock.patch.object(MOVE, "_update_clusters"), \
                 mock.patch.object(MOVE, "_password", return_value="secret"), \
                 mock.patch.object(MOVE, "ksend"):
             MOVE.link_legacy("old", "https://198.51.100.5:8443", **kwargs)
