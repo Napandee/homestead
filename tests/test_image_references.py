@@ -139,5 +139,40 @@ class ScanTests(Fixture):
         self.assertEqual([["docker.io/library/small:1"]], [i["repoTags"] for i in imports._SCANS["node1"]["images"]])
 
 
+class UnreadInventoryTests(Fixture):
+    """Every source of "still needed" is read in full, or nothing is removed (#620)."""
+    UNUSED = "sha256:" + "a" * 64
+    LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs")
+
+    def setUp(self):
+        super().setUp()
+        self.nodes[0]["status"]["images"][2]["names"].append("docker.io/library/unused@" + self.UNUSED)
+
+    def posted(self):
+        """Removal pods started (a scan pod may start too; it removes nothing)."""
+        return [body["metadata"]["name"] for method, path, body in self.sent if method == "POST"
+                and body["metadata"]["name"].startswith("homestead-image-clean-")]
+
+    def test_an_image_nothing_needs_is_cleaned_up(self):
+        imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual(1, len(self.posted()))
+
+    def test_nothing_is_removed_when_a_list_cannot_be_read(self):
+        read = imports.kget
+        for failed in self.LISTS:
+            for how, answer in (("timed out", OSError("timed out")),
+                                ("cut short", {"items": [], "metadata": {"continue": "next"}})):
+                def get(path, failed=failed, answer=answer):
+                    if path == failed:
+                        if isinstance(answer, Exception):
+                            raise answer
+                        return answer
+                    return read(path)
+                with self.subTest(failed=failed, how=how), mock.patch.object(imports, "kget", get):
+                    with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                        imports.cleanup_image(self.UNUSED, ["node1"])
+                    self.assertEqual([], self.posted())
+
+
 if __name__ == "__main__":
     unittest.main()
