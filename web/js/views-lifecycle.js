@@ -324,15 +324,14 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   // Placement, storage, its neighbours and its address are built from these
   // reads; a form built without one would save a change nobody made (#620).
-  const need = (path, what) => api(path).catch(e => { throw new Error(`Could not read ${what}: ${e.message}`); });
   try {
     const [w, liveNodes, options, others, network] = await Promise.all([
       api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       loadHardwareFeatures().catch(e => { throw new Error(`Could not read the hardware features: ${e.message}`); })
-        .then(() => need("/api/nodes", "the hosts")),
-      need(`/api/deploy/options?ns=${encodeURIComponent(ns)}`, "the storage options"),
-      STATE.data.wl ? Promise.resolve(STATE.data.wl) : need("/api/workloads", "the other apps"),
-      need("/api/network", "the network"),
+        .then(() => mustRead("/api/nodes", "the hosts")),
+      mustRead(`/api/deploy/options?ns=${encodeURIComponent(ns)}`, "the storage options"),
+      STATE.data.wl ? Promise.resolve(STATE.data.wl) : mustRead("/api/workloads", "the other apps"),
+      mustRead("/api/network", "the network"),
     ]);
     const vips = await vipChoices(network);
     STATE.data.network = network;
@@ -1096,16 +1095,25 @@ window.vmNetChanged = () => {
 };
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
-  const [opts, disks, vipOptions, devices, namespaces] = await Promise.all([
-    api("/api/vm/create-options").catch(e => ({ unread: e.message })),
-    api("/api/vm-disks").catch(() => []),
-    vipChoices(),
-    api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
-    api("/api/namespaces").catch(() => [defaultNamespace()]),
-  ]);
-  // A form built on invented options would offer classes and images that may not be there (#620).
-  if (opts.unread) {
-    modal("New virtual machine", UI.callout("bad", "Could not read what a new VM can use", esc(opts.unread)) + UI.actions(UI.cancel("Close")));
+  // A form built on invented options would offer classes, images and
+  // addresses that may not be there (#620). A read that only hides some
+  // choices (other namespaces, imported disks when none was chosen) is named
+  // on the form instead.
+  const missed = [];
+  const partly = (path, what, fallback) => api(path).catch(e => { missed.push(`Could not read ${what}: ${e.message}`); return fallback; });
+  let opts, disks, vipOptions, devices, namespaces;
+  try {
+    let network;
+    [opts, disks, devices, namespaces, network] = await Promise.all([
+      mustRead("/api/vm/create-options", "what a new VM can use"),
+      selectedDisk ? mustRead("/api/vm-disks", "the imported disks") : partly("/api/vm-disks", "the imported disks", []),
+      api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
+      partly("/api/namespaces", "the other namespaces", []),
+      mustRead("/api/network", "the network"),
+    ]);
+    vipOptions = await vipChoices(network);
+  } catch (e) {
+    modal("New virtual machine", UI.error(e, { retry: `vmNew(${jsArg(selectedDisk)},${jsArg(selectedNamespace)})`, dialog: true }));
     return;
   }
   window.__vmNetworkReopen = "vm";
@@ -1189,7 +1197,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
-  modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
+  modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
     { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
     // The display and virtual devices, a step of their own as on the Edit dialog.
     ...(opts.hardware_base ? [{ title: "Display and devices", html: vmDisplayFields(opts.hardware_base) }] : []),
