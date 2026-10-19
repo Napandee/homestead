@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as networking
+from fakes.platform import plain_platform
 
 
 class NetworkingTests(unittest.TestCase):
@@ -97,6 +98,7 @@ class NetworkingTests(unittest.TestCase):
         self.assertEqual("web", self.sent[-1][2]["spec"]["ports"][0]["name"])
 
     def setUp(self):
+        plain_platform(self)
         self.sent = []
         self.objects = {
             "/api/v1/services": {"items": [{

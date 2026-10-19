@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+from fakes.platform import plain_platform
 
 STACK = """services:
   web:
@@ -24,6 +25,7 @@ STACK = """services:
 
 class ComposeApplyTests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         self.created = []
         self.controllers = {}
         self.pods = []

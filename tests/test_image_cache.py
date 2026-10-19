@@ -7,10 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+from fakes.platform import plain_platform
 
 
 class ImageCacheTests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         self.active = "sha256:" + "a" * 64
         self.rollback = "sha256:" + "b" * 64
         self.unused = "sha256:" + "c" * 64

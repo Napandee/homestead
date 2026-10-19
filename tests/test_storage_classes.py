@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_storage_classes as STORAGE_CLASSES
+from fakes.platform import plain_platform
 
 CLASSES = {"items": [
     {"metadata": {"name": "harvester-longhorn", "annotations": {
@@ -138,6 +139,7 @@ class StorageClassTests(unittest.TestCase):
 
 class LonghornV2Tests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
