@@ -147,6 +147,11 @@ class UnreadInventoryTests(Fixture):
     def setUp(self):
         super().setUp()
         self.nodes[0]["status"]["images"][2]["names"].append("docker.io/library/unused@" + self.UNUSED)
+        # A removal pod needs the runtime's paths, which come from the platform;
+        # since #662 an unread platform is an error, not a guess, so give it one.
+        platform = mock.patch("homestead_platform.detect", lambda *_: {"distribution": "k3s"})
+        platform.start()
+        self.addCleanup(platform.stop)
 
     def posted(self):
         """Removal pods started (a scan pod may start too; it removes nothing)."""
