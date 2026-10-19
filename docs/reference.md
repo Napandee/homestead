@@ -1835,6 +1835,7 @@ image is published:
 
 ```bash
 python -m pip install --only-binary=:all: --require-hashes -r requirements-topology.txt
+python -m pip install --only-binary=:all: --require-hashes -r requirements-test.txt   # test-only, not in the image
 python -m unittest discover -s tests -v
 for file in web/js/*.js web/sw.js; do node --check "$file"; done
 node --test tests/*.test.js
