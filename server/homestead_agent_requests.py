@@ -19,7 +19,6 @@ and are dropped KEEP after they end.
 import os
 import re
 import secrets
-import threading
 import time
 
 import homestead_agent_audit as AUDIT
@@ -32,7 +31,8 @@ FILE = "agent-requests.json"
 TTL = 30 * 60
 MAX_PENDING = 10
 KEEP = 7 * 86400
-_lock = threading.Lock()
+# Every copy of Homestead reads and saves the same file, so they share the lock.
+_lock = SHARED.SharedLock("agent-requests", directory=lambda: DATA_DIR)
 
 
 def bind(data_dir):
@@ -145,9 +145,8 @@ def listing(role):
 
 def _claim(rid):
     """The one decision on a request, across every copy of Homestead: a file
-    made with O_EXCL on the shared data volume, which only one copy can make.
-    _lock alone holds within one copy; two people - or two clicks - reaching
-    two copies at once could otherwise both run it."""
+    made with O_EXCL on the shared data volume, which only one copy can make,
+    and which stays there as the record that it was decided."""
     if not re.fullmatch(r"[0-9a-f]{16}", str(rid or "")):
         raise ValueError("there is no such request")
     path = os.path.join(DATA_DIR, f"agent-request-{rid}.decided")
@@ -159,8 +158,7 @@ def _claim(rid):
 
 def _take(rid, user, role, status):
     """The request, moved out of pending under the lock, so two people
-    deciding at once cannot both run it - on this copy (_lock) or another
-    (_claim)."""
+    deciding at once cannot both run it, on this copy or another."""
     with _lock:
         rows = _settle(_load(), time.time())
         row = rows.get(str(rid or ""))
