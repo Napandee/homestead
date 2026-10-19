@@ -1102,7 +1102,9 @@ window.selfHealthPaint = selfHealthPaint;
 window.sambaSet = async on => {
   if (on && !STATE.data.sambaInstalled) {
     if (nodeAddressesOnly()) return sambaInstallGo("");
-    const choices = await vipChoices();
+    let choices;
+    try { choices = await vipChoices(); }
+    catch (e) { return modal("Install Samba", UI.error(e, { title: "Could not offer an address", retry: "sambaSet(true)", dialog: true })); }
     const own = (choices.own || []).find(v => v.free);
     return modal("Install Samba", `<p class="small">Samba serves the network shares. Choose the address Windows will find it at.</p>
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
@@ -1148,7 +1150,9 @@ window.nfsSet = async on => {
       ${UI.actions(`<button class="btn pri" onclick="closeModal();go('shares')">Network Shares</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
     if (nodeAddressesOnly()) return modal("NFS needs a VIP", `<p>k3s ServiceLB cannot provide the dedicated address and preserved client IPs needed for this NFSv4 server. Install kube-vip under Cluster Add-ons, then try again.</p>
       ${UI.actions(`<button class="btn pri" onclick="closeModal();addonsPaint()">OK</button>`)}`);
-    const choices = await vipChoices();
+    let choices;
+    try { choices = await vipChoices(); }
+    catch (e) { return modal("Install NFSv4 server", UI.error(e, { title: "Could not offer an address", retry: "nfsSet(true)", dialog: true })); }
     choices.used = [];
     choices.own = (choices.own || []).filter(v => v.free);
     const own = (choices.own || []).find(v => v.free);
