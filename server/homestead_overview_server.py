@@ -76,18 +76,20 @@ def bind_routes(helpers, **values):
 def _sampler():
     while True:
         started = time.monotonic()
+        # Each VM's disk traffic is a count, and a rate needs two readings.
+        # Every replica keeps its own, in memory, for the pages it answers.
         try:
-            o = get_overview()
-            if LEADER.is_leader():
-                HISTORY.record_live(o)
-            # Each VM's disk traffic is a count, and a rate needs two readings.
+            VMUSAGE.sample()
+        except Exception:
+            pass
+        # The dashboard history is the leader's to keep; a standby replica's
+        # full scan of the cluster would be thrown away (#621).
+        if LEADER.is_leader():
             try:
-                VMUSAGE.sample()
-            except Exception:
-                pass
-            beat("sampler", 30, leader_only=True)
-        except Exception as error:
-            beat("sampler", 30, error, leader_only=True)
+                HISTORY.record_live(get_overview())
+                beat("sampler", 30, leader_only=True)
+            except Exception as error:
+                beat("sampler", 30, error, leader_only=True)
         time.sleep(max(1, 30 - (time.monotonic() - started)))
 
 

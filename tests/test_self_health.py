@@ -46,9 +46,11 @@ class HeartbeatTests(unittest.TestCase):
         server.HEART.update(self.saved)
 
     def test_each_task_says_whether_it_is_working(self):
-        server.beat("sampler", 30)
-        server.beat("alerts", 20, leader_only=True)
-        server.beat("hardware", 30, RuntimeError("probe timed out"), leader_only=True)
+        # The leader-only tasks beat on the leader, which shares them (#621).
+        with mock.patch.object(server.LEADER, "is_leader", lambda: True):
+            server.beat("sampler", 30)
+            server.beat("alerts", 20, leader_only=True)
+            server.beat("hardware", 30, RuntimeError("probe timed out"), leader_only=True)
         server.HEART["history"] = {"every": 30, "leader_only": True, "last_ok": time.time() - 3600, "error": "", "error_at": 0}
         with mock.patch.object(server.KUBE_HELPERS, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: True), \
