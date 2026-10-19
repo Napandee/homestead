@@ -7,9 +7,15 @@ from what it saw last, the difference is a change, recorded with the settings
 from before it so it can be undone.
 
 Who made it: every write Homestead sends to a Deployment is noted with the
-person whose request sent it (a job of Homestead's own has none). A change
-with no such note in the minute before it was made outside Homestead -
-kubectl, Helm, GitOps - and says so.
+person whose request sent it (a job of Homestead's own has none). The write
+also carries it, as an annotation on the app's own metadata (never its pod
+template, which would restart it), so the leader credits a change whichever
+copy of Homestead served it. The annotation names nobody: it holds a keyed
+digest of the app, the moment and the person, which the leader checks against
+the accounts and API keys. A mark that does not check out for that app -
+copied from another app, or altered - is ignored. A change
+with no such note or mark in the minute before it was made outside Homestead
+- kubectl, Helm, GitOps - and says so.
 
 Values that may be secret are never kept in the readable summary: an
 environment variable from a Secret is "from Secret x", and a plain one whose
@@ -21,12 +27,14 @@ KEEP entries per app for KEEP_DAYS.
 """
 import copy
 import hashlib
+import hmac
 import json
 import os
 import re
 import threading
 import time
 
+import homestead_names as NAMES
 import homestead_routes
 import homestead_shared as SHARED
 
@@ -40,6 +48,9 @@ _notes = []                 # (at, ns, name, who) of Homestead's own writes
 _notes_lock = threading.Lock()
 REQUEST = threading.local() # who the request on this thread is for
 BY_SCHEDULE = "schedule"    # a power schedule's stop or start: not a change to record
+AUTHOR = NAMES.key("changedBy")   # on an app's own metadata: who last wrote it, and when
+MARK_MAX = 256                    # a longer mark is not one Homestead wrote
+_AUTHOR_POINTER = "/metadata/annotations/" + AUTHOR.replace("~", "~0").replace("/", "~1")
 
 
 # server.py's review of an undo, and its writer (bind); for the loop, the
@@ -73,13 +84,132 @@ def _save(data):
 _DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([a-z0-9-]+)/deployments(?:/([a-z0-9.-]+)(?:/scale)?)?(?:\?.*)?$")
 
 
+def _author_key():
+    """A key every copy of Homestead shares, so a mark can be checked without naming anyone.
+
+    Read only: before setup there is no key, and looking for changes must not
+    make one (it raises, so the write goes unmarked and a mark reads as outside)."""
+    import homestead_auth as AUTH
+    key = AUTH._load().get("signing_key")
+    if not key:
+        raise LookupError("no signing key yet")
+    return hmac.new(key.encode(), b"homestead-change-author-v1", hashlib.sha256).digest()
+
+
+def _authors():
+    """Everyone a write can be for: the accounts and the API keys, by name."""
+    import homestead_auth as AUTH
+    data = AUTH._load()
+    return {"users": list(data.get("users") or {}),
+            "api_keys": [key.get("name", "") for key in (data.get("api_keys") or {}).values()]}
+
+
+def _label(who):
+    """Who a write was for, with its kind, so names of different kinds never match."""
+    if not who:
+        return "job:"
+    if who == BY_SCHEDULE:
+        return "schedule:"
+    if who.startswith("api-key:"):
+        return who
+    return "user:" + who
+
+
+def _signed(key, ns, name, at, who):
+    """The digest a mark holds: this app, this moment, this person."""
+    text = "\n".join(("Deployment", ns, name, str(int(at)), _label(who)))
+    return hmac.new(key, text.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+_METADATA = ("", "/metadata", "/metadata/annotations")   # paths whose value can hold the mark
+
+
+def _strip(body):
+    """Drop any mark the request brought, in a body or a JSON patch: only this
+    write guard puts one on, so nobody can carry another person's through Homestead.
+
+    In a JSON patch an op on the mark itself is dropped, a value set at the
+    whole object, its metadata or its annotations is cleaned, and a copy or move
+    into one of those is refused: what it copies cannot be cleaned here."""
+    if isinstance(body, list):
+        keep = []
+        for op in body:
+            if isinstance(op, dict):
+                if _AUTHOR_POINTER in (op.get("path"), op.get("from")):
+                    continue
+                if op.get("op") in ("copy", "move") and op.get("path") in _METADATA:
+                    raise ValueError("a JSON patch cannot copy or move into an app's metadata")
+                value = op.get("value")
+                if op.get("path") in _METADATA and isinstance(value, dict):
+                    _strip_object(value, op["path"])
+            keep.append(op)
+        body[:] = keep
+    elif isinstance(body, dict):
+        _strip_object(body, "")
+
+
+def _strip_object(value, path):
+    """Remove the mark from an object, its metadata or its annotations, by where it was set."""
+    if path == "":
+        value = value.get("metadata")
+    if path in ("", "/metadata") and isinstance(value, dict):
+        value = value.get("annotations")
+    if isinstance(value, dict):
+        value.pop(AUTHOR, None)
+
+
+def _carry(path, body, ns, name, who, now):
+    """Put the mark on the app's own metadata, when this body can hold it.
+
+    A JSON patch (a list) and a Scale have no app metadata to put it on; they
+    are only noted on this copy, as before."""
+    if not isinstance(body, dict) or "/scale" in path.split("?")[0]:
+        return
+    meta = body.setdefault("metadata", {})
+    if not isinstance(meta, dict):
+        return
+    if meta.get("annotations") is None:
+        meta["annotations"] = {}
+    if isinstance(meta["annotations"], dict):
+        try:
+            meta["annotations"][AUTHOR] = json.dumps(
+                {"at": int(now), "by": _signed(_author_key(), ns, name, now, who)}, separators=(",", ":"))
+        except Exception:
+            pass    # the credentials could not be read: the note on this copy still says who
+
+
+def _marked_by(dep, ns, name, since, now):
+    """Who the app's mark says wrote it since the last look, or None when there is
+    no such mark or it does not check out for this app.
+
+    The mark's time is the writing copy's clock and the window the leader's; with
+    the clocks set by NTP the few seconds of slack cover the difference. A mark
+    kept on this app over another edit within one look is credited, as the note
+    in memory always was."""
+    raw = (((dep or {}).get("metadata") or {}).get("annotations") or {}).get(AUTHOR)
+    if not isinstance(raw, str) or len(raw) > MARK_MAX:
+        return None
+    try:
+        mark = json.loads(raw)
+        at, tag = int(mark["at"]), str(mark["by"])
+        if not since - 5 <= at <= now:
+            return None
+        key, known = _author_key(), _authors()
+        candidates = ["", BY_SCHEDULE, *(u for u in known["users"] if _label(u) == "user:" + u),
+                      *(f"api-key:{n}" for n in known["api_keys"])]
+        return next((who for who in candidates if hmac.compare_digest(_signed(key, ns, name, at, who), tag)), None)
+    except Exception:
+        return None
+
+
 def note_write(method, path, body=None, now=None):
-    """Homestead is about to write a Deployment: remember who for."""
+    """Homestead is about to write a Deployment: remember who for, and say so on the write."""
     if method not in ("POST", "PUT", "PATCH"):
         return
     m = _DEPLOYMENT.match(path or "")
     if not m:
         return
+    _strip(body)            # before anything else: a refused patch is not noted
     name = m.group(2) or ((body or {}).get("metadata") or {}).get("name") or ""
     who = getattr(REQUEST, "user", None) or ""
     now = now or time.time()
@@ -88,15 +218,18 @@ def note_write(method, path, body=None, now=None):
         cutoff = now - NOTE_WINDOW * 4
         while _notes and _notes[0][0] < cutoff:
             _notes.pop(0)
+    _carry(path, body, m.group(1), name, who, now)
 
 
-def _attribution(ns, name, since, now):
-    """Who made a change seen now: the latest note for this app since the last look."""
+def _attribution(ns, name, since, now, dep=None):
+    """Who made a change seen now: the latest note for this app since the last look,
+    or else the mark the write left on the app, if it is that recent and checks out."""
     with _notes_lock:
         found = [n for n in _notes if n[1] == ns and n[2] == name and since - 5 <= n[0] <= now]
-    if not found:
-        return "outside", ""
-    return "homestead", found[-1][3]
+    if found:
+        return "homestead", found[-1][3]
+    who = _marked_by(dep, ns, name, since, now)
+    return ("outside", "") if who is None else ("homestead", who)
 
 
 def _env(container):
@@ -194,6 +327,34 @@ def _template(dep):
     return {"template": template, "replicas": spec.get("replicas", 1)}
 
 
+def _observe_one(apps, seen, dep, now, since):
+    """Record one app's change since the last look; True when the history changed."""
+    meta = dep.get("metadata") or {}
+    key = f"{meta.get('namespace')}/{meta.get('name')}"
+    seen.add(key)
+    now_summary = summary(dep)
+    app = apps.get(key)
+    if app is None:                      # first sight: what it is, not a change
+        apps[key] = {"last": now_summary, "kept": _template(dep), "entries": [], "seen": round(now)}
+        return True
+    changed = False
+    rows = diff(app.get("last") or {}, now_summary)
+    if rows:
+        source, who = _attribution(meta.get("namespace"), meta.get("name"), since, now, dep)
+        if who == BY_SCHEDULE and all(r["field"] == "Copies" for r in rows):
+            # Stopped or started on its schedule, twice a day: kept as
+            # the app now is, but not an entry crowding out real changes.
+            app["last"], app["kept"] = now_summary, _template(dep)
+            return True
+        entry = {"id": hashlib.sha256(f"{key}{now}".encode()).hexdigest()[:12], "at": round(now),
+                 "source": source, "by": who, "changes": rows, "before": app.get("kept")}
+        app["entries"] = ([entry] + app.get("entries", []))[:KEEP]
+        app["last"], app["kept"] = now_summary, _template(dep)
+        changed = True
+    app["seen"] = app.get("seen") if now - app.get("seen", 0) < 86400 else round(now)
+    return changed
+
+
 def observe(deployments, now=None, since=None):
     """One look at every app: record what changed since the last."""
     now = now or time.time()
@@ -204,29 +365,10 @@ def observe(deployments, now=None, since=None):
         changed = False
         seen = set()
         for dep in deployments or []:
-            meta = dep.get("metadata") or {}
-            key = f"{meta.get('namespace')}/{meta.get('name')}"
-            seen.add(key)
-            now_summary = summary(dep)
-            app = apps.get(key)
-            if app is None:                      # first sight: what it is, not a change
-                apps[key] = {"last": now_summary, "kept": _template(dep), "entries": [], "seen": round(now)}
-                changed = True
-                continue
-            rows = diff(app.get("last") or {}, now_summary)
-            if rows:
-                source, who = _attribution(meta.get("namespace"), meta.get("name"), since, now)
-                if who == BY_SCHEDULE and all(r["field"] == "Copies" for r in rows):
-                    # Stopped or started on its schedule, twice a day: kept as
-                    # the app now is, but not an entry crowding out real changes.
-                    app["last"], app["kept"], changed = now_summary, _template(dep), True
-                    continue
-                entry = {"id": hashlib.sha256(f"{key}{now}".encode()).hexdigest()[:12], "at": round(now),
-                         "source": source, "by": who, "changes": rows, "before": app.get("kept")}
-                app["entries"] = ([entry] + app.get("entries", []))[:KEEP]
-                app["last"], app["kept"] = now_summary, _template(dep)
-                changed = True
-            app["seen"] = app.get("seen") if now - app.get("seen", 0) < 86400 else round(now)
+            try:
+                changed = _observe_one(apps, seen, dep, now, since) or changed
+            except Exception:
+                continue    # one app that cannot be read stops no other from being recorded
         oldest = now - KEEP_DAYS * 86400
         for key in list(apps):
             entries = [e for e in apps[key].get("entries", []) if e["at"] >= oldest]
