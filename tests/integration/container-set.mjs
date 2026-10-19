@@ -26,6 +26,10 @@ try {
   browser = await chromium.launch({ headless: true });
   for (const width of [1440, 375]) for (const theme of ["dark", "light"]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 } });
+    // Motion off, as the dialog audit runs: a dialog still scaling in moves a
+    // button between Playwright measuring it and the click landing.
+    await context.addInitScript(theme => localStorage.setItem("homestead.settings",
+      JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 })), theme);
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
