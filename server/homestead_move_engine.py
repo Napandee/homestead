@@ -27,6 +27,7 @@ import urllib.parse
 import weakref
 
 import homestead_icons as ICONS
+import homestead_kube as KUBE
 import homestead_move as MOVE
 import homestead_names as NAMES
 import homestead_passthrough as PASSTHROUGH
@@ -202,15 +203,6 @@ def moves():
 
 
 # ------------------------------------------------------------------- helpers
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _q(**params):
     return "?" + urllib.parse.urlencode(params)
 
@@ -219,7 +211,7 @@ def _here_endpoint(target):
     secret_name = (target or {}).get("secret") or ""
     if not secret_name:
         return ""
-    secret = _get(f"/api/v1/namespaces/{LHNS}/secrets/{secret_name}") or {}
+    secret = KUBE.get_optional(f"/api/v1/namespaces/{LHNS}/secrets/{secret_name}", read=kget) or {}
     raw = (secret.get("data") or {}).get("AWS_ENDPOINTS", "")
     try:
         return base64.b64decode(raw).decode()
@@ -407,7 +399,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                 device_resources = PASSTHROUGH.resources()["resources"]
             _, effects, _, device_hosts = VM_DEVICES.prepare(definition, namespace, host_devices)
             for effect in effects:
-                if effect["kind"] == "configmap" and effect["body"] and _get(effect["path"]):
+                if effect["kind"] == "configmap" and effect["body"] and KUBE.get_optional(effect["path"], read=kget):
                     blockers.append("The destination vBIOS ConfigMap already exists; choose another namespace")
             if device_rows:
                 warnings.append("Review GPU compatibility before starting the destination VM. Its devices use the selected destination hardware; the source hostname selector is removed and other placement rules are retained")
@@ -415,7 +407,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             blockers.append(str(error))
         # A halted copy still needs the VM API; discovering this after backup
         # would needlessly stop the source on a destination without KubeVirt.
-        if not _get("/apis/kubevirt.io/v1"):
+        if not KUBE.get_optional("/apis/kubevirt.io/v1", read=kget):
             blockers.append("Install KubeVirt on the destination before transferring a VM")
         if transfer_mode == "copy":
             warnings.append("The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it")
@@ -439,7 +431,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             if persistent_efi or persistent_tpm:
                 blockers.append("This VM has persistent firmware or TPM state outside its disks; copying that state is not supported yet")
         for secret in definition.get("secrets", []):
-            if _get(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}"):
+            if KUBE.get_optional(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}", read=kget):
                 blockers.append(f"Secret {secret['metadata']['name']} already exists in {namespace}; choose another destination namespace")
     joined = bool(_same_target(here, there))
     if not joined:
@@ -452,16 +444,16 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                             f"to {there.get('url')} for this transfer, then returns to its previous setting; "
                             "backups already written to the old one stay there")
 
-    if not _get(f"/api/v1/namespaces/{namespace}"):
+    if not KUBE.get_optional(f"/api/v1/namespaces/{namespace}", read=kget):
         warnings.append(f"namespace {namespace} does not exist here and will be created")
     # A volume is its own claim, checked with the claims below.
-    if kind != "volume" and _get(_object_path(kind, namespace, name)):
+    if kind != "volume" and KUBE.get_optional(_object_path(kind, namespace, name), read=kget):
         blockers.append(f"{name} already exists in {namespace} on this cluster")
     choices = _choices(definition.get("claims", []), volumes, kind)
     chosen_class = storage_class or LH.STORAGE_CLASS
 
     def check_class(klass, claim, longhorn):
-        base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}")
+        base = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}", read=kget)
         where = f"volume {claim}: " if claim else ""
         if not base:
             blockers.append(f"{where}storage class {klass} does not exist here")
@@ -480,7 +472,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         check_class(chosen_class, "", True)
     for claim in definition.get("claims", []):
         pick = choices[claim["claim"]]
-        exists = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+        exists = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}", read=kget)
         if pick["action"] == "skip":
             if not exists:
                 blockers.append(f"volume {claim['claim']} is skipped, but no volume of that name is in "
@@ -492,14 +484,13 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             check_class(pick["storage_class"], claim["claim"], pick["action"] == "move")
         if pick["action"] == "move":
             klass = pick["storage_class"] or chosen_class
-            base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}")
+            base = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}", read=kget)
             if base:
                 try:
                     LH.validate_restore_class(base, claim.get("volume_mode") or "Filesystem", migration=True)
                 except ValueError as error:
                     blockers.append(f"volume {claim['claim']}: {error}")
-        if pick["action"] == "move" and claim.get("backing_image") and not _get(
-                f"{LH_API}/namespaces/{LHNS}/backingimages/{claim['backing_image']}"):
+        if pick["action"] == "move" and claim.get("backing_image") and not KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backingimages/{claim['backing_image']}", read=kget):
             warnings.append(f"disk {claim['claim']} is built on the {claim['backing_image']} image, "
                             "which will be restored from its backup first")
         if pick["action"] == "blank":
@@ -519,13 +510,13 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             warnings.append("no node here carries " + ", ".join(f"{k}={v}" for k, v in selector.items())
                             + ", so it will wait unscheduled until one does")
     for secret in definition.get("pull_secrets", []) or []:
-        if not _get(f"/api/v1/namespaces/{namespace}/secrets/{secret}"):
+        if not KUBE.get_optional(f"/api/v1/namespaces/{namespace}/secrets/{secret}", read=kget):
             warnings.append(f"image pull secret {secret} does not exist here, so a private image "
                             "may not pull")
     for network in definition.get("networks", []) or []:
         net_ns, _, net_name = network.rpartition("/")
-        if not _get(f"/apis/k8s.cni.cncf.io/v1/namespaces/{net_ns or namespace}/"
-                    f"network-attachment-definitions/{net_name}"):
+        if not KUBE.get_optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{net_ns or namespace}/"
+                    f"network-attachment-definitions/{net_name}", read=kget):
             warnings.append(f"network {network} does not exist here; the VM will not start "
                             "until it does")
 
@@ -712,7 +703,7 @@ def _borrow_target_locked(move, there=None):
         if target["secret"]:
             path = f"/api/v1/namespaces/{LHNS}/secrets"
             secret = target["secret"]
-            existing = _get(f"{path}/{secret}")
+            existing = KUBE.get_optional(f"{path}/{secret}", read=kget)
             if existing and not _ours(existing, move["id"]):
                 raise ValueError("The transfer's backup credentials already exist and belong to another workload")
             if not existing:
@@ -890,9 +881,9 @@ def _syncing(move):
     # An image a disk is built on has to be readable here too, or the disk
     # cannot be restored however visible its own backup is.
     for image in {c["backing_image"] for c in _moving(move) if c.get("backing_image")}:
-        if _get(f"{LH_API}/namespaces/{LHNS}/backingimages/{image}"):
+        if KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backingimages/{image}", read=kget):
             continue
-        found = _get(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{image}")
+        found = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{image}", read=kget)
         if not ((found or {}).get("status", {}) or {}).get("url"):
             waiting.append(f"the {image} image")
     if waiting:
@@ -902,14 +893,14 @@ def _syncing(move):
 
 
 def _ensure_namespace(namespace):
-    if _get(f"/api/v1/namespaces/{namespace}"):
+    if KUBE.get_optional(f"/api/v1/namespaces/{namespace}", read=kget):
         return
     ksend("POST", "/api/v1/namespaces", {"apiVersion": "v1", "kind": "Namespace",
                                          "metadata": {"name": namespace}})
 
 
 def _image_ready(name):
-    image = _get(f"{LH_API}/namespaces/{LHNS}/backingimages/{name}")
+    image = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backingimages/{name}", read=kget)
     if not image:
         return False
     files = ((image.get("status", {}) or {}).get("diskFileStatusMap") or {}).values()
@@ -941,9 +932,9 @@ def _image_class():
 
 def _ensure_image(move, name, storage_class=""):
     """Restore a Harvester image from its backup before the disks built on it."""
-    if _get(f"{LH_API}/namespaces/{LHNS}/backingimages/{name}"):
+    if KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backingimages/{name}", read=kget):
         return
-    backup = _get(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{name}")
+    backup = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{name}", read=kget)
     url = ((backup or {}).get("status", {}) or {}).get("url", "")
     if not url:
         raise CLIENT.Unreachable(f"the {name} image backup is not visible here yet")
@@ -961,7 +952,7 @@ def _ensure_image(move, name, storage_class=""):
 
 def _restore_progress(namespace, claim):
     """(finished, percent) for one claim being restored from a backup."""
-    pvc = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim}", read=kget)
     if pvc:
         problem = LH.restore_problem({**pvc, "metadata": {**pvc.get("metadata", {}), "namespace": namespace}})
         if problem:
@@ -969,7 +960,7 @@ def _restore_progress(namespace, claim):
     if not pvc or (pvc.get("status", {}) or {}).get("phase") != "Bound":
         return False, 0
     volume_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
-    volume = _get(f"{LH_API}/namespaces/{LHNS}/volumes/{volume_name}") if volume_name else None
+    volume = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/volumes/{volume_name}", read=kget) if volume_name else None
     if not volume:
         return False, 0
     status = volume.get("status", {}) or {}
@@ -996,7 +987,7 @@ def _restoring(move):
     for claim in move["claims"]:
         if claim.get("created"):
             continue
-        existing = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+        existing = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}", read=kget)
         if claim.get("action") == "skip":
             if not existing:
                 raise ValueError(f"volume {claim['claim']} was to be skipped, using one already in {namespace} "
@@ -1066,7 +1057,7 @@ def _blank_claim(move, claim, namespace):
 
 def _post_ours(path, collection, body, move):
     """Create something, treating 'it exists and this move made it' as done."""
-    existing = _get(path)
+    existing = KUBE.get_optional(path, read=kget)
     if existing:
         if _ours(existing, move["id"]):
             return
@@ -1129,7 +1120,7 @@ def _creating(move):
     for service in definition.get("services", []):
         service_name = service["metadata"]["name"]
         path = f"/api/v1/namespaces/{namespace}/services/{service_name}"
-        existing = _get(path)
+        existing = KUBE.get_optional(path, read=kget)
         if existing and _ours(existing, move["id"]):
             continue
         # On the host network an app answers on the node itself. Here k3s's
@@ -1188,11 +1179,11 @@ def _starting(move):
         ksend("PATCH", path, {"spec": dict(origin)}, ctype="application/merge-patch+json")
         flags["started"] = time.time()
     if move["kind"] == "vm":
-        vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{name}")
+        vmi = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{name}", read=kget)
         ready = (vmi or {}).get("status", {}).get("phase") == "Running"
         waiting = "Waiting for the VM to boot"
     else:
-        found = _get(path) or {}
+        found = KUBE.get_optional(path, read=kget) or {}
         want = int(origin.get("replicas", 1) or 1)
         have = int((found.get("status", {}) or {}).get("readyReplicas", 0) or 0)
         ready = have >= want

@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import urllib.error
+import homestead_kube as KUBE
 import homestead_multus as MULTUS
 import homestead_roles as ROLES
 
@@ -36,10 +37,10 @@ def _groups():
 def _listed(path):
     """Every row of a list detect() decides from, or an error: an empty list
     because the read failed would say a feature is not there."""
-    listing = kget(path)
-    if not isinstance(listing, dict) or not isinstance(listing.get("items"), list):
-        raise ValueError(f"Kubernetes returned an incomplete list for {path}")
-    return listing["items"]
+    try:
+        return KUBE.items(path, read=kget)
+    except KUBE.Incomplete as error:
+        raise ValueError(f"Kubernetes returned an incomplete list for {path}") from error
 
 
 def _exists(path):

@@ -17,6 +17,7 @@ label patch, not a controller.
 """
 import base64
 import json
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_csi_restore as CSI_RESTORE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
@@ -553,8 +554,7 @@ def backup_target():
         "interval": sp.get("pollInterval", ""),
         "available": avail.get("status") != "True",
         "reason": avail.get("message", "") or avail.get("reason", ""),
-        "secret_missing": bool(sp.get("credentialSecret")) and _get_or_none(
-            f"/api/v1/namespaces/{LHNS}/secrets/{sp.get('credentialSecret')}") is None,
+        "secret_missing": bool(sp.get("credentialSecret")) and KUBE.get_optional(f"/api/v1/namespaces/{LHNS}/secrets/{sp.get('credentialSecret')}", read=kget) is None,
         # Set through Harvester's own setting there, which VM backups use too.
         "harvester": _harvester_setting() is not None,
     }
@@ -573,7 +573,7 @@ def _target_secret(name, keys):
             "metadata": {"name": name, "namespace": LHNS, "labels": {NAMES.key("managed"): "true"}},
             "stringData": data}
     path = f"/api/v1/namespaces/{LHNS}/secrets"
-    current = _get_or_none(f"{path}/{name}")
+    current = KUBE.get_optional(f"{path}/{name}", read=kget)
     if current:
         body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
         ksend("PUT", f"{path}/{name}", body)
@@ -663,7 +663,7 @@ def _set_harvester_target(setting, url, poll, keys):
 
 def _secret_keys(name):
     """S3 keys, and the endpoint, from a Secret in Longhorn's namespace."""
-    secret = _get_or_none(f"/api/v1/namespaces/{LHNS}/secrets/{name}") or {}
+    secret = KUBE.get_optional(f"/api/v1/namespaces/{LHNS}/secrets/{name}", read=kget) or {}
     data = secret.get("data") or {}
 
     def read(key):
@@ -858,13 +858,13 @@ def ensure_move_backup(volume, snapshot, backup, cleanup_id="", source_uid=""):
         from homestead_transfer_cleanup import ownership
         annotations = ownership(cleanup_id, source_uid)
     path = f"{API}/namespaces/{LHNS}/backups/{backup}"
-    existing = _get_or_none(path)
+    existing = KUBE.get_optional(path, read=kget)
     if existing:
         if ((existing.get("spec") or {}).get("snapshotName") != snapshot or
                 (existing.get("metadata", {}).get("labels") or {}).get("backup-volume") != volume):
             raise ValueError("migration backup exists with a different snapshot or volume")
         return {"backup": backup}
-    snap = _get_or_none(f"{API}/namespaces/{LHNS}/snapshots/{snapshot}")
+    snap = KUBE.get_optional(f"{API}/namespaces/{LHNS}/snapshots/{snapshot}", read=kget)
     if not snap:
         try:
             create_snapshot(volume, snapshot, annotations=annotations)
@@ -910,19 +910,10 @@ def _valid_k8s_name(value):
         K8S_LABEL.fullmatch(part) for part in value.split("."))
 
 
-def _get_or_none(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _backup(name):
     if not _valid_k8s_name(name):
         raise ValueError("backup name is invalid")
-    item = _get_or_none(f"{API}/namespaces/{LHNS}/backups/{name}")
+    item = KUBE.get_optional(f"{API}/namespaces/{LHNS}/backups/{name}", read=kget)
     if item is None:
         raise ValueError("backup was not found")
     return item
@@ -956,11 +947,10 @@ def restore_plan(backup, namespace, pvc_name):
     suggested = (suggested or "restored-volume") + "-restore"
     conflict = None
     if namespace:
-        if _get_or_none(f"/api/v1/namespaces/{namespace}") is None:
+        if KUBE.get_optional(f"/api/v1/namespaces/{namespace}", read=kget) is None:
             conflict = {"kind": "Namespace", "name": namespace,
                         "message": f"Namespace {namespace} does not exist"}
-        elif pvc_name and _get_or_none(
-                f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}") is not None:
+        elif pvc_name and KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}", read=kget) is not None:
             conflict = {"kind": "PersistentVolumeClaim", "name": pvc_name,
                         "message": f"PVC {namespace}/{pvc_name} already exists; choose a new name"}
     return {
@@ -1013,7 +1003,7 @@ def restore_backup(cfg):
     # Longhorn's restore webhook recovers backingImage/backupTargetName from
     # the backup; migration prepares that image before creating this PVC.
     backing_image = str(status.get("volumeBackingImageName") or cfg.get("backing_image") or "")
-    if backing_image and _get_or_none(f"{API}/namespaces/{LHNS}/backingimages/{backing_image}") is None:
+    if backing_image and KUBE.get_optional(f"{API}/namespaces/{LHNS}/backingimages/{backing_image}", read=kget) is None:
         raise ValueError(f"Restore the {backing_image} backing image before restoring this disk")
     supported = CSI_RESTORE.ensure_support()
     result = {"ok": True, "backup": backup, "namespace": namespace, "name": pvc_name,

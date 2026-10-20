@@ -7,6 +7,7 @@ import copy
 import urllib.error
 from urllib.parse import quote
 
+import homestead_kube as KUBE
 import homestead_place as PLACE
 import homestead_vm_resources as VMRES
 import homestead_pod_resources as RESOURCES
@@ -18,10 +19,10 @@ import homestead_vm_device_usage as DEVICE_USAGE
 
 
 def _items(read, path):
-    value = read(path)
-    if not isinstance(value.get("items"), list) or (value.get("metadata") or {}).get("continue"):
-        raise ValueError("incomplete VM admission inventory")
-    return value["items"]
+    try:
+        return KUBE.items(path, read=read)
+    except KUBE.Incomplete as error:
+        raise ValueError("incomplete VM admission inventory") from error
 
 
 def _optional(read, path):

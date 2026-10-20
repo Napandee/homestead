@@ -178,7 +178,7 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
         since = cfg.setdefault("snapshot_wait_started", time.time())
         if time.time() - float(since) > 15 * 60:
             raise ValueError("CSI snapshot setup did not become ready; repair snapshot support, then resume this restore")
-        existing = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+        existing = KUBE.get_optional(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=LH.kget)
         if existing:
             annotation = (existing.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id")
             if annotation != cfg["restore_id"]:
@@ -189,7 +189,7 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
             if not created["created"]:
                 return "running", 2, created["message"]
             ref["restore_started"] = True
-    pvc = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=LH.kget)
     if pvc:
         if cfg and (pvc.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id") != cfg["restore_id"]:
             raise ValueError("The destination PVC was replaced by another operation")

@@ -30,6 +30,7 @@ import json
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 
 KIND = "restore-test"
@@ -65,15 +66,6 @@ def bind(_kget, _ksend, _names, _backups, _restore, _restore_status, _csi_cleanu
         workloads, app_settings, save_app_settings, dns_name = _workloads, _settings, _save_settings, _dns_name
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _send(method, path, body=None):
     """A write that is done if Kubernetes says it already was."""
     try:
@@ -97,9 +89,9 @@ def plan(ns, dep):
                      for v in dep["spec"]["template"]["spec"].get("volumes") or []} - {None, ""})
     rows, without = [], []
     for claim in claims:
-        pvc = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}") or {}
+        pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read=kget) or {}
         pv_name = (pvc.get("spec") or {}).get("volumeName")
-        pv = _get(f"/api/v1/persistentvolumes/{pv_name}") if pv_name else None
+        pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget) if pv_name else None
         csi = ((pv or {}).get("spec") or {}).get("csi") or {}
         if csi.get("driver") != "driver.longhorn.io":
             without.append({"claim": claim, "why": "not a Longhorn volume"})
@@ -142,7 +134,7 @@ def pick(workloads, operations, enabled, window_open, now, classes):
         if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") \
                 or w.get("managed_smb") or w.get("managed_nfs") or w.get("site") or not due(w, now):
             continue
-        dep = _get(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
+        dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}", read=kget)
         if not dep:
             continue
         rows, _ = plan(w["ns"], dep)
@@ -230,7 +222,7 @@ def privileged(dep):
 
 def _pod(ns, item):
     selector = f"{names.key(LABEL)}%3D{item['id']}"
-    pods = (_get(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}") or {}).get("items") or []
+    pods = (KUBE.get_optional(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}", read=kget) or {}).get("items") or []
     return pods[0] if pods else None
 
 
@@ -258,7 +250,7 @@ def resolve(item, checkpoint, now=None):
         checkpoint(item)
 
     if phase == "plan":
-        dep = _get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
         if not dep:
             return "failed", 0, f"{name} no longer exists"
         rows, without = plan(ns, dep)
@@ -300,7 +292,7 @@ def resolve(item, checkpoint, now=None):
         progress = min(s[1] for s in states) if states else 0
         return "running", 5 + int(progress * 0.5), "Restoring " + "; ".join(f"{r['claim']}: {s[2]}" for r, s in zip(ref["rows"], states))
     if phase == "starting":
-        dep = _get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
         if not dep:
             return _finish(item, to, False, f"{name} was removed during the test")
         to("checking", copy_at=now, ports=_ports(dep), privileged=privileged(dep))
@@ -308,9 +300,9 @@ def resolve(item, checkpoint, now=None):
         _send("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", copy_of(dep, item, ref["rows"]))
         return "running", 70, "Copy started, cut off from the network; waiting for it to be ready"
     if phase == "checking":
-        if not _get(f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}"):
+        if not KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}", read=kget):
             # Saved as checking, then stopped before the copy was made: make it now.
-            dep = _get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+            dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
             if not dep:
                 return _finish(item, to, False, f"{name} was removed during the test")
             _send("POST", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", fence(item, ns))

@@ -1,4 +1,4 @@
-import sys, unittest
+import io, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_move_engine as ENGINE
@@ -22,12 +22,12 @@ class ImageClassTests(unittest.TestCase):
     storageClass found for backingImage" - on a cluster with no default."""
 
     def setUp(self):
-        self.saved = ENGINE.kget, ENGINE.ksend, ENGINE.LH, ENGINE._get
+        self.saved = ENGINE.kget, ENGINE.ksend, ENGINE.LH
         self.sent = []
         ENGINE.LH = Longhorn()
 
     def tearDown(self):
-        ENGINE.kget, ENGINE.ksend, ENGINE.LH, ENGINE._get = self.saved
+        ENGINE.kget, ENGINE.ksend, ENGINE.LH = self.saved
 
     def classes(self, *rows):
         ENGINE.kget = lambda path: {"items": list(rows)}
@@ -46,9 +46,15 @@ class ImageClassTests(unittest.TestCase):
         self.assertEqual("fast", ENGINE._image_class())
 
     def test_the_restored_image_names_its_class(self):
-        self.classes(klass("harvester-longhorn"))
-        ENGINE._get = lambda path: ({"status": {"url": "s3://bucket/backupbackingimages/ubuntu"}}
-                                    if "backupbackingimages" in path else None)
+        classes = {"items": [klass("harvester-longhorn")]}
+
+        def read(path):
+            if "backupbackingimages" in path:
+                return {"status": {"url": "s3://bucket/backupbackingimages/ubuntu"}}
+            if "/backingimages/" in path:
+                raise urllib.error.HTTPError(path, 404, "not found", {}, io.BytesIO(b""))
+            return classes
+        ENGINE.kget = read
         ENGINE.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body))
 
         ENGINE._ensure_image({"id": "m1"}, "ubuntu")

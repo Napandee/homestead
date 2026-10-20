@@ -23,7 +23,7 @@ class RestoreRecoveryTests(unittest.TestCase):
 
     def test_pending_setup_is_polled_and_keeps_config_for_restart(self):
         resolver = Mock()
-        with patch.object(server.LH, "_get_or_none", return_value=None), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=None), \
              patch.object(server.LH, "restore_backup", return_value={"created": False, "message": "Installing CSI snapshots"}) as restore:
             self.assertEqual(("running", 2, "Installing CSI snapshots"), server.STORAGE_ROUTES._restore_then_tidy(self.item, resolver))
         restore.assert_called_once_with(self.cfg)
@@ -31,23 +31,28 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.assertFalse(self.item["ref"]["restore_started"])
 
     def test_existing_owned_claim_after_lost_reply_is_adopted_without_second_create(self):
-        with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=self.pvc) as read, \
              patch.object(server.LH, "restore_backup") as restore, \
              patch.object(server.LH, "restore_problem", return_value=""):
             result = server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("running", 30, "Restoring data"))
         self.assertEqual("running", result[0])
         self.assertTrue(self.item["ref"]["restore_started"])
         restore.assert_not_called()
+        # The claim is read through Longhorn's own reader, as it was before.
+        claim = "/api/v1/namespaces/lab/persistentvolumeclaims/example-data"
+        self.assertTrue(read.call_args_list)
+        for call in read.call_args_list:
+            self.assertEqual(((claim,), {"read": server.LH.kget}), (call.args, call.kwargs))
 
     def test_unrelated_claim_is_not_adopted_and_deleted_started_claim_is_not_recreated(self):
         self.pvc["metadata"]["annotations"] = {}
-        with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=self.pvc), \
              patch.object(server.LH, "restore_backup") as restore:
             with self.assertRaisesRegex(ValueError, "another operation"):
                 server.STORAGE_ROUTES._restore_then_tidy(self.item, Mock())
             restore.assert_not_called()
         self.item["ref"]["restore_started"] = True
-        with patch.object(server.LH, "_get_or_none", return_value=None), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=None), \
              patch.object(server.LH, "restore_backup") as restore, \
              patch.object(server.STORAGE_ROUTES, "cleanup_restores"):
             result = server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("failed", 0, "Destination deleted"))
@@ -58,7 +63,7 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.item["ref"]["restore_started"] = True
         self.pvc["status"]["phase"] = "Pending"
         resolver = Mock()
-        with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=self.pvc), \
              patch.object(server.LH, "restore_problem", return_value="backup is unavailable"):
             result = server.STORAGE_ROUTES._restore_then_tidy(self.item, resolver)
         self.assertEqual("failed", result[0])
@@ -68,14 +73,14 @@ class RestoreRecoveryTests(unittest.TestCase):
     def test_explicit_resume_resets_dependency_wait_timeout(self):
         self.cfg["snapshot_wait_started"] = 1
         self.item["status"] = "queued"
-        with patch.object(server.LH, "_get_or_none", return_value=None), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=None), \
              patch.object(server.LH, "restore_backup", return_value={"created": False, "message": "Waiting"}):
             self.assertEqual("running", server.STORAGE_ROUTES._restore_then_tidy(self.item, Mock())[0])
         self.assertGreater(self.cfg["snapshot_wait_started"], 1)
 
     def test_growth_waits_for_data_restore_then_checks_class_fresh(self):
         self.item["ref"]["restore_started"] = True
-        with patch.object(server.LH, "_get_or_none", return_value=self.pvc), \
+        with patch.object(server.LH.KUBE, "get_optional", return_value=self.pvc), \
              patch.object(server.LH, "restore_problem", return_value=""), \
              patch.object(server.LH, "finish_restore_resize") as grow:
             server.STORAGE_ROUTES._restore_then_tidy(self.item, lambda item: ("running", 50, "Restoring"))

@@ -60,10 +60,10 @@ def bind(read, send, helper_image, namespaces):
 
 
 def _items(path):
-    value = kget(path)
-    if not isinstance(value.get("items"), list) or value.get("metadata", {}).get("continue"):
-        raise ValueError("Snapshot browser inventory is incomplete")
-    return value["items"]
+    try:
+        return KUBE.items(path, read=kget)
+    except KUBE.Incomplete as error:
+        raise ValueError("Snapshot browser inventory is incomplete") from error
 
 
 def _name(value):
