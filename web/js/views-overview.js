@@ -7,8 +7,21 @@ const tempSource = temps => temps?.max_source ? ` (${esc(temps.max_source)})` : 
 function nodeTemp(n) {
   const t = n.temps || {}, cpu = t.cpu_c ?? null, max = t.max_c ?? null;
   const value = cpu ?? max;
-  const extra = cpu != null && max != null && max > cpu ? `max ${max}°C${t.max_source ? `, ${t.max_source}` : ""}` : "";
+  if (value == null && n.probe?.state === "waiting") return { value, label: "CPU temp", text: "waiting for the probe", extra: "" };
+  const extra = [cpu != null && max != null && max > cpu ? `max ${max}°C${t.max_source ? `, ${t.max_source}` : ""}` : "",
+    value != null && ["stale", "unreachable"].includes(n.probe?.state) ? `last reading ${probeAge(n.probe.age_s)} ago` : ""].filter(Boolean).join(" · ");
   return { value, label: cpu != null || max == null ? "CPU temp" : "Max temp", text: value == null ? "—" : `${value}°C`, extra };
+}
+/* The node probe is read in the background (#705), so a host shows at once and
+   fills in when its probe answers. These say how old its readings are. */
+function probeAge(seconds) {
+  if (seconds == null) return "";
+  return seconds < 90 ? `${seconds} s` : seconds < 5400 ? `${Math.round(seconds / 60)} min` : `${Math.round(seconds / 3600)} h`;
+}
+function probeProblem(n) {
+  const p = n.probe || {};
+  if (p.state !== "unreachable") return "";
+  return `The probe on ${n.name} hasn't answered the last ${p.misses} times` + (p.last_ok ? `; its last reading is ${probeAge(p.age_s)} old` : "");
 }
 /* The kubelet's filesystem, which may not be the system drive's. */
 const NODE_FS_TIP = "The filesystem the kubelet reports for this host; Storage lists each drive.";
@@ -179,14 +192,16 @@ function nodeHealth(n) {
   const ready = n.status === "Ready";
   const critical = !ready || (n.disk_issues || []).some(i => i.severity === "critical") || drives.some(d => d.health?.state === "critical");
   const hostOs = ["warn", "bad"].includes(n.host_os?.tone);
-  const tone = critical ? "bad" : issues.length || n.schedulable === false || hostOs ? "warn" : "ok";
+  const probe = probeProblem(n);
+  const tone = critical ? "bad" : issues.length || probe || n.schedulable === false || hostOs ? "warn" : "ok";
   const status = !ready ? stateWords(n.status) || "Not ready" : issues.length ? "Drive warning"
-    : n.schedulable === false ? "Cordoned" : hostOs ? "Host OS warning" : "Ready";
-  return { tone, status, issues, ready };
+    : probe ? "Probe not answering" : n.schedulable === false ? "Cordoned" : hostOs ? "Host OS warning" : "Ready";
+  return { tone, status, issues: probe ? [...issues, probe] : issues, ready };
 }
 /* The node page's Storage line: its drives, any with a warning, any unused. */
 function nodeStorageLine(n, drives, unused) {
-  const warned = nodeHealth(n).issues.length;
+  // The probe's own warning is not a drive's.
+  const warned = nodeHealth(n).issues.length - (probeProblem(n) ? 1 : 0);
   return [plural(drives, "drive"), warned ? plural(warned, "warning") : "", unused ? `${unused} unused` : ""].filter(Boolean).join(" · ");
 }
 /* One callout on a node's Overview when it needs doing something about. */
@@ -366,7 +381,10 @@ function nodeCard(n) {
         <span class="small mono">${net[0]} <span class="dim">${net[1]}</span></span></div>
       ${n.temps && n.temps.cpu_c != null ? `<div class="between"><span class="dim xs">TEMP</span>
         <span class="small mono ${tempCls(n.temps.cpu_c)}"><b>${n.temps.cpu_c}°C</b>
-          ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°${tempSource(n.temps)}</span>` : ""}</span></div>` : ""}
+          ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°${tempSource(n.temps)}</span>` : ""}</span></div>`
+        : n.probe?.state === "waiting" ? `<div class="between"><span class="dim xs">TEMP</span><span class="small dim">waiting for the probe</span></div>` : ""}
+      ${["stale", "unreachable"].includes(n.probe?.state) && n.temps ? `<div class="between"><span class="dim xs">PROBE</span>
+        <span class="small ${n.probe.state === "unreachable" ? "t-warm" : "dim"}">${n.probe.state === "unreachable" ? "not answering · " : ""}last reading ${esc(probeAge(n.probe.age_s))} ago</span></div>` : ""}
     </div>
     <div class="nodepods"><span class="small mono" data-tip="${n.pods_wl} of your pods (bright) and ${n.pods_sys} system pods">
       <b>${n.pods}</b> <span class="dim">pods${n.vms ? ` · <b>${n.vms}</b> VM${n.vms === 1 ? "" : "s"}` : ""}</span></span>
@@ -440,7 +458,8 @@ function nodeComparisonRows(nodes) {
       metric(`Storage ${i + 1}`, n => n.disks?.length ? comparisonDisk(n,n.disks[i]) : i ? '<span class="dim">—</span>' : comparisonDisk(n,{device:"filesystem",name:"Node filesystem",root_fs:true,system:true,size_gb:n.fs_cap_gb}), false)),
     metric("Network", n => n.status === "Ready" ? `<span class="mono small">${ratePair(n.rx_mbps, n.tx_mbps).join(" ")}</span>` : '<span class="dim">—</span>', false),
     metric("CPU temp", n => { const t = nodeTemp(n);
-      return n.status !== "Ready" || t.value == null ? '<span class="dim">—</span>'
+      return n.status === "Ready" && t.value == null && n.probe?.state === "waiting" ? `<span class="dim">${esc(t.text)}</span>`
+        : n.status !== "Ready" || t.value == null ? '<span class="dim">—</span>'
         : `<span class="mono ${tempCls(t.value)}">${esc(t.text)}</span>${t.extra ? `<span class="comparison-note">${esc(t.extra)}</span>` : ""}`; }),
     metric("Pods", n => `<b class="mono">${esc(n.pods ?? "—")}</b>${nodePodDots(n)}`),
     metric("VMs", n => `<span class="mono">${esc(n.vms ?? 0)}</span>`),

@@ -134,6 +134,8 @@
     nodes[i].uptime_s = up;
     nodes[i].ready_since = new Date(Date.now() - up * 1000 + 95000).toISOString();
   });
+  // What each host's node probe last said (#705): read in the background.
+  nodes.forEach(n => { n.probe = { state: "ok", misses: 0, last_ok: Date.now() / 1000 - 8, age_s: 8 }; });
   const demoUptime = (() => {
     const now = Math.floor(Date.now() / 1000), today = now - now % 86400;
     const plan = {
