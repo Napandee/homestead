@@ -362,8 +362,13 @@ function groupCount(name) {
   const names = row.volumes.map(n => ((d.volumes || []).find(v => v.name === n) || {}).pvc || n);
   return `<span class="dim xs" data-tip="${esc(names.join(", "))}">· ${names.length ? `${names.length} volume${names.length === 1 ? "" : "s"}` : "no volumes"}</span>`;
 }
+// The generation of the job the editor opened ("" for a new one): the server
+// refuses to save over a job whose settings were changed, or that was deleted
+// or made, since; the job running moves no generation (#621).
+let LJ_GENERATION = null;
 window.lhJob = (j) => {
   const d = STATE.data.lh || { groups: ["default"], tasks: {} };
+  LJ_GENERATION = !j ? "" : (j.generation ?? null);
   j = j || { name: "", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 1, groups: ["default"] };
   modal(j.name ? "Edit job · " + j.name : "New recurring job", `
     <div class="f2">
@@ -544,6 +549,7 @@ window.lhJobSave = async () => {
   const body = { name: $("#lj_name").value.trim(), task,
     cron: $("#lj_cron").value.trim(), retain: KEEPS(task) ? +$("#lj_retain").value : 0,
     concurrency: +$("#lj_conc").value, groups };
+  if (LJ_GENERATION !== null) body.generation = LJ_GENERATION;
   if (!body.name) return fieldError("#lj_name", "Give the job a name.");
   if (!groups.length) return fieldError("#lj_newgroup", "Pick at least one group, or type a new one: without a group the job protects nothing.");
   try {
