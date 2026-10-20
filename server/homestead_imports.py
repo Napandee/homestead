@@ -1484,12 +1484,20 @@ def _system_image(ref):
         r"suse/sles/)", str(ref or ""), re.I))
 
 
-def _needed_list(path):
+def _needed_list(path, optional_group=None):
     """Every row of one list the image cache asks "still needed?" of, or an
     error: a list that failed or was cut short must not read as nothing
-    needing an image, or clean-up would remove one a workload still runs on."""
+    needing an image, or clean-up would remove one a workload still runs on.
+    optional_group names an API group that may not be installed (KubeVirt):
+    a 404 is then no rows, but only once API discovery says the group is absent."""
     try:
         listing = kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and optional_group and _group_absent(optional_group):
+            error.close()
+            return []
+        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
+                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
     except Exception as error:
         raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
                          "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
@@ -1498,6 +1506,18 @@ def _needed_list(path):
         raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
                          "are still needed, and no image is cleaned up until it can. Try again in a moment.")
     return listing["items"]
+
+
+def _group_absent(group):
+    """Whether API discovery says this group is not served. Anything unclear
+    reads as served, so the caller keeps its error."""
+    try:
+        groups = kget("/apis").get("groups")
+    except Exception:
+        return False
+    return (isinstance(groups, list) and bool(groups)
+            and all(isinstance(g, dict) and g.get("name") for g in groups)
+            and not any(g["name"] == group for g in groups))
 
 
 def image_retention_inventory():
@@ -1548,7 +1568,8 @@ def image_retention_inventory():
 
 def _stopped_references():
     """Images a workload with no pods still starts from: a Deployment or
-    StatefulSet scaled to zero, and a CronJob between runs. With no pod to
+    StatefulSet scaled to zero, a CronJob between runs, and a stopped VM that
+    boots from a container image (containerDisk or kernel boot). With no pod to
     name them they read as unused, and cleaning one up meant the next start
     - often the moment it is needed - waited on a pull.
 
@@ -1582,6 +1603,22 @@ def _stopped_references():
                             "reason": "scheduled" if kind == "CronJob" else "stopped", "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
+    for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io"):
+        meta, status = vm.get("metadata") or {}, vm.get("status") or {}
+        if status.get("ready") is True or status.get("printableStatus") == "Running":
+            continue              # a running VM's pod names its container disks
+        tspec = (((vm.get("spec") or {}).get("template") or {}).get("spec") or {})
+        disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", ""))
+                 for volume in tspec.get("volumes") or [] if isinstance(volume, dict)]
+        kernel = ((((tspec.get("domain") or {}).get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
+        disks.append(("kernel-boot", kernel.get("image", "")))
+        for name, ref in disks:
+            if not ref:
+                continue
+            out.append({"ref": _canonical_image(ref), "digest": _image_digest(ref),
+                        "reason": "stopped", "by_name": True,
+                        "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
+                        "container": name})
     return out
 
 
