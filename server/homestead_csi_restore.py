@@ -4,6 +4,7 @@ import re
 import urllib.error
 
 import homestead_addons as ADDONS
+import homestead_kube as KUBE
 import homestead_pod_resources as RESOURCES
 import homestead_storage_resize as RESIZE
 import homestead_names as NAMES
@@ -21,15 +22,6 @@ kget = ksend = None
 def bind(read, send):
     global kget, ksend
     kget, ksend = read, send
-
-
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def _items(path):
@@ -51,7 +43,7 @@ def _component(container, name):
 
 def support():
     """Read only. Never replace a distribution's existing snapshot controller."""
-    discovery = _get(API)
+    discovery = KUBE.get_optional(API, read=kget)
     served = {r.get("name") for r in (discovery or {}).get("resources", [])}
     all_deployments = _items("/apis/apps/v1/deployments")
     deployments = [d for d in all_deployments if _controller(d)]
@@ -99,7 +91,7 @@ def ensure_support():
     # Helm leaves existing CRDs alone. Omit them entirely to avoid claiming
     # ownership, and add only definitions this cluster does not have.
     for resource in CRDS:
-        if _get(f"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/{resource}.snapshot.storage.k8s.io") is None:
+        if KUBE.get_optional(f"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/{resource}.snapshot.storage.k8s.io", read=kget) is None:
             manifests.append(ADDONS.fetch(f"{UPSTREAM}/client/config/crd/snapshot.storage.k8s.io_{resource}.yaml")[0])
     for filename in ("rbac-snapshot-controller.yaml", "setup-snapshot-controller.yaml"):
         manifest = ADDONS.fetch(f"{UPSTREAM}/deploy/kubernetes/snapshot-controller/{filename}")[0]
@@ -120,7 +112,7 @@ def _owned(obj):
 
 def _ensure(path, body):
     name = body["metadata"]["name"]
-    existing = _get(f"{path}/{name}")
+    existing = KUBE.get_optional(f"{path}/{name}", read=kget)
     if existing is None:
         try:
             return ksend("POST", path, body)
@@ -175,7 +167,7 @@ def problem(pvc):
     source = spec.get("dataSource") or {}
     if source.get("apiGroup") != "snapshot.storage.k8s.io" or source.get("kind") != "VolumeSnapshot":
         return ""
-    snapshot = _get(f"{API}/namespaces/{pvc['metadata']['namespace']}/volumesnapshots/{source['name']}")
+    snapshot = KUBE.get_optional(f"{API}/namespaces/{pvc['metadata']['namespace']}/volumesnapshots/{source['name']}", read=kget)
     if snapshot is None:
         # Removing import metadata after binding does not affect its disk.
         return "" if (pvc.get("status") or {}).get("phase") == "Bound" else "The restore snapshot no longer exists"
@@ -210,7 +202,7 @@ def finish_resize(pvc, cfg):
 
 def cleanup():
     """Remove import metadata only after its PVC binds. Never delete a backup."""
-    if _get(API) is None:
+    if KUBE.get_optional(API, read=kget) is None:
         return []
     removed = []
     for content in _items(f"{API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue"):
@@ -221,7 +213,7 @@ def cleanup():
         namespace, pvc_name = annotations.get("homestead.io/restore-namespace"), annotations.get("homestead.io/restore-pvc")
         if not namespace or not pvc_name:
             continue
-        pvc = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}")
+        pvc = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}", read=kget)
         ref = spec.get("volumeSnapshotRef") or {}
         source = ((pvc or {}).get("spec") or {}).get("dataSource") or {}
         if (ref.get("namespace") != namespace or source.get("apiGroup") != "snapshot.storage.k8s.io"
@@ -229,7 +221,7 @@ def cleanup():
                 or source.get("name") != ref.get("name") or source.get("kind") != "VolumeSnapshot"):
             continue
         snapshot_path = f"{API}/namespaces/{namespace}/volumesnapshots/{ref['name']}"
-        snapshot = _get(snapshot_path)
+        snapshot = KUBE.get_optional(snapshot_path, read=kget)
         if snapshot:
             if not _owned(snapshot) or (snapshot.get("spec", {}).get("source") or {}).get("volumeSnapshotContentName") != content["metadata"]["name"]:
                 continue

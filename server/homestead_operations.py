@@ -6,6 +6,7 @@ restart cannot lose an in-flight image pull, rollout, import, migration, or
 backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
+import homestead_kube as KUBE
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
@@ -609,7 +610,7 @@ def _backup(item):
 def _volume_restore(item):
     ref = item["ref"]
     namespace, name = ref["namespace"], ref["name"]
-    pvc = _get_or_none(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}", read=kget)
     if pvc is None:
         return "failed", 0, "The destination PVC no longer exists"
     pvc_status = pvc.get("status", {}) or {}
@@ -619,15 +620,15 @@ def _volume_restore(item):
     pv_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
     if not pv_name:
         return "running", 8, "Provisioning the destination PVC"
-    pv = _get_or_none(f"/api/v1/persistentvolumes/{pv_name}")
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget)
     if pv is None:
         return "running", 12, "Waiting for the restored persistent volume"
     csi = (pv.get("spec", {}) or {}).get("csi", {}) or {}
     volume_name = csi.get("volumeHandle", "")
     if not volume_name:
         return "failed", 12, "The provisioned PV is not a Longhorn CSI volume"
-    volume = _get_or_none(
-        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{volume_name}")
+    volume = KUBE.get_optional(
+        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{volume_name}", read=kget)
     if volume is None:
         return "running", 16, "Waiting for Longhorn to create the volume"
     status = volume.get("status", {}) or {}
@@ -697,19 +698,10 @@ def _image_cleanup(item):
     return "running", progress, f"Image removed from {complete}/{len(pods)} nodes"
 
 
-def _get_or_none(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _volume_delete(item):
     ref = item["ref"]
-    pvc = None if ref.get("orphan") else _get_or_none(
-        f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+    pvc = None if ref.get("orphan") else KUBE.get_optional(
+        f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=kget)
     if pvc is not None:
         deleting = bool((pvc.get("metadata", {}) or {}).get("deletionTimestamp"))
         return "running", 35 if deleting else 15, (
@@ -717,11 +709,11 @@ def _volume_delete(item):
     if ref.get("action") == "delete_claim":
         return "succeeded", 100, "Claim deleted; backing data retained"
 
-    pv = _get_or_none(f"/api/v1/persistentvolumes/{ref['pv']}") if ref.get("pv") else None
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{ref['pv']}", read=kget) if ref.get("pv") else None
     if pv is not None:
         return "running", 70, "Claim deleted; removing the backing persistent volume"
-    volume = (_get_or_none(
-        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{ref['volume']}")
+    volume = (KUBE.get_optional(
+        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{ref['volume']}", read=kget)
               if ref.get("volume") else None)
     if volume is not None:
         return "running", 90, "Persistent volume deleted; Longhorn is removing replica data"

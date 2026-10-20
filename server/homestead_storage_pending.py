@@ -18,6 +18,8 @@ import calendar
 import time
 import urllib.error
 
+import homestead_kube as KUBE
+
 kget = ksend = None
 KEY = "homestead.io/storage-pending"
 EFFECT = "PreferNoSchedule"
@@ -30,15 +32,6 @@ def bind(_kget, _ksend):
     kget, ksend = _kget, _ksend
 
 
-def _optional(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _age(stamp, now):
     try:
         return now - calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
@@ -48,7 +41,7 @@ def _age(stamp, now):
 
 def registered(name):
     """Whether Longhorn's CSI driver is registered on the node yet."""
-    csinode = _optional(f"/apis/storage.k8s.io/v1/csinodes/{name}") or {}
+    csinode = KUBE.get_optional(f"/apis/storage.k8s.io/v1/csinodes/{name}", read=kget) or {}
     return any(d.get("name") == DRIVER for d in (csinode.get("spec") or {}).get("drivers") or [])
 
 
@@ -82,7 +75,7 @@ def tick(now=None):
     """Taint new nodes whose storage is not ready, untaint ready ones.
     Returns [(node, what was done)] for the log."""
     now = now or time.time()
-    longhorn = _optional(f"/apis/storage.k8s.io/v1/csidrivers/{DRIVER}") is not None
+    longhorn = KUBE.get_optional(f"/apis/storage.k8s.io/v1/csidrivers/{DRIVER}", read=kget) is not None
     done = []
     for node in kget("/api/v1/nodes").get("items", []):
         change = wanted(node, longhorn, now)

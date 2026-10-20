@@ -22,6 +22,8 @@ import re
 import time
 import urllib.error
 
+import homestead_kube as KUBE
+
 kget = ksend = None
 NS = "lab"
 OPS = None
@@ -36,20 +38,11 @@ def bind(_kget, _ksend, namespace, operations=None):
     kget, ksend, NS, OPS = _kget, _ksend, namespace, operations
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 # ------------------------------------------------------------ the guide
 def _setting(name):
     """A Harvester setting's value, which is often JSON inside a string."""
     try:
-        setting = _get(f"/apis/harvesterhci.io/v1beta1/settings/{name}") or {}
+        setting = KUBE.get_optional(f"/apis/harvesterhci.io/v1beta1/settings/{name}", read=kget) or {}
     except Exception:
         return ""
     return setting.get("value") or setting.get("default") or ""
@@ -78,11 +71,11 @@ def next_hostname(names):
 
 def guide():
     """What the Harvester installer asks when joining this cluster, and this cluster's answers."""
-    setting = _get("/apis/harvesterhci.io/v1beta1/settings/server-version") or {}
+    setting = KUBE.get_optional("/apis/harvesterhci.io/v1beta1/settings/server-version", read=kget) or {}
     version = str(setting.get("value") or (setting.get("status") or {}).get("value") or "").lstrip("v")
-    vip = str(((_get("/api/v1/namespaces/harvester-system/configmaps/vip") or {}).get("data") or {}).get("ip") or "")
+    vip = str(((KUBE.get_optional("/api/v1/namespaces/harvester-system/configmaps/vip", read=kget) or {}).get("data") or {}).get("ip") or "")
     nodes, arches = [], set()
-    for node in (_get("/api/v1/nodes") or {}).get("items", []):
+    for node in (KUBE.get_optional("/api/v1/nodes", read=kget) or {}).get("items", []):
         info = (node.get("status") or {}).get("nodeInfo") or {}
         arches.add(info.get("architecture") or "amd64")
         if not version:
@@ -220,7 +213,7 @@ HOSTNAME = "kubernetes.io/hostname"
 def _distribution(node):
     kubelet = ((node.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "")
     try:
-        harvester = any(g.get("name") == "harvesterhci.io" for g in (_get("/apis") or {}).get("groups", []))
+        harvester = any(g.get("name") == "harvesterhci.io" for g in (KUBE.get_optional("/apis", read=kget) or {}).get("groups", []))
     except Exception:
         harvester = False
     return ("harvester" if harvester else "k3s" if "+k3s" in kubelet
@@ -302,7 +295,7 @@ def _pinned_workloads(name, workloads):
 def _unpin(row):
     plural = "deployments" if row["kind"] == "Deployment" else "statefulsets"
     path = f"/apis/apps/v1/namespaces/{row['namespace']}/{plural}/{row['name']}"
-    item = _get(path)
+    item = KUBE.get_optional(path, read=kget)
     if not item:
         return False
     pod = item["spec"]["template"]["spec"]
@@ -328,20 +321,20 @@ def _recreate_empty(row):
     name, so its app starts somewhere else - with no data, which was lost."""
     ns, claim = row["namespace"], row["claim"]
     path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims"
-    old = _get(f"{path}/{claim}")
+    old = KUBE.get_optional(f"{path}/{claim}", read=kget)
     if old:
         _force_delete(f"{path}/{claim}")
         ksend("PATCH", f"{path}/{claim}", {"metadata": {"finalizers": None}}, "application/merge-patch+json") \
-            if _get(f"{path}/{claim}") else None
-    if _get(f"/api/v1/persistentvolumes/{row['pv']}"):
+            if KUBE.get_optional(f"{path}/{claim}", read=kget) else None
+    if KUBE.get_optional(f"/api/v1/persistentvolumes/{row['pv']}", read=kget):
         _force_delete(f"/api/v1/persistentvolumes/{row['pv']}")
-        if _get(f"/api/v1/persistentvolumes/{row['pv']}"):
+        if KUBE.get_optional(f"/api/v1/persistentvolumes/{row['pv']}", read=kget):
             ksend("PATCH", f"/api/v1/persistentvolumes/{row['pv']}", {"metadata": {"finalizers": None}},
                   "application/merge-patch+json")
     if not old:
         return False
     for _ in range(15):
-        if not _get(f"{path}/{claim}"):
+        if not KUBE.get_optional(f"{path}/{claim}", read=kget):
             break
         time.sleep(1)
     spec = {key: value for key, value in (old.get("spec") or {}).items()
@@ -357,7 +350,7 @@ def _recreate_empty(row):
 def _password_secret(name):
     for suffix in ("k3s", "rke2"):
         path = f"/api/v1/namespaces/kube-system/secrets/{name}.node-password.{suffix}"
-        if _get(path):
+        if KUBE.get_optional(path, read=kget):
             return path
     return ""
 
@@ -369,7 +362,7 @@ def _stop_steps(node):
         return ("drain it (kubectl drain --ignore-daemonsets --delete-emptydir-data), run "
                 "k3s-agent-uninstall.sh on it (k3s-uninstall.sh on a server)")
     try:
-        harvester = any(g.get("name") == "harvesterhci.io" for g in (_get("/apis") or {}).get("groups", []))
+        harvester = any(g.get("name") == "harvesterhci.io" for g in (KUBE.get_optional("/apis", read=kget) or {}).get("groups", []))
     except Exception:
         harvester = True
     if "+rke2" in kubelet and not harvester:
@@ -379,10 +372,10 @@ def _stop_steps(node):
 
 def removal_plan(name):
     """What removing a node would do, and whether it is safe - before anything changes."""
-    node = _get(f"/api/v1/nodes/{name}")
+    node = KUBE.get_optional(f"/api/v1/nodes/{name}", read=kget)
     if not node:
         raise ValueError(f"there is no node called {name}")
-    nodes = (_get("/api/v1/nodes") or {}).get("items", [])
+    nodes = (KUBE.get_optional("/api/v1/nodes", read=kget) or {}).get("items", [])
     ready = _ready(node)
     roles = _roles(node)
     since = _not_ready_since(node)
@@ -507,7 +500,7 @@ def remove_node(name, accept_loss=False, gone=False):
                          f"confirm that first")
     log = []
     lh = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/{name}"
-    if _get(lh):
+    if KUBE.get_optional(lh, read=kget):
         ksend("PATCH", lh, {"spec": {"allowScheduling": False}}, "application/merge-patch+json")
         log.append(f"Longhorn stopped scheduling to {name}")
     pods, vmis, attachments, replicas = _stuck_on(name) if gone else ([], [], [], [])
@@ -567,7 +560,7 @@ def _machines():
 def _unstick_machine(machine_name):
     """A machine whose deletion waits on a host that will never answer: let it go."""
     path = f"/apis/cluster.x-k8s.io/v1beta1/namespaces/fleet-local/machines/{machine_name}"
-    machine = _get(path)
+    machine = KUBE.get_optional(path, read=kget)
     if not machine or not machine["metadata"].get("deletionTimestamp"):
         return False
     ksend("PATCH", path, {"metadata": {"finalizers": None}}, "application/merge-patch+json")
@@ -591,7 +584,7 @@ def _delete_machines_for(name, known):
 
 def cleanup_report():
     """What is left over: dead nodes, machines with no node, Longhorn nodes with no node."""
-    nodes = (_get("/api/v1/nodes") or {}).get("items", [])
+    nodes = (KUBE.get_optional("/api/v1/nodes", read=kget) or {}).get("items", [])
     names = {n["metadata"]["name"] for n in nodes}
     dead = [{"name": n["metadata"]["name"], "roles": _roles(n), "since": _not_ready_since(n)}
             for n in nodes if not _ready(n)]
@@ -653,7 +646,7 @@ def cleanup(kind, name, force=False):
                 raise ValueError("that attachment is on a node that is still here")
             _force_delete(f"/apis/storage.k8s.io/v1/volumeattachments/{name}")
             ksend("PATCH", f"/apis/storage.k8s.io/v1/volumeattachments/{name}", {"metadata": {"finalizers": None}},
-                  "application/merge-patch+json") if _get(f"/apis/storage.k8s.io/v1/volumeattachments/{name}") else None
+                  "application/merge-patch+json") if KUBE.get_optional(f"/apis/storage.k8s.io/v1/volumeattachments/{name}", read=kget) else None
             return {"ok": True, "message": f"Released attachment {name}"}
         if kind == "pin":
             row = next((r for r in report["pinned_workloads"] if f"{r['namespace']}/{r['name']}" == name), None)

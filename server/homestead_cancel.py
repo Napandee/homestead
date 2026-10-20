@@ -29,6 +29,7 @@ import urllib.parse
 import homestead_disks as DISKS
 import homestead_helm as HELM
 import homestead_imports as IMP
+import homestead_kube as KUBE
 import homestead_longhorn as LH
 import homestead_move_engine as MOVE_ENGINE
 import homestead_names as NAMES
@@ -58,15 +59,6 @@ def bind(_kget, _ksend, _remove_workload=None, _tidy_restore=None):
 
 def _q(value):
     return urllib.parse.quote(str(value), safe="")
-
-
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def _delete(path):
@@ -118,7 +110,7 @@ def rollout_target(ns, name, since):
     or undoing it would undo someone else's change instead.
 
     Returns (deployment, replicaset or None, why not)."""
-    dep = _get(_deployment_path(ns, name))
+    dep = KUBE.get_optional(_deployment_path(ns, name), read=kget)
     if not dep:
         return None, None, f"{name} no longer exists"
     meta = dep.get("metadata") or {}
@@ -181,7 +173,7 @@ def deployment_plan(item):
             f"The change is saved already: {name} carries on restarting with it. "
             "Edit or remove the share to change it back."]}
     if undo == "delete":
-        dep = _get(_deployment_path(ns, name))
+        dep = KUBE.get_optional(_deployment_path(ns, name), read=kget)
         if not dep:
             return {"mode": "stop", "keeps": [f"{name} no longer exists; there is nothing to remove"]}
         claims = _claims_of(dep)
@@ -208,7 +200,7 @@ def deployment_cancel(item, _options):
     if undo == "keep":
         return "Stopped following it; the share change stays"
     if undo == "delete":
-        if not _get(_deployment_path(ns, name)):
+        if not KUBE.get_optional(_deployment_path(ns, name), read=kget):
             return f"{name} was already gone"
         if remove_workload:
             remove_workload(ns, name)
@@ -226,7 +218,7 @@ def deployment_cancel(item, _options):
 # ------------------------------------------------------------ image updates
 def image_plan(item):
     ref = item["ref"]
-    dep = _get(_deployment_path(ref["namespace"], ref["name"]))
+    dep = KUBE.get_optional(_deployment_path(ref["namespace"], ref["name"]), read=kget)
     previous = UPDATES._annotation_json(dep, UPDATES.PREVIOUS).get("images") if dep else {}
     if not previous:
         return {"mode": "forget", "keeps": [f"{ref['name']} keeps no earlier image to go back to; "
@@ -260,7 +252,7 @@ def _cleanup_pods(item):
     ns = item["ref"]["namespace"]
     out = []
     for name in item["ref"].get("pods") or []:
-        pod = _get(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}")
+        pod = KUBE.get_optional(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}", read=kget)
         out.append((name, ((pod or {}).get("status") or {}).get("phase") if pod else "gone"))
     return out
 
@@ -301,7 +293,7 @@ def restore_plan(item):
 def restore_cancel(item, _options):
     ref = item["ref"]
     path = f"/api/v1/namespaces/{_q(ref['namespace'])}/persistentvolumeclaims/{_q(ref['name'])}"
-    claim = _get(path)
+    claim = KUBE.get_optional(path, read=kget)
     # Only the claim this restore made: one of the same name made since - the
     # restore removed and the name used again - is someone's data.
     made_by = (((claim or {}).get("metadata") or {}).get("annotations") or {}).get("homestead.io/restored-from-backup")
@@ -319,7 +311,7 @@ def restore_cancel(item, _options):
 
 def backup_plan(item):
     ref = item["ref"]
-    backup = _get(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}") or {}
+    backup = KUBE.get_optional(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}", read=kget) or {}
     snapshot = (backup.get("spec") or {}).get("snapshotName", "")
     return {"mode": "rollback",
             "undo": ["Stops the backup and removes what it has written to the backup store"]
@@ -329,7 +321,7 @@ def backup_plan(item):
 
 def backup_cancel(item, _options):
     ref = item["ref"]
-    backup = _get(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}") or {}
+    backup = KUBE.get_optional(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}", read=kget) or {}
     snapshot = (backup.get("spec") or {}).get("snapshotName", "")
     _delete(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}")
     if snapshot:
@@ -407,8 +399,8 @@ def disk_import_cancel(item, _options):
 # --------------------------------------------------------------------- VMs
 def migration_plan(item):
     vm = item["resource"].get("name", "the VM")
-    vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{_q(item['ref']['namespace'])}"
-               f"/virtualmachineinstances/{_q(vm)}") or {}
+    vmi = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{_q(item['ref']['namespace'])}"
+               f"/virtualmachineinstances/{_q(vm)}", read=kget) or {}
     node = (vmi.get("status") or {}).get("nodeName", "")
     return {"mode": "rollback", "undo": [f"Aborts the migration: {vm} keeps running"
                                          + (f" on {node}" if node else " where it is")],
@@ -542,7 +534,7 @@ def _helm_action(item):
 
 def _helmchart(item):
     name = item["resource"].get("name", "")
-    return name, _get(f"/apis/helm.cattle.io/v1/namespaces/{_q(HELM.CONTROLLER_NS)}/helmcharts/{_q(name)}")
+    return name, KUBE.get_optional(f"/apis/helm.cattle.io/v1/namespaces/{_q(HELM.CONTROLLER_NS)}/helmcharts/{_q(name)}", read=kget)
 
 
 def helm_plan(item):
@@ -596,7 +588,7 @@ def smart_cancel(item, _options):
 
 def service_plan(item):
     ref = item["ref"]
-    svc = _get(f"/api/v1/namespaces/{_q(ref['namespace'])}/services/{_q(ref['name'])}") or {}
+    svc = KUBE.get_optional(f"/api/v1/namespaces/{_q(ref['namespace'])}/services/{_q(ref['name'])}", read=kget) or {}
     address = ",".join(i.get("ip", "") for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []
                        if i.get("ip"))
     return {"mode": "rollback",

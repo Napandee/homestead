@@ -677,7 +677,7 @@ class HostrunStdinTests(unittest.TestCase):
             return {}
         HOSTRUN.bind(lambda path: pods.get("p") or {}, ksend,
                      lambda ns, pod, argv, **k: seen.update(k) or (b"OK", ""), "lab")
-        with mock.patch.object(HOSTRUN, "_get", lambda path: pods.get("p")), \
+        with mock.patch.object(HOSTRUN.KUBE, "get_optional", lambda path, read=None: pods.get("p")), \
              mock.patch.object(HOSTRUN, "_delete", lambda path: pods.pop("p", None)):
             HOSTRUN.run("app-1", "cat", stdin=b"secret", sleep=lambda s: None)
         self.assertEqual(b"secret", seen.get("stdin"))
