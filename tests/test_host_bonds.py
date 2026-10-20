@@ -124,7 +124,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn("is on bond0 already", " ".join(BONDS.plan("h1", {"action": "create", "members": ["enp3s0"]}, self.bonded())["refusals"]))
 
 
-@unittest.skipIf(yaml is None, "PyYAML is not installed")
+# CI installs PyYAML (requirements-test.txt), so there a missing one fails rather than skips.
+@unittest.skipIf(yaml is None and os.environ.get("CI", "").lower() not in ("true", "1"), "PyYAML is not installed")
 class EditTests(unittest.TestCase):
     """The edit that runs on the host, run here against netplan files."""
 

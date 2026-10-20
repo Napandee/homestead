@@ -69,7 +69,8 @@ class LookTests(unittest.TestCase):
         self.assertIn("did not finish", BRIDGE.problem(BRIDGE.parse(K3S.replace("END", ""))))
 
 
-@unittest.skipIf(yaml is None, "PyYAML is not installed here")
+# CI installs PyYAML (requirements-test.txt), so there a missing one fails rather than skips.
+@unittest.skipIf(yaml is None and os.environ.get("CI", "").lower() not in ("true", "1"), "PyYAML is not installed here")
 class RewriteTests(unittest.TestCase):
     """The Python the host runs, run here on netplan files like Ubuntu's."""
 
