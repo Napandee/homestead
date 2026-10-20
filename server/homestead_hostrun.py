@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -98,7 +99,7 @@ def hold(node, what, seconds=LEASE_SECONDS, holder=""):
     raises Busy when another change holds it and it has not run out."""
     holder = holder or f"{IDENTITY}/{secrets.token_hex(4)}"
     now = datetime.datetime.now(datetime.timezone.utc)
-    lease = _get(_lease_path(node))
+    lease = KUBE.get_optional(_lease_path(node), read=kget)
     if lease is None:
         body = {"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
                 "metadata": {"name": lease_name(node), "namespace": NS,
@@ -143,21 +144,12 @@ def let_go(node, holder):
     """Give node's change lease back, if holder still has it. Never raises:
     a lease not given back runs out by itself."""
     try:
-        lease = _get(_lease_path(node))
+        lease = KUBE.get_optional(_lease_path(node), read=kget)
         if lease and (lease.get("spec") or {}).get("holderIdentity") == holder:
             lease["spec"]["holderIdentity"] = ""
             ksend("PUT", _lease_path(node), lease)
     except Exception:
         pass
-
-
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def body(node, lifetime=900, name=""):
@@ -245,7 +237,7 @@ def _run(node, script, timeout, wait, sleep, stdin):
     ksend("POST", f"/api/v1/namespaces/{NS}/pods", body(node, lifetime=max(300, timeout + wait + 60), name=name))
     try:
         for _ in range(int(wait * 2)):
-            status = (_get(path) or {}).get("status") or {}
+            status = (KUBE.get_optional(path, read=kget) or {}).get("status") or {}
             if status.get("phase") == "Running":
                 break
             waiting = next((((c.get("state") or {}).get("waiting") or {}) for c in status.get("containerStatuses") or []

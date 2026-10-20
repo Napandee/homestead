@@ -20,6 +20,7 @@ from contextvars import ContextVar
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_move as MOVE
 import homestead_names as NAMES
 import homestead_routes as ROUTER
@@ -82,15 +83,6 @@ def in_namespace(namespace, call, *args, **kwargs):
         _SOURCE_NAMESPACE.reset(token)
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 KINDS = ("container", "vm", "volume")
 
 
@@ -123,7 +115,7 @@ def _users(claim):
 
 
 def _object(kind, name):
-    found = _get(_path(_kind(kind), name))
+    found = KUBE.get_optional(_path(_kind(kind), name), read=kget)
     if not found:
         raise ValueError(f"{name} does not exist on this cluster")
     return found
@@ -178,11 +170,11 @@ def _claims_of(kind, obj):
 
 def _longhorn_volume(claim):
     """The Longhorn volume behind a claim, or a reason there is not one."""
-    pvc = _get(f"/api/v1/namespaces/{_namespace()}/persistentvolumeclaims/{claim}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{_namespace()}/persistentvolumeclaims/{claim}", read=kget)
     if not pvc:
         raise ValueError(f"claim {claim} does not exist")
     pv_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
-    pv = _get(f"/api/v1/persistentvolumes/{pv_name}") if pv_name else None
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget) if pv_name else None
     csi = ((pv or {}).get("spec", {}) or {}).get("csi", {}) or {}
     if csi.get("driver") != "driver.longhorn.io":
         raise ValueError(f"claim {claim} is not on Longhorn, so it has no backup to travel in")
@@ -195,9 +187,9 @@ def _claim_row(claim):
     request = ((spec.get("resources", {}) or {}).get("requests", {}) or {}).get("storage", "")
     size_gb = storage_gib(request)
     storage_class = spec.get("storageClassName", "")
-    parameters = ((_get(f"/apis/storage.k8s.io/v1/storageclasses/{storage_class}")
+    parameters = ((KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{storage_class}", read=kget)
                    if storage_class else None) or {}).get("parameters", {}) or {}
-    lh_volume = _get(f"{LH_API}/namespaces/{LHNS}/volumes/{volume}") or {}
+    lh_volume = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/volumes/{volume}", read=kget) or {}
     return {
         "claim": claim, "volume": volume,
         "size_gb": size_gb or 1,
@@ -301,7 +293,7 @@ def definition(kind, name):
                 for ref in ("secretRef", "userDataSecretRef", "networkDataSecretRef"):
                     secret_name = ((volume.get(source) or {}).get(ref) or {}).get("name")
                     if secret_name:
-                        secret = _get(f"/api/v1/namespaces/{_namespace()}/secrets/{secret_name}")
+                        secret = KUBE.get_optional(f"/api/v1/namespaces/{_namespace()}/secrets/{secret_name}", read=kget)
                         if not secret:
                             raise ValueError(f"Cloud-init Secret {secret_name} is missing on the source; restore it before transferring this VM")
                         secrets.append({"apiVersion": "v1", "kind": "Secret",
@@ -322,7 +314,7 @@ def definition(kind, name):
         "object": body, "origin": origin,
         "services": [_clean_service(s) for s in _services_for(pod_labels)] if kind == "container" else [],
         "secrets": secrets,
-        **({"vbios": VM_DEVICES.export(dict(obj, metadata={**obj["metadata"], "namespace": _namespace()}), _get)} if kind == "vm" else {}),
+        **({"vbios": VM_DEVICES.export(dict(obj, metadata={**obj["metadata"], "namespace": _namespace()}), lambda path: KUBE.get_optional(path, read=kget))} if kind == "vm" else {}),
         "claims": [_claim_row(claim) for claim in _claims_of(kind, obj)],
         "node_selector": (template.get("spec", {}) or {}).get("nodeSelector", {}) or {},
         "pull_secrets": [ref.get("name") for ref in
@@ -339,8 +331,8 @@ def _remaining(kind, obj):
     if kind == "volume":
         return len(_users(obj["metadata"]["name"]))
     if kind == "vm":
-        vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/"
-                   f"{obj['metadata']['name']}")
+        vmi = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/"
+                   f"{obj['metadata']['name']}", read=kget)
         active = bool(vmi) and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
         return 1 if active else sum(len(_users(claim)) for claim in _claims_of(kind, obj))
     labels = ((obj.get("spec", {}) or {}).get("selector", {}) or {}).get("matchLabels", {}) or {}
@@ -376,7 +368,7 @@ def quiesce(kind, name, transfer_id="", expected_uid="", expected_version=""):
     if not origin:
         origin = _run_state(kind, obj)
         if transfer_id and kind == "vm":
-            vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}")
+            vmi = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}", read=kget)
             origin["_copy_running"] = bool(vmi) and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
             origin["_copy_completed"] = bool(vmi) and (vmi.get("status") or {}).get("phase") == "Succeeded" and origin.get("runStrategy") in ("Once", "RerunOnFailure")
             if origin.get("runStrategy") == "Once" and not origin["_copy_completed"]:
@@ -512,14 +504,14 @@ def status(kind, name):
     for row in recorded:
         found = by_name.get(row["backup"], {})
         if not found:
-            snap = _get(f"{LH_API}/namespaces/{LHNS}/snapshots/{row['snapshot']}") if row.get("snapshot") else None
+            snap = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/snapshots/{row['snapshot']}", read=kget) if row.get("snapshot") else None
             problem = move_snapshot_error(snap)
             if not row.get("snapshot"):
                 problem = "Recorded backup no longer exists; retry the move to take a fresh snapshot"
             found = {"state": "Error" if problem else "Pending", "error": problem}
         image_state = {}
         if row.get("backing_image"):
-            image = _get(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{row['backing_image']}")
+            image = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/backupbackingimages/{row['backing_image']}", read=kget)
             st = (image or {}).get("status", {}) or {}
             image_state = {"state": st.get("state", "") or "Pending",
                            "progress": int(st.get("progress", 0) or 0),
@@ -564,7 +556,7 @@ def release(kind, name, transfer_id="", expected_uid=""):
         # the lease until the start request succeeds, including lost replies.
         vmi_path = f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}"
         def recovering_vmi():
-            vmi = _get(vmi_path)
+            vmi = KUBE.get_optional(vmi_path, read=kget)
             if vmi and ((vmi.get("metadata") or {}).get("deletionTimestamp") or
                         (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")):
                 raise PendingRecovery("Waiting for the old VM instance to disappear before restoring its running state")
@@ -643,7 +635,7 @@ def target():
                          "storage under Data protection first")
     credentials = {}
     if current.get("secret"):
-        secret = _get(f"/api/v1/namespaces/{LHNS}/secrets/{current['secret']}") or {}
+        secret = KUBE.get_optional(f"/api/v1/namespaces/{LHNS}/secrets/{current['secret']}", read=kget) or {}
         for key, value in (secret.get("data") or {}).items():
             try:
                 credentials[key] = base64.b64decode(value).decode()

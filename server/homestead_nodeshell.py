@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -39,15 +40,6 @@ def pod_name(node):
     return NAMES.fitted(f"homestead-shell-{safe}")
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def body(node):
     return {"apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": pod_name(node), "namespace": NS,
@@ -65,7 +57,7 @@ def body(node):
 def open_shell(node, wait=60, sleep=time.sleep):
     """The helper for a node, made if need be, once it runs: what the
     console connects to."""
-    found = _get(f"/api/v1/nodes/{node}")
+    found = KUBE.get_optional(f"/api/v1/nodes/{node}", read=kget)
     if not found:
         raise ValueError(f"there is no node {node}")
     ready = any(c.get("type") == "Ready" and c.get("status") == "True"
@@ -73,7 +65,7 @@ def open_shell(node, wait=60, sleep=time.sleep):
     if not ready:
         raise ValueError(f"{node} is not Ready, so nothing can run on it to open a shell")
     path = f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}"
-    pod = _get(path)
+    pod = KUBE.get_optional(path, read=kget)
     if pod and (pod.get("spec") or {}).get("nodeName") != node:
         # Never a shell on another host than the one asked for.
         raise ValueError(f"the shell helper for {node} is in use for {(pod.get('spec') or {}).get('nodeName')}; "
@@ -86,14 +78,14 @@ def open_shell(node, wait=60, sleep=time.sleep):
         except urllib.error.HTTPError:
             pass
         for _ in range(20):
-            if not _get(path):
+            if not KUBE.get_optional(path, read=kget):
                 break
             sleep(0.5)
         pod = None
     if not pod:
         ksend("POST", f"/api/v1/namespaces/{NS}/pods", body(node))
     for _ in range(int(wait * 2)):
-        pod = _get(path) or {}
+        pod = KUBE.get_optional(path, read=kget) or {}
         status = pod.get("status") or {}
         if status.get("phase") == "Running":
             return {"node": node, "namespace": NS, "pod": pod_name(node), "container": "shell", "command": HOST_SHELL}
@@ -117,7 +109,7 @@ def session_ended(node):
         last = _sessions[node] == 0
     if last:
         try:
-            pod = _get(f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}")
+            pod = KUBE.get_optional(f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}", read=kget)
         except Exception:
             return   # its deadline still ends it
         if not pod or (pod.get("spec") or {}).get("nodeName") != node:
