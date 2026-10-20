@@ -24,6 +24,8 @@ import time
 import urllib.error
 import zlib
 
+import homestead_kube as KUBE
+
 kget = ksend = None
 VERSION = ""
 FORMAT = "homestead-config-backup"
@@ -56,12 +58,9 @@ def _part(part_id):
 
 
 def _read(kind, namespace, name):
-    try:
-        found = kget(f"/api/v1/namespaces/{namespace}/{kind}/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
+    found = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/{kind}/{name}", read=kget)
+    if found is None:
+        return None
     return {"data": found.get("data") or {}, "binaryData": found.get("binaryData") or {}}
 
 
