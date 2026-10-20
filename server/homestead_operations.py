@@ -220,32 +220,10 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", un
                     if existing.get("tracking_stopped") and existing.get("status") in TERMINAL:
                         continue
                     raise ValueError(f"Workload job {existing['id']} is still active or needs recovery; inspect it first")
-        if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
-                                        i.get("ref", {}).get("node") == ref.get("node") for i in items):
-            raise ValueError("Host maintenance is already active; inspect its job before retrying")
-        if kind == "set-restart" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
-                                         (i.get("ref", {}).get("ns"), i.get("ref", {}).get("name")) ==
-                                         (ref.get("ns"), ref.get("name")) for i in items):
-            raise ValueError("A restart for this StatefulSet is already active; inspect its job before retrying")
-        if kind == "k3s-cluster" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
-                                        (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
-                                        (ref.get("namespace"), ref.get("name")) for i in items):
-            raise ValueError("This k3s VM batch is already active; inspect its job before retrying")
-        if kind in ("snapshot-delete", "snapshot-revert") and any(
-                i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
-                and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
-            raise ValueError("A snapshot operation is already active on this volume; inspect its job first")
-        if kind == "reclass" and any(i.get("kind") == "reclass" and
-                i.get("resource", {}).get("name") == resource.get("name") and
-                i.get("resource", {}).get("namespace") == resource.get("namespace") and
-                (i.get("status") not in TERMINAL or (i.get("status") == "failed" and not RESUMABLE["reclass"](i)))
-                for i in items):
-            raise ValueError("This volume already has a storage-class move; inspect its job first")
-        if kind == "reclass" and any(
-                _vm_targets(kind, ref) & _vm_targets(i.get("kind"), i.get("ref") or {}) and
-                (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
-                for i in items if i.get("kind") in POWER_RECEIPTS.KINDS | {"k3s-cluster"}):
-            raise ValueError("An affected workload or volume has another job or recovery hold; inspect it before moving storage")
+        rule = CONFLICTS.get(kind)
+        why = rule(items, kind, ref, resource) if rule else ""
+        if why:
+            raise ValueError(why)
         STORAGE_CONFLICTS.require_clear(items, kind, ref, resource)
         items.append(item)
         _write(items)
@@ -279,6 +257,66 @@ def _vm_targets(kind, ref):
         return targets
     names = [row.get("name") for row in ref.get("nodes", [])] if kind == "k3s-cluster" else [ref.get("name")]
     return {(ref.get("namespace"), name) for name in names if name}
+
+
+def _conflict_node_power(items, kind, ref, resource):
+    if any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+           i.get("ref", {}).get("node") == ref.get("node") for i in items):
+        return "Host maintenance is already active; inspect its job before retrying"
+    return ""
+
+
+def _conflict_set_restart(items, kind, ref, resource):
+    if any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+           (i.get("ref", {}).get("ns"), i.get("ref", {}).get("name")) ==
+           (ref.get("ns"), ref.get("name")) for i in items):
+        return "A restart for this StatefulSet is already active; inspect its job before retrying"
+    return ""
+
+
+def _conflict_k3s_cluster(items, kind, ref, resource):
+    if any(i.get("kind") == kind and i.get("status") not in TERMINAL and
+           (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
+           (ref.get("namespace"), ref.get("name")) for i in items):
+        return "This k3s VM batch is already active; inspect its job before retrying"
+    return ""
+
+
+def _conflict_snapshot(items, kind, ref, resource):
+    if any(i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
+           and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
+        return "A snapshot operation is already active on this volume; inspect its job first"
+    return ""
+
+
+def _conflict_reclass(items, kind, ref, resource):
+    if any(i.get("kind") == "reclass" and
+           i.get("resource", {}).get("name") == resource.get("name") and
+           i.get("resource", {}).get("namespace") == resource.get("namespace") and
+           (i.get("status") not in TERMINAL or (i.get("status") == "failed" and not RESUMABLE["reclass"](i)))
+           for i in items):
+        return "This volume already has a storage-class move; inspect its job first"
+    if any(_vm_targets(kind, ref) & _vm_targets(i.get("kind"), i.get("ref") or {}) and
+           (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
+           for i in items if i.get("kind") in POWER_RECEIPTS.KINDS | {"k3s-cluster"}):
+        return "An affected workload or volume has another job or recovery hold; inspect it before moving storage"
+    return ""
+
+
+# Which running jobs refuse a new one of a kind: kind -> function(items, kind,
+# ref, resource) returning the reason, or "" when it may start. start() checks it
+# under its lock, after `unless`, an import's disks and approval receipts, and
+# before the storage conflicts; those belong to no one kind and stay in start().
+# These were branches of start(); they move to the modules that own each kind
+# later (#622).
+CONFLICTS = {
+    "node-power": _conflict_node_power,
+    "set-restart": _conflict_set_restart,
+    "k3s-cluster": _conflict_k3s_cluster,
+    "snapshot-delete": _conflict_snapshot,
+    "snapshot-revert": _conflict_snapshot,
+    "reclass": _conflict_reclass,
+}
 
 
 class Superseded(ValueError):

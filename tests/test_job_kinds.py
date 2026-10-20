@@ -24,7 +24,7 @@ import homestead_job_kinds as KINDS
 
 def stand_in(**dicts):
     ops = types.SimpleNamespace(RESOLVERS={}, CANCELLERS={}, RESUMABLE={}, LOGGERS={}, CLEANUPS=set(),
-                                CDI_CANCELLABLE=set(), VIEWS={}, CANCEL_BLOCKS={},
+                                CDI_CANCELLABLE=set(), VIEWS={}, CANCEL_BLOCKS={}, CONFLICTS={},
                                 _public=lambda item: {"id": item["id"], "shown": True})
     for name, value in dicts.items():
         getattr(ops, name).update(value)
@@ -72,7 +72,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_it_adds_no_start_rules_of_its_own_yet(self):
         found = KINDS.kind("scan", stand_in(RESOLVERS={"scan": lambda item: None}))
-        self.assertIsNone(found.conflicts([{"kind": "scan", "status": "running"}], "scan", {}, {}))
+        self.assertEqual("", found.conflicts([{"kind": "scan", "status": "running"}], "scan", {}, {}))
 
     def test_without_a_stand_in_it_reads_the_job_store(self):
         import homestead_operations as OPS
@@ -264,6 +264,12 @@ class GuardTests(unittest.TestCase):
         (#622), where branch_kinds() no longer sees them either."""
         self.assertGreaterEqual(len(self.ops.CANCEL_BLOCKS), 4)
         self.assertEqual([], sorted(set(self.ops.CANCEL_BLOCKS) - set(self.kinds)))
+
+    def test_every_kind_with_a_start_rule_of_its_own_exists(self):
+        """The kind branches of start() became keys of OPS.CONFLICTS (#622),
+        where branch_kinds() no longer sees them either."""
+        self.assertGreaterEqual(len(self.ops.CONFLICTS), 6)
+        self.assertEqual([], sorted(set(self.ops.CONFLICTS) - set(self.kinds)))
 
     def test_every_kind_started_has_a_resolver(self):
         found, dynamic = started_kinds()
