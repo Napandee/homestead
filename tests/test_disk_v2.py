@@ -368,7 +368,7 @@ class DiskV2Tests(unittest.TestCase):
                 # Every read is a deserialized record; no in-memory coordinator survives.
                 self.assertEqual(V.status(operation_id)['phase'], phase)
             self.assertEqual(sum(method == 'POST' for method, _, _ in self.c.writes), 1)
-            saved = OPS._read()[0]; saved['ref']['phase'] = 'complete'; OPS.checkpoint(saved)
+            saved = OPS.stored()[0]; saved['ref']['phase'] = 'complete'; OPS.checkpoint(saved)
             self.assertEqual(V.status(operation_id)['status'], 'succeeded')
 
 

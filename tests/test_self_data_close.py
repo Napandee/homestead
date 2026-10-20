@@ -15,6 +15,7 @@ import homestead_operations as OPS
 import homestead_capacity_review as SIGN
 import homestead_self_data_prepare as P
 from homestead_storage_journal import Held
+from fakes.job_store import put
 
 
 class CloseRecoveryTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class CloseRecoveryTests(unittest.TestCase):
                     "message": "Recovered Homestead on its original volume. Both data volumes and the recovery audit are retained.",
                     "ref": {"namespace": "lab", "source": "homestead-data", "destination": "homestead-data-e3c6",
                             "retain_resources": True}}
-        OPS._write([self.job])
+        put(OPS, [self.job])
         self.running = ("homestead-data", True)
 
     def close(self, body=None, *, start=False):
@@ -39,13 +40,13 @@ class CloseRecoveryTests(unittest.TestCase):
     def test_it_blocks_until_closed_then_keeps_everything(self):
         self.assertEqual(["move-job"], [j["id"] for j in P.blocking_jobs(OPS)])
         self.assertTrue(P.blocking_jobs(OPS)[0]["closable"])
-        before = OPS._read()
+        before = OPS.stored()
         review = self.close()
-        self.assertEqual(before, OPS._read(), "the review writes nothing")
+        self.assertEqual(before, OPS.stored(), "the review writes nothing")
         self.assertEqual(("homestead-data", "homestead-data-e3c6"), (review["source"], review["destination"]))
         self.close({"id": "move-job", "capacity_token": review["capacity_token"], "confirm_close": True}, start=True)
         self.assertEqual([], P.blocking_jobs(OPS), "another preparation can start")
-        saved = OPS._read()[0]
+        saved = OPS.stored()[0]
         self.assertTrue(saved["ref"]["retain_resources"], "both volumes stay protected")
         self.assertEqual("homestead-data", saved["ref"]["recovery_closed"]["source"])
         self.assertIn("Recovery closed", saved["history"][-1]["m"])
@@ -67,10 +68,10 @@ class CloseRecoveryTests(unittest.TestCase):
 
     def test_only_a_cancelled_move_that_kept_its_volumes_can_be_closed(self):
         for change in ({"status": "running"}, {"status": "succeeded"}, {"kind": P.KIND}):
-            OPS._write([{**self.job, **change}])
+            put(OPS, [{**self.job, **change}])
             with self.assertRaises(Held):
                 self.close()
-        OPS._write([{**self.job, "ref": {**self.job["ref"], "retain_resources": False}}])
+        put(OPS, [{**self.job, "ref": {**self.job["ref"], "retain_resources": False}}])
         with self.assertRaises(Held):
             self.close()
 

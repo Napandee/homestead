@@ -12,6 +12,7 @@ import homestead_operations as OPS
 import homestead_capacity_review as SIGN
 import homestead_self_data_prepare as P
 from homestead_storage_journal import Held
+from fakes.job_store import put
 
 
 class PreparationArchiveTests(unittest.TestCase):
@@ -28,7 +29,7 @@ class PreparationArchiveTests(unittest.TestCase):
                             "operation": "a" * 24, "node": "node1", "storage_class": "destination-class",
                             "prepared": {"claim_uid": "destination-uid", "volume_uid": "pv-uid", "volume": "pv"},
                             "retain_resources": False, "storage_writes": [{"state": "observed", "after": {"uid": "destination-uid"}}]}}
-        OPS._write([self.job])
+        put(OPS, [self.job])
 
     def archive(self, body=None, *, start=False, actor="admin", namespace="lab"):
         return P.archive(body or {"id": self.job["id"]}, actor, namespace, "homestead", OPS, start=start)
@@ -37,31 +38,31 @@ class PreparationArchiveTests(unittest.TestCase):
         return {"id": review["id"], "capacity_token": review["capacity_token"], "confirm_archive": True}
 
     def test_archive_keeps_both_volume_identities_and_receipts_through_pruning(self):
-        before = OPS._read()
+        before = OPS.stored()
         with mock.patch.object(OPS, "_refresh", side_effect=AssertionError("must not resolve")):
             review = self.archive()
-            self.assertEqual(before, OPS._read(), "preview is read only")
+            self.assertEqual(before, OPS.stored(), "preview is read only")
             self.assertEqual("destination", review["destination"])
             self.archive(self.confirmed(review), start=True)
-        saved = OPS._read()[0]
+        saved = OPS.stored()[0]
         for key in ("source", "prepared", "destination", "storage_writes"):
             self.assertEqual(self.job["ref"][key], saved["ref"][key])
         self.assertTrue(saved["ref"]["preparation_archived"])
         self.assertEqual([], OPS.snapshot())
         self.assertEqual([], OPS.list_operations())
         with mock.patch.object(OPS, "MAX_OPERATIONS", 0):
-            OPS._write(OPS._read())
-            self.assertEqual(1, len(OPS._read()))
+            put(OPS)
+            self.assertEqual(1, len(OPS.stored()))
         self.assertEqual(0, OPS.dismiss_finished()["remaining"])
-        self.assertEqual(1, len(OPS._read()))
-        self.assertIn("volumes and receipts retained", OPS._read()[0]["history"][-1]["m"])
+        self.assertEqual(1, len(OPS.stored()))
+        self.assertIn("volumes and receipts retained", OPS.stored()[0]["history"][-1]["m"])
         with self.assertRaises(Held): self.archive(self.confirmed(review), start=True)
 
     def test_archiving_a_legacy_preparation_preserves_its_original_store_and_log(self):
-        OPS._write([])
+        put(OPS, [])
         OPS.SHARED.write_json(Path(OPS.DATA_DIR) / OPS.LEGACY_STORE, [self.job], durable=True)
         self.archive(self.confirmed(self.archive()), start=True)
-        saved = OPS._read()[0]
+        saved = OPS.stored()[0]
         self.assertTrue(saved["_legacy_store"])
         self.assertTrue(saved["ref"]["preparation_archived"])
         self.assertEqual([], OPS.snapshot())
@@ -77,7 +78,7 @@ class PreparationArchiveTests(unittest.TestCase):
                 job = copy.deepcopy(self.job); job["status"] = status
                 job["ref"]["retain_resources"] = retained
                 if not prepared: job["ref"].pop("prepared")
-                OPS._write([job])
+                put(OPS, [job])
                 with self.assertRaises(Held): self.archive()
                 self.assertFalse(OPS._public(job)["preparation_archivable"])
                 job["ref"]["preparation_archived"] = True
@@ -90,15 +91,15 @@ class PreparationArchiveTests(unittest.TestCase):
         with self.assertRaises(Held): self.archive(body, start=True, actor="another-admin")
         with self.assertRaises(Held): self.archive(body, start=True, namespace="other")
         job = copy.deepcopy(self.job); job["ref"]["source"]["uid"] = "replacement"
-        OPS._write([job])
+        put(OPS, [job])
         with self.assertRaises(Held): self.archive(body, start=True)
-        self.assertEqual([job], OPS._read())
+        self.assertEqual([job], OPS.stored())
 
     def test_archiving_completed_record_does_not_bypass_other_running_or_recovery_jobs(self):
         blocker = {"id": "recovery", "kind": "backup", "title": "Recover backup", "status": "failed",
                    "message": "inspect retained helper", "ref": {"retain_resources": True}}
         running = {"id": "running", "kind": "backup", "status": "running", "ref": {}}
-        OPS._write([self.job, blocker, running])
+        put(OPS, [self.job, blocker, running])
         self.archive(self.confirmed(self.archive()), start=True)
         blockers = P.blocking_jobs(OPS)
         self.assertEqual(["recovery", "running"], [job["id"] for job in blockers])

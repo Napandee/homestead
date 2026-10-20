@@ -15,6 +15,7 @@ import server  # Bind the app before test fixtures install their signing key.
 from homestead_storage_journal import Held
 import test_self_data_review as review_fixture
 from test_self_data_coordinator import IMAGE, OP, obj
+from fakes.job_store import put
 
 
 class PreparationTests(unittest.TestCase):
@@ -225,10 +226,10 @@ class PreparationTests(unittest.TestCase):
         body = {**self.body, "confirm_capacity": True, "capacity_token": SIGN.issue(cfg, context)}
         with mock.patch.object(OPS, "DATA_DIR", temp.name):
             before = len(self.c.sent)
-            with OPS._lock:
+            with OPS.transaction():
                 with self.assertRaises(Held): P.start(self.body, self.reviewed, OPS)
                 job = P.start(body, self.reviewed, OPS)
-                saved = OPS._read()[0]
+                saved = OPS.stored()[0]
                 self.assertEqual(P.KIND, saved["kind"])
                 self.assertEqual([], saved["ref"]["storage_writes"])
                 with self.assertRaises(Held): P.start(body, self.reviewed, OPS)
@@ -244,7 +245,7 @@ class PreparationTests(unittest.TestCase):
         self.c.objects.pop(self.c.anchor.path)
         def send(method, path, body, **kwargs):
             if "?dryRun=All" in path: return json.loads(json.dumps(body))
-            saved = OPS._read()[0]
+            saved = OPS.stored()[0]
             self.assertEqual("intent", saved["ref"]["storage_writes"][-1]["state"])
             return self.c.send(method, path, body, **kwargs)
         def post(path, body):
@@ -263,7 +264,7 @@ class PreparationTests(unittest.TestCase):
              mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "source", "classes": [{"name": "destination-class", "shareable": False}]}), \
              mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 88}}}):
             preview = post("/api/self/data/prepare/preview", self.body)
-            self.assertEqual([], OPS._read())
+            self.assertEqual([], OPS.stored())
             started = post("/api/self/data/prepare", {**self.body, "confirm_capacity": True, "capacity_token": preview["capacity_token"]})
             self.assertEqual("queued", started["operation"]["status"])
             self.assertEqual(15, OPS.list_operations()[0]["progress"])
@@ -274,8 +275,8 @@ class PreparationTests(unittest.TestCase):
             self.assertFalse(OPS.list_operations()[0]["dismissible"])
             self.assertFalse(OPS.list_operations()[0]["cleanable"])
             with mock.patch.object(OPS, "MAX_OPERATIONS", 0):
-                OPS._write(OPS._read())
-            self.assertEqual(1, len(OPS._read()), "Prepared identities must survive history pruning")
+                put(OPS)
+            self.assertEqual(1, len(OPS.stored()), "Prepared identities must survive history pruning")
             with mock.patch.object(OPS, "list_operations", side_effect=AssertionError("status must not run resolvers")):
                 handler = object.__new__(server.H)
                 handler.path = "/api/self/data/prepare"; handler._guard = mock.Mock(return_value=False)

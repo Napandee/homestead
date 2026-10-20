@@ -43,6 +43,13 @@ class JobStore:
             yield Transaction(self)
 
 
+def put(ops, items=None):
+    """Save items - or, given none, the jobs as stored - through ops.transaction(),
+    as the code does; ops is homestead_operations or one of the stand-ins here."""
+    with ops.transaction() as tx:
+        tx.save(items)
+
+
 class Store(JobStore):
     """A stand-in built from a read and an optional write, plus any other names the code calls."""
     def __init__(self, read=list, write=None, **names):

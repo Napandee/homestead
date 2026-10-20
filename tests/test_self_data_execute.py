@@ -53,7 +53,7 @@ class ExecutionTests(unittest.TestCase):
         return self.f.f.read(path)
 
     def send(self, method, path, body):
-        self.assertTrue(OPS._read(), "durable intent precedes every API write")
+        self.assertTrue(OPS.stored(), "durable intent precedes every API write")
         if "?dryRun=" in path: return copy.deepcopy(body)
         result = self.cluster.send(method, path, body)
         if method == "POST" and body.get("kind") == "Pod":
@@ -82,7 +82,7 @@ class ExecutionTests(unittest.TestCase):
     def test_signed_setup_reaches_independent_worker_only_after_drain(self):
         with mock.patch.object(E.P, "publish_pointer", side_effect=self.publish):
             handle = self.task().run()
-        self.assertIsNotNone(handle, OPS._read())
+        self.assertIsNotNone(handle, OPS.stored())
         self.assertTrue(self.published)
         source = self.cluster.objects[self.cluster.dep_path]
         self.assertEqual(2, source["spec"]["replicas"])
@@ -110,7 +110,7 @@ class ExecutionTests(unittest.TestCase):
         result = runner.tick()
         self.assertEqual("done", result["status"], result)
         self.assertFalse(runner.maintenance_ready())
-        saved = next(i for i in OPS._read() if i["id"] == self.job["id"])
+        saved = next(i for i in OPS.stored() if i["id"] == self.job["id"])
         self.assertEqual("succeeded", E.resolve(saved, self.read, clock=lambda: 1000)[0])
         for name in ("source", "target"):
             self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/" + name, self.cluster.objects)
@@ -129,7 +129,7 @@ class ExecutionTests(unittest.TestCase):
     def test_lost_anchor_response_is_not_adopted_or_retried_by_polling(self):
         self.cluster.lost = lambda method, path, body: method == "POST" and body.get("kind") == "ConfigMap"
         self.assertIsNone(self.task().run())
-        item = next(i for i in OPS._read() if i["id"] == self.job["id"])
+        item = next(i for i in OPS.stored() if i["id"] == self.job["id"])
         before = copy.deepcopy(self.cluster.sent)
         self.assertEqual("failed", E.resolve(item, self.read)[0])
         self.assertEqual(before, self.cluster.sent)

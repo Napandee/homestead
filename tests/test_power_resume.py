@@ -15,6 +15,7 @@ import server
 import homestead_power as POWER
 import homestead_lifecycle as LC
 import homestead_maintenance as MAINTENANCE
+from fakes.job_store import put
 
 
 def job(phase="draining", age=60, worker="homestead-old", plan=True):
@@ -82,7 +83,7 @@ class OneOwnerTests(unittest.TestCase):
         for patch in (mock.patch.object(server.OPS, "DATA_DIR", directory.name),
                       mock.patch.object(server.OPS, "WRITE_GUARD", None)):
             patch.start(); self.addCleanup(patch.stop)
-        server.OPS._write([{"id": "job-1", "kind": "node-power", "status": "running", "progress": 10, "message": "",
+        put(server.OPS, [{"id": "job-1", "kind": "node-power", "status": "running", "progress": 10, "message": "",
                             "history": [], "ref": {"node": "k3s-1", "phase": "draining", "worker": "homestead-new"}}])
 
     def test_a_superseded_worker_records_nothing_and_never_sends(self):
@@ -96,12 +97,12 @@ class OneOwnerTests(unittest.TestCase):
             with self.assertRaises(server.OPS.Superseded):
                 server.POWER_JOBS.run_power_job("job-1", plan)
         self.assertEqual([], sent)
-        saved = server.OPS._read()[0]
+        saved = server.OPS.stored()[0]
         self.assertEqual(("running", "draining"), (saved["status"], saved["ref"]["phase"]), "the job is left to its owner")
 
     def test_its_owner_carries_on(self):
         server.OPS.record_phase("job-1", "verifying", 15, "Rechecking", owner="homestead-new")
-        self.assertEqual("verifying", server.OPS._read()[0]["ref"]["phase"])
+        self.assertEqual("verifying", server.OPS.stored()[0]["ref"]["phase"])
 
 
 class WorkerGoneTests(unittest.TestCase):
@@ -217,6 +218,6 @@ class FailedBeforePowerTests(OneOwnerTests):
             with self.assertRaises(server.POWER_JOBS.PowerNotSent):
                 server.POWER_JOBS.run_power_job("job-1", plan)
         restore.assert_called_once()
-        saved = server.OPS._read()[0]
+        saved = server.OPS.stored()[0]
         self.assertEqual(["lab/plex"], saved["ref"]["restored"]["started"])
         self.assertIn("Started again: lab/plex", saved["message"])
