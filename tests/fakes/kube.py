@@ -43,12 +43,14 @@ MERGE_KEYS = {"containers": "name", "initContainers": "name", "ephemeralContaine
               "ports": ("containerPort", "port")}
 MERGED_PRIMITIVE_LISTS = {"finalizers"}
 LIST_KINDS = {"endpoints": "Endpoints"}
+# Resources whose name in the path is not the kind made plural.
+PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-attachment-definitions"}
 
 
 def plural(kind):
     kind = kind.lower()
-    if kind == "endpoints":
-        return kind
+    if kind in PLURALS:
+        return PLURALS[kind]
     if kind.endswith(("s", "x", "ch", "sh")):
         return kind + "es"
     if kind.endswith("y") and kind[-2:-1] not in "aeiou":

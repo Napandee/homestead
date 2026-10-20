@@ -116,6 +116,14 @@ class ReadTests(unittest.TestCase):
             self.assertEqual(kube.path_of(claim), "/api/v1/namespaces/lab/persistentvolumeclaims/d")
             self.assertEqual(names(K.kget("/apis/apps/v1/deployments")), ["web"])
 
+    def test_a_resource_whose_path_name_is_not_its_kind_made_plural(self):
+        nad = {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
+               "metadata": {"name": "vlan1", "namespace": "default"}}
+        path = "/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions/vlan1"
+        with Kube(nad) as kube:
+            self.assertEqual(kube.path_of(nad), path)
+            self.assertEqual(K.kget(path)["metadata"]["name"], "vlan1")
+
     def test_an_object_is_served_at_every_version_of_its_group(self):
         dv = {"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume", "metadata": {"name": "d", "namespace": "lab"}}
         with Kube(dv):
