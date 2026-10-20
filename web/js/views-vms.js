@@ -914,15 +914,20 @@ const uvmPost = (path, body) => api(path, { method: "POST", headers: { "Content-
 
 async function viewVmImport() {
   if (platformLacks("kubevirt", "Virtual machines")) return;
+  // What could not be read is named on the page, and no class or namespace
+  // list is invented for the imports that use these (#620).
+  const missed = [];
+  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
   const [srcs, disks, namespaces, storageClasses] = await Promise.all([
-    api("/api/sources").catch(() => []), api("/api/vm-disks").catch(() => []),
-    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    part("/api/sources", "import servers", []), part("/api/vm-disks", "VM disks", []),
+    part("/api/namespaces", "namespaces", null), part("/api/storageclasses", "storage classes", null),
   ]);
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   STATE.data.uvms = STATE.data.uvms || {};
   const servers = srcs;
   paint(`${UI.pageHeader(`Virtual machines`, `Bring VMs across from an Unraid server or a Proxmox host, or a disk image from a web address`, `${menuButton("＋ Import", [{ label: "Add a server", icon: "import", run: "srcAdd()", need: "admin" },
         { label: "A disk image from a URL", icon: "disk", run: "vmDiskImport()", need: "admin" }])}`)}
+    ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
     ${servers.length ? servers.map(s => `<div class="sec between"><span>${esc(s.name)} ${tip(`${SOURCE_KINDS[s.kind] || s.kind} · ${s.user}@${s.host}`)}</span>
       ${actionBar([{ label: "Remove server", icon: "trash", run: `srcDel(${jsq(s.name)})`, need: "admin", danger: true,
         tip: "Remove it from Homestead's import servers. Nothing on it changes." }], { shown: 0, label: `More for ${s.name}` })}</div>
@@ -1023,7 +1028,11 @@ window.uvmImport = async (source, id) => {
   const vm = (STATE.data.uvms[source]?.vms || []).find(v => v.id === id);
   if (!vm) return;
   const name = vm.name, kind = uvmKind(source);
-  const opts = await api("/api/vm/create-options").catch(() => ({ cdi: true, storage_classes: [], network_details: [] }));
+  const opts = await api("/api/vm/create-options").catch(e => ({ unread: e.message }));
+  // Neither the VM's options nor a storage class are guessed (#620).
+  const unread = opts.unread || (!opts.storage_classes?.length && STATE.data.importStorageClasses === null
+    ? "the storage classes could not be read; refresh this page and try again" : "");
+  if (unread) return modal(`Import ${name}`, UI.callout("bad", "Could not read what this import needs", esc(unread)) + UI.actions(UI.cancel("Close")));
   if (opts.cdi === false) return modal(`Import ${name}`, UI.lead("VM disks arrive through CDI, KubeVirt's disk importer, and this cluster does not have it. Install CDI from kubevirt.io, then import again.") + UI.actions(UI.cancel("Close")));
   window.__uvm = { source, vm };
   const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
