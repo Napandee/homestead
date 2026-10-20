@@ -39,7 +39,7 @@ class BootTests(unittest.TestCase):
 
     def test_ready_route_checks_journal_and_key_without_any_persistent_write(self):
         with mock.patch.object(server.OPS, "list_operations", side_effect=AssertionError("resolver polling")), \
-             mock.patch.object(server.OPS, "_lock", side_effect=AssertionError("creating locks")), \
+             mock.patch.object(server.OPS.SHARED.SharedLock, "__enter__", side_effect=AssertionError("creating locks")), \
              mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=AssertionError("write")):
             h, result = self.handler("/healthz")
         self.assertTrue(result)

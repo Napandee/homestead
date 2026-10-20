@@ -21,7 +21,7 @@ import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
 import homestead_vms as VMS
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 
 
 def missing(path):
@@ -313,12 +313,10 @@ class K3sClusterTests(Store):
         items = OPS.stored()
         items[-1]["status"] = "failed"
         put(OPS, items)
-        original = OPS._write
         def write(rows):
             if any(row.get("tracking_stopped") for row in rows):
                 raise OSError("lost storage")
-            return original(rows)
-        with mock.patch.object(OPS, "_write", side_effect=write), mock.patch.object(VMS, "delete") as delete:
+        with store_writes(OPS, fail=write), mock.patch.object(VMS, "delete") as delete:
             with self.assertRaises(OSError):
                 OPS.cancel(op, confirm="k3s-lab")
         delete.assert_not_called()

@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+from fakes.job_store import put
 
 
 class RolloutPowerJobTests(unittest.TestCase):
@@ -31,8 +32,8 @@ class RolloutPowerJobTests(unittest.TestCase):
                   {"id": "b", "kind": "node-power", "status": "running", "ref": {"node": "node-1", "action": "reboot", "started_epoch": now - 3600}},
                   {"id": "c", "kind": "node-power", "status": "running", "ref": {"node": "node-1", "action": "poweroff", "started_epoch": now}},
                   {"id": "d", "kind": "node-power", "status": "failed", "ref": {"node": "node-1", "action": "reboot", "started_epoch": now}}]
-        with mock.patch.object(server.OPS, "_read", return_value=stored):
-            self.assertEqual("", server.POWER_JOBS.rollout_power_job("node-1", now - 60))
+        put(server.OPS, stored)
+        self.assertEqual("", server.POWER_JOBS.rollout_power_job("node-1", now - 60))
 
 
 if __name__ == "__main__":

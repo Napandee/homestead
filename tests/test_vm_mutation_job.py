@@ -9,7 +9,7 @@ from unittest import mock
 
 import test_vm_resources  # server module path
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 import homestead_vm_mutation_job as job
 import homestead_vm_mutation_recovery as recovery
 import homestead_vm_power_job as power
@@ -126,7 +126,7 @@ class VMMutationJobTests(unittest.TestCase):
             self.dispatch()
 
     def test_history_write_failure_never_sends(self):
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk")), self.assertRaises(OSError):
+        with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             self.dispatch()
         self.send.assert_not_called()
 
@@ -188,7 +188,7 @@ class VMMutationJobTests(unittest.TestCase):
                 recovery.preview(ident, ops, read, "admin")
             self.assertNotIn("test-secret-value", str(error.exception))
         good = self.approved(ident)
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk")), self.assertRaises(OSError):
+        with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             recovery.resolve(good, ops, self.read, "admin")
         self.assertTrue(ops.stored()[0]["ref"]["retain_resources"])
 

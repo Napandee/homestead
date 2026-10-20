@@ -17,7 +17,7 @@ import server
 import homestead_self_data_worker as W
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
-from fakes.job_store import JobStore, put
+from fakes.job_store import JobStore, put, store_writes
 from test_self_data_coordinator import Cluster
 import test_self_data_execute as execute_fixture
 
@@ -68,8 +68,9 @@ class CleanupTests(unittest.TestCase):
             self.assertEqual("succeeded", saved["status"])
             self.assertEqual(100, saved["progress"])
             self.assertFalse(saved["ref"]["retain_resources"])
-            with mock.patch.object(OPS, "_write", side_effect=AssertionError("Already complete")):
+            with store_writes(OPS) as written:
                 self.assertFalse(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
+            self.assertEqual([], written)
 
     def test_completion_never_clears_another_job_or_uncertain_identity(self):
         self.finish()

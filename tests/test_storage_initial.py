@@ -8,7 +8,7 @@ import test_reclass_review as fixtures
 import homestead_reclass as rc
 import homestead_storage_workflow as workflow
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 import homestead_vm_power_receipts as receipts
 import server
 from homestead_storage_journal import Held
@@ -88,7 +88,7 @@ class InitialStorageTests(unittest.TestCase):
 
     def test_initial_store_failure_cannot_stop_a_workload(self):
         body = self.approved()
-        with mock.patch.object(ops, "_write", side_effect=OSError("store unavailable")):
+        with store_writes(ops, fail=OSError("store unavailable")):
             with self.assertRaises(OSError): workflow.start_reviewed(body, "admin", ops)
         self.assertEqual([], self.sent)
 

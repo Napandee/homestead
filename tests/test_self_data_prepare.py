@@ -326,7 +326,7 @@ class PreparationTests(unittest.TestCase):
         foreign = copy.deepcopy(item); foreign["ref"]["namespace"] = "foreign"
         with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.f.read), \
              mock.patch.object(server.SELF_DATA_ROUTES, "homestead_data_volume", return_value={"pvc": "different"}), \
-             mock.patch.object(server.OPS, "_read", return_value=[item, foreign]):
+             mock.patch.object(server.OPS, "stored", return_value=[item, foreign]):
             state = server.SELF_DATA_ROUTES.self_data_preparation_state()
         self.assertEqual(1, len(state["preparations"]))
         self.assertFalse(state["preparations"][0]["prepared"])
