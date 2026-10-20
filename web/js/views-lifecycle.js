@@ -262,7 +262,8 @@ function placementSection(p, w, nodes, containers) {
             <option value="require" ${p.spread === "require" ? "selected" : ""}>require different hosts</option></select></div>
         <div class="f"><label>Preferred host ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
           <option value="">any host</option>
-          ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
+          ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}${n.schedulable === false ? " (not schedulable)" : ""}</option>`).join("")}
+          ${w.node && !(nodes || []).some(n => n.name === w.node) ? `<option value="${esc(w.node)}" selected>${esc(w.node)} (gone)</option>` : ""}
         </select></div></div></div>
     <div class="place-level"><div class="place-title">Other apps</div>
       <div class="place-grid two">
@@ -342,7 +343,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
       nodes: nodes0(liveNodes).length };
     if (liveNodes.length) STATE.data.nodes = liveNodes;
-    const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
+    // Its own host stays on the list when cordoned, so Save does not unpin it.
+    const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false || n.name === w.node);
     const seeds = w.seed_configs || [];
     const containers = w.containers || [{ original_name: w.container_name || w.name, name: w.container_name || w.name,
       image: w.image, cpu: w.cpu, memory: w.memory, env: w.env || {}, env_refs: [], ports: w.ports || [],
@@ -399,6 +401,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
+    window.__editIsSelf = w.priority === "self";
     editPortsChanged();
     window.__editPortBaseline = editPortSignature();
     containerRemoveButtons();
@@ -546,7 +549,8 @@ window.editSave = async (ns, name) => {
   if ($("#e_lan_on")) body.lan = (access === "lan" || $("#e_lan_on").checked) && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
-  if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
+  // The app's own answer says whether it is Homestead; the list of apps may not have been read.
+  if ((window.__editIsSelf || (STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name)) && !body.autostart) {
     if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`, { title: "Turn autostart off", ok: "Stop Homestead", danger: true }))) return;
     body.confirm_self = true;
   }
