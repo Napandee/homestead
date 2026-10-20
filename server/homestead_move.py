@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_routes as ROUTER
 from homestead_pod_resources import storage_gib
@@ -280,6 +281,8 @@ def list_clusters():
 
 
 def _stored_clusters():
+    """The registry for showing and looking up: empty when it cannot be read.
+    Changes go through _update_clusters, which refuses an unread one."""
     try:
         found = kget(f"/api/v1/namespaces/{NS}/configmaps/homestead-clusters")
         rows = json.loads((found.get("data") or {}).get("clusters.json", "[]"))
@@ -288,19 +291,20 @@ def _stored_clusters():
         return []
 
 
-def _save_clusters(rows):
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": "homestead-clusters", "namespace": NS,
-                         "labels": {NAMES.key("managed"): "true"}},
-            "data": {"clusters.json": json.dumps(rows, indent=2)}}
-    try:
-        kget(f"/api/v1/namespaces/{NS}/configmaps/homestead-clusters")
-        ksend("PUT", f"/api/v1/namespaces/{NS}/configmaps/homestead-clusters", body)
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        ksend("POST", f"/api/v1/namespaces/{NS}/configmaps", body)
-    return rows
+def _update_clusters(change):
+    """Make change(rows) on the registry as it is stored when it is saved, so
+    a cluster added or removed meanwhile, here or on another copy of
+    Homestead, is kept (#621). A registry that cannot be read, or holds
+    something other than a list, stops the change: nothing is written over
+    it. Returns the rows saved."""
+    def apply(rows):
+        if rows is None:
+            rows = []
+        if not isinstance(rows, list):
+            raise ValueError("the clusters registry is not a list; nothing was changed")
+        return change(rows)
+    return KUBE.update_json(f"/api/v1/namespaces/{NS}/configmaps/homestead-clusters", "clusters.json", apply,
+                            read=kget, write=ksend, labels={NAMES.key("managed"): "true"}, indent=2)
 
 
 def add_cluster(name, url, user, password):
@@ -313,10 +317,15 @@ def add_cluster(name, url, user, password):
         raise ValueError("address must be a http:// or https:// URL")
     if any(row.get("fleet") and row["name"] == name for row in list_clusters()):
         raise ValueError(f"{name} is a linked cluster already")
-    rows = [row for row in _stored_clusters() if row["name"] != name]
-    rows.append({"name": name, "url": url, "user": user,
-                 "added": time.strftime("%Y-%m-%d %H:%M")})
-    _save_clusters(rows)
+    added = {"name": name, "url": url, "user": user, "added": time.strftime("%Y-%m-%d %H:%M")}
+
+    def add(rows):
+        # A name kept for a linked cluster (one added before linking existed)
+        # is not replaced: moves that recorded it still use it.
+        if any(row["name"] == name and (row.get("fleet") or row.get("alias")) for row in rows):
+            raise ValueError(f"{name} is a linked cluster already")
+        return [row for row in rows if row["name"] != name] + [added]
+    rows = _update_clusters(add)
     secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
               "metadata": {"name": _secret_name(name), "namespace": NS},
               "stringData": {"password": password or ""}}
@@ -334,8 +343,7 @@ def add_cluster(name, url, user, password):
 def remove_cluster(name):
     if any(row.get("fleet") and not row.get("alias") and row["name"] == name for row in _stored_clusters() + list_clusters()):
         raise ValueError(f"{name} is linked; unlink it under Settings → Linked clusters")
-    rows = [row for row in _stored_clusters() if row["name"] != name]
-    _save_clusters(rows)
+    rows = _update_clusters(lambda rows: [row for row in rows if row["name"] != name])
     _tokens.pop(name, None)
     try:
         ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/{_secret_name(name)}")
@@ -395,9 +403,8 @@ def link_legacy(name, own_url="", plain_ok=False):
     if not member:
         result = FLEET.join(row["url"], row.get("user", ""), _password(name), own_url, plain_ok=plain_ok)
         member, missed = result["member"], result.get("missed", [])
-    rows = [dict(r, user="", fleet=True, alias=True, id=member["id"]) if r["name"] == name else r
-            for r in _stored_clusters()]
-    _save_clusters(rows)
+    _update_clusters(lambda rows: [dict(r, user="", fleet=True, alias=True, id=member["id"]) if r["name"] == name else r
+                                   for r in rows])
     _tokens.pop(name, None)
     try:
         ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/{_secret_name(name)}")
