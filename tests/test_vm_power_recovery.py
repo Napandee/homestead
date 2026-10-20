@@ -6,6 +6,7 @@ from unittest import mock
 
 import test_vm_power_job as fixtures
 import homestead_operations as ops
+from fakes.job_store import put, store_writes
 import homestead_vm_power_job as power
 import homestead_vm_power_recovery as recovery
 import server
@@ -34,7 +35,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
         self.addCleanup(key.stop)
         with self.assertRaises(ValueError):
             self.dispatch(send=mock.Mock(side_effect=TimeoutError("unavailable")))
-        self.ident = ops._read()[0]["id"]
+        self.ident = ops.stored()[0]["id"]
 
     def approved(self):
         review = recovery.preview(self.ident, ops, self.read, "admin")
@@ -44,11 +45,11 @@ class VMPowerRecoveryTests(unittest.TestCase):
 
     def test_preview_only_reports_safe_identity_and_status_fields(self):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"cloudInitNoCloud": {"userData": "private-cloud-config"}}]
-        before = copy.deepcopy(ops._read())
-        with mock.patch.object(ops, "_write") as write:
+        before = copy.deepcopy(ops.stored())
+        with store_writes(ops) as written:
             result = recovery.preview(self.ident, ops, self.read, "admin")
-        write.assert_not_called()
-        self.assertEqual(before, ops._read())
+        self.assertEqual([], written)
+        self.assertEqual(before, ops.stored())
         self.assertNotIn("private-cloud-config", str(result))
         self.assertNotIn("review_digest", str(result))
         self.assertEqual("vm-uid", result["plan"]["resource"]["original_uid"])
@@ -58,7 +59,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
     def test_resolve_keeps_unknown_outcome_and_original_approval_consumed(self):
         result = recovery.resolve(self.approved(), ops, self.read, "admin")
         self.assertTrue(result["ok"])
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("failed", item["status"])
         self.assertEqual("resolved-unknown", item["ref"]["phase"])
         self.assertFalse(item["ref"]["retain_resources"])
@@ -76,7 +77,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
         for change in ({"capacity_token": ""}, {"confirm_capacity": False}, {"acknowledge_unknown": False}, {"confirm": "wrong"}):
             with self.assertRaises(ValueError):
                 recovery.resolve({**good, **change}, ops, self.read, "admin")
-            self.assertEqual("uncertain", ops._read()[0]["ref"]["phase"])
+            self.assertEqual("uncertain", ops.stored()[0]["ref"]["phase"])
 
     def test_changed_vm_instance_or_actor_requires_another_review(self):
         good = self.approved()
@@ -102,7 +103,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
             self.assertIsNone(review["capacity_token"])
             with self.assertRaisesRegex(ValueError, "dispatcher is active"):
                 recovery.resolve(good, ops, self.read, "admin")
-        self.assertEqual("uncertain", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("uncertain", ops.stored()[0]["ref"]["phase"])
 
     def test_dispatcher_in_another_process_blocks_recovery_until_it_exits(self):
         recovery.resolve(self.approved(), ops, self.read, "admin")
@@ -113,7 +114,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
         try:
             child.start()
             self.assertTrue(sending.wait(10))
-            ident = ops._read()[-1]["id"]
+            ident = ops.stored()[-1]["id"]
             self.assertTrue(recovery.preview(ident, ops, self.read, "admin")["plan"]["blocked"])
             finish.set()
             child.join(10)
@@ -126,9 +127,9 @@ class VMPowerRecoveryTests(unittest.TestCase):
 
     def test_orphan_dispatch_phase_can_be_inspected_only_with_fenced_protocol(self):
         ops.record_phase(self.ident, "dispatching", 10, "lost worker")
-        items = ops._read()
+        items = ops.stored()
         items[0]["ref"]["phase_at"] = 99999999999
-        ops._write(items)
+        put(ops, items)
         self.approved()  # ownership is proven by the lock, not elapsed time
         ops.record_phase(self.ident, "dispatching", 10, "old worker", dispatch_protocol=0)
         self.assertTrue(recovery.preview(self.ident, ops, self.read, "admin")["plan"]["blocked"])
@@ -164,10 +165,10 @@ class VMPowerRecoveryTests(unittest.TestCase):
 
     def test_unavailable_journal_does_not_report_resolved(self):
         good = self.approved()
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk unavailable")):
+        with store_writes(ops, fail=OSError("disk unavailable")):
             with self.assertRaises(OSError):
                 recovery.resolve(good, ops, self.read, "admin")
-        self.assertEqual("uncertain", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("uncertain", ops.stored()[0]["ref"]["phase"])
 
     def test_invalid_id_cannot_address_arbitrary_lock_paths(self):
         for ident in ("../../outside", "", "A" * 24, "0" * 23):

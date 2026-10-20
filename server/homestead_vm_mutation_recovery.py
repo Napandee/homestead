@@ -75,8 +75,8 @@ def _snapshot(item, read, actor):
 
 def preview(ident, ops, read, actor):
     try:
-        with RECOVERY._exclusive(ident, ops), ops._lock:
-            plan, context = _snapshot(RECOVERY._job(ops._read(), ident), read, actor)
+        with RECOVERY._exclusive(ident, ops), ops.transaction():
+            plan, context = _snapshot(RECOVERY._job(ops.stored(), ident), read, actor)
             return {"plan": plan, "capacity_token": REVIEW.issue({"id": ident}, context)}
     except RECOVERY.DispatcherBusy:
         return {"plan": {"id": ident, "blocked": True, "blockers": ["The configuration dispatcher is active. Wait before inspecting its outcome."],
@@ -86,8 +86,8 @@ def preview(ident, ops, read, actor):
 def resolve(body, ops, read, actor):
     ident = str(body.get("id") or "")
     try:
-        with RECOVERY._exclusive(ident, ops), ops._lock:
-            items = ops._read()
+        with RECOVERY._exclusive(ident, ops), ops.transaction() as t:
+            items = t.items
             item = RECOVERY._job(items, ident)
             plan, context = _snapshot(item, read, actor)
             REVIEW.enforce({"id": ident, "capacity_token": body.get("capacity_token"), "confirm_capacity": body.get("confirm_capacity")}, plan, context)
@@ -102,7 +102,7 @@ def resolve(body, ops, read, actor):
             importing = item["kind"] == IMPORT.KIND
             ops._finish(item, "failed", item.get("progress", 0),
                         f"{actor} inspected the incomplete {'import' if importing else 'VM save'}; outcome remains unknown. Resources retained; no retry or rollback; a late effect remains possible.")
-            ops._write(items)
+            t.save(items)
             return {"ok": True, "detail": "Tracking resolved as unknown; no cluster change was sent. Resources and import holds remain; any new action requires a fresh review." if importing else "Tracking resolved as unknown; no cluster change was sent. Resources remain and any new VM action requires a fresh review.",
                     "operation": ops._public(item)}
     except RECOVERY.DispatcherBusy:

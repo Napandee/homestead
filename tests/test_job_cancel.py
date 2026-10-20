@@ -21,6 +21,7 @@ import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
 import homestead_vms as VMS
+from fakes.job_store import put, store_writes
 
 
 def missing(path):
@@ -74,7 +75,7 @@ class Store(unittest.TestCase):
                          "/", ref)["id"]
 
     def stored(self, op):
-        return next(item for item in OPS._read() if item["id"] == op)
+        return next(item for item in OPS.stored() if item["id"] == op)
 
 
 class FrameworkTests(Store):
@@ -109,7 +110,7 @@ class FrameworkTests(Store):
 
     def test_a_finished_job_has_nothing_to_cancel(self):
         op = self.job("thing", {})
-        items = OPS._read(); items[-1]["status"] = "succeeded"; OPS._write(items)
+        items = OPS.stored(); items[-1]["status"] = "succeeded"; put(OPS, items)
         with self.assertRaisesRegex(ValueError, "succeeded already"):
             OPS.cancel(op)
 
@@ -149,9 +150,9 @@ class FrameworkTests(Store):
     def test_the_poll_does_not_move_a_job_on_while_it_is_being_cancelled(self):
         OPS.RESOLVERS["thing"] = lambda item: ("succeeded", 100, "done")
         op = self.job("thing", {})
-        items = OPS._read()
+        items = OPS.stored()
         items[-1].update(status=OPS.CANCELLING, cancel_started=time.time())
-        OPS._write(items)
+        put(OPS, items)
         listed = next(o for o in OPS.list_operations() if o["id"] == op)
         self.assertEqual(OPS.CANCELLING, listed["status"])
         self.assertFalse(listed["cancellable"])
@@ -160,10 +161,10 @@ class FrameworkTests(Store):
 
     def test_a_cancel_interrupted_long_ago_can_be_asked_again(self):
         op = self.job("thing", {})
-        items = OPS._read()
+        items = OPS.stored()
         items[-1].update(status=OPS.CANCELLING, previous_status="running",
                          cancel_started=time.time() - OPS.CANCEL_RETRY_AFTER - 1)
-        OPS._write(items)
+        put(OPS, items)
         self.assertTrue(next(o for o in OPS.list_operations() if o["id"] == op)["cancellable"])
         OPS.cancel(op)
         self.assertEqual("cancelled", self.stored(op)["status"])
@@ -242,9 +243,9 @@ class K3sClusterTests(Store):
 
     def test_failed_build_requires_retention_review_and_never_claims_cleanup(self):
         op = self.op()
-        items = OPS._read()
+        items = OPS.stored()
         items[-1].update(status="failed", finished_at=OPS._now(), message="After 45 minutes the cluster is not up")
-        OPS._write(items)
+        put(OPS, items)
         listed = next(o for o in OPS.list_operations() if o["id"] == op)
         self.assertEqual((False, True), (listed["cancellable"], listed["cleanable"]))
         self.assertTrue(listed["tracking_only"])
@@ -270,7 +271,7 @@ class K3sClusterTests(Store):
 
     def test_other_failed_jobs_are_not_offered_a_clean_up(self):
         op = self.job("image-pull", {"namespace": "lab", "name": "x"})
-        items = OPS._read(); items[-1]["status"] = "failed"; OPS._write(items)
+        items = OPS.stored(); items[-1]["status"] = "failed"; put(OPS, items)
         self.assertFalse(next(o for o in OPS.list_operations() if o["id"] == op)["cleanable"])
         with self.assertRaisesRegex(ValueError, "failed already"):
             OPS.cancel(op)
@@ -290,13 +291,13 @@ class K3sClusterTests(Store):
     def test_failed_new_and_legacy_recovery_records_survive_clear_and_pruning(self):
         for retained in (False, True):
             op = self.op()
-            items = OPS._read()
+            items = OPS.stored()
             item = next(row for row in items if row["id"] == op)
             item.update(status="failed")
             item["ref"].update(retain_resources=retained, phase="failed")
-            OPS._write(items)
+            put(OPS, items)
             with mock.patch.object(OPS, "MAX_OPERATIONS", 0):
-                OPS._write(OPS._read())
+                put(OPS)
             self.assertEqual(0, OPS.dismiss_finished()["dismissed"])
             with self.assertRaisesRegex(ValueError, "recovery details"):
                 OPS.dismiss(op)
@@ -309,15 +310,13 @@ class K3sClusterTests(Store):
 
     def test_tracking_result_write_failure_keeps_recovery_evidence(self):
         op = self.op()
-        items = OPS._read()
+        items = OPS.stored()
         items[-1]["status"] = "failed"
-        OPS._write(items)
-        original = OPS._write
+        put(OPS, items)
         def write(rows):
             if any(row.get("tracking_stopped") for row in rows):
                 raise OSError("lost storage")
-            return original(rows)
-        with mock.patch.object(OPS, "_write", side_effect=write), mock.patch.object(VMS, "delete") as delete:
+        with store_writes(OPS, fail=write), mock.patch.object(VMS, "delete") as delete:
             with self.assertRaises(OSError):
                 OPS.cancel(op, confirm="k3s-lab")
         delete.assert_not_called()
@@ -327,12 +326,12 @@ class K3sClusterTests(Store):
 
     def test_previously_completed_legacy_cleanup_remains_dismissible(self):
         op = self.op()
-        items = OPS._read()
+        items = OPS.stored()
         items[-1].update(status="failed", cleaned=True)
-        OPS._write(items)
+        put(OPS, items)
         self.assertTrue(OPS._public(self.stored(op))["dismissible"])
         OPS.dismiss(op)
-        self.assertEqual([], OPS._read())
+        self.assertEqual([], OPS.stored())
 
     def test_a_build_that_fails_part_way_retains_vms_and_records_the_uncertain_target(self):
         removed, made = [], []
@@ -350,7 +349,7 @@ class K3sClusterTests(Store):
         finally:
             K3SC.bind(None, None, None)
         self.assertEqual([], removed)
-        item = OPS._read()[-1]
+        item = OPS.stored()[-1]
         self.assertEqual("failed", item["status"])
         self.assertEqual("k3s-lab-agent-1", item["ref"]["attempted"])
         self.assertEqual("made-uid", item["ref"]["created"][0]["identity"]["uid"])

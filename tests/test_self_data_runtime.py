@@ -86,7 +86,7 @@ class RuntimeTests(unittest.TestCase):
     def test_preview_does_not_create_locks_register_or_rewrite_heartbeats(self):
         self.ready()
         before = Path(OPS.DATA_DIR, R.FILE).read_bytes()
-        with mock.patch.object(OPS, "_lock", side_effect=AssertionError("no locking")), \
+        with mock.patch.object(S.SharedLock, "__enter__", side_effect=AssertionError("no locking")), \
              mock.patch.object(S, "write_json", side_effect=AssertionError("no writes")):
             self.check()
         self.assertEqual(before, Path(OPS.DATA_DIR, R.FILE).read_bytes())

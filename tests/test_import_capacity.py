@@ -95,7 +95,7 @@ class ImportCapacityTests(unittest.TestCase):
         self.assertEqual(("Job", "homestead-import-imported"), (secret["metadata"]["ownerReferences"][0]["kind"],
                                                                 secret["metadata"]["ownerReferences"][0]["name"]))
         self.assertEqual({"password": "c2VjcmV0"}, secret["data"])
-        journal = str(server.OPS._read())
+        journal = str(server.OPS.stored())
         self.assertNotIn("c2VjcmV0", journal)
 
     def test_an_import_into_a_system_or_missing_namespace_is_refused(self):

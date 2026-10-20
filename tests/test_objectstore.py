@@ -9,6 +9,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as KUBE
 import homestead_objectstore as store
 
 
@@ -17,19 +18,35 @@ class ObjectStoreTests(unittest.TestCase):
         self.objects = {}
         self.sent = []
         self.claims = []
+        self.failing = {}  # path: how many reads of it fail before it answers again
         for kind in ("backups", "snapshots", "backupbackingimages", "volumes", "backupvolumes"):
             self.objects[f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/{kind}"] = {"items": []}
         store.bind(self._get, self._send, self._create_pvc, "lab")
         store.LH.bind(self._get, self._send, {}, "longhorn-r2")
+        # The shared client (homestead_kube) reads through the same fake.
+        shared = mock.patch.object(KUBE, "kget", side_effect=lambda path, **kw: self._get(path))
+        shared.start()
+        self.addCleanup(shared.stop)
         # Homestead's shared address, as Networking would plan it.
         self.plans = []
         plan = mock.patch.object(store.NETWORK, "service_plan",
                                  side_effect=lambda cfg, **kw: self.plans.append(cfg) or {"vip": "192.0.2.242"})
         plan.start()
         self.addCleanup(plan.stop)
+        # Networking checks the store's address against what the cluster holds,
+        # through its own client: the same fake, with nothing else in use.
+        for path in ("/api/v1/services", "/apis/discovery.k8s.io/v1/endpointslices",
+                     "/apis/apps/v1/deployments", "/api/v1/nodes"):
+            self.objects[path] = {"items": []}
+        reads = mock.patch.object(store.NETWORK, "kget", side_effect=lambda path, **kw: self._get(path))
+        reads.start()
+        self.addCleanup(reads.stop)
 
     def _get(self, path):
         key = path.split("?")[0]
+        if self.failing.get(key):
+            self.failing[key] -= 1
+            raise urllib.error.HTTPError(path, 500, "the API server timed out", {}, None)
         if key not in self.objects:
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         return self.objects[key]
@@ -631,6 +648,97 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual(actual["url"], store.request_target()["kept_target"])
         self.assertEqual({}, store._target_request(deployment))
         self.assertTrue(store.request_target(replace=True)["pending"])
+
+    # A read that fails is not an object that is missing (#620): whatever
+    # Homestead would do about "not there" waits until it can read again.
+    SERVICE = "/api/v1/namespaces/lab/services/homestead-objectstore"
+    DEPLOYMENT = "/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"
+    KEYS = "/api/v1/namespaces/lab/secrets/homestead-objectstore-keys"
+    UNREAD = "could not read .* from Kubernetes"
+
+    def test_an_unread_service_does_not_move_a_running_store_to_the_shared_address(self):
+        self._service(annotation="192.0.2.243")
+        self.failing[self.SERVICE] = 1
+        with self.assertRaisesRegex(store.Unread, "could not read services/homestead-objectstore from Kubernetes"):
+            store.deploy({"point_longhorn": False})
+        self.assertEqual([], self.sent)
+        self.assertEqual([], self.plans, "no shared address was planned for it")
+
+    def test_an_unread_deployment_does_not_replace_a_serving_minio(self):
+        self.objects[self.DEPLOYMENT] = {
+            "metadata": {"resourceVersion": "5"}, "status": {"readyReplicas": 1},
+            "spec": {"template": {"spec": {"containers": [{"image": "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"}]}}}}
+        self.failing[self.DEPLOYMENT] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
+        self.assertFalse([p for _, p, _ in self.sent if "/deployments" in p or "/services" in p])
+
+    def test_unread_keys_are_never_replaced_by_new_ones(self):
+        self._service(ip="192.0.2.243")
+        self.failing[self.KEYS] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
+        self.failing[self.KEYS] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.point_longhorn()
+        self.assertEqual([], self.sent, "neither the store nor Longhorn is given keys it does not have")
+        self.assertEqual([], self.claims)
+
+    def test_an_unread_storage_class_does_not_put_the_store_on_another_class(self):
+        self.failing["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
+        self.assertEqual([], self.claims)
+        self.assertFalse([p for _, p, _ in self.sent if "storageclasses" in p or "/deployments" in p])
+
+    def test_an_unread_volume_claim_is_not_created_again(self):
+        self.failing["/api/v1/namespaces/lab/persistentvolumeclaims/homestead-objectstore"] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
+        self.assertEqual([], self.claims)
+
+    def test_moves_out_are_not_switched_on_an_unread_store(self):
+        self._deployment(1)
+        for allow in (True, False):
+            with self.subTest(allow=allow):
+                self.failing[self.DEPLOYMENT] = 1
+                with self.assertRaisesRegex(Exception, self.UNREAD):
+                    store.set_transfers(allow)
+                self.assertEqual([], self.sent)
+                self.assertEqual([], self.claims)
+        self.failing[self.DEPLOYMENT] = 1
+        reply = store._transfers({"allow": False})
+        self.assertEqual(503, getattr(reply, "code", None), "a linked cluster waits out a 5xx and stops on a 4xx")
+        self.assertRegex(reply.body["error"], self.UNREAD)
+
+    def test_an_unread_service_does_not_fail_a_pending_target_switch(self):
+        deployment, _ = self._target_fixture()
+        store.request_target()
+        self.failing[self.SERVICE] = 1
+        with mock.patch.object(store, "point_longhorn") as point, \
+                self.assertRaisesRegex(Exception, self.UNREAD):
+            store.reconcile_target()
+        point.assert_not_called()
+        self.assertEqual("pending", store.target_status(deployment)["state"])
+
+    def test_an_unread_service_is_not_called_missing(self):
+        self._deployment(1)
+        self.failing[self.SERVICE] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.request_target()
+        self.assertEqual([], self.sent)
+        self.failing[self.SERVICE] = 1
+        with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.status()
+
+    def test_an_absent_store_is_still_set_up_from_nothing(self):
+        # Every object answers 404: that is "not there", and deploy makes it all.
+        store.deploy({"point_longhorn": False})
+        made = {p for m, p, _ in self.sent if m == "POST"}
+        self.assertEqual({"/api/v1/namespaces/lab/secrets", "/apis/apps/v1/namespaces/lab/deployments",
+                          "/api/v1/namespaces/lab/services"}, made)
+        self.assertEqual(1, len(self.claims))
+        self.assertFalse(store.status()["deployed"])
 
 
 if __name__ == "__main__":

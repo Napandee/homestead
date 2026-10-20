@@ -253,7 +253,7 @@ def configure(body, operations=None):
     if operations is not None:
         # The progress resolver uses this same shared lock. Persist the pause
         # before changing Longhorn, so a refresh/restart cannot re-enable it.
-        with operations._lock:
+        with operations.transaction():
             return _configure(body, operations)
     return _configure(body)
 
@@ -265,17 +265,17 @@ def _configure(body, operations=None):
         raise ValueError("Review the V2 upgrade settings again before applying")
     if not body['enabled'] and operations is not None:
         operations.require_write()
-        items = operations._read()
-        changed = False
-        for item in items:
-            ref = item.get('ref') or {}
-            if (item.get('kind') == 'platform-upgrade' and item.get('status') in ('queued', 'running')
-                    and ref.get('component') == 'longhorn' and ref.get('v2_mode') == 'live'
-                    and not ref.get('v2_enabled')):
-                ref['v2_enabled'] = True
-                changed = True
-        if changed:
-            operations._write(items)
+        with operations.transaction() as t:
+            changed = False
+            for item in t.items:
+                ref = item.get('ref') or {}
+                if (item.get('kind') == 'platform-upgrade' and item.get('status') in ('queued', 'running')
+                        and ref.get('component') == 'longhorn' and ref.get('v2_mode') == 'live'
+                        and not ref.get('v2_enabled')):
+                    ref['v2_enabled'] = True
+                    changed = True
+            if changed:
+                t.save()
     # Pausing must work even during degraded recovery. No prerequisites are
     # imposed on disabling; a node already upgrading is allowed to finish.
     if not body["enabled"]:

@@ -317,6 +317,10 @@ def view():
             for row in facts.get("vips") or [] if row.get("ip")}
     nodes = set(facts.get("node_ips") or [])
     pools = _pool_ranges(facts)
+    # With the cluster's Nodes or Services unread, their addresses would look
+    # free: offer none until they can be read (#615).
+    unread = (f"could not read the cluster's {' and '.join(facts['unread'])}; "
+              "no address is offered as free until it can be") if facts.get("unread") else ""
     subnets = []
     for subnet in data["subnets"]:
         network = ipaddress.ip_network(subnet["cidr"])
@@ -392,7 +396,7 @@ def view():
         taken_ranges = [(int(_ip(start)), int(_ip(end)))] if start and end else []
         taken_ranges += [(lo, hi) for _, lo, hi in pools]
         free = [a for a in usable if a not in used and not any(lo <= a <= hi for lo, hi in taken_ranges)
-                and str(ipaddress.ip_address(a)) != subnet.get("gateway")]
+                and str(ipaddress.ip_address(a)) != subnet.get("gateway")] if not unread else []
         subnets.append({**subnet, "rows": sorted(rows.values(), key=lambda r: int(ipaddress.ip_address(r["ip"]))),
                         "usable": len(usable), "used": len(used),
                         "dhcp_size": (int(_ip(end)) - int(_ip(start)) + 1) if start and end else 0,
@@ -405,7 +409,7 @@ def view():
     # UniFi is optional: without an address and a key, nothing of it is shown.
     unifi["configured"] = bool(unifi.get("url") and unifi.get("has_key"))
     known = {s["cidr"] for s in data["subnets"]}
-    return {"subnets": subnets, "kinds": list(KINDS), "categories": list(CATEGORIES),
+    return {"subnets": subnets, "unread": unread, "kinds": list(KINDS), "categories": list(CATEGORIES),
             "suggested": [c for c in suggested_subnets() if c not in known],
             "unifi_networks": [n for n in data.get("unifi_networks") or [] if n.get("cidr") not in known],
             "unifi": unifi}

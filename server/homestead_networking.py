@@ -23,6 +23,7 @@ DNS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_fleet as FLEET
 import homestead_ipam as IPAM
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
 import homestead_self_address as SELF_ADDRESS
@@ -45,12 +46,16 @@ def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip, _guard
     node_probes = _node_probes or node_probes
 
 
-def _items(path):
+def _items(path, strict=False):
+    """A list read. An optional one (strict=False) is [] when it fails: an
+    API the cluster may not have, such as Harvester's IP pools. A strict one
+    raises: Services, EndpointSlices, Deployments and Nodes decide which
+    address and port are free, and none seen is not none in use (#615)."""
     for attempt in range(2):
         try:
             return kget(path).get("items", [])
         except urllib.error.HTTPError as error:
-            if error.code in (403, 404):
+            if error.code in (403, 404) and not strict:
                 return []
             if error.code == 429 and attempt == 0:
                 try:
@@ -61,8 +66,32 @@ def _items(path):
                 continue
             raise
         except Exception:
+            if strict:
+                raise
             return []
     return []
+
+
+def _unread(state):
+    """What could not be read for this state, in words, or ""."""
+    unread = state.get("unread") or []
+    return f"could not read the cluster's {' and '.join(unread)}" if unread else ""
+
+
+def _complete(state, outcome):
+    """state, or a refusal naming what could not be read and what did not happen."""
+    if _unread(state):
+        raise ValueError(f"{_unread(state)}; {outcome}. Try again in a moment")
+    return state
+
+
+def _read(path, what):
+    """A strict list read whose failure says what could not be read."""
+    try:
+        return _items(path, strict=True)
+    except Exception as error:
+        print(f"Networking: could not read {what}: {str(error)[:160]}", flush=True)
+        raise ValueError(f"could not read the cluster's {what}; nothing was changed. Try again in a moment") from error
 
 
 def _name(value, label):
@@ -256,6 +285,8 @@ def _address_owners(raw_rows, node_ips):
 def address_problem(ip, state=None):
     """Why an address cannot be given to a Service here, or "" if it can."""
     state = state or inventory()
+    if _unread(state):
+        return f"{_unread(state)}, so whether {ip} is free is not known; try again in a moment"
     ip = str(ip or "").strip()
     owner = state.get("platform_addresses", {}).get(ip)
     if owner:
@@ -278,11 +309,39 @@ def check_address(ip, state=None):
     return ip
 
 
-def inventory():
-    services = _items("/api/v1/services")
-    slices = _items("/apis/discovery.k8s.io/v1/endpointslices")
-    deployments = _items("/apis/apps/v1/deployments")
-    nodes = _items("/api/v1/nodes")
+def cluster_address_problem(ip, state):
+    """Why a VM's static address clashes with the cluster's own or a
+    Service's, or "" - from an inventory ({} when none could be had)."""
+    if not state or _unread(state):
+        return (f"{_unread(state) or 'could not read the cluster'}, so whether {ip} is free is not known; "
+                "try again in a moment")
+    if ip in (state.get("node_ips") or []) or ip in (state.get("platform_addresses") or {}):
+        return f"{ip} is one of the cluster's own addresses"
+    if any(v.get("ip") == ip for v in state.get("vips") or []):
+        return f"{ip} is a Service's address"
+    return ""
+
+
+def inventory(leaving=None):
+    """leaving: (namespace, name) of a Service about to be replaced, whose
+    addresses count as free (set_workload_address)."""
+    # What these four say decides a free address and port. One that cannot be
+    # read is named in "unread": the Networking page shows the rest, and
+    # anything that would choose an address refuses (_unread).
+    unread = []
+
+    def strict(path, what):
+        try:
+            return _items(path, strict=True)
+        except Exception as error:
+            unread.append(what)
+            print(f"Networking: could not read {what}: {str(error)[:160]}", flush=True)
+            return []
+
+    services = strict("/api/v1/services", "Services")
+    slices = strict("/apis/discovery.k8s.io/v1/endpointslices", "EndpointSlices")
+    deployments = strict("/apis/apps/v1/deployments", "Deployments")
+    nodes = strict("/api/v1/nodes", "Nodes")
     ingresses = _items("/apis/networking.k8s.io/v1/ingresses")
     pools_raw = _items("/apis/loadbalancer.harvesterhci.io/v1beta1/ippools") + PLATFORM.metallb_pools()
     endpoint_by_service = _endpoint_index(slices)
@@ -416,6 +475,8 @@ def inventory():
     platform, foreign = _address_owners(raw_rows, node_ips)
     reserved = set(node_ips) | set(platform)
     for row in raw_rows:
+        if (row["namespace"], row["name"]) == leaving:
+            continue
         reserved.update(row["external_ips"])
         if row["cluster_ip"] and row["cluster_ip"] != "None":
             reserved.add(row["cluster_ip"])
@@ -473,7 +534,7 @@ def inventory():
                    kind=place.get("kind", "vip"))
 
     return {"services": sorted(raw_rows, key=lambda row: (row["system"], row["namespace"], row["name"])),
-            "vips": vip_rows, "conflicts": conflicts, "pools": pools,
+            "unread": unread, "vips": vip_rows, "conflicts": conflicts, "pools": pools,
             "platform_addresses": platform, "foreign_addresses": foreign,
             "platform_clashes": clashes,
             "shared_vip": {"ip": default_vip,
@@ -529,20 +590,14 @@ def node_addresses_only():
     """k3s's ServiceLB: every LoadBalancer Service is published on every
     node's own address, and a VIP asked for is ignored. There is no address
     to choose, only a port, which must be free across all of them."""
-    try:
-        return PLATFORM.detect().get("load_balancer") == "servicelb"
-    except Exception:
-        return False
+    return PLATFORM.detect().get("load_balancer") == "servicelb"
 
 
 def servicelb_present():
     """ServiceLB is there to put a Service on the nodes' own addresses -
     alone, or beside kube-vip, which then gives VIPs to the Services that
     ask for one."""
-    try:
-        return bool(PLATFORM.detect().get("servicelb"))
-    except Exception:
-        return False
+    return bool(PLATFORM.detect().get("servicelb"))
 
 
 def _node_port_owner(state, namespace, service_name, ports):
@@ -597,12 +652,13 @@ def _ports(cfg):
 
 
 def service_plan(cfg, require_workload=True):
-    state = inventory()
-    shared = state["shared_vip"]["ip"]
     namespace = _name(cfg.get("namespace") or DEFAULT_NAMESPACE, "namespace")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not create Services in system namespaces")
     service_name = _name(cfg.get("name") or cfg.get("service_name"), "service name")
+    state = _complete(inventory(leaving=(namespace, service_name) if cfg.get("replaces") else None),
+                      "nothing was changed")
+    shared = state["shared_vip"]["ip"]
     workload_name = _name(cfg.get("workload") or service_name, "workload name")
     kind = cfg.get("workload_kind") or "Deployment"
     if kind not in ("Deployment", "VirtualMachine"):
@@ -626,6 +682,9 @@ def service_plan(cfg, require_workload=True):
             raise ValueError("This Service is shared across workloads or managed by an add-on; change it in its owning settings")
         if existing["type"] != cfg.get("type", "LoadBalancer"):
             raise ValueError("Keep the existing Service type; create a separate Service to change reachability")
+        state["services"] = [row for row in state["services"] if row is not existing]
+    elif existing and cfg.get("replaces") and existing.get("uid") == cfg["replaces"]:
+        # Checked before set_workload_address deletes it: plan as if it had gone.
         state["services"] = [row for row in state["services"] if row is not existing]
     elif existing:
         raise ValueError(f"Service {namespace}/{service_name} already exists")
@@ -767,7 +826,7 @@ def create_service(cfg):
     if plan["workload_kind"] == "VirtualMachine":
         selector = plan["selector"]
     else:
-        deployments = _items("/apis/apps/v1/deployments")
+        deployments = _read("/apis/apps/v1/deployments", "Deployments")
         deployment = next(item for item in deployments
                           if item.get("metadata", {}).get("namespace") == plan["namespace"] and
                           item.get("metadata", {}).get("name") == plan["workload"])
@@ -820,7 +879,7 @@ def workload_services(namespace, workload):
     if not selector:
         return []
     rows = []
-    for service in _items(f"/api/v1/namespaces/{namespace}/services"):
+    for service in _read(f"/api/v1/namespaces/{namespace}/services", "Services"):
         chosen = (service.get("spec", {}) or {}).get("selector") or {}
         if chosen and all(selector.get(key) == value for key, value in chosen.items()):
             rows.append(service)
@@ -831,7 +890,7 @@ def workload_services(namespace, workload):
 
 def _listener_owner(service, ports):
     """Another Service already answering on one of these VIP listeners."""
-    state = inventory()
+    state = _complete(inventory(), "the ports were not changed")
     mine = (service["metadata"]["namespace"], service["metadata"]["name"])
     spec = service.get("spec") or {}
     if servicelb_present() and spec.get("type") == "LoadBalancer" and not spec.get("loadBalancerClass"):
@@ -942,7 +1001,12 @@ def set_workload_address(namespace, workload, network_mode, vip_mode="shared", v
            **({"vip": vip} if mode == "manual" and want == "LoadBalancer" else {}), "ports": ports}
     if spec.get("type") != want:
         # Reachability changes: the old Service goes and one of the new kind
-        # is made with the same ports, as Deploy would have made it.
+        # is made with the same ports, as Deploy would have made it. The new
+        # one is checked first, so a refusal leaves the old one answering. An
+        # automatic address taken while the old one goes is swapped for the
+        # next free one, as before: Edit showed none to review, and refusing
+        # after the DELETE would leave the app with no Service at all.
+        service_plan({**cfg, "replaces": meta.get("uid")})
         path = f"/api/v1/namespaces/{namespace}/services/{meta['name']}"
         ksend("DELETE", path)
         # A LoadBalancer Service lingers while its address is released.
@@ -983,7 +1047,9 @@ def delete_service(namespace, name, force=False):
     name = _name(name, "service name")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not delete Services in system namespaces")
-    row = next((item for item in inventory()["services"]
+    # A Deployments read that failed leaves every Service with no targets:
+    # an app's own would look orphaned and go without force.
+    row = next((item for item in _complete(inventory(), "nothing was deleted")["services"]
                 if item["namespace"] == namespace and item["name"] == name), None)
     if not row:
         raise ValueError(f"Service {namespace}/{name} does not exist")
@@ -1012,6 +1078,10 @@ def workload_service_names(namespace, workload):
 # Homestead to give to Services - named, so the picker says what each is for.
 VIP_MAP = "homestead-vips"
 MAX_ADD = 64
+
+
+class _NothingAdded(Exception):
+    """add_vips found nothing to add: nothing is saved."""
 
 
 def _vip_map_path():
@@ -1047,28 +1117,29 @@ def set_default_vip(ip):
     check_address(ip, state)
     if PLATFORM.detect().get("load_balancer") not in ("kube-vip", "metallb"):
         raise ValueError("Install kube-vip or MetalLB before choosing a workload VIP; ServiceLB uses node addresses")
-    rows = registered()
-    if not any(row["ip"] == ip for row in rows):
-        raise ValueError("Add this reserved address to Your VIPs first")
-    for row in rows:
-        row["default"] = row["ip"] == ip
-    _save_registered(rows)
+    def choose(rows):
+        if not any(row["ip"] == ip for row in rows):
+            raise ValueError("Add this reserved address to Your VIPs first")
+        for row in rows:
+            row["default"] = row["ip"] == ip
+        return rows
+    _update_registered(choose)
     return {"ok": True, "ip": ip, "detail": "Default workload VIP saved; existing Services are unchanged"}
 
 
-def _save_registered(rows):
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": VIP_MAP, "namespace": DEFAULT_NAMESPACE, "labels": {"homestead.io/managed": "true"}},
-            "data": {"vips.json": json.dumps(sorted(rows, key=lambda r: int(ipaddress.ip_address(r["ip"]))), indent=1)}}
-    try:
-        current = kget(_vip_map_path())
-        body["metadata"] = current.get("metadata", body["metadata"])
-        body["data"] = dict(current.get("data") or {}, **body["data"])
-        ksend("PUT", _vip_map_path(), body)
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NAMESPACE}/configmaps", body)
+def _update_registered(change):
+    """Change Your VIPs as they are stored when the change is saved (#621):
+    change(rows) gets the stored rows and returns the new ones, and runs again
+    on the newer rows if another change was saved meanwhile. It may raise to
+    stop; nothing is saved. A registry that cannot be read is an error, never
+    an empty one to save over."""
+    def apply(stored):
+        if stored is not None and not isinstance(stored, list):
+            raise ValueError("Your VIPs could not be read (vips.json is not a list); nothing was changed")
+        rows = [row for row in (stored or []) if isinstance(row, dict) and row.get("ip")]
+        return sorted(change(rows), key=lambda r: int(ipaddress.ip_address(r["ip"])))
+    return KUBE.update_json(_vip_map_path(), "vips.json", apply, read=kget, write=ksend,
+                            labels={"homestead.io/managed": "true"}, indent=1)
 
 
 def add_vips(cfg, ipam_records=None):
@@ -1081,30 +1152,37 @@ def add_vips(cfg, ipam_records=None):
     if last - first + 1 > MAX_ADD:
         raise ValueError(f"at most {MAX_ADD} addresses at once")
     label = " ".join(str(cfg.get("label") or "").split())[:60]
-    state = inventory()
+    state = _complete(inventory(), "nothing was added")
     nodes = set(state["node_ips"])
-    rows = registered()
-    have = {row["ip"] for row in rows}
     records = ipam_records or {}
     added, skipped = [], []
-    for number in range(first, last + 1):
-        ip = str(ipaddress.ip_address(number))
-        if ip in have:
-            skipped.append(f"{ip} is already on the list")
-        elif ip in nodes:
-            skipped.append(f"{ip} is a node's own address")
-        elif ip in state["platform_addresses"]:
-            skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
-        elif ip in state["foreign_addresses"]:
-            skipped.append(f"{ip} belongs to {state['foreign_addresses'][ip]}")
-        elif (records.get(ip) or {}).get("category") not in (None, "", "vip"):
-            record = records[ip]
-            skipped.append(f"{ip} is {record.get('name') or 'a device'} in IP addresses")
-        else:
-            rows.append({"ip": ip, "label": label, "added": time.strftime("%Y-%m-%d %H:%M")})
-            added.append(ip)
-    if added:
-        _save_registered(rows)
+
+    def add(rows):
+        added.clear(), skipped.clear()      # again from the top if another change was saved meanwhile
+        have = {row["ip"] for row in rows}
+        for number in range(first, last + 1):
+            ip = str(ipaddress.ip_address(number))
+            if ip in have:
+                skipped.append(f"{ip} is already on the list")
+            elif ip in nodes:
+                skipped.append(f"{ip} is a node's own address")
+            elif ip in state["platform_addresses"]:
+                skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
+            elif ip in state["foreign_addresses"]:
+                skipped.append(f"{ip} belongs to {state['foreign_addresses'][ip]}")
+            elif (records.get(ip) or {}).get("category") not in (None, "", "vip"):
+                record = records[ip]
+                skipped.append(f"{ip} is {record.get('name') or 'a device'} in IP addresses")
+            else:
+                rows.append({"ip": ip, "label": label, "added": time.strftime("%Y-%m-%d %H:%M")})
+                added.append(ip)
+        if not added:
+            raise _NothingAdded()
+        return rows
+    try:
+        _update_registered(add)
+    except _NothingAdded:
+        pass
     return {"ok": bool(added), "added": added, "skipped": skipped,
             "detail": (f"{len(added)} address{'es' if len(added) != 1 else ''} added" if added else "nothing added")
                       + (f"; {len(skipped)} skipped: " + "; ".join(skipped[:4]) if skipped else "")}
@@ -1114,13 +1192,16 @@ def remove_vip(ip):
     ip = _ipv4(ip, "address")
     if any(row["ip"] == ip and row.get("default") for row in registered()):
         raise ValueError("Choose another default workload VIP before removing this address")
-    state = inventory()
+    state = _complete(inventory(), "nothing was removed")
     users = next((row for row in state["vips"] if row["ip"] == ip), None)
     if users:
         names = sorted({f"{l['namespace']}/{l['service']}" for l in users["listeners"]})
         raise ValueError(f"{ip} is in use by {', '.join(names)}; remove or move those first")
-    rows = [row for row in registered() if row["ip"] != ip]
-    _save_registered(rows)
+    def remove(rows):
+        if any(row["ip"] == ip and row.get("default") for row in rows):
+            raise ValueError("Choose another default workload VIP before removing this address")
+        return [row for row in rows if row["ip"] != ip]
+    _update_registered(remove)
     return {"ok": True, "detail": f"{ip} is no longer reserved for Homestead"}
 
 
@@ -1138,7 +1219,7 @@ def change_vip(old, new, apply=False):
     old, new = _ipv4(old, "current address"), _ipv4(new, "new address")
     if old == new:
         raise ValueError("the new address is the same as the current one")
-    state = inventory()
+    state = _complete(inventory(), "nothing was moved")
     rows = registered()
     entry = next((row for row in rows if row["ip"] == old), None)
     if entry is None:
@@ -1173,9 +1254,22 @@ def change_vip(old, new, apply=False):
         if (service.get("spec") or {}).get("loadBalancerIP") == old:
             service["spec"]["loadBalancerIP"] = new
         ksend("PUT", path, service)
-    entry["ip"] = new
-    entry["previous"] = old
-    _save_registered(rows)
+    def move(rows):
+        # The Services have moved: the registry follows, even if the entry
+        # changed meanwhile (kept, with its new label or default).
+        now = next((row for row in rows if row["ip"] == old), None) or dict(entry)
+        there = next((row for row in rows if row["ip"] == new), None)
+        rows = [row for row in rows if row["ip"] not in (old, new)]
+        if there is not None:
+            # Added meanwhile, say in another tab: one entry for the address,
+            # keeping a label either one had.
+            now = {**there, **{k: v for k, v in now.items() if v not in ("", None)}}
+        now.update(ip=new, previous=old)
+        if now.get("default"):
+            for row in rows:
+                row.pop("default", None)
+        return rows + [now]
+    _update_registered(move)
     plan["detail"] = (f"{old} is now {new}" + (f"; {len(moving)} Service{'s' if len(moving) != 1 else ''} moved with it"
                                                if moving else "") + ("; still the default workload VIP" if entry.get("default") else ""))
     return plan
@@ -1183,11 +1277,12 @@ def change_vip(old, new, apply=False):
 
 def set_vip_label(ip, label):
     ip = _ipv4(ip, "address")
-    rows = registered()
-    for row in rows:
-        if row["ip"] == ip:
-            row["label"] = " ".join(str(label or "").split())[:60]
-    _save_registered(rows)
+    def relabel(rows):
+        for row in rows:
+            if row["ip"] == ip:
+                row["label"] = " ".join(str(label or "").split())[:60]
+        return rows
+    _update_registered(relabel)
     return {"ok": True}
 
 

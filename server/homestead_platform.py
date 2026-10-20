@@ -11,12 +11,14 @@ import json
 import re
 import shlex
 import time
+import urllib.error
 import homestead_multus as MULTUS
 import homestead_roles as ROLES
 
 kget = None
-_cached = {"at": 0.0, "value": None}
+_cached = {"at": 0.0, "value": None, "failed_at": 0.0}
 TTL = 300
+RETRY = 15          # after a failed read, the last good answer is used this long before asking again
 
 
 def bind(_kget):
@@ -25,10 +27,19 @@ def bind(_kget):
 
 
 def _groups():
-    try:
-        return {g.get("name") for g in kget("/apis").get("groups", [])}
-    except Exception:
-        return set()
+    groups = kget("/apis").get("groups")
+    if not isinstance(groups, list):
+        raise ValueError("Kubernetes did not say which APIs it serves")
+    return {g.get("name") for g in groups if isinstance(g, dict)}
+
+
+def _listed(path):
+    """Every row of a list detect() decides from, or an error: an empty list
+    because the read failed would say a feature is not there."""
+    listing = kget(path)
+    if not isinstance(listing, dict) or not isinstance(listing.get("items"), list):
+        raise ValueError(f"Kubernetes returned an incomplete list for {path}")
+    return listing["items"]
 
 
 def _exists(path):
@@ -51,11 +62,8 @@ def _items(path):
 def _servicelb_running():
     """ServiceLB's svclb- DaemonSets, which it makes for each LoadBalancer
     Service it serves."""
-    try:
-        return any((d.get("metadata") or {}).get("name", "").startswith("svclb-")
-                   for d in _items("/apis/apps/v1/namespaces/kube-system/daemonsets"))
-    except Exception:
-        return False
+    return any((d.get("metadata") or {}).get("name", "").startswith("svclb-")
+               for d in _listed("/apis/apps/v1/namespaces/kube-system/daemonsets"))
 
 
 KUBE_VIP_DAEMONSETS = ("/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds",
@@ -97,10 +105,31 @@ def _vip_shared_lease(daemonset):
 
 
 def detect(force=False):
-    if not force and _cached["value"] is not None and time.time() - _cached["at"] < TTL:
-        return _cached["value"]
+    """What this cluster is and has, read at most every five minutes. A read
+    that fails is never kept as the answer: the last good one is used, and
+    the cluster is asked again after RETRY seconds. With no good answer yet
+    it raises, rather than guess that KubeVirt, Longhorn or a load balancer
+    is not there."""
+    now, good = time.time(), _cached["value"]
+    if not force and good is not None and now - _cached["at"] < TTL:
+        return good
+    if not force and good is not None and now - _cached["failed_at"] < RETRY:
+        return good
+    try:
+        value = _read()
+    except Exception as error:
+        _cached["failed_at"] = time.time()      # when it failed: a read can hang for a while first
+        if good is not None:
+            return good
+        raise ValueError(f"Homestead could not read what this cluster runs ({str(error)[:160]}); "
+                         "try again in a moment") from error
+    _cached.update(at=now, value=value, failed_at=0.0)
+    return value
+
+
+def _read():
     groups = _groups()
-    nodes = _items("/api/v1/nodes")
+    nodes = _listed("/api/v1/nodes")
     kubelets = [((n.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "") for n in nodes]
     harvester = "harvesterhci.io" in groups
     distribution = ("harvester" if harvester else "k3s" if any("+k3s" in k for k in kubelets)
@@ -118,8 +147,10 @@ def detect(force=False):
         try:
             kube_vip_ds = kget(path)
             break
-        except Exception:
-            continue
+        except urllib.error.HTTPError as error:
+            if error.code != 404:         # absent is a 404; anything else is not knowing
+                raise
+            error.close()
     kube_vip = harvester or kube_vip_ds is not None
     metallb = "metallb.io" in groups
     # k3s's own load balancer, unless something else is doing the job. Its
@@ -153,7 +184,6 @@ def detect(force=False):
         "control_plane": sorted(control),
         "arch": sorted({((n.get("status") or {}).get("nodeInfo") or {}).get("architecture", "") for n in nodes} - {""}),
     }
-    _cached.update(at=time.time(), value=value)
     return value
 
 

@@ -163,6 +163,13 @@ class K3sClusterTests(unittest.TestCase):
         self.assertTrue(all(vm["log_console"] for vm in self.made))
         self.assertIn('password: "a-long-password"', server)
 
+    def test_the_login_password_reaches_the_nodes_as_typed(self):
+        # A surrogate pair (\ud83d\udd11) would reach cloud-init as two lone
+        # surrogates: PyYAML reads each \u escape on its own.
+        data = K3S.user_data({"name": "n", "role": "agent", "address": "192.0.2.61"},
+                             "192.0.2.60", "tok", "päss🔑word12", "k3s")
+        self.assertIn('password: "päss🔑word12"', data)
+
     def test_a_bare_cluster_uses_k3s_own_installer(self):
         node = {"name": "n", "role": "agent", "address": "192.0.2.61"}
         data = K3S.user_data(node, "192.0.2.60", "tok", "pw-long-enough", "k3s")

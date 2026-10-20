@@ -1,7 +1,8 @@
-import copy, sys, unittest, urllib.error
+import copy, json, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as networking
+from fakes.platform import plain_platform
 
 
 DEPLOYMENT = {
@@ -22,6 +23,7 @@ SERVICE = {
 
 class EditedPortsReachTheServiceTests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         self.sent = []
         self.objects = {
             "/apis/apps/v1/namespaces/lab/deployments/plex": copy.deepcopy(DEPLOYMENT),
@@ -120,3 +122,75 @@ class EditAddressStepTests(EditedPortsReachTheServiceTests):
         self.objects["/api/v1/namespaces/lab/services"]["items"][0]["metadata"]["name"] = "shared-plex"
         self.assertEqual("", networking.set_workload_address("lab", "plex", "internal"))
         self.assertEqual([], self.sent)
+
+
+class AddressChangeChecksFirstTests(EditedPortsReachTheServiceTests):
+    """Switching between internal and the LAN replaces the Service: the new
+    one is checked before the old one goes, so a refusal leaves the app
+    reachable as it was (#614)."""
+    def setUp(self):
+        super().setUp()
+        service = copy.deepcopy(SERVICE)
+        service["metadata"].update(uid="svc-uid", resourceVersion="7",
+                                   annotations={"homestead.io/vip-mode": "cluster"})
+        service["spec"] = {"type": "ClusterIP", "clusterIP": "10.43.0.30", "selector": {"app": "plex"},
+                           "ports": [{"name": "web", "port": 32400, "targetPort": 32400, "protocol": "TCP"}]}
+        service.pop("status")
+        for path in ("/api/v1/namespaces/lab/services", "/api/v1/services"):
+            self.objects[path] = {"items": [copy.deepcopy(service)]}
+        self.objects["/api/v1/namespaces/lab/services/plex"] = copy.deepcopy(service)
+        self.objects["/api/v1/nodes"] = {"items": [{"metadata": {"name": "host-1"}, "status": {"addresses": [
+            {"type": "InternalIP", "address": "192.0.2.10"}]}}]}
+
+    def register(self, *ips):
+        self.objects["/api/v1/namespaces/lab/configmaps/homestead-vips"] = {
+            "data": {"vips.json": json.dumps([{"ip": ip} for ip in ips])}}
+
+    def test_no_free_vip_refuses_and_keeps_the_internal_service(self):
+        with self.assertRaisesRegex(ValueError, "no free address"):
+            networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        self.assertEqual([], self.sent)
+
+    def test_a_node_address_refuses_and_keeps_the_internal_service(self):
+        with self.assertRaisesRegex(ValueError, "cluster node address"):
+            networking.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.10")
+        self.assertEqual([], self.sent)
+
+    def test_a_free_vip_replaces_the_internal_service(self):
+        self.register("192.0.2.250")
+        networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        self.assertEqual(["DELETE", "POST"], [method for method, _, _ in self.sent])
+        body = self.sent[-1][2]
+        self.assertEqual("LoadBalancer", body["spec"]["type"])
+        self.assertIn("192.0.2.250", str(body["metadata"]["annotations"]))
+
+    def test_an_address_taken_while_the_old_service_goes_gives_it_the_next_free_one(self):
+        """Edit shows no automatic VIP to review: refusing after the DELETE
+        would leave the app with no Service, so it takes the next free one."""
+        self.register("192.0.2.250", "192.0.2.251")
+        send = networking.ksend
+
+        def taking(method, path, body=None, **kwargs):
+            result = send(method, path, body, **kwargs)
+            if method == "DELETE":
+                other = copy.deepcopy(SERVICE)
+                other["metadata"].update(name="other", annotations={"kube-vip.io/loadbalancerIPs": "192.0.2.250"})
+                other["status"]["loadBalancer"]["ingress"] = [{"ip": "192.0.2.250"}]
+                self.objects["/api/v1/services"]["items"].append(other)
+            return result
+
+        networking.ksend = taking
+        networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        method, _, body = self.sent[-1]
+        self.assertEqual("POST", method)
+        self.assertIn("192.0.2.251", str(body["metadata"]["annotations"]))
+
+    def test_an_address_the_replaced_service_names_counts_as_free(self):
+        """A hand-made internal Service can still carry a VIP annotation; it
+        goes with the Service, so the check before the DELETE offers it."""
+        self.register("192.0.2.249")
+        for path in ("/api/v1/namespaces/lab/services", "/api/v1/services"):
+            self.objects[path]["items"][0]["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"] = "192.0.2.249"
+        networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        self.assertEqual(["DELETE", "POST"], [method for method, _, _ in self.sent])
+        self.assertIn("192.0.2.249", str(self.sent[-1][2]["metadata"]["annotations"]))

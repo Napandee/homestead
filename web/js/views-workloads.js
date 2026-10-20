@@ -145,15 +145,22 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
       .map(x => [updateKey(x.ns, x.name), x]));
     paintUpdateBadge(report.updates || 0, report.errors || 0);
     if (window.paintHomesteadNotice) paintHomesteadNotice();
-    const previous = +(localStorage.getItem("homestead.update-count") || 0);
+    // Without storage, compared with what this page last saw: no failed check,
+    // and no repeat of the same toast every quarter of an hour.
+    let previous = existing?.updates || 0, previousErrors = existing?.errors || 0;
+    try {
+      previous = +(localStorage.getItem("homestead.update-count") || 0);
+      previousErrors = +(localStorage.getItem("homestead.update-errors") || 0);
+    } catch (e) { /* this page's counts */ }
     const preferences = STATE.data.appSettings?.updates || {};
     if (!quiet && preferences.notify_available !== false && report.updates > previous)
       toast(`${report.updates} container image update${report.updates === 1 ? "" : "s"} available`, "ok");
-    const previousErrors = +(localStorage.getItem("homestead.update-errors") || 0);
     if (!quiet && preferences.notify_failures !== false && report.errors > previousErrors)
       toast(`${report.errors} image registry check${report.errors === 1 ? " needs" : "s need"} attention`, "bad");
-    localStorage.setItem("homestead.update-count", report.updates || 0);
-    localStorage.setItem("homestead.update-errors", report.errors || 0);
+    try {
+      localStorage.setItem("homestead.update-count", report.updates || 0);
+      localStorage.setItem("homestead.update-errors", report.errors || 0);
+    } catch (e) { /* this visit only */ }
     return report;
   } catch (e) {
     if (!quiet) toast("Image update check failed · " + e.message, "bad");
@@ -1567,16 +1574,19 @@ window.wlDelete = async (ns, name) => {
   modal("Delete · " + name, '<div class="empty"><span class="spin2"></span>checking what this removes</div>', true);
   // The card list alone cannot say which Services or claims belong to this
   // workload, and deleting it removes the first and keeps the second.
+  // A failed read is not "none": it is shown, and the delete is not offered.
   const [network, vols] = await Promise.all([
-    STATE.data.network ? Promise.resolve(STATE.data.network) : api("/api/network").catch(() => ({ services: [] })),
-    STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes").catch(() => []),
+    STATE.data.network ? Promise.resolve(STATE.data.network) : api("/api/network").catch(e => ({ error: e.message })),
+    STATE.data.vols ? Promise.resolve(STATE.data.vols) : api("/api/volumes").catch(e => ({ error: e.message })),
   ]);
+  const failed = [network, vols].find(read => read?.error);
+  const unread = read => `<span class="warn">could not be read: ${esc(read.error)}</span>`;
   const workload = (STATE.data.wl || []).find(row => row.ns === ns && row.name === name) || {};
   const services = (network.services || [])
     .filter(row => row.namespace === ns && (row.targets || []).includes(name));
   const listeners = services.flatMap(row => (row.external_ips || [])
     .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
-  const claims = (vols || []).filter(vol => (vol.attached || []).includes(name));
+  const claims = vols.error ? [] : (vols || []).filter(vol => (vol.attached || []).includes(name));
   $("#mbody").innerHTML = `
     <div class="note dependency-danger"><b>This removes the app, not its data.</b>
       The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
@@ -1585,16 +1595,19 @@ window.wlDelete = async (ns, name) => {
       <div class="dependency-row"><span>Deployment</span><b class="mono">${esc(ns)}/${esc(name)}</b></div>
       <div class="dependency-row"><span>Containers</span><b>${(workload.images || []).length || 1}</b></div>
       <div class="dependency-row ${services.length ? "stranded" : ""}"><span>Services removed</span>
-        <b>${services.length ? services.map(row => esc(row.name)).join(", ") : "none"}</b></div>
+        <b>${network.error ? unread(network) : services.length ? services.map(row => esc(row.name)).join(", ") : "none"}</b></div>
       ${listeners.length ? `<div class="dependency-row stranded"><span>LAN listeners freed</span>
         <b class="mono">${listeners.map(esc).join(", ")}</b></div>` : ""}
       <div class="dependency-row"><span>Volumes kept</span>
-        <b>${claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
+        <b>${vols.error ? unread(vols) : claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
     </div>
-    ${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
+    ${failed ? `<div class="note" style="margin-top:12px">Deleting is offered once Homestead can read which Services it removes and which volumes it keeps. Try again in a moment.</div>
+    ${UI.actions(`<button class="btn" onclick="wlDelete(${jsq(ns)},${jsq(name)})">Retry</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`
+    : `${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
       onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete app</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`}`;
   if (window.applyRole) window.applyRole();
 };
 window.wlDeleteNow = async (ns, name, button) => {
@@ -2299,7 +2312,8 @@ window.deployRemovePrimary = async () => {
   const next = extras.shift();
   const cleared = { command: [], args: [], env_meta: [], env_bindings: {}, template_devices: [], volume_owners: {}, app_profile: null, gpu: false, cap_add: [], privileged: false, tun: false };
   await viewDeploy({ ...cfg, ...cleared, ...next, ...(next.privileges || {}),
-    name: cfg.workload_name, workload_name: cfg.workload_name, container_name: next.name, additional_containers: extras });
+    name: cfg.workload_name, workload_name: cfg.workload_name, container_name: next.name, additional_containers: extras })
+    .catch(e => toast(e.message, "bad"));
 };
 window.deployRemoveContainer = index => {
   $(`#d_extra_containers .edit-container[data-index="${index}"]`).remove(); syncSummary();
@@ -2322,10 +2336,19 @@ function deployTierField(tier) {
 }
 async function viewDeploy(pre) {
   pre = pre || window.__deployPrefill;
-  window.__deployPrefill = null;
-  const [, liveNodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
+  // The form's hosts, namespaces, storage and addresses come from these reads;
+  // without one it would offer a guess (#620). The page shows the error instead.
+  const [, liveNodes, nss, network] = await Promise.all([loadHardwareFeatures(), mustRead("/api/nodes", "the hosts"),
+    mustRead("/api/namespaces", "the namespaces"), mustRead("/api/network", "the network")]);
+  // Every read is done before the form's settings change, so a failure leaves them as they were.
+  const next = Object.assign(deployDefaults(), pre || {});
+  if (!nss.includes(next.namespace)) next.namespace = nss.includes("lab") ? "lab" : nss[0];
+  const options = await mustRead("/api/deploy/options?ns=" + encodeURIComponent(next.namespace), "the storage options");
   if (liveNodes.length) STATE.data.nodes = liveNodes;
-  DCFG = Object.assign(deployDefaults(), pre || {});
+  DCFG = next;
+  DOPT = options;
+  // Cleared only now, so Retry after a failed read opens the same template.
+  window.__deployPrefill = null;
   DCFG.workload_name ||= DCFG.name || "";
   DCFG.container_name ||= DCFG.name || "";
   (DCFG.env_meta || []).forEach(meta => {
@@ -2341,10 +2364,7 @@ async function viewDeploy(pre) {
     });
     if (feature && !DCFG.hardware.includes(feature.id)) DCFG.hardware.push(feature.id);
   });
-  const nss = await api("/api/namespaces").catch(() => ["lab"]);
-  if (!nss.includes(DCFG.namespace)) DCFG.namespace = nss.includes("lab") ? "lab" : nss[0];
-  DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(DCFG.namespace)).catch(() => DOPT);
-  const vips = await vipChoices();
+  const vips = await vipChoices(network);
   const sharedVip = vips.shared || "";
   resetPaint();
   const sections = [
@@ -2710,7 +2730,8 @@ window.confirmDeploy = async () => {
    Harvester's IP pools, or a VIP already in use, whose ports are then shared.
    "Type an address" is there for one outside the pools. */
 async function vipChoices(networkData) {
-  const net = networkData || await api("/api/network", { keep: true }).catch(() => null);
+  // An unread network is not "no addresses": the caller says it could not read it (#620).
+  const net = networkData || await mustRead("/api/network", "the network");
   // The cluster's own address (Harvester's management VIP, an ingress
   // controller's) and addresses other software owns are never offered: an app
   // sharing the management VIP is how host joining breaks.

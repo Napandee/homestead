@@ -125,7 +125,7 @@ class ChangeVipTests(unittest.TestCase):
         patches = [mock.patch.object(NETWORK, "inventory", lambda: copy.deepcopy(inventory)),
                    mock.patch.object(NETWORK, "registered", lambda: copy.deepcopy(self.rows)),
                    mock.patch.object(NETWORK, "check_address", lambda ip, state=None: None),
-                   mock.patch.object(NETWORK, "_save_registered", lambda rows: self.saved.append(rows)),
+                   mock.patch.object(NETWORK, "_update_registered", lambda change: self.saved.append(change(copy.deepcopy(self.rows)))),
                    mock.patch.object(NETWORK, "kget", lambda path: copy.deepcopy(self.services[path.rsplit("/", 1)[-1]])),
                    mock.patch.object(NETWORK, "ksend", lambda method, path, body=None, **k: self.sent.append((method, path, body))),
                    mock.patch.object(NETWORK.PLATFORM, "vip_annotations", lambda vip: {"kube-vip.io/loadbalancerIPs": vip})]
@@ -149,6 +149,15 @@ class ChangeVipTests(unittest.TestCase):
         row = self.saved[-1][0]
         self.assertEqual(("192.0.2.210", "Homestead and apps", True, "192.0.2.200"),
                          (row["ip"], row["label"], row["default"], row["previous"]))
+
+    def test_an_address_added_meanwhile_ends_as_one_entry(self):
+        # Another tab adds the new address while the Services move (#621).
+        stored = self.rows + [{"ip": "192.0.2.210", "label": "", "default": False}]
+        with mock.patch.object(NETWORK, "_update_registered", lambda change: self.saved.append(change(copy.deepcopy(stored)))):
+            NETWORK.change_vip("192.0.2.200", "192.0.2.210", apply=True)
+        rows = self.saved[-1]
+        self.assertEqual(["192.0.2.210"], [row["ip"] for row in rows])
+        self.assertEqual(("Homestead and apps", True, "192.0.2.200"), (rows[0]["label"], rows[0]["default"], rows[0]["previous"]))
 
     def test_a_new_address_in_use_or_a_node_address_is_refused(self):
         for new, words in (("192.0.2.21", "node's own"), ("192.0.2.201", "already used by a Service")):

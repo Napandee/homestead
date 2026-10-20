@@ -1,5 +1,7 @@
 import os, sys, tempfile, unittest
 from pathlib import Path
+# probe.py imports homestead_http, which ships beside it in the probe's manifest.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "probe"))
 import probe
 

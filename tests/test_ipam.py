@@ -49,6 +49,15 @@ class IpamTests(unittest.TestCase):
         IPAM.save_subnets([{"cidr": "192.0.2.0/24", "name": "LAN", "gateway": "192.0.2.1",
                             "dhcp_start": "192.0.2.100", "dhcp_end": "192.0.2.199"}])
 
+    def test_an_unread_cluster_offers_no_free_address(self):
+        """With Nodes or Services unread, their addresses looked free (#615)."""
+        IPAM.bind(self.store.get, self.store.send, "lab", lambda: dict(FACTS, unread=["Nodes"]))
+        view = IPAM.view()
+        self.assertEqual(([], [], 0), (view["subnets"][0]["free_list"], view["subnets"][0]["next_free"],
+                                       view["subnets"][0]["free_static"]))
+        self.assertIn("could not read the cluster's Nodes", view["unread"])
+        self.assertEqual([], IPAM.free_addresses()[0]["free"])
+
     def subnet(self):
         return IPAM.view()["subnets"][0]
 

@@ -294,3 +294,8 @@ def _prune(volume, keep_name):
     for old in rows[KEEP_SNAPSHOTS:]:
         if old["name"] != keep_name:
             snapshot_prune(volume, old["name"])
+
+
+def register(ops):
+    """The job store's entry for an automatic update (#622)."""
+    ops.RESOLVERS[KIND] = lambda item: resolve(item, ops.checkpoint)

@@ -17,6 +17,7 @@ import re
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_operations as OPS
@@ -138,7 +139,7 @@ def self_data_preparation(body, actor, *, start=False):
         if not start:
             cfg, public, context, _ = reviewed()
             return {**public, "capacity_token": CAPACITY_REVIEW.issue(cfg, context)}
-        with OPS._lock:
+        with OPS.transaction():
             result = reviewed()
             # Cleanup may have finished before Jobs' next refresh. Reconcile
             # only the verified completed handoff; do not advance other jobs.
@@ -166,7 +167,7 @@ def self_data_preparation_state():
         info = homestead_data_volume()
         nodes = SELF_DATA_PREPARE.D._inventory(kget, "/api/v1/nodes")
         jobs = []
-        for item in OPS._read():
+        for item in OPS.stored():
             ref = item.get("ref", {})
             if (item.get("kind") != SELF_DATA_PREPARE.KIND or ref.get("namespace") != SELF.NS
                     or OPS._archived_preparation(item)):
@@ -383,3 +384,12 @@ def _require_no_data_handoff(read, ns):
         if error.code == 404: return
         raise
     raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
+
+
+def register(ops):
+    """The self-data jobs (#622). The Kubernetes client is looked up when a
+    job is asked about, as server.py did."""
+    ops.RESOLVERS[SELF_DATA_PREPARE.KIND] = self_data_preparation_progress
+    ops.CANCELLERS[SELF_DATA_PREPARE.KIND] = (SELF_DATA_PREPARE.cancel_plan, SELF_DATA_PREPARE.cancel_run)
+    ops.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, KUBE.kget, directory=DATA_DIR)
+    ops.RESOLVERS["self-data-move"] = _data_move_status

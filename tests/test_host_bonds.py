@@ -2,6 +2,7 @@ import json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_bonds as BONDS
+import homestead_hostrun as HOSTRUN
 
 try:
     import yaml
@@ -123,7 +124,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn("is on bond0 already", " ".join(BONDS.plan("h1", {"action": "create", "members": ["enp3s0"]}, self.bonded())["refusals"]))
 
 
-@unittest.skipIf(yaml is None, "PyYAML is not installed")
+# CI installs PyYAML (requirements-test.txt), so there a missing one fails rather than skips.
+@unittest.skipIf(yaml is None and os.environ.get("CI", "").lower() not in ("true", "1"), "PyYAML is not installed")
 class EditTests(unittest.TestCase):
     """The edit that runs on the host, run here against netplan files."""
 
@@ -184,11 +186,25 @@ class Ops:
 class Host:
     """A host answering the scripts: inspect, change, check, confirm."""
 
-    def __init__(self, f, check=""):
-        self.facts, self.check, self.ran = f, check, []
+    Busy = HOSTRUN.Busy
 
-    def run(self, node, script, timeout=60):
+    def __init__(self, f, check="", held_by=""):
+        self.facts, self.check, self.ran = f, check, []
+        self.held_by, self.holds, self.let_go_of, self.changes = held_by, [], [], []
+
+    def hold(self, node, what, seconds=60, holder=""):
+        if self.held_by:
+            raise HOSTRUN.Busy(f"another change is running on {node}: {self.held_by}")
+        self.holds.append((node, what, seconds))
+        return "this-replica/1"
+
+    def let_go(self, node, holder):
+        self.let_go_of.append((node, holder))
+
+    def run(self, node, script, timeout=60, change="", holder=""):
         self.ran.append(script)
+        if change:
+            self.changes.append((script, change, holder))
         if script == BONDS.INSPECT_SCRIPT:
             return "FACTS " + json.dumps({k: v for k, v in self.facts.items() if k != "complete"}) + "\nEND\n", ""
         if script.startswith("set -e"):
@@ -198,6 +214,88 @@ class Host:
         if script == BONDS.ROLLBACK_NOW:
             return "STARTED\n", ""
         return self.check, ""
+
+
+class HostLeaseTests(unittest.TestCase):
+    """A bond change holds its host from the change until the job ends, so no
+    other change (a disk, OS updates) runs there while the network settles
+    or rolls back (#597)."""
+
+    def setUp(self):
+        BONDS.bind(None, lambda path: {"items": [{"metadata": {"name": "kube-vip-x"}}]} if "pods" in path else
+                   {"items": [{}, {}]} if path == "/api/v1/nodes" else {"status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+                   lambda verb, path, *a, **k: None)
+
+    def test_the_host_is_held_from_the_change_until_the_job_ends(self):
+        good = "ADDR\nROUTE\nGATEWAY\nIN enp1s0\nUP enp1s0\nIN enp2s0\nUP enp2s0\nARMED\nEND\n"
+        host, ops = Host(facts(), good), Ops()
+        BONDS.hostrun = host
+        BONDS.start("h1", {"members": ["enp2s0"]}, ops)
+        ref = ops.started[0][2]
+        self.assertEqual([("h1", "Bond enp1s0 + enp2s0 on h1")], [h[:2] for h in host.holds])
+        self.assertGreater(host.holds[0][2], BONDS.ROLLBACK_SECONDS, "held past the rollback")
+        self.assertEqual("this-replica/1", ref["lease"])
+        self.assertEqual([], host.let_go_of, "still held when start returns")
+        item = {"ref": ref}
+        BONDS.status(item, now=ref["since"] + 30)
+        BONDS.status(item, now=ref["since"] + 31)
+        self.assertEqual({"this-replica/1"}, {holder for _, _, holder in host.changes},
+                         "the change, confirm and restart all run inside the hold")
+        self.assertEqual("succeeded", BONDS.status(item, now=ref["since"] + 80)[0])
+        self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
+        self.assertNotIn("lease", ref)
+
+    def test_a_job_that_fails_lets_go_of_the_host(self):
+        host, ops = Host(facts(), ""), Ops()
+        BONDS.hostrun = host
+        BONDS.start("h1", {"members": ["enp2s0"]}, ops)
+        ref = ops.started[0][2]
+        self.assertEqual("failed", BONDS.status({"ref": ref}, now=ref["since"] + BONDS.ROLLBACK_SECONDS + 61)[0])
+        self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
+
+    def test_another_change_on_the_host_refuses_the_bond_before_anything_changes(self):
+        host = Host(facts(), "", held_by="Prepare /dev/sdb on h1")
+        BONDS.hostrun = host
+        with self.assertRaisesRegex(ValueError, "another change is running on h1: Prepare /dev/sdb on h1"):
+            BONDS.start("h1", {"members": ["enp2s0"]}, Ops())
+        self.assertFalse(host.changes)
+
+    def test_stopping_tracking_the_job_lets_go_of_the_host_at_once(self):
+        host, ops = Host(facts(), ""), Ops()
+        BONDS.hostrun = host
+        BONDS.start("h1", {"members": ["enp2s0"]}, ops)
+        item = {"kind": BONDS.KIND, "ref": ops.started[0][2]}
+        BONDS.register(BONDS.OPS)  # its canceller is added by register (#622)
+        plan, run = BONDS.OPS.CANCELLERS[BONDS.KIND]
+        self.assertTrue(any("puts its old network back" in line for line in plan(item)["keeps"]))
+        self.assertIn("other changes on h1 can start", run(item, {}))
+        self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
+        self.assertNotIn("lease", item["ref"])
+
+    def test_a_job_whose_node_is_gone_lets_go_of_the_host(self):
+        import urllib.error
+        host, ops = Host(facts(), ""), Ops()
+        BONDS.hostrun = host
+        BONDS.start("h1", {"members": ["enp2s0"]}, ops)
+        ref = dict(ops.started[0][2], stage="restarting")
+
+        def gone(path):
+            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+
+        BONDS.kget = gone
+        with self.assertRaises(urllib.error.HTTPError):
+            BONDS.status({"ref": ref}, now=ref["since"] + 60)
+        self.assertEqual([("h1", "this-replica/1")], host.let_go_of, "the job fails on a 404: the host is let go of")
+
+    def test_a_change_the_host_refuses_lets_go_at_once(self):
+        host, ops = Host(facts(), ""), Ops()
+        host.run = lambda node, script, timeout=60, change="", holder="": (
+            ("ERR netplan is not there\n", "") if change else Host.run(host, node, script, timeout))
+        BONDS.hostrun = host
+        with self.assertRaisesRegex(ValueError, "was not changed"):
+            BONDS.start("h1", {"members": ["enp2s0"]}, ops)
+        self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
+        self.assertFalse(ops.started)
 
 
 class JobTests(unittest.TestCase):

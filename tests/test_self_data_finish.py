@@ -17,6 +17,7 @@ import server
 import homestead_self_data_worker as W
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
+from fakes.job_store import JobStore, put, store_writes
 from test_self_data_coordinator import Cluster
 import test_self_data_execute as execute_fixture
 
@@ -59,29 +60,30 @@ class CleanupTests(unittest.TestCase):
 
     def test_completion_clears_copied_job_without_jobs_poll_and_is_idempotent(self):
         self.finish()
-        self.assertNotIn(OPS._read()[0]["status"], OPS.TERMINAL)
+        self.assertNotIn(OPS.stored()[0]["status"], OPS.TERMINAL)
         with mock.patch.object(OPS, "list_operations", side_effect=AssertionError("No resolver polling")):
             self.assertTrue(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
             E.idle(OPS)
-            saved = OPS._read()[0]
+            saved = OPS.stored()[0]
             self.assertEqual("succeeded", saved["status"])
             self.assertEqual(100, saved["progress"])
             self.assertFalse(saved["ref"]["retain_resources"])
-            with mock.patch.object(OPS, "_write", side_effect=AssertionError("Already complete")):
+            with store_writes(OPS) as written:
                 self.assertFalse(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
+            self.assertEqual([], written)
 
     def test_completion_never_clears_another_job_or_uncertain_identity(self):
         self.finish()
         for key in ("operation", "anchor_uid", "namespace", "deployment", "source", "destination"):
-            original = OPS._read()
+            original = OPS.stored()
             altered = copy.deepcopy(original); altered[0]["ref"][key] = "different"
-            OPS._write(altered)
+            put(OPS, altered)
             self.assertFalse(E.reconcile_completed(OPS, self.directory, "lab", "homestead"))
             with self.assertRaises(Held): E.idle(OPS)
-            OPS._write(original)
+            put(OPS, original)
         other = OPS.start("deployment", "Other work", {}, "/containers", {"retain_resources": True})
         E.reconcile_completed(OPS, self.directory, "lab", "homestead")
-        saved = next(i for i in OPS._read() if i["id"] == other["id"])
+        saved = next(i for i in OPS.stored() if i["id"] == other["id"])
         self.assertEqual("queued", saved["status"])
         self.assertTrue(saved["ref"]["retain_resources"])
         with self.assertRaises(Held): E.idle(OPS)
@@ -202,7 +204,7 @@ class SupersededHoldTests(unittest.TestCase):
     its hold for good: the next move's receipt replaced the one that would
     have released it, and Jobs could never clear it (seen on a real cluster)."""
 
-    class Store:
+    class Store(JobStore):
         def __init__(self, items):
             import threading
             self._lock, self.items, self.writes = threading.RLock(), items, 0

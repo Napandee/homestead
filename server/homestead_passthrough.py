@@ -40,6 +40,7 @@ import json
 import re
 import time
 
+import homestead_kubevirt_cr as KUBEVIRT_CR
 import homestead_shared as SHARED
 
 kget = ksend = hostrun = platform = None
@@ -368,7 +369,7 @@ def enable_iommu(node):
     facts = inspect(node)
     if facts["iommu"]:
         return {"ok": True, "detail": f"IOMMU is on on {node} already"}
-    out, err = hostrun.run(node, iommu_script(facts["cpu"]), timeout=120)
+    out, err = hostrun.run(node, iommu_script(facts["cpu"]), timeout=120, change=f"Turn on IOMMU on {node}")
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
     if not done:
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-200:]
@@ -384,17 +385,18 @@ def _state_path():
     return f"{DATA_DIR}/passthrough.json"
 
 
+# Every copy of Homestead changes the same file, so they share the lock.
+_state_lock = SHARED.SharedLock("passthrough", directory=lambda: DATA_DIR)
+
+
 def _load():
-    try:
-        with open(_state_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_state_path(), {})
 
 
-def _save(state):
-    SHARED.write_json(_state_path(), state, indent=1, sort_keys=True)
+def _update(fn):
+    """Change the hand-over record as it is now, under the shared lock: never
+    a copy read before a host script ran."""
+    return SHARED.update_file(_state_path(), fn, _state_lock, {}, indent=1, sort_keys=True)
 
 
 def vfio_script(addresses, give):
@@ -453,14 +455,15 @@ def give(node, address):
     blocked = [f"{r['address']} ({'; '.join(r['problems'])})" for r in moving if r["problems"]]
     if blocked:
         raise ValueError(f"{address} shares IOMMU group {row['group']} with {', '.join(blocked)}, which stay with the host")
-    out, err = hostrun.run(node, vfio_script([r["address"] for r in moving], True), timeout=180)
+    out, err = hostrun.run(node, vfio_script([r["address"] for r in moving], True), timeout=180,
+                           change=f"Hand {address} on {node} to VMs")
     if "OK" not in out.split():
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-200:]
         raise ValueError(f"{address} was not handed over: {problem}")
-    state = _load()
-    for r in moving:
-        state.setdefault("pci", {}).setdefault(node, {})[r["address"]] = f"{r['vendor']}:{r['device']}"
-    _save(state)
+    def record(state):
+        for r in moving:
+            state.setdefault("pci", {}).setdefault(node, {})[r["address"]] = f"{r['vendor']}:{r['device']}"
+    _update(record)
     for r in moving:
         _permit(pci=(r["vendor"], r["device"]))
     return {"ok": True, "resource": row["resource"], "moved": [r["address"] for r in moving],
@@ -484,14 +487,16 @@ def take_back(node, address):
     # (a GPU's HDMI audio) were handed over with it, in the same slot.
     slot = address.rsplit(".", 1)[0] + "."
     group += [a for a in listed if a.startswith(slot) and a not in group]
-    out, err = hostrun.run(node, vfio_script(group, False), timeout=120)
+    out, err = hostrun.run(node, vfio_script(group, False), timeout=120, change=f"Give {address} back to {node}")
     if "OK" not in out.split():
         raise ValueError(f"{address} was not given back: {(err or out)[-200:]}")
     # The vendor:device each was handed over as, as recorded then: a device
     # no longer on the host has no facts to read it from.
-    pairs = {listed.pop(a) for a in group if a in listed}
-    _save(state)
-    still = {v for rows in state.get("pci", {}).values() for v in rows.values()}
+    def forget(state):
+        now = state.get("pci", {}).get(node, {})
+        gone = {now.pop(a) for a in group if a in now}
+        return gone, {v for rows in state.get("pci", {}).values() for v in rows.values()}
+    pairs, still = _update(forget)
     for pair in pairs - still:
         vendor, _, device = str(pair).partition(":")
         if HEX4.fullmatch(vendor) and HEX4.fullmatch(device):
@@ -530,44 +535,44 @@ def _permitted(kv=None):
 
 
 def ensure_gates(*gates, send=None):
-    """KubeVirt's feature gates, with these on."""
+    """KubeVirt's feature gates, with these on. Worked out from the gates as
+    stored when it saves, so a gate switched on meanwhile stays on (#621)."""
     reviewed = send is not None
-    send = send or ksend
-    kv = _kubevirt()
-    if not kv:
-        raise ValueError("KubeVirt is not installed")
-    developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
-    current = list(developer.get("featureGates") or [])
-    missing = [g for g in gates if g not in current]
-    if missing:
+    missing = []
+
+    def change(kv):
+        developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
+        current = list(developer.get("featureGates") or [])
+        missing[:] = [g for g in gates if g not in current]
+        if not missing:
+            return None
         meta = kv.get("metadata") or {}
         if reviewed and not all(meta.get(key) for key in ("uid", "resourceVersion")):
             raise ValueError("KubeVirt identity/version is unavailable; review the device settings again")
-        identity = {key: meta[key] for key in ("uid", "resourceVersion") if meta.get(key)}
-        send("PATCH", _kv_path(kv), {"metadata": identity, "spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}},
-              ctype="application/merge-patch+json")
-    return missing
+        return {"spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}}
+    KUBEVIRT_CR.update(change, current=_kubevirt, write=send or ksend)
+    return list(missing)
 
 
 def _permit(pci=None, usb=None, remove=False):
-    kv = _kubevirt()
-    if not kv:
-        raise ValueError("KubeVirt is not installed")
-    hd = copy_dict(((kv["spec"].get("configuration") or {}).get("permittedHostDevices") or {}))
-    if pci:
-        vendor, device = pci
-        rows = [r for r in hd.get("pciHostDevices") or [] if r.get("resourceName") != pci_resource(vendor, device)]
-        if not remove:
-            rows.append({"pciVendorSelector": f"{vendor}:{device}".upper(), "resourceName": pci_resource(vendor, device)})
-        hd["pciHostDevices"] = rows
-    if usb:
-        vendor, product = usb
-        rows = [r for r in hd.get("usb") or [] if r.get("resourceName") != usb_resource(vendor, product)]
-        if not remove:
-            rows.append({"resourceName": usb_resource(vendor, product), "selectors": [{"vendor": vendor, "product": product}]})
-        hd["usb"] = rows
-    ksend("PATCH", _kv_path(kv), {"spec": {"configuration": {"permittedHostDevices": hd}}},
-          ctype="application/merge-patch+json")
+    # Worked out from the lists as stored when it is saved, so a device another
+    # admin permits or removes meanwhile stays as they left it (#621).
+    def change(kv):
+        hd = copy_dict(((kv["spec"].get("configuration") or {}).get("permittedHostDevices") or {}))
+        if pci:
+            vendor, device = pci
+            rows = [r for r in hd.get("pciHostDevices") or [] if r.get("resourceName") != pci_resource(vendor, device)]
+            if not remove:
+                rows.append({"pciVendorSelector": f"{vendor}:{device}".upper(), "resourceName": pci_resource(vendor, device)})
+            hd["pciHostDevices"] = rows
+        if usb:
+            vendor, product = usb
+            rows = [r for r in hd.get("usb") or [] if r.get("resourceName") != usb_resource(vendor, product)]
+            if not remove:
+                rows.append({"resourceName": usb_resource(vendor, product), "selectors": [{"vendor": vendor, "product": product}]})
+            hd["usb"] = rows
+        return {"spec": {"configuration": {"permittedHostDevices": hd}}}
+    KUBEVIRT_CR.update(change, current=_kubevirt, write=ksend)
     if not remove:
         ensure_gates("HostDevices")
 

@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const core = fs.readFileSync("web/js/core.js", "utf8");
 function context() {
   const c = {document:{addEventListener(){},querySelector(){return null}}, FLEET:{view:{}}, icon:()=>"<svg class=\"btnicon\"></svg>",
@@ -9,7 +10,7 @@ function context() {
     ratePair:()=>["0","Mb/s"],sizePair:()=>"0/10 GB",sizeText:()=>"10 GB",meter:()=>"",sev:()=>""};
   c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
   require("./helpers/load-time")(c);
-  vm.runInContext(core.slice(0,core.indexOf("/* Put text on the clipboard.")),c);
+  vm.runInContext(between(core,null,"/* Put text on the clipboard."),c);
   for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
   vm.runInContext("this.workloadRowKey=workloadRowKey;this.nodeComparisonKey=nodeComparisonKey",c);
@@ -53,8 +54,8 @@ test("node comparison keeps one scrollable matrix and selection across refresh",
 });
 test("sorting keeps detail rows next to their parents, including empty values and stable ties",()=>{
   const c={};vm.createContext(c);require("./helpers/core-text")(c);
-  vm.runInContext(core.slice(core.indexOf('const SORT_UNITS'),core.indexOf('function sortRows(')),c);
-  vm.runInContext(core.slice(core.indexOf('function sortBody('),core.indexOf('/* On a phone a stacked table')),c);
+  vm.runInContext(between(core,'const SORT_UNITS','function sortRows('),c);
+  vm.runInContext(between(core,'function sortBody(','/* On a phone a stacked table'),c);
   const row=(key,value)=>({dataset:{rowKey:key},cells:[{dataset:{sort:value},textContent:value}]});
   const detail=key=>({dataset:{detailFor:key},cells:[{},{}]});
   const a=row("a","2"),b=row("b","1"),d=row("d","1"),empty=row("empty",""),da=detail("a"),db=detail("b"),dd=detail("d"),de=detail("empty");

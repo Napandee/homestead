@@ -25,6 +25,7 @@ case "${1:-}" in
     node scripts/check_image_admission.mjs
     node scripts/check_import_admission.mjs
     node scripts/check_dialog_focus.mjs
+    node scripts/check_reduced_motion.mjs
     SET_RESTART_SCREENSHOTS=release-assets/dialogs/set-restart node tests/integration/set-restart.mjs
     SNAPSHOT_RESTORE_SCREENSHOTS=release-assets/dialogs/snapshot-restore node tests/integration/snapshot-restore.mjs
     HOST_SELECT_SCREENSHOTS=release-assets/dialogs/host-select node tests/integration/host-select-chips.mjs
@@ -43,6 +44,7 @@ case "${1:-}" in
     ROW_ACTIONS_SCREENSHOTS=release-assets/pages/row-actions node tests/integration/row-actions-edge.mjs
     UI_TABLE_SCREENSHOTS=release-assets/pages/ui-table node tests/integration/ui-table-phone.mjs
     IPAM_FIGURES_SCREENSHOTS=release-assets/pages/ipam-figures node tests/integration/ipam-figures.mjs
+    node tests/integration/unread-is-not-empty.mjs
     ;;
   pages-dashboard)
     INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs

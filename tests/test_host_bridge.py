@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_bridge as BRIDGE
+import homestead_hostrun as HOSTRUN
 
 try:
     import yaml
@@ -30,11 +31,23 @@ END"""
 
 
 class Host:
-    def __init__(self, answers):
+    def __init__(self, answers, held_by=""):
         self.answers, self.scripts = answers, []
+        self.held_by, self.holds, self.let_go_of, self.changes = held_by, [], [], []
 
-    def run(self, node, script, timeout=60):
+    def hold(self, node, what, seconds=60, holder=""):
+        if self.held_by:
+            raise HOSTRUN.Busy(f"another change is running on {node}: {self.held_by}")
+        self.holds.append((node, what, seconds))
+        return "this-replica/1"
+
+    def let_go(self, node, holder):
+        self.let_go_of.append((node, holder))
+
+    def run(self, node, script, timeout=60, change="", holder=""):
         self.scripts.append(script)
+        if change:
+            self.changes.append((change, holder))
         for marker, out in self.answers:
             if marker in script:
                 return out, ""
@@ -56,7 +69,8 @@ class LookTests(unittest.TestCase):
         self.assertIn("did not finish", BRIDGE.problem(BRIDGE.parse(K3S.replace("END", ""))))
 
 
-@unittest.skipIf(yaml is None, "PyYAML is not installed here")
+# CI installs PyYAML (requirements-test.txt), so there a missing one fails rather than skips.
+@unittest.skipIf(yaml is None and os.environ.get("CI", "").lower() not in ("true", "1"), "PyYAML is not installed here")
 class RewriteTests(unittest.TestCase):
     """The Python the host runs, run here on netplan files like Ubuntu's."""
 
@@ -106,6 +120,56 @@ class ScriptTests(unittest.TestCase):
         self.assertLess(script.index("--unit=homestead-bridge-rollback"), script.index("--unit=homestead-bridge-apply"))
         self.assertIn(f"--on-active={BRIDGE.ROLLBACK_SECONDS}", script)
         self.assertNotIn("netplan apply\n", script.split("--unit=homestead-bridge-rollback")[0], "nothing applied before the rollback is armed")
+
+
+class Ops:
+    def __init__(self):
+        self.started = []
+
+    def start(self, kind, title, resource, href, ref, message=""):
+        self.started.append(ref)
+        return {"id": "op1"}
+
+
+class HostLeaseTests(unittest.TestCase):
+    """The move into the bridge holds its host until the job ends (#597)."""
+    GOOD = [(BRIDGE.INSPECT_SCRIPT, K3S), ("python3 -", "OK /var/lib/homestead/netplan-x\n"),
+            ("CONFIRMED", "CONFIRMED\n"), ("ip -4", "ADDR\nPORT\nROUTE\nGATEWAY\nARMED\n")]
+
+    def bind(self, host):
+        BRIDGE.bind(host, lambda path: {"items": [{}]} if "nodes" in path else {"items": []}, lambda *a, **k: None)
+
+    def test_the_host_is_held_from_the_move_until_the_job_ends(self):
+        host, ops = Host(self.GOOD), Ops()
+        self.bind(host)
+        BRIDGE.start("k3s", ops)
+        ref = ops.started[0]
+        self.assertEqual([("k3s", "Move k3s's enp1s0 into br0")], [h[:2] for h in host.holds])
+        self.assertGreater(host.holds[0][2], BRIDGE.ROLLBACK_SECONDS)
+        self.assertEqual([], host.let_go_of)
+        item = {"ref": ref}
+        BRIDGE.status(item, now=ref["since"] + 20)
+        self.assertEqual({"this-replica/1"}, {holder for _, holder in host.changes})
+        self.assertEqual("succeeded", BRIDGE.status(item, now=ref["since"] + 21)[0])
+        self.assertEqual([("k3s", "this-replica/1")], host.let_go_of)
+
+    def test_stopping_tracking_the_job_lets_go_of_the_host_at_once(self):
+        host, ops = Host(self.GOOD), Ops()
+        self.bind(host)
+        BRIDGE.start("k3s", ops)
+        item = {"kind": "host-bridge", "ref": ops.started[0]}
+        BRIDGE.register(BRIDGE.OPS)  # its canceller is added by register (#622)
+        plan, run = BRIDGE.OPS.CANCELLERS["host-bridge"]
+        self.assertTrue(any("puts its old network back" in line for line in plan(item)["keeps"]))
+        self.assertIn("other changes on k3s can start", run(item, {}))
+        self.assertEqual([("k3s", "this-replica/1")], host.let_go_of)
+
+    def test_another_change_on_the_host_refuses_the_move_before_anything_changes(self):
+        host = Host(self.GOOD, held_by="Install 3 updates on k3s")
+        self.bind(host)
+        with self.assertRaisesRegex(ValueError, "another change is running on k3s: Install 3 updates on k3s"):
+            BRIDGE.start("k3s", Ops())
+        self.assertFalse(host.changes)
 
 
 class JobTests(unittest.TestCase):

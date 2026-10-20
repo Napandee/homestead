@@ -3,6 +3,7 @@
 // sidebar, the phone's bottom bar, the tabs and the page title all say it.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs");
+const between = require("./helpers/between");
 const { ROUTES, TABS } = require("../web/js/router.js");
 const html = fs.readFileSync("web/index.html", "utf8"), app = fs.readFileSync("web/js/app.js", "utf8");
 
@@ -12,14 +13,14 @@ test("a machine in the cluster is a host: the page is Hosts", () => {
 });
 
 test("app.js keeps no page titles of its own; the title comes from ROUTES", () => {
-  const views = app.slice(app.indexOf("const VIEWS = {"), app.indexOf("};", app.indexOf("const VIEWS = {")));
+  const views = between(app, "const VIEWS = {", "};");
   assert.doesNotMatch(views, /\[\s*"[A-Z]/, "no title strings in VIEWS");
   assert.match(app, /HomesteadRouter\.ROUTES\[v\]\.label/);
 });
 
 const links = part => [...part.matchAll(/<a href="[^"]*" data-view="(\w+)"><svg[^>]*><use href="[^"]*"\/><\/svg>([^<]+)/g)]
   .map(([, view, text]) => [view, text.trim()]);
-const bottom = html.slice(html.indexOf('id="bottombar"'), html.indexOf("</nav>", html.indexOf('id="bottombar"')));
+const bottom = between(html, 'id="bottombar"', "</nav>");
 
 test("every sidebar link says its page's name", () => {
   const sidebar = links(html.replace(bottom, ""));

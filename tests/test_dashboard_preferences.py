@@ -157,7 +157,7 @@ class DashboardPreferencesTests(unittest.TestCase):
         self.assertEqual(1, self.rv)
 
     def test_switched_cluster_layout_uses_home_account_with_csrf_and_conflict_checks(self):
-        listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H, max_connections=2)
+        listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H)
         thread = threading.Thread(target=listener.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(listener.server_close)

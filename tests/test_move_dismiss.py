@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_move as MOVE
 import homestead_move_engine as ENGINE
 
 
@@ -20,6 +21,10 @@ class DismissTests(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.saved = ENGINE.DATA_DIR
         ENGINE.DATA_DIR = self.dir.name
+        # server.py binds the engine's client to homestead_move; do the same here.
+        client = mock.patch.object(ENGINE, "CLIENT", MOVE)
+        client.start()
+        self.addCleanup(client.stop)
         with open(os.path.join(self.dir.name, ENGINE.STORE), "w", encoding="utf-8") as handle:
             json.dump([move("mosquitto", "succeeded"), move("zigbee", "running"), move("birdnet", "failed"),
                        move("frigate", "cancelled"), move("ha", "succeeded", True)], handle)

@@ -8,6 +8,7 @@ from unittest import mock
 
 import test_vm_resources as fixtures
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_vm_power_job as power
 
 
@@ -57,7 +58,7 @@ class VMPowerJobTests(unittest.TestCase):
 
     def test_expected_new_instance_completes_and_receipt_survives_dismiss_and_pruning(self):
         result, send = self.dispatch()
-        self.assertEqual("accepted", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("accepted", ops.stored()[0]["ref"]["phase"])
         job = ops.list_operations()[0]
         self.assertEqual("succeeded", job["status"])
         self.assertFalse(job["dismissible"])
@@ -66,7 +67,7 @@ class VMPowerJobTests(unittest.TestCase):
             ops.dismiss(job["id"])
         self.assertEqual(0, ops.dismiss_finished()["dismissed"])
         with mock.patch.object(ops, "MAX_OPERATIONS", 0):
-            ops._write(ops._read())
+            put(ops)
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.dispatch()
         self.assertEqual(1, send.call_count)
@@ -127,7 +128,7 @@ class VMPowerJobTests(unittest.TestCase):
     def test_server_error_is_uncertain_not_definitive_refusal(self):
         with self.assertRaises(ValueError):
             self.dispatch(send=mock.Mock(side_effect=urllib.error.HTTPError("hidden", 500, "private", {}, None)))
-        self.assertEqual("uncertain", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("uncertain", ops.stored()[0]["ref"]["phase"])
 
     def test_failed_receipt_write_preserves_dispatch_intent_and_blocks_retry(self):
         original = ops.record_phase
@@ -139,7 +140,7 @@ class VMPowerJobTests(unittest.TestCase):
         with mock.patch.object(ops, "record_phase", side_effect=record):
             with self.assertRaisesRegex(ValueError, "accepted power but its receipt"):
                 self.dispatch(send=send)
-        self.assertEqual("dispatching", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("dispatching", ops.stored()[0]["ref"]["phase"])
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.dispatch(send=send)
         send.assert_called_once()
@@ -150,16 +151,16 @@ class VMPowerJobTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.dispatch(send=send)
         send.assert_not_called()
-        self.assertEqual("prepared", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("prepared", ops.stored()[0]["ref"]["phase"])
 
     def test_cancel_before_dispatch_fences_worker_without_sending_power(self):
         send = mock.Mock()
         def cancel_before_send():
-            ops.cancel(ops._read()[0]["id"], confirm="guest")
+            ops.cancel(ops.stored()[0]["id"], confirm="guest")
         with self.assertRaisesRegex(ValueError, "job has ended"):
             self.dispatch(send=send, before_send=cancel_before_send)
         send.assert_not_called()
-        self.assertEqual("cancelled", ops._read()[0]["status"])
+        self.assertEqual("cancelled", ops.stored()[0]["status"])
 
     def test_cancelling_prepared_job_cannot_advance_to_dispatching(self):
         original = power.cancel_run
@@ -169,7 +170,7 @@ class VMPowerJobTests(unittest.TestCase):
             return original(item, options)
         with mock.patch.dict(ops.CANCELLERS, {"vm-power": (power.cancel_plan, cancel_with_race)}):
             def cancel():
-                ops.cancel(ops._read()[0]["id"], confirm="guest")
+                ops.cancel(ops.stored()[0]["id"], confirm="guest")
             send = mock.Mock()
             with self.assertRaises(ValueError):
                 self.dispatch(send=send, before_send=cancel)
@@ -179,7 +180,7 @@ class VMPowerJobTests(unittest.TestCase):
         result, _ = self.dispatch()
         ident = result["operation"]["id"]
         ops.cancel(ident, confirm="guest")
-        self.assertEqual("cancelled", ops._read()[0]["status"])
+        self.assertEqual("cancelled", ops.stored()[0]["status"])
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.dispatch()
 
@@ -188,7 +189,7 @@ class VMPowerJobTests(unittest.TestCase):
         job = ops.list_operations()[0]
         with mock.patch.object(ops.time, "time", return_value=time.time() + 601):
             ops.dismiss(job["id"])
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
 
     def test_two_processes_with_same_approval_send_only_once(self):
         context = multiprocessing.get_context("spawn")
@@ -205,7 +206,7 @@ class VMPowerJobTests(unittest.TestCase):
                 child.join(10)
                 self.assertEqual(0, child.exitcode)
             self.assertEqual(1, sent.value)
-            self.assertEqual(1, len(ops._read()))
+            self.assertEqual(1, len(ops.stored()))
         finally:
             for child in children:
                 if child.is_alive():

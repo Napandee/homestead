@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_node_parity as PARITY
+import homestead_hostrun as HOSTRUN
 
 HELM = PARITY.HELMCHARTS
 INSTALLER_LONGHORN = "persistence:\n  defaultClassReplicaCount: 1\ndefaultSettings:\n  defaultReplicaCount: 1\n"
@@ -30,6 +31,7 @@ class Cluster:
     def __init__(self, nodes, objects=None, probes=None, host_out="MULTIPATH set\nISCSI kept\nEND\n"):
         self.objects = {"/api/v1/nodes": {"items": nodes}, **(objects or {})}
         self.probes, self.host_out, self.sent, self.ran = probes or {}, host_out, [], []
+        self.held, self.changes = set(), []
 
     def kget(self, path):
         # Longhorn stores on every node unless a test says otherwise.
@@ -42,8 +44,11 @@ class Cluster:
     def ksend(self, method, path, body=None, ctype=""):
         self.sent.append((method, path, body))
 
-    def run(self, name, script, timeout=60):
+    def run(self, name, script, timeout=60, change=""):
+        if name in self.held:
+            raise HOSTRUN.Busy(f"another change is running on {name}: Prepare /dev/sdb on {name}")
         self.ran.append(name)
+        self.changes.append(change)
         return self.host_out, ""
 
 
@@ -64,6 +69,18 @@ class NodeParityTests(unittest.TestCase):
         self.assertIn(("node-2", "multipathd kept off Longhorn's devices"), changes)
         PARITY.tick()
         self.assertEqual(["node-1", "node-2"], cluster.ran, "done once per node")
+
+    def test_setting_a_host_up_is_a_change_and_a_held_host_waits_for_the_next_round(self):
+        cluster = Cluster([node("node-1"), node("node-2")])
+        cluster.held = {"node-1"}
+        self.bind(cluster)
+        PARITY.tick()
+        self.assertEqual(["node-2"], cluster.ran, "node-2 is not held up by node-1")
+        self.assertEqual(["Set node-2 up as the other hosts are"], cluster.changes,
+                         "journald, multipathd and iscsid are changed: it takes the host's lease (#597)")
+        cluster.held = set()
+        PARITY.tick()
+        self.assertIn("node-1", cluster.ran, "tried again once free")
 
     def test_a_host_that_boots_from_multipath_is_left_alone(self):
         self.assertIn('grep -q mpath; then echo "MULTIPATH root"', PARITY.HOST_SCRIPT)

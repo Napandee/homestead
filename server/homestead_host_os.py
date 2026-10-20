@@ -26,6 +26,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 
 import homestead_operations as OPS
 import homestead_shared as SHARED
@@ -36,6 +37,10 @@ EVERY = 6 * 3600
 UNIT = "homestead-os-upgrade"
 LOG = "/var/log/homestead-os-upgrade.log"
 STATUS = "/var/lib/homestead/os-upgrade.status"
+# An upgrade holds its host (homestead_hostrun.hold) from its start until it
+# is seen to end, or this long if nobody follows it: past the two hours an
+# upgrade is given, so no other change starts on the host meanwhile (#597).
+UPGRADE_HOLD = 2 * 3600 + 600
 _lock = SHARED.SharedLock("host-os")
 
 # Read-only unless REFRESH is 1, which refreshes the package lists first -
@@ -410,7 +415,7 @@ def set_hold(node, hold):
         script = f"mkdir -p /etc/apt/apt.conf.d && printf '%s' '{HOLD_TEXT}' > {HOLD} && echo DONE"
     else:
         script = f"rm -f {HOLD} && echo DONE"
-    out, err = hostrun.run(node, script, timeout=45)
+    out, err = hostrun.run(node, script, timeout=45, change=f"{'Hold' if hold else 'Release'} automatic updates on {node}")
     if "DONE" not in out:
         raise ValueError(f"could not {'hold' if hold else 'release'} {node}'s automatic updates: {(err or out)[-160:]}")
     with _lock:
@@ -421,8 +426,15 @@ def set_hold(node, hold):
             _save(state)
 
 
-def upgrade_begin(node, facts=None):
-    """Start installing every waiting update on node, detached on the host."""
+def _title(node, facts):
+    count = len(facts.get("updates") or [])
+    return f"Install {count or 'the'} update{'s' if count != 1 else ''} on {node}"
+
+
+def upgrade_begin(node, facts=None, ref=None):
+    """Start installing every waiting update on node, detached on the host.
+    The host stays held for the upgrade; ref keeps the hold, which
+    upgrade_done lets go of."""
     facts = facts or read(node)
     manager = facts.get("package_manager")
     if manager not in UPGRADE:
@@ -433,10 +445,25 @@ def upgrade_begin(node, facts=None):
     script = (f"mkdir -p {os.path.dirname(STATUS)} && rm -f {STATUS} && "
               f"systemd-run --unit={UNIT} --collect --quiet sh -c "
               f"'( {command} ) > {LOG} 2>&1; echo $? > {STATUS}' && echo STARTED")
-    out, err = hostrun.run(node, script, timeout=60)
+    what = _title(node, facts)
+    lease = hostrun.hold(node, what, seconds=UPGRADE_HOLD)
+    try:
+        out, err = hostrun.run(node, script, timeout=60, change=what, holder=lease)
+    except Exception:
+        hostrun.let_go(node, lease)
+        raise
     if "STARTED" not in out:
+        hostrun.let_go(node, lease)
         raise ValueError(f"updates on {node} did not start: {(err or out)[-200:]}")
+    if ref is not None:
+        ref["lease"] = lease
     return manager
+
+
+def upgrade_done(node, ref):
+    """Let go of the host an upgrade held (upgrade_begin)."""
+    if ref.get("lease"):
+        hostrun.let_go(node, ref.pop("lease"))
 
 
 def upgrade_state(node):
@@ -455,15 +482,28 @@ def upgrade_state(node):
 def upgrade_start(node, ops):
     """Install every waiting update on node, detached on the host, as a job."""
     facts = read(node)
-    manager = upgrade_begin(node, facts)
-    count = len(facts.get("updates") or [])
-    return ops.start("host-os", f"Install {count or 'the'} update{'s' if count != 1 else ''} on {node}",
-                     {"kind": "Node", "name": node}, "/nodes", {"node": node, "since": time.time(), "manager": manager},
+    held = {}
+    manager = upgrade_begin(node, facts, held)
+    return ops.start("host-os", _title(node, facts),
+                     {"kind": "Node", "name": node}, "/nodes", {"node": node, "since": time.time(), "manager": manager, **held},
                      f"{manager} is installing updates on {node}")
 
 
 def status(item, now=None):
-    """The upgrade job's state, from the host: (status, progress, message)."""
+    """The upgrade job's state, from the host: (status, progress, message).
+    The host is let go of when the job ends."""
+    try:
+        result = _step(item, now)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:    # the job fails on it (homestead_operations)
+            upgrade_done(item["ref"]["node"], item["ref"])
+        raise
+    if result[0] in ("succeeded", "failed"):
+        upgrade_done(item["ref"]["node"], item["ref"])
+    return result
+
+
+def _step(item, now=None):
     ref, now = item["ref"], now or time.time()
     node = ref["node"]
     if now - ref.get("since", now) < 20:
@@ -550,3 +590,27 @@ ROUTES = {
     # Every Ready host read again now (#371); the card follows it.
     ("POST", "/api/os-updates/check"): ("admin", lambda request: {"ok": True, "checking": check_all()}),
 }
+
+
+def cancel_plan(item):
+    """Stopping tracking an upgrade lets go of the host at once. apt or dnf
+    carries on there, and its own lock still stops a second install; holding
+    the host for up to two hours more, with nothing on the page saying why,
+    would block every other change there for no one to see (#597)."""
+    node = item["ref"]["node"]
+    return {"mode": "forget", "needs": "admin",
+            "keeps": [f"The updates keep installing on {node}; Homestead only stops following them",
+                      f"Other changes on {node} no longer wait for them: start one there only once the install has ended"]}
+
+
+def cancel_run(item, options):
+    upgrade_done(item["ref"]["node"], item["ref"])
+    return f"Stopped following the updates on {item['ref']['node']}; they carry on there"
+
+
+
+
+def register(ops):
+    """The job store's entry for a host's OS update (#622)."""
+    ops.RESOLVERS["host-os"] = status
+    ops.CANCELLERS["host-os"] = (cancel_plan, cancel_run)

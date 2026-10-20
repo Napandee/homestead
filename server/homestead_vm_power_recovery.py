@@ -114,8 +114,8 @@ def _job(items, ident):
 
 def preview(ident, ops, read, actor):
     try:
-        with _exclusive(ident, ops), ops._lock:
-            plan, context = _snapshot(_job(ops._read(), ident), read, actor)
+        with _exclusive(ident, ops), ops.transaction():
+            plan, context = _snapshot(_job(ops.stored(), ident), read, actor)
             return {"plan": plan, "capacity_token": REVIEW.issue({"id": ident}, context)}
     except DispatcherBusy:
         return {"plan": {"id": ident, "blocked": True, "blockers": ["A Homestead dispatcher is still active for this job. Wait; it cannot be resolved while sending power."],
@@ -125,8 +125,8 @@ def preview(ident, ops, read, actor):
 def resolve(body, ops, read, actor):
     ident = str(body.get("id") or "")
     try:
-        with _exclusive(ident, ops), ops._lock:
-            items = ops._read()
+        with _exclusive(ident, ops), ops.transaction() as t:
+            items = t.items
             item = _job(items, ident)
             plan, context = _snapshot(item, read, actor)
             cfg = {"id": ident, "capacity_token": body.get("capacity_token"), "confirm_capacity": body.get("confirm_capacity")}
@@ -140,7 +140,7 @@ def resolve(body, ops, read, actor):
             ref.update(phase="resolved-unknown", retain_resources=False)
             ops._finish(item, "failed", item.get("progress", 0),
                         f"{actor} acknowledged an unknown power outcome after inspection. No retry or rollback was sent; a late effect is still possible.")
-            ops._write(items)
+            t.save(items)
             return {"ok": True, "detail": "Tracking resolved as unknown; no cluster change was sent. Any new power action requires a fresh review.",
                     "operation": ops._public(item)}
     except DispatcherBusy as error:

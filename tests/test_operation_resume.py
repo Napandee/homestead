@@ -3,6 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_operations as OPS
 import homestead_reclass as RC
+from fakes.job_store import put
 
 
 class ResumeTests(unittest.TestCase):
@@ -27,10 +28,10 @@ class ResumeTests(unittest.TestCase):
         op = OPS.start("reclass", "Move qdirstat-appdata to longhorn-v1-1x",
                        {"kind": "PersistentVolumeClaim", "name": "qdirstat-appdata", "namespace": "lab"},
                        "/volumes", {"phase": phase})
-        items = OPS._read()
+        items = OPS.stored()
         items[-1].update(status="failed", finished_at=OPS._now(),
                          message="The Kubernetes operation resource no longer exists")
-        OPS._write(items)
+        put(OPS, items)
         return op["id"]
 
     def test_a_move_stopped_mid_swap_carries_on(self):
@@ -41,7 +42,7 @@ class ResumeTests(unittest.TestCase):
 
         OPS.resume(op)
 
-        item = next(o for o in OPS._read() if o["id"] == op)
+        item = next(o for o in OPS.stored() if o["id"] == op)
         self.assertEqual(("running", ""), (item["status"], item["finished_at"]))
 
     def test_a_move_that_was_put_back_does_not(self):
@@ -52,7 +53,7 @@ class ResumeTests(unittest.TestCase):
 
     def test_kinds_without_safe_steps_never_resume(self):
         op = OPS.start("backup", "Back up frigate", {"kind": "Backup", "name": "b"}, "/", {})
-        items = OPS._read(); items[-1]["status"] = "failed"; OPS._write(items)
+        items = OPS.stored(); items[-1]["status"] = "failed"; put(OPS, items)
         with self.assertRaisesRegex(ValueError, "can carry on"):
             OPS.resume(op["id"])
 

@@ -1,12 +1,12 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 function load() {
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "views-workloads.js"), "utf8");
-  const start = source.indexOf("const CAPACITY_ROUTINE"), end = source.indexOf("window.capacityNotes = capacityNotes;");
   const ctx = { window: {} };
   vm.createContext(ctx);
-  vm.runInContext(source.slice(start, end) + "\nwindow.capacityNotes = capacityNotes;", ctx);
+  vm.runInContext(between(source, "const CAPACITY_ROUTINE", "window.capacityNotes = capacityNotes;") + "\nwindow.capacityNotes = capacityNotes;", ctx);
   return ctx.window.capacityNotes;
 }
 

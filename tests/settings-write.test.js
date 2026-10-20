@@ -10,16 +10,26 @@ const STORED = { site_name: "Main site", catalog_url: "https://example.com/feed.
   thresholds: { cpu: { warning: 70, critical: 88 } }, updates: { policy: "maintenance_window", maintenance: { start: "03:00" } },
   placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["host-3"] }, mcp: { enabled: false }, info: { version: "x" } };
 
-function load({ readFails = false } = {}) {
+// stale: how many saves the server refuses as based on changed settings (409).
+function load({ readFails = false, revision, stale = 0 } = {}) {
   const posts = [];
+  let reads = 0;
   const ctx = { console, Promise, JSON, STATE: { data: {} }, document: { addEventListener() {}, getElementById: () => null },
     $: () => null, $$: () => [], esc: String, jsq: String, jsArg: String, icon: () => "", can: () => true,
     toast() {}, closeModal() {}, viewSettings() {}, loadImageUpdates() {}, mcpCardPaint() {},
     ask: async () => true, HEALTH_DEFAULTS: { thresholds: {} }, HEALTH: {},
     loadHealthSettings: async () => ctx.STATE.data.appSettings,
     api: async (path, options = {}) => {
-      if (options.method === "POST") { const body = JSON.parse(options.body); posts.push(body); return body; }
-      if (path === "/api/settings") { if (readFails) throw new Error("Bad Gateway"); return JSON.parse(JSON.stringify(STORED)); }
+      if (options.method === "POST") {
+        const body = JSON.parse(options.body); posts.push(body);
+        if (stale-- > 0) throw Object.assign(new Error("The settings were changed since they were read here"), { status: 409 });
+        return body;
+      }
+      if (path === "/api/settings") {
+        if (readFails) throw new Error("Bad Gateway");
+        reads++;
+        return JSON.parse(JSON.stringify({ ...STORED, site_name: reads > 1 ? "Renamed" : STORED.site_name, revision: revision && `${revision}.${reads}` }));
+      }
       return {};
     } };
   ctx.window = ctx; vm.createContext(ctx);
@@ -35,6 +45,39 @@ test("a save sends the settings as they are now, with only its change", async ()
   const { ctx, posts } = load();
   await ctx.settingsWrite({ catalog_url: "" });
   assert.deepEqual(posts, [{ ...without(STORED, "info"), catalog_url: "" }]);
+});
+
+test("a save names the revision it read, so the server can refuse it if the settings changed since", async () => {
+  const { ctx, posts } = load({ revision: "41" });
+  await ctx.settingsWrite(current => ({ revision: "1", site_name: current.site_name + " 2" }));
+  assert.equal(posts[0].revision, "41.1");
+  assert.equal(posts[0].site_name, "Main site 2");
+});
+
+test("a save refused as stale is tried once more on a fresh read, with the change made to that", async () => {
+  const { ctx, posts } = load({ revision: "41", stale: 1 });
+  const saved = await ctx.settingsWrite(current => ({ site_name: current.site_name + " 2" }));
+  assert.equal(posts.length, 2);
+  assert.deepEqual([posts[1].revision, posts[1].site_name], ["41.2", "Renamed 2"]);
+  assert.equal(saved.site_name, "Renamed 2");
+});
+
+test("a save refused as stale twice gives up with the server's words", async () => {
+  const { ctx, posts } = load({ revision: "41", stale: 2 });
+  await assert.rejects(ctx.settingsWrite({ catalog_url: "" }), /changed since they were read here/);
+  assert.equal(posts.length, 2);
+});
+
+test("the catalogue dialog closes only when the save was made", async () => {
+  for (const [stale, closes] of [[2, 0], [0, 1]]) {
+    const { ctx } = load({ stale });
+    let closed = 0;
+    ctx.closeModal = () => closed++;
+    ctx.viewSettings = () => {};
+    ctx.$ = id => ({ "#set_catalog": { value: "https://example.com/feed.json" } })[id] || null;
+    await ctx.catalogSave(false);
+    assert.equal(closed, closes, `after ${stale} refusals`);
+  }
 });
 
 test("a save whose read fails saves nothing", async () => {

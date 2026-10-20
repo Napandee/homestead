@@ -77,3 +77,40 @@ test("using an existing link sends no password, so it does not ask", async () =>
   assert.deepEqual(t.asked, []);
   assert.deepEqual(t.calls.map(c => c.path), ["/api/fleet/link-legacy"]);
 });
+
+// The server refuses to send secrets over plain http:// unless the request says
+// the person agreed; the page says so only after they did (#602).
+test("a ticked plain link tells the server it was agreed to; https:// doesn't claim it", async () => {
+  for (const [url, ticked, agreed] of [["http://192.0.2.250:8088", true, true], ["https://192.0.2.250:8443", false, false]]) {
+    const t = setup(form(url, ticked));
+    await t.ctx.fleetLinkSave();
+    assert.equal(t.calls[0].body.plain_ok, agreed, url);
+  }
+});
+
+test("linking an old cluster over http:// tells the server once the person said yes", async () => {
+  const t = setup();
+  t.ctx.ask = async () => true;
+  t.ctx.FLEET.view = { self: "a", linked: true, members: [] };
+  t.ctx.FLEET.legacy = [{ name: "old", user: "admin", url: "http://192.0.2.9:8088" }];
+  await t.ctx.fleetLinkLegacy("old");
+  assert.equal(t.calls.find(c => c.path === "/api/fleet/link-legacy").body.plain_ok, true);
+});
+
+test("unlinking or leaving says the new key goes unencrypted to a plain member, and sends only after yes", async () => {
+  const members = [{ id: "a", name: "home", self: true, url: "https://192.0.2.10:8443" },
+    { id: "b", name: "branch", url: "http://192.0.2.250:8088" }, { id: "c", name: "office", url: "https://192.0.2.251:8443" }];
+  for (const [run, path] of [[ctx => ctx.fleetUnlink("c", "office"), "/api/fleet/remove"], [ctx => ctx.fleetLeave(), "/api/fleet/leave"]]) {
+    const t = setup();
+    t.ctx.FLEET.view = { self: "a", linked: true, members };
+    await run(t.ctx);
+    assert.match(t.asked[0], /unencrypted to branch/, path);
+    assert.deepEqual(t.calls.filter(c => c.path === path), [], "said no: nothing is sent");
+    const yes = setup();
+    yes.ctx.ask = async () => true;
+    yes.ctx.FLEET.view = { self: "a", linked: true, members };
+    yes.ctx.setFleetMode = () => {};
+    await run(yes.ctx);
+    assert.equal(yes.calls.find(c => c.path === path).body.plain_ok, true, path);
+  }
+});

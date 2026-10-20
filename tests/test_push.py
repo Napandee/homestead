@@ -312,7 +312,8 @@ class BellRouteTests(unittest.TestCase):
         route = ROUTES.find("GET", "/api/alerts")
         self.assertEqual(("homestead_alerts", "viewer"), (route.module, route.role))
         self.assertIs(PUSH.devices, ALERTS.DEVICES[0], "push tells alerts whose devices are whose")
-        with mock.patch.object(ALERTS, "active", return_value=[{"announced": 1}, {"announced": 0}]),                 mock.patch.object(ALERTS, "log", return_value={"alerts": [{"category": "test"}, {"category": "hosts"}]}),                 mock.patch.object(ALERTS, "DEVICES", [lambda user: [{"user": user}]]):
+        with mock.patch.object(ALERTS, "active", return_value=[{"announced": 1}, {"announced": 0}]),                 mock.patch.object(ALERTS, "log", return_value={"alerts": [{"category": "test"}, {"category": "hosts"}]}),                 mock.patch.object(ALERTS, "DEVICES", [lambda user: [{"user": user}]]), \
+                mock.patch.object(ALERTS, "AGENTS", [lambda: {"enabled": False, "pending": 0}]):
             answer = route.handler(ROUTES.Request("GET", "/api/alerts", {}, None, "ada", "viewer"))
         self.assertEqual(([{"announced": 1}], [{"category": "hosts"}], [{"user": "ada"}]),
                          (answer["active"], answer["log"], answer["devices"]))

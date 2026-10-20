@@ -25,6 +25,8 @@ answer where that matters.
 """
 import re
 
+import homestead_kubevirt_cr as KUBEVIRT_CR
+
 VERSION = "v0.13.2"
 IMAGE = "quay.io/kubevirt/macvtap-cni"
 CHART = "homestead-macvtap"
@@ -202,31 +204,30 @@ GATE = "ExternalNetResourceInjection"
 def register_binding():
     """KubeVirt's macvtap binding, beside any others, and KubeVirt reading
     the devices macvtap networks name (nad_lookup). KubeVirt before 1.5 also
-    needs its NetworkBindingPlugins feature switched on."""
-    kv = _kubevirt()
-    if not kv:
-        raise ValueError("KubeVirt is not installed")
-    meta = kv["metadata"]
-    path = f"/apis/kubevirt.io/v1/namespaces/{meta['namespace']}/kubevirts/{meta['name']}"
-    patch = {"spec": {"configuration": {"network": {"binding": BINDING}}}}
-    version = _version(kv)
-    developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
-    changes = {}
-    if version and version < (1, 5):
-        gates = list(developer.get("featureGates") or [])
-        if "NetworkBindingPlugins" not in gates:
-            changes["featureGates"] = gates + ["NetworkBindingPlugins"]
-    if version is None or version >= (1, 8):
-        # An unknown version is one still deploying (see nad_lookup).
-        gates = [g for g in developer.get("featureGates") or [] if g != GATE]
-        if gates != list(developer.get("featureGates") or []):
-            changes["featureGates"] = gates
-        disabled = list(developer.get("disabledFeatureGates") or [])
-        if GATE not in disabled:
-            changes["disabledFeatureGates"] = disabled + [GATE]
-    if changes:
-        patch["spec"]["configuration"]["developerConfiguration"] = changes
-    ksend("PATCH", path, patch, ctype="application/merge-patch+json")
+    needs its NetworkBindingPlugins feature switched on. The gate lists are
+    worked out from what is stored when it saves, so a gate someone switched
+    on or off meanwhile stays as they left it (#621)."""
+    def change(kv):
+        patch = {"spec": {"configuration": {"network": {"binding": BINDING}}}}
+        version = _version(kv)
+        developer = ((kv["spec"].get("configuration") or {}).get("developerConfiguration") or {})
+        changes = {}
+        if version and version < (1, 5):
+            gates = list(developer.get("featureGates") or [])
+            if "NetworkBindingPlugins" not in gates:
+                changes["featureGates"] = gates + ["NetworkBindingPlugins"]
+        if version is None or version >= (1, 8):
+            # An unknown version is one still deploying (see nad_lookup).
+            gates = [g for g in developer.get("featureGates") or [] if g != GATE]
+            if gates != list(developer.get("featureGates") or []):
+                changes["featureGates"] = gates
+            disabled = list(developer.get("disabledFeatureGates") or [])
+            if GATE not in disabled:
+                changes["disabledFeatureGates"] = disabled + [GATE]
+        if changes:
+            patch["spec"]["configuration"]["developerConfiguration"] = changes
+        return patch
+    KUBEVIRT_CR.update(change, current=_kubevirt, write=ksend)
 
 
 def install(cfg=None):

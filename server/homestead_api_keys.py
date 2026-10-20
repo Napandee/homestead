@@ -27,11 +27,9 @@ change to them.
 import hashlib
 import hmac
 import ipaddress
-import json
 import os
 import re
 import secrets
-import threading
 import time
 
 import homestead_auth as AUTH
@@ -80,7 +78,7 @@ FAILURES_ALLOWED = 20          # wrong keys per address in AUTH.ATTEMPT_WINDOW
 KEEP_EXPIRED = 30 * 86400      # an expired key is listed this long, then dropped
 USAGE_EVERY = 60               # seconds between writes of one key's last use
 DATA_DIR = "/data"
-_usage_lock = threading.Lock()
+_usage_lock = SHARED.SharedLock("api-key-usage", directory=lambda: DATA_DIR)
 _usage_written = {}
 
 
@@ -94,25 +92,18 @@ def _usage_path():
 
 
 def _usage():
-    try:
-        with open(_usage_path(), encoding="utf-8") as handle:
-            found = json.load(handle)
-        return found if isinstance(found, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_usage_path(), {})
 
 
 def _note_use(kid, addr, now):
     if now - _usage_written.get(kid, 0) < USAGE_EVERY:
         return
-    with _usage_lock:
-        _usage_written[kid] = now
-        usage = _usage()
-        usage[kid] = {"at": int(now), "ip": str(addr or "")[:64]}
-        try:
-            SHARED.write_json(_usage_path(), usage)
-        except (OSError, TypeError):
-            pass
+    _usage_written[kid] = now
+    try:
+        SHARED.update_file(_usage_path(), lambda usage: usage.update({kid: {"at": int(now), "ip": str(addr or "")[:64]}}),
+                           _usage_lock, {})
+    except (SHARED.Unreadable, OSError, TypeError):
+        pass                    # a key still works; its last use is not saved over what could not be read
 
 
 def _digest(secret):
@@ -261,7 +252,11 @@ def manage(action, body, user):
 
 
 def list_keys():
-    usage, now = _usage(), time.time()
+    try:
+        usage = _usage()
+    except SHARED.Unreadable:
+        usage = {}              # the keys are listed; when each was last used is not known
+    now = time.time()
     keys = AUTH._load().get("api_keys") or {}
     out = sorted((public(kid, rec, usage, now) for kid, rec in keys.items()), key=lambda k: -k["created"])
     for key in out:

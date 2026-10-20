@@ -66,9 +66,9 @@ def release_superseded(ops, namespace, deployment):
     recovered to proves that recovery started: the earlier hold keeps nothing
     any more, so it is released and its record can be cleared. Failed moves,
     and cancellations no later move started from, keep theirs."""
-    with ops._lock:
+    with ops.transaction() as t:
         ops.require_write()
-        items = ops._read()
+        items = t.items
         mine = [i for i in items if i.get("kind") == KIND and (i.get("ref") or {}).get("namespace") == namespace
                 and (i.get("ref") or {}).get("deployment") == deployment]
         settled = [i for i in mine if i.get("status") == "succeeded" and i["ref"].get("retain_resources") is False]
@@ -82,7 +82,7 @@ def release_superseded(ops, namespace, deployment):
                 ref["retain_resources"] = False
                 released = True
         if released:
-            ops._write(items)
+            t.save(items)
         return released
 
 
@@ -94,7 +94,7 @@ def _reconcile_receipt(ops, directory, namespace, deployment):
     may clear that hold, never a resource name or an elapsed timeout.
     """
     from homestead_self_data_finish import read as read_completed
-    with ops._lock:
+    with ops.transaction() as t:
         ops.require_write()
         saved = read_completed(directory, namespace, deployment)
         if not saved: return False
@@ -103,7 +103,7 @@ def _reconcile_receipt(ops, directory, namespace, deployment):
         expected = {"namespace": namespace, "deployment": deployment,
                     "operation": state["operation"], "anchor_uid": anchor.handle()["uid"],
                     "source": state["source"]["name"], "destination": state["destination"]}
-        items = ops._read()
+        items = t.items
         matches = [i for i in items if i.get("kind") == KIND and
                    all(i.get("ref", {}).get(k) == v for k, v in expected.items())]
         if len(matches) > 1: raise Held("Duplicate data-move jobs need review")
@@ -114,7 +114,7 @@ def _reconcile_receipt(ops, directory, namespace, deployment):
         retained = item["ref"].get("retain_resources") is not False
         item["ref"]["retain_resources"] = False
         changed = ops._finish(item, "cancelled" if status["status"] == "cancelled" else "succeeded", 100, status["message"])
-        if changed or retained: ops._write(items)
+        if changed or retained: t.save(items)
         return changed or retained
 
 
@@ -151,8 +151,8 @@ class Execution:
         self.recheck, self.clock, self.wait, self.probe = recheck, clock, wait, probe
 
     def checkpoint(self, **fields):
-        with self.ops._lock:
-            item = next(i for i in self.ops._read() if i["id"] == self.job_id)
+        with self.ops.transaction():
+            item = next(i for i in self.ops.stored() if i["id"] == self.job_id)
             item["ref"].update(fields)
             self.ops.checkpoint(item)
 
@@ -164,7 +164,7 @@ class Execution:
             # The HTTP request has returned/released its shared activity lock.
             # A live source remains usable throughout helper preparation.
             with self.barrier.activity():
-                with ops._lock:
+                with ops.transaction():
                     idle(ops, self.job_id)
                     handle = anchor.create(operation=scope.operation,
                         deployment={"name": scope.deployment, **identity(e["deployment"])},

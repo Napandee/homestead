@@ -8,6 +8,7 @@ from unittest import mock
 import test_vm_capacity as fixtures
 import server
 import homestead_capacity_review as review
+from fakes.job_store import store_writes
 
 
 class VMPowerAdmissionTests(unittest.TestCase):
@@ -107,7 +108,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertEqual(409, result[0], result)
         self.assertIn("VM lab/other", result[1]["error"])
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read()[0]["ref"]["retain_resources"])
+        self.assertFalse(server.OPS.stored()[0]["ref"]["retain_resources"])
 
     def test_concurrent_approved_starts_send_only_one_request_for_one_device(self):
         import threading
@@ -131,7 +132,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         writes.assert_called_once()
         self.assertEqual(1, sum(isinstance(result, dict) for result in outcomes), outcomes)
         self.assertIn("start pending", str(outcomes))
-        self.assertEqual(1, len(server.OPS._read()))
+        self.assertEqual(1, len(server.OPS.stored()))
 
     def test_start_requires_signed_review_not_just_checkbox(self):
         for body in (self.body, {**self.body, "confirm_capacity": True}):
@@ -172,7 +173,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/power", self.reviewed())
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read())
+        self.assertFalse(server.OPS.stored())
 
     def test_encryption_gate_change_after_review_does_not_send_power(self):
         self.encrypted()
@@ -182,7 +183,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/power", signed)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read())
+        self.assertFalse(server.OPS.stored())
 
     def test_encryption_device_disappearing_after_review_never_dispatches(self):
         self.encrypted()
@@ -191,14 +192,14 @@ class VMPowerAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/power", signed)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read())
+        self.assertFalse(server.OPS.stored())
 
     def test_supported_encrypted_guest_uses_normal_one_shot_power_journal(self):
         self.encrypted()
         result, writes = self.call("/api/vm/power", self.reviewed())
         self.assertEqual(200, result[0], result)
         writes.assert_called_once_with("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/lab/virtualmachines/guest/start", {})
-        self.assertEqual(1, len(server.OPS._read()))
+        self.assertEqual(1, len(server.OPS.stored()))
 
     def test_invalid_numa_policy_cannot_be_overridden_by_capacity_ack(self):
         self.vm["spec"]["template"]["spec"]["domain"]["cpu"]["numa"] = {"guestMappingPassthrough": {}}
@@ -206,7 +207,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/power", self.reviewed())
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read())
+        self.assertFalse(server.OPS.stored())
 
     def test_physical_numa_sample_is_not_capacity_override_authority(self):
         self.numa_host()
@@ -214,7 +215,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/power", self.reviewed())
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read())
+        self.assertFalse(server.OPS.stored())
 
     def test_persistent_state_replacement_after_review_never_sends_power(self):
         pvc = self.persistent_state()
@@ -241,11 +242,11 @@ class VMPowerAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/power", {**signed, **controls})
             self.assertEqual(409, result[0], result)
             writes.assert_not_called()
-            self.assertFalse(server.OPS._read())
+            self.assertFalse(server.OPS.stored())
         result, writes = self.call("/api/vm/power", {**signed, "ack_state_initialization": True, "confirm_state_name": "guest"})
         self.assertEqual(200, result[0], result)
         writes.assert_called_once()
-        self.assertTrue(server.OPS._read()[0]["ref"]["state_initialization_acknowledged"])
+        self.assertTrue(server.OPS.stored()[0]["ref"]["state_initialization_acknowledged"])
 
     def test_namespace_backup_selector_change_invalidates_review(self):
         self.fresh_state()
@@ -414,7 +415,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertEqual(400, result[0], result)
         writes.assert_called_once()
         self.assertNotIn("private-endpoint", str(result))
-        record = server.OPS._read()[0]
+        record = server.OPS.stored()[0]
         self.assertEqual("uncertain", record["ref"]["phase"])
         self.assertFalse(server.OPS._public(record)["cancellable"])
         result, writes = self.call("/api/vm/power", body)
@@ -430,13 +431,13 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertIn("HTTP 409", result[1]["error"])
         self.assertNotIn("private", str(result))
         writes.assert_called_once()
-        record = server.OPS._read()[0]
+        record = server.OPS.stored()[0]
         self.assertEqual("failed", record["status"])
         self.assertFalse(record["ref"]["retain_resources"])
 
     def test_journal_failure_never_sends_power(self):
         body = self.reviewed()
-        with mock.patch.object(server.OPS, "_write", side_effect=OSError("journal unavailable")):
+        with store_writes(server.OPS, fail=OSError("journal unavailable")):
             result, writes = self.call("/api/vm/power", body)
         self.assertNotEqual(200, result[0])
         writes.assert_not_called()
@@ -452,7 +453,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/power", body)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        record = server.OPS._read()[0]
+        record = server.OPS.stored()[0]
         self.assertEqual("failed", record["status"])
         self.assertIn("no power request was sent", record["message"])
 

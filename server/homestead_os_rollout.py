@@ -164,7 +164,7 @@ def _rebalancing():
     rollout drains and reboots the hosts it is moving them to, so the
     scheduled one waits for it. An unreadable job list does not hold it up."""
     try:
-        return any(i.get("kind") == "container-rebalance" and i.get("status") not in OPS.TERMINAL for i in OPS._read())
+        return any(i.get("kind") == "container-rebalance" and i.get("status") not in OPS.TERMINAL for i in OPS.stored())
     except Exception:
         return False
 
@@ -273,7 +273,7 @@ def step(state, now=None):
         facts = host_os.read(name, refresh=True)
         node.update(updates=len(facts.get("updates") or []), security=facts.get("security", 0))
         if node["updates"]:
-            host_os.upgrade_begin(name, facts)
+            host_os.upgrade_begin(name, facts, node)
             rollout["phase"], node["since"] = "installing", now
             rollout["message"] = f"{name}: installing {node['updates']} update{'s' if node['updates'] != 1 else ''}"
         elif facts.get("reboot") and config["reboot"] == "when-needed":
@@ -283,6 +283,8 @@ def step(state, now=None):
         return True
     if phase == "installing":
         state_now = host_os.upgrade_state(name)
+        if not state_now["running"]:
+            host_os.upgrade_done(name, node)
         if state_now["running"]:
             if now - node.get("since", now) > INSTALL_LIMIT:
                 _result(rollout, False, f"updates did not finish in two hours; see {host_os.LOG} there")
@@ -456,3 +458,8 @@ ROUTES = {
     ("POST", "/api/os-updates/settings"): ("admin", lambda request: {"ok": True, "settings": save_settings(request.body)}),
     ("POST", "/api/os-updates/stop"): ("admin", lambda request: {"ok": True, "rollout": stop(), "detail": "Stopping once the host being updated is done"}),
 }
+
+
+def register(ops):
+    """The job store's entry for an OS update rolled across the hosts (#622)."""
+    ops.RESOLVERS["os-rollout"] = status

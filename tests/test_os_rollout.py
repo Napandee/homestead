@@ -20,7 +20,7 @@ class Hosts:
     LOG = "/var/log/homestead-os-upgrade.log"
 
     def __init__(self, facts):
-        self.facts, self.began, self.holds, self.codes = facts, [], [], {}
+        self.facts, self.began, self.holds, self.codes, self.held = facts, [], [], {}, set()
 
     def read(self, name, refresh=False):
         return self.facts[name]
@@ -31,8 +31,15 @@ class Hosts:
     def stored(self, name):
         return self.facts.get(name)
 
-    def upgrade_begin(self, name, facts=None):
+    def upgrade_begin(self, name, facts=None, ref=None):
         self.began.append(name)
+        if ref is not None:
+            ref["lease"] = f"lease-{name}"
+        self.held.add(name)
+
+    def upgrade_done(self, name, ref):
+        if ref.pop("lease", "") == f"lease-{name}":
+            self.held.discard(name)
 
     def upgrade_state(self, name):
         code = self.codes.get(name, "0")
@@ -87,12 +94,12 @@ class RolloutTests(unittest.TestCase):
 
     def test_a_scheduled_rollout_waits_while_containers_are_rebalanced(self):
         with mock.patch.object(ROLLOUT, "due", return_value=True), \
-                mock.patch.object(ROLLOUT.OPS, "_read", return_value=[{"kind": "container-rebalance", "status": "running"}]), \
+                mock.patch.object(ROLLOUT.OPS, "stored", return_value=[{"kind": "container-rebalance", "status": "running"}]), \
                 mock.patch.object(ROLLOUT, "start") as start:
             ROLLOUT.tick()
             start.assert_not_called()
         with mock.patch.object(ROLLOUT, "due", return_value=True), \
-                mock.patch.object(ROLLOUT.OPS, "_read", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
+                mock.patch.object(ROLLOUT.OPS, "stored", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
                 mock.patch.object(ROLLOUT, "start") as start:
             ROLLOUT.tick()
             start.assert_called_once()
@@ -108,6 +115,13 @@ class RolloutTests(unittest.TestCase):
         notes = {r["node"]: r["note"] for r in done["results"]}
         self.assertEqual(("updates installed", "up to date", "updates installed and restarted"),
                          (notes["node-2"], notes["node-3"], notes["node-1"]))
+
+    def test_each_host_is_let_go_of_once_its_updates_are_installed(self):
+        ROLLOUT.start(now=1000)
+        done = self.run_until_done(on_step=self.finish_restarts)
+        self.assertEqual("succeeded", done["status"])
+        self.assertEqual(["node-2", "node-1"], self.hosts.began)
+        self.assertEqual(set(), self.hosts.held, "no host is left held for another change")
 
     def test_a_host_the_review_will_not_restart_keeps_its_updates_and_the_rollout_goes_on(self):
         self.refuse["node-1"] = "Running VMs are on this host; migrate or stop them and review again"

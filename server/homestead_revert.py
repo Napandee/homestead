@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 
@@ -55,24 +56,15 @@ def _backend(method, path, body=None):
     return json.loads(text)
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _volume(name):
-    volume = _get(f"{API}/volumes/{name}")
+    volume = KUBE.get_optional(f"{API}/volumes/{name}", read=kget)
     if not volume:
         raise ValueError(f"there is no Longhorn volume {name}")
     return volume
 
 
 def _snapshot(name, volume):
-    snap = _get(f"{API}/snapshots/{name}")
+    snap = KUBE.get_optional(f"{API}/snapshots/{name}", read=kget)
     if not snap or (snap.get("spec") or {}).get("volume") != volume:
         raise ValueError(f"{volume} has no snapshot {name}")
     return snap

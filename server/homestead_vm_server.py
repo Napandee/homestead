@@ -296,10 +296,9 @@ def vm_address_problem(ip):
         network = cached("network", 5, NETWORK.inventory)
     except Exception:
         network = {}
-    if ip in (network.get("node_ips") or []) or ip in (network.get("platform_addresses") or {}):
-        return f"{ip} is one of the cluster's own addresses"
-    if any(v.get("ip") == ip for v in network.get("vips") or []):
-        return f"{ip} is a Service's address"
+    problem = NETWORK.cluster_address_problem(ip, network)
+    if problem:
+        return problem
     # A few ports a machine usually has, quickly: a free address answers none.
     if IPAM._probe(ip, ports=(22, 80, 443, 3389, 6443), timeout=0.4).get("up"):
         return f"{ip} answers on the network: something is already there"

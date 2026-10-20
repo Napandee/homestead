@@ -10,6 +10,7 @@ from unittest import mock
 
 import test_vm_resources  # server import path
 import homestead_operations as ops
+from fakes.job_store import put, store_writes
 import homestead_k3scluster as cluster
 import homestead_cancel as cancel
 import homestead_vm_mutation_recovery as recovery
@@ -80,7 +81,7 @@ class VMBatchJournalTests(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def send(self, method, path, body, **kw):
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("intent", item["ref"]["writes"][-1]["phase"])
         self.assertEqual("provisioning", item["ref"]["phase"])
         self.sent.append((method, path))
@@ -105,7 +106,7 @@ class VMBatchJournalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Resources are retained") as error:
             self.dispatch()
         self.assertNotIn("test-private", str(error.exception))
-        return ops._read()[0]["id"]
+        return ops.stored()[0]["id"]
 
     def approved(self, ident):
         result = recovery.preview(ident, ops, self.read, "admin")
@@ -118,7 +119,7 @@ class VMBatchJournalTests(unittest.TestCase):
         self.assertTrue(result["mutation_recovery"])
         self.assertFalse(result["cancellable"])
         self.assertFalse(result["cleanable"])
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("awaiting-ready", item["ref"]["phase"])
         self.assertEqual([1, 2, 3, 4], [entry["sequence"] for entry in item["ref"]["writes"]])
         self.assertTrue(all(entry["phase"] == "accepted" for entry in item["ref"]["writes"]))
@@ -131,7 +132,7 @@ class VMBatchJournalTests(unittest.TestCase):
 
     def test_partial_and_uncertain_resources_remain_visible_without_automatic_cleanup(self):
         ident = self.fail_second()
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("failed", item["status"])
         self.assertEqual(["accepted", "accepted", "accepted", "uncertain"], [entry["phase"] for entry in item["ref"]["writes"]])
         self.assertEqual(1, len(item["ref"]["created"]))
@@ -148,7 +149,7 @@ class VMBatchJournalTests(unittest.TestCase):
         self.after_send = mock.Mock(side_effect=TimeoutError("test-private"))
         with self.assertRaises(ValueError):
             self.dispatch()
-        plan = recovery.preview(ops._read()[0]["id"], ops, self.read, "admin")["plan"]
+        plan = recovery.preview(ops.stored()[0]["id"], ops, self.read, "admin")["plan"]
         self.assertEqual(3, len(plan["resources"]))
         self.assertEqual(["not dispatched", "not dispatched"], [row["last_write"] for row in plan["resources"][:2]])
         self.assertEqual(1, len(self.sent))
@@ -158,7 +159,7 @@ class VMBatchJournalTests(unittest.TestCase):
         before = copy.deepcopy(self.objects)
         good = self.approved(ident)
         recovery.resolve(good, ops, self.read, "admin")
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("failed", item["status"])
         self.assertEqual("unknown", item["ref"]["recovery"]["outcome"])
         self.assertTrue(item["tracking_stopped"])
@@ -173,10 +174,10 @@ class VMBatchJournalTests(unittest.TestCase):
     def test_reviewing_timed_out_batch_releases_data_preparation_without_cluster_changes(self):
         import homestead_self_data_prepare as data
         self.dispatch()
-        items = ops._read()
+        items = ops.stored()
         item = items[0]
         ops._finish(item, "failed", 10, "Guest verification timed out (0/2 ready). Resources are retained; inspect the batch outcome.")
-        ops._write(items)
+        put(ops, items)
         before, sent = copy.deepcopy(self.objects), list(self.sent)
         with mock.patch.object(ops, "_refresh", side_effect=AssertionError("inspection must not advance jobs")):
             blockers = data.blocking_jobs(ops)
@@ -194,7 +195,7 @@ class VMBatchJournalTests(unittest.TestCase):
             self.assertEqual([], data.blocking_jobs(ops))
         self.assertEqual(before, self.objects)
         self.assertEqual(sent, self.sent, "stopping tracking cannot send a cluster write")
-        saved = ops._read()[0]
+        saved = ops.stored()[0]
         self.assertEqual("failed", saved["status"])
         self.assertEqual("unknown", saved["ref"]["recovery"]["outcome"])
         self.assertEqual(item["ref"]["writes"], saved["ref"]["writes"])
@@ -214,7 +215,7 @@ class VMBatchJournalTests(unittest.TestCase):
         for kind in ("vm-power", "vm-create", "vm-edit"):
             with self.assertRaisesRegex(ValueError, "needs recovery"):
                 ops.start(kind, "new", {}, "/vms", {"name": "batch-server-1", "namespace": "lab", "review_digest": hashlib.sha256(kind.encode()).hexdigest()})
-        self.assertEqual(1, len(ops._read()))
+        self.assertEqual(1, len(ops.stored()))
 
     def test_individual_action_prevents_a_conflicting_batch_before_any_write(self):
         ops.start("vm-edit", "edit", {}, "/vms", {"name": "batch-agent-1", "namespace": "lab", "review_digest": "a" * 64})
@@ -237,12 +238,12 @@ class VMBatchJournalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.dispatch(create_one=create)
         self.assertEqual(2, len(self.sent))
-        self.assertEqual([], ops._read()[0]["ref"]["created"])
+        self.assertEqual([], ops.stored()[0]["ref"]["created"])
 
     def test_missing_approval_or_store_failure_sends_nothing(self):
         with self.assertRaises(ValueError):
             cluster.commit(prepared(), ops, create_one=create_one, review={}, send=self.send)
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk")), self.assertRaises(OSError):
+        with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             self.dispatch()
         self.assertEqual([], self.sent)
 
@@ -262,7 +263,7 @@ class VMBatchJournalTests(unittest.TestCase):
         with mock.patch.object(power, "worker_lock", lock), self.assertRaises(ValueError):
             self.dispatch()
         self.assertEqual([], self.sent)
-        self.assertEqual("resolved-unknown", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("resolved-unknown", ops.stored()[0]["ref"]["phase"])
 
     def test_actual_two_process_duplicate_approval_dispatches_one_batch(self):
         ctx = multiprocessing.get_context("spawn")
@@ -291,11 +292,11 @@ class VMBatchJournalTests(unittest.TestCase):
         child.start()
         try:
             self.assertTrue(sending.wait(10))
-            ident = ops._read()[0]["id"]
+            ident = ops.stored()[0]["id"]
             result = recovery.preview(ident, ops, self.read, "admin")
             self.assertTrue(result["plan"]["blocked"])
             self.assertIsNone(result["capacity_token"])
-            self.assertFalse(cancel.k3s_plan(ops._read()[0])["can"])
+            self.assertFalse(cancel.k3s_plan(ops.stored()[0])["can"])
         finally:
             finish.set()
             child.join(10)
@@ -306,7 +307,7 @@ class VMBatchJournalTests(unittest.TestCase):
 
     def test_open_guest_ports_do_not_prove_authenticated_health(self):
         self.dispatch()
-        item = ops._read()[0]
+        item = ops.stored()[0]
         def read(path):
             if "/virtualmachines/" in path:
                 return self.read(path)

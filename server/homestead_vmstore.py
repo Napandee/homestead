@@ -16,7 +16,10 @@ Elsewhere, CDI fills each VM's disk straight from the publisher's address, so
 there is nothing to keep: a new VM always starts from the newest build.
 
 What is kept, and which Harvester image holds each build, is in the
-homestead-vm-store ConfigMap.
+homestead-vm-store ConfigMap. A change to it is made on the record as stored
+when it is saved (#621): what to download or delete is worked out on the
+record read first, done once, and only then recorded, so a 409 from another
+writer means recording it again, never downloading or deleting again.
 """
 import calendar
 import concurrent.futures
@@ -27,6 +30,7 @@ import urllib.parse
 import time
 import urllib.error
 import urllib.request
+import homestead_kube as KUBE
 import homestead_routes
 
 kget = ksend = None
@@ -244,6 +248,7 @@ def _path():
 
 
 def load():
+    """The record as the pages show it: one that cannot be read is empty."""
     try:
         cm = kget(_path())
     except urllib.error.HTTPError as error:
@@ -258,15 +263,44 @@ def load():
     return data, cm
 
 
-def save(data, cm):
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": CONFIGMAP, "namespace": NS, "labels": {"homestead.io/managed": "true"}},
-            "data": {"store.json": json.dumps(data, sort_keys=True)}}
-    if cm:
-        body["metadata"]["resourceVersion"] = cm["metadata"].get("resourceVersion")
-        ksend("PUT", _path(), body)
-    else:
-        ksend("POST", f"/api/v1/namespaces/{NS}/configmaps", body)
+UNREADABLE = "the VM store's record (homestead-vm-store) is not one Homestead wrote; nothing was changed"
+
+
+def _checked(data):
+    """The record to change: nothing written over one that is not a record."""
+    data = {} if data is None else data
+    if not isinstance(data, dict) or not isinstance(data.setdefault("kept", {}), dict) \
+            or not all(isinstance(kept, dict) for kept in data["kept"].values()):
+        raise ValueError(UNREADABLE)
+    return data
+
+
+def _record():
+    """The record to work a change out on, before anything is downloaded or
+    deleted for it: one that cannot be read stops the change."""
+    try:
+        cm = kget(_path())
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return {"kept": {}}
+        raise
+    try:
+        # Exactly what update_json refuses: a missing key is no record yet, "" is not one.
+        text = (cm.get("data") or {}).get("store.json")
+        return _checked(json.loads("{}" if text is None else text))
+    except ValueError:
+        raise ValueError(UNREADABLE) from None
+
+
+def _update(change):
+    """change(record) made on the record as stored, and again on a newer one
+    if another writer saved meanwhile."""
+    def apply(data):
+        data = _checked(data)
+        change(data)
+        return data
+    KUBE.update_json(_path(), "store.json", apply, labels={"homestead.io/managed": "true"},
+                     read=kget, write=ksend, sort_keys=True)
 
 
 # ------------------------------------------------------------------ the store
@@ -352,10 +386,9 @@ def keep(image_id, auto=True):
     url = url_for(entry)
     if not url:
         raise ValueError(f"{entry['name']} has no {arch()} image")
-    data, cm = load()
-    kept = data["kept"].setdefault(image_id, {"versions": []})
-    kept["auto"] = bool(auto)
-    detail = f"{entry['name']} is kept"
+    kept = _record()["kept"].get(image_id) or {"versions": []}
+    kept.setdefault("versions", [])
+    detail, made_version = f"{entry['name']} is kept", None
     have = {f"{i['namespace']}/{i['name']}": i for i in images()} if _harvester() else {}
     found = [v for v in _versions(entry, url, kept, have) if v.get("found")]
     if found:
@@ -373,21 +406,30 @@ def keep(image_id, auto=True):
     elif _harvester() and not kept["versions"]:
         now = upstream(url)
         made = hv_download(url, _display(entry, now), True)
-        kept["versions"].append({"image": f"{made['namespace']}/{made['name']}", "etag": now.get("etag", ""),
-                                 "modified": now.get("modified", ""), "size": now.get("size", 0),
-                                 "added": int(time.time())})
+        made_version = {"image": f"{made['namespace']}/{made['name']}", "etag": now.get("etag", ""),
+                        "modified": now.get("modified", ""), "size": now.get("size", 0), "added": int(time.time())}
         detail = f"{entry['name']} is downloading as a Harvester image" + ("" if not made.get("reused") else " (already there)")
-    kept["checked"] = int(time.time())
-    save(data, cm)
+    checked = int(time.time())
+
+    def change(data):
+        record = data["kept"].setdefault(image_id, {"versions": []})
+        record["auto"], record["checked"] = bool(auto), checked
+        mine = kept["versions"] if found else [made_version] if made_version else []
+        stored = {v.get("image"): v for v in record.get("versions") or []}
+        # A build recorded meanwhile keeps what was recorded of it (its etag, say).
+        versions = [v for image, v in stored.items() if image not in {m["image"] for m in mine}] \
+            + [dict(stored.get(m["image"]) or {}, **m) for m in mine]
+        record["versions"] = sorted(versions, key=lambda v: v.get("added", 0))
+    _update(change)
     return {"ok": True, "detail": detail + ("; it keeps itself current" if auto else "")}
 
 
 def set_auto(image_id, auto):
-    data, cm = load()
-    if image_id not in data["kept"]:
-        raise ValueError("that image is not kept")
-    data["kept"][image_id]["auto"] = bool(auto)
-    save(data, cm)
+    def change(data):
+        if not isinstance(data["kept"].get(image_id), dict):
+            raise ValueError("that image is not kept")
+        data["kept"][image_id]["auto"] = bool(auto)
+    _update(change)
     return {"ok": True}
 
 
@@ -398,8 +440,7 @@ def _in_use(ref):
 def forget(image_id):
     """Stop keeping an image: its builds no disk was made from are deleted;
     those a disk came from stay until that disk is gone."""
-    data, cm = load()
-    kept = data["kept"].pop(image_id, None)
+    kept = _record()["kept"].get(image_id)
     if kept is None:
         raise ValueError("that image is not kept")
     left = []
@@ -412,7 +453,7 @@ def forget(image_id):
                 delete_image(ns, name)
             except Exception:
                 left.append(version["image"])
-    save(data, cm)
+    _update(lambda data: data["kept"].pop(image_id, None))
     return {"ok": True, "detail": "No longer kept" + (f"; {', '.join(left)} stay{'s' if len(left) == 1 else ''} while disks use "
                                                      f"{'it' if len(left) == 1 else 'them'}" if left else "")}
 
@@ -422,9 +463,10 @@ def refresh(force=False):
     old; once it is ready, older builds no disk was made from go."""
     if not _harvester():
         return {"ok": True, "updated": [], "tidied": []}
-    data, cm = load()
+    data = _record()
     have = {f"{i['namespace']}/{i['name']}": i for i in images()}
     updated, tidied, now_ts = [], [], int(time.time())
+    done = {}   # image id -> (builds gone, build added or None)
     for image_id, kept in data["kept"].items():
         entry = BY_ID.get(image_id)
         if not entry or not (kept.get("auto") or force):
@@ -449,13 +491,27 @@ def refresh(force=False):
         with _lock:
             _heads.pop(url, None)
         now = upstream(url)
+        added = None
         if url and not now.get("error") and not (newest and _same_build(newest, now)):
             made = hv_download(url, _display(entry, now), not newest)
-            versions.append({"image": f"{made['namespace']}/{made['name']}", "etag": now.get("etag", ""),
-                             "modified": now.get("modified", ""), "size": now.get("size", 0), "added": now_ts})
+            added = {"image": f"{made['namespace']}/{made['name']}", "etag": now.get("etag", ""),
+                     "modified": now.get("modified", ""), "size": now.get("size", 0), "added": now_ts}
             updated.append(entry["name"])
-        kept["versions"] = versions
-    save(data, cm)
+        kept_now = {v["image"] for v in versions}
+        done[image_id] = ({v.get("image") for v in kept.get("versions") or []} - kept_now, added)
+
+    def change(data):
+        for image_id, (gone, added) in done.items():
+            record = data["kept"].get(image_id)
+            if not isinstance(record, dict):
+                continue      # no longer kept
+            record["checked"] = now_ts
+            versions = [v for v in record.get("versions") or [] if v.get("image") not in gone]
+            if added and added["image"] not in {v.get("image") for v in versions}:
+                versions.append(added)
+            record["versions"] = versions
+    if done:
+        _update(change)
     return {"ok": True, "updated": updated, "tidied": tidied}
 
 

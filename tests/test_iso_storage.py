@@ -1,3 +1,4 @@
+import copy
 import sys
 import unittest
 import urllib.error
@@ -60,6 +61,56 @@ class Cluster:
         elif method in ("PUT", "POST") and body:
             self.objects[path if method == "PUT" else f"{path}/{body['metadata']['name']}"] = body
         return body
+
+
+class VersionedCluster(Cluster):
+    """Cluster whose ISO library ConfigMap carries a resourceVersion checked
+    on PUT, and which can let another request save just after a read."""
+
+    LIBRARY = "/api/v1/namespaces/lab/configmaps/homestead-iso-library"
+
+    def __init__(self):
+        super().__init__()
+        self.version, self.after_read = 1, None
+        self.objects[self.LIBRARY]["metadata"]["resourceVersion"] = "1"
+
+    def get(self, path):
+        found = copy.deepcopy(super().get(path))
+        if path == self.LIBRARY and self.after_read:
+            hook, self.after_read = self.after_read, None
+            hook()                  # another request saves between this read and its write
+        return found
+
+    def send(self, method, path, body=None, **kw):
+        if method == "PUT" and path == self.LIBRARY:
+            # As Kubernetes: a PUT naming no version is not checked.
+            sent = (body.get("metadata") or {}).get("resourceVersion")
+            if sent and sent != self.objects[path]["metadata"]["resourceVersion"]:
+                raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
+            self.version += 1
+            body = copy.deepcopy(body)
+            body["metadata"]["resourceVersion"] = str(self.version)
+        return super().send(method, path, body, **kw)
+
+
+class SettingsTests(unittest.TestCase):
+    def test_two_settings_saved_at_once_both_stay(self):
+        c = VersionedCluster()
+        c.after_read = lambda: ISOS.set_keep_days(14)
+        with mock.patch.object(ISOS, "shares", lambda: [{"name": "media"}]):
+            ISOS.set_folders([{"share": "media", "path": "isos"}])
+        self.assertEqual(14, ISOS.keep_days())
+        self.assertEqual([{"share": "media", "path": "isos"}], ISOS.folders())
+
+
+    def test_a_hand_edited_value_is_fixed_by_saving_it_from_the_page(self):
+        c = Cluster()
+        data = c.objects[VersionedCluster.LIBRARY]["data"]
+        data.update(folders="", keep_days="07")       # left by kubectl: not JSON
+        with mock.patch.object(ISOS, "shares", lambda: [{"name": "media"}]):
+            ISOS.set_folders([{"share": "media", "path": "isos"}])
+        ISOS.set_keep_days(14)
+        self.assertEqual(([{"share": "media", "path": "isos"}], 14), (ISOS.folders(), ISOS.keep_days()))
 
 
 class TidyTests(unittest.TestCase):

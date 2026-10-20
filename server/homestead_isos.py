@@ -22,8 +22,8 @@ import hashlib
 import json
 import posixpath
 import re
-import urllib.error
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_routes
 
@@ -55,15 +55,6 @@ def bind(_kget, _ksend, _shares, _list_files, _pick_class, _share_node, share_ns
     pick_class, share_node, SHARE_NS, DEFAULT_NS, IMAGE = _pick_class, _share_node, share_ns, default_ns, image
 
 
-def _optional(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _clean(path):
     raw = str(path or "").replace("\\", "/").strip().strip("/")
     if not raw:
@@ -78,22 +69,18 @@ def _clean(path):
 
 # ------------------------------------------------------------------ folders
 def _settings():
-    cm = _optional(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}") or {}
+    cm = KUBE.get_optional(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}", read=kget) or {}
     return dict(cm.get("data") or {})
 
 
 def _save_settings(**changes):
-    """Write one setting without losing the other."""
-    data = _settings()
-    data.update(changes)
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": CONFIGMAP, "namespace": DEFAULT_NS, "labels": {NAMES.key("managed"): "true"}},
-            "data": data}
+    """Write settings without losing the other, or one saved meanwhile: each
+    key, one at a time, is changed on the ConfigMap as read, and read again if
+    it changed before the write (#621). A key is replaced outright, so a value
+    hand-edited into something unreadable is fixed by saving it here."""
     path = f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{CONFIGMAP}"
-    if _optional(path) is None:
-        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NS}/configmaps", body)
-    else:
-        ksend("PUT", path, body)
+    for key, value in changes.items():
+        KUBE.update_json(path, key, lambda current, value=value: value, replace=True, read=kget, write=ksend)
 
 
 def folders():
@@ -121,7 +108,7 @@ def set_keep_days(days):
         raise ValueError("days is a whole number") from None
     if not 0 <= days <= 365:
         raise ValueError("between 0 (keep them) and 365 days")
-    _save_settings(keep_days=str(days))
+    _save_settings(keep_days=days)
     return {"ok": True, "keep_days": days,
             "detail": "ISO copies no VM uses are kept" if days == 0
                       else f"ISO copies no VM uses are removed after {days} day{'' if days == 1 else 's'}"}
@@ -139,7 +126,7 @@ def set_folders(rows):
             clean.append({"share": share, "path": path})
     if len(clean) > 20:
         raise ValueError("at most 20 ISO folders")
-    _save_settings(folders=json.dumps(clean))
+    _save_settings(folders=clean)
     return {"ok": True, "folders": clean,
             "detail": f"{len(clean)} ISO folder{'' if len(clean) == 1 else 's'} saved"}
 
@@ -326,7 +313,7 @@ def prepare(share, path, ns=None):
     if not file:
         raise ValueError(f"{path} is not on {share} any more")
     name = volume_name(share, path, file["size"])
-    if _optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}"):
+    if KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", read=kget):
         return {"ok": True, "name": name, "detail": f"{file['name']} is already a volume"}
     klass, rwx = pick_class()
     # The copy, and a filesystem's own room: disk.img must fit whole.
@@ -370,7 +357,7 @@ def prepare(share, path, ns=None):
 
 def ready_volume(ns, name):
     """An ISO volume a drive can hold now, or ValueError saying why not."""
-    pvc = _optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", read=kget)
     if not pvc or ((pvc.get("metadata") or {}).get("labels") or {}).get(LABEL) != "true":
         raise ValueError(f"{name} is not an ISO volume in {ns}")
     state, problem = _state(pvc, _jobs(ns).get(name))
@@ -385,7 +372,7 @@ def delete(name, ns=None):
     if users:
         raise ValueError(f"{', '.join(sorted(users))} still {'has' if len(users) == 1 else 'have'} it in a "
                          "CD-ROM drive; eject it there first")
-    pvc = _optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", read=kget)
     if not pvc or ((pvc.get("metadata") or {}).get("labels") or {}).get(LABEL) != "true":
         raise ValueError(f"{name} is not an ISO volume")
     try:

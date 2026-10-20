@@ -47,7 +47,11 @@ class VolumeUseTests(unittest.TestCase):
 
         self.world = world
 
+        self.unreadable = set()
+
         def kget(path):
+            if path in self.unreadable:
+                raise OSError("forbidden")
             if path in world:
                 return {"items": world[path]}
             if "engines" in path:
@@ -118,6 +122,23 @@ class VolumeUseTests(unittest.TestCase):
         self.assertEqual(["nextcloud"], row["attached"])
         self.assertEqual("nextcloud", row["attached_to"])
         self.assertEqual("Running", row["pod_status"])
+
+    def test_an_unreadable_kind_makes_use_unknown_not_orphaned(self):
+        """One failed list used to drop that kind silently: every volume only
+        it uses was then called orphaned and offered as spare."""
+        for path in ("/apis/batch/v1/cronjobs", "/apis/apps/v1/statefulsets", "/apis/kubevirt.io/v1/virtualmachines"):
+            with self.subTest(path=path):
+                self.unreadable = {path}
+                self.assertIsNone(self.rows()["scratch"]["used_by"])
+
+    def test_no_kubevirt_means_no_vms_not_unknown(self):
+        import urllib.error
+
+        def missing(path):
+            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+        kget = server.KUBE_HELPERS.kget   # put back by tearDown
+        server.KUBE_HELPERS.kget = lambda path: missing(path) if "kubevirt.io" in path else kget(path)
+        self.assertEqual([], self.rows()["scratch"]["used_by"])
 
 
 if __name__ == "__main__":

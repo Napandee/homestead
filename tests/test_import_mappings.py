@@ -1,6 +1,8 @@
 import copy
 import sys
 import unittest
+import urllib.error
+from unittest import mock
 from pathlib import Path
 
 
@@ -406,7 +408,12 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual("homestead-import-plex", created[-1]["metadata"]["name"])
 
     def test_a_claim_can_be_handed_over_after_the_fact(self):
-        result = imports.chown_claim("lab", "mosquitto-appdata", "1883", "")
+        def get(path):
+            if "/jobs/" in path:   # no earlier chown of this volume: the API says 404
+                raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+            return {"items": []}
+        with mock.patch.object(imports, "kget", get):
+            result = imports.chown_claim("lab", "mosquitto-appdata", "1883", "")
 
         job = self.bodies[-1]
         self.assertEqual("homestead-chown-mosquitto-appdata", job["metadata"]["name"])

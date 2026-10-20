@@ -326,7 +326,7 @@ _ACTIVE, _ACTIVE_LOCK = set(), threading.Lock()
 # Seams the tests replace.
 OPS_START = OPS.start
 OPS_RECORD = OPS.record_phase
-OPS_READ = OPS._read
+OPS_READ = OPS.stored
 POD = os.environ.get("HOSTNAME", "")
 SETTLE = 20          # seconds before the first look at a unit just started
 PROBE_EVERY = 30     # seconds between looks at the host while it reinstalls
@@ -419,6 +419,14 @@ def _prepare(op_id, ref):
             raise _Stopped()
         OPS_RECORD(op_id, ref.get("phase", "draining"), 15, f"Preparing {node}", worker=POD)
         if ref.get("phase", "draining") == "draining":
+            # Another change on the host refuses now, with its reason, rather
+            # than after a drain for nothing. The reinstall takes the lease
+            # itself when it starts (#597).
+            try:
+                hostrun.let_go(node, hostrun.hold(node, f"Make {node} a server"))
+            except HOSTRUN.Busy as error:
+                record("failed", 100, f"{node} was not changed: {error}"[:400])
+                return
             LIFECYCLE.set_cordon(node, True)
             LIFECYCLE.drain(node, include_system=True, wait=True,
                             progress=lambda phase, pct, msg: record("draining", 20, _drain_text(msg)))
@@ -427,7 +435,12 @@ def _prepare(op_id, ref):
         script = launch_script(op_id, len(token), promote_script(ref["version"], ref["server"], ref["args"]))
         record("launching", 40, f"Starting the reinstall on {node}", running_since=time.time())
         launching = True
-        out, err = hostrun.run(node, script, timeout=90, wait=60, stdin=token.encode())
+        try:
+            out, err = hostrun.run(node, script, timeout=90, wait=60, stdin=token.encode(),
+                                   change=f"Make {node} a server")
+        except HOSTRUN.Busy:
+            launching = False    # refused before anything ran there
+            raise
         if "STARTED" not in out:
             raise ValueError(f"the reinstall on {node} did not confirm it started: {(err or out)[-200:]}")
         record("running", 45, f"Reinstalling k3s on {node} as a server", running_since=time.time())

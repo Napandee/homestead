@@ -262,7 +262,8 @@ function placementSection(p, w, nodes, containers) {
             <option value="require" ${p.spread === "require" ? "selected" : ""}>require different hosts</option></select></div>
         <div class="f"><label>Preferred host ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
           <option value="">any host</option>
-          ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}</option>`).join("")}
+          ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}${n.schedulable === false ? " (not schedulable)" : ""}</option>`).join("")}
+          ${w.node && !(nodes || []).some(n => n.name === w.node) ? `<option value="${esc(w.node)}" selected>${esc(w.node)} (gone)</option>` : ""}
         </select></div></div></div>
     <div class="place-level"><div class="place-title">Other apps</div>
       <div class="place-grid two">
@@ -322,15 +323,19 @@ document.addEventListener("change", event => { if (event.target.closest(".placem
 window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  // Placement, storage, its neighbours and its address are built from these
+  // reads; a form built without one would save a change nobody made (#620).
   try {
-    const [w, liveNodes, options, others] = await Promise.all([
+    const [w, liveNodes, options, others, network] = await Promise.all([
       api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
-      loadHardwareFeatures().then(() => api("/api/nodes").catch(() => [])),
-      api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
-      STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => []),
+      loadHardwareFeatures().catch(e => { throw new Error(`Could not read the hardware features: ${e.message}`); })
+        .then(() => mustRead("/api/nodes", "the hosts")),
+      mustRead(`/api/deploy/options?ns=${encodeURIComponent(ns)}`, "the storage options"),
+      STATE.data.wl ? Promise.resolve(STATE.data.wl) : mustRead("/api/workloads", "the other apps"),
+      mustRead("/api/network", "the network"),
     ]);
-    const [vips, network] = await Promise.all([vipChoices(), api("/api/network").catch(() => null)]);
-    if (network) STATE.data.network = network;
+    const vips = await vipChoices(network);
+    STATE.data.network = network;
     EDIT_SAVE_UNCERTAIN = false;
     // What it uses now, beside what it reserves: with one container, all of it is that container's.
     const listed = (others || []).find(x => x.ns === ns && x.name === name);
@@ -338,7 +343,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
       nodes: nodes0(liveNodes).length };
     if (liveNodes.length) STATE.data.nodes = liveNodes;
-    const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false);
+    // Its own host stays on the list when cordoned, so Save does not unpin it.
+    const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false || n.name === w.node);
     const seeds = w.seed_configs || [];
     const containers = w.containers || [{ original_name: w.container_name || w.name, name: w.container_name || w.name,
       image: w.image, cpu: w.cpu, memory: w.memory, env: w.env || {}, env_refs: [], ports: w.ports || [],
@@ -395,6 +401,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
+    window.__editIsSelf = w.priority === "self";
     editPortsChanged();
     window.__editPortBaseline = editPortSignature();
     containerRemoveButtons();
@@ -542,7 +549,8 @@ window.editSave = async (ns, name) => {
   if ($("#e_lan_on")) body.lan = (access === "lan" || $("#e_lan_on").checked) && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
-  if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
+  // The app's own answer says whether it is Homestead; the list of apps may not have been read.
+  if ((window.__editIsSelf || (STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name)) && !body.autostart) {
     if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`, { title: "Turn autostart off", ok: "Stop Homestead", danger: true }))) return;
     body.confirm_self = true;
   }
@@ -971,10 +979,15 @@ function vmNetworkNote(opts, forVm = false) {
    Networks > VM Networks, so it shows there too. When made from a form that
    needed one, that form opens again with it to choose. */
 window.vmNetworkAdd = async (reopen = null) => {
-  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
+  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(e => ({ unread: e.message }));
   const back = reopen || window.__vmNetworkReopen || null;
   const o = opts.vm_network_options || {};
   const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
+  // Unread options are not "Multus is needed first" (#620).
+  if (opts.unread) {
+    open("New LAN network", UI.callout("bad", "Could not read the network options", esc(opts.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   if (!o.harvester && !o.multus) {
     open("New LAN network", `<div class="note"><b>Multus is needed first.</b> A container or VM joins the LAN as a second network,
         which Kubernetes does through Multus - k3s and RKE2 leave it out unless asked.</div>
@@ -1086,14 +1099,28 @@ window.vmNetChanged = () => {
 };
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
+  // A form built on invented options would offer classes, images and
+  // addresses that may not be there (#620). A read that only hides some
+  // choices (other namespaces, imported disks when none was chosen) is named
+  // on the form instead.
+  const missed = [];
+  const partly = (path, what, fallback) => api(path).catch(e => { missed.push(`Could not read ${what}: ${e.message}`); return fallback; });
+  let opts, disks, vipOptions, devices, namespaces;
+  try {
+    let network;
+    [opts, disks, devices, namespaces, network] = await Promise.all([
+      mustRead("/api/vm/create-options", "what a new VM can use"),
+      selectedDisk ? mustRead("/api/vm-disks", "the imported disks") : partly("/api/vm-disks", "the imported disks", []),
+      api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
+      partly("/api/namespaces", "the other namespaces", []),
+      mustRead("/api/network", "the network"),
+    ]);
+    vipOptions = await vipChoices(network);
+  } catch (e) {
+    modal("New virtual machine", UI.error(e, { retry: `vmNew(${jsArg(selectedDisk)},${jsArg(selectedNamespace)})`, dialog: true }));
+    return;
+  }
   window.__vmNetworkReopen = "vm";
-  const [opts, disks, vipOptions, devices, namespaces] = await Promise.all([
-    api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
-    api("/api/vm-disks").catch(() => []),
-    vipChoices(),
-    api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
-    api("/api/namespaces").catch(() => [defaultNamespace()]),
-  ]);
   // Imports are CDI DataVolumes, so without CDI there are none to attach.
   const readyDisks = opts.cdi ? disks.filter(d => d.phase === "Succeeded" && !d.in_use) : [];
   const selected = selectedDisk ? `disk:${selectedNamespace || defaultNamespace()}/${selectedDisk}` : "";
@@ -1174,7 +1201,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
-  modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
+  modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
     { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
     // The display and virtual devices, a step of their own as on the Edit dialog.
     ...(opts.hardware_base ? [{ title: "Display and devices", html: vmDisplayFields(opts.hardware_base) }] : []),
@@ -1485,13 +1512,23 @@ function jobNext(j) {
     ? `<span class="dim" data-tip="It runs on the host's clock, which the page cannot know. Saving it here pins it to UTC.">—</span>`
     : '<span class="dim">—</span>';
 }
+// A CronJob Homestead did not make (Helm, kubectl) is listed but not edited
+// here: a save would drop the volumes, env and account this page never shows.
+function jobOwner(j) {
+  if (j.managed !== false) return "";
+  return `<div class="dim xs" data-tip="Change it where it was made; Run now still works.">not made here · ${
+    j.managed_by ? `managed by ${esc(j.managed_by)}` : "read-only"}</div>`;
+}
+// The generation of the job the editor opened ("" for a new one): the
+// server refuses the save if its spec changed, or it appeared, since.
+let jobEditing = "";
 async function viewSchedules() {
   const js = await api("/api/schedules");
   paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · schedules in UTC, next runs in your time zone (${esc(yourZone())})`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
       <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>
-        <td><b>${esc(j.name)}</b></td>
+        <td><b>${esc(j.name)}</b>${jobOwner(j)}</td>
         <td class="small">${jobWhen(j)}</td>
         <td class="small">${jobNext(j)}</td>
         <td class="mono small dim">${esc(j.image)}</td>
@@ -1499,12 +1536,13 @@ async function viewSchedules() {
         <td>${j.suspend ? '<span class="pill low">paused</span>'
             : j.active ? '<span class="pill low">running</span>' : '<span class="pill ok">active</span>'}</td>
         <td data-actions>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
-          { label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
-          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
+          ...(j.managed === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
+          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }])], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
 }
 window.jobEdit = (j) => {
   j = j || { name: "", schedule: "0 3 * * *", image: "alpine:3.20", command: "" };
+  jobEditing = j.generation ?? "";
   modal(j.name ? "Edit · " + j.name : "New schedule", `
     <div class="f"><label>Name</label><input type="text" id="j_name" value="${esc(j.name)}" ${j.name ? "readonly" : ""} placeholder="nightly-prune"></div>
     ${scheduleBuilder(j.schedule, j.time_zone || "Etc/UTC")}
@@ -1519,7 +1557,8 @@ window.jobEdit = (j) => {
 };
 window.jobSave = async () => {
   const body = { name: $("#j_name").value.trim(), schedule: $("#lj_cron").value.trim(),
-    image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked };
+    image: $("#j_image").value.trim(), command: $("#j_cmd").value, suspend: $("#j_susp").checked,
+    generation: jobEditing };
   if (!body.name || !body.command) return toast("Name and command are required", "bad");
   try {
     await api("/api/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -1561,9 +1600,13 @@ function importProgressCell(job) {
 async function viewImport() {
   const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
   if (nodes.length) STATE.data.nodes = nodes;
+  // What could not be read is named on the page, and no class or namespace
+  // list is invented for the dialogs that use these (#620).
+  const missed = [];
+  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
   const [srcs, jobs, namespaces, storageClasses] = await Promise.all([
-    api("/api/sources"), api("/api/imports").catch(() => []),
-    api("/api/namespaces").catch(() => [defaultNamespace()]), api("/api/storageclasses").catch(() => ["longhorn-r2"]),
+    api("/api/sources"), part("/api/imports", "recent imports", []),
+    part("/api/namespaces", "namespaces", null), part("/api/storageclasses", "storage classes", null),
   ]);
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
@@ -1571,6 +1614,7 @@ async function viewImport() {
         { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
         // VM imports moved to their own page; this points there for a release or so.
         { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "Now under Virtual machines › Import" }])}`)}
+    ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
 
     <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
     ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>
@@ -1637,7 +1681,12 @@ function importSourceSteps() {
 window.importRemove = async (name, state, namespace = defaultNamespace()) => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, namespace }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
+    body: JSON.stringify({ name, namespace }) }).catch(e => ({ unread: e.message }));
+  // Without the plan there is nothing safe to offer: not "it created nothing" (#620).
+  if (plan.unread) {
+    modal(`Remove import · ${name}`, UI.callout("bad", "Could not check what this import created", esc(plan.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   if (plan.journalled) {
     modal(`Remove import Job · ${name}`, UI.lead("Remove the copy Job after a verified successful import. The app, Services and all volumes stay in place.") +
       UI.callout("info", "Incomplete import?", "Open Recent jobs → Inspect import. An active or uncertain copy cannot be removed here.") +
@@ -1692,6 +1741,11 @@ window.importRemoveNow = async (name, button, namespace = defaultNamespace()) =>
 };
 
 window.vmDiskImport = () => {
+  if (STATE.data.importStorageClasses === null || STATE.data.importNamespaces === null) {
+    modal("Import VM disk", UI.callout("bad", `Could not read the ${STATE.data.importStorageClasses === null ? "storage classes" : "namespaces"}`,
+      "Refresh the Import page and try again.") + UI.actions(UI.cancel("Close")));
+    return;
+  }
   const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = STATE.data.importStorageClasses || ["longhorn-r2"];
   modal("Import VM disk", `
@@ -1834,7 +1888,7 @@ window.srcBrowse = async name => {
   try {
     const [r, dc] = await Promise.all([
       api("/api/sources/browse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
-      api("/api/sources/containers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(() => ({ containers: [] })),
+      api("/api/sources/containers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).catch(e => ({ containers: [], unread: e.message })),
     ]);
     const src = (STATE.data.srcs || []).find(s => s.name === name) || {};
     const entries = r.entries.filter(e => !e.startsWith("==") && !/^(WARNING|Permission|Warning)/i.test(e));
@@ -1853,7 +1907,8 @@ window.srcBrowse = async name => {
              onclick="importSetup(${jsq(name)},${jsq(e)})">Import</button></div>`).join("")}</div>`
       : `<div class="empty">No appdata folders returned. Check the credentials and that
          <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`)
-      + (dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
+      + (dc.unread ? UI.callout("warn", `Could not list the Docker containers on ${name}`, `${esc(dc.unread)} Only its appdata folders are offered.`)
+        : dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
          appdata folders are offered. Check that Docker is running there and the SSH user may use it.</div>`);
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `srcBrowse(${jsArg(name)})`, dialog: true }); }
 };
@@ -2168,14 +2223,25 @@ window.importMappings = () => {
 };
 
 window.importSetup = async (source, dir, cfg = {}) => {
-  const importVips = await vipChoices();
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
   const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
-  const [storage, liveNodes] = await Promise.all([
-    api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(() => ({ pvcs: [], storage_classes: [] })),
-    api("/api/nodes").catch(() => [])]);
+  const [storage, liveNodes, importVips] = await Promise.all([
+    api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(e => ({ unread: e.message })),
+    api("/api/nodes").catch(() => []),
+    // ServiceLB puts it on every host's own address: there is no address to choose.
+    nodeAddressesOnly() ? null : vipChoices().catch(e => ({ unread: e.message }))]);
+  // An unread network is not "no addresses": the picker would offer only a new one (#620).
+  if (importVips?.unread) {
+    childModal("Import · " + dir, UI.error({ message: importVips.unread }, { title: "Could not open the import", dialog: true }));
+    return;
+  }
+  // No class list is not "pick none": the server would choose one (#620).
+  if (storage.unread) {
+    childModal("Import · " + dir, UI.callout("bad", "Could not read the storage options", esc(storage.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   if (liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
   // A container that mounts nothing needs no storage: the folders and volumes
@@ -2246,7 +2312,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   $("#im_steps").dataset.guard = "imStepGuard";
   if (keeps) $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
   $("#im_storage")?.addEventListener("input", importMapPicture);
-  vipChoices().then(choices => { const host = $("#im_vip_pick"); if (host) host.innerHTML = vipPicker("im", "", choices); });
+  if ($("#im_vip_pick")) $("#im_vip_pick").innerHTML = importVips ? vipPicker("im", "", importVips) : "";
   imSyncVolumes();
 };
 /* Another Homestead on the network. The destination pulls, so these
@@ -2740,14 +2806,22 @@ function movesHtml(moves) {
   }).join("");
 }
 
+/* A failed read of the moves is not "no moves": say so, with Retry. */
+function movesUnreadHtml(error) {
+  return `<div class="note bad">The moves could not be read: ${esc(error)}
+    <button class="btn sm" onclick="movesRepaint()">Retry</button></div>`;
+}
+window.movesUnreadHtml = movesUnreadHtml;
+
 /* Only the moves section repaints while one runs, so a form half-filled
    elsewhere on the page is left alone. */
 async function watchMoves() {
   clearTimeout(window.__moveTimer);
   if (!$("#movesList")) return;
-  const moves = await api("/api/move/moves").catch(() => null);
+  const moves = await api("/api/move/moves").catch(e => ({ error: e.message }));
   const host = $("#movesList");
-  if (moves && host) host.innerHTML = movesHtml(moves);
+  if (host) host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+  if (moves.error) return;
   if (window.applyRole) window.applyRole();
   if ((moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending)) window.__moveTimer = setTimeout(watchMoves, 4000);
 }
@@ -2925,7 +2999,9 @@ window.confirmImport = async () => {
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
 window.moveDismiss = async (id = "") => {
-  const all = await api("/api/move/moves").catch(() => []);
+  let all;
+  try { all = await api("/api/move/moves"); }
+  catch (e) { return toast(`The moves could not be read, so nothing was cleared: ${e.message}`, "bad"); }
   const failed = id ? all.find(m => m.id === id && m.status === "failed") : null;
   const rows = all.filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
   if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
@@ -2939,7 +3015,7 @@ window.moveDismiss = async (id = "") => {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");
     const host = $("#movesList");
-    if (host) host.innerHTML = movesHtml(await api("/api/move/moves").catch(() => []));
+    if (host) host.innerHTML = await api("/api/move/moves").then(movesHtml, e => movesUnreadHtml(e.message));
     if (window.applyRole) applyRole();
   } catch (e) { toast(e.message, "bad"); }
 };

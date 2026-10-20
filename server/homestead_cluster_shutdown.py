@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 import uuid
 
+import homestead_kube as KUBE
 import homestead_maintenance as M
 
 NAME = "homestead-cluster-shutdown"
@@ -46,17 +47,8 @@ def encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def optional(get, path):
-    try:
-        return get(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def inventory(get, path, optional_api=False):
-    value = optional(get, path) if optional_api else get(path)
+    value = KUBE.get_optional(path, read=get) if optional_api else get(path)
     if value is None:
         return []
     if not isinstance(value.get("items"), list) or value.get("metadata", {}).get("continue"):
@@ -158,11 +150,11 @@ class Shutdown:
         self.path = f"/api/v1/namespaces/{namespace}/secrets/{NAME}"
 
     def read(self):
-        journal = optional(self.get, self.path)
+        journal = KUBE.get_optional(self.path, read=self.get)
         if journal is None:
             # Never migrate power authority from the old, lower-trust journal.
             # An unfinished preview installation needs manual inspection first.
-            legacy = optional(self.get, f"/api/v1/namespaces/{self.ns}/configmaps/{NAME}")
+            legacy = KUBE.get_optional(f"/api/v1/namespaces/{self.ns}/configmaps/{NAME}", read=self.get)
             if legacy is not None:
                 raise ValueError("Legacy shutdown ConfigMap found; inspect and retire its helpers and journal from a cluster console before starting another shutdown")
             return None
@@ -421,7 +413,7 @@ class Shutdown:
         someone changed since is left as it is."""
         for ns, name, _ in plan.get("vms") or []:
             path = f"{VM_API}/namespaces/{ns}/virtualmachines/{name}"
-            vm = optional(self.get, path)
+            vm = KUBE.get_optional(path, read=self.get)
             notes = (vm or {}).get("metadata", {}).get("annotations") or {}
             if not vm or notes.get(HELD_BY) != run:
                 continue

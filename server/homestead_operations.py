@@ -6,12 +6,14 @@ restart cannot lose an in-flight image pull, rollout, import, migration, or
 backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
+import homestead_kube as KUBE
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_cdi_cleanup as CDI_CLEANUP
 from homestead_storage_journal import Held as StorageHeld
 import json
+import contextlib
 import copy
 import os
 import secrets
@@ -134,6 +136,43 @@ def _write(items):
         SHARED.write_json(os.path.join(DATA_DIR, LEGACY_STORE), legacy, durable=True, separators=(",", ":"))
         if not _initialized(LEGACY_MARKER):
             SHARED.write_json(os.path.join(DATA_DIR, LEGACY_MARKER), {"version": 1}, durable=True)
+
+
+def stored():
+    """The jobs as stored now, with every field: a strict read. A failed or
+    damaged store raises; it is never an empty list. It takes no lock - writes
+    replace the file whole, so a read sees one version or the next - as reads
+    outside a transaction always have. It always reads the file, so inside a
+    transaction it does not see that transaction's unsaved changes. (snapshot(),
+    further down, is what the page shows.)"""
+    return _read()
+
+
+class Transaction:
+    """The jobs, read on first use, while the lock is held; written only by save()."""
+    def __init__(self):
+        self._items = None
+
+    @property
+    def items(self):
+        if self._items is None:
+            self._items = _read()
+        return self._items
+
+    def save(self, items=None):
+        if items is not None:
+            self._items = items
+        _write(self.items)
+
+
+@contextlib.contextmanager
+def transaction():
+    """Check the store and act on it atomically, across replicas: the lock is
+    held for the whole block, re-entrantly. Nothing is written unless the
+    block calls save(); if the block raises, nothing is written and the lock
+    is released."""
+    with _lock:
+        yield Transaction()
 
 
 def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", unless=()):
@@ -297,68 +336,124 @@ def _public(item):
         out["cancellable"] = False
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = _dismissible(item)
-    if item.get("kind") == "disk-v2-convert":
-        out["disk_v2_preparation"] = True
-        out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("evacuating", "awaiting-erase", "cancelled")
-        out["cleanable"] = False
-    if item.get("kind") == "k3s-cluster":
-        out["tracking_only"] = True
-    if item.get("kind") == "auto-update":
-        ref = item.get("ref") or {}
-        out["auto_update"] = {"namespace": ref.get("namespace", ""), "name": ref.get("name", ""),
-                              "phase": ref.get("phase", ""), "snapshots": ref.get("snapshots") or []}
-    if item.get("kind") == "node-power":
-        ref = item.get("ref") or {}
-        out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
-                        "direct": bool(ref.get("planned_outage") or ref.get("forced")),
-                        "failed_phase": ref.get("failed_phase", ""),
-                        # Apps and VMs stopped to wait for the host, or VMs moved first.
-                        "holds": bool(ref.get("held")) or any(
-                            choice == "wait" or (choice == "move" and key.startswith("VirtualMachine/"))
-                            for key, choice in (ref.get("choices") or {}).items()),
-                        "held": len(ref.get("held") or []),
-                        "waiting": bool(ref.get("held")) and ref.get("restored") is None,
-                        "restored": ref.get("restored")}
-    if item.get("kind") == "set-restart":
-        ref = item.get("ref") or {}
-        out["cancellable"] = False  # the delete is done when the job starts
-        out["set_restart"] = {"node": ref.get("node", ""), "set": ref.get("name", ""),
-                              "started_by": ref.get("started_by", ""), "stage": ref.get("stage", "")}
-    if item.get("kind") == "vm-power":
-        out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
-        out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
-    if item.get("kind") in ("vm-create", "vm-edit", "import-create"):
-        out["cancellable"] = False  # a configuration write cannot be undone by forgetting its job
-        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
-    if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("dispatch_protocol") == 2:
-        out["cancellable"] = out["cleanable"] = False
-        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
-        out["batch_name"] = item["ref"]["name"]
-    if item.get("kind") == "snapshot-delete":
-        out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
-    if item.get("kind") in ("self-data-prepare", "host-console", "cluster-shutdown", "longhorn-v2-prepare"):
-        out["cancellable"] = out["cleanable"] = False
-    if item.get("kind") == "self-data-prepare":
-        from homestead_self_data_prepare import can_archive
-        out["preparation_archivable"] = can_archive(item)
-    if item.get("kind") == "workload-rename":
-        out["tracking_only"] = True
-        out["rename_recovery"] = True
-    if item.get("kind") in ("workload-copy", "restructure"):
-        out["tracking_only"] = True
-        out["copy_recovery"] = True
-    if item.get("kind") == "k3s-cluster" and item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
-        out["cancellable"] = False  # synchronous dispatch may still be in flight
     check = RESUMABLE.get(item.get("kind"))
     if item.get("status") == "failed" and check:
         try:
             out["resumable"] = not check(item)
         except Exception:
             out["resumable"] = False
-    if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
+    fields = VIEWS.get(item.get("kind"))
+    if fields:
+        fields(item, out)
+    return out
+
+
+def _view_disk_v2(item, out):
+    out["disk_v2_preparation"] = True
+    out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("evacuating", "awaiting-erase", "cancelled")
+    out["cleanable"] = False
+
+
+def _view_k3s_cluster(item, out):
+    out["tracking_only"] = True
+    if item.get("ref", {}).get("dispatch_protocol") == 2:
+        out["cancellable"] = out["cleanable"] = False
+        out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
+        out["batch_name"] = item["ref"]["name"]
+    if item.get("ref", {}).get("retain_resources") and item["ref"].get("phase") == "provisioning":
+        out["cancellable"] = False  # synchronous dispatch may still be in flight
+
+
+def _view_auto_update(item, out):
+    ref = item.get("ref") or {}
+    out["auto_update"] = {"namespace": ref.get("namespace", ""), "name": ref.get("name", ""),
+                          "phase": ref.get("phase", ""), "snapshots": ref.get("snapshots") or []}
+
+
+def _view_node_power(item, out):
+    ref = item.get("ref") or {}
+    out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
+                    "direct": bool(ref.get("planned_outage") or ref.get("forced")),
+                    "failed_phase": ref.get("failed_phase", ""),
+                    # Apps and VMs stopped to wait for the host, or VMs moved first.
+                    "holds": bool(ref.get("held")) or any(
+                        choice == "wait" or (choice == "move" and key.startswith("VirtualMachine/"))
+                        for key, choice in (ref.get("choices") or {}).items()),
+                    "held": len(ref.get("held") or []),
+                    "waiting": bool(ref.get("held")) and ref.get("restored") is None,
+                    "restored": ref.get("restored")}
+
+
+def _view_set_restart(item, out):
+    ref = item.get("ref") or {}
+    out["cancellable"] = False  # the delete is done when the job starts
+    out["set_restart"] = {"node": ref.get("node", ""), "set": ref.get("name", ""),
+                          "started_by": ref.get("started_by", ""), "stage": ref.get("stage", "")}
+
+
+def _view_vm_power(item, out):
+    out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
+    out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")
+
+
+def _view_mutation(item, out):
+    out["cancellable"] = False  # a configuration write cannot be undone by forgetting its job
+    out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
+
+
+def _view_snapshot_delete(item, out):
+    out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
+
+
+def _view_not_cancellable(item, out):
+    out["cancellable"] = out["cleanable"] = False
+
+
+def _view_self_data_prepare(item, out):
+    from homestead_self_data_prepare import can_archive
+    out["cancellable"] = out["cleanable"] = False
+    out["preparation_archivable"] = can_archive(item)
+
+
+def _view_rename(item, out):
+    out["tracking_only"] = True
+    out["rename_recovery"] = True
+
+
+def _view_copy(item, out):
+    out["tracking_only"] = True
+    out["copy_recovery"] = True
+
+
+def _view_reclass(item, out):
+    if "storage_protocol" in item.get("ref", {}):
         out.update(cancellable=False, cleanable=False, resumable=False,
                    storage_recovery=item["ref"]["storage_protocol"] == 1 and item["ref"].get("handoff_phase") != "done")
-    return out
+
+
+# What each kind adds to the shared part of the tray's view: kind ->
+# function(item, out), run last, after "resumable" is set. These were branches
+# of _public; they move to the modules that own each kind later (#622).
+VIEWS = {
+    "disk-v2-convert": _view_disk_v2,
+    "k3s-cluster": _view_k3s_cluster,
+    "auto-update": _view_auto_update,
+    "node-power": _view_node_power,
+    "set-restart": _view_set_restart,
+    "vm-power": _view_vm_power,
+    "vm-create": _view_mutation,
+    "vm-edit": _view_mutation,
+    "import-create": _view_mutation,
+    "snapshot-delete": _view_snapshot_delete,
+    "self-data-prepare": _view_self_data_prepare,
+    "host-console": _view_not_cancellable,
+    "cluster-shutdown": _view_not_cancellable,
+    "longhorn-v2-prepare": _view_not_cancellable,
+    "workload-rename": _view_rename,
+    "workload-copy": _view_copy,
+    "restructure": _view_copy,
+    "reclass": _view_reclass,
+}
 
 
 def _receipt_needed(item):
@@ -571,7 +666,7 @@ def _backup(item):
 def _volume_restore(item):
     ref = item["ref"]
     namespace, name = ref["namespace"], ref["name"]
-    pvc = _get_or_none(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}", read=kget)
     if pvc is None:
         return "failed", 0, "The destination PVC no longer exists"
     pvc_status = pvc.get("status", {}) or {}
@@ -581,15 +676,15 @@ def _volume_restore(item):
     pv_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
     if not pv_name:
         return "running", 8, "Provisioning the destination PVC"
-    pv = _get_or_none(f"/api/v1/persistentvolumes/{pv_name}")
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget)
     if pv is None:
         return "running", 12, "Waiting for the restored persistent volume"
     csi = (pv.get("spec", {}) or {}).get("csi", {}) or {}
     volume_name = csi.get("volumeHandle", "")
     if not volume_name:
         return "failed", 12, "The provisioned PV is not a Longhorn CSI volume"
-    volume = _get_or_none(
-        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{volume_name}")
+    volume = KUBE.get_optional(
+        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{volume_name}", read=kget)
     if volume is None:
         return "running", 16, "Waiting for Longhorn to create the volume"
     status = volume.get("status", {}) or {}
@@ -659,19 +754,10 @@ def _image_cleanup(item):
     return "running", progress, f"Image removed from {complete}/{len(pods)} nodes"
 
 
-def _get_or_none(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _volume_delete(item):
     ref = item["ref"]
-    pvc = None if ref.get("orphan") else _get_or_none(
-        f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+    pvc = None if ref.get("orphan") else KUBE.get_optional(
+        f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=kget)
     if pvc is not None:
         deleting = bool((pvc.get("metadata", {}) or {}).get("deletionTimestamp"))
         return "running", 35 if deleting else 15, (
@@ -679,11 +765,11 @@ def _volume_delete(item):
     if ref.get("action") == "delete_claim":
         return "succeeded", 100, "Claim deleted; backing data retained"
 
-    pv = _get_or_none(f"/api/v1/persistentvolumes/{ref['pv']}") if ref.get("pv") else None
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{ref['pv']}", read=kget) if ref.get("pv") else None
     if pv is not None:
         return "running", 70, "Claim deleted; removing the backing persistent volume"
-    volume = (_get_or_none(
-        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{ref['volume']}")
+    volume = (KUBE.get_optional(
+        f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{ref['volume']}", read=kget)
               if ref.get("volume") else None)
     if volume is not None:
         return "running", 90, "Persistent volume deleted; Longhorn is removing replica data"
@@ -940,6 +1026,37 @@ def _cancel_stale(item):
     return time.time() - started > CANCEL_RETRY_AFTER
 
 
+def _block_self_data_handoff(item):
+    return "A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained."
+
+
+def _block_reclass(item):
+    if "storage_protocol" in item.get("ref", {}):
+        return "Use the storage move review to pause safely; cancelling must not roll back or delete retained data"
+    return ""
+
+
+def _block_longhorn_v2_prepare(item):
+    return "Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log"
+
+
+def _block_snapshot_delete(item):
+    return "Longhorn snapshot removal cannot be undone or safely cancelled"
+
+
+# Why a kind's job cannot be cancelled where it is: kind -> function(item)
+# returning the reason, or "" when it can be. Checked after the import's CDI
+# receipt and before the kind's own canceller plans anything. These were
+# branches of _plan_for; they move to the modules that own each kind later
+# (#622).
+CANCEL_BLOCKS = {
+    "self-data-handoff": _block_self_data_handoff,
+    "reclass": _block_reclass,
+    "longhorn-v2-prepare": _block_longhorn_v2_prepare,
+    "snapshot-delete": _block_snapshot_delete,
+}
+
+
 def _plan_for(item):
     plan = {"mode": "forget", "can": True, "why_not": "", "undo": [], "severity": "low",
             "keeps": ["Homestead has no way to stop this kind of job: it carries on in Kubernetes "
@@ -949,17 +1066,10 @@ def _plan_for(item):
     if item.get("ref", {}).get("cdi_cleanup") and item.get("kind") not in CDI_CANCELLABLE:
         plan.update(can=False, why_not="The import must finish reclaiming its temporary storage before its job can be dismissed.")
         return plan
-    if item.get("kind") == "self-data-handoff":
-        plan.update(can=False, why_not="A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained.")
-        return plan
-    if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
-        plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
-        return plan
-    if item.get("kind") == "longhorn-v2-prepare":
-        plan.update(can=False, why_not="Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log")
-        return plan
-    if item.get("kind") == "snapshot-delete":
-        plan.update(can=False, why_not="Longhorn snapshot removal cannot be undone or safely cancelled")
+    block = CANCEL_BLOCKS.get(item.get("kind"))
+    why_not = block(item) if block else ""
+    if why_not:
+        plan.update(can=False, why_not=why_not)
         return plan
     if entry:
         plan.update(entry[0](item) or {})

@@ -118,7 +118,7 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
             # again now. The host stays cordoned, so an app tied to it waits
             # for scheduling to be allowed.
             restored = {}
-            held = next((((i.get("ref") or {}).get("held") or []) for i in OPS._read() if i.get("id") == operation_id), [])
+            held = next((((i.get("ref") or {}).get("held") or []) for i in OPS.stored() if i.get("id") == operation_id), [])
             if held:
                 try:
                     started, left = HOLD.restore(held, operation_id)
@@ -251,8 +251,8 @@ def allow_scheduling(item):
 
 def release_held_power(operation_id):
     """Start what waits for a host on other hosts now, without waiting for it."""
-    with OPS._lock:
-        items = OPS._read()
+    with OPS.transaction() as t:
+        items = t.items
         item = next((i for i in items if i.get("id") == operation_id), None)
         if not item or item.get("kind") != "node-power":
             raise ValueError("host power job not found")
@@ -262,7 +262,7 @@ def release_held_power(operation_id):
         if ref.get("phase") not in ("observing",):
             raise ValueError("wait until the power command has been sent")
         restore_held(item, uncordon=False)
-        OPS._write(items)
+        t.save(items)
     return {"ok": True, "detail": "Started again: " + (", ".join(ref["restored"]["started"]) or "nothing")}
 
 
@@ -433,7 +433,7 @@ def rollout_power_job(node, since):
     """A restart of this host started since the rollout began and not failed:
     the one a drained leader left running."""
     # The stored records: the public list leaves each job's ref out.
-    for item in OPS._read():
+    for item in OPS.stored():
         ref = item.get("ref") or {}
         if (item.get("kind") == "node-power" and ref.get("node") == node and ref.get("action") == "reboot"
                 and float(ref.get("started_epoch") or 0) >= float(since or 0)

@@ -1,41 +1,34 @@
-"""Which namespaces are yours, and making and removing them."""
+"""Which namespaces are yours, and making and removing them. Runs on the
+shared fake API (tests/fakes/kube.py)."""
 import sys
 import unittest
-import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_kube as K
 import homestead_namespaces as ns
+from fakes.kube import Kube
+
+# The kinds a namespace's contents are counted by, as the API serves them.
+KINDS = {"persistentvolumeclaims": ("v1", "PersistentVolumeClaim"), "pods": ("v1", "Pod"),
+         "cronjobs": ("batch/v1", "CronJob"), "daemonsets": ("apps/v1", "DaemonSet"),
+         "datavolumes": ("cdi.kubevirt.io/v1beta1", "DataVolume"),
+         "virtualmachines": ("kubevirt.io/v1", "VirtualMachine")}
+PATHS = {"persistentvolumeclaims": "/api/v1/namespaces/{}/persistentvolumeclaims",
+         "cronjobs": "/apis/batch/v1/namespaces/{}/cronjobs"}
 
 
 def namespace(name, annotations=None):
-    return {"metadata": {"name": name, "annotations": annotations or {}}, "status": {"phase": "Active"}}
+    return {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": name, "annotations": annotations or {}},
+            "status": {"phase": "Active"}}
 
 
-class Cluster:
-    def __init__(self, names, contents=None, failing=(), missing=()):
-        self.items = [namespace(n) for n in names]
-        self.contents = contents or {}
-        self.failing, self.missing = failing, missing
-        self.sent = []
-
-    def get(self, path):
-        if path == "/api/v1/namespaces":
-            return {"items": self.items}
-        for kind in self.failing:
-            if path.endswith("/" + kind):
-                raise urllib.error.HTTPError(path, 500, "busy", {}, None)
-        for kind in self.missing:
-            if path.endswith("/" + kind):
-                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-        for (kind, name), items in self.contents.items():
-            if f"/namespaces/{name}/{kind}" in path:
-                return {"items": items if isinstance(items, list) else [{}] * items}
-        return {"items": []}
-
-    def send(self, method, path, body=None):
-        self.sent.append((method, path, body))
-        return {}
+def contents(kind, name, items):
+    version, kind_name = KINDS[kind]
+    rows = items if isinstance(items, list) else [{"metadata": {"name": f"{kind}-{i}"}} for i in range(items)]
+    return [dict(row, apiVersion=version, kind=kind_name, metadata=dict(row["metadata"], namespace=name))
+            for row in rows]
 
 
 HARVESTER = ["default", "lab", "media", "kube-system", "cattle-system", "harvester-system", "longhorn-system",
@@ -44,9 +37,23 @@ HARVESTER = ["default", "lab", "media", "kube-system", "cattle-system", "harvest
 
 
 class NamespaceTests(unittest.TestCase):
-    def use(self, names=HARVESTER, contents=None, **kw):
-        self.cluster = Cluster(names, contents, **kw)
-        ns.bind(self.cluster.get, self.cluster.send, "lab", "lab")
+    def use(self, names=HARVESTER, contents_of=None, failing=(), missing=()):
+        objects = [namespace(n) for n in names]
+        for (kind, name), items in (contents_of or {}).items():
+            objects += contents(kind, name, items)
+        absent = [KINDS[kind][0].split("/")[0] for kind in missing]
+        self.kube = self.enterContext(Kube(*objects, absent_groups=absent))
+        # A short API error on a kind, in every namespace.
+        for kind in failing:
+            for name in names:
+                self.kube.fail(PATHS[kind].format(name), 500, times=99)
+        saved = tuple(getattr(ns, name, None) for name in ("kget", "ksend", "DEFAULT_NS", "OWN_NS"))
+        self.addCleanup(ns.bind, *saved)
+        ns.bind(K.kget, K.ksend, "lab", "lab")
+
+    def deletes(self):
+        # The body too: a delete sent with a body (a dry run, say) is not the delete.
+        return [write[:3] for write in self.kube.writes if write[0] == "DELETE"]
 
     def test_pickers_offer_only_places_for_apps(self):
         self.use()
@@ -59,16 +66,17 @@ class NamespaceTests(unittest.TestCase):
     def test_a_namespace_is_made_and_labelled(self):
         self.use()
         ns.create("Photos")
-        method, path, body = self.cluster.sent[-1]
+        method, path, body, _ = self.kube.writes[-1]
         self.assertEqual(("POST", "/api/v1/namespaces", "photos"), (method, path, body["metadata"]["name"]))
         self.assertEqual("true", body["metadata"]["labels"]["homestead.io/managed"])
+        self.assertIsNotNone(self.kube.object("/api/v1/namespaces/photos"))
         for bad in ("kube-thing", "cattle-x", "p-abcde", "no_underscores", ""):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
                     ns.create(bad)
 
     def test_only_an_empty_namespace_of_yours_goes_and_only_when_named(self):
-        self.use(contents={("persistentvolumeclaims", "media"): 2})
+        self.use(contents_of={("persistentvolumeclaims", "media"): 2})
         for name, reason in (("lab", "default"), ("kube-system", "platform"), ("media", "2 volumes"),
                              ("default", "Kubernetes")):
             with self.subTest(name):
@@ -78,32 +86,35 @@ class NamespaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "type old"):
             ns.delete("old", "")
         ns.delete("old", "old")
-        self.assertEqual(("DELETE", "/api/v1/namespaces/old", None), self.cluster.sent[-1])
+        self.assertEqual([("DELETE", "/api/v1/namespaces/old", None)], self.deletes())
+        self.assertIsNone(self.kube.object("/api/v1/namespaces/old"))
 
     def test_a_failed_count_refuses_the_delete(self):
         # A short API error must not read as "no volumes here" (#599).
         self.use(names=["lab", "old"], failing=("persistentvolumeclaims",))
         with self.assertRaisesRegex(ValueError, "could not check volumes in old, so nothing was deleted"):
             ns.delete("old", "old")
-        self.assertEqual([], [s for s in self.cluster.sent if s[0] == "DELETE"])
+        self.assertEqual([], self.deletes())
 
     def test_an_api_the_cluster_does_not_have_counts_as_none(self):
         self.use(names=["lab", "old"], missing=("virtualmachines", "datavolumes"))
         ns.delete("old", "old")
-        self.assertEqual(("DELETE", "/api/v1/namespaces/old", None), self.cluster.sent[-1])
+        self.assertEqual([("DELETE", "/api/v1/namespaces/old", None)], self.deletes())
 
     def test_a_cronjob_a_daemonset_a_disk_or_a_bare_pod_is_not_empty(self):
         bare = {"metadata": {"name": "debug"}, "status": {"phase": "Running"}}
-        owned = {"metadata": {"name": "web-1", "ownerReferences": [{"kind": "ReplicaSet"}]}, "status": {"phase": "Running"}}
+        owned = {"metadata": {"name": "web-1", "ownerReferences": [{"kind": "ReplicaSet", "name": "web", "uid": "rs1"}]},
+                 "status": {"phase": "Running"}}
         done = {"metadata": {"name": "once"}, "status": {"phase": "Succeeded"}}
         for kind, items, said in (("cronjobs", 1, "1 scheduled job"), ("daemonsets", 1, "1 daemon set"),
                                   ("datavolumes", 1, "1 VM disk"), ("pods", [bare, owned, done], "1 running pod")):
             with self.subTest(kind):
-                self.use(names=["lab", "old"], contents={(kind, "old"): items})
+                self.use(names=["lab", "old"], contents_of={(kind, "old"): items})
                 with self.assertRaisesRegex(ValueError, said):
                     ns.delete("old", "old")
-        self.use(names=["lab", "old"], contents={("pods", "old"): [owned, done]})
+        self.use(names=["lab", "old"], contents_of={("pods", "old"): [owned, done]})
         ns.delete("old", "old")
+        self.assertEqual([("DELETE", "/api/v1/namespaces/old", None)], self.deletes())
 
     def test_the_inventory_says_what_it_could_not_read_and_offers_no_delete(self):
         self.use(names=["lab", "old"], failing=("cronjobs",))

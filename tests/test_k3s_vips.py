@@ -80,6 +80,7 @@ class K3sVipServiceTests(unittest.TestCase):
     def setUp(self):
         base = test_networking.NetworkingTests("setUp")
         base.setUp()
+        self.addCleanup(base.doCleanups)
         self.sent, self.objects = base.sent, base.objects
         node = "192.0.2.210"
         homestead = self.objects["/api/v1/services"]["items"][0]

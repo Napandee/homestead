@@ -35,6 +35,7 @@ import hashlib
 import json
 import re
 import time
+import urllib.error
 
 import homestead_operations as OPS
 import homestead_routes as ROUTER
@@ -44,6 +45,10 @@ platform = lambda force=False: {}
 BOND = "bond0"
 ROLLBACK_SECONDS = 240
 LACP_WAIT = 60
+# How long a change holds its host (homestead_hostrun.hold) if its job never
+# ends: past the rollback, the LACP wait and a k3s restart. The job lets go
+# when it ends (#597).
+HOLD_SECONDS = ROLLBACK_SECONDS + LACP_WAIT + 600
 BACKUP_ROOT = "/var/lib/homestead"
 KIND = "host-bond"
 UNIT = "homestead-bond-rollback"
@@ -493,16 +498,25 @@ def start(node, req, ops, busy=None, servers_ready=None):
     if req.get("digest") and req["digest"] != p["digest"]:
         raise ValueError(f"{node}'s network changed since this was reviewed: review it again")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out, err = hostrun.run(node, change_script(p["spec"], stamp), timeout=120)
+    what = {"create": f"Bond {' + '.join(p['members'])} on {node}", "change": f"Change {p['bond']} on {node}",
+            "remove": f"Remove {p['bond']} on {node}, back to {p['keep']}"}[p["action"]]
+    # The host is held until the job ends, not just for this run: netplan
+    # applies after it, and the network may yet roll back.
+    lease = hostrun.hold(node, what, seconds=HOLD_SECONDS)
+    try:
+        out, err = hostrun.run(node, change_script(p["spec"], stamp), timeout=120, change=what, holder=lease)
+    except Exception:
+        hostrun.let_go(node, lease)
+        raise
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
     if not done:
+        hostrun.let_go(node, lease)
         reason = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
         raise ValueError(f"{node} was not changed: {reason}")
     ref = {"node": node, "action": p["action"], "bond": p["bond"], "members": p["members"], "mode": p["mode"],
            "carries_on": p["carries_on"], "address": p["address"], "renamed": p["renamed"], "backup": done[3:],
-           "services": facts.get("services") or [], "stage": "applied", "since": time.time()}
-    what = {"create": f"Bond {' + '.join(p['members'])} on {node}", "change": f"Change {p['bond']} on {node}",
-            "remove": f"Remove {p['bond']} on {node}, back to {p['keep']}"}[p["action"]]
+           "services": facts.get("services") or [], "stage": "applied", "since": time.time(),
+           "change": what, "lease": lease}
     return ops.start(KIND, what, {"kind": "Node", "name": node}, f"/nodes?node={node}&section=network", ref,
                      f"Applied; checking {node} - it puts its old network back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
 
@@ -515,7 +529,30 @@ def _node_count():
 
 
 def status(item, now=None):
-    """The job's next step: (status, progress, message)."""
+    """The job's next step: (status, progress, message). The host is let go
+    of when the job ends."""
+    try:
+        result = _step(item, now)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:    # the job fails on it (homestead_operations)
+            _let_go(item["ref"])
+        raise
+    if result[0] in ("succeeded", "failed"):
+        _let_go(item["ref"])
+    return result
+
+
+def _let_go(ref):
+    if ref.get("lease"):
+        hostrun.let_go(ref["node"], ref.pop("lease"))
+
+
+def _held(ref):
+    """What a follow-up change runs with: inside the job's hold."""
+    return {"change": ref.get("change") or f"Network change on {ref['node']}", "holder": ref.get("lease", "")}
+
+
+def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
     if ref["stage"] == "applied":
@@ -538,11 +575,11 @@ def status(item, now=None):
             if needs_partner and "PARTNER" not in words:
                 if elapsed < LACP_WAIT + 15:
                     return "running", 40, f"{node} is up on {ref['bond']}; waiting for the switch to answer LACP"
-                hostrun.run(node, ROLLBACK_NOW, timeout=30)
+                hostrun.run(node, ROLLBACK_NOW, timeout=30, **_held(ref))
                 ref.update(stage="rolled-back", since=now)
                 return ("running", 60, f"The switch did not answer LACP on {ref['bond']} in {LACP_WAIT} seconds, so {node} "
                         "is putting its old network back now")
-            out, _ = hostrun.run(node, CONFIRM_SCRIPT, timeout=45)
+            out, _ = hostrun.run(node, CONFIRM_SCRIPT, timeout=45, **_held(ref))
             if "CONFIRMED" not in out:
                 return "running", 50, f"{node} is up; confirming"
             ref.update(stage="confirmed", since=now)
@@ -576,7 +613,8 @@ def status(item, now=None):
             pass
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
         if service and _node_count() > 1:
-            hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45)
+            hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                        **_held(ref))
             ref.update(stage="restarting", since=now)
             return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
         ref.update(stage="done")
@@ -639,3 +677,25 @@ ROUTES = {
     ("POST", "/api/node/bond/preview"): ("admin", lambda request: review(request.body)),
     ("POST", "/api/node/bond"): ("admin", lambda request: change(request.body)),
 }
+
+
+def cancel_plan(item):
+    """Stopping tracking it also lets go of the host, so other changes there
+    need not wait for the hold to run out (#597)."""
+    node = item["ref"]["node"]
+    return {"mode": "forget", "needs": "admin",
+            "keeps": [f"The change carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
+                      f"Other changes on {node} can start again at once"]}
+
+
+def cancel_run(item, options):
+    _let_go(item["ref"])
+    return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
+
+
+
+
+def register(ops):
+    """The job store's entry for a host's bond (#622)."""
+    ops.RESOLVERS[KIND] = status
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

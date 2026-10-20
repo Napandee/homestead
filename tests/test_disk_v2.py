@@ -18,6 +18,7 @@ import homestead_disk_v2 as V
 import homestead_disks as DISKS
 import homestead_operations as OPS
 import homestead_storage_conflicts as CONFLICTS
+from fakes.job_store import JobStore
 
 GB = 1024 ** 3
 READY = [{'type': 'Ready', 'status': 'True'}, {'type': 'Schedulable', 'status': 'True'}]
@@ -26,7 +27,7 @@ HOST_FACTS = '\n'.join(['DEVICE /dev/sdb', 'SIZE ' + str(1000 * GB), 'UUID fs-da
     'CONFIG {"diskUUID":"disk-source-uuid"}', 'END'])
 
 
-class Operations:
+class Operations(JobStore):
     TERMINAL = OPS.TERMINAL
     def __init__(self): self.items = []; self._lock = threading.RLock()
     def _read(self): return copy.deepcopy(self.items)
@@ -105,7 +106,7 @@ class Cluster:
             return {'items': [{'metadata': {'name': 'helper', 'ownerReferences': [{'uid': job['metadata']['uid']}]}} for job in self.jobs.values()]}
         raise urllib.error.HTTPError(path, 404, 'missing', None, None)
     def send(self, method, path, body, **options):
-        assert self.ops._read(), 'The approval must be durable before any mutation'
+        assert self.ops.stored(), 'The approval must be durable before any mutation'
         self.writes.append((method, path, copy.deepcopy(body)))
         if '/nodes/' in path:
             obj = self.lh[path.rsplit('/', 1)[1]]
@@ -135,7 +136,7 @@ class Cluster:
     def start(self, plan=None):
         plan = plan or self.review()
         return V.start({k: plan[k] for k in ('node', 'disk', 'request_id', 'capacity_token')} | {'confirm_capacity': True})
-    def tick(self): return V.status(self.ops._read()[0]['id'])
+    def tick(self): return V.status(self.ops.stored()[0]['id'])
     def evacuate(self):
         for replica in self.replicas:
             if replica['spec']['nodeID'] == 'node-1':
@@ -143,7 +144,7 @@ class Cluster:
         self.lh['node-1']['status']['diskStatus']['data']['scheduledReplica'] = {}
     def awaiting(self): self.start(); self.tick(); self.evacuate(); return self.tick()
     def prepare(self):
-        review = V.prepare_review(self.ops._read()[0]['id'])
+        review = V.prepare_review(self.ops.stored()[0]['id'])
         body = {k: review[k] for k in ('operation_id', 'request_id', 'capacity_token')}
         body.update(confirm_capacity=True, confirm_device=review['device'])
         return V.prepare(body), body
@@ -318,7 +319,7 @@ class DiskV2Tests(unittest.TestCase):
         item = self.c.tick(); self.assertEqual(item['status'], 'failed'); self.assertFalse(item['dismissible'])
         with self.assertRaises(ValueError): V.mutation_guard('node-1', 'data')
         V.mutation_guard('node-2', 'data')
-        for kind, ref in [('node-power', {'node': 'node-1'}), ('longhorn-v2-upgrade', {}), ('snapshot-delete', {'volume': 'volume-data'})]:
+        for kind, ref in [('node-power', {'node': 'node-1'}), ('platform-upgrade', {'component': 'longhorn'}), ('snapshot-delete', {'volume': 'volume-data'})]:
             with self.subTest(kind=kind), self.assertRaises(ValueError): CONFLICTS.require_clear(self.c.ops.items, kind, ref)
         self.assertEqual(V.logs(self.c.ops.items[0])[0]['text'], 'fixture helper output')
     def test_other_disk_actions_share_the_lock_and_cannot_change_reviewed_device(self):
@@ -367,7 +368,7 @@ class DiskV2Tests(unittest.TestCase):
                 # Every read is a deserialized record; no in-memory coordinator survives.
                 self.assertEqual(V.status(operation_id)['phase'], phase)
             self.assertEqual(sum(method == 'POST' for method, _, _ in self.c.writes), 1)
-            saved = OPS._read()[0]; saved['ref']['phase'] = 'complete'; OPS.checkpoint(saved)
+            saved = OPS.stored()[0]; saved['ref']['phase'] = 'complete'; OPS.checkpoint(saved)
             self.assertEqual(V.status(operation_id)['status'], 'succeeded')
 
 

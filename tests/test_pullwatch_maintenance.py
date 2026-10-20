@@ -12,6 +12,7 @@ import homestead_names as names
 import homestead_pullwatch as pull
 import homestead_runtime as runtime
 import homestead_imports as imports
+from fakes.platform import plain_platform
 from test_cluster_shutdown import Fake
 import test_node_power_plan as power_fixtures
 
@@ -104,6 +105,7 @@ class PullWatchDrainTests(unittest.TestCase):
 
 class AllMaintenanceHelpersTests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         patch = mock.patch.object(pull, "NS", "lab")
         patch.start()
         self.addCleanup(patch.stop)
@@ -199,6 +201,7 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
 
 class PullWatchLifecycleTests(unittest.TestCase):
     def setUp(self):
+        plain_platform(self)
         import tempfile
         for field, value in (("NS", "lab"), ("_ASKED", {}), ("_SHARED_AT", {}), ("_LAYERS", {}),
                              ("DATA_DIR", tempfile.mkdtemp())):

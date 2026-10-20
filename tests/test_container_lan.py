@@ -1,40 +1,48 @@
-import json, sys, unittest, urllib.error
+"""A container's own LAN network. Runs on the shared fake API (tests/fakes/kube.py)."""
+import json, sys, unittest
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_kube as K
 import homestead_lan as LAN
+from fakes.kube import Kube
 
-BASE = "/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions/vlan1"
 OWN = "/apis/k8s.cni.cncf.io/v1/namespaces/lab/network-attachment-definitions/zigbee2mqtt-lan"
-VLAN1 = {"metadata": {"name": "vlan1"}, "spec": {"config": json.dumps(
+
+
+def nad(name, namespace, config=None, **meta):
+    body = {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
+            "metadata": dict(meta, name=name, namespace=namespace)}
+    if config is not None:
+        body["spec"] = {"config": json.dumps(config)}
+    return body
+
+
+VLAN1 = nad("vlan1", "default",
     {"cniVersion": "0.3.1", "name": "vlan1", "type": "bridge", "bridge": "mgmt-br", "promiscMode": True,
-     "vlan": 1, "ipam": {}})}}
+     "vlan": 1, "ipam": {}})
 WANTED = {"network": "default/vlan1", "address": "192.0.2.70", "prefix": 24, "gateway": "192.0.2.1"}
-
-
-class Cluster:
-    def __init__(self):
-        self.objects, self.sent = {BASE: VLAN1}, []
-        LAN.bind(self.get, self.send)
-
-    def get(self, path):
-        if path in self.objects:
-            return self.objects[path]
-        raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-
-    def send(self, method, path, body=None, **kw):
-        self.sent.append((method, path, body))
-        return body
 
 
 class ContainerLanTests(unittest.TestCase):
     """A Harvester VM network gives no addresses, so a container on it needs
     a network of its own holding its one address."""
 
+    def cluster(self):
+        kube = self.enterContext(Kube(VLAN1))
+        self.addCleanup(LAN.bind, getattr(LAN, "kget", None), getattr(LAN, "ksend", None))
+        LAN.bind(K.kget, K.ksend)
+        return kube
+
+    @staticmethod
+    def sent(kube):
+        return [write[:3] for write in kube.writes]
+
     def test_its_own_network_copies_the_bridge_with_a_static_address(self):
-        c = Cluster()
+        kube = self.cluster()
         LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(WANTED))
-        method, path, body = c.sent[0]
+        method, path, body = self.sent(kube)[0]
         self.assertEqual(("POST", "/apis/k8s.cni.cncf.io/v1/namespaces/lab/network-attachment-definitions"), (method, path))
         config = json.loads(body["spec"]["config"])
         self.assertEqual(("bridge", "mgmt-br", 1, "zigbee2mqtt-lan"), (config["type"], config["bridge"], config["vlan"], config["name"]))
@@ -42,11 +50,12 @@ class ContainerLanTests(unittest.TestCase):
                          config["ipam"])
 
     def test_changing_the_address_updates_its_network(self):
-        c = Cluster()
-        c.objects[OWN] = {"metadata": {"name": "zigbee2mqtt-lan", "resourceVersion": "7"}}
+        kube = self.cluster()
+        kube.add(nad("zigbee2mqtt-lan", "lab", resourceVersion="7", labels={"app": "zigbee2mqtt"}))
         LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(dict(WANTED, address="192.0.2.71")))
-        method, path, body = c.sent[0]
+        method, path, body = self.sent(kube)[0]
         self.assertEqual(("PUT", OWN, "7"), (method, path, body["metadata"]["resourceVersion"]))
+        self.assertEqual("192.0.2.71/24", json.loads(kube.object(OWN)["spec"]["config"])["ipam"]["addresses"][0]["address"])
 
     def test_the_pod_joins_it_as_a_second_interface(self):
         dep = {"metadata": {"name": "zigbee2mqtt"}, "spec": {"template": {"metadata": {}, "spec": {}}}}
@@ -59,16 +68,16 @@ class ContainerLanTests(unittest.TestCase):
         self.assertIsNone(LAN.read(dep))
 
     def test_only_a_network_on_the_lan_can_give_an_address(self):
-        c = Cluster()
-        c.objects[BASE] = {"spec": {"config": json.dumps({"type": "host-device", "device": "eth1"})}}
+        kube = self.cluster()
+        kube.add(nad("vlan1", "default", {"type": "host-device", "device": "eth1"}))
         with self.assertRaisesRegex(ValueError, "not a network bridged"):
             LAN.ensure_nad("lab", "zigbee2mqtt", LAN.clean(WANTED))
 
     def test_a_macvlan_network_carries_its_nic_into_the_copy(self):
         """k3s LAN networks on a plain NIC are macvlan."""
         body_config = {"cniVersion": "0.3.1", "type": "macvlan", "master": "eth0", "mode": "bridge", "ipam": {}}
-        c = Cluster()
-        c.objects[BASE] = {"spec": {"config": json.dumps(body_config)}}
+        kube = self.cluster()
+        kube.add(nad("vlan1", "default", body_config))
         own = json.loads(LAN.nad_body("lab", "zigbee2mqtt", LAN.clean(WANTED))["spec"]["config"])
         self.assertEqual(("macvlan", "eth0", "bridge", "static"), (own["type"], own["master"], own["mode"], own["ipam"]["type"]))
 

@@ -658,3 +658,8 @@ ROUTES = {
     ("POST", "/api/addons/kubevirt/emulation"): ("admin", _emulation),
     ("GET", "/api/addons"): ("viewer", lambda request: status()),
 }
+
+
+def register(ops):
+    """The job store's entry for installing Multus (#622)."""
+    ops.RESOLVERS["multus"] = multus_progress

@@ -123,9 +123,12 @@ def claim_references():
 
     Longhorn knows only the pods using a volume now, so a stopped container's
     volume looked the same as one nothing uses at all - and only the second
-    is safe to think about deleting.
+    is safe to think about deleting. A kind whose list cannot be read, or
+    comes back without items or cut short, is noted under UNREAD rather than
+    counted as unused; only KubeVirt being absent means no VMs. The kinds
+    that were read still name what uses a claim.
     """
-    refs = {}
+    refs, unread = {}, []
 
     def note(ns, claims, what):
         for claim in claims:
@@ -135,45 +138,76 @@ def claim_references():
     def claims_of(podspec):
         return [(v.get("persistentVolumeClaim") or {}).get("claimName") for v in (podspec or {}).get("volumes") or []]
 
+    def listed(kind, path, absent_ok=False):
+        try:
+            listing = kget(path)
+        except urllib.error.HTTPError as error:
+            if not (absent_ok and error.code == 404):
+                unread.append(kind)
+            return []
+        except Exception:
+            unread.append(kind)
+            return []
+        rows = listing.get("items") if isinstance(listing, dict) else None
+        meta = (listing.get("metadata") or {}) if isinstance(listing, dict) else None
+        if (not isinstance(rows, list) or not isinstance(meta, dict) or meta.get("continue")
+                or any(not isinstance(row, dict) for row in rows)):
+            unread.append(kind)
+            return []
+        return rows
+
+    def each(kind, rows, read):
+        # A row that is not shaped as Kubernetes writes it leaves its kind
+        # unread: skipping it could leave its claim looking unused.
+        try:
+            for row in rows:
+                read(row)
+        except (KeyError, TypeError, AttributeError):
+            unread.append(kind)
+
+    def workload(kind, spec_of):
+        def read(obj):
+            name, ns = obj["metadata"]["name"], obj["metadata"]["namespace"]
+            note(ns, claims_of(spec_of(obj)), f"{kind}/{name}")
+            if kind == "StatefulSet":
+                # A StatefulSet's own claims are made from its template, named
+                # <template>-<set>-<n>; they belong to it too.
+                for template in (obj.get("spec") or {}).get("volumeClaimTemplates") or []:
+                    prefix = f"{(template.get('metadata') or {}).get('name', '')}-{name}-"
+                    refs.setdefault(("__prefix__", ns, prefix), []).append(f"StatefulSet/{name}")
+        return read
+
+    def vm(obj):
+        volumes = ((((obj.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
+        claims = [(v.get("persistentVolumeClaim") or {}).get("claimName") or (v.get("dataVolume") or {}).get("name")
+                  for v in volumes]
+        note(obj["metadata"]["namespace"], claims, f"VM/{obj['metadata']['name']}")
+
     for kind, path, spec_of in (
             ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
             ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
             ("DaemonSet", "/apis/apps/v1/daemonsets", lambda o: o["spec"]["template"]["spec"]),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
-        try:
-            items = kget(path).get("items", [])
-        except Exception:
-            continue
-        for obj in items:
-            try:
-                note(obj["metadata"]["namespace"], claims_of(spec_of(obj)), f"{kind}/{obj['metadata']['name']}")
-            except (KeyError, TypeError):
-                continue
-        if kind == "StatefulSet":
-            # A StatefulSet's own claims are made from its template, named
-            # <template>-<set>-<n>; they belong to it too.
-            for obj in items:
-                name, ns = obj["metadata"]["name"], obj["metadata"]["namespace"]
-                for template in (obj.get("spec") or {}).get("volumeClaimTemplates") or []:
-                    prefix = f"{(template.get('metadata') or {}).get('name', '')}-{name}-"
-                    refs.setdefault(("__prefix__", ns, prefix), []).append(f"StatefulSet/{name}")
-    try:
-        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
-        vms = []
-    for vm in vms:
-        volumes = ((((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
-        claims = [(v.get("persistentVolumeClaim") or {}).get("claimName") or (v.get("dataVolume") or {}).get("name")
-                  for v in volumes]
-        note(vm["metadata"]["namespace"], claims, f"VM/{vm['metadata']['name']}")
+        each(kind, listed(kind, path), workload(kind, spec_of))
+    each("VM", listed("VM", "/apis/kubevirt.io/v1/virtualmachines", absent_ok=True), vm)
+    if unread:
+        refs[UNREAD] = unread
     return refs
 
 
+# claim_references' key for the kinds it could not read.
+UNREAD = ("__unread__",)
+
+
 def _references_for(refs, ns, claim):
+    """What uses a claim. None when nothing that was read uses it but a kind
+    could not be read: then it is not known to be unused."""
     found = list(refs.get((ns, claim)) or [])
     for key, owners in refs.items():
         if key[0] == "__prefix__" and key[1] == ns and claim.startswith(key[2]):
             found.extend(owners)
+    if not found and refs.get(UNREAD):
+        return None
     return sorted(set(found))
 
 

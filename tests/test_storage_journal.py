@@ -194,12 +194,12 @@ class JournalTests(unittest.TestCase):
             operation = operations.start("reclass", "Move data", {"namespace": "lab", "name": "data"}, "/volumes", {"namespace": "lab"})
             def checkpoint(item):
                 operations.checkpoint(item)
-                store.durable = copy.deepcopy(next(row for row in operations._read() if row["id"] == operation["id"]))
-            with operations._lock:
-                item = next(row for row in operations._read() if row["id"] == operation["id"])
+                store.durable = copy.deepcopy(next(row for row in operations.stored() if row["id"] == operation["id"]))
+            with operations.transaction():
+                item = next(row for row in operations.stored() if row["id"] == operation["id"])
                 store.patch(journal.Journal(item, store.read, store.send, checkpoint))
-            with operations._lock:
-                restored = next(row for row in operations._read() if row["id"] == operation["id"])
+            with operations.transaction():
+                restored = next(row for row in operations.stored() if row["id"] == operation["id"])
                 self.assertEqual("accepted", restored["ref"]["storage_writes"][0]["state"])
                 store.patch(journal.Journal(restored, store.read, store.send, checkpoint))
             self.assertEqual(1, len(store.sent))

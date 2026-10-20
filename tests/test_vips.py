@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as NET
+from fakes.platform import plain_platform
 
 MAP = "/api/v1/namespaces/lab/configmaps/homestead-vips"
 
@@ -42,6 +43,9 @@ def service(ip, name="plex", port=32400):
 
 
 class VipTests(unittest.TestCase):
+    def setUp(self):
+        plain_platform(self)
+
     def test_a_range_is_kept_with_its_label_skipping_what_cannot_be_a_vip(self):
         c = Cluster()
         result = NET.add_vips({"start": "192.0.2.199", "end": "192.0.2.203", "label": "Media"},

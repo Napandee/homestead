@@ -477,7 +477,7 @@ class MaintenanceJobTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "already active"):
                     ops.start("node-power", "Reboot", {}, "/nodes", {"node": "one"})
                 ops.record_phase(job["id"], "sending", 20, "Sending", helper_pod="helper")
-                record = ops._read()[0]
+                record = ops.stored()[0]
                 self.assertEqual("helper", record["ref"]["helper_pod"])
                 self.assertEqual("sending", record["ref"]["phase"])
                 self.assertEqual("Sending", record["history"][-1]["m"])

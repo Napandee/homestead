@@ -21,6 +21,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
 import homestead_container_rebalance as CREBALANCE
 import homestead_host_console as HOST_CONSOLE
+import homestead_imports as IMPORTS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
 import homestead_lhrebuild as LHREBUILD
@@ -199,7 +200,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
+            active = [i for i in OPS.stored() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -208,16 +209,27 @@ def _power_jobs_loop():
 
 
 def _detached_copies_loop():
-    """Offline rebuilding on by default, and Homestead's stand-in for it on
-    Longhorn without one; the leader only."""
+    """Every minute on the leader, unless the cluster is shutting down:
+    offline rebuilding on by default, and Homestead's stand-in for it on
+    Longhorn without one; and the image scans and import clean-up that
+    looking at those pages used to do (#622)."""
     while True:
         time.sleep(60)
         try:
-            if LEADER.is_leader() and (cluster_shutdown().state() or {}).get("phase") in (None, "released"):
-                LHREBUILD.tick()
-                _cache.pop("lhrebuild", None)
+            if not (LEADER.is_leader() and (cluster_shutdown().state() or {}).get("phase") in (None, "released")):
+                continue
+        except Exception as error:
+            print(f"leader or shutdown state unread; detached volume copies, image scans and import clean-up skipped: {str(error)[:160]}", flush=True)
+            continue
+        try:
+            LHREBUILD.tick()
+            _cache.pop("lhrebuild", None)
         except Exception as error:
             print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
+        try:
+            IMPORTS.tick()
+        except Exception as error:
+            print(f"image scans and import clean-up not done: {str(error)[:160]}", flush=True)
 
 
 def allocation_probe_capacity(obj, template):
@@ -322,7 +334,7 @@ def _os_updates_loop():
 def cluster_shutdown(review=False):
     image = _self_data_helper_image(kget, SELF.NS)[1] if review else ""
     def busy():
-        with OPS._lock:
+        with OPS.transaction():
             return ["Finish or recover job: " + j["title"] for j in SELF_DATA_PREPARE.blocking_jobs(OPS)
                     if j["kind"] != "cluster-shutdown"]
     return CLUSTER_SHUTDOWN.Shutdown(kget, lambda *a, **kw: _ksend(*a, **kw, shutdown_bypass=True), SELF.NS, SELF.POD, image,
@@ -448,3 +460,15 @@ ROUTES = {
     ("POST", "/api/cluster/cleanup/run"): ("admin", _cleanup_run),
     ("POST", "/api/cluster/shutdown"): ("admin", _shutdown),
 }
+
+
+def register(ops):
+    """The cluster jobs whose resolvers live here (#622), and two stand-ins:
+    join plans are gone, so a job one left in Activity says so rather than
+    erroring; and a node clean-up is recorded once it has happened, so it reads
+    as done straight away."""
+    ops.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
+    ops.RESOLVERS["harvester-upgrade"] = _harvester_upgrade_status
+    ops.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
+                                             "Join plans were replaced by the install guide")
+    ops.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))

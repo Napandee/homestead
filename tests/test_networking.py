@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as networking
+from fakes.platform import plain_platform
 
 
 class NetworkingTests(unittest.TestCase):
@@ -97,6 +98,7 @@ class NetworkingTests(unittest.TestCase):
         self.assertEqual("web", self.sent[-1][2]["spec"]["ports"][0]["name"])
 
     def setUp(self):
+        plain_platform(self)
         self.sent = []
         self.objects = {
             "/api/v1/services": {"items": [{
@@ -296,6 +298,95 @@ class NetworkingTests(unittest.TestCase):
         })
         self.assertEqual("cluster", prepared["vip_mode"])
         self.assertEqual("", prepared["lb_ip"])
+
+    def failing(self, *paths):
+        """A read of these paths times out; every other read answers."""
+        def get(path):
+            if path in paths:
+                raise TimeoutError("timed out")
+            return self.objects[path]
+        networking.bind(get, lambda method, path, body=None, **kwargs: self.sent.append((method, path, body)),
+                        {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
+
+    def test_a_services_read_that_times_out_refuses_rather_than_choosing_a_vip(self):
+        """With no Services seen, every VIP looked free and 192.0.2.242, which
+        homestead answers on, was handed out again (#615)."""
+        self.failing("/api/v1/services")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was changed"):
+            networking.service_plan({"namespace": "lab", "name": "pihole", "vip_mode": "automatic",
+                                     "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
+
+    def test_a_nodes_read_that_fails_does_not_let_a_node_address_through(self):
+        self.failing("/api/v1/nodes")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Nodes"):
+            networking.service_plan({"namespace": "lab", "name": "pihole", "vip_mode": "manual",
+                                     "vip": "192.0.2.210",
+                                     "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
+        self.assertIn("could not read", networking.address_problem("192.0.2.210"))
+
+    def test_a_failed_read_of_its_services_changes_no_ports(self):
+        self.failing("/api/v1/namespaces/lab/services")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was changed"):
+            networking.sync_workload_ports("lab", "homestead", [
+                {"name": "web", "container": 8088, "host": 9090, "protocol": "TCP", "expose": True}])
+        self.assertEqual([], self.sent)
+
+    def test_a_deployments_read_that_fails_when_creating_says_what_it_could_not_read(self):
+        reads = []
+
+        def get(path):
+            reads.append(path)
+            if path == "/apis/apps/v1/deployments" and reads.count(path) > 1:
+                raise TimeoutError("timed out")   # inventory's read worked; create_service's own did not
+            return self.objects[path]
+        networking.bind(get, lambda method, path, body=None, **kwargs: self.sent.append((method, path, body)),
+                        {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments"):
+            networking.create_service({"namespace": "lab", "name": "pihole", "vip_mode": "automatic",
+                                       "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
+        self.assertEqual([], self.sent)
+
+    def test_a_deployments_read_that_fails_does_not_make_an_apps_service_look_orphaned(self):
+        """Every Service's targets were empty, so deleting one needed no force."""
+        self.failing("/apis/apps/v1/deployments")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments; nothing was deleted"):
+            networking.delete_service("lab", "homestead")
+        self.assertEqual([], self.sent)
+
+    def test_a_nodes_read_that_fails_adds_no_vip(self):
+        self.objects["/api/v1/namespaces/lab/configmaps/homestead-vips"] = {
+            "metadata": {"name": "homestead-vips", "namespace": "lab", "resourceVersion": "1"},
+            "data": {"vips.json": '[{"ip": "192.0.2.242"}]'}}
+        self.failing("/api/v1/nodes")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Nodes; nothing was added"):
+            networking.add_vips({"ip": "192.0.2.210"})
+        self.assertEqual([], self.sent)
+
+    def test_a_services_read_that_fails_removes_no_vip(self):
+        """With no Services seen, a VIP in use left Your VIPs without the "in use by" refusal."""
+        self.objects["/api/v1/namespaces/lab/configmaps/homestead-vips"] = {
+            "metadata": {"name": "homestead-vips", "namespace": "lab", "resourceVersion": "1"},
+            "data": {"vips.json": '[{"ip": "192.0.2.242"}]'}}
+        self.failing("/api/v1/services")
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was removed"):
+            networking.remove_vip("192.0.2.242")
+        self.assertEqual([], self.sent)
+
+    def test_a_vm_address_is_checked_against_what_could_be_read(self):
+        state = networking.inventory()
+        self.assertIn("own addresses", networking.cluster_address_problem("192.0.2.210", state))
+        self.assertIn("a Service's address", networking.cluster_address_problem("192.0.2.242", state))
+        self.assertEqual("", networking.cluster_address_problem("192.0.2.77", state))
+        self.assertIn("could not read the cluster's Nodes",
+                      networking.cluster_address_problem("192.0.2.210", dict(state, unread=["Nodes"])))
+        self.assertIn("could not read", networking.cluster_address_problem("192.0.2.77", {}),
+                      "no inventory at all is not a free address")
+
+    def test_the_network_page_still_shows_what_it_could_read(self):
+        self.failing("/apis/discovery.k8s.io/v1/endpointslices")
+        state = networking.inventory()
+        self.assertEqual(["EndpointSlices"], state["unread"])
+        self.assertEqual(["homestead"], [row["name"] for row in state["services"]])
 
     def test_inventory_retries_a_single_api_throttle(self):
         calls = []

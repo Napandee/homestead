@@ -18,6 +18,7 @@ import shlex
 import secrets
 import time
 import homestead_copy_checks as COPY_CHECKS
+import homestead_self as SELF
 import urllib.error
 import urllib.parse
 
@@ -590,13 +591,21 @@ def chown_claim(namespace, pvc, uid, gid):
     owner_uid, owner_gid = _ownership({"uid": uid, "gid": gid})
     if owner_uid is None:
         raise ValueError("a user id is required")
-    job = f"homestead-chown-{pvc}"[:60].rstrip("-")
+    job = NAMES.fitted(f"homestead-chown-{pvc}")
     try:
+        existing = kget(f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        existing = None
+    if existing:
+        # Only this volume's last chown is replaced, never another volume's.
+        if NAMES.label_of(existing.get("metadata") or {}, "app") != pvc:
+            raise ValueError(f"the chown Job {job} belongs to another volume; try again once it is gone "
+                             "(a finished one is removed within 10 minutes)")
         ksend("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}"
                         "?propagationPolicy=Background")
         time.sleep(1)
-    except urllib.error.HTTPError:
-        pass
     script = (f"echo '==> step 1/1 ownership :: chown -R {owner_uid}:{owner_gid} /data'\n"
               f"chown -R {owner_uid}:{owner_gid} /data\n"
               "echo '==> done'; ls -ld /data\n")
@@ -1380,6 +1389,22 @@ def _drop_source_copy(job, ns):
             raise
 
 
+def _drop_finished_copies():
+    """Each finished copy in another namespace gives back the source password
+    it borrowed. The leader's, once a minute (tick): reading the imports does
+    not (#622)."""
+    for job in NAMES.find("/apis/batch/v1/jobs", "task"):
+        meta, status = job["metadata"], job.get("status", {})
+        ns = meta.get("namespace") or NS
+        if NAMES.label_of(meta, "task") not in ("import", "chown") or ns == NS or status.get("active") \
+                or not (status.get("succeeded") or status.get("failed")):
+            continue
+        try:
+            _drop_source_copy(meta["name"], ns)
+        except Exception as error:
+            print(f"import {ns}/{meta['name']}: its source password was not removed: {str(error)[:160]}", flush=True)
+
+
 def _job_pod(job, ns=None):
     try:
         pods = kget(f"/api/v1/namespaces/{ns or NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
@@ -1403,11 +1428,6 @@ def import_status():
         ns = j["metadata"].get("namespace") or NS
         state = ("running" if st.get("active") else "done" if st.get("succeeded")
                  else "failed" if st.get("failed") else "pending")
-        if state in ("done", "failed") and ns != NS:
-            try:
-                _drop_source_copy(j["metadata"]["name"], ns)
-            except Exception:
-                pass
         row = {
             "name": j["metadata"]["name"], "namespace": ns,
             "kind": NAMES.label_of(j["metadata"], "task", "import"),
@@ -1464,13 +1484,47 @@ def _system_image(ref):
         r"suse/sles/)", str(ref or ""), re.I))
 
 
-def image_retention_inventory():
-    """Images Kubernetes still needs now or for the immediate managed rollback."""
-    retained = []
+def _needed_list(path, optional_group=None):
+    """Every row of one list the image cache asks "still needed?" of, or an
+    error: a list that failed or was cut short must not read as nothing
+    needing an image, or clean-up would remove one a workload still runs on.
+    optional_group names an API group that may not be installed (KubeVirt):
+    a 404 is then no rows, but only once API discovery says the group is absent."""
     try:
-        pods = kget("/api/v1/pods").get("items", [])
+        listing = kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and optional_group and _group_absent(optional_group):
+            error.close()
+            return []
+        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
+                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+    except Exception as error:
+        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
+                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+    if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
+            or (listing.get("metadata") or {}).get("continue")):
+        raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
+                         "are still needed, and no image is cleaned up until it can. Try again in a moment.")
+    return listing["items"]
+
+
+def _group_absent(group):
+    """Whether API discovery says this group is not served. Anything unclear
+    reads as served, so the caller keeps its error."""
+    try:
+        groups = kget("/apis").get("groups")
     except Exception:
-        pods = []
+        return False
+    return (isinstance(groups, list) and bool(groups)
+            and all(isinstance(g, dict) and g.get("name") for g in groups)
+            and not any(g["name"] == group for g in groups))
+
+
+def image_retention_inventory():
+    """Images Kubernetes still needs now or for the immediate managed rollback.
+    Raises when any of its lists cannot be read in full."""
+    retained = []
+    pods = _needed_list("/api/v1/pods")
     for pod in pods:
         meta, spec, status = pod.get("metadata", {}), pod.get("spec", {}), pod.get("status", {})
         if status.get("phase") in ("Succeeded", "Failed") or meta.get("deletionTimestamp"):
@@ -1488,11 +1542,7 @@ def image_retention_inventory():
                 "reason": "active", "namespace": meta.get("namespace", ""),
                 "workload": workload, "container": container.get("name", ""),
             })
-    try:
-        deployments = kget("/apis/apps/v1/deployments").get("items", [])
-    except Exception:
-        deployments = []
-    for dep in deployments:
+    for dep in _needed_list("/apis/apps/v1/deployments"):
         meta = dep.get("metadata", {})
         try:
             previous = json.loads(NAMES.annotation_of(meta, "update-previous", "{}"))
@@ -1518,7 +1568,8 @@ def image_retention_inventory():
 
 def _stopped_references():
     """Images a workload with no pods still starts from: a Deployment or
-    StatefulSet scaled to zero, and a CronJob between runs. With no pod to
+    StatefulSet scaled to zero, a CronJob between runs, and a stopped VM that
+    boots from a container image (containerDisk or kernel boot). With no pod to
     name them they read as unused, and cleaning one up meant the next start
     - often the moment it is needed - waited on a pull.
 
@@ -1530,11 +1581,7 @@ def _stopped_references():
             ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
             ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
-        try:
-            items = kget(path).get("items", [])
-        except Exception:
-            continue
-        for obj in items:
+        for obj in _needed_list(path):
             meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
             if kind != "CronJob" and int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1) > 0:
                 continue          # running ones are named by their pods
@@ -1556,6 +1603,22 @@ def _stopped_references():
                             "reason": "scheduled" if kind == "CronJob" else "stopped", "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
+    for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io"):
+        meta, status = vm.get("metadata") or {}, vm.get("status") or {}
+        if status.get("ready") is True or status.get("printableStatus") == "Running":
+            continue              # a running VM's pod names its container disks
+        tspec = (((vm.get("spec") or {}).get("template") or {}).get("spec") or {})
+        disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", ""))
+                 for volume in tspec.get("volumes") or [] if isinstance(volume, dict)]
+        kernel = ((((tspec.get("domain") or {}).get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
+        disks.append(("kernel-boot", kernel.get("image", "")))
+        for name, ref in disks:
+            if not ref:
+                continue
+            out.append({"ref": _canonical_image(ref), "digest": _image_digest(ref),
+                        "reason": "stopped", "by_name": True,
+                        "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
+                        "container": name})
     return out
 
 
@@ -1571,9 +1634,9 @@ def image_cache():
     nodes = kget("/api/v1/nodes").get("items", [])
     retained = image_retention_inventory()
     _load_scans()
+    # Reading only: the leader's tick saves scans, removes their pods and
+    # starts the next one (#622).
     scanning = _collect_scans()
-    if not scanning:
-        scanning = _rescan_if_stale(nodes)
     per_node, totals = [], {}
     full = True
     for n in nodes:
@@ -1609,10 +1672,9 @@ def image_cache():
                        "system": _system_image(value["name"]),
                        "protected": bool(reasons), "retained_by": reasons})
     shared.sort(key=lambda x: -x["size_mb"])
-    # Read here rather than on its own timer: whoever is looking at the image
-    # cache is exactly who wants to know a pull is running, or has finished and
-    # been cleared away.
-    pulls = prepull_status()
+    # Whoever is looking at the image cache wants to know a pull is running,
+    # or has finished; the leader's tick clears a finished one away.
+    pulls = prepull_status(sweep=False)
     return {"nodes": per_node, "images": shared, "complete": full, "scanning": scanning,
             "pulls": pulls["pulls"], "pulls_finished": pulls["finished"],
             "distinct": len(shared),
@@ -1638,6 +1700,7 @@ SCAN_RETRY = 5 * 60
 SCAN_DIR = ""        # set by the server; empty keeps scans in memory only
 SCAN_STORE = "image-scans.json"
 _SCANS = {}          # node -> {"at": time, "images": [...]}
+_SCAN_FAILED = {}    # node -> when its last scan failed; it waits as a fresh one would
 _SCAN_STARTED = [0.0]
 _scan_lock = SHARED.SharedLock("image-scans")
 
@@ -1683,14 +1746,35 @@ def _merged(scanned, listed):
     return scanned + [image for image in listed if not seen & set(image.get("names") or [])]
 
 
+def tick():
+    """The leader's minute (#622): what looking at the image cache or the
+    imports used to do as it read. Finished scans are saved and their pods
+    removed, a host whose scan is old is scanned again, finished pre-pulls are
+    cleared away, and a finished copy gives back the password it borrowed."""
+    _load_scans()
+    if not _collect_scans(tidy=True):
+        _rescan_if_stale(kget("/api/v1/nodes").get("items", []))
+    prepull_status(sweep=True)
+    _drop_finished_copies()
+    _bust("imgcache")
+
+
+def _scannable(node):
+    """A node a scan pod can run on: Ready and not cordoned. Only these count
+    towards a scan being due, or one host that is never scanned would have
+    every host scanned again at each retry (#622)."""
+    conditions = {c.get("type"): c.get("status") for c in (node.get("status") or {}).get("conditions") or []}
+    return conditions.get("Ready") == "True" and not (node.get("spec") or {}).get("unschedulable")
+
+
 def _rescan_if_stale(nodes):
     """Start a scan when a Ready node has none, or an old one, so the list is
-    whole for whoever looks - not only an admin who presses Scan."""
+    whole for whoever looks - not only an admin who presses Scan. A node whose
+    last scan failed waits as long as one whose scan worked."""
     now = time.time()
-    ready = [n["metadata"]["name"] for n in nodes
-             if any(c.get("type") == "Ready" and c.get("status") == "True"
-                    for c in (n.get("status") or {}).get("conditions") or [])]
-    stale = [name for name in ready if now - float((_SCANS.get(name) or {}).get("at") or 0) > SCAN_FRESH]
+    ready = [n["metadata"]["name"] for n in nodes if _scannable(n)]
+    stale = [name for name in ready
+             if now - max(float((_SCANS.get(name) or {}).get("at") or 0), _SCAN_FAILED.get(name, 0)) > SCAN_FRESH]
     if not stale or now - _SCAN_STARTED[0] < SCAN_RETRY:
         return []
     try:
@@ -1703,27 +1787,32 @@ def start_image_scan():
     """One pod per Ready node, printing everything its containerd holds."""
     started = []
     attempt = format(int(time.time()), "x")[-6:]
-    for node in kget("/api/v1/nodes").get("items", []):
-        conditions = {c.get("type"): c.get("status") for c in (node.get("status") or {}).get("conditions") or []}
-        if conditions.get("Ready") != "True" or (node.get("spec") or {}).get("unschedulable"):
-            continue
-        name = node["metadata"]["name"]
-        suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
-        body = RUNTIME.pod(f"homestead-image-scan-{suffix}-{attempt}", NS, name,
-                           f"{RUNTIME.CRICTL} images -o json", SCAN_TASK,
-                           {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
-        body["spec"]["automountServiceAccountToken"] = False
-        ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
-        started.append(name)
+    # Counted as started even if a pod cannot be made part way, so the next
+    # tick does not start the ones that were made again.
     _SCAN_STARTED[0] = time.time()
-    _save_scans()
-    _bust("imgcache")
+    try:
+        for node in kget("/api/v1/nodes").get("items", []):
+            if not _scannable(node):
+                continue
+            name = node["metadata"]["name"]
+            suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
+            body = RUNTIME.pod(f"homestead-image-scan-{suffix}-{attempt}", NS, name,
+                               f"{RUNTIME.CRICTL} images -o json", SCAN_TASK,
+                               {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
+            body["spec"]["automountServiceAccountToken"] = False
+            ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
+            started.append(name)
+    finally:
+        _save_scans()
+        _bust("imgcache")
     return {"ok": True, "nodes": started,
             "detail": f"asking containerd on {len(started)} node{'s' if len(started) != 1 else ''} for every image"}
 
 
-def _collect_scans():
-    """Read finished scan pods into _SCANS and remove them; say which run."""
+def _collect_scans(tidy=False):
+    """Read finished scan pods into _SCANS; say which nodes are still being
+    scanned. Only the leader's tick (tidy) saves them and removes the pods: a
+    viewer's read writes nothing (#622)."""
     running = []
     for pod in NAMES.find(f"/api/v1/namespaces/{NS}/pods", "task", SCAN_TASK):
         meta, phase = pod.get("metadata") or {}, (pod.get("status") or {}).get("phase")
@@ -1735,10 +1824,15 @@ def _collect_scans():
                 _SCANS[node] = {"at": time.time(), "images": [
                     {key: image.get(key) for key in ("repoTags", "repoDigests", "size")}
                     for image in listed.get("images") or []]}
-                _save_scans()
+                if tidy:
+                    _save_scans()
             except Exception:
                 pass
         if phase in ("Succeeded", "Failed"):
+            if not tidy:
+                continue
+            if phase == "Failed":
+                _SCAN_FAILED[node] = time.time()
             try:
                 ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}")
             except Exception:
@@ -1846,8 +1940,9 @@ def prepull_status(sweep=True):
             image = container.get("image", "") or image
         row = {"name": name, "image": image, "desired": desired, "ready": ready,
                "complete": bool(desired) and ready >= desired}
-        if row["complete"] and sweep:
-            stop_prepull(name)
+        if row["complete"]:
+            if sweep:
+                stop_prepull(name)
             finished.append(row)
         else:
             pulls.append(row)
@@ -1946,6 +2041,26 @@ def cleanup_image(digest, nodes=None):
 
 
 # --------------------------------------------------------------- schedules
+# Schedules lists every CronJob in the namespace but changes only those it
+# made: save_job labels each one homestead.io/managed=true (under the old
+# domain before the rename, which the start-up adoption of old keys does not
+# move for CronJobs). Others (Helm, kubectl) carry volumes, env and a service
+# account this page does not show, so they are read-only here.
+# Any CronJob name Kubernetes allows (a DNS subdomain of at most 52
+# characters), for Run now, which works on CronJobs Homestead did not name.
+CRONJOB_NAME = re.compile(r"[a-z0-9]([a-z0-9.-]{0,50}[a-z0-9])?")
+
+
+def _job_managed(cj):
+    meta = cj.get("metadata") or {}
+    return "true" in (NAMES.label_of(meta, "managed"), SELF.old_label(meta, "managed"))
+
+
+def _job_managed_by(cj):
+    labels = (cj.get("metadata") or {}).get("labels") or {}
+    return labels.get("app.kubernetes.io/managed-by", "")
+
+
 def list_jobs():
     try:
         cjs = kget(f"/apis/batch/v1/namespaces/{NS}/cronjobs").get("items", [])
@@ -1955,6 +2070,7 @@ def list_jobs():
     for c in cjs:
         sp, st = c["spec"], c.get("status", {})
         cont = sp["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        managed = _job_managed(c)
         out.append({
             "name": c["metadata"]["name"],
             "schedule": sp.get("schedule", ""),
@@ -1964,45 +2080,93 @@ def list_jobs():
             "command": " ".join(cont.get("command", [])[-1:]) if cont.get("command") else "",
             "last": st.get("lastScheduleTime", ""),
             "active": len(st.get("active", []) or []),
+            "managed": managed,
+            "managed_by": "" if managed else _job_managed_by(c),
+            "generation": c["metadata"].get("generation"),
         })
     return sorted(out, key=lambda x: x["name"])
 
 
+def _managed_job(name):
+    """The CronJob Homestead made under this name, or None when there is none."""
+    current = _get_or_none(f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}")
+    if current is not None and not _job_managed(current):
+        by = _job_managed_by(current)
+        raise ValueError(f"Homestead did not make the CronJob {name}"
+                         + (f" ({by} manages it)" if by else "")
+                         + "; change it where it was made")
+    return current
+
+
 def save_job(cfg):
-    name = cfg["name"]
-    if not SAFE.match(name):
-        raise ValueError("name must be lowercase letters, numbers and dashes")
-    body = {
-        "apiVersion": "batch/v1", "kind": "CronJob",
-        "metadata": {"name": name, "namespace": NS, "labels": {NAMES.key("managed"): "true"}},
-        "spec": {"schedule": cfg["schedule"], "timeZone": "Etc/UTC", "suspend": bool(cfg.get("suspend")),
-                 "concurrencyPolicy": "Forbid",
-                 "successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 3,
-                 "jobTemplate": {"spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 86400,
-                     "template": {"spec": {"restartPolicy": "Never", "containers": [{
-                         "name": "task", "image": cfg.get("image", "alpine:3.24"),
-                         "command": ["sh", "-c", cfg["command"]],
-                     }]}}}}},
-    }
+    name = _required_name(cfg.get("name"))
+    current = _managed_job(name)
+    # The page sends the generation it read ("" for a new schedule), so a
+    # save never lands on a job whose spec changed, or that appeared, since
+    # the page loaded. Not resourceVersion: that moves with every status
+    # write, so each run starting or ending would refuse the save.
+    read = cfg.get("generation")
+    now = (current or {}).get("metadata", {}).get("generation", "")
+    if read is not None and str(read) != str(now):
+        if read == "":
+            raise ValueError(f"a schedule named {name} already exists; reload the page to edit it")
+        raise ValueError(f"{name} changed since the page loaded; reload it and save again")
+    _bust("cron")
+    if current is None:
+        body = {
+            "apiVersion": "batch/v1", "kind": "CronJob",
+            "metadata": {"name": name, "namespace": NS, "labels": {NAMES.key("managed"): "true"}},
+            "spec": {"schedule": cfg["schedule"], "timeZone": "Etc/UTC", "suspend": bool(cfg.get("suspend")),
+                     "concurrencyPolicy": "Forbid",
+                     "successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 3,
+                     "jobTemplate": {"spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 86400,
+                         "template": {"spec": {"restartPolicy": "Never", "containers": [{
+                             "name": "task", "image": cfg.get("image", "alpine:3.24"),
+                             "command": ["sh", "-c", cfg["command"]],
+                         }]}}}}},
+        }
+        return ksend("POST", f"/apis/batch/v1/namespaces/{NS}/cronjobs", body)
+    # An edit changes only what the page shows and keeps the rest of the
+    # object (volumes, env, service account, annotations). The PUT carries
+    # the resourceVersion just read, so Kubernetes refuses it with a 409 if
+    # the job changed in between.
+    body = copy.deepcopy(current)
+    body.pop("status", None)
+    labels = body["metadata"].setdefault("labels", {})
+    labels.pop(SELF.OLD_DOMAIN + "managed", None)
+    labels[NAMES.key("managed")] = "true"
+    spec = body["spec"]
+    spec["schedule"] = cfg["schedule"]
+    spec["suspend"] = bool(cfg.get("suspend"))
     # Without a timeZone the schedule runs on the controller host's clock,
     # so a saved one is pinned to UTC, which is what the page shows. A zone
     # already set, say with kubectl, is kept.
+    spec["timeZone"] = spec.get("timeZone") or "Etc/UTC"
+    container = spec["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+    container["image"] = cfg.get("image") or container.get("image") or "alpine:3.24"
+    container["command"] = ["sh", "-c", cfg["command"]]
     try:
-        current = kget(f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}")
-        body["spec"]["timeZone"] = current.get("spec", {}).get("timeZone") or body["spec"]["timeZone"]
         return ksend("PUT", f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}", body)
     except urllib.error.HTTPError as e:
-        if e.code != 404:
+        if e.code != 409:
             raise
-        return ksend("POST", f"/apis/batch/v1/namespaces/{NS}/cronjobs", body)
+        raise ValueError(f"{name} changed since the page loaded; reload it and save again") from None
 
 
 def del_job(name):
+    name = _required_name(name)
+    _managed_job(name)
+    _bust("cron")
     ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}?propagationPolicy=Background")
     return {"ok": True}
 
 
 def run_job_now(name):
+    # Any CronJob may be run now: it starts a Job from the template and
+    # changes nothing on the CronJob itself.
+    name = str(name or "")
+    if not CRONJOB_NAME.fullmatch(name):
+        raise ValueError("name must be a CronJob's: lowercase letters, numbers, dashes and dots, at most 52")
     cj = kget(f"/apis/batch/v1/namespaces/{NS}/cronjobs/{name}")
     body = {"apiVersion": "batch/v1", "kind": "Job",
             "metadata": {"name": f"{name}-{int(time.time()) % 1000000}", "namespace": NS,
@@ -2441,7 +2605,10 @@ def prepare_vm(cfg, platform=None, default_class=""):
         "#cloud-config\n"
         f"hostname: {name}\n"
         "ssh_pwauth: true\n"
-        f"password: {password}\n"
+        # Quoted, as homestead_k3scluster.user_data does: bare, a "#", "*",
+        # ": " or all digits would make YAML read another value or none. Not
+        # ASCII-escaped: PyYAML reads a surrogate pair as two characters.
+        f"password: {json.dumps(password, ensure_ascii=False)}\n"
         "chpasswd: {expire: false}\n"))
 
     annotations, templates = {}, []

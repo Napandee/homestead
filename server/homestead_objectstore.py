@@ -27,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 from homestead_pod_resources import storage_gib
 
@@ -113,11 +114,21 @@ def bind(_kget, _ksend, _create_pvc, namespace):
     NAMES.bind(_kget)
 
 
+class Unread(Exception):
+    """A read of the store's own objects failed: not the same as their being
+    absent. Whatever "not there" would lead to - new keys, a new address, a
+    RustFS in place of a serving MinIO - waits until they can be read."""
+
+
 def _get(path):
+    """The object, or None when it is not there (404). Any other failure
+    raises Unread, naming what could not be read."""
     try:
-        return kget(path)
-    except Exception:
-        return None
+        return KUBE.get_optional(path)
+    except Exception as error:
+        what = "/".join(path.split("?")[0].rstrip("/").split("/")[-2:])
+        raise Unread(f"Homestead could not read {what} from Kubernetes, so it did not act on it: "
+                     f"{error}. Try again in a moment.") from error
 
 
 def _decode(secret, key):
@@ -169,11 +180,15 @@ def endpoint(service=None):
 
 def _volume_problem(claim):
     """Why Longhorn cannot give the store its volume, in Longhorn's words:
-    no room for its copies, say. Empty when it can, or cannot tell."""
+    no room for its copies, say. Empty when it can, or cannot tell: only a
+    hint beside the status, so an unread volume is not worth failing for."""
     volume = ((claim or {}).get("spec") or {}).get("volumeName")
     if not volume:
         return ""
-    item = _get(f"/apis/longhorn.io/v1beta2/namespaces/{LHNS}/volumes/{volume}") or {}
+    try:
+        item = _get(f"/apis/longhorn.io/v1beta2/namespaces/{LHNS}/volumes/{volume}") or {}
+    except Unread:
+        return ""
     for condition in (item.get("status") or {}).get("conditions") or []:
         if condition.get("type") == "Scheduled" and condition.get("status") == "False":
             return condition.get("message") or condition.get("reason") or "Longhorn cannot place its copies"
@@ -766,7 +781,7 @@ def _transfers(b):
     try:
         return set_transfers(bool(b.get("allow")), int(b.get("size_gb") or 100), str(b.get("lb_ip") or ""),
                              str(b.get("vip_mode") or ""), int(b.get("port") or 0))
-    except MOVE_SOURCE.PendingRecovery as error:
+    except (MOVE_SOURCE.PendingRecovery, Unread) as error:
         return homestead_routes.Reply(503, {"error": str(error)})
     except (ValueError, PermissionError) as error:
         return homestead_routes.Reply(409, {"error": str(error)})

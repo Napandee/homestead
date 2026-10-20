@@ -227,6 +227,12 @@ ADOPT = (("", "v1", "nodes", False), ("", "v1", "services", True), ("", "v1", "p
          ("apps", "v1", "daemonsets", True), ("kubevirt.io", "v1", "virtualmachines", True))
 
 
+def old_label(meta, suffix):
+    """A label still under the old domain, for kinds ADOPT does not cover:
+    the CronJobs Schedules made before the rename keep harvui.io/managed."""
+    return ((meta or {}).get("labels") or {}).get(OLD_DOMAIN + suffix)
+
+
 def _renamed(values):
     """The patch that moves each old key to its new name, keeping a newer value that is already there."""
     change = {}

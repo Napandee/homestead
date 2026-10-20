@@ -237,7 +237,7 @@ def save_checked(cfg):
     """save, refused when V2 would be switched off under a saved V2 disk
     preparation; checked under the jobs' lock so none starts meanwhile."""
     homestead_routes.forget("lhcap")
-    with OPS._lock:
+    with OPS.transaction():
         if "v2" in cfg and not cfg["v2"] and DISK_V2.tasks():
             raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
         return save(cfg)

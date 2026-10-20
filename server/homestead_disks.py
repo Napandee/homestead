@@ -16,6 +16,7 @@ scheduling stops, replicas are moved off, then the disk is removed.
 """
 import json
 import posixpath
+import hashlib
 import re
 import urllib.error
 
@@ -486,11 +487,25 @@ def add(cfg):
         raise ValueError(f"Longhorn does not know node {node}")
     if any(d.get("path") == path for d in ((lh.get("spec") or {}).get("disks") or {}).values()):
         raise ValueError(f"Longhorn already uses {path} on {node}")
-    disk_id = "disk-" + re.sub(r"[^a-z0-9]+", "-", path.lower()).strip("-")[:50]
+    disk_id = _disk_id(lh, path)
     _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {
         "path": path, "allowScheduling": True, "diskType": "block" if block else "filesystem",
         "storageReserved": 0, "tags": []}}}}, f"adding {path}")
     return {"ok": True, "detail": f"Longhorn is adding {path} on {node}"}
+
+
+def _disk_id(lh, path):
+    """The key a new Longhorn disk is added under: from its path, ended in a
+    hash when it is too long, and never one another path already has - two
+    drives of one model differ only in their serial at the end."""
+    disks = (lh.get("spec") or {}).get("disks") or {}
+    disk_id = NAMES.fitted("disk-" + re.sub(r"[^a-z0-9]+", "-", path.lower()).strip("-"), 55)
+    if (disks.get(disk_id) or {}).get("path", path) != path:
+        # Another path has this key (/mnt/disk_2 and /mnt/disk-2): one of its own, from the whole path.
+        disk_id = f"{disk_id[:46].rstrip('-')}-{hashlib.sha256(path.encode()).hexdigest()[:8]}"
+    if (disks.get(disk_id) or {}).get("path", path) != path:
+        raise ValueError(f"Longhorn already has a disk called {disk_id}, at {disks[disk_id].get('path')}; nothing was changed")
+    return disk_id
 
 
 def _lh_disk(node, disk_id):
@@ -816,7 +831,8 @@ def set_up(cfg):
                 raise ValueError(f"type {device} to confirm: it holds {facts['fstype'] or 'partitions or LVM'}, which Longhorn's V2 engine erases")
             facts = setup_module.wipe(node, device, facts)
         elif release:
-            out, err = setup_module.hostrun.run(node, f"D={device}\n{release}echo WIPED", timeout=60)
+            out, err = setup_module.hostrun.run(node, f"D={device}\n{release}echo WIPED", timeout=60,
+                                                       change=f"Release {device} on {node}")
             if "WIPED" not in out:
                 raise ValueError(f"could not release {device}: {(err or out)[:200]}")
         path, kept = facts["by_id"] or device, False
@@ -881,7 +897,7 @@ def _give_longhorn(node, path, engine, tags, device):
         # The old entry for this folder, from before anything was mounted there.
         _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {"allowScheduling": False}}}}, "clearing the old entry")
         _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: None}}}, "clearing the old entry")
-    disk_id = "disk-" + re.sub(r"[^a-z0-9]+", "-", path.lower()).strip("-")[:50]
+    disk_id = _disk_id(lh, path)
     _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {
         "path": path, "allowScheduling": True, "diskType": "block" if engine == "v2" else "filesystem",
         "storageReserved": 0, "tags": tags}}}}, f"adding {path}")
@@ -989,3 +1005,9 @@ ROUTES = {
     ("POST", "/api/disks/inspect"): ("admin", lambda request: inspect_disk(str(request.body.get("node") or ""), str(request.body.get("device") or ""))),
     ("GET", "/api/disks"): ("viewer", lambda request: homestead_routes.cached("disks", 10, inventory)),
 }
+
+
+def register(ops):
+    """The job store's entries for retiring a disk (#622)."""
+    ops.RESOLVERS["disk-retire"] = retire_step
+    ops.RESUMABLE["disk-retire"] = retire_resumable

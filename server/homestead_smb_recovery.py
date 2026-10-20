@@ -6,6 +6,7 @@ The Deployment keeps runtime exclusions separately from the share inventory.
 import copy
 import json
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 
 ANNOTATION = NAMES.key("smb-recovery")
@@ -37,10 +38,7 @@ def observe(rows, get, namespace):
         return {}, ""
     try:
         def items(path):
-            result = get(path)
-            if not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue"):
-                raise ValueError("incomplete API inventory")
-            return result["items"]
+            return KUBE.items(path, read=get)
         nodes = items("/api/v1/nodes")
         pvcs = {p["metadata"]["name"]: p for p in items(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims")}
         prefix = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"

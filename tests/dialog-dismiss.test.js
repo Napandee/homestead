@@ -2,6 +2,7 @@
 // Escape and the X ask before they throw away what a person typed (#459).
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 const core = fs.readFileSync("web/js/core.js", "utf8");
 const ui = fs.readFileSync("web/js/ui.js", "utf8");
 
@@ -33,7 +34,7 @@ function dialogs() {
   c.window = c;
   c.$ = s => nodes[s];
   vm.createContext(c);
-  vm.runInContext(core.slice(core.indexOf("function modal("), core.indexOf("/* ---------------- shared, viewport-safe tooltips")), c);
+  vm.runInContext(between(core, "function modal(", "/* ---------------- shared, viewport-safe tooltips"), c);
   c.ask = async (message, options = {}) => { c.asked.push({ message, ...options }); return c.answer; };
   c.isOpen = () => !nodes["#modal"].classList.contains("hidden");
   c.title = () => nodes["#mtitle"].textContent;

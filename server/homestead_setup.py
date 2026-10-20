@@ -12,7 +12,6 @@ phone, their notifications) for that person alone.
 import json
 import os
 import re
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -26,7 +25,8 @@ PERSONAL = ("appearance", "phone", "notifications")
 STEPS = ("health", "quorum", "placement", "clocks", "address", "lan", "https", "hostname", "disks", "storage", "smb",
          "backups", "config", "osupdates", "appearance", "phone", "notifications", "people",
          "unifi", "unraid", "homeassistant", "linked", "starter", "console")
-_lock = threading.Lock()
+# Every copy of Homestead saves the same file, so they share the lock.
+_lock = SHARED.SharedLock("setup", directory=lambda: DATA_DIR)
 
 
 def lan_state(networks):
@@ -78,16 +78,11 @@ def stamp():
         return 0
 
 
-def _save(state):
-    SHARED.write_json(_path(), state, durable=True)
-
-
 def _change(apply):
-    with _lock:
-        state = load()
+    def change(state):
         apply(state)
-        _save(state)
         return state
+    return SHARED.update_file(_path(), change, _lock, {}, durable=True)
 
 
 def skips(user):
@@ -158,7 +153,10 @@ def mark_opened():
 def note(key, value):
     if key not in ("config_backup_at", "https_url"):
         raise ValueError("not a setup fact")
-    _change(lambda state: state.update({key: value}))
+    try:
+        _change(lambda state: state.update({key: value}))
+    except SHARED.Unreadable:
+        pass        # the guide's bookkeeping: a backup or check that worked is not failed over it
 
 
 def https_check(url, fetch=None):

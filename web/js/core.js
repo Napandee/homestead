@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.330";
+const HOMESTEAD_VERSION = "2.8.331-dev.3";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -177,9 +177,9 @@ const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/(
   .replace(/ (.*)$/, (all, rest) => " " + rest.toLowerCase());
 
 /* ---------------- settings ---------------- */
-const SET = Object.assign(
-  { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 },
-  JSON.parse(localStorage.getItem("homestead.settings") || "{}"));
+const SET = { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 };
+// Blocked storage or a damaged value: the defaults, not a page that never loads.
+try { Object.assign(SET, JSON.parse(localStorage.getItem("homestead.settings") || "{}")); } catch (e) { /* defaults */ }
 
 function applySettings() {
   const root = document.documentElement;
@@ -189,7 +189,7 @@ function applySettings() {
   root.dataset.bg = SET.bg;
   root.style.setProperty("--blur", SET.blur + "px");
   root.dataset.motion = SET.motion;
-  localStorage.setItem("homestead.settings", JSON.stringify(SET));
+  try { localStorage.setItem("homestead.settings", JSON.stringify(SET)); } catch (e) { /* this visit only */ }
 }
 applySettings();
 
@@ -218,7 +218,14 @@ async function api(path, opts) {
   if (diagnostic) opts = { ...opts, headers: { ...opts?.headers, ...diagnostic.headers } };
   let r;
   try { r = await fetch(path, opts); }
-  catch (error) { diagnostic?.done(0); throw error; }
+  catch (error) {
+    diagnostic?.done(0);
+    // A connection that broke after you left the page is for a page nobody is
+    // looking at too: dropped like a late answer, so its error is not shown on
+    // the page you went to.
+    if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
+    throw error;
+  }
   const missing = r.headers.get("x-homestead-fleet-missing");
   if (missing && window.fleetNoteMissing) window.fleetNoteMissing(missing);
   const ct = r.headers.get("content-type") || "";
@@ -230,6 +237,12 @@ async function api(path, opts) {
   if (!r.ok) throw Object.assign(new Error((b && b.error) || r.statusText), { status: r.status, body: b });
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;
+}
+
+/* A read the caller cannot do without. Its failure says what could not be
+   read, so the page shows that rather than a form built on a guess (#620). */
+function mustRead(path, what, opts) {
+  return api(path, opts).catch(e => { throw Object.assign(new Error(`Could not read ${what}: ${e.message}`), { status: e.status }); });
 }
 
 /* ---------------- configurable hardware ---------------- */

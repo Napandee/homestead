@@ -2,7 +2,6 @@
 import copy
 import json
 import sys
-import threading
 from types import SimpleNamespace
 import unittest
 import urllib.error
@@ -12,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_components as C
 import homestead_lhv2_upgrade as V
 import homestead_capacity_review as R
+from fakes.job_store import Store
 
 
 def ready():
@@ -277,8 +277,7 @@ class UpgradeTests(unittest.TestCase):
         store = [copy.deepcopy(item), unrelated]
         def write(items):
             store[:] = copy.deepcopy(items)
-        ops = SimpleNamespace(_lock=threading.RLock(), require_write=lambda: None,
-                              _read=lambda: copy.deepcopy(store), _write=write)
+        ops = Store(read=lambda: copy.deepcopy(store), write=write, require_write=lambda: None)
         body = self.c.body(False)
         V.configure(body, ops)
         self.assertTrue(store[0]['ref']['v2_enabled'])
@@ -292,7 +291,7 @@ class UpgradeTests(unittest.TestCase):
         self.c.installed = 'v1.13.0'
         body = self.c.body(False)
         body['confirm_capacity'] = False
-        ops = SimpleNamespace(_lock=threading.RLock(), require_write=lambda: None)
+        ops = Store(require_write=lambda: None)
         with self.assertRaisesRegex(ValueError, 'Review'):
             V.configure(body, ops)
         self.assertFalse(self.c.sent)
@@ -305,6 +304,16 @@ class UpgradeTests(unittest.TestCase):
             helm.assert_not_called()
             result = C.upgrade('longhorn', 'v1.13.0', {'v2_mode': 'live', 'confirm_backup': True})
             self.assertEqual('live', result['v2_mode']); helm.assert_called_once()
+
+    def test_an_unfinished_disk_conversion_refuses_the_upgrade_before_helm_is_touched(self):
+        # The conflict rule must hold before the upgrade starts, not when its job is recorded after.
+        found = {'name': 'Longhorn', 'installed': 'v1.12.2', 'next': 'v1.13.0'}
+        converting = {'kind': 'disk-v2-convert', 'status': 'running', 'ref': {'node': 'node-1', 'phase': 'erasing'}}
+        with patch.object(C, '_component', return_value=found), patch.object(C, 'helm_upgrade') as helm, \
+                patch.object(C, 'OPS', SimpleNamespace(stored=lambda: [converting]), create=True):
+            with self.assertRaisesRegex(ValueError, 'Finish disk preparation'):
+                C.upgrade('longhorn', 'v1.13.0', {'v2_mode': 'live', 'confirm_backup': True})
+            helm.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()

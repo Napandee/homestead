@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+from fakes.job_store import store_writes
 import homestead_import_job as flow
 import homestead_import_guard as guard
 import homestead_imports as imports
@@ -64,7 +65,7 @@ class ImportJobTests(unittest.TestCase):
         self.sent.append((method, path, copy.deepcopy(body)))
         if method == "POST":
             # Every creation has a durable intent BEFORE transmission.
-            entry = ops._read()[0]["ref"]["writes"][-1]
+            entry = ops.stored()[0]["ref"]["writes"][-1]
             self.assertEqual("intent", entry["phase"])
             self.assertEqual(body["metadata"]["name"], entry["resource"]["name"])
             path += "/" + body["metadata"]["name"]
@@ -86,7 +87,7 @@ class ImportJobTests(unittest.TestCase):
         return flow.dispatch(self.body, self.prepared, self.context, self.read, self.send, ops, self.create_claim, self.admission)
 
     def item(self):
-        return ops._read()[0]
+        return ops.stored()[0]
 
     def poll(self):
         return ops.list_operations()[0]
@@ -114,7 +115,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual([{"name": "PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-env", "key": "app.PASSWORD"}}}], env)
         self.assertNotIn("credential-never-journalled", json.dumps(self.objects[self.dep_path]))
         self.assertTrue(all(r["phase"] == "accepted" for r in self.item()["ref"]["writes"]))
-        self.assertNotIn("credential-never-journalled", json.dumps(ops._read()))
+        self.assertNotIn("credential-never-journalled", json.dumps(ops.stored()))
         self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
         self.complete()
         self.assertEqual("succeeded", self.poll()["status"])
@@ -146,7 +147,7 @@ class ImportJobTests(unittest.TestCase):
                     self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
 
     def test_journal_failure_sends_nothing(self):
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk full")), self.assertRaises(Exception):
+        with store_writes(ops, fail=OSError("disk full")), self.assertRaises(Exception):
             self.start()
         self.assertEqual([], self.sent)
 
@@ -154,7 +155,7 @@ class ImportJobTests(unittest.TestCase):
         self.body["capacity_token"] = "1.invalid"
         with self.assertRaises(ValueError):
             self.start()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual([], self.sent)
 
     def test_unverified_api_receipt_cannot_advance_setup(self):
@@ -165,12 +166,10 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual("unverified", self.item()["ref"]["writes"][-1]["phase"])
 
     def test_acknowledged_write_with_journal_failure_leaves_intent(self):
-        original = ops._write
         def record(items):
             if items and items[0]["ref"].get("writes") and items[0]["ref"]["writes"][-1]["phase"] == "accepted":
                 raise OSError("storage lost")
-            return original(items)
-        with mock.patch.object(ops, "_write", side_effect=record), self.assertRaises(ValueError):
+        with store_writes(ops, fail=record), self.assertRaises(ValueError):
             self.start()
         self.assertEqual(1, len(self.sent))
         self.assertEqual("intent", self.item()["ref"]["writes"][-1]["phase"])
@@ -180,7 +179,7 @@ class ImportJobTests(unittest.TestCase):
         self.objects[self.pvc_path]["metadata"]["uid"] = "replacement"
         with self.assertRaisesRegex(ValueError, "Borrowed volume"):
             self.start()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual([], self.sent)
 
     def test_new_and_borrowed_claim_or_pv_replacement_blocks_helper(self):

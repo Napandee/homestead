@@ -10,6 +10,7 @@ class DefaultsTests(unittest.TestCase):
     def setUp(self):
         base = test_networking.NetworkingTests("setUp")
         base.setUp()
+        self.addCleanup(base.doCleanups)
         self.objects, self.sent = base.objects, base.sent
         self.ip = "192.0.2.80"
         self.map = "/api/v1/namespaces/lab/configmaps/homestead-vips"

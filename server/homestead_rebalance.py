@@ -279,7 +279,7 @@ def status(item):
     stage, now = ref.get("stage", "add"), time.time()
 
     def skip(why):
-        if stage in ("building", "settling") and ref.get("original"):
+        if stage in ("building", "removing", "settling") and ref.get("original"):
             _replicas(move["volume"], ref["original"])
         ref.setdefault("skipped", []).append(f"{move['claim']}: {why}")
         ref.update(index=i + 1, stage="add", original=None, before=None, placed=False, gone_since=None)
@@ -334,6 +334,13 @@ def status(item):
     if stage == "removing":
         old = hosts.get(move["from"])
         if old:
+            # A copy that failed while the new one built: removing the old
+            # one now would leave fewer whole copies than the volume asks
+            # for. The count is still one over, so Longhorn rebuilds it.
+            if sum(1 for r in copies if r is not old and _built(volume, r)) < ref["original"]:
+                if now - ref["started"] > 3600 + 120 * move.get("size_gb", 0):
+                    return skip("another copy failed during the move; the old copy is kept")
+                return "running", progress, f"Waiting for Longhorn to rebuild a failed copy of {move['claim']} before removing the one on {move['from']}"
             ksend("DELETE", f"{LH}/replicas/{(old.get('metadata') or {}).get('name')}")
         # Still marked: until the old copy is gone it is one over, not short.
         _replicas(move["volume"], ref["original"], keeps=ref["original"])
@@ -362,7 +369,7 @@ def cancel_plan(item):
 def cancel_run(work, chosen):
     ref = work.get("ref") or {}
     moves, i = ref.get("moves") or [], ref.get("index", 0)
-    if i < len(moves) and ref.get("stage") in ("building", "settling") and ref.get("original"):
+    if i < len(moves) and ref.get("stage") in ("building", "removing", "settling") and ref.get("original"):
         _replicas(moves[i]["volume"], ref["original"])
     return f"Stopped after moving {ref.get('moved', 0)} cop{'y' if ref.get('moved', 0) == 1 else 'ies'}"
 
@@ -400,3 +407,9 @@ ROUTES = {
     ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
     ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
 }
+
+
+def register(ops):
+    """The job store's entry for a volume rebalance (#622)."""
+    ops.RESOLVERS[KIND] = status
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

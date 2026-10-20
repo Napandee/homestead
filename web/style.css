@@ -1275,6 +1275,13 @@ html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-steps .cur
   backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3);
   border:1px solid var(--line2);box-shadow:0 34px 90px rgba(0,0,0,.7);
   animation:pop .35s var(--e)}
+/* Motion off, or the system asking for less motion: dialogs, confirmations,
+   sign-in, toasts and page sections appear in place instead of sliding or
+   scaling in. Backdrops still fade, which moves nothing. After .gatebox, the
+   last of their own rules, so these win on order too. */
+html[data-motion="off"] .modalbox,html[data-motion="off"] .askbox,html[data-motion="off"] .gatebox,
+html[data-motion="off"] .tst,html[data-motion="off"] .stagger>*{animation:none}
+@media(prefers-reduced-motion:reduce){.modalbox,.askbox,.gatebox,.tst,.stagger>*{animation:none}}
 .gatebox .mark{width:46px;height:46px;border-radius:14px;font-size:21px;margin:0 auto 16px}
 .gatebox h2{margin:0 0 4px;text-align:center;font-size:19px;font-weight:700}
 .gatebox p.sub{margin:0 0 22px;text-align:center;color:var(--mut);font-size:12.5px}
@@ -1764,6 +1771,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
   .wltable.stack tbody.grouphead tr{display:block}
   .wltable.stack tbody.grouphead td{display:block;padding:0 10px}
   .wltable.stack tbody.grouphead td::before{display:none}
+  .wltable.stack tbody.grouphead td:first-child>.wgroup-headrow{display:flex}
 }
 
 /* Data protection: a schedule in shapes rather than cron, and plans. */
@@ -2261,6 +2269,10 @@ div.ipam-line.dim{display:block}
 .ui-actions .btn{min-height:38px}
 .ui-actions .btn.danger:not(:disabled){background:var(--crit);border-color:var(--crit);color:#fff}
 .ui-actions .btn.danger:not(:disabled):hover{background:#ff6668;border-color:#ff6668}
+/* Inside a callout, actions are a row of the callout's own, not a dialog's
+   sticky footer: no bleed past its edges, no bar, no backdrop. */
+.ui-callout .ui-actions{position:static;margin:10px 0 0!important;padding:0;border-top:0;background:none;
+  backdrop-filter:none;-webkit-backdrop-filter:none;z-index:auto}
 
 @media(max-width:640px){
   .modal{padding:0;place-items:end stretch}

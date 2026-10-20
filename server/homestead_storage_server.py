@@ -15,12 +15,14 @@ import os
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_cancel as CANCEL
+import homestead_copy_job as COPY_JOB
 import homestead_disks as DISKS
 import homestead_files as FILES
 import homestead_fleet as FLEET
 import homestead_host_limits as HOST_LIMITS
 import homestead_host_os as HOST_OS
 import homestead_isos as ISOS
+import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn as LH
 import homestead_manifests as MANIFESTS
@@ -32,6 +34,7 @@ import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_reclass as RECLASS
 import homestead_restore_test as RESTORE_TEST
+import homestead_revert as REVERT
 import homestead_root_guard as ROOT_GUARD
 import homestead_self as SELF
 import homestead_share_servers as SHARE_SERVERS
@@ -242,7 +245,7 @@ def storage_volume_action(volume, action):
 def storage_legacy_cancel(item, options):
     if "storage_protocol" in item.get("ref", {}):
         raise ValueError("Use the storage move recovery review; legacy rollback is not supported for this job")
-    with OPS._lock, STORAGE_GUARD.dispatching(item):
+    with OPS.transaction(), STORAGE_GUARD.dispatching(item):
         return CANCEL.reclass_cancel(item, options)
 
 
@@ -595,7 +598,10 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
     try:
         users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
     except Exception:
-        users = ["something"]
+        users = None
+    if users is None:
+        raise ValueError(f"a volume named {name} already exists in {ns}, and Homestead could not check what uses it; "
+                         "try again, give this app's volume another name, or choose the existing one to share it")
     if users:
         raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
                          "give this app's volume another name, or choose the existing one to share it")
@@ -618,3 +624,26 @@ def storage_restart_admission(item, proposals):
 
 def storage_helper_admission(item, manifest):
     return copy_admission(manifest)
+
+
+def register(ops):
+    """The storage jobs whose resolvers live here (#622); cancelling a failed
+    copy tidies up after it. The Kubernetes client and the copy admission are
+    looked up when a job is asked about, as server.py did, so a test that
+    patches one is the one used. The reclass canceller replaces the one
+    homestead_cancel registers, so this runs after it."""
+    ops.RESOLVERS["volume-restore"] = _restore_then_tidy
+    ops.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
+    ops.RESOLVERS["restructure"] = COPY_JOB.legacy_status
+    ops.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
+    ops.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, KUBE.kget, KUBE.ksend, ops, copy_admission)
+    ops.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, KUBE.kget, ops),
+                                     lambda item, options: COPY_JOB.recovery_run(item, options, KUBE.kget, KUBE.ksend, ops))
+    ops.RESOLVERS["reclass"] = storage_move_progress
+    ops.RESUMABLE["reclass"] = RECLASS.resumable
+    ops.CANCELLERS["reclass"] = (CANCEL.reclass_plan, storage_legacy_cancel)
+    ops.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
+    ops.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
+        lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
+    ops.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
+    ops.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable

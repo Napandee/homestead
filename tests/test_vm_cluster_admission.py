@@ -79,7 +79,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual(200, result[0], result)
         self.assertFalse(result[1]["capacity"]["blocked"], result)
         self.assertEqual([], self.sent)
-        self.assertEqual([], server.OPS._read())
+        self.assertEqual([], server.OPS.stored())
         return {**result[1]["config"], "capacity_token": result[1]["capacity_token"], "confirm_capacity": True}
 
     def test_preview_freezes_ids_but_never_exposes_join_token_or_secret_manifests(self):
@@ -94,13 +94,13 @@ class VMClusterAdmissionTests(unittest.TestCase):
         result = self.call("/api/vm/k3s-cluster", self.body)
         self.assertEqual(400, result[0], result)
         self.assertEqual([], self.sent)
-        self.assertEqual([], server.OPS._read())
+        self.assertEqual([], server.OPS.stored())
 
     def test_reviewed_api_records_every_resource_and_supports_read_only_batch_inspection(self):
         body = self.reviewed()
         result = self.call("/api/vm/k3s-cluster", body)
         self.assertEqual(200, result[0], result)
-        item = server.OPS._read()[0]
+        item = server.OPS.stored()[0]
         self.assertEqual(2, item["ref"]["dispatch_protocol"])
         self.assertEqual(len(self.sent), len(item["ref"]["writes"]))
         self.assertTrue(all(row["phase"] == "accepted" for row in item["ref"]["writes"]))
@@ -112,7 +112,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         server.VM_MUTATION_RECOVERY.resolve({"id": item["id"], "capacity_token": inspection["capacity_token"],
             "confirm_capacity": True, "confirm": "cluster", "acknowledge_unknown": True}, server.OPS, self.read, "admin")
         self.assertEqual(before, len(self.sent))
-        self.assertEqual("resolved-unknown", server.OPS._read()[0]["ref"]["phase"])
+        self.assertEqual("resolved-unknown", server.OPS.stored()[0]["ref"]["phase"])
 
     def test_whole_batch_cannot_double_book_individually_available_memory(self):
         self.nodes[0]["allocatable"]["memory"] = "6Gi"
@@ -133,7 +133,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
             storage = vm["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]
             self.assertEqual(["ReadWriteOnce"], storage["accessModes"])
             self.assertEqual("Filesystem", storage["volumeMode"])
-        item = server.OPS._read()[-1]
+        item = server.OPS.stored()[-1]
         self.assertEqual("awaiting-ready", item["ref"]["phase"])
         self.assertEqual(2, len(item["ref"]["created"]))
         health = item["ref"]["guest_health"]
@@ -165,7 +165,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual(400, result[0], result)
         self.assertEqual(1, len([path for _, path, _ in self.sent if path.endswith("/virtualmachines")]))
         self.assertNotIn("DELETE", [method for method, _, _ in self.sent])
-        self.assertEqual("failed", server.OPS._read()[-1]["status"])
+        self.assertEqual("failed", server.OPS.stored()[-1]["status"])
 
     def test_new_capacity_consumer_after_first_vm_is_accounted_before_next(self):
         body = self.reviewed()

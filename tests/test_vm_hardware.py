@@ -267,7 +267,7 @@ class AttachTests(unittest.TestCase):
         found = {"iso-virtio": {"metadata": {"labels": {"homestead.io/iso": "true"}}}}
         with mock.patch.object(vms, "_get", lambda ns, name: prepared["current"]), \
                 mock.patch.object(vms, "_identity", lambda obj: {"uid": "u", "resourceVersion": "1"}), \
-                mock.patch.object(vms, "_optional", lambda path: found.get(path.rsplit("/", 1)[-1])):
+                mock.patch.object(vms.KUBE, "get_optional", lambda path, read=None: found.get(path.rsplit("/", 1)[-1])):
             vms._recheck_edit(prepared)
             found["iso-virtio"] = {"metadata": {"labels": {}}}
             with self.assertRaisesRegex(ValueError, "cannot be adopted"):

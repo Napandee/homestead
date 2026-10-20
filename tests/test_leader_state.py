@@ -86,7 +86,24 @@ class HeartbeatTests(SharedDir):
         HEARTBEATS.HEART.update(self.saved)
         super().tearDown()
 
+    def test_a_replica_that_does_not_lead_never_shares_beats(self):
+        # #621: a standby replica's leader-only beat wrote its own (mostly
+        # empty) beats over the leader's, so another replica's health card
+        # lost the leader's tasks until the leader next wrote.
+        with mock.patch.object(HEARTBEATS.LEADER, "is_leader", return_value=True), \
+                mock.patch("time.time", return_value=1000):
+            HEARTBEATS.beat("auto-updates", 60, leader_only=True)
+        HEARTBEATS.HEART.clear()
+        LEADER_STATE._written.clear()
+        with mock.patch.object(HEARTBEATS.LEADER, "is_leader", return_value=False), \
+                mock.patch("time.time", return_value=1001):
+            HEARTBEATS.beat("sampler", 30, leader_only=True)
+        self.assertEqual({"auto-updates"}, set(HEARTBEATS.leader_beats(max_age=None)))
+
     def test_the_leaders_beats_are_shared_and_a_failure_at_once(self):
+        leading = mock.patch.object(HEARTBEATS.LEADER, "is_leader", return_value=True)
+        leading.start()
+        self.addCleanup(leading.stop)
         with mock.patch("time.time", return_value=1000):
             HEARTBEATS.beat("auto-updates", 60, leader_only=True)
             HEARTBEATS.beat("sampler", 30)                     # every replica's own: not shared

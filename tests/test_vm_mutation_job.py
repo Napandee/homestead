@@ -9,6 +9,7 @@ from unittest import mock
 
 import test_vm_resources  # server module path
 import homestead_operations as ops
+from fakes.job_store import put, store_writes
 import homestead_vm_mutation_job as job
 import homestead_vm_mutation_recovery as recovery
 import homestead_vm_power_job as power
@@ -52,7 +53,7 @@ class VMMutationJobTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Inspect job") as error:
             self.dispatch()
         self.assertNotIn("test-secret-value", str(error.exception))
-        return ops._read()[0]["id"]
+        return ops.stored()[0]["id"]
 
     def read(self, path):
         self.assertEqual(PATH, path)
@@ -67,7 +68,7 @@ class VMMutationJobTests(unittest.TestCase):
         result = self.dispatch()
         self.assertEqual("succeeded", result["operation"]["status"])
         self.assertIn("health are not verified", result["operation"]["message"])
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("accepted", item["ref"]["writes"][0]["phase"])
         self.assertFalse(item["ref"]["retain_resources"])
         self.assertNotIn("test-secret-value", str(item))
@@ -83,12 +84,12 @@ class VMMutationJobTests(unittest.TestCase):
             ops.dismiss_finished()
             with mock.patch.object(time, "time", return_value=1), self.assertRaisesRegex(ValueError, "already has job"):
                 self.dispatch(kind=kind, body=body)
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual(2, self.send.call_count)
 
     def test_failure_retains_receipts_and_blocks_new_create_edit_and_power(self):
         ident = self.failed()
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("uncertain", item["ref"]["writes"][0]["phase"])
         self.assertTrue(ops._public(item)["mutation_recovery"])
         self.assertFalse(ops._public(item)["cancellable"])
@@ -96,7 +97,7 @@ class VMMutationJobTests(unittest.TestCase):
         for kind in ("vm-create", "vm-edit", "vm-power"):
             with self.assertRaisesRegex(ValueError, "needs recovery"):
                 ops.start(kind, "new", {}, "/vms", {"namespace": "lab", "name": "guest", "review_digest": hashlib.sha256(kind.encode()).hexdigest()})
-        self.assertEqual(ident, ops._read()[0]["id"])
+        self.assertEqual(ident, ops.stored()[0]["id"])
 
     def test_partial_failure_and_swallowed_warning_never_become_success(self):
         def commit(writer):
@@ -109,7 +110,7 @@ class VMMutationJobTests(unittest.TestCase):
             return {"ok": True, "warning": "ignored write failure"}
         with self.assertRaises(ValueError):
             self.dispatch(commit)
-        item = ops._read()[0]
+        item = ops.stored()[0]
         self.assertEqual("failed", item["status"])
         self.assertEqual(["accepted", "refused"], [row["phase"] for row in item["ref"]["writes"]])
         self.assertTrue(item["ref"]["retain_resources"])
@@ -120,12 +121,12 @@ class VMMutationJobTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fresh admission"):
             self.dispatch(commit)
         self.send.assert_not_called()
-        self.assertFalse(ops._read()[0]["ref"]["retain_resources"])
+        self.assertFalse(ops.stored()[0]["ref"]["retain_resources"])
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.dispatch()
 
     def test_history_write_failure_never_sends(self):
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk")), self.assertRaises(OSError):
+        with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             self.dispatch()
         self.send.assert_not_called()
 
@@ -135,8 +136,8 @@ class VMMutationJobTests(unittest.TestCase):
             return {"ok": True, "vm_identity": {**VM["metadata"], "uid": "wrong-vm"}}
         with self.assertRaises(ValueError):
             self.dispatch(commit)
-        self.assertTrue(ops._read()[0]["ref"]["retain_resources"])
-        self.assertEqual("failed", ops._read()[0]["status"])
+        self.assertTrue(ops.stored()[0]["ref"]["retain_resources"])
+        self.assertEqual("failed", ops.stored()[0]["status"])
 
     def test_resolution_is_read_only_audited_unknown_and_consumes_old_token(self):
         ident = self.failed()
@@ -145,7 +146,7 @@ class VMMutationJobTests(unittest.TestCase):
         self.assertEqual(1, self.send.call_count)
         self.assertEqual("failed", result["operation"]["status"])
         self.assertFalse(result["operation"]["mutation_recovery"])
-        ref = ops._read()[0]["ref"]
+        ref = ops.stored()[0]["ref"]
         self.assertEqual(("admin", "unknown"), (ref["recovery"]["by"], ref["recovery"]["outcome"]))
         self.assertFalse(ref["retain_resources"])
         self.assertNotIn("test-secret-value", str(ref))
@@ -165,7 +166,7 @@ class VMMutationJobTests(unittest.TestCase):
         self.vm["metadata"]["resourceVersion"] = "v2"
         with self.assertRaises(recovery.REVIEW.Rejected):
             recovery.resolve(good, ops, self.read, "admin")
-        self.assertTrue(ops._read()[0]["ref"]["retain_resources"])
+        self.assertTrue(ops.stored()[0]["ref"]["retain_resources"])
 
     def test_missing_replacement_and_deleting_resources_are_not_adopted(self):
         ident = self.failed()
@@ -187,9 +188,9 @@ class VMMutationJobTests(unittest.TestCase):
                 recovery.preview(ident, ops, read, "admin")
             self.assertNotIn("test-secret-value", str(error.exception))
         good = self.approved(ident)
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk")), self.assertRaises(OSError):
+        with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             recovery.resolve(good, ops, self.read, "admin")
-        self.assertTrue(ops._read()[0]["ref"]["retain_resources"])
+        self.assertTrue(ops.stored()[0]["ref"]["retain_resources"])
 
     def test_active_dispatcher_in_another_process_blocks_inspection_and_resolution(self):
         ident = self.failed()
@@ -214,10 +215,10 @@ class VMMutationJobTests(unittest.TestCase):
 
     def test_orphan_prepared_job_can_be_resolved_without_replaying_and_is_fenced(self):
         ident = self.failed()
-        items = ops._read()
+        items = ops.stored()
         items[0].update(status="queued")
         items[0]["ref"].update(phase="prepared", writes=[])
-        ops._write(items)
+        put(ops, items)
         recovery.resolve(self.approved(ident), ops, self.read, "admin")
         with self.assertRaisesRegex(ValueError, "job has ended"):
             ops.record_phase(ident, "writing", 0, "late worker")

@@ -11,6 +11,7 @@ import homestead_copy_job as COPY
 import homestead_env_secrets as ENVSEC
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as GUARD
+import homestead_kube as KUBE
 import homestead_rename as IDENT
 import homestead_rollout_capacity as ROLLOUT
 import homestead_vm_power_job as LOCKS
@@ -147,14 +148,14 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                     annotations[GUARD.JOB_UID] = job["metadata"]["uid"]
                     writer("PUT", IDENT.base(ns) + "/" + name, current)
             writer.check()
-            with ops._lock:
-                items = ops._read()
+            with ops.transaction() as t:
+                items = t.items
                 item = next(i for i in items if i["id"] == ident)
                 item["ref"].update(phase="copying" if job else "saved", retain_resources=bool(job))
                 ops._finish(item, "running" if job else "succeeded", 35 if job else 100,
                     "Copy Job created; application stays stopped until a fresh Start review" if job else
                     "Import resources saved; application readiness has not been verified")
-                ops._write(items)
+                t.save(items)
                 return {**prepared["result"], "operation": ops._public(item)}
         except Exception:
             try:
@@ -215,9 +216,9 @@ def journalled(ns, name, job, ops):
     """Fence legacy name-based cleanup even when the Job is missing/replaced."""
     if job.get("metadata", {}).get("annotations", {}).get(GUARD.DISPATCH):
         return True
-    with ops._lock:
+    with ops.transaction():
         return any(i.get("kind") == KIND and any(r.get("kind") == "Job" and
-            (r.get("namespace"), r.get("name")) == (ns, name) for r in i.get("ref", {}).get("planned", [])) for i in ops._read())
+            (r.get("namespace"), r.get("name")) == (ns, name) for r in i.get("ref", {}).get("planned", [])) for i in ops.stored())
 
 
 def remove_completed_job(ns, name, job, read, send, ops):
@@ -225,8 +226,8 @@ def remove_completed_job(ns, name, job, read, send, ops):
     ident = job.get("metadata", {}).get("annotations", {}).get(GUARD.DISPATCH)
     if not ident:
         raise ValueError("Import Job identity is missing or replaced; inspect Recent jobs. Nothing was deleted.")
-    with LOCKS.worker_lock(ident, ops, timeout=0), ops._lock:
-        items = ops._read()
+    with LOCKS.worker_lock(ident, ops, timeout=0), ops.transaction() as t:
+        items = t.items
         item = next((i for i in items if i["id"] == ident and i["kind"] == KIND), None)
         if not item or item.get("status") != "succeeded" or item["ref"].get("retain_resources"):
             raise ValueError("Wait for a verified successful import before removing its Job. Inspect incomplete imports in Recent jobs; all data is retained.")
@@ -261,6 +262,12 @@ def remove_completed_job(ns, name, job, read, send, ops):
         send("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{name}",
              {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": ref["job_uid"]}, "propagationPolicy": "Background"})
         ref["helper_removed"] = True
-        ops._write(items)
+        t.save(items)
     return {"ok": True, "journalled": True, "name": name, "pods_removed": [], "prepulls_removed": [],
             "message": "Completed import Job removed; workload and all volumes retained"}
+
+
+def register(ops):
+    """The job store's entries for creating an app from an import (#622)."""
+    ops.RESOLVERS[KIND] = lambda item: status(item, KUBE.kget)
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

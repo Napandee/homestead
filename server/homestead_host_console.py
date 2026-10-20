@@ -156,9 +156,10 @@ def script(action):
 
 def _apply(node, uid, action):
     """Run one console action on one host and record what it is now. Called
-    holding _lock: host-run uses one helper per node."""
+    holding _lock, so one console action runs at a time."""
     try:
-        out, err = hostrun.run(node, script(action), timeout=240)
+        out, err = hostrun.run(node, script(action), timeout=240,
+                               change="" if action == "inspect" else f"{action.capitalize()} the host console on {node}")
         report = next((s for s in out.splitlines() if s.startswith("HSCONSOLE ")), "")
         if not report:
             failed = next((s for s in out.splitlines() if s.startswith("HSCONSOLE-FAILED ")), "")
@@ -281,3 +282,8 @@ ROUTES = {
     ("GET", "/api/host-console"): ("admin", lambda request: inventory()),
     ("POST", "/api/host-console"): ("admin", lambda request: act(request.body, request.user)),
 }
+
+
+def register(ops):
+    """The job store's entry for installing the host console (#622)."""
+    ops.RESOLVERS["host-console"] = status

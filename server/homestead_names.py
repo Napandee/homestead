@@ -5,6 +5,7 @@ or annotation it writes is homestead.io/something. The helpers here keep that
 in one place, so no module spells a name or key its own way.
 """
 
+import hashlib
 import urllib.parse
 
 BRAND = "homestead"
@@ -35,6 +36,16 @@ def read(meta, suffix, default=""):
 def object_name(suffix, namespace=None, kind="configmaps"):
     """What Homestead calls its own object of this kind."""
     return f"{BRAND}-{suffix}"
+
+
+def fitted(name, limit=63):
+    """A Kubernetes name built from a volume, node or path, kept as it is when
+    it fits; else cut and ended in a hash of the whole name, so two that start
+    the same never share one object (#596)."""
+    if len(name) <= limit:
+        return name
+    digest = hashlib.sha256(name.encode()).hexdigest()[:8]
+    return f"{name[:limit - 9].rstrip('-.')}-{digest}"
 
 
 def labels(task, app=None, **extra):

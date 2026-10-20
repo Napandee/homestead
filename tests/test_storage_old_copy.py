@@ -6,6 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_operations as ops
+from fakes.job_store import damaged_store, put
 import homestead_reclass as rc
 
 
@@ -23,8 +24,7 @@ class RetainedCopyTests(unittest.TestCase):
             patch.start(); self.addCleanup(patch.stop)
 
     def record(self, status, **ref):
-        with ops._lock:
-            ops._write([{"id": "move", "kind": "reclass", "status": status, "ref": {"old_pv": "original", **ref}}])
+        put(ops, [{"id": "move", "kind": "reclass", "status": status, "ref": {"old_pv": "original", **ref}}])
 
     def test_active_failed_and_cancelled_moves_protect_original(self):
         for status in ("queued", "running", "cancelling", "failed", "cancelled"):
@@ -44,7 +44,7 @@ class RetainedCopyTests(unittest.TestCase):
         self.assertEqual("Delete", self.send.call_args.args[2]["spec"]["persistentVolumeReclaimPolicy"])
 
     def test_unreadable_history_never_means_no_active_moves(self):
-        with mock.patch.object(ops, "_read", side_effect=ValueError("history unavailable")):
+        with damaged_store(ops):
             with self.assertRaises(ValueError): rc.remove_old_copy("original", ops)
         self.send.assert_not_called()
 

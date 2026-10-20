@@ -128,9 +128,11 @@ class ScanTests(unittest.TestCase):
         shim.raw_get = lambda path: json.dumps(listing)
         with unittest.mock.patch.dict(sys.modules, {"homestead_shim": shim}):
             report = IMP.image_cache()
+            self.assertEqual([], self.sent, "looking removes nothing (#622)")
+            IMP.tick()
         self.assertTrue(report["complete"])
         self.assertEqual({"big:1", "small:2"}, {i["name"] for i in report["images"]})
-        self.assertTrue(any(m == "DELETE" for m, p, b in self.sent))
+        self.assertTrue(any(m == "DELETE" for m, p, b in self.sent), "the leader's tick removes the finished pod")
 
     def test_forgetting_a_rollback_drops_the_kept_image(self):
         IMP.kget = lambda path: {"metadata": {"annotations": {"homestead.io/update-previous": "{}"}}}

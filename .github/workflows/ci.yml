@@ -67,7 +67,8 @@ jobs:
             [ "$(block "$BASE" "$1")" != "$(block HEAD "$1")" ] && echo true || echo false
           }
           either() { [ "$1" = true ] || [ "$2" = true ] && echo true || echo false; }
-          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/ci_ui_checks.sh)" "$(job_changed dialogs)")
+          # The checks themselves count too: a PR that changes only one runs it.
+          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/ci_ui_checks.sh 'scripts/check_*.mjs' 'tests/integration/*.mjs')" "$(job_changed dialogs)")
           installer=$(either "$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs)" "$(job_changed installer-screens)")
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
@@ -176,6 +177,9 @@ jobs:
       - name: Install allocation client test dependencies
         run: |
           python -m pip install --only-binary=:all: --require-hashes -r requirements-topology.txt
+      - name: Install test-only dependencies
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements-test.txt
       - name: Backend tests
         run: python -m unittest discover -s tests -v
       - name: JavaScript syntax

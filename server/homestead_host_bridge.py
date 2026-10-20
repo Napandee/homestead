@@ -27,6 +27,7 @@ Nothing is done to a host whose network Homestead cannot describe.
 """
 import re
 import time
+import urllib.error
 
 import homestead_operations as OPS
 import homestead_routes as ROUTER
@@ -34,6 +35,9 @@ import homestead_routes as ROUTER
 hostrun = kget = ksend = None
 BRIDGE = "br0"
 ROLLBACK_SECONDS = 240
+# How long the move holds its host (homestead_hostrun.hold) if its job never
+# ends: past the rollback and a k3s restart. The job lets go when it ends.
+HOLD_SECONDS = ROLLBACK_SECONDS + 600
 BACKUP_ROOT = "/var/lib/homestead"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,15}")
 MAC = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
@@ -224,15 +228,25 @@ def start(node, ops):
     if facts["problem"]:
         raise ValueError(f"{node}: {facts['problem']}")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out, err = hostrun.run(node, convert_script({"file": facts["file"], "netplan_id": facts["netplan_id"],
-                                                  "mac": facts["mac"]}, stamp), timeout=120)
+    what = f"Move {node}'s {facts['interface']} into {BRIDGE}"
+    # The host is held until the job ends: netplan applies after this run,
+    # and the network may yet roll back (#597).
+    lease = hostrun.hold(node, what, seconds=HOLD_SECONDS)
+    try:
+        out, err = hostrun.run(node, convert_script({"file": facts["file"], "netplan_id": facts["netplan_id"],
+                                                      "mac": facts["mac"]}, stamp), timeout=120, change=what, holder=lease)
+    except Exception:
+        hostrun.let_go(node, lease)
+        raise
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
     if not done:
+        hostrun.let_go(node, lease)
         reason = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
         raise ValueError(f"{node} was not changed: {reason}")
     ref = {"node": node, "interface": facts["interface"], "address": facts["address"], "bridge": BRIDGE,
-           "backup": done[3:], "stage": "applied", "since": time.time(), "services": facts["services"]}
-    return ops.start("host-bridge", f"Move {node}'s {facts['interface']} into {BRIDGE}",
+           "backup": done[3:], "stage": "applied", "since": time.time(), "services": facts["services"],
+           "change": what, "lease": lease}
+    return ops.start("host-bridge", what,
                      {"kind": "Node", "name": node}, "/nodes", ref,
                      f"Applied; checking {node} on {BRIDGE} - it puts itself back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
 
@@ -245,7 +259,30 @@ def _node_count():
 
 
 def status(item, now=None):
-    """The job's next step: (status, progress, message)."""
+    """The job's next step: (status, progress, message). The host is let go
+    of when the job ends."""
+    try:
+        result = _step(item, now)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:    # the job fails on it (homestead_operations)
+            _let_go(item["ref"])
+        raise
+    if result[0] in ("succeeded", "failed"):
+        _let_go(item["ref"])
+    return result
+
+
+def _let_go(ref):
+    if ref.get("lease"):
+        hostrun.let_go(ref["node"], ref.pop("lease"))
+
+
+def _held(ref):
+    """What a follow-up change runs with: inside the job's hold."""
+    return {"change": ref.get("change") or f"Move {ref['node']} into {BRIDGE}", "holder": ref.get("lease", "")}
+
+
+def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
     if ref["stage"] == "applied":
@@ -257,7 +294,7 @@ def status(item, now=None):
             out = ""
         seen = set(out.split())
         if {"ADDR", "PORT", "ROUTE", "GATEWAY", "ARMED"} <= seen:
-            out, _ = hostrun.run(node, CONFIRM_SCRIPT, timeout=45)
+            out, _ = hostrun.run(node, CONFIRM_SCRIPT, timeout=45, **_held(ref))
             if "CONFIRMED" not in out:
                 return "running", 40, f"{node} is up on {BRIDGE}; confirming"
             ref.update(stage="confirmed", since=now)
@@ -280,7 +317,8 @@ def status(item, now=None):
             pass
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
         if service and _node_count() > 1:
-            hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45)
+            hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                        **_held(ref))
             ref.update(stage="restarting", since=now)
             return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
         ref.update(stage="done")
@@ -310,3 +348,25 @@ ROUTES = {
     ("POST", "/api/node/bridge/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
     ("POST", "/api/node/bridge"): ("admin", lambda request: convert(request.body)),
 }
+
+
+def cancel_plan(item):
+    """Stopping tracking it also lets go of the host, so other changes there
+    need not wait for the hold to run out (#597)."""
+    node = item["ref"]["node"]
+    return {"mode": "forget", "needs": "admin",
+            "keeps": [f"The move carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
+                      f"Other changes on {node} can start again at once"]}
+
+
+def cancel_run(item, options):
+    _let_go(item["ref"])
+    return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
+
+
+
+
+def register(ops):
+    """The job store's entry for a host's LAN bridge (#622)."""
+    ops.RESOLVERS["host-bridge"] = status
+    ops.CANCELLERS["host-bridge"] = (cancel_plan, cancel_run)

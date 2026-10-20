@@ -333,7 +333,7 @@ def wipe(node, device, facts):
         raise ValueError(refusal(facts, "wipe"))
     if "wipefs" not in facts["tools"]:
         raise ValueError(f"{node} has no wipefs; install util-linux there")
-    out, err = hostrun.run(node, wipe_script(device, facts), timeout=300)
+    out, err = hostrun.run(node, wipe_script(device, facts), timeout=300, change=f"Erase {device} on {node}")
     if "WIPED" not in out.split():
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
         raise ValueError(f"wiping {device} on {node} stopped: {problem}")
@@ -387,7 +387,8 @@ def setup(node, device, mode, fstype="ext4", confirm=""):
         # as a blank disk is.
         facts, mode = wipe(node, device, facts), "format"
     point = mount_point(device)
-    out, err = hostrun.run(node, setup_script(device, mode, fstype, point, facts.get("multipath") or ()), timeout=600)
+    out, err = hostrun.run(node, setup_script(device, mode, fstype, point, facts.get("multipath") or ()), timeout=600,
+                           change=f"Prepare {device} on {node}")
     done = next((line for line in out.splitlines() if line.startswith("OK ")), "")
     if not done:
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
@@ -560,7 +561,7 @@ lvs "{vg}/{OS_LV_V2}" >/dev/null 2>&1 && {{ echo "ERR {vg}/{OS_LV_V2} already ex
 lvcreate -y -L {size}G -n {OS_LV_V2} "{vg}" >/dev/null
 udevadm settle 2>/dev/null || true
 [ -b "{device}" ] && echo "OK {device}"
-""", timeout=120)
+""", timeout=120, change=f"Make {vg}/{OS_LV_V2} on {node}")
         if not any(line.startswith("OK ") for line in out.splitlines()):
             problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
             raise ValueError(f"making {vg}/{OS_LV_V2} on {node} stopped: {problem}")
@@ -572,7 +573,7 @@ lvcreate -y -L {size}G -n {OS_LV} "{vg}" >/dev/null
 udevadm settle 2>/dev/null || true
 mkfs.ext4 -F -L hs-longhorn "{device}" >/dev/null
 """ + setup_script(device, "mount", "ext4", OS_POINT)
-    out, err = hostrun.run(node, script, timeout=600)
+    out, err = hostrun.run(node, script, timeout=600, change=f"Make {vg}/{OS_LV} on {node}")
     if not any(line.startswith("OK ") for line in out.splitlines()):
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
         raise ValueError(f"making {vg}/{OS_LV} on {node} stopped: {problem}")
@@ -643,7 +644,7 @@ def use_region(node, disk, start, size_gb, engine="v1", confirm=""):
     script = partition_script(disk, region, first, length, time.strftime("%Y%m%d-%H%M%S"))
     if engine == "v1":
         script += 'mkfs.ext4 -F -L hs-longhorn "$NEWP" >/dev/null\n' + setup_script('"$NEWP"', "mount", "ext4", point)
-    out, err = hostrun.run(node, script, timeout=600)
+    out, err = hostrun.run(node, script, timeout=600, change=f"Make a partition on /dev/{disk} on {node}")
     made = next((line.split() for line in out.splitlines() if line.startswith("PART ")), None)
     problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
     if not made or engine == "v1" and not any(line.startswith("OK ") for line in out.splitlines()):

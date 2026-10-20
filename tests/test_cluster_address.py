@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as NET
+from fakes.platform import plain_platform
 
 MAP = "/api/v1/namespaces/lab/configmaps/homestead-vips"
 NODE = "192.0.2.201"
@@ -65,6 +66,9 @@ def plan(mode, vip="", port=8080):
 class ClusterAddressTests(unittest.TestCase):
     """Homestead once put apps on Harvester's management VIP, and new hosts
     could no longer join through it on RKE2's 9345."""
+
+    def setUp(self):
+        plain_platform(self)
 
     def test_the_management_vip_is_the_platforms(self):
         Cluster([INGRESS])

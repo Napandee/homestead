@@ -147,7 +147,8 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         "#cloud-config",
         f"hostname: {node['name']}",
         "ssh_pwauth: true",
-        f"password: {json.dumps(password)}",
+        # Not ASCII-escaped: PyYAML reads a surrogate pair as two characters.
+        f"password: {json.dumps(password, ensure_ascii=False)}",
         "chpasswd: {expire: false}",
         "package_update: true",
         "packages: [qemu-guest-agent, curl, python3]" if health else "packages: [qemu-guest-agent, curl]",
@@ -265,8 +266,8 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
                     not identity.get("uid") or not identity.get("resourceVersion")):
                 raise ValueError("VM creation identity was not returned")
             if writer:
-                with ops._lock:
-                    current = next(row for row in ops._read() if row["id"] == operation["id"])
+                with ops.transaction() as t:
+                    current = next(row for row in t.items if row["id"] == operation["id"])
                     receipts = [entry for entry in current["ref"]["writes"] if entry["resource"] == {
                         "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ns, "name": node["name"]}]
                     if (not receipts or receipts[-1]["phase"] != "accepted" or receipts[-1]["identity"] != {
@@ -345,3 +346,8 @@ def status(item):
         return "running", 80, f"k3s is up; installing {'Longhorn and ' if ref.get('setup') == 'homestead' else ''}Homestead inside it"
     return "succeeded", 100, (f"The cluster is up: its Homestead answers at http://{first}:8088 - open it and "
                               "create the first account there. The nodes' login is ubuntu with your password")
+
+
+def register(ops):
+    """The job store's entry for a k3s cluster made from VMs (#622)."""
+    ops.RESOLVERS["k3s-cluster"] = status

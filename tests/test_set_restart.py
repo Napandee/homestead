@@ -739,7 +739,7 @@ class SetRestartRouteTests(unittest.TestCase):
             self.assertEqual(202, r.code)
             self.assertEqual(1, len(self.sent), "no retry")
             self.assertEqual("already replaced", r.body["set_restart"]["stage"])
-            item = OPS._read()[0]
+            item = OPS.stored()[0]
             self.assertEqual("web-0 was already replaced; nothing was deleted; waiting for it to be Ready on another host",
                              item["message"])
 
@@ -754,14 +754,14 @@ class SetRestartRouteTests(unittest.TestCase):
         self.assertIn("could not delete any of the pods", r.body["error"])
         self.assertEqual(["web-0", "web-1"], [x["name"] for x in r.body["not_deleted"]])
         self.assertIn("boom", r.body["not_deleted"][0]["error"])
-        self.assertEqual([], OPS._read())
+        self.assertEqual([], OPS.stored())
 
     def test_mixed_deleted_and_failed_follows_only_the_deleted(self):
         self.two_pods(); self.errs = {"web-1": 500}
         r = self.run_req()
         self.assertEqual(202, r.code)
         self.assertEqual(["web-1"], [x["name"] for x in r.body["not_deleted"]])
-        item = OPS._read()[0]
+        item = OPS.stored()[0]
         self.assertEqual(["web-0"], [p["name"] for p in item["ref"]["pods"]])
         self.assertEqual("Deleted web-0; could not delete web-1: HTTP Error 500: boom; nothing was changed for it; "
                          "waiting for a replacement on another host", item["message"])
@@ -773,7 +773,7 @@ class SetRestartRouteTests(unittest.TestCase):
         self.two_pods(); self.errs = {"web-0": 404}
         r = self.run_req()
         self.assertEqual(202, r.code)
-        item = OPS._read()[0]
+        item = OPS.stored()[0]
         self.assertEqual(["web-0", "web-1"], [p["name"] for p in item["ref"]["pods"]])
         self.assertEqual("Deleted web-1; web-0 was already replaced; waiting for a replacement on another host", item["message"])
         self.assertEqual("deleted", r.body["set_restart"]["stage"])
@@ -791,7 +791,7 @@ class SetRestartRouteTests(unittest.TestCase):
 
     def item(self):
         r = self.run_req()
-        return next(i for i in OPS._read() if i["id"] == r.body["id"])
+        return next(i for i in OPS.stored() if i["id"] == r.body["id"])
 
     def new_pod(self, node, ready, uid="u9"):
         conds = [{"type": "Ready", "status": "True" if ready else "False"}]

@@ -55,3 +55,22 @@ class DashboardHistoryApiTests(unittest.TestCase):
                 self.assertGreaterEqual(sleep.call_args.args[0], 1)
                 self.assertLessEqual(sleep.call_args.args[0], 30)
         self.assertEqual([17], server.HISTORY.live_series()["cpu"])
+
+    def test_only_the_leader_scans_the_cluster_and_beats_for_the_sampler(self):
+        # #621: a standby replica ran the full overview scan every half minute
+        # for nothing, and its leader-only beat wrote over the leader's shared
+        # heartbeats. It still takes its own VM disk readings: they live in its
+        # memory, and the pages it answers read them.
+        for leading in (False, True):
+            with self.subTest(leading=leading), \
+                    mock.patch.object(server.LEADER, "is_leader", return_value=leading), \
+                    mock.patch.object(server.OVERVIEW_ROUTES, "get_overview", return_value=overview(17)) as scan, \
+                    mock.patch.object(server.HISTORY, "record_live"), \
+                    mock.patch.object(server.VMUSAGE, "sample") as vm_sample, \
+                    mock.patch.object(server.OVERVIEW_ROUTES, "beat") as beat, \
+                    mock.patch.object(server.time, "sleep", side_effect=StopLoop):
+                with self.assertRaises(StopLoop):
+                    server.OVERVIEW_ROUTES._sampler()
+                self.assertEqual(int(leading), scan.call_count)
+                self.assertEqual(int(leading), beat.call_count)
+                vm_sample.assert_called_once()

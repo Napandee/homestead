@@ -4,6 +4,7 @@
    states read as people write them, and one action has one label. */
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
 const core = fs.readFileSync("web/js/core.js", "utf8");
 const ui = fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js")
@@ -14,9 +15,8 @@ const where = (pattern, files = ui) => files.flatMap(([file, source]) => source.
 function coreHelpers() {
   const ctx = { String, Number };
   vm.createContext(ctx);
-  const start = core.indexOf("const plural"), end = core.indexOf("\n\n", core.indexOf("const stateWords"));
-  assert.ok(start >= 0 && end > start, "core.js defines plural() and stateWords()");
-  vm.runInContext(`${core.slice(start, end)}; this.plural = plural; this.stateWords = stateWords;`, ctx);
+  const words = between(core, "const plural", "const stateWords") + between(core, "const stateWords", "\n\n");
+  vm.runInContext(`${words}; this.plural = plural; this.stateWords = stateWords;`, ctx);
   return ctx;
 }
 
@@ -55,10 +55,9 @@ test("an AI agent request labels its fields as people write them", () => {
   const source = fs.readFileSync("web/js/views-agents.js", "utf8");
   const ctx = { String, JSON, Array, esc: s => String(s ?? "") };
   vm.createContext(ctx);
-  const from = source.indexOf("const AGENT_LABELS"), to = source.indexOf("const AGENT_STATUS");
-  assert.ok(from >= 0 && to > from, "views-agents.js has a label map");
-  const value = source.slice(source.indexOf("function agentValue"), source.indexOf("/* The plan to review"));
-  vm.runInContext(`${source.slice(from, to)}${value}; this.agentLabel = agentLabel; this.agentValue = agentValue;`, ctx);
+  const labels = between(source, "const AGENT_LABELS", "const AGENT_STATUS");
+  const value = between(source, "function agentValue", "/* The plan to review");
+  vm.runInContext(`${labels}${value}; this.agentLabel = agentLabel; this.agentValue = agentValue;`, ctx);
   assert.equal(ctx.agentLabel("uid"), "UID");
   assert.equal(ctx.agentLabel("load_balancer_ip"), "Load balancer IP");
   assert.equal(ctx.agentLabel("why_admin"), "Admin because");

@@ -8,8 +8,8 @@ NFS gateway with its exports. Both live in the namespace shares do.
 import copy
 import os
 import time
-import urllib.error
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_nfs as NFS
@@ -35,15 +35,6 @@ def bind(_kget, _ksend, _build_deployment, namespace, cache,
     kget, ksend, build_deployment = _kget, _ksend, _build_deployment
     SMB_NAMESPACE, _cache = namespace, cache
     shared_classes, default_class, storage_options = _shared_classes, _default_class, _storage_options
-
-
-def _optional_smb(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def _smb_path(kind, name):
@@ -97,7 +88,7 @@ def _migrate_samba_locked(legacy):
     new_dep_path = _smb_path("deployments", SMB_NAME)
     old_svc_path = _smb_path("services", "samba")
     new_svc_path = _smb_path("services", SMB_NAME)
-    old_service = _optional_smb(old_svc_path)
+    old_service = KUBE.get_optional(old_svc_path, read=kget)
     rows, credentials, *_ = SHARES._state()
     new_dep = _smb_new_object(legacy, SMB_NAME)
     replicas = int((legacy.get("spec") or {}).get("replicas", 1) or 0)
@@ -128,7 +119,7 @@ def _migrate_samba_locked(legacy):
                   ctype="application/merge-patch+json")
             deadline = time.time() + SHARES.ROLLOUT_TIMEOUT
             while time.time() < deadline:
-                live = _optional_smb(new_dep_path) or {}
+                live = KUBE.get_optional(new_dep_path, read=kget) or {}
                 status = live.get("status") or {}
                 if (int(status.get("readyReplicas", 0) or 0) >= replicas and
                         int(status.get("updatedReplicas", 0) or 0) >= replicas and
@@ -168,10 +159,10 @@ def install_samba(address=""):
     SMB on port 445 at an address of its own - the one chosen, or the next
     free one. Shares are its arguments, which Homestead writes, so it starts
     with none."""
-    existing = _optional_smb(_smb_path("deployments", SMB_NAME))
+    existing = KUBE.get_optional(_smb_path("deployments", SMB_NAME), read=kget)
     if existing:
         return existing
-    legacy = _optional_smb(_smb_path("deployments", "samba"))
+    legacy = KUBE.get_optional(_smb_path("deployments", "samba"), read=kget)
     if legacy:
         return _migrate_samba(legacy)
     cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
@@ -194,8 +185,8 @@ def install_samba(address=""):
 
 def samba_state():
     """The Samba server shares are served from: whether it runs, and where."""
-    dep = _optional_smb(_smb_path("deployments", SMB_NAME)) or _optional_smb(
-        _smb_path("deployments", "samba"))
+    dep = KUBE.get_optional(_smb_path("deployments", SMB_NAME), read=kget) or KUBE.get_optional(
+        _smb_path("deployments", "samba"), read=kget)
     try:
         rows, credentials, *_ = SHARES._state()
         configured = {row["name"] for row in rows}
@@ -213,8 +204,8 @@ def samba_state():
     status = dep.get("status") or {}
     address = ""
     try:
-        svc = _optional_smb(_smb_path("services", SMB_NAME)) or _optional_smb(
-            _smb_path("services", "samba")) or {}
+        svc = KUBE.get_optional(_smb_path("services", SMB_NAME), read=kget) or KUBE.get_optional(
+            _smb_path("services", "samba"), read=kget) or {}
         address = next((i.get("ip", "") for i in ((svc.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []), "") \
             or ((svc.get("metadata") or {}).get("annotations") or {}).get("kube-vip.io/loadbalancerIPs", "") \
             or ((svc.get("metadata") or {}).get("annotations") or {}).get("metallb.universe.tf/loadBalancerIPs", "") \
@@ -294,7 +285,7 @@ def remove_samba():
         for name in (SMB_NAME, "samba"):
             for kind in ("deployments", "services"):
                 path = _smb_path(kind, name)
-                if _optional_smb(path) is not None:
+                if KUBE.get_optional(path, read=kget) is not None:
                     ksend("DELETE", path)
                     removed.append(f"{kind}/{name}")
         _cache.pop("wl", None)
@@ -315,8 +306,8 @@ def repair_samba(address=""):
 
 def nfs_state():
     """The opt-in NFSv4 gateway is independent of the SMB server and PVCs."""
-    dep = _optional_smb(_smb_path("deployments", NFS.NAME))
-    svc = _optional_smb(_smb_path("services", NFS.NAME))
+    dep = KUBE.get_optional(_smb_path("deployments", NFS.NAME), read=kget)
+    svc = KUBE.get_optional(_smb_path("services", NFS.NAME), read=kget)
     rows, *_ = SHARES._state()
     names = [row["name"] for row in rows if row.get("nfs_clients")]
     desired = int(((dep or {}).get("spec") or {}).get("replicas", 0) or 0)
@@ -393,7 +384,7 @@ def _nfs_deployment(rows, address=""):
 def reconcile_nfs(rows=None):
     """Keep a running NFS gateway's exports aligned with the saved inventory."""
     dep_path = _smb_path("deployments", NFS.NAME)
-    current = _optional_smb(dep_path)
+    current = KUBE.get_optional(dep_path, read=kget)
     if not current:
         return {"state": "absent"}
     if rows is None:
@@ -415,7 +406,7 @@ def reconcile_nfs(rows=None):
 def set_nfs(enabled, address=""):
     with SHARES.LOCK:
         path = _smb_path("deployments", NFS.NAME)
-        current = _optional_smb(path)
+        current = KUBE.get_optional(path, read=kget)
         if not enabled:
             if current:
                 ksend("PATCH", path, {"spec": {"replicas": 0}},
@@ -436,7 +427,7 @@ def set_nfs(enabled, address=""):
                 raise
         else:
             reconcile_nfs(rows)
-            if _optional_smb(_smb_path("services", NFS.NAME)) is None:
+            if KUBE.get_optional(_smb_path("services", NFS.NAME), read=kget) is None:
                 _, svc = _nfs_deployment(rows, address)
                 ksend("POST", f"/api/v1/namespaces/{SMB_NAMESPACE}/services", svc)
             ksend("PATCH", path, {"spec": {"replicas": 1}},
@@ -448,13 +439,13 @@ def set_nfs(enabled, address=""):
 def remove_nfs():
     """Remove only the NFS address and daemon, never a claim or share record."""
     with SHARES.LOCK:
-        current = _optional_smb(_smb_path("deployments", NFS.NAME))
+        current = KUBE.get_optional(_smb_path("deployments", NFS.NAME), read=kget)
         if current:
             _nfs_inventory(current)
         removed = []
         for kind in ("deployments", "services"):
             path = _smb_path(kind, NFS.NAME)
-            if _optional_smb(path) is not None:
+            if KUBE.get_optional(path, read=kget) is not None:
                 ksend("DELETE", path)
                 removed.append(f"{kind}/{NFS.NAME}")
         _cache.pop("wl", None)
@@ -467,7 +458,7 @@ def set_nfs_export(name, clients, read_only=True):
     """Save one explicit export; an empty client network removes that export."""
     with SHARES.LOCK:
         rows, _, config_obj, _, _ = SHARES._state()
-        rows = NFS.export_ids(rows, _optional_smb(_smb_path("deployments", NFS.NAME)))
+        rows = NFS.export_ids(rows, KUBE.get_optional(_smb_path("deployments", NFS.NAME), read=kget))
         row = next((item for item in rows if item.get("name") == name), None)
         if row is None:
             raise ValueError("share not found")

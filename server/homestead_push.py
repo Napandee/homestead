@@ -67,12 +67,27 @@ def private_key():
     with _lock:
         if "private" in _key_cache:
             return _key_cache["private"]
+        # A new key would orphan every browser subscribed with the old one,
+        # so one is made only when the file is missing, never when it could
+        # not be looked at.
         try:
-            with open(_key_path(), encoding="utf-8") as handle:
-                private = int(json.load(handle)["private"], 16)
-        except (OSError, ValueError, KeyError):
+            os.stat(_key_path())
+            missing = False
+        except FileNotFoundError:
+            missing = True
+        except OSError as error:
+            raise SHARED.Unreadable(f"Homestead could not read vapid.json on its data volume ({error.strerror}), "
+                                    "so it changed nothing; the saved key is kept") from error
+        if missing:
             private = EC.new_private_key()
             SHARED.write_json(_key_path(), {"private": f"{private:064x}", "created": int(time.time())}, mode=0o600)
+        else:
+            saved = SHARED.read_json(_key_path(), {})
+            try:
+                private = int(saved["private"], 16)
+            except (TypeError, KeyError, ValueError) as error:
+                raise SHARED.Unreadable("vapid.json on Homestead's data volume does not hold a valid push key, "
+                                        "so it changed nothing; the saved key is kept") from error
         _key_cache["private"] = private
         _key_cache["public"] = EC.public_bytes(EC.public_key(private))
         return private
@@ -102,12 +117,7 @@ def _subs_path():
 
 
 def _read():
-    try:
-        with open(_subs_path(), encoding="utf-8") as handle:
-            rows = json.load(handle)
-        return rows if isinstance(rows, list) else []
-    except (OSError, ValueError):
-        return []
+    return SHARED.read_json(_subs_path(), [])
 
 
 def _write(rows):

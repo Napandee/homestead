@@ -65,6 +65,53 @@ class ReviveTests(unittest.TestCase):
         self.assertEqual([], self.deleted)
 
 
+class UnreadLeasesTests(unittest.TestCase):
+    """A Lease list that failed read as no Lease at all: every shared lease
+    looked unheld, and kube-vip was restarted, every VIP with it (#615)."""
+
+    def setUp(self):
+        import time as _time
+        self.deleted = []
+        self.answers = {"/api/v1/services": {"items": [service("homestead-smb"), service("homestead-vip")]},
+                        "/apis/discovery.k8s.io/v1/endpointslices": {"items": slices("homestead-smb")},
+                        "/api/v1/namespaces/kube-system/pods": {"items": [
+                            {"metadata": {"name": "kube-vip-24rxl", "ownerReferences": [{"kind": "DaemonSet"}]}}]}}
+
+        def get(path):
+            answer = self.answers.get(path)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer if answer is not None else {"items": []}
+
+        VIPS.bind(get, lambda method, path, body=None, **k: self.deleted.append(path) if method == "DELETE" else None)
+        VIPS._restarted[0] = 0.0
+        VIPS._stranded_since.clear()
+        VIPS._stranded_since[("lab", LEASE)] = _time.time() - 120   # stranded past the grace already
+
+    def tearDown(self):
+        VIPS._stranded_since.clear()
+
+    def test_a_lease_read_that_fails_restarts_nothing(self):
+        self.answers["/apis/coordination.k8s.io/v1/leases"] = TimeoutError("timed out")
+        with self.assertRaisesRegex(Exception, "timed out"):
+            VIPS.keep(PLATFORM)
+        self.assertEqual([], self.deleted)
+
+    def test_no_lease_at_all_while_services_name_one_restarts_nothing(self):
+        self.answers["/apis/coordination.k8s.io/v1/leases"] = {"items": []}
+        VIPS.keep(PLATFORM)
+        self.assertEqual([], self.deleted)
+
+
+    def test_homestead_may_list_leases_without_the_wildcard_rule(self):
+        """keep() lists Leases cluster-wide; only the "*" rule allowed it, so
+        tightening that would have made the read fail every pass."""
+        import re
+        deploy = (Path(__file__).resolve().parents[1] / "deploy" / "deploy.yaml").read_text()
+        rule = re.search(r'apiGroups: \["coordination.k8s.io"\]\n\s+resources: \[leases\]\n\s+verbs: \[([^\]]*)\]', deploy)
+        self.assertIn("list", [verb.strip() for verb in rule.group(1).split(",")])
+
+
 if __name__ == "__main__":
     unittest.main()
 

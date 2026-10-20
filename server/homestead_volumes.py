@@ -72,8 +72,19 @@ def _claim_volume_names(spec, claim):
             if (row.get("persistentVolumeClaim") or {}).get("claimName") == claim}
 
 
-def _mounts(spec, claim):
-    volume_names = _claim_volume_names(spec, claim)
+def _template_claim_names(obj, claim):
+    """A StatefulSet's own claims come from its volumeClaimTemplates, named
+    <template>-<set>-<n>, and are absent from its pod template's volumes;
+    containers mount them by the template's name. Retained ordinals beyond
+    the current scale count too: scaling back up reuses them."""
+    name = (obj.get("metadata") or {}).get("name", "")
+    return {template.get("metadata", {}).get("name", "")
+            for template in ((obj.get("spec") or {}).get("volumeClaimTemplates") or [])
+            if re.fullmatch(re.escape(f"{(template.get('metadata') or {}).get('name', '')}-{name}") + r"-\d+", claim)}
+
+
+def _mounts(spec, claim, templated=frozenset()):
+    volume_names = _claim_volume_names(spec, claim) | set(templated)
     if not volume_names:
         return []
     out = []
@@ -92,8 +103,8 @@ def _mounts(spec, claim):
     return out
 
 
-def _consumer(kind, obj, spec, claim, active, detail=""):
-    if not _claim_volume_names(spec, claim):
+def _consumer(kind, obj, spec, claim, active, detail="", templated=frozenset()):
+    if not _claim_volume_names(spec, claim) and not templated:
         return None
     meta = obj.get("metadata", {}) or {}
     return {
@@ -102,7 +113,7 @@ def _consumer(kind, obj, spec, claim, active, detail=""):
         "namespace": meta.get("namespace", ""),
         "active": bool(active),
         "detail": detail,
-        "mounts": _mounts(spec, claim),
+        "mounts": _mounts(spec, claim, templated),
     }
 
 
@@ -127,9 +138,19 @@ def _consumers(namespace, claim, warnings):
             desired = int((obj.get("spec", {}) or {}).get("replicas", 1) or 0)
             spec = (((obj.get("spec", {}) or {}).get("template") or {}).get("spec") or {})
             row = _consumer(kind, obj, spec, claim, desired > 0,
-                            f"{desired} desired instance{'s' if desired != 1 else ''}")
+                            f"{desired} desired instance{'s' if desired != 1 else ''}",
+                            _template_claim_names(obj, claim) if kind == "StatefulSet" else frozenset())
             if row:
                 result.append(row)
+
+    # A CronJob between runs has no pod; only its template says it needs the
+    # claim, and its next run would find it gone.
+    for job in _items(f"/apis/batch/v1/namespaces/{namespace}/cronjobs", "cronjob", warnings):
+        template = ((job.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {}
+        row = _consumer("CronJob", job, (template.get("template") or {}).get("spec") or {}, claim, False,
+                        "suspended" if (job.get("spec") or {}).get("suspend") else "runs on a schedule")
+        if row:
+            result.append(row)
 
     # Jobs can hold PVC protection even after their owning UI has disappeared.
     for job in _items(f"/apis/batch/v1/namespaces/{namespace}/jobs", "job", warnings):
@@ -149,8 +170,10 @@ def _consumers(namespace, claim, warnings):
         template_spec = (((vm_spec.get("template") or {}).get("spec") or {}))
         claims = []
         for volume in template_spec.get("volumes") or []:
-            source = volume.get("persistentVolumeClaim") or {}
-            if source.get("claimName") == claim:
+            # A disk is given either as the claim itself or as the
+            # DataVolume that made it, which has the claim's name.
+            if claim in ((volume.get("persistentVolumeClaim") or {}).get("claimName"),
+                         (volume.get("dataVolume") or {}).get("name")):
                 claims.append(volume.get("name", ""))
         if claims:
             running = bool(vm_spec.get("running")) or vm_spec.get("runStrategy") not in (None, "Halted")
@@ -367,13 +390,8 @@ def orphan_plan(namespace, name, volume):
     if ks.get("namespace") not in (None, "", namespace) or ks.get("pvcName") not in (None, "", name):
         raise ValueError("Backing volume identity does not match the selected former claim")
     warnings, blockers = [], []
+    # Stopped CronJobs included; an old claim name must not be broken by cleanup.
     consumers = _consumers(namespace, name, warnings)
-    # Include stopped CronJobs too; an old claim name must not be broken by cleanup.
-    for job in _items(f"/apis/batch/v1/namespaces/{namespace}/cronjobs", "cronjob", warnings):
-        template = ((job.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {}
-        row = _consumer("CronJob", job, (template.get("template") or {}).get("spec") or {}, name, False)
-        if row:
-            consumers.append(row)
     if consumers:
         blockers.append("Remove remaining workload references to the former claim first")
     if namespace in SYSTEM_NAMESPACES:
@@ -458,7 +476,7 @@ def _review(plan):
 def delete_reviewed(cfg):
     """Delete as reviewed, recorded as a job, under the jobs' lock so no
     storage job starts on the volume meanwhile."""
-    with OPS._lock:
+    with OPS.transaction():
         result = delete(cfg, validate=_review)
         result["operation"] = OPS.start(
             "volume-delete", f"Delete volume {result['name']}",

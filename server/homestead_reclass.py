@@ -31,6 +31,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes
@@ -60,33 +61,11 @@ def bind(_kget, _ksend, _ktext, _storage_classes, _capacity=None, own_ns=""):
     kget, ksend, ktext, storage_classes, capacity, OWN_NS = _kget, _ksend, _ktext, _storage_classes, _capacity, own_ns
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _items(path, optional_group=None):
     try:
-        result = kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code != 404 or not optional_group:
-            raise
-        discovery = kget("/apis")
-        groups = discovery.get("groups")
-        if not isinstance(groups, list) or any(not isinstance(g, dict) or not g.get("name") for g in groups):
-            raise ValueError("API discovery is incomplete; volume use cannot be checked")
-        if any(g["name"] == optional_group for g in groups):
-            raise
-        return []  # explicitly absent optional API, not a failed inventory
-    if not isinstance(result, dict) or not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue"):
-        raise ValueError("Volume inventory is incomplete; refresh before moving data")
-    if any(not isinstance(row, dict) for row in result["items"]):
-        raise ValueError("Volume inventory contains invalid entries")
-    return result["items"]
+        return KUBE.items(path, optional_group, read=kget)
+    except KUBE.Incomplete as error:
+        raise ValueError("Volume inventory is incomplete; refresh before moving data") from error
 
 
 def _pin(fences, path, obj):
@@ -243,7 +222,7 @@ def _longhorn_used(ns, claim):
 
 def plan(ns, claim, target, *, capture=False):
     """Everything that would stop the move or surprise someone, and the room it takes."""
-    pvc = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
+    pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read=kget)
     if not pvc:
         raise ValueError(f"volume {claim} does not exist in {ns}")
     fences = {} if capture else None
@@ -429,8 +408,8 @@ def _config(body):
 def _review(body, actor, ops):
     cfg = _config(body)
     result = plan(cfg["namespace"], cfg["claim"], cfg["target"], capture=True)
-    with ops._lock:
-        conflicts = CONFLICTS.conflicts(ops._read(), "reclass", {
+    with ops.transaction():
+        conflicts = CONFLICTS.conflicts(ops.stored(), "reclass", {
             "namespace": cfg["namespace"], "claim": cfg["claim"],
             "temp": cfg["claim"][:63 - len(TEMP_SUFFIX)].rstrip("-") + TEMP_SUFFIX,
             "copy_claims": {cfg["claim"]: result["_source_binding"]}})
@@ -461,7 +440,7 @@ def preview(body, actor, ops):
 
 
 def start_reviewed(body, actor, ops):
-    with ops._lock:
+    with ops.transaction():
         cfg, result, context = _review(body, actor, ops)
         if not result["ok"] or body.get("confirm_capacity") is not True or not REVIEW.valid({**cfg, "capacity_token":body.get("capacity_token")}, context):
             raise ValueError("Review the current volume, affected workloads and warnings before starting the move")
@@ -524,7 +503,7 @@ def _stop(ns, ref, send=None, *, cleanup=True):
             vm["metadata"].pop("managedFields", None)
             send("PUT", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}", vm)
             if c.get("via") == "dv":
-                pvc = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}") or {}
+                pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}", read=kget) or {}
                 owners = [o for o in (pvc.get("metadata") or {}).get("ownerReferences") or [] if o.get("kind") != "DataVolume"]
                 send("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['claim']}",
                       {"metadata": {"ownerReferences": owners or None}}, ctype="application/merge-patch+json")
@@ -607,11 +586,11 @@ def _started(ns, ref):
     for c in ref["consumers"]:
         if c["kind"] in ("Deployment", "StatefulSet") and c.get("replicas"):
             plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
-            obj = _get(f"/apis/apps/v1/namespaces/{ns}/{plural}/{c['name']}") or {}
+            obj = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/{plural}/{c['name']}", read=kget) or {}
             if int((obj.get("status") or {}).get("readyReplicas", 0) or 0) < c["replicas"]:
                 waiting.append(c["name"])
         elif c["kind"] == "VirtualMachine" and c.get("running"):
-            vm = _get(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{c['name']}") or {}
+            vm = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{c['name']}", read=kget) or {}
             if (vm.get("status") or {}).get("printableStatus") != "Running":
                 waiting.append(c["name"])
     return waiting
@@ -809,7 +788,7 @@ def _resolve(item):
         ref.update(phase="copy", job=name, copy_since=time.time())
         return "running", 12, f"Making the new volume on {ref['target']}"
     if phase == "copy":
-        job = _get(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}")
+        job = KUBE.get_optional(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}", read=kget)
         if not job:
             return _rollback(ns, ref, "The copy job went missing.")
         status = job.get("status") or {}
@@ -834,7 +813,7 @@ def _resolve(item):
         if not started:
             waited = time.time() - ref.get("copy_since", time.time())
             if waited > START_LIMIT:
-                tmp = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}") or {}
+                tmp = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}", read=kget) or {}
                 phase = (tmp.get("status") or {}).get("phase", "missing")
                 return _rollback(ns, ref, f"The copy never started: after {int(waited // 60)} min {int(waited % 60)} s the new volume on "
                                  f"{ref['target']} is still {phase}.")
@@ -868,7 +847,7 @@ def _swap(item, ns, ref):
     safe to run again, so a restart part-way carries on."""
     claim, temp = ref["claim"], ref["temp"]
     if not ref.get("new_pv"):
-        tmp = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}") or {}
+        tmp = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}", read=kget) or {}
         if not (tmp.get("spec") or {}).get("volumeName"):
             return "running", 82, "Waiting for the new volume to be bound"
         ref["new_pv"] = tmp["spec"]["volumeName"]
@@ -884,16 +863,16 @@ def _swap(item, ns, ref):
     except urllib.error.HTTPError:
         pass
     # 2. The temporary claim goes, and its volume is freed to be claimed again.
-    if _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}"):
+    if KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}", read=kget):
         ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}")
         return "running", 84, "Releasing the new volume from its temporary name"
-    pv = _get(f"/api/v1/persistentvolumes/{new_pv}") or {}
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{new_pv}", read=kget) or {}
     ref_claim = (pv.get("spec") or {}).get("claimRef") or {}
     if ref_claim.get("name") == temp:
         ksend("PATCH", f"/api/v1/persistentvolumes/{new_pv}", {"spec": {"claimRef": None}},
               ctype="application/merge-patch+json")
     # 3. The original claim goes; its volume stays, released, as the old copy.
-    current = _get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
+    current = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read=kget)
     if current and (current.get("spec") or {}).get("volumeName") == old_pv:
         if not (current.get("metadata") or {}).get("deletionTimestamp"):
             ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
@@ -931,7 +910,7 @@ def _held(ns, ref, claim_obj):
         if c["kind"] not in ("Deployment", "StatefulSet"):
             continue
         plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
-        obj = _get(f"/apis/apps/v1/namespaces/{ns}/{plural}/{c['name']}")
+        obj = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/{plural}/{c['name']}", read=kget)
         if obj and int((obj.get("spec") or {}).get("replicas") or 0) > 0:
             c["stopped"] = False
             again.append(c["name"])
@@ -984,8 +963,8 @@ def remove_old_copy(pv, ops):
     # Serialize with handoff progression and job creation. A failed/cancelled
     # move still needs its original until recovery explicitly completes; hiding
     # its job is not permission to destroy that recovery copy.
-    with ops._lock:
-        for item in ops._read():
+    with ops.transaction():
+        for item in ops.stored():
             ref = item.get("ref", {})
             if (item.get("kind") == "reclass" and pv in (ref.get("old_pv"), ref.get("cutover", {}).get("old_pv")) and
                     (item.get("status") != "succeeded" or ref.get("retain_resources"))):
@@ -994,7 +973,7 @@ def remove_old_copy(pv, ops):
 
 
 def _remove_old_copy(pv):
-    obj = _get(f"/api/v1/persistentvolumes/{pv}")
+    obj = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv}", read=kget)
     if not obj or not ((obj.get("metadata") or {}).get("annotations") or {}).get(OLD_COPY):
         raise ValueError(f"{pv} is not an old copy Homestead kept")
     if (obj.get("status") or {}).get("phase") != "Released":

@@ -165,7 +165,7 @@ class NetworkTests(network_fixture.HostInterfaceNetworkTests):
 class VmJoinTests(unittest.TestCase):
     def join(self, config):
         nad = {"spec": {"config": json.dumps(config)}}
-        with mock.patch.object(VMS, "_optional", lambda path: nad):
+        with mock.patch.object(VMS.KUBE, "get_optional", lambda path, read=None: nad):
             iface, net = {"name": "nic-0", "masquerade": {}}, {"name": "nic-0", "pod": {}}
             VMS._set_network(iface, net, "default/lan")
         return iface, net
@@ -211,7 +211,7 @@ class HostLimitTests(unittest.TestCase):
         runs = []
         answers = {"a": "RAISED 128 123938 8192 524288\n", "b": "KEPT 16384 1048576\n"}
         nodes = {"items": [{"metadata": {"name": n}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}} for n in "ab"]}
-        host = type("H", (), {"run": staticmethod(lambda node, script, timeout=60: runs.append((node, script)) or (answers[node], ""))})
+        host = type("H", (), {"run": staticmethod(lambda node, script, timeout=60, change="": runs.append((node, script)) or (answers[node], ""))})
         LIMITS.bind(lambda path: nodes, host, lambda force=False: {"distribution": "k3s"}, tmp.name)
         self.assertEqual({"a": "128 instances, 123938 watches -> 8192, 524288"}, LIMITS.tick())
         self.assertEqual({}, LIMITS.tick(), "once per node")
@@ -221,6 +221,28 @@ class HostLimitTests(unittest.TestCase):
         self.assertIn("/etc/sysctl.d/90-homestead.conf", script)
         LIMITS.bind(lambda path: nodes, host, lambda force=False: {"harvester": True}, tmp.name)
         self.assertEqual({}, LIMITS.tick())
+
+
+    def test_raising_limits_is_a_change_and_a_held_host_is_skipped_not_the_round(self):
+        import homestead_host_limits as LIMITS
+        import homestead_hostrun as HOSTRUN
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        held, changes = {"a"}, []
+
+        def run(node, script, timeout=60, change=""):
+            if node in held:
+                raise HOSTRUN.Busy(f"another change is running on {node}: Install 3 updates on {node}")
+            changes.append(change)
+            return "KEPT 16384 1048576\n", ""
+
+        nodes = {"items": [{"metadata": {"name": n}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}} for n in "ab"]}
+        LIMITS.bind(lambda path: nodes, type("H", (), {"run": staticmethod(run)}), lambda force=False: {"distribution": "k3s"}, tmp.name)
+        LIMITS.tick()
+        self.assertEqual(["Raise the inotify limits on b"], changes, "b is done though a is held (#597)")
+        held.clear()
+        LIMITS.tick()
+        self.assertEqual(2, len(changes), "a is tried again next round")
 
 
 class BaselineTests(unittest.TestCase):

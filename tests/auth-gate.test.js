@@ -1,10 +1,11 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
+const between = require("./helpers/between");
 
-function fixture() {
+function fixture({ base = "/", search = "" } = {}) {
   const fields = {}, timers = new Map();
-  let nextTimer = 0, rejectRequest, response = { user: null };
+  let nextTimer = 0, rejectRequest, response = { user: null }, logout = { ok: true, status: 200 };
   const element = () => ({ value: "", disabled: false, addEventListener() {},
     focus() { ctx.document.activeElement = this; },
     classList: { hidden: true, contains() { return this.hidden; },
@@ -19,18 +20,25 @@ function fixture() {
   const ctx = { console, document: { activeElement: null, body: { dataset: {} } },
     $: s => fields[s], $$: () => [], esc: s => String(s),
     localStorage: { getItem: () => null, setItem() {} },
-    fetch: async () => ({ ok: true, json: async () => response }),
+    fetch: async url => {
+      if (url !== "/api/auth/logout") return { ok: true, json: async () => response };
+      if (logout instanceof Error) throw logout;
+      return { ...logout, json: async () => ({}) };
+    },
+    toasts: [], toast: (text, kind) => ctx.toasts.push([text, kind]), HOMESTEAD_BASE: base, URLSearchParams,
     api: () => new Promise((_, reject) => { rejectRequest = reject; }),
     setTimeout: fn => { timers.set(++nextTimer, fn); return nextTimer; },
     setInterval: fn => { timers.set(++nextTimer, fn); return nextTimer; },
-    clearTimeout: id => timers.delete(id), clearInterval: id => timers.delete(id) };
+    clearTimeout: id => timers.delete(id), clearInterval: id => timers.delete(id),
+    navigations: [], location: { pathname: base + "apps", search, replace: url => ctx.navigations.push(url) } };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/router.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/auth.js", "utf8").replace(/^boot\(\);$/m, ""), ctx);
-  ctx.afterAuth = async () => {};
+  ctx.afterAuth = async () => { ctx.afterAuthCalls = (ctx.afterAuthCalls || 0) + 1; };
   return { ctx, fields, timers, run: code => vm.runInContext(code, ctx),
     fail: () => rejectRequest(new Error("not signed in")), rejection: () => rejectRequest,
-    respond: value => { response = value; } };
+    respond: value => { response = value; }, logoutAnswers: value => { logout = value; } };
 }
 
 test("unauthenticated background failures preserve the password field and focus", async () => {
@@ -74,7 +82,7 @@ test("session loss during initialization cannot restart background polls", async
   t.ctx.startLoop = () => loops++;
   // Restore the real initialization function (the fixture normally stubs it).
   const auth = fs.readFileSync("web/js/auth.js", "utf8");
-  t.run(auth.slice(auth.indexOf("async function afterAuth()"), auth.indexOf("/* ---------------- API keys")));
+  t.run(between(auth, "async function afterAuth()", "/* ---------------- API keys"));
   const initializing = t.ctx.afterAuth();
   const failed = t.ctx.api("/api/overview").catch(() => {}); t.fail(); await failed;
   finish(); await initializing;
@@ -97,7 +105,86 @@ test("a visibility or manual refresh does not load the page behind sign-in", asy
     $: () => ({ classList: { contains: () => false } }), toast() {} };
   vm.createContext(ctx);
   const app = fs.readFileSync("web/js/app.js", "utf8");
-  vm.runInContext(app.slice(app.indexOf("async function refresh(force)"), app.indexOf("window.refresh = refresh;")), ctx);
+  vm.runInContext(between(app, "async function refresh(force)", "window.refresh = refresh;"), ctx);
   assert.equal(await ctx.refresh(true), false);
   assert.equal(calls, 0);
+});
+
+test("signing out loads a fresh page, so nothing from the session is left for the next person", async () => {
+  const t = fixture(); t.run('ME = "admin"; ROLE = "admin";');
+  t.ctx.pwaForgetDevice = async () => {};
+  await t.ctx.doLogout();
+  assert.deepEqual(t.ctx.navigations, ["/"]);
+  assert.equal(t.run("ME"), null);
+});
+
+test("someone else signing in after a session expired gets a fresh page, not the last one's", async () => {
+  const t = fixture(); t.run('ME = "old"; ROLE = "admin";');
+  const expired = t.ctx.api("/api/overview").catch(() => {}); t.fail(); await expired;
+  t.fields["#lg_user"].value = "new"; t.fields["#lg_pass"].value = "new password";
+  t.respond({ user: "new", role: "viewer" });
+  await t.ctx.doLogin();
+  assert.deepEqual(t.ctx.navigations, ["/"]);
+  assert.equal(t.ctx.afterAuthCalls, undefined);
+});
+
+test("the same person signing back in after a session expired carries on where they were", async () => {
+  const t = fixture(); t.run('ME = "admin"; ROLE = "admin";');
+  const expired = t.ctx.api("/api/overview").catch(() => {}); t.fail(); await expired;
+  t.fields["#lg_user"].value = "admin"; t.fields["#lg_pass"].value = "password";
+  t.respond({ user: "admin", role: "admin" });
+  await t.ctx.doLogin();
+  assert.deepEqual(t.ctx.navigations, []);
+  assert.equal(t.ctx.afterAuthCalls, 1);
+});
+
+test("signing out stays in the app's own place: the demo under its base, and with ?demo=1", async () => {
+  const pages = fixture({ base: "/homestead/" });
+  pages.ctx.pwaForgetDevice = async () => {};
+  await pages.ctx.doLogout();
+  assert.deepEqual(pages.ctx.navigations, ["/homestead/"]);
+  const screenshots = fixture({ search: "?demo=1&demo-scenario=busy" });
+  screenshots.ctx.pwaForgetDevice = async () => {};
+  await screenshots.ctx.doLogout();
+  assert.deepEqual(screenshots.ctx.navigations, ["/?demo=1&demo-scenario=busy"]);
+});
+
+test("a sign-out the server did not take says so and stays signed in, rather than reloading straight back in", async () => {
+  for (const answer of [new Error("Failed to fetch"), { ok: false, status: 502 }]) {
+    const t = fixture(); t.run('ME = "admin"; ROLE = "admin";');
+    t.ctx.pwaForgetDevice = async () => {};
+    t.logoutAnswers(answer);
+    await t.ctx.doLogout();
+    assert.deepEqual(t.ctx.navigations, []);
+    assert.equal(t.run("ME"), "admin");
+    assert.equal(t.ctx.toasts.length, 1);
+    assert.equal(t.ctx.toasts[0][1], "bad");
+  }
+});
+
+test("a session that had already ended still signs out", async () => {
+  const t = fixture(); t.run('ME = "admin"; ROLE = "admin";');
+  t.ctx.pwaForgetDevice = async () => {};
+  t.logoutAnswers({ ok: false, status: 401 });
+  await t.ctx.doLogout();
+  assert.deepEqual(t.ctx.navigations, ["/"]);
+});
+
+test("the same name signing back in with another role gets a fresh page", async () => {
+  // A role change ends that user's sessions: this is how a demotion arrives.
+  const t = fixture(); t.run('ME = "alice"; ROLE = "admin";');
+  const expired = t.ctx.api("/api/overview").catch(() => {}); t.fail(); await expired;
+  t.fields["#lg_user"].value = "alice"; t.fields["#lg_pass"].value = "password";
+  t.respond({ user: "alice", role: "viewer" });
+  await t.ctx.doLogin();
+  assert.deepEqual(t.ctx.navigations, ["/"]);
+  assert.equal(t.ctx.afterAuthCalls, undefined);
+});
+
+test("the sign-in form opens in a browser that blocks site storage (#618)", () => {
+  const t = fixture();
+  const refuse = () => { throw Object.assign(new Error("The operation is insecure."), { name: "SecurityError" }); };
+  t.ctx.localStorage = { getItem: refuse, setItem: refuse, removeItem: refuse };
+  t.ctx.loginForm();
+  assert.ok(t.fields["#lg_go"], "the Sign in button is drawn");
 });
