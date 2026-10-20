@@ -73,7 +73,7 @@ class HostGuestVerificationTests(unittest.TestCase):
             self.assertFalse(result["mutation_recovery"])
             self.assertFalse(result["cancellable"])
             self.assertFalse(result["cleanable"])
-            self.assertEqual("verified-ready", ops._read()[0]["ref"]["phase"])
+            self.assertEqual("verified-ready", ops.stored()[0]["ref"]["phase"])
 
     def test_deterministic_cloud_init_pins_probe_source_config_hash_and_uuid(self):
         with mock.patch.object(cluster, "check", return_value=""):

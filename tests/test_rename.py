@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_capacity_review as review
 import homestead_lifecycle as lifecycle
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_rename as rename
 import homestead_vm_power_job as locks
 
@@ -113,8 +114,8 @@ class RenameTests(unittest.TestCase):
         self.assertEqual("old", new["spec"]["template"]["metadata"]["labels"]["homestead.io/workload"])
         self.assertIn("new", [value for key, value in new["spec"]["selector"]["matchLabels"].items() if key.startswith("homestead.io/rename-")])
         self.assertEqual("data", new["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
-        self.assertNotIn("do-not-journal", json.dumps(ops._read()))
-        self.assertEqual(4, len(ops._read()[0]["ref"]["writes"]))
+        self.assertNotIn("do-not-journal", json.dumps(ops.stored()))
+        self.assertEqual(4, len(ops.stored()[0]["ref"]["writes"]))
 
     def test_late_capacity_block_keeps_both_stopped_and_never_auto_restores(self):
         self.admission.return_value = {"blocked": True}
@@ -122,7 +123,7 @@ class RenameTests(unittest.TestCase):
             self.dispatch()
         self.assertEqual(["POST", "PATCH"], [row[0] for row in self.sent])
         self.assertTrue(all(obj["spec"]["replicas"] == 0 for obj in self.objects.values()))
-        self.assertTrue(ops._read()[0]["ref"]["retain_resources"])
+        self.assertTrue(ops.stored()[0]["ref"]["retain_resources"])
         self.assertTrue(ops.list_operations()[0]["cleanable"])
 
     def test_repeated_rename_preserves_labels_a_later_service_may_select(self):
@@ -247,7 +248,7 @@ class RenameTests(unittest.TestCase):
             self.dispatch(send=lost)
         self.assertNotIn("do-not-journal", str(caught.exception))
         self.assertEqual(1, len(self.sent))
-        job = ops._read()[0]
+        job = ops.stored()[0]
         self.assertEqual("uncertain", job["ref"]["writes"][0]["phase"])
         self.assertEqual("failed", job["status"])
         self.assertNotIn("do-not-journal", json.dumps(job))
@@ -257,7 +258,7 @@ class RenameTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "job storage"):
                 self.dispatch()
         self.assertEqual([], self.sent)
-        self.assertEqual("queued", ops._read()[0]["status"])
+        self.assertEqual("queued", ops.stored()[0]["status"])
 
     def test_readiness_failure_keeps_new_running_and_old_stopped(self):
         def not_ready(method, name, obj):
@@ -282,7 +283,7 @@ class RenameTests(unittest.TestCase):
 
     def test_replay_refused_after_success_and_visible_history_pruning(self):
         self.dispatch()
-        ops._write([])
+        put(ops, [])
         before = len(self.sent)
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.dispatch()
@@ -292,7 +293,7 @@ class RenameTests(unittest.TestCase):
         self.admission.return_value = {"blocked": True}
         with self.assertRaises(ValueError):
             self.dispatch()
-        job = ops._read()[0]
+        job = ops.stored()[0]
         before = copy.deepcopy(self.objects), copy.deepcopy(self.sent)
         with locks.worker_lock(job["id"], ops):
             self.assertFalse(rename.recovery_plan(job, self.read, ops)["can"])
@@ -302,7 +303,7 @@ class RenameTests(unittest.TestCase):
         # A failed acknowledgement leaves the job inspectable.
         ops.cancel(job["id"], options={"ack": True}, confirm="old")
         self.assertEqual(before, (self.objects, self.sent))
-        self.assertTrue(ops._read()[0]["tracking_stopped"])
+        self.assertTrue(ops.stored()[0]["tracking_stopped"])
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.dispatch()
 

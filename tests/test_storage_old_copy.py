@@ -6,6 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_reclass as rc
 
 
@@ -23,8 +24,7 @@ class RetainedCopyTests(unittest.TestCase):
             patch.start(); self.addCleanup(patch.stop)
 
     def record(self, status, **ref):
-        with ops._lock:
-            ops._write([{"id": "move", "kind": "reclass", "status": status, "ref": {"old_pv": "original", **ref}}])
+        put(ops, [{"id": "move", "kind": "reclass", "status": status, "ref": {"old_pv": "original", **ref}}])
 
     def test_active_failed_and_cancelled_moves_protect_original(self):
         for status in ("queued", "running", "cancelling", "failed", "cancelled"):

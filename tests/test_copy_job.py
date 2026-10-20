@@ -10,6 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_copy_job as flow
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_capacity_review as review
 import homestead_import_guard as guard
 import homestead_restructure as restructure
@@ -71,7 +72,7 @@ class CopyJobTests(unittest.TestCase):
         raise urllib.error.HTTPError(path, 404, "private API body", {}, None)
 
     def apply(self):
-        self.assertEqual("preparing", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("preparing", ops.stored()[0]["ref"]["phase"])
         count = restructure.hold(self.prepared["deployment"])
         self.dep = copy.deepcopy(self.prepared["deployment"])
         self.dep["metadata"].update(resourceVersion="2", generation=2)
@@ -82,7 +83,7 @@ class CopyJobTests(unittest.TestCase):
     def send(self, method, path, body, **kwargs):
         self.sent.append((method, path, copy.deepcopy(body)))
         if method == "POST":
-            self.assertEqual("copy_intent", ops._read()[0]["ref"]["phase"])
+            self.assertEqual("copy_intent", ops.stored()[0]["ref"]["phase"])
             name = body["metadata"]["name"]
             self.assertNotIn(name, self.jobs)
             obj = copy.deepcopy(body)
@@ -130,7 +131,7 @@ class CopyJobTests(unittest.TestCase):
         self.assertEqual(1, self.dep["spec"]["replicas"])
         self.assertNotIn(flow.MARKER, self.dep["metadata"]["annotations"])
         self.assertEqual("succeeded", self.poll()["status"])
-        self.assertNotIn("secret-not-in-journal", json.dumps(ops._read()))
+        self.assertNotIn("secret-not-in-journal", json.dumps(ops.stored()))
         self.assertEqual(["PUT", "POST", "PATCH"], [row[0] for row in self.sent])
         helper = self.admission.call_args_list[0].args[0]
         self.assertEqual("64Mi", helper["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]["memory"])
@@ -154,7 +155,7 @@ class CopyJobTests(unittest.TestCase):
 
     def test_other_workload_copy_cannot_reserve_same_claim_before_pods_exist(self):
         self.start()
-        other = copy.deepcopy(ops._read()[0]["ref"])
+        other = copy.deepcopy(ops.stored()[0]["ref"])
         other.update(name="other-app", review_digest="b" * 64, moves=[{"from": "different", "to": "new"}])
         with self.assertRaisesRegex(ValueError, "still active or needs recovery"):
             ops.start(flow.KIND, "Other copy", {}, "/containers", other)
@@ -227,7 +228,7 @@ class CopyJobTests(unittest.TestCase):
     def test_consumed_review_cannot_be_replayed_after_history_clear(self):
         original = copy.deepcopy(self.dep)
         self.start(); self.poll(); self.complete(); self.poll(); self.poll()
-        ops._write([])
+        put(ops, [])
         self.dep = original
         before = len(self.sent)
         with self.assertRaisesRegex(ValueError, "already has job"):
@@ -238,7 +239,7 @@ class CopyJobTests(unittest.TestCase):
         self.body["confirm_capacity"] = False
         with self.assertRaisesRegex(ValueError, "Review"):
             self.start()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual([], self.sent)
 
     def test_hold_cannot_be_released_by_an_operator(self):
@@ -270,7 +271,7 @@ class CopyJobTests(unittest.TestCase):
         self.after_send = lambda *args: (_ for _ in ()).throw(TimeoutError("secret-not-in-journal"))
         self.assertEqual("failed", self.poll()["status"])
         self.poll()
-        saved = ops._read()[0]
+        saved = ops.stored()[0]
         self.assertEqual("copy_intent", saved["ref"]["phase"])
         self.assertFalse(flow.recovery_plan(saved, self.read, ops)["can"])
         self.assertEqual(["PUT", "POST"], [row[0] for row in self.sent])
@@ -281,7 +282,7 @@ class CopyJobTests(unittest.TestCase):
         self.after_send = lambda *args: (_ for _ in ()).throw(TimeoutError("private upstream body"))
         self.assertEqual("failed", self.poll()["status"])
         self.poll()
-        self.assertEqual("release_intent", ops._read()[0]["ref"]["phase"])
+        self.assertEqual("release_intent", ops.stored()[0]["ref"]["phase"])
         self.assertEqual(["PUT", "POST", "PATCH"], [row[0] for row in self.sent])
         self.assertEqual(1, self.dep["spec"]["replicas"])
 
@@ -299,7 +300,7 @@ class CopyJobTests(unittest.TestCase):
             self.start(apply=partial)
         self.assertEqual("failed", self.poll()["status"])
         self.assertEqual(["PUT"], [row[0] for row in self.sent])
-        self.assertTrue(ops._read()[0]["ref"]["retain_resources"])
+        self.assertTrue(ops.stored()[0]["ref"]["retain_resources"])
 
     def test_unrelated_claim_source_rejected_before_any_edit(self):
         self.body["containers"][0]["volumes"][0]["copy_from"]["claim"] = "unrelated"
@@ -325,8 +326,8 @@ class CopyJobTests(unittest.TestCase):
         self.assertEqual(0, self.dep["spec"]["replicas"])
         self.assertEqual({"old", "new"}, set(self.pvcs))
         self.assertEqual(1, len(self.jobs))
-        self.assertTrue(ops._read()[0]["tracking_stopped"])
-        self.assertEqual("failed", ops._read()[0]["status"])
+        self.assertTrue(ops.stored()[0]["tracking_stopped"])
+        self.assertEqual("failed", ops.stored()[0]["status"])
 
     def test_legacy_resolution_is_read_only(self):
         item = {"ref": {"namespace": "lab", "name": "app", "phase": "copying", "job": "old-copy"}}
@@ -338,12 +339,12 @@ class CopyJobTests(unittest.TestCase):
 
     def test_unknown_phase_never_reports_success(self):
         self.start()
-        items = ops._read(); items[0]["ref"]["phase"] = "wrong"; ops._write(items)
+        items = ops.stored(); items[0]["ref"]["phase"] = "wrong"; put(ops, items)
         self.assertEqual("failed", self.poll()["status"])
 
     def test_setup_in_progress_cannot_release_hold(self):
         self.start()
-        item = ops._read()[0]
+        item = ops.stored()[0]
         with locks.worker_lock(item["id"], ops):
             self.assertFalse(flow.recovery_plan(item, self.read, ops)["can"])
 

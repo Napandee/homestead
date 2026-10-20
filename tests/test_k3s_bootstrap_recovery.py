@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_k3scluster as cluster
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_cancel as cancel
 import homestead_vms as vms
 import homestead_ipam as ipam
@@ -36,7 +37,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
         self.created = []
 
     def create(self, cfg):
-        item = ops._read()[-1]
+        item = ops.stored()[-1]
         self.assertEqual("provisioning", item["ref"]["phase"])
         self.assertEqual(cfg["name"], item["ref"]["attempted"])
         self.created.append(copy.deepcopy(cfg))
@@ -52,7 +53,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
         self.assertEqual("52:54:00:11:22:33", a["configs"][0]["mac"])
         self.assertIn(self.token, a["configs"][1]["cloud_init"])
         create.assert_not_called()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
 
     def test_invalid_version_address_and_resources_fail_before_any_job_or_vm(self):
         for change in ({"k3s_version": "v1.2.3;bad"}, {"addresses": ["not-an-ip", "192.0.2.21"]},
@@ -61,15 +62,15 @@ class BootstrapRecoveryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cluster.start({**self.cfg, **change}, ops)
                 create.assert_not_called()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
 
     def test_job_exists_before_first_write_and_records_receipts_not_secrets(self):
         result = cluster.commit(self.prepared, ops, create_one=self.create)
         self.assertEqual("running", result["status"])
-        item = ops._read()[-1]
+        item = ops.stored()[-1]
         self.assertEqual("awaiting-ready", item["ref"]["phase"])
         self.assertEqual(2, len(item["ref"]["created"]))
-        text = json.dumps(ops._read())
+        text = json.dumps(ops.stored())
         for private in (self.cfg["password"], self.token, "cloud_init", "#cloud-config"):
             self.assertNotIn(private, text)
 
@@ -82,7 +83,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Resources are retained") as error:
                 cluster.commit(self.prepared, ops, create_one=create)
             remove.assert_not_called()
-        item = ops._read()[-1]
+        item = ops.stored()[-1]
         self.assertEqual("failed", item["status"])
         self.assertEqual("test-agent-1", item["ref"]["attempted"])
         self.assertEqual(1, len(item["ref"]["created"]))
@@ -97,7 +98,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Stopped at test-server-1"):
             cluster.commit(self.prepared, ops, create_one=lambda cfg: calls.append(cfg["name"]) or {})
         self.assertEqual(["test-server-1"], calls)
-        self.assertEqual("test-server-1", ops._read()[-1]["ref"]["attempted"])
+        self.assertEqual("test-server-1", ops.stored()[-1]["ref"]["attempted"])
 
     def test_before_node_gate_stops_remaining_writes_without_cleanup(self):
         def gate(cfg, made):
@@ -107,7 +108,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Stopped at test-agent-1"):
             cluster.commit(self.prepared, ops, create_one=self.create, before_node=gate)
         self.assertEqual(1, len(self.created))
-        self.assertEqual("", ops._read()[-1]["ref"]["attempted"])
+        self.assertEqual("", ops.stored()[-1]["ref"]["attempted"])
 
     def test_job_persistence_failure_prevents_vm_creation(self):
         with mock.patch.object(ops, "_write", side_effect=OSError("full disk")):
@@ -125,7 +126,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Resources are retained"):
                 cluster.commit(self.prepared, ops, create_one=self.create)
         self.assertEqual(1, len(self.created))
-        self.assertEqual("test-server-1", ops._read()[-1]["ref"]["attempted"])
+        self.assertEqual("test-server-1", ops.stored()[-1]["ref"]["attempted"])
 
     def test_active_batch_deduplicates_before_second_dispatch(self):
         cluster.commit(self.prepared, ops, create_one=self.create)
@@ -138,8 +139,8 @@ class BootstrapRecoveryTests(unittest.TestCase):
                  {"id": "partial", "status": "failed", "ref": {"retain_resources": True}}]
         items += [{"id": str(i), "status": "succeeded", "ref": {}} for i in range(8)]
         with mock.patch.object(ops, "MAX_OPERATIONS", 3):
-            ops._write(items)
-        self.assertEqual(["in-flight", "partial", "5", "6", "7"], [row["id"] for row in ops._read()])
+            put(ops, items)
+        self.assertEqual(["in-flight", "partial", "5", "6", "7"], [row["id"] for row in ops.stored()])
 
     def test_provisioning_monitor_never_declares_success_or_replays_a_write(self):
         item = {"ref": {"phase": "provisioning", "nodes": self.prepared["plan"]["nodes"], "started": time.time()}, "progress": 4}
@@ -164,7 +165,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
 
     def test_readiness_never_accepts_replacement_vm_by_name(self):
         cluster.commit(self.prepared, ops, create_one=self.create)
-        item = ops._read()[-1]
+        item = ops.stored()[-1]
         with mock.patch.object(cluster, "kget", return_value={"metadata": {"uid": "replacement"}}):
             status, _, message = cluster.status(item)
         self.assertEqual("failed", status)
