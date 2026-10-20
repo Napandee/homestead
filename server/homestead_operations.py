@@ -1034,6 +1034,37 @@ def _cancel_stale(item):
     return time.time() - started > CANCEL_RETRY_AFTER
 
 
+def _block_self_data_handoff(item):
+    return "A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained."
+
+
+def _block_reclass(item):
+    if "storage_protocol" in item.get("ref", {}):
+        return "Use the storage move review to pause safely; cancelling must not roll back or delete retained data"
+    return ""
+
+
+def _block_longhorn_v2_prepare(item):
+    return "Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log"
+
+
+def _block_snapshot_delete(item):
+    return "Longhorn snapshot removal cannot be undone or safely cancelled"
+
+
+# Why a kind's job cannot be cancelled where it is: kind -> function(item)
+# returning the reason, or "" when it can be. Checked after the import's CDI
+# receipt and before the kind's own canceller plans anything. These were
+# branches of _plan_for; they move to the modules that own each kind later
+# (#622).
+CANCEL_BLOCKS = {
+    "self-data-handoff": _block_self_data_handoff,
+    "reclass": _block_reclass,
+    "longhorn-v2-prepare": _block_longhorn_v2_prepare,
+    "snapshot-delete": _block_snapshot_delete,
+}
+
+
 def _plan_for(item):
     plan = {"mode": "forget", "can": True, "why_not": "", "undo": [], "severity": "low",
             "keeps": ["Homestead has no way to stop this kind of job: it carries on in Kubernetes "
@@ -1043,17 +1074,10 @@ def _plan_for(item):
     if item.get("ref", {}).get("cdi_cleanup") and item.get("kind") not in CDI_CANCELLABLE:
         plan.update(can=False, why_not="The import must finish reclaiming its temporary storage before its job can be dismissed.")
         return plan
-    if item.get("kind") == "self-data-handoff":
-        plan.update(can=False, why_not="A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained.")
-        return plan
-    if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
-        plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
-        return plan
-    if item.get("kind") == "longhorn-v2-prepare":
-        plan.update(can=False, why_not="Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log")
-        return plan
-    if item.get("kind") == "snapshot-delete":
-        plan.update(can=False, why_not="Longhorn snapshot removal cannot be undone or safely cancelled")
+    block = CANCEL_BLOCKS.get(item.get("kind"))
+    why_not = block(item) if block else ""
+    if why_not:
+        plan.update(can=False, why_not=why_not)
         return plan
     if entry:
         plan.update(entry[0](item) or {})

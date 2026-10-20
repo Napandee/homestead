@@ -184,7 +184,7 @@ class RegistryTests(unittest.TestCase):
     def test_a_kind_without_fields_of_its_own_has_none(self):
         import types
         ops = types.SimpleNamespace(RESOLVERS={"scan": lambda item: None}, CANCELLERS={}, RESUMABLE={},
-                                    LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set(), VIEWS={},
+                                    LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set(), VIEWS={}, CANCEL_BLOCKS={},
                                     _public=lambda item: item)
         self.assertIsNone(KINDS.kind("scan", ops).fields)
 
