@@ -1,8 +1,12 @@
-import copy, sys, unittest
+import sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_failover as FAILOVER
+import homestead_kube as K
 import homestead_lhcapacity as LHCAP
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 UNREACHABLE, NOT_READY = FAILOVER.KEYS
 GPU = {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
@@ -37,28 +41,41 @@ class ModeTests(unittest.TestCase):
             FAILOVER.tolerations({}, "sometimes")
 
 
+def deployment(name, tolerations):
+    return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name, "namespace": "lab"},
+            "spec": {"template": {"spec": {"containers": [{"name": name, "image": "busybox"}],
+                                           "tolerations": tolerations}}}}
+
+
 class SetManyTests(unittest.TestCase):
+    """On the shared fake API (tests/fakes/kube.py)."""
     def setUp(self):
-        self.deps = {"frigate": {"spec": {"template": {"spec": {"tolerations": FAILOVER.tolerations({}, "move")}}}},
-                     "zigbee2mqtt": {"spec": {"template": {"spec": {"tolerations": [GPU]}}}}}
-        self.sent = []
-        FAILOVER.bind(lambda path: copy.deepcopy(self.deps[path.rsplit("/", 1)[1]]),
-                      lambda method, path, body=None, **kw: self.sent.append((method, path, body)))
+        self.kube = self.enterContext(Kube(deployment("frigate", FAILOVER.tolerations({}, "move")),
+                                           deployment("zigbee2mqtt", [GPU])))
+        # The shared fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under its DATA_DIR.
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        saved = FAILOVER.kget, FAILOVER.ksend
+        self.addCleanup(lambda: FAILOVER.bind(*saved))
+        FAILOVER.bind(K.kget, K.ksend)
+
+    def tolerations(self, name):
+        return self.kube.object(f"/apis/apps/v1/namespaces/lab/deployments/{name}")["spec"]["template"]["spec"].get("tolerations")
 
     def test_only_changed_containers_are_patched(self):
         result = FAILOVER.set_many([{"ns": "lab", "name": "frigate", "mode": "move"},
                                     {"ns": "lab", "name": "zigbee2mqtt", "mode": "wait"}])
         self.assertEqual(["zigbee2mqtt"], result["changed"])
-        method, path, body = self.sent[0]
-        self.assertEqual(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/zigbee2mqtt"), (method, path))
-        wanted = body["spec"]["template"]["spec"]["tolerations"]
+        self.assertEqual([("PATCH", "/apis/apps/v1/namespaces/lab/deployments/zigbee2mqtt")],
+                         [(method, path) for method, path, *_ in self.kube.writes])
+        wanted = self.tolerations("zigbee2mqtt")
         self.assertIn(GPU, wanted)
         self.assertEqual("wait", FAILOVER.mode_of({"tolerations": wanted}))
 
     def test_back_to_the_default_clears_the_list(self):
-        self.deps["frigate"]["spec"]["template"]["spec"]["tolerations"] = FAILOVER.tolerations({}, "move")
         FAILOVER.set_many([{"ns": "lab", "name": "frigate", "mode": "default"}])
-        self.assertIsNone(self.sent[0][2]["spec"]["template"]["spec"]["tolerations"])
+        self.assertIsNone(self.kube.writes[0][2]["spec"]["template"]["spec"]["tolerations"])
+        self.assertIsNone(self.tolerations("frigate"))
 
 
 class LonghornPolicyTests(unittest.TestCase):
