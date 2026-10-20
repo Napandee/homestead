@@ -139,24 +139,55 @@ window.dismissCompletedOperations = async () => {
 };
 window.operationActive = operationActive;
 
+// How often the tray asks (#705): every 3 s while a job runs, 10 s once
+// nothing in it has changed for a minute, 15 s with nothing running, and once
+// a minute in a hidden tab. Anything the person does asks at once and goes
+// back to 3 s (refreshOperations(true)).
+const OPERATION_POLL = {active: 3000, settled: 10000, idle: 15000, hidden: 60000, settleAfter: 60000};
+let operationsSeen = "", operationsChangedAt = 0;
+
+function operationPollDelay(immediate) {
+  if (document.hidden) return OPERATION_POLL.hidden;
+  if (immediate) return OPERATION_POLL.active;
+  if (!(STATE.data.operations || []).some(operationActive)) return OPERATION_POLL.idle;
+  return Date.now() - operationsChangedAt >= OPERATION_POLL.settleAfter ? OPERATION_POLL.settled : OPERATION_POLL.active;
+}
+
+function scheduleOperations(delay) {
+  clearTimeout(operationTimer);
+  operationTimer = setTimeout(refreshOperations, delay);
+  window.__operationTimer = operationTimer;
+}
+
 async function refreshOperations(immediate = false) {
   clearTimeout(operationTimer);
   if (!ME) return;
+  if (immediate) operationsChangedAt = Date.now();
   try {
     // keep: the tray outlives every page. A read abandoned by navigating away
     // never settles, which stopped this loop for good - the job an App Store
     // install started sat at "queued" while its container ran.
     STATE.data.operations = await api("/api/operations", { keep: true });
     STATE.operationsStale = false;
+    const seen = JSON.stringify(STATE.data.operations);
+    if (seen !== operationsSeen) { operationsSeen = seen; operationsChangedAt = Date.now(); }
     renderOperations();
   } catch (_) { STATE.operationsStale = true; paintJobsDialog(); }
   if (!ME) return;
-  const active = (STATE.data.operations || []).some(operationActive);
-  operationTimer = setTimeout(refreshOperations, immediate || active ? 3000 : 15000);
-  window.__operationTimer = operationTimer;
+  scheduleOperations(operationPollDelay(immediate));
 }
 
-window.startOperationChecks = () => refreshOperations(true);
+// Hidden: wait a minute for the next read. Shown again: read at once.
+let operationsWatchVisibility = () => {
+  operationsWatchVisibility = () => {};
+  document.addEventListener("visibilitychange", () => {
+    if (!ME) return;
+    if (document.hidden) scheduleOperations(OPERATION_POLL.hidden);
+    else refreshOperations(true);
+  });
+};
+
+window.startOperationChecks = () => { operationsWatchVisibility(); return refreshOperations(true); };
 window.noteOperation = operation => {
   if (!operation) return;
   const items = STATE.data.operations || [];
