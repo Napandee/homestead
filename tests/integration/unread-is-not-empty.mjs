@@ -22,6 +22,10 @@ try {
     page.on("pageerror", e => errors.push(e.message));
     await page.goto(`${base}/?demo=1`);
     await page.waitForSelector(".dashboard-widget");
+    // Most steps call a page's view directly, so the app still thinks it is on
+    // the Dashboard: its refresh tick would repaint the Dashboard over the page
+    // a step is reading. The check drives every paint itself.
+    await page.evaluate(() => clearInterval(window.__loopTimer));
 
     // Remove a host: unread hosts are not "every host is Ready".
     await page.evaluate(failing, "/api/nodes");
@@ -126,7 +130,8 @@ try {
     assert.match(await page.locator("body").innerText(), /could not be read[\s\S]*storage classes[\s\S]*timed out/i);
     // Virtual machines › Import, where Import VM disk is offered: the same.
     await page.evaluate(() => viewVmImport());
-    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Virtual machines"));
+    // The Import page's subtitle also names "Virtual machines": wait for this page's own title.
+    await page.waitForFunction(() => document.querySelector(".phead h2")?.innerText.trim() === "Virtual machines");
     assert.match(await page.locator("body").innerText(), /could not be read[\s\S]*storage classes[\s\S]*timed out/i);
     await page.evaluate(() => vmDiskImport());
     assert.match(await body(), /Could not read the storage classes/);
@@ -214,7 +219,8 @@ try {
     // not half switched to the other container's settings.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(() => go("deploy"));
-    await page.waitForSelector("#d_target_mode");
+    // go() first shows the last Deploy form it painted; wait for this visit's own.
+    await page.waitForFunction(() => document.querySelector("#d_target_mode") && !document.querySelector("#views.refreshing"));
     const before = await page.evaluate(() => { deployAddContainer(); collect(); return JSON.stringify(DCFG); });
     await page.evaluate(failing, "/api/deploy/options");
     await page.evaluate(() => deployRemovePrimary());
