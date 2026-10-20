@@ -11,8 +11,17 @@ const COMPOSE = { text: "", variables: "", namespace: "lab", vip_mode: "shared",
   editor: null, timer: null, asked: 0, busy: false, review: null, reviewSequence: 0 };
 
 window.composeImport = async () => {
-  const composeVips = await vipChoices();
-  const namespaces = await api("/api/namespaces").catch(() => ["lab"]);
+  // Without these the form would offer a namespace or an address made up for it (#620).
+  let composeVips, namespaces;
+  try {
+    const [network, read] = await Promise.all([mustRead("/api/network", "the network"),
+      mustRead("/api/namespaces", "the namespaces")]);
+    composeVips = await vipChoices(network);
+    namespaces = read;
+  } catch (e) {
+    modal("Import Docker Compose", UI.error(e, { retry: "composeImport()", dialog: true }));
+    return;
+  }
   if (!namespaces.includes(COMPOSE.namespace)) COMPOSE.namespace = namespaces.includes("lab") ? "lab" : namespaces[0];
   modal("Import Docker Compose", `<div class="compose">
     <div class="compose-left">

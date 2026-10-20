@@ -2312,7 +2312,8 @@ window.deployRemovePrimary = async () => {
   const next = extras.shift();
   const cleared = { command: [], args: [], env_meta: [], env_bindings: {}, template_devices: [], volume_owners: {}, app_profile: null, gpu: false, cap_add: [], privileged: false, tun: false };
   await viewDeploy({ ...cfg, ...cleared, ...next, ...(next.privileges || {}),
-    name: cfg.workload_name, workload_name: cfg.workload_name, container_name: next.name, additional_containers: extras });
+    name: cfg.workload_name, workload_name: cfg.workload_name, container_name: next.name, additional_containers: extras })
+    .catch(e => toast(e.message, "bad"));
 };
 window.deployRemoveContainer = index => {
   $(`#d_extra_containers .edit-container[data-index="${index}"]`).remove(); syncSummary();
@@ -2335,10 +2336,19 @@ function deployTierField(tier) {
 }
 async function viewDeploy(pre) {
   pre = pre || window.__deployPrefill;
-  window.__deployPrefill = null;
-  const [, liveNodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
+  // The form's hosts, namespaces, storage and addresses come from these reads;
+  // without one it would offer a guess (#620). The page shows the error instead.
+  const [, liveNodes, nss, network] = await Promise.all([loadHardwareFeatures(), mustRead("/api/nodes", "the hosts"),
+    mustRead("/api/namespaces", "the namespaces"), mustRead("/api/network", "the network")]);
+  // Every read is done before the form's settings change, so a failure leaves them as they were.
+  const next = Object.assign(deployDefaults(), pre || {});
+  if (!nss.includes(next.namespace)) next.namespace = nss.includes("lab") ? "lab" : nss[0];
+  const options = await mustRead("/api/deploy/options?ns=" + encodeURIComponent(next.namespace), "the storage options");
   if (liveNodes.length) STATE.data.nodes = liveNodes;
-  DCFG = Object.assign(deployDefaults(), pre || {});
+  DCFG = next;
+  DOPT = options;
+  // Cleared only now, so Retry after a failed read opens the same template.
+  window.__deployPrefill = null;
   DCFG.workload_name ||= DCFG.name || "";
   DCFG.container_name ||= DCFG.name || "";
   (DCFG.env_meta || []).forEach(meta => {
@@ -2354,10 +2364,7 @@ async function viewDeploy(pre) {
     });
     if (feature && !DCFG.hardware.includes(feature.id)) DCFG.hardware.push(feature.id);
   });
-  const nss = await api("/api/namespaces").catch(() => ["lab"]);
-  if (!nss.includes(DCFG.namespace)) DCFG.namespace = nss.includes("lab") ? "lab" : nss[0];
-  DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(DCFG.namespace)).catch(() => DOPT);
-  const vips = await vipChoices();
+  const vips = await vipChoices(network);
   const sharedVip = vips.shared || "";
   resetPaint();
   const sections = [

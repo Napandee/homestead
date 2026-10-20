@@ -232,6 +232,12 @@ async function api(path, opts) {
   return b;
 }
 
+/* A read the caller cannot do without. Its failure says what could not be
+   read, so the page shows that rather than a form built on a guess (#620). */
+function mustRead(path, what, opts) {
+  return api(path, opts).catch(e => { throw Object.assign(new Error(`Could not read ${what}: ${e.message}`), { status: e.status }); });
+}
+
 /* ---------------- configurable hardware ---------------- */
 async function loadHardwareFeatures(force = false) {
   if (!force && Array.isArray(STATE.data.hardwareFeatures)) return STATE.data.hardwareFeatures;

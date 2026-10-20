@@ -165,6 +165,61 @@ try {
       assert.equal(await page.locator("#e_steps").count(), 0, `no edit form without ${what}`);
       await close();
     }
+
+    // Deploy: no namespace, host list, storage or addresses made up for the form.
+    for (const [path, what] of [["/api/namespaces", "the namespaces"], ["/api/nodes", "the hosts"],
+      ["/api/deploy/options", "the storage options"], ["/api/network", "the network"]]) {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, path);
+      await page.evaluate(() => go("deploy"));
+      await page.waitForFunction(() => /Could not read|Basics/.test(document.querySelector("#views")?.innerText || ""));
+      const deploy = await page.locator("#views").innerText();
+      assert.match(deploy, new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.equal(await page.locator("#d_target_mode").count(), 0, `no deploy form without ${what}`);
+    }
+    // Retry after a failed read opens the template that was asked for, not an empty form.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/namespaces");
+    await page.evaluate(() => { window.__deployPrefill = { name: "from-template" }; go("deploy"); });
+    await page.waitForFunction(() => /Could not read the namespaces/.test(document.querySelector("#views")?.innerText || ""));
+    await page.evaluate(() => { window.api = window.__realApi; go("deploy"); });
+    await page.waitForSelector("#d_target_mode");
+    assert.equal(await page.evaluate(() => DCFG.workload_name), "from-template");
+
+    // Import Docker Compose and New VM: no made-up namespace list.
+    for (const [path, what] of [["/api/namespaces", "the namespaces"], ["/api/network", "the network"]]) {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, path);
+      await page.evaluate(() => composeImport());
+      await settled(page);
+      assert.match(await body(), new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.equal(await page.locator("#composeNs").count(), 0, `no Compose form without ${what}`);
+      await close();
+    }
+    // New VM refuses where a guess would build the wrong VM; where a failed read
+    // only hides some choices, the form opens and says what it could not read.
+    for (const [path, what, disk, refuses] of [["/api/network", "the network", "", true],
+      ["/api/vm-disks", "the imported disks", "win-disk", true],
+      ["/api/vm-disks", "the imported disks", "", false], ["/api/namespaces", "the other namespaces", "", false]]) {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, path);
+      await page.evaluate(disk => vmNew(disk, disk ? "lab" : ""), disk);
+      await settled(page);
+      assert.match(await body(), new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.equal(await page.locator("#v_steps").count(), refuses ? 0 : 1, `${path} ${disk ? "with" : "without"} a chosen disk`);
+      await close();
+    }
+
+    // Promoting the second container: a failed read leaves the form as it was,
+    // not half switched to the other container's settings.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(() => go("deploy"));
+    await page.waitForSelector("#d_target_mode");
+    const before = await page.evaluate(() => { deployAddContainer(); collect(); return JSON.stringify(DCFG); });
+    await page.evaluate(failing, "/api/deploy/options");
+    await page.evaluate(() => deployRemovePrimary());
+    await page.waitForFunction(() => /Could not read the storage options/.test(document.querySelector("#toast")?.innerText || ""));
+    assert.equal(await page.evaluate(() => JSON.stringify(DCFG)), before, "the form's settings are unchanged");
     await page.evaluate(() => { window.api = window.__realApi; });
 
     assert.deepEqual(errors, []);
