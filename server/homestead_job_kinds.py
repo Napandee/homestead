@@ -12,7 +12,8 @@ kinds() reads them as they stand on each call, so nothing has to
 move for it to be right; the registrations and homestead_operations' kind
 branches move into these records later, a few kinds at a time. The view's
 kind branches have moved into a per-kind table in homestead_operations
-(OPS.VIEWS), which a kind's `fields` names."""
+(OPS.VIEWS), which a kind's `fields` names, and the cancel plan's into
+another (OPS.CANCEL_BLOCKS), which a kind's `cancel_block` names."""
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -36,6 +37,7 @@ class Kind:
     cdi_cancellable: bool = False             # cancellable while its CDI receipt is held
     view: Callable = OPS._public              # item -> what the job tray is sent
     fields: Optional[Callable] = None         # (item, out) -> what this kind adds to that view
+    cancel_block: Optional[Callable] = None   # item -> why it cannot be cancelled now, or ""
     conflicts: Callable = _no_rules_of_its_own
 
 
@@ -47,7 +49,8 @@ def kinds(ops=OPS):
     return {name: Kind(name, resolve=ops.RESOLVERS.get(name), cancel=ops.CANCELLERS.get(name),
                        resumable=ops.RESUMABLE.get(name), log=ops.LOGGERS.get(name),
                        cleanup=name in ops.CLEANUPS, cdi_cancellable=name in ops.CDI_CANCELLABLE,
-                       view=ops._public, fields=ops.VIEWS.get(name))
+                       view=ops._public, fields=ops.VIEWS.get(name),
+                       cancel_block=ops.CANCEL_BLOCKS.get(name))
             for name in sorted(names)}
 
 

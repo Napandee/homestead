@@ -24,7 +24,8 @@ import homestead_job_kinds as KINDS
 
 def stand_in(**dicts):
     ops = types.SimpleNamespace(RESOLVERS={}, CANCELLERS={}, RESUMABLE={}, LOGGERS={}, CLEANUPS=set(),
-                                CDI_CANCELLABLE=set(), VIEWS={}, _public=lambda item: {"id": item["id"], "shown": True})
+                                CDI_CANCELLABLE=set(), VIEWS={}, CANCEL_BLOCKS={},
+                                _public=lambda item: {"id": item["id"], "shown": True})
     for name, value in dicts.items():
         getattr(ops, name).update(value)
     return ops
@@ -257,6 +258,12 @@ class GuardTests(unittest.TestCase):
         branch_kinds() no longer sees them: a mistyped key would never run."""
         self.assertGreater(len(self.ops.VIEWS), 10)
         self.assertEqual([], sorted(set(self.ops.VIEWS) - set(self.kinds)))
+
+    def test_every_kind_with_a_refusal_of_its_own_exists(self):
+        """The kind branches of _plan_for became keys of OPS.CANCEL_BLOCKS
+        (#622), where branch_kinds() no longer sees them either."""
+        self.assertGreaterEqual(len(self.ops.CANCEL_BLOCKS), 4)
+        self.assertEqual([], sorted(set(self.ops.CANCEL_BLOCKS) - set(self.kinds)))
 
     def test_every_kind_started_has_a_resolver(self):
         found, dynamic = started_kinds()
