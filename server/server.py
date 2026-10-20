@@ -108,7 +108,7 @@ POD_NAME = os.environ.get("HOSTNAME", "")
 
 OWN_GROUP = "Homestead"
 
-VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "font/ttf",
+VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "font/ttf", ".woff2": "font/woff2",
                 ".json": "application/json", ".svg": "image/svg+xml", ".map": "application/json",
                 ".md": "text/markdown; charset=utf-8"}
 
@@ -1066,8 +1066,8 @@ MAX_BODY = 8 * 1024 * 1024
 CSP = "; ".join([
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
     "img-src 'self' data: blob: https:",
     "connect-src 'self'",
     "worker-src 'self' blob:",
