@@ -595,7 +595,10 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
     try:
         users = STORAGE._references_for(STORAGE.claim_references(), ns, name)
     except Exception:
-        users = ["something"]
+        users = None
+    if users is None:
+        raise ValueError(f"a volume named {name} already exists in {ns}, and Homestead could not check what uses it; "
+                         "try again, give this app's volume another name, or choose the existing one to share it")
     if users:
         raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
                          "give this app's volume another name, or choose the existing one to share it")
