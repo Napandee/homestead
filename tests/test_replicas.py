@@ -50,6 +50,63 @@ class LeaderTests(unittest.TestCase):
         with mock.patch.object(LEADER, "IDENTITY", name):
             return LEADER.attempt(at)
 
+    def test_a_leader_that_cannot_renew_stops_leading_by_its_own_clock(self):
+        # #621: the flag stayed True until a renew raised, and a renew can hang
+        # for as long as the API write timeout - past the lease, while another
+        # replica already leads. Like Kubernetes' own controllers, the leader
+        # steps down at the renew deadline, before the lease can pass on.
+        with mock.patch.object(LEADER.time, "monotonic", return_value=100.0):
+            self.assertTrue(self.as_replica("homestead-a", T0))
+            self.assertTrue(LEADER.is_leader())
+        with mock.patch.object(LEADER.time, "monotonic", return_value=100.0 + LEADER.RENEW_DEADLINE - 1):
+            self.assertTrue(LEADER.is_leader(), "still within the renew deadline")
+            self.assertTrue(LEADER.status()["leader"])
+        with mock.patch.object(LEADER.time, "monotonic", return_value=100.0 + LEADER.RENEW_DEADLINE + 1):
+            self.assertFalse(LEADER.is_leader(), "no renew for too long: not leading, whatever the flag says")
+            self.assertFalse(LEADER.status()["leader"])
+        self.assertLess(LEADER.RENEW_DEADLINE, LEADER.DURATION, "it steps down before another replica may take over")
+        # a renew that succeeds again restores it
+        with mock.patch.object(LEADER.time, "monotonic", return_value=200.0):
+            self.assertTrue(self.as_replica("homestead-a", T0 + datetime.timedelta(seconds=12)))
+            self.assertTrue(LEADER.is_leader())
+
+    def test_the_deadline_counts_from_when_the_renew_started(self):
+        # The lease's renewTime is stamped when the attempt starts, so another
+        # replica's clock runs from then. A slow renew (a GET of 8 s, a PUT of
+        # 4 s, both within the API timeouts) must not buy the leader time past
+        # the lease; it counts from the start, as client-go does.
+        clock = [100.0]
+        def slow_get(path):
+            clock[0] += 8
+            return self.store.get(path)
+        def slow_send(method, path, body=None, **kw):
+            clock[0] += 4
+            return self.store.send(method, path, body, **kw)
+        self.as_replica("homestead-a", T0)                      # the lease exists, a holds it
+        LEADER.bind(slow_get, slow_send, "lab")
+        with mock.patch.object(LEADER.time, "monotonic", side_effect=lambda: clock[0]):
+            self.assertTrue(self.as_replica("homestead-a", T0 + datetime.timedelta(seconds=2)))
+            self.assertEqual(112.0, clock[0])
+            clock[0] = 100.0 + LEADER.RENEW_DEADLINE + 1
+            self.assertFalse(LEADER.is_leader(), "the 12 s it took to renew are not a fresh deadline")
+
+    def test_one_slow_or_failed_renew_fits_inside_the_deadline(self):
+        self.assertLessEqual(2 * LEADER.RENEW_EVERY, LEADER.RENEW_DEADLINE / 2)
+
+    def test_stepping_down_by_the_clock_ends_the_term(self):
+        # A leader that stepped down and renews again starts a new term: its
+        # "leading since" is the new one, not the first.
+        with mock.patch.object(LEADER.time, "monotonic", return_value=100.0), \
+                mock.patch.object(LEADER.time, "time", return_value=1000.0):
+            self.assertTrue(self.as_replica("homestead-a", T0))
+        with mock.patch.object(LEADER.time, "monotonic", return_value=100.0 + LEADER.RENEW_DEADLINE + 1):
+            self.assertFalse(LEADER.is_leader())
+            self.assertFalse(LEADER._state["leader"])
+        with mock.patch.object(LEADER.time, "monotonic", return_value=200.0), \
+                mock.patch.object(LEADER.time, "time", return_value=2000.0):
+            self.assertTrue(self.as_replica("homestead-a", T0 + datetime.timedelta(seconds=12)))
+        self.assertEqual(2000.0, LEADER._state["since"])
+
     def test_one_replica_leads_and_another_takes_over_when_it_stops(self):
         self.assertTrue(self.as_replica("homestead-a", T0))
         self.assertFalse(self.as_replica("homestead-b", T0 + datetime.timedelta(seconds=5)))

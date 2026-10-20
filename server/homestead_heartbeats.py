@@ -9,6 +9,7 @@ too, instead of "standby" for every one.
 import threading
 import time
 
+import homestead_leader as LEADER
 import homestead_leader_state as LEADER_STATE
 
 HEART = {}
@@ -32,7 +33,10 @@ def beat(name, every, error=None, leader_only=False):
             row["error"] = ""
         else:
             row["error"], row["error_at"] = str(error)[:200], now
-        shared = {k: dict(v) for k, v in HEART.items() if v.get("leader_only")} if leader_only else None
+        # Only the leader shares: a standby replica's copy would replace the
+        # leader's beats with its own, which has none of the leader's tasks.
+        shared = ({k: dict(v) for k, v in HEART.items() if v.get("leader_only")}
+                  if leader_only and LEADER.is_leader() else None)
     if shared is not None:
         # Written at once when a task starts or stops failing, else every SHARE_EVERY seconds.
         LEADER_STATE.put("heartbeats", shared, every=SHARE_EVERY,

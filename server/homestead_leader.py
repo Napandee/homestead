@@ -20,8 +20,17 @@ NS = "lab"
 NAME = "homestead-leader"
 IDENTITY = os.environ.get("HOSTNAME", "") or f"homestead-{os.getpid()}"
 DURATION = 15
-RENEW_EVERY = 5
-_state = {"leader": False, "holder": "", "since": 0.0, "error": ""}
+# Often enough that one slow or failed renew still fits inside the renew
+# deadline below, as client-go's retry period (2 s): one Lease GET and PUT
+# every 2 s on the leader, a GET on each other replica.
+RENEW_EVERY = 2
+# A leader that has not renewed for this long stops acting as one, by its own
+# clock: a renew can hang (the API's write timeout is as long as the lease),
+# and by the time the lease runs out another replica may lead. Shorter than
+# the lease, as in Kubernetes' own leader election (renew deadline 10 s,
+# lease 15 s), so the two never overlap.
+RENEW_DEADLINE = 10
+_state = {"leader": False, "holder": "", "since": 0.0, "error": "", "renewed": 0.0}
 _lock = threading.Lock()
 
 
@@ -56,6 +65,9 @@ def _path(name=""):
 def attempt(now=None):
     """One round: take or keep the lease if it is ours to have. Returns
     whether this replica leads."""
+    # The lease's renewTime is stamped now, so the deadline counts from here,
+    # not from when a slow renew finishes (as client-go does).
+    started = time.monotonic()
     now = now or _now()
     spec = {"holderIdentity": IDENTITY, "leaseDurationSeconds": DURATION,
             "renewTime": _stamp(now)}
@@ -73,7 +85,7 @@ def attempt(now=None):
             if conflict.code == 409:
                 return _set(False, "")
             raise
-        return _set(True, IDENTITY)
+        return _set(True, IDENTITY, started)
     current = lease.get("spec", {}) or {}
     holder = current.get("holderIdentity") or ""
     renewed = _parse(current.get("renewTime")) or _parse(current.get("acquireTime"))
@@ -93,25 +105,35 @@ def attempt(now=None):
         if error.code == 409:
             return _set(False, holder)
         raise
-    return _set(True, IDENTITY)
+    return _set(True, IDENTITY, started)
 
 
-def _set(leading, holder):
+def _set(leading, holder, started=None):
     with _lock:
         if leading and not _state["leader"]:
             _state["since"] = time.time()
+        if leading:
+            _state["renewed"] = time.monotonic() if started is None else started
         _state.update(leader=leading, holder=holder, error="")
     return leading
 
 
 def is_leader():
-    return _state["leader"]
+    if not _state["leader"]:
+        return False
+    if time.monotonic() - _state["renewed"] <= RENEW_DEADLINE:
+        return True
+    with _lock:
+        # Stepped down by the clock: a later renew starts a new term.
+        _state["leader"] = False
+    return False
 
 
 def status():
+    leading = is_leader()
     with _lock:
-        return {"identity": IDENTITY, "leader": _state["leader"], "holder": _state["holder"] or IDENTITY
-                if _state["leader"] else _state["holder"], "error": _state["error"]}
+        return {"identity": IDENTITY, "leader": leading, "holder": _state["holder"] or IDENTITY
+                if leading else _state["holder"], "error": _state["error"]}
 
 
 def run():
