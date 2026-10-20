@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import urllib.error
 import homestead_imports as imports
 
+VMS = "/apis/kubevirt.io/v1/virtualmachines"
 ESPHOME = "sha256:" + "e" * 64
 BACKUP = "sha256:" + "f" * 64
 
@@ -30,7 +32,9 @@ class Fixture(unittest.TestCase):
         self.nodes = [ready("node1", [
             {"names": ["ghcr.io/esphome/esphome:2025.9.0", "ghcr.io/esphome/esphome@" + ESPHOME], "sizeBytes": 600 << 20},
             {"names": ["docker.io/restic/restic:0.17", "docker.io/restic/restic@" + BACKUP], "sizeBytes": 30 << 20},
-            {"names": ["docker.io/library/unused:1"], "sizeBytes": 10 << 20}])]
+            {"names": ["docker.io/library/unused:1"], "sizeBytes": 10 << 20},
+            {"names": ["quay.io/containerdisks/fedora:41"], "sizeBytes": 500 << 20},
+            {"names": ["quay.io/containerdisks/debian:12"], "sizeBytes": 400 << 20}])]
         self.objects = {
             "/api/v1/pods": {"items": []},
             "/apis/apps/v1/deployments": {"items": [
@@ -45,6 +49,15 @@ class Fixture(unittest.TestCase):
                 {"metadata": {"name": "backup", "namespace": "lab"},
                  "spec": {"jobTemplate": {"spec": {"template": {"spec": {"containers": [
                      {"name": "restic", "image": "restic/restic:0.17"}]}}}}}}]},
+            VMS: {"items": [
+                {"metadata": {"name": "lab-vm", "namespace": "lab"},
+                 "spec": {"runStrategy": "Halted", "template": {"spec": {"volumes": [
+                     {"name": "rootdisk", "containerDisk": {"image": "quay.io/containerdisks/fedora:41"}},
+                     {"name": "cloudinit", "cloudInitNoCloud": {"userData": "#cloud-config"}}]}}}},
+                {"metadata": {"name": "web-vm", "namespace": "lab"},
+                 "spec": {"runStrategy": "Always", "template": {"spec": {"volumes": [
+                     {"name": "rootdisk", "containerDisk": {"image": "quay.io/containerdisks/debian:12"}}]}}},
+                 "status": {"printableStatus": "Running", "ready": True}}]},
         }
 
         def get(path):
@@ -88,6 +101,24 @@ class StoppedReferenceTests(Fixture):
 
     def test_a_running_workload_is_named_by_its_pods_not_as_stopped(self):
         self.assertFalse(self.image(imports.image_cache(), "unused")["protected"])
+
+    def test_a_stopped_vms_container_disk_is_kept_and_says_why(self):
+        fedora = self.image(imports.image_cache(), "fedora")
+        self.assertTrue(fedora["protected"])
+        self.assertEqual([("stopped", "lab", "lab-vm", "rootdisk")],
+                         [(r["reason"], r["namespace"], r["workload"], r["container"]) for r in fedora["retained_by"]])
+
+    def test_a_stopped_vms_kernel_boot_container_is_kept(self):
+        vm = self.objects[VMS]["items"][0]
+        vm["spec"]["template"]["spec"]["domain"] = {"firmware": {"kernelBoot": {"container": {
+            "image": "docker.io/library/unused:1", "kernelPath": "/boot/vmlinuz"}}}}
+        unused = self.image(imports.image_cache(), "unused")
+        self.assertTrue(unused["protected"])
+        self.assertIn(("stopped", "lab-vm", "kernel-boot"),
+                      [(r["reason"], r["workload"], r["container"]) for r in unused["retained_by"]])
+
+    def test_a_running_vm_is_named_by_its_pod_not_as_stopped(self):
+        self.assertFalse(self.image(imports.image_cache(), "debian")["protected"])
 
     def test_the_digest_it_last_ran_on_holds_the_image_whatever_its_tag(self):
         dep = self.objects["/apis/apps/v1/deployments"]["items"][0]
@@ -142,7 +173,8 @@ class ScanTests(Fixture):
 class UnreadInventoryTests(Fixture):
     """Every source of "still needed" is read in full, or nothing is removed (#620)."""
     UNUSED = "sha256:" + "a" * 64
-    LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs")
+    LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
+             VMS)
 
     def setUp(self):
         super().setUp()
@@ -177,6 +209,44 @@ class UnreadInventoryTests(Fixture):
                     with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
                         imports.cleanup_image(self.UNUSED, ["node1"])
                     self.assertEqual([], self.posted())
+
+    def kubevirt_answers_404(self, served):
+        """The VM list answers 404; discovery answers with these groups, or
+        raises when given an exception."""
+        read = imports.kget
+
+        def get(path):
+            if path == VMS:
+                raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+            if path == "/apis":
+                if isinstance(served, Exception):
+                    raise served
+                return {"groups": [{"name": name} for name in served]}
+            return read(path)
+        return mock.patch.object(imports, "kget", get)
+
+    def test_without_kubevirt_installed_clean_up_still_works(self):
+        with self.kubevirt_answers_404(["apps", "batch"]):
+            imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual(1, len(self.posted()))
+
+    def test_a_404_for_vms_while_kubevirt_is_served_removes_nothing(self):
+        with self.kubevirt_answers_404(["apps", "batch", "kubevirt.io"]):
+            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
+
+    def test_an_empty_discovery_answer_removes_nothing(self):
+        with self.kubevirt_answers_404([]):
+            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
+
+    def test_a_discovery_that_fails_after_a_404_removes_nothing(self):
+        with self.kubevirt_answers_404(OSError("timed out")):
+            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
 
 
 if __name__ == "__main__":
