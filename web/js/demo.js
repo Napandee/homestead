@@ -1830,9 +1830,9 @@ ssh_pwauth: true
         const body = JSON.parse(init.body || "{}");
         portalLinks = (body.links || []).map((link, i) => ({ ...link, id: link.id || `demo${i}`,
           shown: link.icon.startsWith("builtin:") ? { kind: "builtin", src: link.icon.slice(8) } : { kind: "letter" } }));
-        return { ok: true, links: portalLinks };
+        return { ok: true, links: portalLinks, version: "1" };
       }
-      return { links: portalLinks, icons: ["router", "switch", "wifi", "firewall", "nas", "server", "printer", "camera", "ups", "globe"] };
+      return { links: portalLinks, icons: ["router", "switch", "wifi", "firewall", "nas", "server", "printer", "camera", "ups", "globe"], version: "1" };
     },
     "/api/cluster/components": demoPlatform === "harvester"
       ? { distribution: "harvester", harvester: true, checked: Math.floor(Date.now() / 1000), components: [
