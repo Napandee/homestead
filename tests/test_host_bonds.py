@@ -264,6 +264,7 @@ class HostLeaseTests(unittest.TestCase):
         BONDS.hostrun = host
         BONDS.start("h1", {"members": ["enp2s0"]}, ops)
         item = {"kind": BONDS.KIND, "ref": ops.started[0][2]}
+        BONDS.register(BONDS.OPS)  # its canceller is added by register (#622)
         plan, run = BONDS.OPS.CANCELLERS[BONDS.KIND]
         self.assertTrue(any("puts its old network back" in line for line in plan(item)["keeps"]))
         self.assertIn("other changes on h1 can start", run(item, {}))

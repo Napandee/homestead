@@ -693,4 +693,9 @@ def cancel_run(item, options):
     return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
 
 
-OPS.CANCELLERS[KIND] = (cancel_plan, cancel_run)
+
+
+def register(ops):
+    """The job store's entry for a host's bond (#622)."""
+    ops.RESOLVERS[KIND] = status
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

@@ -608,4 +608,9 @@ def cancel_run(item, options):
     return f"Stopped following the updates on {item['ref']['node']}; they carry on there"
 
 
-OPS.CANCELLERS["host-os"] = (cancel_plan, cancel_run)
+
+
+def register(ops):
+    """The job store's entry for a host's OS update (#622)."""
+    ops.RESOLVERS["host-os"] = status
+    ops.CANCELLERS["host-os"] = (cancel_plan, cancel_run)

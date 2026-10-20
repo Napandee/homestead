@@ -282,3 +282,8 @@ ROUTES = {
     ("GET", "/api/host-console"): ("admin", lambda request: inventory()),
     ("POST", "/api/host-console"): ("admin", lambda request: act(request.body, request.user)),
 }
+
+
+def register(ops):
+    """The job store's entry for installing the host console (#622)."""
+    ops.RESOLVERS["host-console"] = status

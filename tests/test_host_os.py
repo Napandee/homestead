@@ -211,6 +211,7 @@ class StateTests(unittest.TestCase):
         ops = Ops()
         HOST_OS.upgrade_start("node-1", ops)
         item = {"kind": "host-os", "ref": ops.started[0][2]}
+        HOST_OS.register(HOST_OS.OPS)  # its canceller is added by register (#622)
         plan, run = HOST_OS.OPS.CANCELLERS["host-os"]
         keeps = " ".join(plan(item)["keeps"])
         self.assertIn("keep installing on node-1", keeps)
