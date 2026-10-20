@@ -1299,6 +1299,9 @@ window.newShare = async () => {
     const own = (choices.own || []).find(v => v.free);
     const smb = $("#sh_smb");
     if (smb) smb.innerHTML = vipPicker("sh_smb", own ? own.ip : (choices.free[0] || ""), choices);
+  }).catch(e => {
+    const smb = $("#sh_smb");
+    if (smb) { smb.dataset.unread = e.message; smb.innerHTML = UI.callout("bad", "No address to offer Samba", esc(e.message)); }
   });
   shareAccountHint();
 };
@@ -1329,6 +1332,7 @@ window.mkShare = async button => {
     account_mode: selected ? "existing" : "new",
     public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder,
     samba_ip: ($("#sh_smb_lb_ip")?.value || "").trim() };
+  if ($("#sh_smb")?.dataset.unread) return toast($("#sh_smb").dataset.unread, "bad");
   if ($("#sh_smb") && !body.samba_ip) return toast("Choose the address Samba should answer on - add VIPs under Networking if the list is empty", "bad");
   if (reusing) body.pvc = storage.source;
   // A new volume's name is the one to create, not one to look up.

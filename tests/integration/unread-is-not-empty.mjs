@@ -220,6 +220,57 @@ try {
     await page.evaluate(() => deployRemovePrimary());
     await page.waitForFunction(() => /Could not read the storage options/.test(document.querySelector("#toast")?.innerText || ""));
     assert.equal(await page.evaluate(() => JSON.stringify(DCFG)), before, "the form's settings are unchanged");
+
+    // Addresses: an unread network is not "no addresses to choose from".
+    const noNetwork = async () => {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, "/api/network");
+    };
+    await noNetwork();
+    await page.evaluate(() => importSetup("unraid", "media-server"));
+    await settled(page);
+    assert.match(await body(), /Could not read the network[\s\S]*timed out/);
+    assert.equal(await page.locator("#im_steps").count(), 0, "no import wizard without the network");
+    await close();
+
+    // With ServiceLB there is no address to choose, so the import does not need the network.
+    const platform = await page.evaluate(() => JSON.stringify(STATE.platform || null));
+    await noNetwork();
+    await page.evaluate(() => { STATE.platform = { ...(STATE.platform || {}), load_balancer: "servicelb" };
+      return importSetup("unraid", "media-server"); });
+    await settled(page);
+    assert.equal(await page.locator("#im_steps").count(), 1, "the import opens under ServiceLB");
+    await close();
+    await page.evaluate(platform => { STATE.platform = JSON.parse(platform); }, platform);
+
+    await noNetwork();
+    await page.evaluate(() => { STATE.platform = { ...(STATE.platform || {}), load_balancer: "kube-vip" };
+      STATE.data.sambaInstalled = false; return sambaSet(true); });
+    await settled(page);
+    assert.match(await body(), /Could not read the network[\s\S]*timed out/);
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Install", exact: true}).count(), 0, "no Install for Samba");
+    await close();
+
+    await noNetwork();
+    await page.evaluate(() => { STATE.platform = { ...(STATE.platform || {}), load_balancer: "kube-vip" };
+      STATE.data.nfs = { installed: false, exports: [{ name: "media" }] }; return nfsSet(true); });
+    await settled(page);
+    assert.match(await body(), /Could not read the network[\s\S]*timed out/);
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Install NFS server"}).count(), 0);
+    await close();
+
+    // New share, when it would also install Samba: its address picker says so.
+    await noNetwork();
+    await page.evaluate(() => {
+      const read = window.api;
+      window.api = (path, ...rest) => String(path).split("?")[0] === "/api/shares/options"
+        ? read(path, ...rest).then(options => ({ ...options, samba_installed: false })) : read(path, ...rest);
+      return newShare();
+    });
+    await page.waitForFunction(() => document.querySelector("#sh_smb") && !document.querySelector("#sh_smb .spin2"));
+    assert.match(await page.locator("#sh_smb").innerText(), /Could not read the network[\s\S]*timed out/);
+    await close();
+    await page.evaluate(platform => { STATE.platform = JSON.parse(platform); }, platform);
     await page.evaluate(() => { window.api = window.__realApi; });
 
     assert.deepEqual(errors, []);

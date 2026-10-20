@@ -2219,14 +2219,20 @@ window.importMappings = () => {
 };
 
 window.importSetup = async (source, dir, cfg = {}) => {
-  const importVips = await vipChoices();
   const src = (STATE.data.srcs || []).find(s => s.name === source) || {};
   const name = (cfg.name || dir).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 38);
   STATE.data.importCfg = cfg;
   // Live nodes, so hardware plugged in since the page loaded is offered.
-  const [storage, liveNodes] = await Promise.all([
+  const [storage, liveNodes, importVips] = await Promise.all([
     api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(e => ({ unread: e.message })),
-    api("/api/nodes").catch(() => [])]);
+    api("/api/nodes").catch(() => []),
+    // ServiceLB puts it on every host's own address: there is no address to choose.
+    nodeAddressesOnly() ? null : vipChoices().catch(e => ({ unread: e.message }))]);
+  // An unread network is not "no addresses": the picker would offer only a new one (#620).
+  if (importVips?.unread) {
+    childModal("Import · " + dir, UI.error({ message: importVips.unread }, { title: "Could not open the import", dialog: true }));
+    return;
+  }
   // No class list is not "pick none": the server would choose one (#620).
   if (storage.unread) {
     childModal("Import · " + dir, UI.callout("bad", "Could not read the storage options", esc(storage.unread)) + UI.actions(UI.cancel("Close")));
@@ -2302,7 +2308,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   $("#im_steps").dataset.guard = "imStepGuard";
   if (keeps) $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
   $("#im_storage")?.addEventListener("input", importMapPicture);
-  vipChoices().then(choices => { const host = $("#im_vip_pick"); if (host) host.innerHTML = vipPicker("im", "", choices); });
+  if ($("#im_vip_pick")) $("#im_vip_pick").innerHTML = importVips ? vipPicker("im", "", importVips) : "";
   imSyncVolumes();
 };
 /* Another Homestead on the network. The destination pulls, so these
