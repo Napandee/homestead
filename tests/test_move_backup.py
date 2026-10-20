@@ -22,6 +22,12 @@ class SnapshotNameTests(unittest.TestCase):
 
 
 class BackupProgressTests(unittest.TestCase):
+    def setUp(self):
+        # server.py binds the move source to the Longhorn module; do the same here.
+        bound = mock.patch.object(SOURCE, "LH", LH)
+        bound.start()
+        self.addCleanup(bound.stop)
+
     def test_unavailable_inventory_cannot_be_mistaken_for_missing_backups(self):
         row = {"claim": "data", "backup": "backup-done", "volume": "volume-a"}
         with mock.patch.object(SOURCE, "_object", return_value={}), \

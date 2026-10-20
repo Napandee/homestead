@@ -1,10 +1,13 @@
 import hashlib
 import json
 import os
+import sys
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_capacity_review as review
 import homestead_operations as ops
 import homestead_vm_power_receipts as receipts
