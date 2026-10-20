@@ -17,6 +17,7 @@ import re
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_operations as OPS
@@ -383,3 +384,12 @@ def _require_no_data_handoff(read, ns):
         if error.code == 404: return
         raise
     raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
+
+
+def register(ops):
+    """The self-data jobs (#622). The Kubernetes client is looked up when a
+    job is asked about, as server.py did."""
+    ops.RESOLVERS[SELF_DATA_PREPARE.KIND] = self_data_preparation_progress
+    ops.CANCELLERS[SELF_DATA_PREPARE.KIND] = (SELF_DATA_PREPARE.cancel_plan, SELF_DATA_PREPARE.cancel_run)
+    ops.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, KUBE.kget, directory=DATA_DIR)
+    ops.RESOLVERS["self-data-move"] = _data_move_status

@@ -460,3 +460,15 @@ ROUTES = {
     ("POST", "/api/cluster/cleanup/run"): ("admin", _cleanup_run),
     ("POST", "/api/cluster/shutdown"): ("admin", _shutdown),
 }
+
+
+def register(ops):
+    """The cluster jobs whose resolvers live here (#622), and two stand-ins:
+    join plans are gone, so a job one left in Activity says so rather than
+    erroring; and a node clean-up is recorded once it has happened, so it reads
+    as done straight away."""
+    ops.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
+    ops.RESOLVERS["harvester-upgrade"] = _harvester_upgrade_status
+    ops.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
+                                             "Join plans were replaced by the install guide")
+    ops.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))

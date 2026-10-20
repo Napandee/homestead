@@ -140,10 +140,10 @@ MOVED.update(dict.fromkeys(("api_scale", "clear_unstarted_pods", "get_overview",
 OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in OVERVIEW_ROUTES.VALUES})
 import homestead_cluster_server as CLUSTER_ROUTES
 from homestead_cluster_server import (
-    _autoupdate_loop, _baseline_loop, _detached_copies_loop, _hardware_loop,
-    _harvester_upgrade_status, _host_console_loop, _housekeeping_loop, _os_updates_loop,
-    _power_jobs_loop, _upgrade_node_probe, allocation_probe_capacity, cluster_shutdown,
-    pod_container_rows, preview_image_update, reviewed_image_update, set_update_mode,
+    _autoupdate_loop, _baseline_loop, _detached_copies_loop, _hardware_loop, _host_console_loop,
+    _housekeeping_loop, _os_updates_loop, _power_jobs_loop, _upgrade_node_probe,
+    allocation_probe_capacity, cluster_shutdown, pod_container_rows, preview_image_update,
+    reviewed_image_update, set_update_mode,
 )
 CLUSTER_ROUTES.bind_routes(_late(*CLUSTER_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in CLUSTER_ROUTES.VALUES})
 import homestead_network_server as NETWORK_ROUTES
@@ -155,11 +155,10 @@ NETWORK_ROUTES.bind_routes(_late(*NETWORK_ROUTES.ROUTE_NEEDS), **{name: globals(
 import homestead_storage_server as STORAGE_ROUTES
 from homestead_storage_server import (
     _class_made_for, _files_loop, _host_fix_loop, _internal_class, _longhorn_copies_loop,
-    _prune_snapshot, _pvc_rows, _restore_tests_loop, _restore_then_tidy, _samba_loop,
-    _snapshot_files_loop, _storage_pending_loop, _storage_runtime_loop, class_selectable,
-    cleanup_restores, guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb, serves_many,
-    share_storage_options, shared_storage_classes, storage_class_facts, storage_legacy_cancel,
-    storage_move_progress, storage_runtime_check, storage_volume_action,
+    _prune_snapshot, _pvc_rows, _restore_tests_loop, _samba_loop, _snapshot_files_loop,
+    _storage_pending_loop, _storage_runtime_loop, class_selectable, cleanup_restores,
+    guard_smb_object, homestead_part, is_managed_nfs, is_managed_smb, serves_many,
+    share_storage_options, shared_storage_classes, storage_class_facts, storage_runtime_check,
 )
 MOVED.update(dict.fromkeys(("cleanup_restores", "ensure_claim", "storage_helper_admission", "storage_restart_admission"), STORAGE_ROUTES))
 STORAGE_ROUTES.bind_routes(_late(*STORAGE_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in STORAGE_ROUTES.VALUES})
@@ -183,8 +182,8 @@ MOVED.update(dict.fromkeys(("persist_icon_config",), DEPLOY_ROUTES))
 DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in DEPLOY_ROUTES.VALUES})
 import homestead_self_data_server as SELF_DATA_ROUTES
 from homestead_self_data_server import (
-    _data_move_status, _reconcile_permissions, _replace_own_pod, fit_own_strategy, fleet_address,
-    homestead_running_on, own_node, self_data_file_scope, self_data_preparation_progress, self_stop_warning,
+    _reconcile_permissions, _replace_own_pod, fit_own_strategy, fleet_address, homestead_running_on,
+    own_node, self_data_file_scope, self_stop_warning,
 )
 MOVED.update(dict.fromkeys(("_require_no_data_handoff", "_self_data_helper_image", "homestead_data_volume"), SELF_DATA_ROUTES))
 SELF_DATA_ROUTES.bind_routes(_late(*SELF_DATA_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in SELF_DATA_ROUTES.VALUES})
@@ -583,22 +582,14 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(im
 
 UPDATES.pull_progress = _pull_progress
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
-OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
 
 
-OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
-OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
-OPS.RESOLVERS["restructure"] = COPY_JOB.legacy_status
-OPS.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, KUBE_HELPERS.kget, KUBE_HELPERS.ksend, OPS, copy_admission)
-OPS.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, KUBE_HELPERS.kget, OPS),
-                                lambda item, options: COPY_JOB.recovery_run(item, options, KUBE_HELPERS.kget, KUBE_HELPERS.ksend, OPS))
-OPS.CLEANUPS.update((COPY_JOB.KIND, "restructure"))
 import homestead_reclass as RECLASS
 import homestead_storage_admission as STORAGE_ADMISSION
 import homestead_storage_recovery as STORAGE_RECOVERY
@@ -655,8 +646,6 @@ import homestead_disk_setup as DISK_SETUP
 import homestead_disk_v2 as DISK_V2
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
-OPS.RESOLVERS["reclass"] = storage_move_progress
-OPS.RESUMABLE["reclass"] = RECLASS.resumable
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
 MOVE_ENGINE.bind(kget, ksend, LH, MOVE, NETWORK, OPS, DATA_DIR, DEFAULT_NS, guard=lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name))
 
@@ -703,9 +692,6 @@ import homestead_lhv2_upgrade as LHV2_UPGRADE
 LHV2_UPGRADE.bind(kget, ksend, PLATFORM.detect, COMPONENTS.longhorn_version, COMPONENTS.parse)
 STORAGE_RESIZE.upgrade_guard = LHV2_UPGRADE.ensure_resize_idle
 LC.vm_migration_guard = LHV2_UPGRADE.ensure_vm_idle
-
-
-OPS.RESOLVERS["harvester-upgrade"] = _harvester_upgrade_status
 
 
 RESOURCES.bind(kget, ksend, ktable, lambda kind, ns, name: guard_smb_object(kind, ns, name), DEFAULT_NS)
@@ -812,12 +798,7 @@ VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
              lambda ns, name: KUBE_HELPERS.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
 
 
-OPS.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
 SNAPSHOT_DELETE.bind(kget, ksend)
-OPS.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
-OPS.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
-OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
-    lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
 DISKS.bind(kget, ksend, NODES.node_temps)
 DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
 DISK_V2.protect_mutations(DISKS)
@@ -826,7 +807,10 @@ DISK_V2.protect_mutations(DISKS)
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: STORAGE_CLASSES.cleanup_restore_classes())
 CANCEL.register(OPS)
-OPS.CANCELLERS["reclass"] = (CANCEL.reclass_plan, storage_legacy_cancel)
+# Storage, cluster and self-data register their own; storage replaces
+# the reclass canceller registered just above.
+for _module in (STORAGE_ROUTES, CLUSTER_ROUTES, SELF_DATA_ROUTES):
+    _module.register(OPS)
 # What each job has to show for itself: a pod's log, a VM's console.
 JOBLOGS.bind(kget, raw_get)
 JOBLOGS.register(OPS)
@@ -919,10 +903,6 @@ def abandon_self_data_preparation(body):
 CLUSTER_SHUTDOWN.bind(cluster_shutdown)
 
 
-OPS.RESOLVERS[SELF_DATA_PREPARE.KIND] = self_data_preparation_progress
-OPS.CANCELLERS[SELF_DATA_PREPARE.KIND] = (SELF_DATA_PREPARE.cancel_plan, SELF_DATA_PREPARE.cancel_run)
-
-
 def start_self_data_move(body, actor):
     """Persist the approved intent before launching the one-shot source setup."""
     if _self_data_barrier is None:
@@ -964,21 +944,10 @@ def start_self_data_move(body, actor):
     return {"ok": True, "operation": job, "handoff": execution["scope"].operation}, execution["status_token"]
 
 
-OPS.RESOLVERS[SELF_DATA_EXECUTE.KIND] = lambda item: SELF_DATA_EXECUTE.resolve(item, KUBE_HELPERS.kget, directory=DATA_DIR)
-
-
-OPS.RESOLVERS["self-data-move"] = _data_move_status
-
-
 # Looked up when asked, so a test that patches one is the one used.
 SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
                  lambda dep=None: SELF_DATA_ROUTES.homestead_data_volume(dep), _heartbeats,
                  lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
-# Join plans are gone; a job one left in Activity says so rather than erroring.
-OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
-                                         "Join plans were replaced by the install guide")
-# A cleanup is recorded once it has happened, so it reads as done straight away.
-OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("message", ""))
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
