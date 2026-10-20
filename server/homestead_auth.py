@@ -60,6 +60,12 @@ def idle_ttl(remember):
 ROLES = ("viewer", "operator", "admin")
 ROLE_RANK = {r: i for i, r in enumerate(ROLES)}
 
+# Who made a change is recorded by name, and two of Homestead's own callers
+# are too: "schedule" for a power schedule (homestead_changes.BY_SCHEDULE) and
+# "api-key:<name>" for an API key. No account may take the first, and no
+# account name has a ':', so none can pass for an API key.
+RESERVED_USERNAMES = frozenset({"schedule"})
+
 
 def rank(role):
     return ROLE_RANK.get(role or "viewer", 0)
@@ -325,6 +331,10 @@ def create_user(username, password, first_only=False, role="operator"):
     username = (username or "").strip().lower()
     if not username or not username.isascii() or len(username) < 3 or len(username) > 32:
         raise ValueError("username must be 3-32 ASCII characters")
+    if username in RESERVED_USERNAMES:
+        raise ValueError("Homestead uses that username for power schedules; choose another")
+    if ":" in username:
+        raise ValueError("a username cannot contain ':'")
     if not password or len(password) < 10:
         raise ValueError("password must be at least 10 characters")
     data = _load(force=True)
