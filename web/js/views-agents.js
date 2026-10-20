@@ -116,7 +116,7 @@ function agentCard(r, target) {
       ["The agent says", r.reason ? esc(r.reason) : '<span class="dim">no reason given</span>'],
       ["Asked from", r.addr ? `<span class="mono">${esc(r.addr)}</span>` : '<span class="dim">unknown</span>'],
       pending ? ["Expires", esc(agentLeft(r.expires))] : ["Ended", esc(agentWhen(r.ended || r.created))],
-      r.decided_by ? ["Decided by", esc(r.decided_by)] : null])}
+      r.decided_by ? ["Decided by", esc(UI.who(r.decided_by))] : null])}
     ${agentPlanHtml(r.summary)}
     ${!pending && r.detail ? `<p class="small agent-req-detail">${esc(r.detail)}</p>` : ""}
     ${agentOutputHtml(r)}
@@ -147,7 +147,7 @@ async function viewAgents() {
       ended.filter(r => r !== named).map(r => [
         `<b>${esc(r.action || r.title)}</b><div class="dim xs">${esc(r.key)}${r.owner ? ` · made by ${esc(r.owner)}` : ""}</div>`,
         agentStatusChip(r.status),
-        `${r.decided_by ? esc(r.decided_by) + " · " : ""}${esc(agentWhen(r.ended || r.created))}`,
+        `${r.decided_by ? esc(UI.who(r.decided_by)) + " · " : ""}${esc(agentWhen(r.ended || r.created))}`,
         `${esc(r.detail || "")}${r.tool === "run_container_command" && r.status === "done"
           ? ` <button type="button" class="linkish" onclick="agentShow(${jsq(r.id)})">Show output</button>` : ""}`]),
       { empty: "No request has been answered in the last week." }))}`);

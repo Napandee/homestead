@@ -359,11 +359,12 @@ function roleClass(r) {
 }
 function paintWho() {
   if (!ME) return;
-  $("#whonm").textContent = ME;
-  $("#whoav").textContent = ME.slice(0, 2).toUpperCase();
+  const name = UI.who(ME);   // fleet:<handle>:<name> when a linked Homestead relays us
+  $("#whonm").textContent = name;
+  $("#whoav").textContent = name.slice(0, 2).toUpperCase();
   const wr = $("#whorole");
   if (wr) { wr.textContent = ROLE; wr.className = roleClass(ROLE) + " rolechip"; }
-  const su = $("#setUser"); if (su) su.textContent = ME;
+  const su = $("#setUser"); if (su) su.textContent = name;
   const sr = $("#setRole");
   if (sr) { sr.textContent = ROLE; sr.className = roleClass(ROLE) + " rolechip"; }
   document.body.dataset.role = ROLE;

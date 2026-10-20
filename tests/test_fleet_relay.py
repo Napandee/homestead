@@ -88,7 +88,7 @@ class RelayOverHttpTests(unittest.TestCase):
     def test_the_far_cluster_sees_the_person_signed_in_here(self):
         status, state, headers = self.ask("/api/auth/state")
         self.assertEqual(200, status)
-        self.assertEqual("robin@loft", state["user"])
+        self.assertEqual("fleet:loft:robin", state["user"])
         self.assertEqual("operator", state["role"])
         self.assertEqual("Loft", state["via"])
         self.assertEqual("close", headers.get("Connection"))
