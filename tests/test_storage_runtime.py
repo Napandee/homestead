@@ -7,6 +7,7 @@ from unittest import mock
 import test_deploy_capacity
 import server
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_shared as shared
 import homestead_storage_runtime as runtime
 import homestead_storage_guard as guard
@@ -98,7 +99,7 @@ class RuntimeTests(unittest.TestCase):
     def test_own_update_restart_scale_and_bulk_delete_interlocked_until_move_finishes(self):
         item = {"id": "move", "kind": "reclass", "status": "running",
                 "ref": {"namespace": "lab", "claim": "data", "retain_resources": True}}
-        with ops._lock: ops._write([item])
+        put(ops, [item])
         base = "/apis/apps/v1/namespaces/lab/deployments"
         dispatch = mock.Mock()
         for method, path in (("PUT", base + "/homestead"), ("PATCH", base + "/homestead"),
@@ -112,13 +113,12 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guard.send("PATCH", base + "/homestead", {}, dispatch, ops, self.read, own_controller=("lab", "homestead"))
         item.update(status="succeeded"); item["ref"]["retain_resources"] = False
-        with ops._lock: ops._write([item])
+        put(ops, [item])
         guard.send("PATCH", base + "/homestead", {}, dispatch, ops, self.read, own_controller=("lab", "homestead"))
         dispatch.assert_called_once()
 
     def test_real_server_transport_enforces_self_update_interlock(self):
-        with ops._lock:
-            ops._write([{"id": "move", "kind": "reclass", "status": "running", "ref": {"namespace": "lab", "claim": "data"}}])
+        put(ops, [{"id": "move", "kind": "reclass", "status": "running", "ref": {"namespace": "lab", "claim": "data"}}])
         with mock.patch.object(server.SELF, "NS", "lab"), mock.patch.object(server.KUBE_HELPERS, "_ksend") as raw:
             with self.assertRaises(ValueError): server.KUBE_HELPERS.ksend("PUT", "/apis/apps/v1/namespaces/lab/deployments/homestead", {})
             raw.assert_not_called()

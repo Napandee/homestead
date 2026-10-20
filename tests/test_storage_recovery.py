@@ -7,6 +7,7 @@ from unittest import mock
 from test_reclass_handoff import CopyCluster
 import homestead_reclass as rc
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_capacity_review as review
 import homestead_storage_workflow as workflow
 import homestead_storage_recovery as recovery
@@ -38,10 +39,10 @@ class StorageRecoveryTests(unittest.TestCase):
         self.save()
 
     def save(self):
-        with ops._lock: ops._write([self.cluster.item])
+        put(ops, [self.cluster.item])
 
     def load(self):
-        with ops._lock: self.cluster.item = ops._read()[0]
+        self.cluster.item = ops.stored()[0]
         return self.cluster.item
 
     def checkpoint(self, item):
@@ -49,11 +50,11 @@ class StorageRecoveryTests(unittest.TestCase):
         ops.checkpoint(item)
 
     def poll(self):
-        with ops._lock:
+        with ops.transaction() as tx:
             item = self.load()
             outcome = workflow.resolve(item, self.checkpoint, self.helper, self.restart, runtime_check=self.runtime_check)
             ops._finish(item, *outcome)
-            self.save()
+            tx.save([item])
             return outcome
 
     def preview(self, actor="admin"):
@@ -72,11 +73,11 @@ class StorageRecoveryTests(unittest.TestCase):
         self.assertIn("capacity warnings", self.load()["ref"]["storage_hold"])
 
     def test_inspection_never_creates_volume_job_or_durable_intent(self):
-        before, sent = copy.deepcopy(ops._read()), len(self.cluster.sent)
+        before, sent = copy.deepcopy(ops.stored()), len(self.cluster.sent)
         with mock.patch.object(ops, "_write") as write, mock.patch.object(rc, "ksend") as send:
             result = self.preview()
         write.assert_not_called(); send.assert_not_called()
-        self.assertEqual(before, ops._read())
+        self.assertEqual(before, ops.stored())
         self.assertEqual(sent, len(self.cluster.sent))
         self.assertEqual("copy-volume", result["plan"]["next_write"]["step"])
         self.assertIn("pause", result["tokens"])
@@ -186,7 +187,7 @@ class StorageRecoveryTests(unittest.TestCase):
             view = self.preview()
             self.assertNotIn("private-test-value", json.dumps(view))
             self.act("continue", view)
-        self.assertNotIn("private-test-value", json.dumps(ops._read()))
+        self.assertNotIn("private-test-value", json.dumps(ops.stored()))
 
     def test_legacy_job_is_not_silently_upgraded(self):
         self.cluster.item["ref"].pop("storage_protocol"); self.save()

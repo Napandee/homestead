@@ -6,6 +6,7 @@ from unittest import mock
 
 import test_deploy_capacity  # server import path
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_storage_conflicts as conflicts
 import server
 
@@ -25,12 +26,12 @@ class StorageConflictsTests(unittest.TestCase):
         for kind, ref in others:
             for first, second in (((kind, ref), ("reclass", self.move)), (("reclass", self.move), (kind, ref))):
                 with self.subTest(first=first[0], second=second[0], ref=ref):
-                    with ops._lock: ops._write([])
+                    put(ops, [])
                     ops.start(first[0], "First", {}, "/", first[1])
-                    before = copy.deepcopy(ops._read())
+                    before = copy.deepcopy(ops.stored())
                     with self.assertRaisesRegex(ValueError, "storage job"):
                         ops.start(second[0], "Second", {}, "/", second[1])
-                    self.assertEqual(before, ops._read())
+                    self.assertEqual(before, ops.stored())
 
     def test_namespace_and_pv_names_are_not_confused_with_longhorn_handles(self):
         item = {"id": "move", "kind": "reclass", "status": "running", "ref": self.move}
@@ -49,8 +50,8 @@ class StorageConflictsTests(unittest.TestCase):
                 self.assertTrue(ops._recovery_needed(item))
                 self.assertFalse(ops._public(item)["dismissible"])
                 with mock.patch.object(ops, "MAX_OPERATIONS", 0):
-                    with ops._lock: ops._write([item])
-                    self.assertEqual([item], ops._read())
+                    put(ops, [item])
+                    self.assertEqual([item], ops.stored())
                 with self.assertRaisesRegex(ValueError, "unresolved"):
                     ops.start("reclass", "Move", {}, "/", self.move)
 
@@ -65,7 +66,7 @@ class StorageConflictsTests(unittest.TestCase):
     def test_protocol_hold_is_not_replaceable_even_when_generic_resume_is_disabled(self):
         item = {"id": "old", "kind": "reclass", "status": "failed", "resource": {},
                 "ref": {**self.move, "storage_protocol": 1, "retain_resources": True}}
-        with ops._lock: ops._write([item])
+        put(ops, [item])
         with self.assertRaises(ValueError): ops.start("reclass", "Move", {}, "/", self.move)
 
     def test_restore_creation_and_recording_exclude_a_concurrent_storage_move(self):
@@ -103,4 +104,4 @@ class StorageConflictsTests(unittest.TestCase):
         self.assertTrue(finished.is_set())
         self.assertEqual(["conflict"], outcomes)
         self.assertEqual(200, handler._send.call_args.args[0])
-        self.assertEqual(["volume-restore"], [i["kind"] for i in ops._read()])
+        self.assertEqual(["volume-restore"], [i["kind"] for i in ops.stored()])

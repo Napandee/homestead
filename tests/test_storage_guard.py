@@ -8,6 +8,7 @@ from unittest import mock
 import test_deploy_capacity  # server import path
 import server
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_storage_guard as guard
 
 
@@ -17,7 +18,7 @@ class StorageGuardTests(unittest.TestCase):
         patch = mock.patch.object(ops, "DATA_DIR", directory.name); patch.start(); self.addCleanup(patch.stop)
         self.item = {"id": "move", "kind": "reclass", "status": "running", "ref": {
             "namespace": "lab", "claim": "source", "temp": "copy", "old_pv": "pv-old", "retain_resources": True}}
-        with ops._lock: ops._write([self.item])
+        put(ops, [self.item])
         self.pv = {"metadata": {"name": "pv-new"}, "spec": {"claimRef": {"namespace": "lab", "name": "copy"},
             "csi": {"driver": "driver.longhorn.io", "volumeHandle": "longhorn-different-name"}}}
         self.dispatch = mock.Mock(return_value={"ok": True})
@@ -55,7 +56,7 @@ class StorageGuardTests(unittest.TestCase):
         path = "/api/v1/namespaces/lab/persistentvolumeclaims/source"
         with guard.dispatching(self.item): self.send(path)
         with self.assertRaises(ValueError): self.send(path)
-        with ops._lock: ops._write([self.item, {**copy.deepcopy(self.item), "id": "other-move"}])
+        put(ops, [self.item, {**copy.deepcopy(self.item), "id": "other-move"}])
         with guard.dispatching(self.item):
             with self.assertRaises(ValueError): self.send(path)
         self.assertEqual(1, self.dispatch.call_count)
@@ -73,13 +74,13 @@ class StorageGuardTests(unittest.TestCase):
 
     def test_pinned_longhorn_handle_survives_missing_pv_inventory(self):
         self.item["ref"]["copy_claims"] = {"source": {"pv": "removed-pv", "csi_driver": "driver.longhorn.io", "csi_handle": "pinned"}}
-        with ops._lock: ops._write([self.item])
+        put(ops, [self.item])
         with self.assertRaises(ValueError): self.send("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pinned")
         self.dispatch.assert_not_called()
 
     def test_copy_verification_job_is_protected_until_dispatcher_removes_it(self):
         self.item["ref"]["job"] = "copy-proof"
-        with ops._lock: ops._write([self.item])
+        put(ops, [self.item])
         path = "/apis/batch/v1/namespaces/lab/jobs/copy-proof"
         for target in (path, path + "?propagationPolicy=Background", path.rsplit("/", 1)[0]):
             with self.assertRaisesRegex(ValueError, "protected"): self.send(target)
@@ -164,7 +165,7 @@ class StorageGuardTests(unittest.TestCase):
     def test_failed_and_cancelled_records_keep_protection_even_if_tracking_hidden(self):
         for status in ("failed", "cancelled"):
             self.item.update(status=status, tracking_stopped=True)
-            with ops._lock: ops._write([self.item])
+            put(ops, [self.item])
             with self.assertRaises(ValueError): self.send("/api/v1/persistentvolumes/pv-old")
         self.dispatch.assert_not_called()
 
@@ -172,7 +173,7 @@ class StorageGuardTests(unittest.TestCase):
         for status, phase in (("succeeded", "done"), ("failed", "rolled-back")):
             self.item.update(status=status)
             self.item["ref"].update(phase=phase, retain_resources=False)
-            with ops._lock: ops._write([self.item])
+            put(ops, [self.item])
             self.send("/api/v1/persistentvolumes/pv-old")
         self.assertEqual(2, self.dispatch.call_count)
 

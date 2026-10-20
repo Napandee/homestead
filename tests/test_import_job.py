@@ -64,7 +64,7 @@ class ImportJobTests(unittest.TestCase):
         self.sent.append((method, path, copy.deepcopy(body)))
         if method == "POST":
             # Every creation has a durable intent BEFORE transmission.
-            entry = ops._read()[0]["ref"]["writes"][-1]
+            entry = ops.stored()[0]["ref"]["writes"][-1]
             self.assertEqual("intent", entry["phase"])
             self.assertEqual(body["metadata"]["name"], entry["resource"]["name"])
             path += "/" + body["metadata"]["name"]
@@ -86,7 +86,7 @@ class ImportJobTests(unittest.TestCase):
         return flow.dispatch(self.body, self.prepared, self.context, self.read, self.send, ops, self.create_claim, self.admission)
 
     def item(self):
-        return ops._read()[0]
+        return ops.stored()[0]
 
     def poll(self):
         return ops.list_operations()[0]
@@ -114,7 +114,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual([{"name": "PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-env", "key": "app.PASSWORD"}}}], env)
         self.assertNotIn("credential-never-journalled", json.dumps(self.objects[self.dep_path]))
         self.assertTrue(all(r["phase"] == "accepted" for r in self.item()["ref"]["writes"]))
-        self.assertNotIn("credential-never-journalled", json.dumps(ops._read()))
+        self.assertNotIn("credential-never-journalled", json.dumps(ops.stored()))
         self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
         self.complete()
         self.assertEqual("succeeded", self.poll()["status"])
@@ -154,7 +154,7 @@ class ImportJobTests(unittest.TestCase):
         self.body["capacity_token"] = "1.invalid"
         with self.assertRaises(ValueError):
             self.start()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual([], self.sent)
 
     def test_unverified_api_receipt_cannot_advance_setup(self):
@@ -180,7 +180,7 @@ class ImportJobTests(unittest.TestCase):
         self.objects[self.pvc_path]["metadata"]["uid"] = "replacement"
         with self.assertRaisesRegex(ValueError, "Borrowed volume"):
             self.start()
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual([], self.sent)
 
     def test_new_and_borrowed_claim_or_pv_replacement_blocks_helper(self):

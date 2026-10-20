@@ -106,7 +106,7 @@ class Cluster:
             return {'items': [{'metadata': {'name': 'helper', 'ownerReferences': [{'uid': job['metadata']['uid']}]}} for job in self.jobs.values()]}
         raise urllib.error.HTTPError(path, 404, 'missing', None, None)
     def send(self, method, path, body, **options):
-        assert self.ops._read(), 'The approval must be durable before any mutation'
+        assert self.ops.stored(), 'The approval must be durable before any mutation'
         self.writes.append((method, path, copy.deepcopy(body)))
         if '/nodes/' in path:
             obj = self.lh[path.rsplit('/', 1)[1]]
@@ -136,7 +136,7 @@ class Cluster:
     def start(self, plan=None):
         plan = plan or self.review()
         return V.start({k: plan[k] for k in ('node', 'disk', 'request_id', 'capacity_token')} | {'confirm_capacity': True})
-    def tick(self): return V.status(self.ops._read()[0]['id'])
+    def tick(self): return V.status(self.ops.stored()[0]['id'])
     def evacuate(self):
         for replica in self.replicas:
             if replica['spec']['nodeID'] == 'node-1':
@@ -144,7 +144,7 @@ class Cluster:
         self.lh['node-1']['status']['diskStatus']['data']['scheduledReplica'] = {}
     def awaiting(self): self.start(); self.tick(); self.evacuate(); return self.tick()
     def prepare(self):
-        review = V.prepare_review(self.ops._read()[0]['id'])
+        review = V.prepare_review(self.ops.stored()[0]['id'])
         body = {k: review[k] for k in ('operation_id', 'request_id', 'capacity_token')}
         body.update(confirm_capacity=True, confirm_device=review['device'])
         return V.prepare(body), body

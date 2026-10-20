@@ -342,13 +342,13 @@ class JournalTests(unittest.TestCase):
         original = self.api.send
         seen = []
         def send(*args, **kwargs):
-            seen.extend(operations._read())
+            seen.extend(operations.stored())
             return original(*args, **kwargs)
         cleanup.dispatch(self.api.read, send, operations, "vm-disk-import", "Import disk", {}, "/import",
                          {"namespace": "lab", "name": "guest-disk"}, [self.body()], "import")
         self.assertEqual("creating", seen[0]["ref"]["phase"])
         self.assertTrue(seen[0]["ref"]["cdi_cleanup"]["id"])
-        self.assertNotIn("private", repr(operations._read()))
+        self.assertNotIn("private", repr(operations.stored()))
         annotations = self.api.objects[DV + "/guest-disk"]["metadata"]["annotations"]
         self.assertEqual("true", annotations[cleanup.RETAIN_WORKER])
 
@@ -366,7 +366,7 @@ class JournalTests(unittest.TestCase):
         work = cleanup.receipt(["guest-disk"])
         operations.start("vm-disk-import", "Import disk", {}, "/import",
                          {"namespace": "lab", "name": "guest-disk", "phase": "creating", "cdi_cleanup": work})
-        item = operations._read()[0]
+        item = operations.stored()[0]
         self.assertFalse(operations._plan_for(item)["can"])
         self.assertEqual("failed", operations.list_operations()[0]["status"])
         self.assertEqual([], self.api.writes)

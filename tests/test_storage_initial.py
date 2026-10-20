@@ -8,6 +8,7 @@ import test_reclass_review as fixtures
 import homestead_reclass as rc
 import homestead_storage_workflow as workflow
 import homestead_operations as ops
+from fakes.job_store import put
 import homestead_vm_power_receipts as receipts
 import server
 from homestead_storage_journal import Held
@@ -35,7 +36,7 @@ class InitialStorageTests(unittest.TestCase):
         return {**self.body, "confirm_capacity": True, "capacity_token": result["capacity_token"]}
 
     def load(self):
-        with ops._lock: return ops._read()[0]
+        return ops.stored()[0]
 
     def send(self, method, path, body, **kwargs):
         record = self.load()["ref"]["storage_writes"][-1]
@@ -53,12 +54,12 @@ class InitialStorageTests(unittest.TestCase):
         return copy.deepcopy(dep)
 
     def poll(self, checkpoint=None):
-        with ops._lock:
+        with ops.transaction() as tx:
             item = self.load()
             outcome = workflow.resolve(item, checkpoint or ops.checkpoint,
                                        lambda *_: {"blocked": False}, lambda *_: {"blocked": False})
             ops._finish(item, *outcome)
-            ops._write([item])
+            tx.save([item])
             return outcome
 
     def test_new_job_is_durable_before_stop_and_approval_cannot_replay_after_history_clear(self):
@@ -72,7 +73,7 @@ class InitialStorageTests(unittest.TestCase):
         self.assertNotIn(body["capacity_token"], str(item))
         # Simulate compact display history being cleared: the independent
         # consumption receipt still rejects the original approval.
-        with ops._lock: ops._write([])
+        put(ops, [])
         with self.assertRaisesRegex(ValueError, "approval already"):
             workflow.start_reviewed(body, "admin", ops)
         self.assertEqual([], self.sent)
@@ -82,7 +83,7 @@ class InitialStorageTests(unittest.TestCase):
         for body, actor in (({**self.body, "capacity_token": old["capacity_token"], "confirm_capacity": True}, "admin"),
                             (self.approved(), "other-admin")):
             with self.assertRaises(ValueError): workflow.start_reviewed(body, actor, ops)
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual([], self.sent)
 
     def test_initial_store_failure_cannot_stop_a_workload(self):
@@ -147,7 +148,7 @@ class InitialStorageTests(unittest.TestCase):
     def test_replica_change_after_initial_check_stops_before_durable_intent(self):
         workflow.start_reviewed(self.approved(), "admin", ops)
         check = mock.Mock(side_effect=[None, Held("Finish upgrading all replicas")])
-        with ops._lock:
+        with ops.transaction():
             item = self.load()
             result = workflow.resolve(item, ops.checkpoint, lambda *_: {"blocked": False},
                                       lambda *_: {"blocked": False}, runtime_check=check)
@@ -175,7 +176,7 @@ class InitialStorageTests(unittest.TestCase):
         self.assertEqual(200, status)
         body = {**self.body, "capacity_token": preview["capacity_token"], "confirm_capacity": True}
         self.assertNotEqual(200, call("start", body, Held("Finish upgrading all replicas"))[0])
-        self.assertEqual([], ops._read())
+        self.assertEqual([], ops.stored())
         self.assertEqual(200, call("start", body)[0])
         self.assertEqual(1, self.load()["ref"]["storage_protocol"])
         self.assertEqual([], self.sent)
