@@ -1379,6 +1379,6 @@ ROUTES = {
     ("POST", "/api/vm/migrate"): ("operator", _migrate_route),
     ("POST", "/api/vms/logo"): ("operator", lambda request: set_logos(request.body)),
     ("POST", "/api/vms/monitoring"): ("operator", lambda request: set_monitoring(request.body)),
-    ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", 5, list_vms)),
+    ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", homestead_routes.PAGE_SECONDS, list_vms)),
     ("GET", "/api/vm"): ("viewer", lambda request: detail((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
 }

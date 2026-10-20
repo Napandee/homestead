@@ -255,7 +255,7 @@ class WriteGuardTests(unittest.TestCase):
 
     def test_the_guards_are_registered_in_todays_order(self):
         self.assertEqual([guard.__name__ for guard in K.WRITE_GUARDS],
-                         ["self_data_fence", "workload_access", "change_note", "storage_guard"])
+                         ["self_data_fence", "workload_access", "change_note", "storage_guard", "fresh_reads"])
 
     def test_a_write_goes_through_every_guard_in_order(self):
         log = []
@@ -307,7 +307,7 @@ class WriteGuardTests(unittest.TestCase):
         with self.guarded(log), mock.patch.object(K, "WRITE_GUARDS", list(K.WRITE_GUARDS)):
             K.add_write_guard(audit, before="change_note")
             self.assertEqual([guard.__name__ for guard in K.WRITE_GUARDS],
-                             ["self_data_fence", "workload_access", "audit", "change_note", "storage_guard"])
+                             ["self_data_fence", "workload_access", "audit", "change_note", "storage_guard", "fresh_reads"])
             K.ksend("PUT", PODS + "/a", {})
         self.assertEqual(log[:5], ["activity", "self-data fence", "workload access", "audit", "change note"])
 

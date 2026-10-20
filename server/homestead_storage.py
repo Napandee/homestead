@@ -570,11 +570,11 @@ def _q(request, name, default=""):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.cached("vol", 8, get_volumes)),
+    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.cached("vol", homestead_routes.PAGE_SECONDS, get_volumes)),
     ("GET", "/api/volumes/other"): ("viewer", lambda request: homestead_routes.cached("volother", 10, other_volumes)),
     ("GET", "/api/volumes/edit-options"): ("viewer", lambda request: volume_edit_options(
         _q(request, "ns", DEFAULT_NS), _q(request, "name"))),
-    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.cached("stor", 10, get_storage)),
+    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.cached("stor", homestead_routes.PAGE_SECONDS, get_storage)),
     ("GET", "/api/pvcs"): ("viewer", lambda request: claims(_q(request, "ns", DEFAULT_NS))),
     ("POST", "/api/volumes/create"): ("operator", lambda request: create_volume(request.body)),
     ("POST", "/api/volumes/edit"): ("operator", lambda request: edit_volume(request.body)),

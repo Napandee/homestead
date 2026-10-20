@@ -34,6 +34,7 @@ needs the handler itself - headers, streaming, a redirect.
 """
 import collections
 import importlib
+import homestead_cache as CACHE
 
 MODULES = (
     "homestead_addons",
@@ -154,6 +155,11 @@ Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 Reply = collections.namedtuple("Reply", "code body ctype", defaults=("application/json",))
 
 _table = {}
+# How long the pages' main reads (overview, hosts, apps, VMs, volumes,
+# storage) are kept for the UI: longer than its 15 s refresh, so a refresh can
+# be served from the last one (#705). A write Homestead makes to what they show
+# drops them at once (homestead_kube.fresh_reads).
+PAGE_SECONDS = 20
 _cached = [lambda key, seconds, fn: fn()]
 _store = [{}]
 
@@ -167,15 +173,18 @@ def bind(cached, store=None):
 
 
 def forget(*keys):
-    """Drop these keys from server.py's cache."""
+    """Drop these keys from server.py's cache, and from a read of them that
+    is still running, so it is not kept after the change (#705)."""
     for key in keys:
         _store[0].pop(key, None)
+    CACHE.forget_where(lambda key: key in keys)
 
 
 def forget_prefix(prefix):
     """Drop every key from server.py's cache that starts with prefix."""
     for key in [k for k in _store[0] if k.startswith(prefix)]:
         _store[0].pop(key, None)
+    CACHE.forget_where(lambda key: key.startswith(prefix))
 
 
 def cached(key, seconds, fn):

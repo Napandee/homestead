@@ -121,7 +121,7 @@ def bind(_kget, _hostrun, _platform, data_dir="/data"):
 
 
 def applies(p=None):
-    p = p if p is not None else (platform(True) or {})
+    p = p if p is not None else (platform() or {})
     return not p.get("harvester") and p.get("distribution") in ("k3s", "rke2")
 
 
@@ -320,7 +320,7 @@ def current(facts, boot_id):
 
 def report(node=None):
     """What is known of each host, or of one, with how old it is."""
-    p = platform(True) or {}
+    p = platform() or {}
     state, boots = _load(), _boots()
     rows = {}
     for name, facts in state.items():

@@ -359,6 +359,6 @@ def events():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/cluster"): ("viewer", lambda request: homestead_routes.cached("cluster", 15, inventory)),
-    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.cached("ov", 5, overview)),
+    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.cached("ov", homestead_routes.PAGE_SECONDS, overview)),
     ("GET", "/api/events"): ("viewer", lambda request: homestead_routes.cached("ev", 10, events)),
 }

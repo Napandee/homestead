@@ -780,7 +780,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 # Its routes and who may use them (homestead_routes.py). server.py checks
 # /api/move's target is an app before it gets here.
 ROUTES = {
-    ("GET", "/api/workloads"): ("viewer", lambda request: ROUTER.cached("wl", 5, get_workloads)),
+    ("GET", "/api/workloads"): ("viewer", lambda request: ROUTER.cached("wl", ROUTER.PAGE_SECONDS, get_workloads)),
     ("GET", "/api/workloads/start-plan"): ("viewer", lambda request: workload_start_plan(
         _arg(request, "ns"), _arg(request, "name"), int((request.query.get("replicas") or [1])[0]))),
     ("GET", "/api/workload"): ("viewer", edit_form),

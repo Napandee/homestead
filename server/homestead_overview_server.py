@@ -17,6 +17,7 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_alerts as ALERTS
 import homestead_api_v1 as API_V1
 import homestead_auth as AUTH
+import homestead_cache as CACHE
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
@@ -86,7 +87,7 @@ def _sampler():
         # full scan of the cluster would be thrown away (#621).
         if LEADER.is_leader():
             try:
-                HISTORY.record_live(get_overview())
+                HISTORY.record_live(CACHE.refresh("ov", get_overview))   # the pages read this one too
                 beat("sampler", 30, leader_only=True)
             except Exception as error:
                 beat("sampler", 30, error, leader_only=True)
@@ -240,7 +241,7 @@ def _alert_sources():
         except Exception:
             results[name] = None
 
-    take("health", lambda: ALERTS.health_facts(cached("ov", 10, get_overview)))
+    take("health", lambda: ALERTS.health_facts(cached("ov", MODULE_ROUTES.PAGE_SECONDS, get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
@@ -416,7 +417,7 @@ def _history_loop():
         # Checked often, recorded every STEP: a new leader starts at once.
         if LEADER.is_leader() and time.time() - last >= HISTORY.STEP:
             try:
-                HISTORY.record(cached("ov", 10, get_overview))
+                HISTORY.record(cached("ov", MODULE_ROUTES.PAGE_SECONDS, get_overview))
                 last = time.time()
                 beat("history", HISTORY.STEP, leader_only=True)
             except Exception as error:
