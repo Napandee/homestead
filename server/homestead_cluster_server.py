@@ -21,6 +21,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
 import homestead_container_rebalance as CREBALANCE
 import homestead_host_console as HOST_CONSOLE
+import homestead_imports as IMPORTS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
 import homestead_lhrebuild as LHREBUILD
@@ -208,16 +209,27 @@ def _power_jobs_loop():
 
 
 def _detached_copies_loop():
-    """Offline rebuilding on by default, and Homestead's stand-in for it on
-    Longhorn without one; the leader only."""
+    """Every minute on the leader, unless the cluster is shutting down:
+    offline rebuilding on by default, and Homestead's stand-in for it on
+    Longhorn without one; and the image scans and import clean-up that
+    looking at those pages used to do (#622)."""
     while True:
         time.sleep(60)
         try:
-            if LEADER.is_leader() and (cluster_shutdown().state() or {}).get("phase") in (None, "released"):
-                LHREBUILD.tick()
-                _cache.pop("lhrebuild", None)
+            if not (LEADER.is_leader() and (cluster_shutdown().state() or {}).get("phase") in (None, "released")):
+                continue
+        except Exception as error:
+            print(f"leader or shutdown state unread; detached volume copies, image scans and import clean-up skipped: {str(error)[:160]}", flush=True)
+            continue
+        try:
+            LHREBUILD.tick()
+            _cache.pop("lhrebuild", None)
         except Exception as error:
             print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
+        try:
+            IMPORTS.tick()
+        except Exception as error:
+            print(f"image scans and import clean-up not done: {str(error)[:160]}", flush=True)
 
 
 def allocation_probe_capacity(obj, template):
