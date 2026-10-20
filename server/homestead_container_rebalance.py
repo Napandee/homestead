@@ -753,3 +753,9 @@ ROUTES = {
     ("POST", "/api/workloads/rebalance"): ("operator", start_run),
     ("POST", "/api/workloads/rebalance/review"): ("viewer", lambda request: picked((request.body or {}).get("picks"), role=request.role)),
 }
+
+
+def register(ops):
+    """The job store's entry for a container rebalance (#622)."""
+    ops.RESOLVERS[KIND] = status
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

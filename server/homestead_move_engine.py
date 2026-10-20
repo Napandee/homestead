@@ -1606,3 +1606,8 @@ ROUTES = {
     ("POST", "/api/move/moves/finish"): ("admin", lambda request: MOVE.answer(
         lambda: finish(request.body.get("id"), bool(request.body.get("volumes"))))),
 }
+
+
+def register(ops):
+    """A move reads in the Activity tray like every other long job (#622)."""
+    ops.RESOLVERS["move"] = op_state

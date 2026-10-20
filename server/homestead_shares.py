@@ -952,3 +952,8 @@ ROUTES = {
     ("GET", "/api/shares/users"): ("admin", lambda request: list_users()),
     ("POST", "/api/shares/users/delete"): ("admin", lambda request: {"ok": True, **delete_user(request.body.get("user"))}),
 }
+
+
+def register(ops):
+    """The job store's entry for removing a share (#622)."""
+    ops.RESOLVERS["share-remove"] = removal_progress

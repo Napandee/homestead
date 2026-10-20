@@ -407,3 +407,9 @@ ROUTES = {
     ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
     ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
 }
+
+
+def register(ops):
+    """The job store's entry for a volume rebalance (#622)."""
+    ops.RESOLVERS[KIND] = status
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

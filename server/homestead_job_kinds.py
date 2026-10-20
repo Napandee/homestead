@@ -6,7 +6,8 @@ carry on (RESUMABLE), where its output is (LOGGERS), whether cancelling also
 cleans up after a failure (CLEANUPS, CDI_CANCELLABLE). homestead_operations
 seeds some resolvers itself; server.py, homestead_cancel.register and
 homestead_joblogs.register fill most of the rest, and requests, priority,
-promote, set_restart and unraid_vms add their own, at import or in bind().
+promote and set_restart add their own at import or in bind(), and the
+modules server.py lists call register(ops) to add theirs (#622).
 kinds() reads them as they stand on each call, so nothing has to
 move for it to be right; the registrations and homestead_operations' kind
 branches move into these records later, a few kinds at a time."""

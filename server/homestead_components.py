@@ -809,3 +809,9 @@ ROUTES = {
     ("GET", "/api/cluster/components"): ("viewer", _report_route),
     ("POST", "/api/cluster/components/upgrade"): ("admin", _upgrade_route),
 }
+
+
+def register(ops):
+    """The job store's entry for a platform upgrade (#622)."""
+    ops.RESOLVERS["platform-upgrade"] = status
+    ops.CANCELLERS["platform-upgrade"] = (cancel_plan, cancel_run)

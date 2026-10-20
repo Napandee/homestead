@@ -78,3 +78,10 @@ def cancel_plan(item):
 
 def cancel_run(item, options):
     raise ValueError("VM configuration jobs require outcome inspection, not cancellation")
+
+
+def register(ops):
+    """The job store's entries for creating and editing a VM (#622)."""
+    for kind in ("vm-create", "vm-edit"):
+        ops.RESOLVERS[kind] = status
+        ops.CANCELLERS[kind] = (cancel_plan, cancel_run)
