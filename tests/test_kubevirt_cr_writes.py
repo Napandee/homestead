@@ -11,7 +11,9 @@ sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_kubevirt_cr as KUBEVIRT_CR
+import homestead_macvtap as MACVTAP
 import homestead_passthrough as PASSTHROUGH
+import homestead_vm_write as VM_WRITE
 from fakes.kube import Kube
 
 CR = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
@@ -88,6 +90,64 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError):
             KUBEVIRT_CR.update(lambda kv: {"spec": {"x": 1}}, current=lambda: self.KV, write=write)
         self.assertEqual(1, len(sent))
+
+
+class GateTests(unittest.TestCase):
+    """Feature gates are one list too: a gate switched on meanwhile stays on."""
+    SNAPSHOT = {"spec": {"configuration": {"developerConfiguration": {"featureGates": ["Snapshot"]}}}}
+
+    def setUp(self):
+        saved = (PASSTHROUGH.kget, PASSTHROUGH.ksend, PASSTHROUGH.hostrun, PASSTHROUGH.platform, PASSTHROUGH.DATA_DIR)
+        self.addCleanup(lambda: PASSTHROUGH.bind(*saved))
+        saved_macvtap = (MACVTAP.kget, MACVTAP.ksend, MACVTAP.addons, MACVTAP.platform)
+        self.addCleanup(lambda: MACVTAP.bind(*saved_macvtap))
+
+    def gates(self, kube, key="featureGates"):
+        return kube.object(CR)["spec"]["configuration"]["developerConfiguration"].get(key)
+
+    def test_ensure_gates_keeps_a_gate_switched_on_meanwhile(self):
+        with Kube(kubevirt()) as kube:
+            PASSTHROUGH.bind(K.kget, meanwhile(self.SNAPSHOT), None, None)
+            self.assertEqual(["HostDevices"], PASSTHROUGH.ensure_gates("HostDevices"))
+            self.assertEqual(["HostDevices", "Snapshot"], sorted(self.gates(kube)), "the gate switched on meanwhile was dropped")
+
+    def test_ensure_gates_sent_through_a_review_names_the_version_it_read(self):
+        sent = []
+        with Kube(kubevirt()):
+            PASSTHROUGH.bind(K.kget, K.send, None, None)
+            PASSTHROUGH.ensure_gates("HostDevices", send=lambda *a, **o: (sent.append(a[2]), K.send(*a, **o))[1])
+        self.assertTrue(sent[0]["metadata"].get("resourceVersion"))
+
+    def test_a_reviewed_vm_save_still_stops_on_a_conflict(self):
+        # A reviewed VM create or edit sends through its ResourceWriter, which
+        # never replays a refused write: a gate changed meanwhile stops it.
+        events = []
+        with Kube(kubevirt()) as kube:
+            PASSTHROUGH.bind(K.kget, K.send, None, None)
+            writer = VM_WRITE.ResourceWriter(meanwhile(self.SNAPSHOT), events.append)
+            with self.assertRaises(VM_WRITE.WriteFailure):
+                PASSTHROUGH.ensure_gates("HostDevices", send=writer)
+            self.assertEqual(["Snapshot"], self.gates(kube), "nothing of the reviewed save was written")
+        self.assertEqual(["intent", "refused"], [e["phase"] for e in events], "one attempt, recorded as refused")
+        self.assertEqual(409, events[-1]["http_status"])
+
+    def test_macvtap_keeps_a_gate_switched_on_meanwhile(self):
+        cr = kubevirt()
+        cr["status"] = {"observedKubeVirtVersion": "v1.4.1"}   # before 1.5 it needs NetworkBindingPlugins on
+        with Kube(cr) as kube:
+            MACVTAP.bind(K.kget, meanwhile(self.SNAPSHOT), None, None)
+            MACVTAP.register_binding()
+            self.assertEqual(["NetworkBindingPlugins", "Snapshot"], sorted(self.gates(kube)), "the gate switched on meanwhile was dropped")
+            self.assertIn("macvtap", kube.object(CR)["spec"]["configuration"]["network"]["binding"])
+
+    def test_macvtap_on_a_newer_kubevirt_keeps_a_gate_switched_off_meanwhile(self):
+        cr = kubevirt()
+        cr["status"] = {"observedKubeVirtVersion": "v1.9.0"}
+        change = {"spec": {"configuration": {"developerConfiguration": {"disabledFeatureGates": ["Snapshot"]}}}}
+        with Kube(cr) as kube:
+            MACVTAP.bind(K.kget, meanwhile(change), None, None)
+            MACVTAP.register_binding()
+            self.assertEqual([MACVTAP.GATE, "Snapshot"], sorted(self.gates(kube, "disabledFeatureGates")))
 
 
 if __name__ == "__main__":
