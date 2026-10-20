@@ -152,6 +152,41 @@ class ItemsTests(unittest.TestCase):
         with mock.patch.object(K, "kget", Reads({SNAPSHOTS: {"items": [{"metadata": {"name": "s"}}]}})):
             self.assertEqual(K.items(SNAPSHOTS, optional_group="snapshot.storage.k8s.io"), [{"metadata": {"name": "s"}}])
 
+    def test_items_reads_through_a_module_reader_when_given(self):
+        # A module bound to its own reader keeps listing through it, API
+        # discovery included; the client is not used.
+        read = Reads({PODS: {"items": [{"metadata": {"name": "a"}}]}, SNAPSHOTS: http_error(404),
+                      "/apis": {"groups": [{"name": "apps"}]}})
+        with mock.patch.object(K, "kget", Reads({})):
+            self.assertEqual(K.items(PODS, read=read), [{"metadata": {"name": "a"}}])
+            self.assertEqual(K.items(SNAPSHOTS, optional_group="snapshot.storage.k8s.io", read=read), [])
+        self.assertEqual(read.paths, [PODS, SNAPSHOTS, "/apis"])
+
+    def test_items_through_a_module_reader_is_as_strict(self):
+        read = Reads({PODS: {"items": [{}], "metadata": {"continue": "token"}}})
+        with self.assertRaises(ValueError):
+            K.items(PODS, read=read)
+
+    def test_items_with_an_unbound_reader_fails_rather_than_reading_the_cluster(self):
+        client = Reads({PODS: {"items": []}})
+        with mock.patch.object(K, "kget", client):
+            with self.assertRaises(TypeError):
+                K.items(PODS, read=None)
+            self.assertEqual(client.paths, [])
+
+    def test_an_incomplete_list_is_its_own_kind_of_value_error(self):
+        # A module can put an incomplete list in its own words without
+        # rewording other ValueErrors (an invalid name, an answer not JSON).
+        answers = {PODS: {"items": None}, PODS + "?x": {"items": ["x"]}, SNAPSHOTS: http_error(404), "/apis": {"groups": None}}
+        for path, options in ((PODS, {}), (PODS + "?x", {}), (SNAPSHOTS, {"optional_group": "snapshot.storage.k8s.io"})):
+            with self.subTest(path=path):
+                with self.assertRaises(K.Incomplete) as caught:
+                    K.items(path, read=Reads(answers), **options)
+                self.assertIsInstance(caught.exception, ValueError)
+        with self.assertRaises(ValueError) as caught:
+            K.items(PODS, read=Reads({PODS: ValueError("not a valid Kubernetes name")}))
+        self.assertNotIsInstance(caught.exception, K.Incomplete)
+
 
 class SendTests(unittest.TestCase):
     def test_send_writes_through_ksend(self):
