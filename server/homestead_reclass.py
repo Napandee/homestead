@@ -31,6 +31,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes
@@ -71,22 +72,9 @@ def _get(path):
 
 def _items(path, optional_group=None):
     try:
-        result = kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code != 404 or not optional_group:
-            raise
-        discovery = kget("/apis")
-        groups = discovery.get("groups")
-        if not isinstance(groups, list) or any(not isinstance(g, dict) or not g.get("name") for g in groups):
-            raise ValueError("API discovery is incomplete; volume use cannot be checked")
-        if any(g["name"] == optional_group for g in groups):
-            raise
-        return []  # explicitly absent optional API, not a failed inventory
-    if not isinstance(result, dict) or not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue"):
-        raise ValueError("Volume inventory is incomplete; refresh before moving data")
-    if any(not isinstance(row, dict) for row in result["items"]):
-        raise ValueError("Volume inventory contains invalid entries")
-    return result["items"]
+        return KUBE.items(path, optional_group, read=kget)
+    except KUBE.Incomplete as error:
+        raise ValueError("Volume inventory is incomplete; refresh before moving data") from error
 
 
 def _pin(fences, path, obj):

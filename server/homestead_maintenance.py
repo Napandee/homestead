@@ -4,6 +4,7 @@ import json
 from homestead_topology import selected
 import homestead_pullwatch as PULLWATCH
 import homestead_runtime as RUNTIME
+import homestead_kube as KUBE
 import homestead_names as NAMES
 
 
@@ -17,10 +18,10 @@ def pod_snapshot(pods):
 
 
 def items(get, path):
-    result = get(path)
-    if not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue"):
-        raise ValueError("incomplete inventory: " + path)
-    return result["items"]
+    try:
+        return KUBE.items(path, read=get)
+    except KUBE.Incomplete as error:
+        raise ValueError("incomplete inventory: " + path) from error
 
 
 def drainable(pod):

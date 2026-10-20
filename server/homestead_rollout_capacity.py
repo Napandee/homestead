@@ -6,6 +6,7 @@ RollingUpdate intermediate removal/placement orders are not fully simulated.
 """
 import math
 
+import homestead_kube as KUBE
 import homestead_pod_resources as RESOURCES
 
 
@@ -16,10 +17,10 @@ def controller(obj):
 
 
 def items(get, path):
-    result = get(path)
-    if not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue"):
-        raise ValueError("incomplete inventory")
-    return result["items"]
+    try:
+        return KUBE.items(path, read=get)
+    except KUBE.Incomplete as error:
+        raise ValueError("incomplete inventory") from error
 
 
 def owned_pods(current, pods, get, namespace):

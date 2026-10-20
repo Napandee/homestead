@@ -25,10 +25,10 @@ def bind(read, send):
 
 
 def _items(path):
-    result = kget(path)
-    if "items" not in result or (result.get("metadata") or {}).get("continue"):
-        raise ValueError("Snapshot support could not be checked: Kubernetes returned an incomplete inventory")
-    return result["items"]
+    try:
+        return KUBE.items(path, read=kget)
+    except KUBE.Incomplete as error:
+        raise ValueError("Snapshot support could not be checked: Kubernetes returned an incomplete inventory") from error
 
 
 def _controller(deployment):

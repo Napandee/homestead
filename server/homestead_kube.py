@@ -243,6 +243,12 @@ def get(path, **options):
 _CLIENT = object()
 
 
+class Incomplete(ValueError):
+    """A list that came back incomplete or with rows that are not objects, or
+    API discovery that did not say what it serves: items' own errors, so a
+    module can put them in its words and leave every other ValueError be."""
+
+
 def get_optional(path, read=_CLIENT, **options):
     """The object, or None when it is not there (404). Any other failure
     raises: a read that failed is not an object that is missing. A module
@@ -258,29 +264,31 @@ def get_optional(path, read=_CLIENT, **options):
         return None
 
 
-def items(path, optional_group=None):
+def items(path, optional_group=None, read=_CLIENT):
     """Every row of a list, or an error: never a list that failed, came back
     without items, or was cut short (continue). A 429 is retried by kget.
     optional_group names an API group that may not be installed (say
     snapshot.storage.k8s.io): a 404 is then an empty list if API discovery
-    confirms the group is absent, and an error if the group is there."""
+    confirms the group is absent, and an error if the group is there. read is
+    a module's own reader, as for get_optional; discovery goes through it too."""
+    read = kget if read is _CLIENT else read
     try:
-        listing = kget(path)
+        listing = read(path)
     except urllib.error.HTTPError as error:
         if error.code != 404 or not optional_group:
             raise
-        groups = kget("/apis").get("groups")
+        groups = read("/apis").get("groups")
         if not isinstance(groups, list) or any(not isinstance(g, dict) or not g.get("name") for g in groups):
-            raise ValueError("Kubernetes did not say which APIs it serves; refresh and try again")
+            raise Incomplete("Kubernetes did not say which APIs it serves; refresh and try again")
         if any(g["name"] == optional_group for g in groups):
             raise
         error.close()
         return []
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or (listing.get("metadata") or {}).get("continue")):
-        raise ValueError(f"Kubernetes returned an incomplete list for {path}; refresh and try again")
+        raise Incomplete(f"Kubernetes returned an incomplete list for {path}; refresh and try again")
     if any(not isinstance(row, dict) for row in listing["items"]):
-        raise ValueError(f"Kubernetes returned a list with invalid entries for {path}; refresh and try again")
+        raise Incomplete(f"Kubernetes returned a list with invalid entries for {path}; refresh and try again")
     return listing["items"]
 
 
