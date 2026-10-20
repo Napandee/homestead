@@ -140,7 +140,10 @@ class ItemsTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 404)
 
     def test_unreadable_discovery_raises(self):
-        for discovery in ({}, {"groups": None}, {"groups": [{}]}, {"groups": ["apps"]}, http_error(503)):
+        # An answer that names no group at all says nothing about this one: a
+        # real /apis always serves apps and batch.
+        for discovery in ({}, {"groups": None}, {"groups": []}, {"groups": [{}]}, {"groups": ["apps"]},
+                          http_error(503)):
             reads = Reads({SNAPSHOTS: http_error(404), "/apis": discovery})
             with self.subTest(discovery=discovery), mock.patch.object(K, "kget", reads):
                 with self.assertRaises((ValueError, urllib.error.HTTPError)) as caught:
