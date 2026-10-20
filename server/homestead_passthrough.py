@@ -40,6 +40,7 @@ import json
 import re
 import time
 
+import homestead_kubevirt_cr as KUBEVIRT_CR
 import homestead_shared as SHARED
 
 kget = ksend = hostrun = platform = None
@@ -554,24 +555,24 @@ def ensure_gates(*gates, send=None):
 
 
 def _permit(pci=None, usb=None, remove=False):
-    kv = _kubevirt()
-    if not kv:
-        raise ValueError("KubeVirt is not installed")
-    hd = copy_dict(((kv["spec"].get("configuration") or {}).get("permittedHostDevices") or {}))
-    if pci:
-        vendor, device = pci
-        rows = [r for r in hd.get("pciHostDevices") or [] if r.get("resourceName") != pci_resource(vendor, device)]
-        if not remove:
-            rows.append({"pciVendorSelector": f"{vendor}:{device}".upper(), "resourceName": pci_resource(vendor, device)})
-        hd["pciHostDevices"] = rows
-    if usb:
-        vendor, product = usb
-        rows = [r for r in hd.get("usb") or [] if r.get("resourceName") != usb_resource(vendor, product)]
-        if not remove:
-            rows.append({"resourceName": usb_resource(vendor, product), "selectors": [{"vendor": vendor, "product": product}]})
-        hd["usb"] = rows
-    ksend("PATCH", _kv_path(kv), {"spec": {"configuration": {"permittedHostDevices": hd}}},
-          ctype="application/merge-patch+json")
+    # Worked out from the lists as stored when it is saved, so a device another
+    # admin permits or removes meanwhile stays as they left it (#621).
+    def change(kv):
+        hd = copy_dict(((kv["spec"].get("configuration") or {}).get("permittedHostDevices") or {}))
+        if pci:
+            vendor, device = pci
+            rows = [r for r in hd.get("pciHostDevices") or [] if r.get("resourceName") != pci_resource(vendor, device)]
+            if not remove:
+                rows.append({"pciVendorSelector": f"{vendor}:{device}".upper(), "resourceName": pci_resource(vendor, device)})
+            hd["pciHostDevices"] = rows
+        if usb:
+            vendor, product = usb
+            rows = [r for r in hd.get("usb") or [] if r.get("resourceName") != usb_resource(vendor, product)]
+            if not remove:
+                rows.append({"resourceName": usb_resource(vendor, product), "selectors": [{"vendor": vendor, "product": product}]})
+            hd["usb"] = rows
+        return {"spec": {"configuration": {"permittedHostDevices": hd}}}
+    KUBEVIRT_CR.update(change, current=_kubevirt, write=ksend)
     if not remove:
         ensure_gates("HostDevices")
 
