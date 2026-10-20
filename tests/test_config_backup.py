@@ -3,36 +3,20 @@ import base64
 import json
 import sys
 import unittest
-import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_config_backup as config
+import homestead_kube as K
+from fakes.kube import Kube
 
 
-class Kube:
-    def __init__(self):
-        self.objects = {}
+KINDS = {"configmaps": "ConfigMap", "secrets": "Secret"}
 
-    def get(self, path):
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        return json.loads(json.dumps(self.objects[path]))
 
-    def send(self, method, path, body=None, **_):
-        if method == "POST":
-            path = f"{path}/{body['metadata']['name']}"
-        body = json.loads(json.dumps(body))
-        body["metadata"]["resourceVersion"] = str(int(body["metadata"].get("resourceVersion", "0")) + 1)
-        self.objects[path] = body
-        return body
-
-    def put(self, kind, name, data, namespace="lab"):
-        self.objects[f"/api/v1/namespaces/{namespace}/{kind}/{name}"] = {
-            "metadata": {"name": name, "resourceVersion": "7", "labels": {"homestead.io/managed": "true"}}, "data": data}
-
-    def data(self, kind, name, namespace="lab"):
-        return self.objects[f"/api/v1/namespaces/{namespace}/{kind}/{name}"]["data"]
+def path(kind, name, namespace="lab"):
+    return f"/api/v1/namespaces/{namespace}/{kind}/{name}"
 
 
 PARTS = [
@@ -47,15 +31,27 @@ SECRET = base64.b64encode(b'{"users":{"robin":{"hash":"x"}}}').decode()
 
 
 class ConfigBackupTests(unittest.TestCase):
+    """Runs on the shared fake API (tests/fakes/kube.py)."""
     def setUp(self):
-        self.kube = Kube()
+        self.kube = self.enterContext(Kube())
         self.restored = []
-        config.bind(self.kube.get, self.kube.send, "2.8.212", PARTS, site=lambda: "Loft rack",
+        self.addCleanup(config.bind, config.kget, config.ksend, config.VERSION, config.PARTS,
+                        config._site, config._after_restore)
+        config.bind(K.kget, K.ksend, "2.8.212", PARTS, site=lambda: "Loft rack",
                     after_restore=self.restored.extend)
-        self.kube.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Loft rack"}'})
-        self.kube.put("secrets", "homestead-auth", {"store.json": SECRET})
-        self.kube.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[1]}'})
-        self.kube.put("secrets", "homestead-unifi", {"key": base64.b64encode(b"unifi-key").decode()})
+        self.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Loft rack"}'})
+        self.put("secrets", "homestead-auth", {"store.json": SECRET})
+        self.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[1]}'})
+        self.put("secrets", "homestead-unifi", {"key": base64.b64encode(b"unifi-key").decode()})
+
+    def put(self, kind, name, data, namespace="lab"):
+        """Someone (not the restore) leaves the object as it is now."""
+        self.kube.add({"apiVersion": "v1", "kind": KINDS[kind],
+                       "metadata": {"name": name, "namespace": namespace, "labels": {"homestead.io/managed": "true"}},
+                       "data": data})
+
+    def data(self, kind, name, namespace="lab"):
+        return self.kube.object(path(kind, name, namespace))["data"]
 
     def test_the_file_says_what_it_holds_but_not_the_contents(self):
         doc = config.backup(None, "correct horse")
@@ -88,7 +84,7 @@ class ConfigBackupTests(unittest.TestCase):
 
     def test_inspect_compares_each_part_with_now(self):
         doc = config.backup(None, "correct horse")
-        self.kube.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[1,2]}'})
+        self.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[1,2]}'})
         rows = {r["id"]: r for r in config.inspect(doc, "correct horse")["parts"]}
         self.assertEqual("same", rows["settings"]["state"])
         self.assertEqual("differs", rows["ipam"]["state"])
@@ -99,32 +95,36 @@ class ConfigBackupTests(unittest.TestCase):
 
     def test_only_the_chosen_parts_come_back(self):
         doc = config.backup(None, "correct horse")
-        self.kube.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[]}'})
-        self.kube.put("secrets", "homestead-unifi", {"key": base64.b64encode(b"new-key").decode()})
-        self.kube.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Changed"}'})
+        self.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[]}'})
+        self.put("secrets", "homestead-unifi", {"key": base64.b64encode(b"new-key").decode()})
+        self.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Changed"}'})
+        now = self.kube.object(path("configmaps", "homestead-ipam"))["metadata"]["resourceVersion"]
         result = config.restore(doc, "correct horse", ["ipam"])
         self.assertEqual(["ipam"], result["restored"])
-        self.assertEqual('{"subnets":[1]}', self.kube.data("configmaps", "homestead-ipam")["ipam.json"])
-        self.assertEqual(base64.b64encode(b"unifi-key").decode(), self.kube.data("secrets", "homestead-unifi")["key"])
-        self.assertEqual('{"site_name":"Changed"}', self.kube.data("configmaps", "homestead-settings")["settings.json"])
+        self.assertEqual('{"subnets":[1]}', self.data("configmaps", "homestead-ipam")["ipam.json"])
+        self.assertEqual(base64.b64encode(b"unifi-key").decode(), self.data("secrets", "homestead-unifi")["key"])
+        self.assertEqual('{"site_name":"Changed"}', self.data("configmaps", "homestead-settings")["settings.json"])
         self.assertEqual(["ipam"], self.restored)
         # Its labels stay, and the update is made against the object as it is now.
-        kept = self.kube.objects["/api/v1/namespaces/lab/configmaps/homestead-ipam"]["metadata"]
+        kept = self.kube.object(path("configmaps", "homestead-ipam"))["metadata"]
         self.assertEqual({"homestead.io/managed": "true"}, kept["labels"])
+        put = [w for w in self.kube.writes if w[:2] == ("PUT", path("configmaps", "homestead-ipam"))]
+        self.assertEqual(1, len(put))
+        self.assertEqual(now, put[0][2]["metadata"].get("resourceVersion"), "the update names the version it read")
 
     def test_a_part_missing_here_is_created(self):
         doc = config.backup(["settings"], "correct horse")
-        del self.kube.objects["/api/v1/namespaces/lab/configmaps/homestead-settings"]
+        self.kube("DELETE", path("configmaps", "homestead-settings"))
         config.restore(doc, "correct horse", ["settings"])
-        self.assertEqual('{"site_name":"Loft rack"}', self.kube.data("configmaps", "homestead-settings")["settings.json"])
+        self.assertEqual('{"site_name":"Loft rack"}', self.data("configmaps", "homestead-settings")["settings.json"])
 
     def test_a_part_the_backup_did_not_hold_changes_nothing(self):
         doc = config.backup(None, "correct horse")
-        self.kube.put("configmaps", "homestead-portal", {"portal.json": "{}"})
+        self.put("configmaps", "homestead-portal", {"portal.json": "{}"})
         result = config.restore(doc, "correct horse", ["portal"])
         self.assertEqual([], result["restored"])
         self.assertEqual(["Portal"], result["skipped"])
-        self.assertEqual({"portal.json": "{}"}, self.kube.data("configmaps", "homestead-portal"))
+        self.assertEqual({"portal.json": "{}"}, self.data("configmaps", "homestead-portal"))
 
     def test_nothing_chosen_is_refused(self):
         doc = config.backup(None, "correct horse")

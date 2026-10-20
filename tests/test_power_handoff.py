@@ -7,12 +7,13 @@ homestead-data back faulted: Longhorn stopped under a mounted filesystem."""
 import copy
 import sys
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_power_handoff as H
+from fakes.kube import Kube
 
 DEP = "/apis/apps/v1/namespaces/lab/deployments/homestead"
 PVC = "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data"
@@ -20,26 +21,33 @@ VOL = f"{H.LH}/pvc-1"
 
 
 class Cluster:
+    """The host side (commands, sleep, clock) around the shared fake API
+    (tests/fakes/kube.py), which the helper talks to directly."""
     def __init__(self, boot="old", held=True, running=0, state="detached"):
-        self.boot, self.clock_now, self.commands, self.sent = boot, 0.0, [], []
-        self.objects = {DEP: {"metadata": {"annotations": {H.HELD_BY: "job-1", H.HELD_AS: "2"} if held else {}},
-                              "spec": {"replicas": 0}, "status": {"replicas": running}},
-                        PVC: {"spec": {"volumeName": "pvc-1"}},
-                        VOL: {"status": {"state": state}}}
+        self.boot, self.clock_now, self.commands = boot, 0.0, []
+        self.kube = Kube(
+            {"apiVersion": "apps/v1", "kind": "Deployment",
+             "metadata": {"name": "homestead", "namespace": "lab",
+                          "annotations": {H.HELD_BY: "job-1", H.HELD_AS: "2"} if held else {}},
+             "spec": {"replicas": 0}, "status": {"replicas": running}},
+            {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+             "metadata": {"name": "homestead-data", "namespace": "lab"}, "spec": {"volumeName": "pvc-1"}},
+            {"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
+             "metadata": {"name": "pvc-1", "namespace": "longhorn-system"}, "status": {"state": state}})
         self.on_sleep = lambda: None
 
-    def request(self, method, path, body=None, ctype=None):
-        if method == "PATCH":
-            self.sent.append((path, body))
-            obj = self.objects[path]
-            for key, value in body["metadata"]["annotations"].items():
-                if value is None:
-                    obj["metadata"]["annotations"].pop(key, None)
-            obj["spec"].update(body.get("spec") or {})
-            return {}
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        return copy.deepcopy(self.objects[path])
+    def stored(self, path):
+        return self.kube.object(path)
+
+    def set_status(self, path, **status):
+        obj = self.kube.object(path)
+        obj["status"].update(status)
+        self.kube.add(obj)
+
+    @property
+    def sent(self):
+        """Every write that reached the API, of any kind."""
+        return [(method, path) for method, path, _, _ in self.kube.writes]
 
     def execute(self, command, timeout=None):
         self.commands.append(command[-1])
@@ -50,15 +58,15 @@ class Cluster:
         self.on_sleep()
 
     def handoff(self, action="reboot"):
-        return H.Handoff(self.request, "lab", "homestead", "job-1", action, "old", "homestead-data",
+        return H.Handoff(self.kube, "lab", "homestead", "job-1", action, "old", "homestead-data",
                          execute=self.execute, sleep=self.sleep, clock=lambda: self.clock_now)
 
 
 class BeforePowerTests(unittest.TestCase):
     def test_power_waits_for_homestead_to_stop_and_its_volume_to_detach(self):
         c = Cluster(running=1, state="attached")
-        steps = iter([lambda: c.objects[DEP]["status"].update(replicas=0),
-                      lambda: c.objects[VOL]["status"].update(state="detached")])
+        steps = iter([lambda: c.set_status(DEP, replicas=0),
+                      lambda: c.set_status(VOL, state="detached")])
         def on_sleep():
             step = next(steps, None)
             if step:
@@ -77,8 +85,8 @@ class BeforePowerTests(unittest.TestCase):
         c = Cluster(state="attached")
         self.assertEqual(0, c.handoff().run())
         self.assertFalse(any("systemd-run" in cmd for cmd in c.commands))
-        self.assertEqual(2, c.objects[DEP]["spec"]["replicas"])
-        self.assertNotIn(H.HELD_BY, c.objects[DEP]["metadata"]["annotations"])
+        self.assertEqual(2, c.stored(DEP)["spec"]["replicas"])
+        self.assertNotIn(H.HELD_BY, c.stored(DEP)["metadata"].get("annotations", {}))
 
     def test_homestead_changed_by_someone_else_is_left_alone(self):
         c = Cluster(held=False)
@@ -90,14 +98,14 @@ class BeforePowerTests(unittest.TestCase):
         c = Cluster()
         self.assertEqual(0, c.handoff("poweroff").run())
         self.assertTrue(next(cmd for cmd in c.commands if "systemd-run" in cmd).endswith(" poweroff"))
-        self.assertEqual(2, c.objects[DEP]["spec"]["replicas"])
+        self.assertEqual(2, c.stored(DEP)["spec"]["replicas"])
 
 
 class AfterBootTests(unittest.TestCase):
     def test_on_the_new_boot_homestead_starts_again_with_its_replicas(self):
         c = Cluster(boot="new")
         self.assertEqual(0, c.handoff().run())
-        self.assertEqual(2, c.objects[DEP]["spec"]["replicas"])
+        self.assertEqual(2, c.stored(DEP)["spec"]["replicas"])
         self.assertFalse(any("systemd-run" in cmd for cmd in c.commands), "never a second power request")
 
 
