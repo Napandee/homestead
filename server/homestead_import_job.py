@@ -11,6 +11,7 @@ import homestead_copy_job as COPY
 import homestead_env_secrets as ENVSEC
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as GUARD
+import homestead_kube as KUBE
 import homestead_rename as IDENT
 import homestead_rollout_capacity as ROLLOUT
 import homestead_vm_power_job as LOCKS
@@ -264,3 +265,9 @@ def remove_completed_job(ns, name, job, read, send, ops):
         t.save(items)
     return {"ok": True, "journalled": True, "name": name, "pods_removed": [], "prepulls_removed": [],
             "message": "Completed import Job removed; workload and all volumes retained"}
+
+
+def register(ops):
+    """The job store's entries for creating an app from an import (#622)."""
+    ops.RESOLVERS[KIND] = lambda item: status(item, KUBE.kget)
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)

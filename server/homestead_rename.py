@@ -6,6 +6,7 @@ import urllib.error
 
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as IMPORT
+import homestead_kube as KUBE
 import homestead_rollout_capacity as ROLLOUT
 import homestead_vm_power_job as LOCKS
 
@@ -288,3 +289,11 @@ def recovery_run(item, options, read, ops):
         # ledger still prevents reusing the old request after tracking closes.
         item["ref"]["retain_resources"] = False
         return "Resources unchanged; outcome remains unverified. No request was cancelled, retried or rolled back."
+
+
+def register(ops):
+    """The job store's entries for renaming an app (#622)."""
+    ops.RESOLVERS[KIND] = lambda item: status(item, ops)
+    ops.CANCELLERS[KIND] = (lambda item: recovery_plan(item, KUBE.kget, ops),
+                            lambda item, options: recovery_run(item, options, KUBE.kget, ops))
+    ops.CLEANUPS.add(KIND)

@@ -427,3 +427,8 @@ ROUTES = {
     ("POST", "/api/restore-tests/settings"): ("admin", lambda request: switch(request.body.get("enabled"))),
     ("POST", "/api/restore-tests/run"): ("admin", lambda request: run_now(request.body)),
 }
+
+
+def register(ops):
+    """The job store's entry for a restore test (#622)."""
+    ops.RESOLVERS[KIND] = lambda item: resolve(item, ops.checkpoint)
