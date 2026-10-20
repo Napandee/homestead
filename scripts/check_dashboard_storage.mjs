@@ -36,6 +36,8 @@ try {
     const prefs=await api('/api/auth/preferences/dashboard');
     const items=Dashboard.defaults().map(item=>item.id==='nodes'?{...item,display:'detailed'}:item);
     await api('/api/auth/preferences/dashboard',{method:'POST',body:JSON.stringify({revision:prefs.revision,layout:{version:1,items}})});
+    // Saved behind the Dashboard's back (as another device would): it keeps the layout it read for five minutes (#705).
+    Dashboard.invalidate();
   });
   // The overview is faked for every document the page loads, so a reload
   // mid-run (#450) keeps the figures the checks below look for. It wraps the

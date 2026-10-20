@@ -182,6 +182,9 @@ const HealthInsights = (() => {
     title.textContent=done?"Acknowledged until it gets worse":title.dataset.text;
   }
   function paint() {paintBanner();for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();}
+  let seeded={};
+  const SEED_FRESH=15000;
+  function seed(key,value){if(value && typeof value==="object" && !value.error && (key!=="overview" || value.health_issues!==undefined)){data={...data,[key]:value};seeded[key]=Date.now();}}
   async function load(force=false) {
     if(request){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
@@ -189,7 +192,8 @@ const HealthInsights = (() => {
     if(!force && checkedAt>Date.now()-30000 && keys.every(key=>key in data)){paint();return;}
     const token=window.NAV_TOKEN, epoch=generation;
     request=(async()=>{
-      const results=await Promise.all(keys.map(async key=>{
+      // What the page itself just read (the overview, every refresh) is not read twice (#705).
+      const results=await Promise.all(keys.filter(key=>!(seeded[key] && Date.now()-seeded[key]<SEED_FRESH)).map(async key=>{
         if(key==="protection" && STATE.platform?.longhorn===false)return [key,{volumes:[]}];
         if(key==="vms" && STATE.platform?.kubevirt===false)return [key,[]];
         try{
@@ -204,7 +208,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
+  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;
