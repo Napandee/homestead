@@ -24,7 +24,7 @@ import homestead_job_kinds as KINDS
 
 def stand_in(**dicts):
     ops = types.SimpleNamespace(RESOLVERS={}, CANCELLERS={}, RESUMABLE={}, LOGGERS={}, CLEANUPS=set(),
-                                CDI_CANCELLABLE=set(), _public=lambda item: {"id": item["id"], "shown": True})
+                                CDI_CANCELLABLE=set(), VIEWS={}, _public=lambda item: {"id": item["id"], "shown": True})
     for name, value in dicts.items():
         getattr(ops, name).update(value)
     return ops
@@ -251,6 +251,12 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(set(), KNOWN_STRAYS - {kind for _, kind in named}, "fixed: take it out of KNOWN_STRAYS")
         self.assertEqual(set(), KNOWN_STRAYS & set(self.kinds), "now a real kind: take it out of KNOWN_STRAYS")
         self.assertEqual(set(), NOT_JOB_BRANCHES - named, "no longer compared: take it out of NOT_JOB_BRANCHES")
+
+    def test_every_kind_with_a_view_of_its_own_exists(self):
+        """The kind branches of _public became keys of OPS.VIEWS (#622), where
+        branch_kinds() no longer sees them: a mistyped key would never run."""
+        self.assertGreater(len(self.ops.VIEWS), 10)
+        self.assertEqual([], sorted(set(self.ops.VIEWS) - set(self.kinds)))
 
     def test_every_kind_started_has_a_resolver(self):
         found, dynamic = started_kinds()
