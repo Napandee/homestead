@@ -135,7 +135,7 @@ const LEGACY = [
   [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],
   // design.md, Reading the cluster (#620): a read that failed is not an empty
   // answer. The page says it could not read, and offers nothing that acts on a guess.
-  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 94,
+  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 83,
     'catch(e => …) that marks what could not be read, or let the view show the error'],
   // The same with the error named but dropped: catch(e => ({ error: e.message })) keeps it.
   [/\.catch\(\s*(\w+)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{(?:(?!\b\1\b)[^)])*\}\))\s*\)/g, 0,

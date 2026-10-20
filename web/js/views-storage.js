@@ -470,11 +470,16 @@ function otherVolumesHtml(rows) {
 
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
-  const [v, st, classes, v2, cap, forecast] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
-    api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null),
-    api("/api/longhorn/capacity").catch(() => null), api("/api/storage/forecast").catch(() => null)]);
+  // A part of the page that could not be read is named above the page, not
+  // silently left out (#620): no old copies listed is not no old copies.
+  const missed = [];
+  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
+  const [v, st, classes, v2, cap, forecast] = await Promise.all([api("/api/volumes"), part("/api/storage", "totals", null),
+    part("/api/storage/classes", "storage classes", []), part("/api/storage/v2", "the V2 engine", null),
+    part("/api/longhorn/capacity", "capacity", null), part("/api/storage/forecast", "the forecast", null)]);
   STATE.data.forecast = forecast;
-  const [allOldCopies, allOthers] = await Promise.all([api("/api/volumes/old-copies").catch(() => []), api("/api/volumes/other").catch(() => [])]);
+  const [allOldCopies, allOthers] = await Promise.all([part("/api/volumes/old-copies", "old copies", []),
+    part("/api/volumes/other", "other volumes", [])]);
   STATE.data.lhcap = cap || STATE.data.lhcap;
   STATE.data.storageClasses = classes;
   STATE.data.v2 = v2;
@@ -494,6 +499,7 @@ async function viewStorage() {
         { label: "Rebalance copies…", icon: "layers", run: "volumeRebalance()", need: "operator", tip: "Move volume copies so hosts hold similar amounts; nothing restarts" },
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
+  ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
   ${st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
       `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
@@ -540,7 +546,12 @@ async function viewStorage() {
 }
 window.volumeCreate = async () => {
   const [nss, classes] = await Promise.all([api("/api/namespaces"),
-    api("/api/storageclasses?facts=1").catch(() => ({ names: [], facts: {}, shared: [] }))]);
+    api("/api/storageclasses?facts=1").catch(e => ({ unread: e.message }))]);
+  // No class list is not "pick none": the server would choose one (#620).
+  if (classes.unread) {
+    modal("Create volume", UI.callout("bad", "Could not read the storage classes", esc(classes.unread)) + UI.actions(UI.cancel("Close")));
+    return;
+  }
   const scs = classes.names || [];
   window.__volumeClasses = classes;
   modal("Create volume", `<div class="f2"><div class="f"><label>Name</label><input id="vc_name" placeholder="frigate-media"></div>
@@ -783,7 +794,14 @@ window.v2Details = async (fresh = false) => {
 async function storageClassesPaint() {
   const host = $("#storageClassesCard");
   if (!host) return;
-  const [classes, v2] = await Promise.all([api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null)]);
+  const [classes, v2] = await Promise.all([api("/api/storage/classes").catch(e => ({ unread: e.message })),
+    api("/api/storage/v2").catch(() => null)]);
+  if (classes.unread) {
+    // The card says so, rather than vanish as if there were no classes (#620).
+    host.innerHTML = UI.callout("bad", "Could not read the storage classes", esc(classes.unread));
+    host.hidden = false;
+    return;
+  }
   STATE.data.storageClasses = classes;
   STATE.data.v2 = v2;
   host.innerHTML = storageClassCard(classes, v2);
@@ -882,7 +900,8 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
 /* The tags disks and nodes have, to choose from, and which nodes a choice
    leaves - a class needs one node per replica. */
 async function storageClassTags(prefill = {}, button = $("#sc_go")) {
-  const inv = await loadDisks().catch(() => null);
+  let inv = null, unread = "";
+  try { inv = await loadDisks(); } catch (e) { unread = e.message; }
   if ($("#sc_go") !== button) return;
   const box = (id, available, selected, empty) => {
     const host = $(id);
@@ -892,8 +911,11 @@ async function storageClassTags(prefill = {}, button = $("#sc_go")) {
       : `<span class="dim xs">${empty}</span>`;
   };
   STATE.data.scInv = inv;
-  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Hosts, or Volumes → Disks.");
-  box("#sc_nodetags", inv?.all_node_tags || [], prefill.node_tags || [], "No node has a tag yet.");
+  // Unread disks are not disks without tags (#620): the tags it was opened
+  // with stay, and the empty text says what could not be read.
+  const unreadText = unread && `Could not read the disks: ${esc(unread)}`;
+  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], unreadText || "No disk has a tag yet: add them to disks under Hosts, or Volumes → Disks.");
+  box("#sc_nodetags", inv?.all_node_tags || [], prefill.node_tags || [], unreadText || "No node has a tag yet.");
   // One host: only "different disks" can place a second copy.
   if (inv && prefill.copies === undefined && Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
   storageClassReach();
@@ -1060,10 +1082,10 @@ window.volumeChown = async (namespace, name) => {
   // The workload that mounts it already says who it runs as; asking the person
   // for a uid they have no way to know is not a question worth putting to them.
   const hint = await api(`/api/volumes/ownership?namespace=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`)
-    .catch(() => ({ known: false, source: "" }));
+    .catch(e => ({ known: false, unread: e.message }));
   $("#mbody").innerHTML = `
     <p class="muted small">Set file ownership to match the container's user and group. ${tip("Imports preserve source ownership. Change it only when the container requires different IDs or reports permission errors.")}</p>
-    ${hint.known
+    ${hint.unread ? UI.callout("warn", "Could not read what uses this volume", esc(hint.unread)) : hint.known
       ? `<div class="note"><b>${esc(hint.workload)} runs as ${hint.uid ?? hint.gid}${hint.gid != null && hint.gid !== hint.uid ? `:${hint.gid}` : ""}.</b>
           Taken from ${esc(hint.source)}${hint.image ? ` · <span class="mono">${esc(hint.image)}</span>` : ""}.</div>`
       : `<div class="note dependency-danger"><b>Nothing here declares a user.</b> ${esc(hint.source || "")}</div>`}
