@@ -32,6 +32,7 @@ function networkTab(pick) {
     }
     // What the last section was still loading is for one nobody is looking at.
     window.NAV_TOKEN++;
+    window.abortPageReads?.();
     STATE.busy = false;
     refresh(true);
     if (window.scrollPageTop) window.scrollPageTop();

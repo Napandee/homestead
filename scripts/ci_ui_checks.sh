@@ -71,6 +71,7 @@ case "${1:-}" in
     node tests/integration/volume-files-cleanup.mjs
     node scripts/check_update_channels.mjs
     node scripts/check_troubleshooting.mjs
+    node tests/integration/navigation-aborts-reads.mjs
     ;;
   *)
     echo "Usage: sh scripts/ci_ui_checks.sh dialogs-0|dialogs-1|dialogs-2|dialog-flows|pages|pages-dashboard|pages-setup|pages-live" >&2
