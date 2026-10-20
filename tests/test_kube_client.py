@@ -58,6 +58,27 @@ class GetTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 K.get_optional(PODS + "/a")
 
+    def test_get_optional_reads_through_a_module_reader_when_given(self):
+        # A module bound to its own reader (bind(kget, ...)) keeps reading
+        # through it: 404 is None, anything else raises, the client is not used.
+        read = Reads({PODS + "/a": {"kind": "Pod"}, PODS + "/b": http_error(404), PODS + "/c": http_error(500)})
+        with mock.patch.object(K, "kget", Reads({})):
+            self.assertEqual(K.get_optional(PODS + "/a", read=read), {"kind": "Pod"})
+            self.assertIsNone(K.get_optional(PODS + "/b", read=read))
+            with self.assertRaises(urllib.error.HTTPError):
+                K.get_optional(PODS + "/c", read=read)
+        self.assertEqual(read.paths, [PODS + "/a", PODS + "/b", PODS + "/c"])
+
+    def test_an_unbound_reader_fails_rather_than_reading_the_cluster(self):
+        # A module whose bind() never ran passes read=None: that is a mistake
+        # to report, not a cue to read through the real client.
+        client = Reads({PODS + "/a": {"kind": "Pod"}})
+        with mock.patch.object(K, "kget", client):
+            with self.assertRaises(TypeError):
+                K.get_optional(PODS + "/a", read=None)
+            self.assertEqual(client.paths, [])
+            self.assertEqual(K.get_optional(PODS + "/a"), {"kind": "Pod"})
+
 
 class ItemsTests(unittest.TestCase):
     def test_a_whole_list_is_returned(self):

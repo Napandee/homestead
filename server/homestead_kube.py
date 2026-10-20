@@ -240,11 +240,17 @@ def get(path, **options):
     return kget(path, **options)
 
 
-def get_optional(path, **options):
+_CLIENT = object()
+
+
+def get_optional(path, read=_CLIENT, **options):
     """The object, or None when it is not there (404). Any other failure
-    raises: a read that failed is not an object that is missing."""
+    raises: a read that failed is not an object that is missing. A module
+    bound to its own reader passes it as read, so it keeps reading through it;
+    one whose bind() never ran passes None and fails, rather than reading
+    through the real client."""
     try:
-        return kget(path, **options)
+        return (kget if read is _CLIENT else read)(path, **options)
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise

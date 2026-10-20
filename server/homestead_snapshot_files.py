@@ -14,6 +14,7 @@ import threading
 from functools import wraps
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_csi_restore as CSI
 import homestead_files as FILES
 import homestead_pod_resources as RESOURCES
@@ -42,11 +43,11 @@ def serialized(fn):
 
 
 def _linked_clone_available():
-    crd = _get("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/volumes.longhorn.io") or {}
+    crd = KUBE.get_optional("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/volumes.longhorn.io", read=kget) or {}
     supported = any("linked-clone" in v.get("schema", {}).get("openAPIV3Schema", {}).get("properties", {})
                     .get("spec", {}).get("properties", {}).get("cloneMode", {}).get("enum", [])
                     for v in crd.get("spec", {}).get("versions", []) if v.get("served"))
-    plugin = _get("/apis/apps/v1/namespaces/longhorn-system/daemonsets/longhorn-csi-plugin") or {}
+    plugin = KUBE.get_optional("/apis/apps/v1/namespaces/longhorn-system/daemonsets/longhorn-csi-plugin", read=kget) or {}
     images = [c.get("image", "") for c in plugin.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
               if c.get("name") == "longhorn-csi-plugin"]
     version = re.search(r":v?(\d+)\.(\d+)\.(\d+)(?:@sha256:[a-f0-9]+)?$", images[0]) if len(images) == 1 else None
@@ -56,15 +57,6 @@ def _linked_clone_available():
 def bind(read, send, helper_image, namespaces):
     global kget, ksend, image, system_namespaces
     kget, ksend, image, system_namespaces = read, send, helper_image, set(namespaces)
-
-
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
 
 
 def _items(path):
@@ -96,7 +88,7 @@ def _owned(obj):
 
 
 def _record(namespace, name):
-    record = _get(_paths(namespace, name)[0])
+    record = KUBE.get_optional(_paths(namespace, name)[0], read=kget)
     if record is None:
         return None
     spec = record.get("spec", {})
@@ -164,7 +156,7 @@ def review(volume, snapshot):
 
 
 def _ensure(path, body):
-    existing = _get(path)
+    existing = KUBE.get_optional(path, read=kget)
     if existing is None:
         try:
             return ksend("POST", path.rsplit("/", 1)[0], body)
@@ -263,7 +255,7 @@ def status(namespace, name):
     if annotations.get("homestead.io/closing") or result["expires"] <= time.time():
         return {**result, "state": "closing", "message": "Removing the temporary browser and copy"}
     paths = _paths(namespace, name)
-    snapshot, pvc, pod = (_get(p) for p in paths[1:])
+    snapshot, pvc, pod = (KUBE.get_optional(p, read=kget) for p in paths[1:])
     for obj in (snapshot, pvc, pod):
         if obj and not _owned(obj):
             raise ValueError("Snapshot browser resource identity changed")
@@ -316,7 +308,7 @@ def _clone(pvc, plan, name, require_method=True):
         handle = csi.get("volumeHandle")
     if handle == plan["volume"]:
         raise ValueError("Refusing to browse the live volume as a snapshot")
-    clone = _get(LH + "/volumes/" + _name(handle))
+    clone = KUBE.get_optional(LH + "/volumes/" + _name(handle), read=kget)
     if clone:
         state = clone.get("status", {}).get("cloneStatus", {}) or {}
         if not state.get("sourceVolume") and not state.get("snapshot"):
@@ -348,11 +340,11 @@ def close(namespace, name):
     if not record["metadata"]["annotations"].get("homestead.io/closing"):
         ksend("PATCH", paths[0], {"metadata": {"resourceVersion": record["metadata"]["resourceVersion"],
               "annotations": {"homestead.io/closing": "true"}}}, ctype="application/merge-patch+json")
-    pod = _get(paths[3])
+    pod = KUBE.get_optional(paths[3], read=kget)
     if pod:
         _delete(paths[3], pod)
         return {"state": "closing"}
-    pvc = _get(paths[2])
+    pvc = KUBE.get_optional(paths[2], read=kget)
     if pvc:
         if pvc.get("spec", {}).get("dataSource") != {"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": name}:
             raise ValueError("Temporary claim identity changed; cleanup stopped")
@@ -360,13 +352,13 @@ def close(namespace, name):
         _clone(pvc, json.loads(record["metadata"]["annotations"]["homestead.io/source"]), name, require_method=False)
         _delete(paths[2], pvc, record["metadata"]["uid"])
         return {"state": "closing"}
-    snapshot = _get(paths[1])
+    snapshot = KUBE.get_optional(paths[1], read=kget)
     if snapshot:
         if snapshot.get("spec", {}).get("source") != {"volumeSnapshotContentName": name}:
             raise ValueError("Snapshot import identity changed; cleanup stopped")
         _delete(paths[1], snapshot, record["metadata"]["uid"])
         return {"state": "closing"}
-    storage_class = _get(SC + name)
+    storage_class = KUBE.get_optional(SC + name, read=kget)
     if storage_class:
         _delete(SC + name, storage_class, record["metadata"]["uid"])
         return {"state": "closing"}
@@ -375,7 +367,7 @@ def close(namespace, name):
 
 
 def cleanup():
-    if _get(CSI.API) is None:
+    if KUBE.get_optional(CSI.API, read=kget) is None:
         return
     errors = []
     for record in _items(f"{CSI.API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue"):
