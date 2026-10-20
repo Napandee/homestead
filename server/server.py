@@ -459,6 +459,7 @@ import homestead_console as CONSOLE
 import homestead_files as FILES
 import homestead_snapshot_files as SNAPSHOT_FILES
 import homestead_icons as ICONS
+import homestead_static as STATIC
 ICONS.bind(DATA_DIR)
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
@@ -1261,14 +1262,7 @@ class H(HTTP.LimitedHandler):
         return self.client_address[0] if self.client_address else ""
 
     def _file(self, path, ctype, cache=""):
-        try:
-            with open(path, "rb") as f:
-                body = f.read()
-        except FileNotFoundError:
-            return self._send(404, {"error": "not found"})
-        if cache:
-            self._extra_headers = list(getattr(self, "_extra_headers", [])) + [("Cache-Control", cache)]
-        self._send(200, body, ctype)
+        return STATIC.serve(self, path, ctype, cache, HOMESTEAD_VERSION)
 
     def _icon(self, request_path):
         try:
