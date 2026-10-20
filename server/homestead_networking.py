@@ -23,6 +23,7 @@ DNS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_fleet as FLEET
 import homestead_ipam as IPAM
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
 import homestead_self_address as SELF_ADDRESS
@@ -1079,6 +1080,10 @@ VIP_MAP = "homestead-vips"
 MAX_ADD = 64
 
 
+class _NothingAdded(Exception):
+    """add_vips found nothing to add: nothing is saved."""
+
+
 def _vip_map_path():
     return f"/api/v1/namespaces/{DEFAULT_NAMESPACE}/configmaps/{VIP_MAP}"
 
@@ -1112,28 +1117,29 @@ def set_default_vip(ip):
     check_address(ip, state)
     if PLATFORM.detect().get("load_balancer") not in ("kube-vip", "metallb"):
         raise ValueError("Install kube-vip or MetalLB before choosing a workload VIP; ServiceLB uses node addresses")
-    rows = registered()
-    if not any(row["ip"] == ip for row in rows):
-        raise ValueError("Add this reserved address to Your VIPs first")
-    for row in rows:
-        row["default"] = row["ip"] == ip
-    _save_registered(rows)
+    def choose(rows):
+        if not any(row["ip"] == ip for row in rows):
+            raise ValueError("Add this reserved address to Your VIPs first")
+        for row in rows:
+            row["default"] = row["ip"] == ip
+        return rows
+    _update_registered(choose)
     return {"ok": True, "ip": ip, "detail": "Default workload VIP saved; existing Services are unchanged"}
 
 
-def _save_registered(rows):
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": VIP_MAP, "namespace": DEFAULT_NAMESPACE, "labels": {"homestead.io/managed": "true"}},
-            "data": {"vips.json": json.dumps(sorted(rows, key=lambda r: int(ipaddress.ip_address(r["ip"]))), indent=1)}}
-    try:
-        current = kget(_vip_map_path())
-        body["metadata"] = current.get("metadata", body["metadata"])
-        body["data"] = dict(current.get("data") or {}, **body["data"])
-        ksend("PUT", _vip_map_path(), body)
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        ksend("POST", f"/api/v1/namespaces/{DEFAULT_NAMESPACE}/configmaps", body)
+def _update_registered(change):
+    """Change Your VIPs as they are stored when the change is saved (#621):
+    change(rows) gets the stored rows and returns the new ones, and runs again
+    on the newer rows if another change was saved meanwhile. It may raise to
+    stop; nothing is saved. A registry that cannot be read is an error, never
+    an empty one to save over."""
+    def apply(stored):
+        if stored is not None and not isinstance(stored, list):
+            raise ValueError("Your VIPs could not be read (vips.json is not a list); nothing was changed")
+        rows = [row for row in (stored or []) if isinstance(row, dict) and row.get("ip")]
+        return sorted(change(rows), key=lambda r: int(ipaddress.ip_address(r["ip"])))
+    return KUBE.update_json(_vip_map_path(), "vips.json", apply, read=kget, write=ksend,
+                            labels={"homestead.io/managed": "true"}, indent=1)
 
 
 def add_vips(cfg, ipam_records=None):
@@ -1148,28 +1154,35 @@ def add_vips(cfg, ipam_records=None):
     label = " ".join(str(cfg.get("label") or "").split())[:60]
     state = _complete(inventory(), "nothing was added")
     nodes = set(state["node_ips"])
-    rows = registered()
-    have = {row["ip"] for row in rows}
     records = ipam_records or {}
     added, skipped = [], []
-    for number in range(first, last + 1):
-        ip = str(ipaddress.ip_address(number))
-        if ip in have:
-            skipped.append(f"{ip} is already on the list")
-        elif ip in nodes:
-            skipped.append(f"{ip} is a node's own address")
-        elif ip in state["platform_addresses"]:
-            skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
-        elif ip in state["foreign_addresses"]:
-            skipped.append(f"{ip} belongs to {state['foreign_addresses'][ip]}")
-        elif (records.get(ip) or {}).get("category") not in (None, "", "vip"):
-            record = records[ip]
-            skipped.append(f"{ip} is {record.get('name') or 'a device'} in IP addresses")
-        else:
-            rows.append({"ip": ip, "label": label, "added": time.strftime("%Y-%m-%d %H:%M")})
-            added.append(ip)
-    if added:
-        _save_registered(rows)
+
+    def add(rows):
+        added.clear(), skipped.clear()      # again from the top if another change was saved meanwhile
+        have = {row["ip"] for row in rows}
+        for number in range(first, last + 1):
+            ip = str(ipaddress.ip_address(number))
+            if ip in have:
+                skipped.append(f"{ip} is already on the list")
+            elif ip in nodes:
+                skipped.append(f"{ip} is a node's own address")
+            elif ip in state["platform_addresses"]:
+                skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
+            elif ip in state["foreign_addresses"]:
+                skipped.append(f"{ip} belongs to {state['foreign_addresses'][ip]}")
+            elif (records.get(ip) or {}).get("category") not in (None, "", "vip"):
+                record = records[ip]
+                skipped.append(f"{ip} is {record.get('name') or 'a device'} in IP addresses")
+            else:
+                rows.append({"ip": ip, "label": label, "added": time.strftime("%Y-%m-%d %H:%M")})
+                added.append(ip)
+        if not added:
+            raise _NothingAdded()
+        return rows
+    try:
+        _update_registered(add)
+    except _NothingAdded:
+        pass
     return {"ok": bool(added), "added": added, "skipped": skipped,
             "detail": (f"{len(added)} address{'es' if len(added) != 1 else ''} added" if added else "nothing added")
                       + (f"; {len(skipped)} skipped: " + "; ".join(skipped[:4]) if skipped else "")}
@@ -1184,8 +1197,11 @@ def remove_vip(ip):
     if users:
         names = sorted({f"{l['namespace']}/{l['service']}" for l in users["listeners"]})
         raise ValueError(f"{ip} is in use by {', '.join(names)}; remove or move those first")
-    rows = [row for row in registered() if row["ip"] != ip]
-    _save_registered(rows)
+    def remove(rows):
+        if any(row["ip"] == ip and row.get("default") for row in rows):
+            raise ValueError("Choose another default workload VIP before removing this address")
+        return [row for row in rows if row["ip"] != ip]
+    _update_registered(remove)
     return {"ok": True, "detail": f"{ip} is no longer reserved for Homestead"}
 
 
@@ -1238,9 +1254,22 @@ def change_vip(old, new, apply=False):
         if (service.get("spec") or {}).get("loadBalancerIP") == old:
             service["spec"]["loadBalancerIP"] = new
         ksend("PUT", path, service)
-    entry["ip"] = new
-    entry["previous"] = old
-    _save_registered(rows)
+    def move(rows):
+        # The Services have moved: the registry follows, even if the entry
+        # changed meanwhile (kept, with its new label or default).
+        now = next((row for row in rows if row["ip"] == old), None) or dict(entry)
+        there = next((row for row in rows if row["ip"] == new), None)
+        rows = [row for row in rows if row["ip"] not in (old, new)]
+        if there is not None:
+            # Added meanwhile, say in another tab: one entry for the address,
+            # keeping a label either one had.
+            now = {**there, **{k: v for k, v in now.items() if v not in ("", None)}}
+        now.update(ip=new, previous=old)
+        if now.get("default"):
+            for row in rows:
+                row.pop("default", None)
+        return rows + [now]
+    _update_registered(move)
     plan["detail"] = (f"{old} is now {new}" + (f"; {len(moving)} Service{'s' if len(moving) != 1 else ''} moved with it"
                                                if moving else "") + ("; still the default workload VIP" if entry.get("default") else ""))
     return plan
@@ -1248,11 +1277,12 @@ def change_vip(old, new, apply=False):
 
 def set_vip_label(ip, label):
     ip = _ipv4(ip, "address")
-    rows = registered()
-    for row in rows:
-        if row["ip"] == ip:
-            row["label"] = " ".join(str(label or "").split())[:60]
-    _save_registered(rows)
+    def relabel(rows):
+        for row in rows:
+            if row["ip"] == ip:
+                row["label"] = " ".join(str(label or "").split())[:60]
+        return rows
+    _update_registered(relabel)
     return {"ok": True}
 
 
