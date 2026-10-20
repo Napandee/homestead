@@ -151,6 +151,20 @@ try {
     assert.match(await body(), /Could not read the storage options[\s\S]*timed out/);
     assert.equal(await page.locator("#im_steps").count(), 0);
     await close();
+
+    // Edit an app: its placement, storage, neighbours and address come from
+    // these reads; saving a form built without one would change what it was.
+    for (const [path, what] of [["/api/nodes", "the hosts"], ["/api/deploy/options", "the storage options"],
+      ["/api/workloads", "the other apps"], ["/api/network", "the network"]]) {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, path);
+      // In one step, so a refresh cannot refill the list of apps in between.
+      await page.evaluate(() => { STATE.data.wl = null; wlEdit("lab", "frigate", true); });
+      await settled(page);
+      assert.match(await body(), new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.equal(await page.locator("#e_steps").count(), 0, `no edit form without ${what}`);
+      await close();
+    }
     await page.evaluate(() => { window.api = window.__realApi; });
 
     assert.deepEqual(errors, []);
