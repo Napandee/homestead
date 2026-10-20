@@ -41,6 +41,12 @@ class RelayedNameTests(unittest.TestCase):
     def test_a_relayed_email_style_name_is_kept_whole(self):
         self.assertEqual("fleet:office:alice@example.com", self.relayed("alice@example.com"))
 
+    def test_a_relayed_name_holding_a_colon_cannot_pass_for_another_form(self):
+        # An older Homestead's account, or a crafted request, may name someone
+        # with ':'; written as the look-alike '∶', the name ends where it should.
+        self.assertEqual("fleet:office:a∶b", self.relayed("a:b"))
+        self.assertEqual("fleet:office:approving∶k∶ada", self.relayed("approving:k:ada"))
+
     def test_a_linked_homesteads_own_call_is_named_for_that_homestead(self):
         self.assertEqual("fleet:office", self.relayed())
 

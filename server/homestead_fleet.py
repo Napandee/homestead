@@ -220,6 +220,50 @@ def member(ref):
     return next((m for m in members() if ref and ref in (m.get("id"), m.get("handle"))), None)
 
 
+def words(name):
+    """A recorded identity as a person reads it, for text Homestead writes:
+    "alice (via Office)", "Office", "API key backup", "ada approving Claude Code".
+    The same rules as UI.who in web/js/ui.js; tests/fixtures/who-cases.json holds
+    the cases both follow. A linked Homestead is named by its member name, or its
+    handle when the member list cannot be read.
+
+    The name may come from a linked Homestead, so it is read at most WORDS_DEPTH
+    levels deep (the rest is shown as recorded), and reading it never raises into
+    the text it is for: anything unexpected gives the name as recorded."""
+    s = "" if name is None else str(name)
+    try:
+        return _words(s, 0)
+    except Exception:
+        return s
+
+
+WORDS_DEPTH = 3
+
+
+def _words(s, depth):
+    if depth >= WORDS_DEPTH:
+        return s
+    rest = s.split(":", 1)[1] if ":" in s else s
+    cut = rest.find(":")
+
+    def linked_name(handle):
+        try:
+            found = next((m for m in members() if m.get("handle") == handle), None)
+        except Exception:
+            found = None
+        return (found or {}).get("name") or handle
+
+    if s.startswith("api-key:"):
+        return f"API key {rest}"
+    if s.startswith("approving:") and cut > 0:
+        return f"{_words(rest[cut + 1:], depth + 1)} approving {rest[:cut]}"
+    if not s.startswith("fleet:"):
+        return s
+    if cut < 0 or cut == len(rest) - 1:
+        return linked_name(rest if cut < 0 else rest[:cut])
+    return f"{_words(rest[cut + 1:], depth + 1)} (via {linked_name(rest[:cut])})"
+
+
 # ------------------------------------------------------------------ signing
 def _digest(sender, stamp, nonce, method, target, user, role, body):
     return "\n".join([sender, stamp, nonce, method.upper(), target, user, role,
@@ -279,6 +323,9 @@ def verify(headers, method, target, body=b""):
     if role and role not in ROLES:
         raise PermissionError("unknown role")
     via = f"fleet:{origin['handle'] if HANDLE.fullmatch(origin.get('handle') or '') else sender}"
+    # A name from an older Homestead, or a crafted one, may hold ':'; written as
+    # the look-alike '∶' (as agent key names are), it cannot pass for another form.
+    user = str(user or "").replace(":", "∶")
     return {"sender": origin, "role": role, "user": (f"{via}:{user}" if user else via) if role else ""}
 
 
