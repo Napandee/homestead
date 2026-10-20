@@ -6,6 +6,7 @@ until cutover, restart admission, cancellation and reviewed recovery are wired.
 import copy
 import re
 
+import homestead_kube as KUBE
 import homestead_reclass as RC
 import homestead_storage_journal as JOURNAL
 import homestead_rollout_capacity as ROLLOUT
@@ -84,7 +85,7 @@ def quiescent(item, writer):
                         c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
                         for c in job.get("status", {}).get("conditions", [])):
                     return False
-        elif RC._get(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstances/{name}") is not None:
+        elif KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstances/{name}", read=RC.kget) is not None:
             return False
     return True
 

@@ -196,7 +196,7 @@ class RecoveryTests(unittest.TestCase):
         recovery.write(self.dep, {"suspended": {"single": "node offline"}})
         self.dep = shares.configured_deployment(self.dep, self.rows, {})
         self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = SERVERS.SAMBA_IMAGE
-        with mock.patch.object(SERVERS, "_optional_smb", side_effect=lambda path: self.dep if "/deployments/" in path else {}), \
+        with mock.patch.object(SERVERS, "kget", side_effect=lambda path, **_: self.dep if "/deployments/" in path else {}), \
                 mock.patch.object(shares, "_state", return_value=(self.rows, {}, {}, {}, self.dep)), \
                 mock.patch.object(SERVERS, "ksend") as send:
             result = SERVERS.samba_state()
