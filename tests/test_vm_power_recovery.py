@@ -6,7 +6,7 @@ from unittest import mock
 
 import test_vm_power_job as fixtures
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 import homestead_vm_power_job as power
 import homestead_vm_power_recovery as recovery
 import server
@@ -46,9 +46,9 @@ class VMPowerRecoveryTests(unittest.TestCase):
     def test_preview_only_reports_safe_identity_and_status_fields(self):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"cloudInitNoCloud": {"userData": "private-cloud-config"}}]
         before = copy.deepcopy(ops.stored())
-        with mock.patch.object(ops, "_write") as write:
+        with store_writes(ops) as written:
             result = recovery.preview(self.ident, ops, self.read, "admin")
-        write.assert_not_called()
+        self.assertEqual([], written)
         self.assertEqual(before, ops.stored())
         self.assertNotIn("private-cloud-config", str(result))
         self.assertNotIn("review_digest", str(result))
@@ -165,7 +165,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
 
     def test_unavailable_journal_does_not_report_resolved(self):
         good = self.approved()
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk unavailable")):
+        with store_writes(ops, fail=OSError("disk unavailable")):
             with self.assertRaises(OSError):
                 recovery.resolve(good, ops, self.read, "admin")
         self.assertEqual("uncertain", ops.stored()[0]["ref"]["phase"])

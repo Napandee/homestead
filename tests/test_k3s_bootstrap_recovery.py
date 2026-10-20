@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_k3scluster as cluster
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 import homestead_cancel as cancel
 import homestead_vms as vms
 import homestead_ipam as ipam
@@ -111,7 +111,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
         self.assertEqual("", ops.stored()[-1]["ref"]["attempted"])
 
     def test_job_persistence_failure_prevents_vm_creation(self):
-        with mock.patch.object(ops, "_write", side_effect=OSError("full disk")):
+        with store_writes(ops, fail=OSError("full disk")):
             with self.assertRaises(OSError):
                 cluster.commit(self.prepared, ops, create_one=self.create)
         self.assertEqual([], self.created)

@@ -10,7 +10,7 @@ from unittest import mock
 
 import test_vm_resources  # server import path
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 import homestead_k3scluster as cluster
 import homestead_cancel as cancel
 import homestead_vm_mutation_recovery as recovery
@@ -243,7 +243,7 @@ class VMBatchJournalTests(unittest.TestCase):
     def test_missing_approval_or_store_failure_sends_nothing(self):
         with self.assertRaises(ValueError):
             cluster.commit(prepared(), ops, create_one=create_one, review={}, send=self.send)
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk")), self.assertRaises(OSError):
+        with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             self.dispatch()
         self.assertEqual([], self.sent)
 

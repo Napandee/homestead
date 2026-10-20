@@ -78,7 +78,7 @@ class MaintenanceEventTests(unittest.TestCase):
             self.assertEqual(reason, self.events()[0]["reason"])
 
     def test_no_event_before_power_is_sent(self):
-        with mock.patch.object(OPS, "_read", return_value=[]):
+        with mock.patch.object(OPS, "stored", return_value=[]):
             self.run_job(plan(), ["cordoning", "draining", "sending"], raise_at="draining")
         self.assertEqual([], self.events())
 

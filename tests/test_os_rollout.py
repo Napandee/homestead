@@ -94,12 +94,12 @@ class RolloutTests(unittest.TestCase):
 
     def test_a_scheduled_rollout_waits_while_containers_are_rebalanced(self):
         with mock.patch.object(ROLLOUT, "due", return_value=True), \
-                mock.patch.object(ROLLOUT.OPS, "_read", return_value=[{"kind": "container-rebalance", "status": "running"}]), \
+                mock.patch.object(ROLLOUT.OPS, "stored", return_value=[{"kind": "container-rebalance", "status": "running"}]), \
                 mock.patch.object(ROLLOUT, "start") as start:
             ROLLOUT.tick()
             start.assert_not_called()
         with mock.patch.object(ROLLOUT, "due", return_value=True), \
-                mock.patch.object(ROLLOUT.OPS, "_read", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
+                mock.patch.object(ROLLOUT.OPS, "stored", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
                 mock.patch.object(ROLLOUT, "start") as start:
             ROLLOUT.tick()
             start.assert_called_once()

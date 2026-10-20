@@ -7,7 +7,7 @@ from unittest import mock
 import test_vm_write as fixtures
 import homestead_vm_write as writes
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 
 
 class VMWriteJournalTests(unittest.TestCase):
@@ -60,17 +60,15 @@ class VMWriteJournalTests(unittest.TestCase):
         self.assertNotIn("private", json.dumps(job))
 
     def test_intent_disk_failure_never_sends(self):
-        with mock.patch.object(ops, "_write", side_effect=OSError("private")), self.assertRaises(writes.WriteFailure):
+        with store_writes(ops, fail=OSError("private")), self.assertRaises(writes.WriteFailure):
             self.write()
         self.assertEqual([], self.sent)
 
     def test_failed_receipt_write_keeps_durable_intent_without_replay(self):
-        original = ops._write
         def save(items):
             if items[0]["ref"]["writes"][-1]["phase"] == "accepted":
                 raise OSError("private")
-            return original(items)
-        with mock.patch.object(ops, "_write", side_effect=save), self.assertRaises(writes.WriteFailure):
+        with store_writes(ops, fail=save), self.assertRaises(writes.WriteFailure):
             self.write()
         self.assertEqual(1, len(self.sent))
         self.assertEqual("intent", ops.stored()[0]["ref"]["writes"][-1]["phase"])

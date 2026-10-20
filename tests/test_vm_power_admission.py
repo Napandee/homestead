@@ -8,6 +8,7 @@ from unittest import mock
 import test_vm_capacity as fixtures
 import server
 import homestead_capacity_review as review
+from fakes.job_store import store_writes
 
 
 class VMPowerAdmissionTests(unittest.TestCase):
@@ -436,7 +437,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
 
     def test_journal_failure_never_sends_power(self):
         body = self.reviewed()
-        with mock.patch.object(server.OPS, "_write", side_effect=OSError("journal unavailable")):
+        with store_writes(server.OPS, fail=OSError("journal unavailable")):
             result, writes = self.call("/api/vm/power", body)
         self.assertNotEqual(200, result[0])
         writes.assert_not_called()

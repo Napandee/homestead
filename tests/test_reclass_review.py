@@ -8,6 +8,7 @@ from test_reclass import Cluster, OPS, CLASSES
 import homestead_reclass as rc
 import homestead_operations as ops
 import homestead_capacity_review as review
+from fakes.job_store import put, store_writes
 
 
 class ReviewTests(unittest.TestCase):
@@ -231,16 +232,19 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(1,len(ops.snapshot()))
 
     def test_reclass_conflicts_with_existing_import_recovery_hold(self):
-        held={'id':'held','kind':'import-create','status':'failed','ref':{'namespace':'lab','name':'app',
-             'claims':{'data':{}},'retain_resources':True}}
-        with mock.patch.object(ops,'_read',return_value=[held]),mock.patch.object(ops,'_write') as write:
+        # As stored for real: a held import has a job id and an approval digest.
+        held={'id':'0123456789abcdef01234567','kind':'import-create','status':'failed','ref':{'namespace':'lab','name':'app',
+             'claims':{'data':{}},'retain_resources':True,'review_digest':'f'*64}}
+        put(ops,[held])
+        with store_writes(ops) as written:
             with self.assertRaisesRegex(ValueError,'recovery hold'):
                 ops.start('reclass','Move',{'name':'data','namespace':'lab'},'/',{'namespace':'lab','claim':'data'})
-            write.assert_not_called()
+        self.assertEqual([],written)
 
     def test_failed_reclass_can_only_be_replaced_when_not_resumable(self):
         item={'id':'first','kind':'reclass','status':'failed','resource':{'name':'data','namespace':'lab'},'ref':{'phase':'copy'}}
-        with mock.patch.object(ops,'_read',return_value=[item]),mock.patch.dict(ops.RESUMABLE,{'reclass':lambda item:''}),mock.patch.object(ops,'_write') as write:
+        put(ops,[item])
+        with mock.patch.dict(ops.RESUMABLE,{'reclass':lambda item:''}),store_writes(ops) as written:
             with self.assertRaisesRegex(ValueError,'already has'):
                 ops.start('reclass','Move',item['resource'],'/',{'phase':'stop'})
-            write.assert_not_called()
+        self.assertEqual([],written)

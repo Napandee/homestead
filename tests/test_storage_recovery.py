@@ -7,7 +7,7 @@ from unittest import mock
 from test_reclass_handoff import CopyCluster
 import homestead_reclass as rc
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import put, store_writes
 import homestead_capacity_review as review
 import homestead_storage_workflow as workflow
 import homestead_storage_recovery as recovery
@@ -74,9 +74,9 @@ class StorageRecoveryTests(unittest.TestCase):
 
     def test_inspection_never_creates_volume_job_or_durable_intent(self):
         before, sent = copy.deepcopy(ops.stored()), len(self.cluster.sent)
-        with mock.patch.object(ops, "_write") as write, mock.patch.object(rc, "ksend") as send:
+        with store_writes(ops) as written, mock.patch.object(rc, "ksend") as send:
             result = self.preview()
-        write.assert_not_called(); send.assert_not_called()
+        self.assertEqual([], written); send.assert_not_called()
         self.assertEqual(before, ops.stored())
         self.assertEqual(sent, len(self.cluster.sent))
         self.assertEqual("copy-volume", result["plan"]["next_write"]["step"])

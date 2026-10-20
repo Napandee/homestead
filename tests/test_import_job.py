@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+from fakes.job_store import store_writes
 import homestead_import_job as flow
 import homestead_import_guard as guard
 import homestead_imports as imports
@@ -146,7 +147,7 @@ class ImportJobTests(unittest.TestCase):
                     self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
 
     def test_journal_failure_sends_nothing(self):
-        with mock.patch.object(ops, "_write", side_effect=OSError("disk full")), self.assertRaises(Exception):
+        with store_writes(ops, fail=OSError("disk full")), self.assertRaises(Exception):
             self.start()
         self.assertEqual([], self.sent)
 
@@ -165,12 +166,10 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual("unverified", self.item()["ref"]["writes"][-1]["phase"])
 
     def test_acknowledged_write_with_journal_failure_leaves_intent(self):
-        original = ops._write
         def record(items):
             if items and items[0]["ref"].get("writes") and items[0]["ref"]["writes"][-1]["phase"] == "accepted":
                 raise OSError("storage lost")
-            return original(items)
-        with mock.patch.object(ops, "_write", side_effect=record), self.assertRaises(ValueError):
+        with store_writes(ops, fail=record), self.assertRaises(ValueError):
             self.start()
         self.assertEqual(1, len(self.sent))
         self.assertEqual("intent", self.item()["ref"]["writes"][-1]["phase"])

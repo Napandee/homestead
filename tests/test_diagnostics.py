@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_diagnostics as D
 import homestead_route_policy as POLICY
+from fakes.job_store import put
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -165,9 +166,11 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_job_evidence_never_refreshes_jobs_or_reads_console_output(self):
         import homestead_operations as OPS
-        row = {"id": "job-1", "history": [{"message": "Started"}], "ref": {"password": "never-copy"}, "execution": "never-copy"}
-        with patch.object(OPS, "DATA_DIR", self.temp.name), patch.object(OPS, "_read", return_value=[row]), patch.object(OPS, "_refresh", side_effect=AssertionError("must not refresh")):
-            result = OPS.diagnostic_summaries({"job-1"})
+        row = {"id": "job-1", "status": "running", "history": [{"message": "Started"}], "ref": {"password": "never-copy"}, "execution": "never-copy"}
+        with patch.object(OPS, "DATA_DIR", self.temp.name):
+            put(OPS, [row])
+            with patch.object(OPS, "_refresh", side_effect=AssertionError("must not refresh")):
+                result = OPS.diagnostic_summaries({"job-1"})
         self.assertEqual([{"message": "Started"}], result[0]["history"])
         self.assertNotIn("never-copy", json.dumps(result))
 

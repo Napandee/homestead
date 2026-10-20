@@ -8,7 +8,7 @@ from unittest import mock
 import test_deploy_capacity  # server import path
 import server
 import homestead_operations as ops
-from fakes.job_store import put
+from fakes.job_store import damaged_store, put
 import homestead_storage_guard as guard
 
 
@@ -186,8 +186,9 @@ class StorageGuardTests(unittest.TestCase):
             raw.assert_not_called()
 
     def test_unreadable_history_or_partial_pv_list_never_authorizes_deletion(self):
-        with mock.patch.object(ops, "_read", side_effect=ValueError("unavailable")):
-            with self.assertRaises(ValueError): self.send("/api/v1/namespaces/lab/persistentvolumeclaims/source")
+        # A claim no move protects: only the unreadable history can refuse it.
+        with damaged_store(ops):
+            with self.assertRaises(ValueError): self.send("/api/v1/namespaces/lab/persistentvolumeclaims/unrelated")
         with mock.patch.object(self, "read", return_value={"items": [], "metadata": {"continue": "next"}}):
             with self.assertRaises(ValueError): self.send("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/unknown")
         self.dispatch.assert_not_called()
