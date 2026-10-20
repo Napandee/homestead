@@ -87,6 +87,8 @@ window.portalRecheck = async () => {
 /* ---------------- editor ---------------- */
 let PORTAL_EDIT = [];
 let PORTAL_WORKLOADS = [];
+// The version of the links the editor opened on: a save over a newer one is refused.
+let PORTAL_VERSION = "";
 
 function portalIconOptions(value) {
   const builtins = Object.entries(PORTAL_ICON_LABELS).map(([key, label]) =>
@@ -146,6 +148,7 @@ window.portalEdit = async (pick = false) => {
     const [data, wl] = await Promise.all([api("/api/portal"), STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => [])]);
     PORTAL_WORKLOADS = wl || [];
     PORTAL_EDIT = (data.links || []).map(link => ({ ...link }));
+    PORTAL_VERSION = data.version || "";
     $("#mbody").innerHTML = `<p class="muted small">Organize portal links or add links from containers. All signed-in users can see these addresses; do not include passwords.</p>
       <div class="row" style="gap:8px;margin:12px 0"><button class="btn" onclick="portalAdd()">＋ Link</button>
         <button class="btn" onclick="portalPick()">＋ From containers</button></div>
@@ -216,8 +219,9 @@ window.portalSave = async () => {
   const button = $("#pe_save");
   button.disabled = true; button.textContent = "Saving…";
   try {
-    const result = await api("/api/portal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links }) });
-    STATE.data.portal = { ...(STATE.data.portal || {}), links: result.links };
+    const result = await api("/api/portal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links, version: PORTAL_VERSION }) });
+    PORTAL_VERSION = result.version || "";
+    STATE.data.portal = { ...(STATE.data.portal || {}), links: result.links, version: result.version };
     toast(`${links.length} link${links.length === 1 ? "" : "s"} saved`, "ok"); closeModal();
     if (STATE.view === "portal") { resetPaint(); viewPortal(); }
   } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Save links"; }

@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_names as NAMES
+import homestead_routes as ROUTER
 
 kget = ksend = None
 NAMESPACE = "default"
@@ -37,6 +38,7 @@ BUILTIN = ("router", "switch", "wifi", "firewall", "nas", "server", "printer", "
 _status = {"at": 0.0, "value": {}}
 _status_lock = threading.Lock()
 STATUS_TTL = 30
+CHANGED = "The portal links were changed elsewhere since you opened them; open Edit links again to see them"
 
 
 def bind(_kget, _ksend, namespace, _workloads, _persist_icon, _icon_data):
@@ -50,17 +52,24 @@ def _map():
 
 
 def stored():
+    return _stored()[0]
+
+
+def _stored():
+    """The links, and the version of the map they came from ("" when there
+    is none yet): the page saves its whole list over that version."""
     try:
         cm = kget(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}")
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return []
+            return [], ""
         raise
+    version = str((cm.get("metadata") or {}).get("resourceVersion") or "")
     try:
         rows = json.loads((cm.get("data") or {}).get(DATA_KEY, "[]"))
     except ValueError:
-        return []
-    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        return [], version
+    return ([row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []), version
 
 
 def _url(value, title):
@@ -89,8 +98,11 @@ def _icon(value, title):
     return persist_icon(icon)
 
 
-def save(rows):
-    """Replaces the links, after checking every one."""
+def save(rows, version=None):
+    """Replaces the links, after checking every one. version is the one the
+    page read its links at ("" for none yet): links saved since then, in
+    another tab or on another copy, are not saved over - the API server's 409
+    is passed on as one. Without it, the links are replaced as they stand."""
     if not isinstance(rows, list):
         raise ValueError("links must be a list")
     if len(rows) > MAX_LINKS:
@@ -114,21 +126,39 @@ def save(rows):
             "metadata": {"name": _map(), "namespace": NAMESPACE, "labels": {NAMES.key("managed"): "true"}},
             "data": {DATA_KEY: json.dumps(clean, indent=1)}}
     try:
+        if version is None:
+            saved = _replace(body)
+        elif version:
+            body["metadata"]["resourceVersion"] = str(version)
+            saved = ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}", body)
+        else:
+            saved = ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
+    except urllib.error.HTTPError as error:
+        # 409: saved meanwhile. 404: the version shown was removed meanwhile.
+        if version is not None and error.code in (404, 409):
+            return ROUTER.Reply(409, {"error": CHANGED})
+        raise
+    with _status_lock:
+        _status["at"] = 0.0
+    shown, now = _stored()
+    return {"ok": True, "links": view(shown), "version": str(((saved or {}).get("metadata") or {}).get("resourceVersion") or now)}
+
+
+def _replace(body):
+    """The links saved as they stand, for a caller that names no version."""
+    try:
         current = kget(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}")
         body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
-        ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}", body)
+        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}", body)
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
-    with _status_lock:
-        _status["at"] = 0.0
-    return {"ok": True, "links": view()}
+        return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
 
 
-def view():
+def view(rows=None):
     """The links as the page draws them: each icon resolved to something to show."""
-    rows = stored()
+    rows = stored() if rows is None else rows
     logos = {}
     if any(str(row.get("icon", "")).startswith("workload:") for row in rows):
         logos = {f"workload:{w['ns']}/{w['name']}": w.get("icon", "") for w in workloads()}
@@ -147,6 +177,11 @@ def view():
                 pass
         out.append({**row, "shown": shown})
     return out
+
+
+def _page():
+    rows, version = _stored()
+    return {"links": view(rows), "icons": list(BUILTIN), "version": version}
 
 
 def _scheme(port):
@@ -207,6 +242,6 @@ def status(force=False):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/portal/candidates"): ("viewer", lambda request: candidates()),
-    ("POST", "/api/portal"): ("admin", lambda request: save(request.body.get("links"))),
-    ("GET", "/api/portal"): ("viewer", lambda request: {"links": view(), "icons": list(BUILTIN)}),
+    ("POST", "/api/portal"): ("admin", lambda request: save(request.body.get("links"), request.body.get("version"))),
+    ("GET", "/api/portal"): ("viewer", lambda request: _page()),
 }
