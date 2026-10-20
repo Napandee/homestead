@@ -116,7 +116,7 @@ class AcknowledgementTests(unittest.TestCase):
         answer=P.pending("alice",endpoint,True)
         self.assertEqual([],answer["alerts"]);self.assertEqual(1,answer["active"])
     def test_http_identity_csrf_conflicts_and_delivery_ownership(self):
-        listener=HTTP.BoundedHTTPServer(("127.0.0.1",0),server.H,max_connections=2)
+        listener=HTTP.BoundedHTTPServer(("127.0.0.1",0),server.H)
         threading.Thread(target=listener.serve_forever,daemon=True).start()
         self.addCleanup(listener.server_close);self.addCleanup(listener.shutdown)
         identity=self.enterContext(patch.object(server.H,"_who",return_value={"user":"alice","role":"viewer","stale":False}))
