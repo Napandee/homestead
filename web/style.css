@@ -338,7 +338,8 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .tree-pull{margin:4px 0 2px}
 /* A node card: thirty days of uptime under the head, then its meters two
    to a row where the card is wide enough, and its pods on one line. */
-.node-upstrip{display:flex;align-items:center;gap:8px;margin-top:10px}
+.node-upstrip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.node-upstrip .uptime-unread{flex-basis:100%}
 .node-upstrip .uptime-strip.mini{flex:1;min-width:0;height:12px;grid-template-columns:repeat(30,minmax(0,1fr));gap:2px}
 .node-upstrip b{min-width:44px;text-align:right}
 .nodemetrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:9px 20px;margin-top:12px}

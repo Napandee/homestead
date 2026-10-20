@@ -326,6 +326,72 @@ try {
     await close();
     await page.evaluate(() => { window.api = window.__realApi; });
 
+    // Overview: unread metrics are not "waiting for recorded metrics", unread
+    // storage is not "not available yet", and unread Longhorn limits are named
+    // rather than read as "no host is nearly full".
+    // Each waits for the page it asked for, not the one still showing.
+    const dashAfter = async (path, expected) => {
+      await page.evaluate(failing, path);
+      await page.evaluate(() => { go("dash"); });
+      await page.waitForSelector(".dashboard-widget");
+      await page.waitForFunction(source => !document.querySelector("#views.refreshing")
+        && new RegExp(source).test(document.querySelector("#views")?.innerText || ""), expected.source);
+      return page.locator("#views").innerText();
+    };
+    const metrics = await dashAfter("/api/history", /Could not read the recorded metrics/);
+    assert.match(metrics, /Could not read the recorded metrics[\s\S]*timed out/);
+    assert.doesNotMatch(metrics, /Waiting for recorded metrics/);
+    const storage = await dashAfter("/api/storage", /Could not read storage/);
+    assert.match(storage, /Could not read storage[\s\S]*timed out/);
+    assert.doesNotMatch(storage, /Storage figures aren.t available yet/);
+    const limits = await dashAfter("/api/longhorn/capacity", /Could not read Longhorn.s allocation limits/);
+    assert.match(limits, /Could not read Longhorn.s allocation limits[\s\S]*timed out/);
+    // Where it is not known that Longhorn is there, its limits are not reported unread.
+    const knownPlatform = await page.evaluate(() => { const was = STATE.platform; STATE.platform = null; return was; });
+    const unknown = await dashAfter("/api/longhorn/capacity", /Compute[\s\S]*Storage/);
+    assert.doesNotMatch(unknown, /Could not read Longhorn.s allocation limits/);
+    await page.evaluate(was => { STATE.platform = was; }, knownPlatform);
+
+    // Hosts: one failed uptime read keeps the last good strips and says so,
+    // in text a phone shows, not only in a tip.
+    await page.evaluate(() => { window.api = window.__realApi; return viewNodes(); });
+    await page.waitForFunction(() => document.querySelector(".node-upstrip .uptime-strip i[class^='uptime-']"));
+    await page.evaluate(failing, "/api/nodes/uptime");
+    await page.evaluate(() => viewNodes());
+    await page.waitForFunction(() => /Could not read uptime/.test(document.querySelector("#views")?.innerText || ""));
+    assert.ok(await page.locator(".node-upstrip .uptime-strip i[class^='uptime-']").count(), "the last good strips stay");
+    assert.match(await page.locator(".node-upstrip").first().innerText(), /Could not read uptime[\s\S]*timed out/);
+
+    // Hosts: unread uptime is not "no samples yet", on the list and on a host's page.
+    await page.evaluate(failing, "/api/nodes/uptime");
+    await page.evaluate(() => { STATE.data.uptime = null; return viewNodes(); });
+    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Hosts"));
+    const tips = await page.evaluate(() => [...document.querySelectorAll(".node-upstrip")].map(x => x.dataset.tip));
+    assert.ok(tips.length, "the host list shows uptime strips");
+    for (const tip of tips) {
+      assert.match(tip, /Could not read uptime: timed out/);
+      assert.doesNotMatch(tip, /No samples yet/);
+    }
+    await page.evaluate(async () => {
+      document.querySelector("#views").insertAdjacentHTML("beforeend", '<div id="nodeUptime"></div>');
+      await nodeUptimePaint({ name: "harvester-node1", status: "Ready" });
+    });
+    const hostUptime = await page.locator("#nodeUptime").innerText();
+    assert.match(hostUptime, /Could not read uptime[\s\S]*timed out/);
+    assert.doesNotMatch(hostUptime, /No samples yet/);
+
+    // Hardware feature editor: unread hosts are named, not an empty host list
+    // with "no probe data"; the paths can still be typed in.
+    await page.evaluate(failing, "/api/nodes");
+    await page.evaluate(() => { STATE.data.nodes = null; STATE.data.ov = null; return hardwareFeatureEdit(""); });
+    await page.waitForSelector("#hf_id");
+    const hardware = await page.locator("#mbody").innerText();
+    assert.match(hardware, /Could not read the hosts[\s\S]*timed out/);
+    assert.doesNotMatch(hardware, /No probe data from this host yet/);
+    assert.equal(await page.locator("#hf_browse_node").count(), 0, "no host list built on nothing");
+    assert.equal(await page.locator("#hf_host").count(), 1, "the path can still be typed");
+    await page.evaluate(() => { window.api = window.__realApi; closeModal(); });
+
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);
     await context.close();
