@@ -209,11 +209,11 @@ class VMEditAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/edit", signed)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
-        self.assertFalse(server.OPS._read())
+        self.assertFalse(server.OPS.stored())
         result, writes = self.call("/api/vm/edit", {**signed, "ack_state_initialization": True, "confirm_state_name": "guest"})
         self.assertEqual(200, result[0], result)
         self.assertEqual(1, writes.call_count)
-        self.assertTrue(server.OPS._read()[0]["ref"]["state_initialization_acknowledged"])
+        self.assertTrue(server.OPS.stored()[0]["ref"]["state_initialization_acknowledged"])
 
     def test_outer_label_change_cannot_skip_admission_as_metadata_only(self):
         prepared = server.VM_REVIEW.prepare_vm_edit({"ns": "lab", "name": "guest", "description": "edited"})

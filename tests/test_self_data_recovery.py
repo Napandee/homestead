@@ -198,7 +198,7 @@ class RecoveryTests(unittest.TestCase):
         fence = F.Fence(f.read, "lab", "homestead", "new-0", "homestead", f.temp.name)
         self.assertTrue(FIN.finish(fence, f.read, f.send)["done"])
         self.assertTrue(E.reconcile_completed(OPS, f.temp.name, "lab", "homestead"))
-        job = next(i for i in OPS._read() if i["id"] == f.job["id"])
+        job = next(i for i in OPS.stored() if i["id"] == f.job["id"])
         self.assertEqual("cancelled", job["status"])
         for method, path, _ in c.sent:
             if method == "DELETE": self.assertNotIn("persistentvolume", path)
