@@ -135,7 +135,7 @@ const LEGACY = [
   [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],
   // design.md, Reading the cluster (#620): a read that failed is not an empty
   // answer. The page says it could not read, and offers nothing that acts on a guess.
-  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 60,
+  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 52,
     'catch(e => …) that marks what could not be read, or let the view show the error'],
   // An invented list is worse than an empty one: a namespace or class that may not exist.
   [/\.catch\(\s*\(\s*\)\s*=>\s*\[[^\]]/g, 0, "catch(e => …) that marks what could not be read; never a made-up namespace or class"],
