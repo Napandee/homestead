@@ -94,7 +94,6 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     targets = dict(sorted(targets.items(), key=lambda row: (MAINTENANCE.longhorn_instance_manager(row[1]), row[0])))
     frozen = MAINTENANCE.pod_snapshot([p for p in pods if (p.get("spec") or {}).get("nodeName") == node])
     started = time.monotonic()
-    deadline = started + 120
     while targets:
         retrying = []
         for identity, p in targets.items():
