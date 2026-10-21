@@ -165,3 +165,37 @@ class JobAlertTests(unittest.TestCase):
         # Seen on a phone: "Balance containers failed" opened Containers, with nothing there saying why.
         fact = A.job_facts([{"id": "7df5", "status": "failed", "title": "Balance containers", "href": "/containers"}])[0]
         self.assertEqual("/?job=7df5", fact["href"])
+
+
+class SignalDirectionTests(unittest.TestCase):
+    """An acknowledged alert comes back only when it really got worse: a
+    signal is a number that grows as things worsen, or text that changed."""
+    def snap(self, **signals):
+        return {"severity": 1, "signals": signals}
+
+    def test_a_fill_forecast_returns_only_when_it_gets_nearer(self):
+        import homestead_forecast as F
+        rows = lambda left: [{"key": "v", "kind": "volume", "label": "data", "days_left": left, "pct": 80,
+                              "per_day": 1024 ** 3, "full_on": "soon"}]
+        signal = lambda left: F.alert_facts(rows(left))[0]["signals"]
+        acked = {"severity": 1, "signals": signal(9)}
+        # 9 days left, then 11 or 8: the same band, so it stays acknowledged.
+        for left in (11, 8):
+            with self.subTest(left=left):
+                self.assertFalse(A._worse({"severity": 1, "signals": signal(left)}, acked))
+        # A week or less is nearer: it comes back.
+        self.assertTrue(A._worse({"severity": 1, "signals": signal(6)}, acked))
+
+    def test_the_data_volume_returns_by_bands_not_every_percent(self):
+        import homestead_housekeeping as H
+        fact = lambda pct: H.alert_facts({"volume": {"pct": pct}, "stores": []})[0]
+        acked = A._snapshot(fact(86))
+        self.assertFalse(A._worse(A._snapshot(fact(89)), acked))
+        self.assertTrue(A._worse(A._snapshot(fact(91)), acked))
+
+    def test_text_signals_are_worse_when_they_change_not_by_alphabet(self):
+        self.assertFalse(A._worse(self.snap(error="timed out"), self.snap(error="timed out")))
+        self.assertTrue(A._worse(self.snap(error="connection refused"), self.snap(error="timed out")))
+        self.assertTrue(A._worse(self.snap(error="refused"), self.snap()))
+        self.assertTrue(A._worse(self.snap(count=3), self.snap(count=2)))
+        self.assertFalse(A._worse(self.snap(count=2), self.snap(count=3)))
