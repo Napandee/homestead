@@ -2,7 +2,6 @@
 import copy
 import hashlib
 import time
-import urllib.error
 
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as IMPORT
@@ -28,15 +27,6 @@ def base(namespace):
     return f"/apis/apps/v1/namespaces/{namespace}/deployments"
 
 
-def optional(read, path):
-    try:
-        return read(path)
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        return None
-
-
 def guards(current, target, read):
     meta = identity(current)
     blocker = IMPORT.pending(current, meta["namespace"], read)
@@ -47,7 +37,7 @@ def guards(current, target, read):
     if current.get("spec", {}).get("paused"):
         raise Stopped("Resume the paused Deployment before renaming it")
     path = f"/apis/autoscaling/v2/namespaces/{meta['namespace']}/horizontalpodautoscalers"
-    listing = optional(read, path)
+    listing = KUBE.get_optional(path, read=read)
     if listing is None:
         listing = read(path.replace("autoscaling/v2", "autoscaling/v1"))
     if listing is not None:
@@ -63,7 +53,7 @@ def prepare(body, current, clone, read):
         raise ValueError("Rename separately from other edits. Review only the old and new workload names")
     source = identity(current)
     guards(current, body["workload_name"], read)
-    if optional(read, base(source["namespace"]) + "/" + body["workload_name"]) is not None:
+    if KUBE.get_optional(base(source["namespace"]) + "/" + body["workload_name"], read=read) is not None:
         raise ValueError("The new workload name already exists; choose another name")
     count = current.get("spec", {}).get("replicas", 1)
     if type(count) is not int or not 0 <= count <= 100:
@@ -162,7 +152,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             if identity(source) != context["source"]:
                 raise Stopped("Workload changed after review")
             guards(source, new, read)
-            if optional(read, target_path) is not None:
+            if KUBE.get_optional(target_path, read=read) is not None:
                 raise Stopped("The new workload name is no longer free")
             desired = proposed["spec"]["replicas"]
             draft = copy.deepcopy(proposed)
@@ -233,7 +223,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                      "preconditions": {key: source_id[key] for key in ("uid", "resourceVersion")}}, old, 90, source_id)
             # Deletion acknowledgement is not final disappearance.
             deadline = time.monotonic() + timeout
-            while optional(read, source_path) is not None:
+            while KUBE.get_optional(source_path, read=read) is not None:
                 if time.monotonic() >= deadline:
                     raise Stopped("Original Deployment removal is still pending")
                 sleep(2)
@@ -269,7 +259,7 @@ def recovery_plan(item, read, ops):
     try:
         with LOCKS.worker_lock(item["id"], ops, timeout=.01):
             for name in (item["ref"]["name"], item["ref"]["new_name"]):
-                obj = optional(read, base(item["ref"]["namespace"]) + "/" + name)
+                obj = KUBE.get_optional(base(item["ref"]["namespace"]) + "/" + name, read=read)
                 if obj is None:
                     plan["keeps"].append(f"{name}: not present")
                 else:

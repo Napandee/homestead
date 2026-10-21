@@ -8,6 +8,7 @@ import json
 import re
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_lhcapacity as CAP
 import homestead_hostrun as HOST
 import homestead_pod_resources as R
@@ -25,20 +26,11 @@ def bind(read, send, observe, operations, namespace):
     kget, ksend, status, ops, NS = read, send, observe, operations, namespace
 
 
-def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-
-
 def _items(path):
-    result = kget(path)
-    if not isinstance(result.get("items"), list) or result.get("metadata", {}).get("continue"):
-        raise ValueError("V2 setup inventory is incomplete; check again")
-    return result["items"]
+    try:
+        return KUBE.items(path, read=kget)
+    except KUBE.Incomplete as error:
+        raise ValueError("V2 setup inventory is incomplete; check again") from error
 
 
 def _hash(value):
@@ -50,16 +42,16 @@ def _value(obj, fallback=""):
 
 
 def memory_mib():
-    enabled = _get(LH + "/settings/data-engine-hugepage-enabled")
+    enabled = KUBE.get_optional(LH + "/settings/data-engine-hugepage-enabled", read=kget)
     if enabled:
         value = json.loads(_value(enabled, '{}')).get("v2", "true")
         if value not in ("true", "false"):
             raise ValueError("Longhorn's hugepage configuration is unrecognized")
         if value == "false":
             return 0
-    setting = _get(LH + "/settings/data-engine-memory-size")
+    setting = KUBE.get_optional(LH + "/settings/data-engine-memory-size", read=kget)
     value = (json.loads(_value(setting, '{}')).get("v2", "2048") if setting else
-             _value(_get(LH + "/settings/v2-data-engine-hugepage-limit"), "2048"))
+             _value(KUBE.get_optional(LH + "/settings/v2-data-engine-hugepage-limit", read=kget), "2048"))
     if not re.fullmatch(r"[0-9]+", str(value)) or not 2 <= int(value) <= 1048576 or int(value) % 2:
         raise ValueError("Longhorn's V2 memory size must be an even number of MiB")
     return int(value)
@@ -70,7 +62,7 @@ def cpu_mask():
     or None where Longhorn has no such setting. With isolation on, SPDK keeps
     those cores to itself and refuses to start when they are all the host
     has: Longhorn 1.13's default of two (0x3) never starts on a 2-CPU host."""
-    setting = _get(LH + "/settings/data-engine-cpu-mask")
+    setting = KUBE.get_optional(LH + "/settings/data-engine-cpu-mask", read=kget)
     if not setting:
         return None
     raw = _value(setting, "")
@@ -80,7 +72,7 @@ def cpu_mask():
         raise ValueError("Longhorn's V2 CPU mask is unrecognized") from None
     if not re.fullmatch(r"0x[0-9a-fA-F]+", str(mask)) or int(mask, 16) == 0:
         raise ValueError("Longhorn's V2 CPU mask is unrecognized")
-    isolation = _get(LH + "/settings/data-engine-cpu-isolation-enabled")
+    isolation = KUBE.get_optional(LH + "/settings/data-engine-cpu-isolation-enabled", read=kget)
     try:
         isolated = bool(isolation) and json.loads(_value(isolation, "{}")).get("v2", "false") == "true"
     except ValueError:
@@ -90,7 +82,7 @@ def cpu_mask():
 
 def v2_cpu_percent():
     """The share of a host's CPU Longhorn reserves for V2's instance manager."""
-    setting = _get(LH + "/settings/guaranteed-instance-manager-cpu")
+    setting = KUBE.get_optional(LH + "/settings/guaranteed-instance-manager-cpu", read=kget)
     try:
         value = json.loads(_value(setting, "{}")).get("v2", "12") if setting else "12"
         return max(0.0, min(40.0, float(value)))
@@ -118,7 +110,7 @@ def plan():
     base = status()
     setting = kget(LH + "/settings/v2-data-engine")
     enabled = _value(setting) == "true"
-    harvester = _get(CAP.HARVESTER_V2)
+    harvester = KUBE.get_optional(CAP.HARVESTER_V2, read=kget)
     distribution = base.get("distribution", "")
     if distribution == "harvester" and harvester is None:
         raise ValueError("Harvester's V2 setting could not be verified")
@@ -316,7 +308,7 @@ def _ensure(ref, create=False):
     if node['metadata']['uid'] != ref['node_uid']:
         raise ValueError("Host identity changed; review V2 setup again")
     path = f"/apis/batch/v1/namespaces/{NS}/jobs/{ref['name']}"
-    job = _get(path)
+    job = KUBE.get_optional(path, read=kget)
     body = _body(ref)
     if not job:
         if not create:
