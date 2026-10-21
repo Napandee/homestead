@@ -6,6 +6,15 @@
   --tx:#f3f3f5; --mut:#8d8d95; --dim:#84848d;
   --crit:#ff4d4f; --high:#ff7a45; --med:#ffb020; --low:#4a9eff; --ok:#3ddc91; --vio:#a78bfa;
   --focus:#4a9eff; /* the one keyboard focus ring; purple stays for hardware */
+  /* One tone set for every chip (#543): text, tint and edge per tone.
+     .ui-chip reads these; pills and tags move to it page by page. */
+  --tone-ok:var(--ok); --tone-ok-bg:rgba(61,220,145,.12); --tone-ok-line:transparent;
+  --tone-warn:var(--med); --tone-warn-bg:rgba(255,176,32,.13); --tone-warn-line:transparent;
+  --tone-bad:#ff8f93; --tone-bad-bg:rgba(255,77,79,.13); --tone-bad-line:transparent;
+  --tone-info:#8fc2ff; --tone-info-bg:rgba(74,158,255,.13); --tone-info-line:transparent;
+  --tone-hw:var(--vio); --tone-hw-bg:rgba(167,139,250,.1); --tone-hw-line:rgba(167,139,250,.3);
+  --tone-link:#8cc4ff; --tone-link-bg:rgba(74,158,255,.12); --tone-link-line:rgba(74,158,255,.3);
+  --tone-neutral:var(--mut); --tone-neutral-bg:rgba(255,255,255,.07); --tone-neutral-line:var(--line2);
   --r:20px; --r2:14px;
   --e:cubic-bezier(.22,.61,.36,1);
 }
@@ -26,11 +35,19 @@ html[data-theme="light"]{
      the dark theme's are made for a black ground and vanish on this one. */
   --crit:#c8232c; --high:#b8460b; --med:#9a5b00; --low:#1a64c2; --ok:#0b7a48; --vio:#6a4bd1;
   --focus:#1a64c2;
+  /* Pale pink and blue are made for a dark ground: bad, info and link take the deeper colours. */
+  --tone-ok:var(--ok); --tone-ok-bg:rgba(61,220,145,.12); --tone-ok-line:transparent;
+  --tone-warn:var(--med); --tone-warn-bg:rgba(255,176,32,.13); --tone-warn-line:transparent;
+  --tone-bad:var(--crit); --tone-bad-bg:rgba(255,77,79,.13); --tone-bad-line:transparent;
+  --tone-info:var(--low); --tone-info-bg:rgba(74,158,255,.13); --tone-info-line:transparent;
+  --tone-hw:var(--vio); --tone-hw-bg:rgba(167,139,250,.1); --tone-hw-line:rgba(167,139,250,.3);
+  --tone-link:var(--low); --tone-link-bg:rgba(74,158,255,.12); --tone-link-line:rgba(74,158,255,.3);
+  --tone-neutral:var(--mut); --tone-neutral-bg:rgba(255,255,255,.07); --tone-neutral-line:var(--line2);
 }
 /* Pills that are a tint, not a fill, take the deeper colours too. */
 html[data-theme="light"] .pill.neutral,html[data-theme="light"] .pill.low{background:rgba(0,0,0,.05);color:var(--mut)}
 /* Only plain tags turn grey; a toned one keeps its state colour. */
-html[data-theme="light"] .tag:where(:not(.ok,.warn,.bad,.info,.capacity,.hw,.gpu)){background:rgba(0,0,0,.04);color:var(--mut)}html[data-theme="light"] .tag:hover{background:rgba(0,0,0,.07)}
+html[data-theme="light"] .tag:where(:not(.ok,.warn,.bad,.info,.capacity,.hw,.gpu,.link,.neutral)){background:rgba(0,0,0,.04);color:var(--mut)}html[data-theme="light"] .tag:hover{background:rgba(0,0,0,.07)}
 html[data-theme="light"] .card,html[data-theme="light"] .abox,html[data-theme="light"] .flowwrap,
 html[data-theme="light"] .side,html[data-theme="light"] .top,html[data-theme="light"] .fnode{
   background:linear-gradient(158deg,rgba(255,255,255,.82),rgba(255,255,255,.55));
@@ -61,10 +78,11 @@ html[data-theme="light"] .podgrid i{background:rgba(0,0,0,.16)}
 html[data-theme="light"] .podgrid i.wl{background:#16161a;box-shadow:none}
 html[data-theme="light"] pre{background:rgba(0,0,0,.05);color:#2a2a30}
 html[data-theme="light"] .av{color:#fff}
-/* Error and info text tinted pale for a dark ground takes the deeper colours. */
-html[data-theme="light"] .ui-chip.bad,html[data-theme="light"] .note.bad,html[data-theme="light"] .updateerror,
+/* Error and info text tinted pale for a dark ground takes the deeper colours
+   (a chip's come from the light theme's --tone-* tokens). */
+html[data-theme="light"] .note.bad,html[data-theme="light"] .updateerror,
 html[data-theme="light"] .imm-size.bad,html[data-theme="light"] .gateerr{color:var(--crit)}
-html[data-theme="light"] .ui-chip.info{color:var(--low)}
+html[data-theme="light"] .tag:where(.neutral){background:rgba(0,0,0,.04);color:var(--mut)}
 /* The neutral avatars (.n1-.n3, a grey disc) keep the theme's text colour. */
 html[data-theme="light"] .av.n1,html[data-theme="light"] .av.n2,html[data-theme="light"] .av.n3{color:var(--tx)}
 
@@ -456,6 +474,7 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
   display:inline-flex;align-items:center;gap:6px;padding:5px 13px;border-radius:999px;
   font-size:11.5px;font-weight:700;letter-spacing:.01em;transition:all .2s var(--e)
 }
+/* Older solid pills; they go as their pages move to UI.chip (#543). */
 .pill.crit{background:linear-gradient(135deg,#ff4d4f,#ff2d55);color:#fff;box-shadow:0 3px 14px rgba(255,77,79,.35)}
 .pill.high{background:linear-gradient(135deg,#ff8a3d,#ff6a00);color:#fff;box-shadow:0 3px 14px rgba(255,122,69,.3)}
 .pill.med{background:linear-gradient(135deg,#ffc247,#ffa000);color:#1a1200;box-shadow:0 3px 14px rgba(255,176,32,.3)}
@@ -480,9 +499,11 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .tag.bad{color:var(--crit);border-color:rgba(255,77,79,.26);background:rgba(255,77,79,.09)}
 .tag.warn{color:var(--med);border-color:rgba(255,176,32,.26);background:rgba(255,176,32,.09)}
 .tag.gpu{color:var(--vio);border-color:rgba(167,139,250,.28);background:rgba(167,139,250,.1)}
-.tag.hw{color:var(--vio);border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.1)}
+.tag.hw{color:var(--tone-hw);border-color:var(--tone-hw-line);background:var(--tone-hw-bg)}
 .tag.capacity{color:var(--low);border-color:rgba(74,158,255,.26);background:rgba(74,158,255,.08)}
 .tag.info{color:var(--low);border-color:rgba(74,158,255,.26);background:rgba(74,158,255,.09)}
+.tag.link{color:var(--tone-link);border-color:var(--tone-link-line);background:var(--tone-link-bg)}
+.tag:where(.neutral){color:#c2c2ca;border-color:var(--line);background:rgba(255,255,255,.06)}
 
 .av{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:750;
   color:#fff;background:linear-gradient(145deg,#6d6d78,#2a2a30);flex:0 0 auto;
@@ -2253,11 +2274,15 @@ div.ipam-line.dim{display:block}
 .ui-list{margin:4px 0 0;padding-left:18px;display:grid;gap:3px}
 
 .ui-chip{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:11px;font-size:11.5px;font-weight:650;white-space:nowrap;
-  background:rgba(255,255,255,.07);color:var(--mut);border:1px solid var(--line2)}
-.ui-chip.ok{background:rgba(61,220,145,.12);color:var(--ok);border-color:transparent}
-.ui-chip.warn{background:rgba(255,176,32,.13);color:var(--med);border-color:transparent}
-.ui-chip.bad{background:rgba(255,77,79,.13);color:#ff8f93;border-color:transparent}
-.ui-chip.info{background:rgba(74,158,255,.13);color:#8fc2ff;border-color:transparent}
+  background:var(--tone-neutral-bg);color:var(--tone-neutral);border:1px solid var(--tone-neutral-line)}
+/* The tone set (#543); med, crit and low are older names for warn, bad and neutral. */
+.ui-chip.ok{background:var(--tone-ok-bg);color:var(--tone-ok);border-color:var(--tone-ok-line)}
+.ui-chip.warn,.ui-chip.med{background:var(--tone-warn-bg);color:var(--tone-warn);border-color:var(--tone-warn-line)}
+.ui-chip.bad,.ui-chip.crit{background:var(--tone-bad-bg);color:var(--tone-bad);border-color:var(--tone-bad-line)}
+.ui-chip.info{background:var(--tone-info-bg);color:var(--tone-info);border-color:var(--tone-info-line)}
+.ui-chip.hw{background:var(--tone-hw-bg);color:var(--tone-hw);border-color:var(--tone-hw-line)}
+.ui-chip.link{background:var(--tone-link-bg);color:var(--tone-link);border-color:var(--tone-link-line)}
+.ui-chip.neutral,.ui-chip.low{background:var(--tone-neutral-bg);color:var(--tone-neutral);border-color:var(--tone-neutral-line)}
 
 /* The buttons end every dialog, pinned to its bottom edge while the rest scrolls. */
 .ui-actions{position:sticky;bottom:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
