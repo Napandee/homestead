@@ -1353,9 +1353,11 @@ const IMAGE_REASONS = {
   scheduled: { tone: "", tip: "a scheduled job that runs this image" },
 };
 async function viewImages() {
-  const [d, vm] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(() => null)]);
+  const [d, vm, auto] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(() => null),
+    api("/api/images/cleanup-auto").catch(error => ({ error: error.message }))]);
   STATE.data.imageCache = d;
   STATE.data.vmImages = vm;
+  STATE.data.imageCleanupAuto = auto;
   // Kubernetes lists only each node's largest images; the full list is
   // containerd's. Homestead asks for it itself when its last answer is old,
   // so this only waits for a scan that is running to finish.
@@ -1366,6 +1368,7 @@ async function viewImages() {
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
   paint(`${UI.pageHeader(`Image cache`, `${imgs.length} app images across ${d.nodes.length} hosts · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each host's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}`, `<label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label>`)}
+    ${imageCleanupRow(d, auto)}
     ${UI.guide("How images are kept", `<p><b>Clean up</b> removes an image nothing uses from the hosts that hold it.
       <b>active</b> images are what running containers use, and <b>stopped</b> ones what a container scaled to zero starts from; both stay.
       <b>rollback</b> copies are the image a container had before its last update, kept so <b>Roll back</b> can return to it. <b>Forget</b> one and it becomes unused, to clean up like the rest.</p>`)}
@@ -1408,6 +1411,71 @@ async function viewImages() {
     </tbody></table></div></div>
     ${vmImagesSection(vm, d.node_names)}`);
 }
+
+/* Unused images, from every host at once: Clean all unused (reviewed) and
+   the automatic clean-up, which the leader runs hourly when it is on. An
+   update keeps one previous image for Roll back; the one before is unused. */
+const imageUnused = d => (d.images || []).filter(i => i.digest && !i.protected && !i.system && (i.nodes || []).length);
+function imageCleanupRow(d, auto) {
+  const unused = imageUnused(d);
+  const size = Math.round(unused.reduce((sum, i) => sum + i.size_mb * i.nodes.length, 0));
+  const last = auto?.last;
+  const state = auto?.error ? `<span class="tag warn" data-tip="${esc(auto.error)}">unknown</span>`
+    : auto?.auto ? `<span class="pill ok">on · ${esc(auto.after_days)} days</span>` : '<span class="pill neutral">off</span>';
+  const detail = auto?.error ? "The automatic clean-up's setting could not be read"
+    : auto?.auto ? `Images nothing uses for ${auto.after_days} days are removed from every host, checked hourly${last
+        ? ` · last: ${last.removed ? `removed ${last.removed} (${bytesText(last.freed_mb * 1024 ** 2)})` : "nothing due"} ${esc(fmtAgo(Date.now() / 1000 - last.at))}` : ""}`
+    : "Images nothing uses stay until you clean them, or a host's image disk is 85% full";
+  return `<div class="card flat" style="margin-bottom:14px">
+    ${serviceRow(`${unused.length} unused image${unused.length === 1 ? "" : "s"}${unused.length ? ` · ${bytesText(size * 1024 ** 2)} across hosts` : ""}`, "",
+      "Not running, not a stopped app's or a scheduled job's, not a Roll back copy",
+      actionBar([{ label: "Clean all unused", run: "imageCleanAllReview()", need: "admin", danger: true, disabled: !unused.length }]))}
+    ${serviceRow("Automatic clean-up", state, detail, actionBar([{ label: auto?.auto ? "Change" : "Turn on", run: "imageCleanupAuto()", need: "admin", disabled: !!auto?.error }]))}
+  </div>`;
+}
+window.imageCleanupRow = imageCleanupRow;
+window.imageCleanAllReview = async () => {
+  modal("Clean all unused images", '<div class="empty"><span class="spin2"></span> Checking what nothing uses…</div>');
+  let review;
+  try { review = await api("/api/images/cleanup-unused/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "Could not check the images", `${esc(e.message)}. Nothing was removed.`) + UI.actions(UI.cancel("Close")); return; }
+  STATE.data.imageCleanReview = review;
+  if (!review.count) { $("#mbody").innerHTML = UI.lead("No image is unused: every cached image is running, a stopped app's or a scheduled job's, or kept for Roll back.") + UI.actions(UI.cancel("Close")); return; }
+  $("#mbody").innerHTML = UI.lead(`Removes ${review.count} image${review.count === 1 ? "" : "s"} nothing uses from every host that holds them, freeing about <b>${bytesText(review.freed_mb * 1024 ** 2)}</b> across ${review.hosts.length} host${review.hosts.length === 1 ? "" : "s"}. Running images, stopped apps' and scheduled jobs' images, Roll back copies and Harvester's or Kubernetes' own images stay. An image removed here is pulled again if something needs it later.`)
+    + (review.complete ? "" : UI.callout("warn", "Some hosts haven't been scanned yet", "Images on them that Kubernetes doesn't list aren't included."))
+    + UI.table([{ label: "Image" }, { label: "Size" }, { label: "Hosts" }, { label: "Unused since" }],
+      review.images.map(i => [`<span class="mono small">${esc(i.name)}</span>`, bytesText(i.size_mb * 1024 ** 2),
+        esc(i.nodes.join(", ")), esc(fmtAgo(Date.now() / 1000 - i.unused_since))]))
+    + UI.typedConfirm({ id: "cleanAllConfirm", expect: "CLEAN", button: "cleanAllGo" })
+    + UI.actions(UI.cancel() + `<button id="cleanAllGo" class="btn danger" data-need="admin" disabled onclick="imageCleanAllApply()">Clean ${review.count} image${review.count === 1 ? "" : "s"}</button>`);
+};
+window.imageCleanAllApply = async () => {
+  const review = STATE.data.imageCleanReview;
+  if (!review || !typedConfirmMatches("cleanAllConfirm")) return;
+  try {
+    const r = await api("/api/images/cleanup-unused", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: review.token }) });
+    toast(r.detail + (r.skipped?.length ? `; ${r.skipped.length} skipped, needed again` : ""), "ok");
+    closeModal(); viewImages();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.imageCleanupAuto = () => {
+  const auto = STATE.data.imageCleanupAuto || {};
+  modal("Automatic image clean-up", UI.lead("The leader checks every hour, and removes images nothing has used for this many days from every host that holds them. Running images, stopped apps' and scheduled jobs' images, Roll back copies and the platform's own images are never removed.")
+    + `<label class="switch"><input type="checkbox" id="ica_on" ${auto.auto ? "checked" : ""}> Remove unused images automatically</label>
+    <div class="f"><label for="ica_days">After this many days unused</label><input id="ica_days" type="number" min="1" max="365" value="${esc(auto.after_days || 14)}"></div>
+    <p class="dim small">Days count from when Homestead first saw an image unused.</p>`
+    + UI.actions(UI.cancel() + UI.button("Save", "imageCleanupAutoSave()", { kind: "pri" })));
+};
+window.imageCleanupAutoSave = async () => {
+  const days = Math.round(+$("#ica_days").value);
+  if (!(days >= 1 && days <= 365)) return toast("Choose 1 to 365 days", "bad");
+  const on = !!$("#ica_on").checked;
+  try {
+    await settingsWrite({ image_cleanup: { auto: on, after_days: days } });
+    toast(on ? `Unused images are removed after ${days} days` : "Automatic image clean-up is off", "ok");
+    closeModal(); viewImages();
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 /* VM images: on Harvester each is downloaded once and kept as a Longhorn
    backing image. A disk made from it starts as a copy, and every node its

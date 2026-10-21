@@ -406,6 +406,24 @@ so neither reads as unused. *Rollback* copies are
 the image a container had before its last update, kept so **Roll back** can
 return to it; **Forget** one and it becomes unused, to clean up like the rest.
 
+An update keeps one previous image per container for Roll back; the one before
+it becomes unused. Unused images stay on every host that ran them until they
+are cleaned, or until a host's image disk is 85% full and its kubelet removes
+some. Two ways clear them from every host at once:
+
+- **Clean all unused** reviews every unused image - its size, the hosts that
+  hold it and how long it has been unused - and removes them all after you
+  type CLEAN. It removes exactly what the review listed: if anything changed
+  since, it asks you to review again.
+- **Automatic clean-up** (off until an admin turns it on) removes images that
+  have been unused for a number of days, 14 by default, checking every hour on
+  the leader. Days count from when Homestead first saw an image unused, since a
+  host doesn't record when an image was last used. The page shows its last run.
+
+Neither ever removes a running image, a stopped app's or scheduled job's image,
+a Roll back copy, or Harvester's and Kubernetes' own images. An image removed
+is pulled again if something needs it later.
+
 On Harvester the page also lists **VM images** - the cloud images VMs are
 made from. Each is downloaded once and kept as a Longhorn backing image, with
 a copy on every node whose disks were made from it; the table says how big

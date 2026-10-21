@@ -868,6 +868,14 @@
         { name: "docker.io/library/redis:7.2", names: [], digest: "sha256:" + "c".repeat(64),
           size_mb: 41, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"],
           system: false, protected: false, retained_by: [] }] }),
+    // Unused images: redis above, nothing keeps it (homestead_image_cleanup).
+    "/api/images/cleanup-auto": { auto: true, after_days: 14, every_seconds: 3600,
+      last: { at: Math.floor(Date.now() / 1000) - 2400, after_days: 14, removed: 2, freed_mb: 1384, names: [], skipped: [] } },
+    "/api/images/cleanup-unused/preview": () => ({ count: 1, freed_mb: 123, complete: true, token: "demo",
+      hosts: ["harvester-node1", "harvester-node2", "harvester-node3"],
+      images: [{ digest: "sha256:" + "c".repeat(64), name: "docker.io/library/redis:7.2", size_mb: 41,
+        nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], unused_since: Math.floor(Date.now() / 1000) - 9 * 86400 }] }),
+    "/api/images/cleanup-unused": { ok: true, removed: 1, skipped: [], freed_mb: 123, detail: "Cleaning 1 unused image from 3 hosts" },
     // Harvester's VM images: kept once, copied to the nodes their disks run on.
     "/api/images/vm": { harvester: true, note: "", images: [
       { name: "image-4f2a1c", namespace: "lab", display: "noble-server-cloudimg-amd64.img", source: "cloud-images.ubuntu.com",

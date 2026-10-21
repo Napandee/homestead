@@ -320,6 +320,12 @@ def tick():
     prepull_status(sweep=True)
     I._drop_finished_copies()
     I._bust("imgcache")
+    # Hourly: what is unused, and automatic clean-up when it is on.
+    try:
+        import homestead_image_cleanup as CLEANUP
+        CLEANUP.auto_tick()
+    except Exception as error:
+        print(f"image clean-up round not done: {str(error)[:160]}", flush=True)
 
 
 def _scannable(node):
@@ -544,12 +550,14 @@ def forget_rollback(namespace, name):
     return {"ok": True, "detail": f"{name} no longer keeps its previous image; it can be cleaned up now"}
 
 
-def cleanup_image(digest, nodes=None):
-    """Start one tightly scoped CRI removal pod per selected cache node."""
+def cleanup_image(digest, nodes=None, report=None):
+    """Start one tightly scoped CRI removal pod per selected cache node.
+    report: an image cache report just read (Clean all unused reads one for
+    every image it removes), or None to read it now."""
     digest = str(digest or "").lower()
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ValueError("cleanup requires an exact sha256 image digest")
-    report = image_cache()
+    report = report or image_cache()
     image = next((row for row in report["images"] if row.get("digest") == digest), None)
     if not image:
         raise ValueError("that digest is not present in the node image cache")
