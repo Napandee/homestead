@@ -50,18 +50,20 @@ function dashboardAlert(items) {
 async function viewDash() {
   if (Dashboard.editing()) return;
   const requestedNavigation = window.NAV_TOKEN;
-  const [o, hist, st, cap, , , up] = await Promise.all([
+  // A part that could not be read says so, rather than "nothing yet" (#620).
+  const [o, histRead, stRead, capRead, , , upRead] = await Promise.all([
     api("/api/overview"),
-    api("/api/history").catch(() => null),
-    api("/api/storage").catch(() => null),
-    STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(() => null),
+    api("/api/history").catch(e => ({ unread: e.message })),
+    api("/api/storage").catch(e => ({ unread: e.message })),
+    STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(e => ({ unread: e.message })),
     loadHardwareFeatures(),
     loadHealthSettings(),
-    api("/api/nodes/uptime").catch(() => null),
+    api("/api/nodes/uptime").catch(e => ({ unread: e.message })),
     Dashboard.load(),
   ]);
   if (Dashboard.editing() || STATE.view !== "dash" || requestedNavigation !== window.NAV_TOKEN) return;
-  STATE.data.uptime = up || STATE.data.uptime;
+  const [hist, st, cap] = [histRead, stRead, capRead].map(r => r?.unread ? null : r);
+  noteNodeUptime(upRead);
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
   // A node near its allocation limit takes no new replicas: said before it bites.
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
@@ -82,6 +84,9 @@ async function viewDash() {
   const sampledAt = H.last_sample || H.t?.at(-1) || 0;
   const sampleAge = sampledAt ? Math.max(0, Date.now() / 1000 - sampledAt) : 0;
   const chartWindow = H.step === 300 ? "Last hour · saved five-minute samples" : "Last hour · sampled every 30 seconds";
+  const noChart = histRead?.unread
+    ? `<div class="empty small">Could not read the recorded metrics: ${esc(histRead.unread)}</div>`
+    : '<div class="empty small">Waiting for recorded metrics</div>';
   const netNow = o.nodes.reduce((s, n) => s + (n.rx_mbps || 0), 0);
   const txNow = o.nodes.reduce((s, n) => s + (n.tx_mbps || 0), 0);
   const diskUsed = o.nodes.reduce((s, n) => s + (n.fs_used_gb || 0), 0);
@@ -97,7 +102,7 @@ async function viewDash() {
     compute: `    <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
       <div class="between"><div><div class="ctitle">Compute</div>
         <div class="csub">CPU and memory · ${chartWindow}</div></div>${trend(H.cpu)}</div>
-      ${H.cpu?.length ? dualSpark(H.cpu, H.mem || [], { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
+      ${H.cpu?.length ? dualSpark(H.cpu, H.mem || [], { times: H.t }) : noChart}
       <div class="row dashnums">
         <div><div class="bignum">${o.cpu_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s1"></span>CPU · ${o.cpu_cap} cores capacity</div></div>
@@ -108,7 +113,7 @@ async function viewDash() {
     throughput: `    <div class="card glow g-info dashcard">
       <div class="between"><div><div class="ctitle">Throughput</div>
         <div class="csub">Network and local disk · ${chartWindow}</div></div>${trend(rx)}</div>
-      ${rx.length ? dualSpark(rx, tx, { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
+      ${rx.length ? dualSpark(rx, tx, { times: H.t }) : noChart}
       <div class="row dashnums">
         <div><div class="bignum">${rateParts(netNow)[0]}<span class="unit">${rateParts(netNow)[1]}</span></div>
           <div class="csub"><span class="kdot s1"></span>in · ${rateParts(txNow).join(" ")} out</div></div>
@@ -129,8 +134,11 @@ async function viewDash() {
         <div class="csub" style="margin-top:6px">${st.used_pct}% of raw capacity used
           ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div>
         ${tight.length ? `<a class="tag ${tight.some(n => n.level === "crit") ? "bad" : "warn"} lh-tight" onclick="go('storage')"
-          data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GiB allocated, room for a ${n.room_gb} GiB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
+          data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GiB allocated, room for a ${n.room_gb} GiB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}
+        ${capRead?.unread && STATE.platform?.longhorn === true ? `<div class="csub" style="margin-top:6px"><span class="tag warn">Could not read Longhorn's allocation limits</span>
+          a host near its limit is not flagged: ${esc(capRead.unread)}</div>` : ""}</div>
       </div></div>`
+      : stRead?.unread ? UI.callout("warn", "Could not read storage", esc(stRead.unread))
       : '<div class="empty">Storage figures aren\'t available yet.</div>'}
     </div>`,
     cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
@@ -250,6 +258,13 @@ function uptimeDuration(s) {
   return d ? (h ? `${d}d ${h}h` : `${d}d`) : h ? (m ? `${h}h ${m}m` : `${h}h`) : `${Math.max(1, m)}m`;
 }
 const uptimeWhen = t => fmtAt(t);
+/* Hosts' uptime as last read. A read that failed is kept as such, so a host
+   says it could not be read rather than "no samples yet" (#620). */
+function noteNodeUptime(read) {
+  if (read?.unread) { STATE.data.nodeUptimeUnread = read.unread; return; }
+  STATE.data.nodeUptimeUnread = "";
+  STATE.data.uptime = read || STATE.data.uptime;
+}
 
 /* The node page's uptime card: how it is now, the windows, ninety days as a
    strip, and a log of each outage and reboot. The log is history - an entry
@@ -258,12 +273,13 @@ const uptimeWhen = t => fmtAt(t);
 window.nodeUptimePaint = async n => {
   const host = $("#nodeUptime");
   if (!host) return;
-  const all = await api("/api/nodes/uptime").catch(() => null);
+  const all = await api("/api/nodes/uptime").catch(e => ({ unread: e.message }));
   const u = all?.nodes?.[n.name];
   const now = n.status === "Ready"
     ? `<span class="pill low">Up now</span><span class="mono small">${esc(nodeUpFor(n))}</span>`
     : `<span class="pill crit">${esc(n.status || "Down")} now</span>`;
   const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${now}</div></div>`;
+  if (all?.unread) { host.innerHTML = `${head}<div class="dim small">Could not read uptime: ${esc(all.unread)}</div>`; return; }
   if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
   const tone = uptimeTone;
   // Maintenance Homestead caused, or Harvester's maintenance mode, is listed
@@ -506,13 +522,16 @@ const uptimeDayShare = d => d.up_excluding_maintenance ?? d.up;
 const uptimeDayStriped = d => d.maintenance && uptimeTone(uptimeDayShare(d)) === "ok";
 function nodeUptimeStrip(n) {
   const remote = remoteRow(n);
+  // A failed read keeps the last good strip and says so, where a phone shows it too.
+  const unread = !remote && STATE.data.nodeUptimeUnread;
   const u = remote ? null : STATE.data.uptime?.nodes?.[n.name];
   const days = (u?.days || []).slice(-30);
   // The share outside maintenance Homestead caused (#535), saying when there
   // was some, so a 100% never hides it; the share Ready in the tip.
   const raw = u?.windows?.["30d"], month = u?.windows_excluding_maintenance?.["30d"] ?? raw;
   const kept = u?.maintenance_s?.["30d"] || 0, outs = (u?.outages || []).filter(o => !o.maintenance).length;
-  const tip = remote ? "Open this host to view its cluster’s uptime history" : u
+  const tip = remote ? "Open this host to view its cluster’s uptime history"
+    : unread ? `Could not read uptime: ${unread}${u ? ". Showing the last reading" : ""}` : u
     ? [kept ? `Ready ${uptimePct(raw)} of the last 30 days; ${uptimeDuration(kept)} of planned maintenance left out` : "",
        outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the host for when` : "No outage recorded"].filter(Boolean).join(". ")
     : "No samples yet: Homestead records one every five minutes";
@@ -523,7 +542,8 @@ function nodeUptimeStrip(n) {
         : `<i class="uptime-${uptimeTone(uptimeDayShare(d))}" data-tip="${esc(fmtDay(d.day))} · ${d.up == null ? "no samples" : uptimePct(uptimeDayShare(d)) + " up"}"></i>`).join("")
       : "<i></i>".repeat(30)}</div>
     <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d${kept
-      ? ` · ${uptimeDuration(kept)} maintenance` : ""}</span></div>`;
+      ? ` · ${uptimeDuration(kept)} maintenance` : ""}</span>${unread
+      ? `<span class="dim xs uptime-unread">Could not read uptime: ${esc(unread)}${u ? " · last reading shown" : ""}</span>` : ""}</div>`;
 }
 
 /* A line per disk: its name, or its device; what it is - the system drive,
@@ -970,8 +990,11 @@ function backToHardwareList() {
 
 window.hardwareFeatureEdit = async id => {
   const old = id ? hardwareDef(id) : { id: "", name: "", description: "", host_path: "/dev/", container_path: "/dev/", path_type: "CharDevice", usb_ids: [] };
+  // Unread hosts are not hosts without devices (#620): the browser says so,
+  // and the paths can still be typed in.
+  let hostsUnread = "";
   if (!(STATE.data.nodes || STATE.data.ov?.nodes)?.length) {
-    STATE.data.nodes = await api("/api/nodes").catch(() => []);
+    try { STATE.data.nodes = await api("/api/nodes"); } catch (e) { hostsUnread = e.message; }
   }
   const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
   childModal((id ? "Edit" : "Add") + " hardware feature", `
@@ -985,10 +1008,11 @@ window.hardwareFeatureEdit = async id => {
     <div class="device-browser">
       <div class="between"><div><b>Browse a host</b><div class="dim xs">Choose the host whose <span class="mono">/dev</span> tree you want to map.</div></div>
         <span class="tag">read only</span></div>
+      ${hostsUnread ? `<div style="margin-top:10px">${UI.callout("warn", "Could not read the hosts", esc(hostsUnread))}</div>` : `
       <div class="f2" style="margin-top:10px"><div class="f"><label>Host</label><select id="hf_browse_node" onchange="hardwareBrowseRender()">
         ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.status !== "Ready" ? " · " + esc(n.status) : ""}</option>`).join("")}</select></div>
         <div class="f"><label>Filter devices</label><input id="hf_browse_q" placeholder="coral, dri, video, tty…" oninput="hardwareBrowseRender()"></div></div>
-      <div id="hf_browse_results"></div>
+      <div id="hf_browse_results"></div>`}
     </div>
     <div class="note">Device passthrough makes the container privileged. Use the narrowest stable /dev path available. For a USB VID:PID, /dev/bus/usb is commonly required because bus addresses can change after reboot.</div>
     ${UI.actions(`<button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, true);
@@ -1051,9 +1075,9 @@ window.hardwareFeatureDelete = async id => {
 async function viewNodes() {
   const page = new URLSearchParams(location.search).get("node");
   if (page) return nodePage(page);
-  const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(() => null), loadHardwareFeatures()]);
+  const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(e => ({ unread: e.message })), loadHardwareFeatures()]);
   STATE.data.nodes = n;
-  STATE.data.uptime = up || STATE.data.uptime;
+  noteNodeUptime(up);
   const layout = viewLayout("nodes");
   paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
