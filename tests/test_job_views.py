@@ -97,10 +97,12 @@ def reference_view(item):
 
 
 BRANCHED = ["disk-v2-convert", "k3s-cluster", "auto-update", "node-power", "set-restart", "vm-power",
-            "vm-create", "vm-edit", "import-create", "snapshot-delete", "self-data-prepare", "host-console",
+            "vm-create", "vm-edit", "import-create", "self-data-prepare", "host-console",
             "cluster-shutdown", "longhorn-v2-prepare", "workload-rename", "workload-copy", "restructure",
             "reclass"]
-KIND_NAMES = BRANCHED + ["self-data-handoff", "vm-disk-import", "workload-edit", "no-such-kind"]
+# snapshot-delete's branch only said "not cancellable"; its refusal in CANCEL_BLOCKS
+# says that now, for the tray as for cancelling.
+KIND_NAMES = BRANCHED + ["snapshot-delete", "self-data-handoff", "vm-disk-import", "workload-edit", "no-such-kind"]
 STATUSES = ["queued", "running", CANCELLING, "failed", "succeeded", "cancelled"]
 REFS = [
     {},
@@ -146,7 +148,9 @@ class SameViewTests(unittest.TestCase):
                                                            "node-power": broken}),
                       mock.patch.object(OPS, "CLEANUPS", {"k3s-cluster", "workload-copy", "restructure",
                                                           "workload-rename", "vm-create", "reclass",
-                                                          "disk-v2-convert", "host-console"}),
+                                                          "disk-v2-convert", "host-console",
+                                                          # so longhorn-v2-prepare's "never cleanable" shows
+                                                          "longhorn-v2-prepare"}),
                       mock.patch.object(OPS, "CDI_CANCELLABLE", {"vm-disk-import"})):
             patch.start()
             self.addCleanup(patch.stop)

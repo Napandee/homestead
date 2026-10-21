@@ -366,11 +366,15 @@ def checkpoint(item):
 def _public(item):
     out = {key: value for key, value in item.items()
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store")}
-    # Every job still going can be cancelled; what that does is asked for
-    # separately, as it reads Kubernetes and the tray is polled often.
-    out["cancellable"] = item.get("kind") != "self-data-handoff" and item.get("status") not in TERMINAL and (
+    # Every job still going can be cancelled unless its kind refuses (the same
+    # refusals _plan_for gives; they read only the job). What cancelling does
+    # is asked for separately, as it reads Kubernetes and the tray is polled often.
+    out["cancellable"] = item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
     if item.get("ref", {}).get("cdi_cleanup") and item.get("kind") not in CDI_CANCELLABLE:
+        out["cancellable"] = False
+    block = CANCEL_BLOCKS.get(item.get("kind"))
+    if block and block(item):
         out["cancellable"] = False
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = _dismissible(item)
@@ -439,10 +443,6 @@ def _view_mutation(item, out):
     out["mutation_recovery"] = bool(item.get("ref", {}).get("retain_resources"))
 
 
-def _view_snapshot_delete(item, out):
-    out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
-
-
 def _view_not_cancellable(item, out):
     out["cancellable"] = out["cleanable"] = False
 
@@ -482,7 +482,6 @@ VIEWS = {
     "vm-create": _view_mutation,
     "vm-edit": _view_mutation,
     "import-create": _view_mutation,
-    "snapshot-delete": _view_snapshot_delete,
     "self-data-prepare": _view_self_data_prepare,
     "host-console": _view_not_cancellable,
     "cluster-shutdown": _view_not_cancellable,
@@ -1084,9 +1083,10 @@ def _block_snapshot_delete(item):
 
 # Why a kind's job cannot be cancelled where it is: kind -> function(item)
 # returning the reason, or "" when it can be. Checked after the import's CDI
-# receipt and before the kind's own canceller plans anything. These were
-# branches of _plan_for; they move to the modules that own each kind later
-# (#622).
+# receipt and before the kind's own canceller plans anything. _public asks them
+# too, on every poll of the job tray, so a refusal must read only the job and
+# must not raise. These were branches of _plan_for; they move to the modules
+# that own each kind later (#622).
 CANCEL_BLOCKS = {
     "self-data-handoff": _block_self_data_handoff,
     "reclass": _block_reclass,
