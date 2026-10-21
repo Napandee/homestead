@@ -546,6 +546,28 @@ class Home(unittest.TestCase):
                         ROUTES.find(method, path).handler(request)
         self.assertEqual([], calls)
 
+    def test_key_and_user_routes_are_declared_in_their_module(self):
+        import homestead_routes as ROUTES
+        for path in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit", "/api/auth/users",
+                     "/api/auth/role", "/api/auth/users/delete"):
+            with self.subTest(path=path):
+                self.assertEqual("homestead_auth_routes", getattr(ROUTES.find("POST", path), "module", None))
+                self.assertIn(path, server.ADMIN_ROUTES)        # listed from the module's role, not by hand
+
+    def test_an_in_process_account_change_without_a_connection_changes_nothing(self):
+        import homestead_routes as ROUTES
+        calls = []
+        record = lambda name: (lambda *a, **k: calls.append(name))
+        with mock.patch.object(AUTH, "create_user", record("create")), mock.patch.object(AUTH, "set_role", record("role")), \
+                mock.patch.object(AUTH, "delete_user", record("delete")), mock.patch.object(ALERTS, "forget_user", record("forget")), \
+                mock.patch.object(API_KEYS, "manage", record("keys")), mock.patch.object(SIGNINS, "record", record("history")):
+            for path in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit", "/api/auth/users",
+                         "/api/auth/role", "/api/auth/users/delete"):
+                with self.subTest(path=path), self.assertRaises(PermissionError):
+                    ROUTES.find("POST", path).handler(ROUTES.Request("POST", path, {}, {"username": "robin", "role": "viewer"},
+                                                                     "ada", "admin"))
+        self.assertEqual([], calls)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1089,9 +1089,6 @@ ADMIN_ROUTES = {
     "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
     "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
-    "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
-    # API keys: made, listed and revoked by administrators only.
-    "/api/auth/keys", "/api/auth/keys/revoke",
     # The setup guide's checks that reach out, and its first opening.
     "/api/setup/https-check", "/api/setup/opened",
     # Who signed in, from where: other people's addresses and devices.
@@ -1797,31 +1794,8 @@ class H(HTTP.LimitedHandler):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit"):
-                # Made, changed and revoked in this Homestead's own app, by
-                # someone signed in to it: never relayed from a linked cluster.
-                if self._fleet_from:
-                    return self._send(403, {"error": "manage API keys in this Homestead's own app"})
-                done, event, detail = API_KEYS.manage(p.rsplit("/", 1)[-1], b, self.user)
-                self._signin(event, self.user, detail=detail)
-                return self._send(200, done)
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
-            if p == "/api/auth/users":
-                AUTH.create_user(b.get("username"), b.get("password"),
-                                 role=b.get("role", "operator"))
-                self._signin("user-added", (b.get("username") or "").strip().lower(),
-                             detail=f"as {b.get('role', 'operator')}, by {FLEET.words(self.user)}")
-                return self._send(200, {"ok": True, "users": AUTH.list_users()})
-            if p == "/api/auth/role":
-                AUTH.set_role(b["username"], b["role"], self.user)
-                self._signin("role", b["username"], detail=f"now {b['role']}, by {FLEET.words(self.user)}")
-                return self._send(200, {"ok": True, "users": AUTH.list_users()})
-            if p == "/api/auth/users/delete":
-                AUTH.delete_user(b.get("username"), self.user)
-                ALERTS.forget_user(str(b.get("username") or "").strip().lower())
-                self._signin("user-removed", b.get("username"), detail=f"by {FLEET.words(self.user)}")
-                return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/self/data/move":
                 try:
                     result, token = start_self_data_move(b, self.user)
