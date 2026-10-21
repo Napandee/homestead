@@ -111,5 +111,45 @@ class OnTheDataVolume(unittest.TestCase):
         self.assertEqual("", Path(target).read_text(encoding="utf-8"))
 
 
+class TheSetting(unittest.TestCase):
+    """Settings › About › Audit log: the file can be turned off; stdout cannot."""
+
+    def setUp(self):
+        AUDIT_LOG._setting.update(value=True, read=None)
+        self.addCleanup(AUDIT_LOG._setting.update, value=True, read=None)
+        self.clock = [1000.0]
+        self.enterContext(mock.patch.object(AUDIT_LOG.time, "monotonic", side_effect=lambda: self.clock[0]))
+
+    def settings(self, **kwargs):
+        import homestead_settings_helpers as SETTINGS
+        return self.enterContext(mock.patch.object(SETTINGS, "get_app_settings", **kwargs))
+
+    def test_off_means_stdout_only(self):
+        self.settings(return_value={"audit": {"file": False}})
+        with mock.patch.object(AUDIT_LOG, "_stdout") as out, mock.patch.object(AUDIT_LOG, "_append") as append:
+            AUDIT_LOG.emit({"v": 1})
+        out.assert_called_once()
+        append.assert_not_called()
+
+    def test_it_is_read_at_most_every_30_s(self):
+        read = self.settings(return_value={"audit": {"file": True}})
+        for _ in range(5):
+            self.assertTrue(AUDIT_LOG._file_on())
+            self.clock[0] += 1
+        self.assertEqual(1, read.call_count)
+        self.clock[0] += AUDIT_LOG.SETTING_SECONDS
+        AUDIT_LOG._file_on()
+        self.assertEqual(2, read.call_count)
+
+    def test_a_read_error_keeps_the_last_value(self):
+        self.settings(return_value={"audit": {"file": False}})
+        self.assertFalse(AUDIT_LOG._file_on())
+        self.clock[0] += AUDIT_LOG.SETTING_SECONDS + 1
+        self.settings(side_effect=OSError("the cluster did not answer"))
+        self.assertFalse(AUDIT_LOG._file_on())
+        AUDIT_LOG._setting.update(value=True, read=None)
+        self.assertTrue(AUDIT_LOG._file_on(), "before any read: on")
+
+
 if __name__ == "__main__":
     unittest.main()

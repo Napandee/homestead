@@ -174,8 +174,22 @@ def _stdout(line_text):
         sys.stdout.flush()
 
 
+SETTING_SECONDS = 30
+_setting = {"value": True, "read": None}       # on until a read says otherwise
+
+
 def _file_on():
-    return True
+    """The audit.file setting, read at most every SETTING_SECONDS. A read that
+    fails keeps the last answer: the cluster may be restarting."""
+    now = time.monotonic()
+    if _setting["read"] is None or now - _setting["read"] >= SETTING_SECONDS:
+        _setting["read"] = now
+        try:
+            import homestead_settings_helpers as SETTINGS
+            _setting["value"] = SETTINGS.get_app_settings()["audit"]["file"] is not False
+        except Exception:
+            pass
+    return _setting["value"]
 
 
 def _rotate(path, incoming):
