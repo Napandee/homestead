@@ -20,7 +20,8 @@ function fixture({ base = "/", search = "" } = {}) {
   const ctx = { console, document: { activeElement: null, body: { dataset: {} } },
     $: s => fields[s], $$: () => [], esc: s => String(s),
     localStorage: { getItem: () => null, setItem() {} },
-    fetch: async url => {
+    fetch: async (url, options) => {
+      ctx.requests.push([url, options && options.body ? JSON.parse(options.body) : null]);
       if (url !== "/api/auth/logout") return { ok: true, json: async () => response };
       if (logout instanceof Error) throw logout;
       return { ...logout, json: async () => ({}) };
@@ -31,7 +32,7 @@ function fixture({ base = "/", search = "" } = {}) {
     setInterval: fn => { timers.set(++nextTimer, fn); return nextTimer; },
     clearTimeout: id => timers.delete(id), clearInterval: id => timers.delete(id),
     navigations: [], location: { pathname: base + "apps", search, replace: url => ctx.navigations.push(url) } };
-  ctx.window = ctx;
+  ctx.window = ctx; ctx.requests = [];
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync("web/js/router.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/auth.js", "utf8").replace(/^boot\(\);$/m, ""), ctx);
@@ -187,4 +188,27 @@ test("the sign-in form opens in a browser that blocks site storage (#618)", () =
   t.ctx.localStorage = { getItem: refuse, setItem: refuse, removeItem: refuse };
   t.ctx.loginForm();
   assert.ok(t.fields["#lg_go"], "the Sign in button is drawn");
+});
+
+test("first-admin setup asks for the one-time setup code and sends it (#737)", async () => {
+  const t = fixture(); t.ctx.loginForm(null, true);
+  assert.ok(t.fields["#lg_code"], "the setup form has a setup code field");
+  t.respond({ user: "robin" });
+  t.fields["#lg_user"].value = "robin"; t.fields["#lg_pass"].value = t.fields["#lg_pass2"].value = "a-long-password";
+  t.fields["#lg_code"].value = " k7qf-2m9x-h4 ";
+  await t.ctx.doSetup();
+  assert.deepEqual(t.ctx.requests, [["/api/auth/setup", { username: "robin", password: "a-long-password", setup_code: "k7qf-2m9x-h4", remember: false }]]);
+});
+
+test("setup without a code asks for it before sending anything (#737)", async () => {
+  const t = fixture(); t.ctx.loginForm(null, true);
+  t.fields["#lg_user"].value = "robin"; t.fields["#lg_pass"].value = t.fields["#lg_pass2"].value = "a-long-password";
+  await t.ctx.doSetup();
+  assert.deepEqual(t.ctx.requests, []);
+  assert.ok(t.fields["#lg_code"], "the form is shown again");
+});
+
+test("sign-in has no setup code field", () => {
+  const t = fixture(); t.ctx.loginForm();
+  assert.equal(t.fields["#lg_code"], undefined);
 });

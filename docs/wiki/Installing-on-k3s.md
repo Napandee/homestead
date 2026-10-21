@@ -112,7 +112,9 @@ It then:
    12 hours, and until then there is nothing to restore the cluster from - and
    prints its address, `http://<this machine>:8088`.
 
-Open that address and create the first administrator.
+Open that address and create the first administrator. It asks for the one-time
+setup code, which the installer prints beside the address
+([First sign-in](Installing-Homestead#first-sign-in) says where else to find it).
 
 The machine's own screen (not SSH) now shows a live status console in place of
 the login prompt - press Enter for the usual login. See
