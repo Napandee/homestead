@@ -283,9 +283,10 @@ below, with the arrow keys, Enter and Escape. Fill or change the
 Homestead is a working tool: show more at once, pad less.
 
 - **Use the shared sizes.** Buttons are 32px tall (`.btn.sm` 28px), inputs
-  34px, icon buttons 34px, pills and tags 3px by 10px. They live in the
-  density block at the end of `web/style.css`. A page does not pad its own
-  buttons or fields beyond them.
+  34px, icon buttons 34px, the older pills 3px by 10px and tags 2px by 8px.
+  They live in the density block at the end of `web/style.css`; chips
+  (`UI.chip`) are 22px, and slim (18px) in dense rows, beside `.ui-chip`.
+  A page does not pad its own buttons or fields beyond them.
 - **Phones are tighter still**: page padding 12px, card padding 13px, gaps
   10px, big figures 28px - but fields use 16px text there, or the phone zooms
   in while typing.
@@ -556,7 +557,7 @@ in the same module shell so controls do not change location as data arrives.
 | `startReview(plan, options)` | The review before a container or VM starts: sentence, notice, hosts, Details, acknowledgement | Writing a capacity box again |
 | `capacityHostTable(plan)` | Each host with its memory after a change, and why a host is out | A launch-host box |
 | `UI.fields(...)` / `UI.field(label, control, { help })` | Forms: two columns on a desktop, one on a phone | - |
-| `UI.chip(label, tone)` | A short status next to a name | Sentences |
+| `UI.chip(label, tone, { size, tip })` | A short status next to a name. Tones: `ok`, `warn`, `bad`, `info`, `hw`, `link`, `neutral` (`med`, `crit` and `low` are older names for warn, bad and neutral); `size: "slim"` in dense rows and tables | Sentences; hand-written `.pill`/`.tag` |
 | `UI.button(label, onclick, { kind })` / `UI.cancel()` | Buttons | - |
 | `UI.masterDetail(groups, selectedKey, detailHtml, options)` | Grouped navigation and a selected detail, such as Jobs | Form steps |
 | `UI.sectionNavigation(id, sections, options)` | Externally managed setup guides; section forms include this automatically | Hand-written navigation |

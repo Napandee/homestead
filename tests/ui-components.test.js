@@ -169,3 +169,48 @@ test("page section forms have an in-flow footer and return action without changi
  assert.match(page,/section-page/);assert.match(page,/go\(/);assert.doesNotMatch(page,/closeModal\(/);
  assert.match(UI.sectionForm('dialog',sections,'<button>Save</button>'),/closeModal\(/);
 });
+
+// #543: UI.chip is the one way to write a small coloured label.
+test("a chip's default markup is unchanged", () => {
+  assert.equal(UI.chip("x", "warn"), '<span class="ui-chip warn">x</span>');
+  assert.equal(UI.chip("x"), '<span class="ui-chip ">x</span>');
+});
+
+test("a chip knows the whole tone set", () => {
+  for (const tone of ["ok", "warn", "bad", "info", "hw", "link", "neutral"]) {
+    assert.equal(UI.chip("x", tone), `<span class="ui-chip ${tone}">x</span>`);
+  }
+  assert.equal(UI.chip("x", "nonsense"), '<span class="ui-chip ">x</span>', "an unknown tone is the plain chip");
+});
+
+test("older tone names map onto the set", () => {
+  assert.match(UI.chip("x", "med"), /class="ui-chip warn"/);
+  assert.match(UI.chip("x", "crit"), /class="ui-chip bad"/);
+  assert.match(UI.chip("x", "low"), /class="ui-chip neutral"/);
+});
+
+test("slim is a size", () => {
+  assert.match(UI.chip("x", "ok", { size: "slim" }), /class="ui-chip ok slim"/);
+  assert.equal(UI.chip("x", "ok", { size: "huge" }), '<span class="ui-chip ok">x</span>', "an unknown size adds nothing");
+});
+
+test("a chip's tip is escaped", () => {
+  assert.match(UI.chip("x", "", { tip: 'a"<b>' }), /data-tip="a&quot;&lt;b&gt;"/);
+});
+
+test("a chip's tip works by keyboard focus too (design.md: tooltips)", () => {
+  const html = UI.chip("api", "warn", { tip: "late <2m>" });
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /aria-label="api: late &lt;2m&gt;"/);
+  assert.doesNotMatch(UI.chip("api", "warn"), /tabindex|aria-label/, "a chip with no tip is not a stop for the keyboard");
+});
+
+test("only the set and its own aliases are tones", () => {
+  for (const tone of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.equal(UI.chip("x", tone), '<span class="ui-chip ">x</span>', tone);
+  }
+});
+
+test("a chip's label is text", () => {
+  assert.match(UI.chip("<b>"), /&lt;b&gt;/);
+});

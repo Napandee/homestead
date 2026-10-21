@@ -2283,6 +2283,8 @@ div.ipam-line.dim{display:block}
 .ui-chip.hw{background:var(--tone-hw-bg);color:var(--tone-hw);border-color:var(--tone-hw-line)}
 .ui-chip.link{background:var(--tone-link-bg);color:var(--tone-link);border-color:var(--tone-link-line)}
 .ui-chip.neutral,.ui-chip.low{background:var(--tone-neutral-bg);color:var(--tone-neutral);border-color:var(--tone-neutral-line)}
+/* A chip in a dense row or table: the footprint of the older .pill.slim. */
+.ui-chip.slim{height:18px;padding:0 8px;font-size:11px;border-radius:9px}
 
 /* The buttons end every dialog, pinned to its bottom edge while the rest scrolls. */
 .ui-actions{position:sticky;bottom:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
