@@ -31,6 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_audit as AUDIT_LOG
 import homestead_names as NAMES
 import homestead_sessions as SESSIONS
 
@@ -810,6 +811,7 @@ def forward(handler, ref, body, user="", role="", cookies=()):
     Raises Unreachable before anything is sent to the browser, so the caller
     can still answer with an error of its own.
     """
+    AUDIT_LOG.note(to=ref)      # the audit line says where it went; the member writes its own
     target = member(ref)
     if not target:
         raise Unreachable("that cluster is no longer linked")

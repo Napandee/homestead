@@ -149,6 +149,36 @@ class Recording(unittest.TestCase):
             self.assertIsNone(AUDIT_LOG.record(view(), 200, 1))
 
 
+class Notes(unittest.TestCase):
+    """What a request notes is its own: never the next request's on the same thread."""
+
+    def setUp(self):
+        self.out = []
+        self.enterContext(mock.patch.object(AUDIT_LOG, "emit", side_effect=self.out.append))
+        AUDIT_LOG._take_notes()
+
+    def test_notes_never_reach_the_next_request(self):
+        AUDIT_LOG.note(tool="container_restart", kind="change")
+        AUDIT_LOG.record(view("GET", "/api/overview"), 200, 1)      # a read takes them too
+        AUDIT_LOG.record(view(), 200, 1)
+        self.assertNotIn("tool", self.out[0])
+        AUDIT_LOG.note(to="member-2")
+        with mock.patch.object(AUDIT_LOG, "line", side_effect=RuntimeError("bug")):
+            AUDIT_LOG.record(view(), 200, 1)
+        AUDIT_LOG.record(view(), 200, 1)
+        self.assertNotIn("to", self.out[1])
+
+    def test_a_relayed_request_names_the_cluster(self):
+        import homestead_fleet as FLEET
+        handler = mock.Mock(headers={}, command="POST", path="/api/workload/scale")
+        with mock.patch.object(FLEET, "member", return_value={"id": "member-2", "name": "loft", "url": "https://192.0.2.20"}), \
+                mock.patch.object(FLEET, "_connect", side_effect=OSError("no route")):
+            with self.assertRaises(FLEET.Unreachable):
+                FLEET.forward(handler, "member-2", b"{}", "ada", "operator")
+        AUDIT_LOG.record(view(), 502, 1)
+        self.assertEqual(("member-2", 502), (self.out[0]["to"], self.out[0]["status"]))
+
+
 class Stdout(unittest.TestCase):
     def test_one_json_line_per_emit(self):
         with mock.patch.object(AUDIT_LOG.sys, "stdout") as out:

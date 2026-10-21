@@ -20,6 +20,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_mcp as MCP
 import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
+import homestead_audit as AUDIT_LOG
 
 
 def key(scopes=("read",), mcp=True, role="viewer", kid="k1", name="claude"):
@@ -441,6 +442,55 @@ class AuditTests(Base):
         MCP.audit_api(key(), "POST", "/api/v1/containers/lab/web/stop", {}, 200, "192.0.2.9")
         MCP.audit_api(key(), "GET", "/api/v1/vms", None, 403, "192.0.2.9")
         self.assertEqual(["GET /api/v1/vms", "POST /api/v1/containers/lab/web/stop"], [r["action"] for r in AUDIT.recent()])
+
+
+class AuditLineTests(Base):
+    """What the audit log (#738) learns of a POST to /mcp: the tool, only when it
+    changes something, and whether it was held for a person or refused."""
+
+    def setUp(self):
+        super().setUp()
+        AUDIT_LOG._take_notes()
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/web"] = {
+            "metadata": {"uid": "u1"}, "spec": {"template": {"spec": {"containers": [{"image": "nginx"}]}}}}
+
+    def lines(self, message, k):
+        out = []
+        with mock.patch.object(AUDIT_LOG, "emit", side_effect=out.append):
+            self.ask(message, k)
+            conn = ROUTER.Connection(ROUTER.Headers([]), {}, False, False, None, None, k, None)
+            AUDIT_LOG.record(ROUTER.Request("POST", "/mcp", None, {}, f"api-key:{k['name']}", k["role"],
+                                            "192.0.2.40", conn), 200, 4)
+        return out
+
+    def tool(self, name, args):
+        return rpc("tools/call", {"name": name, "arguments": args})
+
+    def test_a_change_tool_writes_its_name(self):
+        k = key(["read", "containers:control"], role="operator")
+        with mock.patch.object(TOOLS.API_V1, "handle", return_value=(200, {"ok": True})):
+            (line,) = self.lines(self.tool("container_restart", {"namespace": "lab", "name": "web"}), k)
+        self.assertEqual(("mcp", "container_restart", "k1", "ada"), (line["via"], line["tool"], line["key"], line["owner"]))
+        self.assertNotIn("outcome", line)
+        self.assertNotIn("kind", line)
+
+    def test_reads_write_nothing(self):
+        for message in (rpc("tools/list"), rpc("ping"), rpc("initialize"), self.tool("whoami", {})):
+            with self.subTest(method=message["method"]):
+                self.assertEqual([], self.lines(message, key()))
+
+    def test_a_held_destructive_call_says_so(self):
+        k = key(["read", "containers:manage"], role="operator")
+        (line,) = self.lines(self.tool("delete_container", {"namespace": "lab", "name": "web", "reason": "unused"}), k)
+        self.assertEqual("delete_container", line["tool"])
+        self.assertEqual("pending", REQUESTS.get(line["held"])["status"])
+        self.assertEqual([], self.deleted)
+
+    def test_a_refused_tool_call_says_so(self):
+        k = key(["read", "containers:manage"], role="operator")
+        with mock.patch.object(TOOLS, "call", side_effect=TOOLS.ToolError("review node memory before starting")):
+            (line,) = self.lines(self.tool("scale_container", {"namespace": "lab", "name": "web", "replicas": 2}), k)
+        self.assertEqual(("scale_container", "refused"), (line["tool"], line["outcome"]))
 
 
 class CatalogueTests(unittest.TestCase):
