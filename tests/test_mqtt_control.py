@@ -4,14 +4,17 @@ import sys
 import tempfile
 import threading
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_agent_audit as AUDIT
+import homestead_kube as K
 import homestead_mqtt as MQTT
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 DEFAULT_ITEMS, DEFAULT_ACT = MQTT.control_items, MQTT.control_act
 
@@ -32,29 +35,31 @@ class FakeClient:
 
 
 class Store:
-    """The ConfigMap and Secret, kept in memory."""
-    def __init__(self, stored=None):
-        self.map = {"metadata": {"resourceVersion": "1"}, "data": {"mqtt.json": json.dumps(stored or {})}}
+    """The settings ConfigMap on the shared fake API (tests/fakes/kube.py); no Secret."""
+    def __init__(self, test, stored=None):
+        self.path = f"/api/v1/namespaces/default/configmaps/{MQTT._map()}"
+        self.kube = test.enterContext(Kube())
+        self.set_cfg(stored or {})
+        # The shared fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under its DATA_DIR.
+        test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
+        saved = MQTT.kget, MQTT.ksend, MQTT.NAMESPACE, MQTT.snapshot, MQTT.is_leader
+        test.addCleanup(lambda: MQTT.bind(*saved))
+        MQTT.bind(K.kget, K.ksend, "default", lambda: None, lambda: True)
 
-    def kget(self, path):
-        if "/configmaps/" in path:
-            return self.map
-        raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-
-    def ksend(self, method, path, body=None, **_):
-        if "/configmaps" in path and method in ("PUT", "POST"):
-            self.map = {"metadata": {"resourceVersion": "2"}, "data": body["data"]}
-        return {}
+    def set_cfg(self, cfg):
+        self.kube.add({"apiVersion": "v1", "kind": "ConfigMap",
+                       "metadata": {"name": MQTT._map(), "namespace": "default"},
+                       "data": {"mqtt.json": json.dumps(cfg)}})
 
     def cfg(self):
-        return json.loads(self.map["data"]["mqtt.json"])
+        return json.loads(self.kube.object(self.path)["data"]["mqtt.json"])
 
 
 class ControlTests(unittest.TestCase):
     def setUp(self):
-        self.store = Store({"enabled": True, "host": "192.0.2.177", "control": True,
-                            "controlled": ["vm:vms/win11", "app:lab/frigate"]})
-        MQTT.bind(self.store.kget, self.store.ksend, "default", lambda: None, lambda: True)
+        self.store = Store(self, {"enabled": True, "host": "192.0.2.177", "control": True,
+                                  "controlled": ["vm:vms/win11", "app:lab/frigate"]})
         self.calls = []
         MQTT.bind_control(lambda: [dict(i) for i in ITEMS], lambda *call: self.calls.append(call) or "")
         MQTT._recent.clear()
@@ -99,9 +104,9 @@ class ControlTests(unittest.TestCase):
                          MQTT.control_states(cfg, ITEMS[:2]))
 
     def test_only_items_picked_and_allowed_are_covered(self):
-        self.store.map["data"]["mqtt.json"] = json.dumps({**self.store.cfg(), "controlled": ["vm:vms/win11", "app:lab/homestead"]})
+        self.store.set_cfg({**self.store.cfg(), "controlled": ["vm:vms/win11", "app:lab/homestead"]})
         self.assertEqual(["vm:vms/win11"], [i["id"] for i in MQTT.controlled(MQTT.load())])
-        self.store.map["data"]["mqtt.json"] = json.dumps({**self.store.cfg(), "control": False})
+        self.store.set_cfg({**self.store.cfg(), "control": False})
         self.assertEqual([], MQTT.controlled(MQTT.load()))
 
     def test_saving_control_keeps_the_broker_and_retires_what_was_dropped(self):

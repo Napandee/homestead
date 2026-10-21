@@ -7,22 +7,30 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_client_address as CLIENTADDR
+import homestead_kube as K
+from fakes.kube import Kube
 
-NODES = {"items": [
-    {"spec": {"podCIDR": "10.42.0.0/24", "podCIDRs": ["10.42.0.0/24"]},
-     "status": {"addresses": [{"type": "InternalIP", "address": "192.0.2.11"}, {"type": "Hostname", "address": "k3s-1"}]}},
-    {"spec": {"podCIDR": "10.42.1.0/24"}, "status": {"addresses": [{"type": "InternalIP", "address": "192.0.2.12"}]}},
-]}
+NODES = [
+    {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "node1"},
+     "spec": {"podCIDR": "10.42.0.0/24", "podCIDRs": ["10.42.0.0/24"]},
+     "status": {"addresses": [{"type": "InternalIP", "address": "192.0.2.11"}, {"type": "Hostname", "address": "node1"}]}},
+    {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "node2"},
+     "spec": {"podCIDR": "10.42.1.0/24"}, "status": {"addresses": [{"type": "InternalIP", "address": "192.0.2.12"}]}},
+]
 
 
 class NodeAddressTests(unittest.TestCase):
+    """On the shared fake API (tests/fakes/kube.py)."""
     def setUp(self):
         self.asked = 0
+        kube = self.enterContext(Kube(*NODES))
 
-        def kget(path):
-            self.asked += 1
-            return NODES
-        CLIENTADDR.bind(kget)
+        def count(method, path, body):
+            self.asked += 1     # and let the fake answer
+        kube.react("GET", "/api/v1/nodes", count)
+        saved = CLIENTADDR.kget
+        self.addCleanup(lambda: CLIENTADDR.bind(saved))
+        CLIENTADDR.bind(K.kget)
         CLIENTADDR._known.update(at=0.0, networks=[], hosts=set())
 
     def test_a_nodes_pod_network_or_own_address_is_a_node_address(self):
