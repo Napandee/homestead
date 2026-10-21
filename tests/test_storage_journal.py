@@ -205,6 +205,30 @@ class JournalTests(unittest.TestCase):
             self.assertEqual(1, len(store.sent))
 
 
+class OwnBookkeepingShapeTests(unittest.TestCase):
+    """What Homestead writes about its own Deployment, not to it, is not a change."""
+
+    def test_the_change_history_mark_is_ignored_on_deployments_and_their_replicasets(self):
+        # The Deployment controller copies the Deployment's annotations onto
+        # its ReplicaSet, so both carry the mark the image scan's write brings.
+        for kind in ("Deployment", "ReplicaSet"):
+            with self.subTest(kind):
+                bare = {"apiVersion": "apps/v1", "kind": kind, "metadata": {"name": "homestead", "annotations": {}},
+                        "spec": {"replicas": 1}}
+                marked = copy.deepcopy(bare)
+                marked["metadata"]["annotations"] = {"homestead.io/ran-digests": "{}",
+                                                     "homestead.io/changedBy": '{"at":1,"by":"x"}'}
+                self.assertEqual(journal.shape(bare), journal.shape(marked))
+                marked["metadata"]["annotations"]["user.example/hold"] = "true"
+                self.assertNotEqual(journal.shape(bare), journal.shape(marked), "other annotations still count")
+
+    def test_the_mark_still_counts_on_other_kinds(self):
+        pvc = {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "source"}, "spec": {}}
+        marked = copy.deepcopy(pvc)
+        marked["metadata"]["annotations"] = {"homestead.io/changedBy": '{"at":1,"by":"x"}'}
+        self.assertNotEqual(journal.shape(pvc), journal.shape(marked))
+
+
 class ListedPodShapeTests(unittest.TestCase):
     """A pod read alone and the same pod from a list are the same pod."""
 
