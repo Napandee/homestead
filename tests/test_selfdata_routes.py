@@ -20,7 +20,9 @@ HANDOFF = "/api/self/data/handoff/" + OP
 TOKEN = "t" * 64
 STARTED = ({"ok": True, "operation": "job-1", "handoff": OP}, TOKEN)
 MOVE_COOKIE = f"homestead-data-move={TOKEN}; Path=/api/self/data/handoff/; HttpOnly; SameSite=Strict; Max-Age=86400"
-MOVE_COOKIE_TLS = f"homestead-data-move={TOKEN}; Path=/api/self/data/handoff/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400"
+# The same attributes as before #764's PR 7, in the order the shared cookie
+# writer (homestead_routes.cookie_header) puts them: Secure after SameSite.
+MOVE_COOKIE_TLS = f"homestead-data-move={TOKEN}; Path=/api/self/data/handoff/; HttpOnly; SameSite=Strict; Secure; Max-Age=86400"
 
 
 class Served(unittest.TestCase):
@@ -240,6 +242,27 @@ class SelfDataHandoff(Served):
         status, _, body = self.request("GET", HANDOFF)
         self.assertEqual((401, {"error": "not signed in", "auth": False}), (status, json.loads(body)))
         self.status.assert_not_called()
+
+
+class DeclaredInTheirModules(unittest.TestCase):
+    def test_the_download_move_and_handoff_are_module_routes(self):
+        import homestead_routes as ROUTES
+        for method, path, role, module in (
+                ("GET", "/api/diagnostics/download", "admin", "homestead_diagnostics"),
+                ("POST", "/api/self/data/move", "admin", "homestead_self_data_server"),
+                ("GET", HANDOFF, "viewer", "homestead_self_data_server"),
+                ("GET", HANDOFF + "/view", "viewer", "homestead_self_data_server")):
+            with self.subTest(path=path):
+                route = ROUTES.find(method, path)
+                self.assertIsNotNone(route, f"{method} {path} is not a module route")
+                self.assertEqual((role, module), (route.role, route.module))
+        import homestead_route_policy as POLICY
+        self.assertNotIn("/api/self/data/handoff/", POLICY.CODE_PREFIXES)
+        self.assertEqual("viewer", POLICY.role(HANDOFF, "GET"))
+        self.assertEqual("/api/self/data/handoff/", ROUTES.COOKIES["homestead-data-move"])
+        source = Path(server.__file__).read_text(encoding="utf-8")
+        for gone in ('"/api/diagnostics/download"', "homestead-data-move=", 'self_data_handoff_status(p['):
+            self.assertNotIn(gone, source)
 
 
 if __name__ == "__main__":

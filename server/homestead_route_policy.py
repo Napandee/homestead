@@ -9,11 +9,9 @@ TARGET_CHECKED = ("/api/move", "/api/move/preview", "/api/image-updates/apply", 
                   "/api/image-updates/preview")
 
 POLICY = {
-    ('GET', '/api/diagnostics/download'): 'admin',
     ('GET', '/api/console'): 'operator',
     ('GET', '/api/node/shell'): 'admin',
     ('GET', '/api/vm/console'): 'operator',
-    ('POST', '/api/self/data/move'): 'admin',
 }
 
 POLICY.update({
@@ -159,10 +157,8 @@ def role(path, method):
 # prefix branch: no module prefix route may cover them. A PR that moves one into
 # a module lifts exactly its entry (#764: workload DELETE in part 6, the
 # handoff in part 7). /api/v1/ is homestead_api_v1's alone (homestead_routes.table).
-CODE_PREFIXES = ("/api/self/data/handoff/", "/api/icons/")
+CODE_PREFIXES = ("/api/icons/",)
 
 
 def _declared(path, method):
-    if method == "GET" and __import__("re").fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path):
-        return "viewer"
     return POLICY.get((method, path))

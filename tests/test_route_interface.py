@@ -139,7 +139,7 @@ class PrefixRoutes(unittest.TestCase):
                              ("GET", "/api/v1/*"), ("GET", "/api/v1/nodes/*"), ("POST", "/api/*"), ("GET", "/*"),
                              ("GET", "/settings/*"), ("GET", "/vms/*"), ("GET", "/js/*"),
                              # server.py's own prefix answers (review I2)
-                             ("GET", "/api/self/data/handoff/*"), ("GET", "/api/self/data/*"),
+                             # (GET /api/self/data/handoff/ was lifted by #764 part 7: its module declares it)
                              # (DELETE /api/workload/ was lifted by #764 part 6: its module declares it)
                              ("GET", "/api/icons/*")):
             with self.subTest(path=path), self.assertRaises(ValueError):

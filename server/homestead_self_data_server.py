@@ -29,13 +29,15 @@ import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_prepare as SELF_DATA_PREPARE
 import homestead_self_data_review as SELF_DATA_REVIEW
 import homestead_self_data_route as SELF_DATA_ROUTE
+import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_health as SELF_HEALTH
 import homestead_storage_runtime as STORAGE_RUNTIME
 import homestead_updates as UPDATES
 
 ROUTE_NEEDS = ("abandon_self_data_preparation", "cached", "class_selectable", "_dns_name",
                "get_app_settings", "kget", "_ksend", "ksend", "require_self_data_write",
-               "self_data_activity", "shared_storage_classes", "storage_classes")
+               "self_data_activity", "self_data_handoff_status", "shared_storage_classes",
+               "start_self_data_move", "storage_classes")
 VALUES = ("DATA_DIR", "HOMESTEAD_VERSION", "LB_IP", "POD_NAME")
 
 
@@ -303,8 +305,34 @@ def _prepare(request):
                                                           start=request.path == "/api/self/data/prepare"))
 
 
+def _move(request):
+    """The move started: its job, and the cookie that lets this browser read
+    its progress from the move's own status server while Homestead is away."""
+    try:
+        result, token = start_self_data_move(request.body, request.user)
+    except SELF_DATA_FENCE.Held as error:
+        return MODULE_ROUTES.Reply(409, {"error": str(error), "review_required": True})
+    return MODULE_ROUTES.Reply(202, result, cookies=(MODULE_ROUTES.Cookie(
+        "homestead-data-move", token, path="/api/self/data/handoff/", max_age=86400),))
+
+
+def _handoff(request):
+    """A recorded move's progress, or the page that shows it (/view)."""
+    found = re.fullmatch(r"/api/self/data/handoff/([a-f0-9]{24})(/view)?", request.path)
+    if not found:   # do_GET answers PermissionError 403, in the guard's words for a non-route
+        raise PermissionError("this route has no declared authorization policy")
+    if found.group(2):
+        return MODULE_ROUTES.Reply(200, SELF_DATA_WORKER.maintenance_page(found.group(1)), "text/html; charset=utf-8")
+    status = self_data_handoff_status(found.group(1))
+    if status is None:
+        return MODULE_ROUTES.Reply(404, {"error": "No recorded data move with this identity"})
+    return MODULE_ROUTES.Reply(503 if status["status"] == "unknown" else 200, status)
+
+
 ROUTES = {
     ("GET", "/api/self/data/prepare"): ("viewer", _preparation_state),
+    ("GET", "/api/self/data/handoff/*"): ("viewer", _handoff),
+    ("POST", "/api/self/data/move"): ("admin", _move),
     ("POST", "/api/self/data/abandon"): ("admin", _abandon),
     ("POST", "/api/self/data/move/preview"): ("admin", _move_preview),
     ("POST", "/api/self/data/handoff/close"): ("admin", _handoff_close),

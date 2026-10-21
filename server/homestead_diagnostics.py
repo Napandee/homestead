@@ -15,6 +15,7 @@ import time
 import zipfile
 import urllib.parse
 
+import homestead_routes as MODULE_ROUTES
 import homestead_shared as SHARED
 
 DIRECTORY = "/data/diagnostics"
@@ -403,8 +404,17 @@ def issue(report_id, owner):
             "comment_shortened": len(record["comment"]) > 180 or body != original_body}
 
 
+def _download(request):
+    """A report as a file to save: a log, or a zip with ?package=1."""
+    filename, ctype, body = export((request.query.get("id") or [""])[0], request.user,
+                                   (request.query.get("format") or ["anonymised"])[0],
+                                   (request.query.get("package") or [""])[0] == "1")
+    return MODULE_ROUTES.Reply(200, body, ctype, headers=(("Content-Disposition", f'attachment; filename="{filename}"'),))
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("GET", "/api/diagnostics/download"): ("admin", _download),
     ("GET", "/api/diagnostics"): ("admin", lambda request: listing(request.user)),
     ("GET", "/api/diagnostics/issue"): ("admin", lambda request: issue((request.query.get("id") or [""])[0], request.user)),
     ("POST", "/api/diagnostics/start"): ("admin", lambda request: create(request.user, request.body.get("package") is True)),
