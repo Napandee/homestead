@@ -266,11 +266,25 @@ def restore_tests_tick():
     return chosen
 
 
+def data_protection_tick():
+    """On the leader, hourly: a restore test when one is due, and the expiry
+    of previous volumes (#743). Each runs even when the other failed; the
+    first failure is raised for the heartbeat."""
+    errors = []
+    for tick in (lambda: restore_tests_tick(), lambda: RESTORE_SWAP.expire_tick()):
+        try:
+            tick()
+        except Exception as error:
+            errors.append(error)
+    if errors:
+        raise errors[0]
+
+
 def _restore_tests_loop():
     while True:
         if LEADER.is_leader():
             try:
-                restore_tests_tick()
+                data_protection_tick()
                 beat("restore-tests", 3600, leader_only=True)
             except Exception as error:
                 beat("restore-tests", 3600, error, leader_only=True)

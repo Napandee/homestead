@@ -623,6 +623,244 @@ def cancel_run(item, _options):
     return f"Cancelled. Nothing was changed; {ref['app']} runs on {ref['old_claim']} as before."
 
 
+# ---- previous volumes --------------------------------------------------------
+
+def _labelled():
+    """Every claim marked as a previous volume: one list, cluster-wide."""
+    selector = urllib.parse.quote(f"{PREVIOUS}=true", safe="")
+    return kget(f"/api/v1/persistentvolumeclaims?labelSelector={selector}").get("items", [])
+
+
+def _number(notes, key):
+    try:
+        return float(notes.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _due(notes, days):
+    """When it would be deleted under today's setting: None when kept."""
+    if notes.get(KEEP) == "true" or not days:
+        return None
+    expires = _number(notes, NAMES.key("replaced-at")) + days * DAY
+    reminded = _number(notes, REMINDED)
+    return max(expires, reminded + DAY) if reminded else expires
+
+
+def _of(notes):
+    ns_app = str(notes.get(NAMES.key("previous-of")) or "")
+    return ns_app.split("/", 1)[1] if "/" in ns_app else ns_app
+
+
+def _back_digest(ns, app, current, name, uid, dep):
+    return _digest(ns, app, current, name, uid, ((dep or {}).get("metadata") or {}).get("generation"))
+
+
+def _row(pvc, days, pods=None, dep=None):
+    meta, spec = pvc.get("metadata") or {}, pvc.get("spec") or {}
+    notes = meta.get("annotations") or {}
+    ns, name, app = meta.get("namespace", ""), meta.get("name", ""), _of(notes)
+    due, reminded = _due(notes, days), _number(notes, REMINDED)
+    current = notes.get(NAMES.key("replaced-by"), "")
+    return {"namespace": ns, "name": name, "app": app, "replaced_by": current,
+            "replaced_at": int(_number(notes, NAMES.key("replaced-at"))) or None,
+            "expires_at": int(due) if due else None, "reminded_at": int(reminded) if reminded else None,
+            "kept": notes.get(KEEP) == "true", "reason": notes.get(NAMES.key("replaced-reason"), "restored"),
+            "size": ((spec.get("resources") or {}).get("requests") or {}).get("storage", ""),
+            "storage_class": spec.get("storageClassName", ""), "volume": spec.get("volumeName", ""),
+            "uid": meta.get("uid", ""),
+            "in_use": any(name in RECLASS._claims_in(p.get("spec")) for p in pods or []),
+            "can_swap_back": bool(dep and _indexes(dep, current)),
+            "digest": _back_digest(ns, app, current, name, meta.get("uid", ""), dep) if dep else ""}
+
+
+def previous_volumes(now=None):
+    """The volumes apps were moved off, and when each goes."""
+    days = keep_days()
+    pods, deps, rows = {}, {}, []
+    for pvc in _labelled():
+        meta = pvc.get("metadata") or {}
+        ns, app = meta.get("namespace", ""), _of(meta.get("annotations") or {})
+        if ns not in pods:
+            pods[ns] = [p for p in kget(f"/api/v1/namespaces/{ns}/pods").get("items", [])
+                        if (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")]
+        if (ns, app) not in deps:
+            deps[(ns, app)] = KUBE.get_optional(_dep_path(ns, app), read=kget) if app and NAME.fullmatch(app) else None
+        rows.append(_row(pvc, days, pods[ns], deps[(ns, app)]))
+    return {"keep_days": days, "volumes": sorted(rows, key=lambda r: (r["namespace"], r["name"]))}
+
+
+def _previous_claim(body):
+    b = body or {}
+    ns, name = _valid(b.get("namespace"), "namespace"), _valid(b.get("name"), "volume name")
+    pvc = KUBE.get_optional(_pvc_path(ns, name), read=kget)
+    if not pvc or ((pvc.get("metadata") or {}).get("labels") or {}).get(PREVIOUS) != "true":
+        raise ValueError(f"{ns}/{name} is not a previous volume")
+    return ns, name, pvc
+
+
+def keep(body, role):
+    """Keep stops the expiry (operator: it only prevents a deletion); un-keep
+    starts it again (admin: it re-arms one). Either way a fresh reminder comes
+    a day before it goes."""
+    want = (body or {}).get("keep")
+    if not isinstance(want, bool):
+        raise ValueError("keep must be true or false")
+    if not want and role != "admin":
+        raise PermissionError("letting a previous volume expire again needs the admin role")
+    ns, name, _ = _previous_claim(body)
+    ksend("PATCH", _pvc_path(ns, name), {"metadata": {"annotations": {KEEP: "true" if want else None, REMINDED: None}}},
+          ctype="application/merge-patch+json")
+    return {**_row(kget(_pvc_path(ns, name)), keep_days()), "detail": (
+        f"{name} is kept until someone deletes it" if want else f"{name} expires again, with a reminder the day before")}
+
+
+def swap_back(body):
+    """Point the app back at a previous volume: the same job, the other way
+    round; the volume it leaves becomes the previous one."""
+    b = body or {}
+    with OPS.transaction():
+        ns, name, pvc = _previous_claim(b)
+        notes = (pvc.get("metadata") or {}).get("annotations") or {}
+        app, current = _of(notes), notes.get(NAMES.key("replaced-by"), "")
+        dep = KUBE.get_optional(_dep_path(ns, _valid(app, "app")), read=kget)
+        if not dep:
+            raise ValueError(f"{app} no longer exists in {ns}; nothing to swap back")
+        indexes = _indexes(dep, current)
+        if not indexes:
+            raise ValueError(f"{app} no longer uses {current}; point it at {name} with Edit instead")
+        digest = _back_digest(ns, app, current, name, (pvc.get("metadata") or {}).get("uid", ""), dep)
+        if str(b.get("digest") or "") != digest:
+            return MODULE_ROUTES.Reply(409, {"error": f"{app} or {name} changed since this was shown; check it again",
+                                             "volume": _row(pvc, keep_days(), dep=dep)})
+        if _pods_using(ns, name):
+            raise ValueError(f"{name} is in use; it cannot be swapped in")
+        busy = _busy(OPS.snapshot(), ns, app, (current, name))
+        if busy:
+            raise ValueError(f"{app} already has a job running ({busy.get('title') or busy.get('kind')}); let it finish first")
+        leaving = KUBE.get_optional(_pvc_path(ns, current), read=kget) or {}
+        ref = {"namespace": ns, "app": app, "kind": "Deployment", "volume": _volumes(dep)[indexes[0]]["name"],
+               "indexes": indexes, "old_claim": current, "new_claim": name,
+               "old_uid": (leaving.get("metadata") or {}).get("uid", ""), "new_uid": (pvc.get("metadata") or {}).get("uid", ""),
+               "old_volume": _handle(leaving) if leaving else "", "backup": "",
+               "generation": (dep.get("metadata") or {}).get("generation"),
+               "direction": "back", "phase": "stopping", "since": time.time()}
+        operation = OPS.start(KIND, f"Swap {app} back to {name}", {"kind": "Deployment", "name": app, "namespace": ns},
+                              "/data-protection", ref, f"Stopping {app}")
+    return {"ok": True, "operation": operation, "detail": f"Swapping {app} back to {name}"}
+
+
+def set_keep_days(value):
+    if isinstance(value, bool):
+        raise ValueError("keep days must be a whole number")
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("keep days must be a whole number") from None
+    if days < 0 or days > 90:
+        raise ValueError("previous volumes are kept 1 to 90 days, or 0 to keep them until deleted")
+    save_settings({"restore_swap": {"keep_days": days}})
+    return {"ok": True, "keep_days": days,
+            "detail": f"Previous volumes are kept {days} days" if days else "Previous volumes are kept until deleted"}
+
+
+# ---- the expiry: on the leader, hourly ---------------------------------------------
+
+def _held(item, ns, name):
+    ref, resource = item.get("ref") or {}, item.get("resource") or {}
+    return (ref.get("namespace") or resource.get("namespace")) == ns and name in (_names_in(ref) | {resource.get("name")})
+
+
+def _expire_one(pvc, days, active, now):
+    meta = pvc.get("metadata") or {}
+    notes = meta.get("annotations") or {}
+    ns, name, app = meta.get("namespace", ""), meta.get("name", ""), _of(notes)
+    if notes.get(KEEP) == "true":
+        return None
+    review = deletion_plan(ns, name)
+    users = [c for c in review.get("consumers") or [] if c.get("active") or c.get("kind") not in ("Job", "Pod")]
+    if users:
+        # Swapped back by hand, or put back by Flux: no longer a copy nobody uses.
+        _unmark(ns, name)
+        note({"key": f"previous-volume:{ns}/{name}:in-use:{int(now)}", "category": "degraded", "severity": "info",
+              "event": True, "title": f"{app} uses {name} again; it is no longer kept for deletion",
+              "body": f"{users[0]['kind']} {users[0]['name']} mounts it, so it is not a previous volume any more.",
+              "href": "/data-protection"})
+        return ("in-use", ns, name)
+    replaced = _number(notes, NAMES.key("replaced-at"))
+    if not replaced:
+        return None
+    expires, reminded = replaced + days * DAY, _number(notes, REMINDED)
+    if not reminded:
+        if now >= expires - DAY:
+            # Every deletion is announced a day ahead, even after a shorter
+            # setting or a cluster that was down past the date.
+            ksend("PATCH", _pvc_path(ns, name), {"metadata": {"annotations": {REMINDED: str(int(now))}}},
+                  ctype="application/merge-patch+json")
+            return ("reminded", ns, name)
+        return None
+    if now < expires or now - reminded < DAY:
+        return None
+    if meta.get("uid") != notes.get(NAMES.key("replaced-uid")):
+        return None                       # a claim made again under the name is someone's data
+    if any(_held(item, ns, name) for item in active):
+        return None
+    if ns in system_namespaces() or review.get("blocking_reasons"):
+        return None
+    delete_volume({"namespace": ns, "name": name, "action": "delete_data", "uid": meta["uid"], "confirmation": name})
+    note({"key": f"previous-volume:{ns}/{name}:deleted:{int(now)}", "category": "degraded", "severity": "info",
+          "event": True, "title": f"Deleted {app}'s previous volume {name} (kept {days} days)",
+          "body": f"{app} runs on {notes.get(NAMES.key('replaced-by'), 'its restored volume')}. "
+                  "Backups of either volume are not touched.", "href": "/data-protection"})
+    return ("deleted", ns, name)
+
+
+def expire_tick(now=None):
+    """Remind a day ahead, then delete, each previous volume past its time.
+    Any doubt about one claim skips it until the next hour."""
+    now = now or time.time()
+    if not is_leader():
+        return []
+    days = keep_days()
+    if not days:
+        return []
+    active = [item for item in OPS.snapshot() if item.get("status") not in TERMINAL]
+    done = []
+    for pvc in _labelled():
+        try:
+            outcome = _expire_one(pvc, days, active, now)
+        except Exception as error:
+            print(f"previous volumes: {(pvc.get('metadata') or {}).get('name')}: {str(error)[:160]}", flush=True)
+            continue
+        if outcome:
+            done.append(outcome)
+    return done
+
+
+def alert_facts(now=None):
+    """A reminded previous volume no one chose to keep: one info alert each."""
+    now = now or time.time()
+    days = keep_days()
+    if not days:
+        return []
+    facts = []
+    for pvc in _labelled():
+        meta = pvc.get("metadata") or {}
+        notes = meta.get("annotations") or {}
+        if notes.get(KEEP) == "true" or not _number(notes, REMINDED):
+            continue
+        ns, name, app, due = meta.get("namespace", ""), meta.get("name", ""), _of(notes), _due(notes, days)
+        when = ("soon" if due <= now else "tomorrow" if due - now <= 1.5 * DAY else
+                "on " + datetime.datetime.fromtimestamp(due, datetime.timezone.utc).strftime("%-d %b"))
+        facts.append({"key": f"previous-volume:{ns}/{name}", "category": "degraded", "severity": "info",
+                      "title": f"{app}'s previous volume {name} will be deleted {when}",
+                      "resolved": f"{app}'s previous volume {name} is no longer due for deletion",
+                      "body": "Restore into this app moved it off this volume. Keep it under Data protection, "
+                              "Previous volumes, to stop the deletion.",
+                      "href": "/data-protection?" + urllib.parse.urlencode({"previous": f"{ns}/{name}"})})
+    return facts
+
+
 def _plan_route(request):
     q = lambda name: (request.query.get(name) or [""])[0]
     return public(plan(q("backup"), q("ns"), q("app"), q("claim"), q("new_name")))
@@ -632,6 +870,10 @@ def _plan_route(request):
 ROUTES = {
     ("GET", "/api/restore-swap/plan"): ("viewer", _plan_route),
     ("POST", "/api/restore-swap"): ("admin", lambda request: start(request.body)),
+    ("GET", "/api/volumes/previous"): ("viewer", lambda request: previous_volumes()),
+    ("POST", "/api/volumes/previous/keep"): ("operator", lambda request: keep(request.body, request.role)),
+    ("POST", "/api/volumes/previous/swap-back"): ("admin", lambda request: swap_back(request.body)),
+    ("POST", "/api/volumes/previous/settings"): ("admin", lambda request: set_keep_days((request.body or {}).get("keep_days"))),
 }
 
 
