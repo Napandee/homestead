@@ -29,11 +29,24 @@ network picture after a VIP repair, say) is dropped for the route too. A
 route that changes something drops what it made stale with `forget(*keys)`,
 or every key that starts with a prefix with `forget_prefix(prefix)`.
 
+A route that needs the connection reads `request.conn` (`connected(request)`
+refuses a call made without one): its headers, without Cookie, Authorization,
+Proxy-Authorization, Cf-Access-Jwt-Assertion and the fleet signature; Homestead's
+own cookies; whether it came over TLS or through Cloudflare; and who the guard
+found - the Access sign-in, the linked Homestead, the API key - with `who()` for
+the session. A Reply sets Homestead's own cookies (`cookies=(Cookie(...),)`) and
+headers the server does not own (`headers=(("Location", "/"),)`), checked before
+any is written: one that is refused (`Refused`) is answered 500, with none of them.
+A path ending "/*" is a prefix route: it answers every path under it.
+
 A module is listed in MODULES to be read. A route stays in server.py while it
-needs the handler itself - headers, streaming, a redirect.
+needs the handler itself: a WebSocket, /mcp, a file served with its own headers.
 """
 import collections
+import collections.abc
 import importlib
+import re
+import types
 import homestead_cache as CACHE
 
 MODULES = (
@@ -144,8 +157,14 @@ MODULES = (
 )
 ROLES = ("viewer", "operator", "admin")
 
-# addr: the address the request came from, as server.py sees it.
-Request = collections.namedtuple("Request", "method path query body user role addr", defaults=("",))
+# addr: the address the request came from, as server.py sees it; conn: the
+# Connection it came on, or None when a route is called in-process.
+Request = collections.namedtuple("Request", "method path query body user role addr conn", defaults=("", None))
+# What a route may know of the connection. headers: a Headers; cookies: Homestead's
+# own, by name; tls, cloudflare: how it reached us; access: the Cloudflare Access
+# claims; fleet: the linked Homestead that sent it; key: the API key it carried;
+# who: a call that answers who is signed in (it may read the account store).
+Connection = collections.namedtuple("Connection", "headers cookies tls cloudflare access fleet key who")
 Route = collections.namedtuple("Route", "method path role handler module")
 Raw = collections.namedtuple("Raw", "body ctype")
 # A download sent as it is read: chunks (an iterator of bytes), its type, the
@@ -153,7 +172,133 @@ Raw = collections.namedtuple("Raw", "body ctype")
 Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 # An answer with its own status: a refusal that carries more than its words,
 # or a 202 for work that carries on. JSON unless told otherwise.
-Reply = collections.namedtuple("Reply", "code body ctype", defaults=("application/json",))
+# headers: (name, value) pairs; cookies: Cookies. Both are checked before sending.
+Reply = collections.namedtuple("Reply", "code body ctype headers cookies", defaults=("application/json", (), ()))
+# max_age None: a cookie that lasts as long as the browser keeps it.
+Cookie = collections.namedtuple("Cookie", "name value path max_age", defaults=("/", None))
+# The only cookies a route may read or set.
+COOKIES = ("homestead_session", "homestead_cluster", "homestead-data-move")
+# Headers the server writes itself; a route may not set or weaken them.
+OWNED_HEADERS = ("set-cookie", "content-type", "content-length", "connection", "content-security-policy",
+                 "strict-transport-security", "x-frame-options", "x-content-type-options",
+                 "referrer-policy", "permissions-policy", "x-homestead-version", "cache-control")
+# Request headers a route never sees: they carry a secret, or the fleet
+# signature that conn.fleet already checked.
+SECRET_HEADERS = ("cookie", "authorization", "proxy-authorization", "cf-access-jwt-assertion", "x-homestead-fleet")
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_VALUE = re.compile(r"[\t\x20-\x7e\x80-\xff]*")
+_COOKIE_VALUE = re.compile(r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*")
+_COOKIE_PATH = re.compile(r"/[\x21-\x3a\x3c-\x7e]*")
+# A path on this site: never //host or /\host, which a browser reads as another site.
+_LOCATION = re.compile(r"/(?![/\\])[^\s\\]*")
+
+
+class Refused(Exception):
+    """A reply a route may not send: Homestead's own mistake, answered 500."""
+
+
+class Headers(collections.abc.Mapping):
+    """The request's headers, read-only, by any case, without SECRET_HEADERS.
+    A header sent twice is read as its first value."""
+
+    def __init__(self, pairs):
+        self._pairs = [(str(name), str(value)) for name, value in pairs if not _secret(str(name))]
+        self._first = {}
+        for name, value in self._pairs:
+            self._first.setdefault(name.lower(), (name, value))
+
+    def __getitem__(self, name):
+        return self._first[str(name).lower()][1]
+
+    def __iter__(self):
+        return (name for name, _ in self._first.values())
+
+    def __len__(self):
+        return len(self._first)
+
+    def __repr__(self):
+        return f"Headers({self._pairs!r})"
+
+
+def _secret(name):
+    name = name.lower()
+    return name in SECRET_HEADERS or name.startswith("x-homestead-fleet-")
+
+
+def connected(request):
+    """The request's Connection; a route that needs one is refused in-process."""
+    if request.conn is None:
+        raise PermissionError(f"{request.path} answers only over HTTP")
+    return request.conn
+
+
+def cookie_header(cookie, tls):
+    """The Set-Cookie value for one of Homestead's cookies, as server.py writes
+    its session cookie: Secure only behind TLS."""
+    name, value, path, max_age = cookie
+    if name not in COOKIES:
+        raise Refused(f"a route may set only Homestead's own cookies, not {name!r}")
+    if not isinstance(value, str) or not _COOKIE_VALUE.fullmatch(value):
+        raise Refused(f"cookie {name} has a value a cookie cannot carry")
+    if not isinstance(path, str) or not _COOKIE_PATH.fullmatch(path):
+        raise Refused(f"cookie {name} has a path a cookie cannot carry")
+    if max_age is not None and (type(max_age) is not int or max_age < 0):
+        raise Refused(f"cookie {name} has a Max-Age that is not a whole number of seconds")
+    return (f"{name}={value}; Path={path}; HttpOnly; SameSite=Strict{'; Secure' if tls else ''}"
+            f"{f'; Max-Age={max_age}' if max_age is not None else ''}")
+
+
+def check_header(name, value):
+    """(name, value) when a route may send it; Refused otherwise."""
+    if not isinstance(name, str) or not _TOKEN.fullmatch(name):
+        raise Refused(f"{name!r} is not a header name")
+    if name.lower() in OWNED_HEADERS:
+        raise Refused(f"{name} is written by the server, not by a route")
+    if not isinstance(value, str) or not _VALUE.fullmatch(value):
+        raise Refused(f"{name} has a value a header cannot carry")
+    if name.lower() == "location" and not _LOCATION.fullmatch(value):
+        raise Refused("Location must be a path on this site")
+    return name, value
+
+
+def _tls(handler):
+    try:
+        return handler._over_tls()
+    except AttributeError:      # a handler with no socket: the proxy's word alone
+        return False
+
+
+def _headers(handler):
+    return getattr(handler, "headers", None) or {}
+
+
+def connection(handler):
+    """The Connection a route sees, from server.py's handler after its guard."""
+    raw = _headers(handler)
+    if raw.get("X-Homestead-Fleet") and getattr(handler, "_fleet_who", None) is False:
+        handler._fleet_identity()       # a public path: the guard did not check the sender
+    cookies = {name: value for name, value in handler._cookies().items() if name in COOKIES}
+    return Connection(Headers(raw.items()), types.MappingProxyType(cookies), _tls(handler),
+                      handler._via_cloudflare(), getattr(handler, "_access", None),
+                      getattr(handler, "_fleet_from", None), getattr(handler, "api_key", None), handler._who)
+
+
+def answer(handler, answer):
+    """Send what a route returned. A Reply's cookies and headers are all checked
+    before any is added, after what the guard already set (a refreshed session)."""
+    if isinstance(answer, Stream):
+        handler._send_stream(answer)
+    elif isinstance(answer, Raw):
+        handler._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
+        handler._send(200, answer.body, answer.ctype)
+    elif isinstance(answer, Reply):
+        tls = _tls(handler) if answer.cookies else False
+        lines = ([("Set-Cookie", cookie_header(Cookie(*cookie), tls)) for cookie in answer.cookies] +
+                 [check_header(*header) for header in answer.headers])
+        handler._extra_headers += lines
+        handler._send(answer.code, answer.body, answer.ctype)
+    else:
+        handler._send(200, answer)
 
 _table = {}
 # How long the pages' main reads (overview, hosts, apps, VMs, volumes,
@@ -209,14 +354,22 @@ def table():
                 raise ValueError(f"{method} {path} in {name} has no known role: {role!r}")
             if not callable(handler):
                 raise ValueError(f"{method} {path} in {name} has no handler")
+            if "*" in path and not (path.endswith("/*") and path.count("*") == 1):
+                raise ValueError(f"{method} {path} in {name}: a prefix route ends in /* and has no other *")
             found[key] = Route(key[0], path, role, handler, name)
     _table.update(found)
     return _table
 
 
 def find(method, path):
-    """The Route for a request, or None when server.py answers it itself."""
-    return table().get((method.upper(), path))
+    """The Route for a request, or None when server.py answers it itself: the
+    exact path, or else the longest prefix route ("/api/x/*") above it."""
+    method, routes = method.upper(), table()
+    route = routes.get((method, path))
+    if route is not None or "*" in path:
+        return route
+    stems = [p for m, p in routes if m == method and p.endswith("/*") and path.startswith(p[:-1])]
+    return routes[(method, max(stems, key=len))] if stems else None
 
 
 def role(path, method):
