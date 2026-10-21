@@ -113,6 +113,65 @@ class DeleteAWorkload(Served):
         self.delete.assert_not_called()
 
 
+class MalformedDeletes(Served):
+    def test_a_malformed_delete_path_is_403(self):
+        for path in ("/api/workload/lab", "/api/workload/Lab/web", "/api/workload/lab/web/extra",
+                     "/api/workload/lab_1/web"):
+            with self.subTest(path=path):
+                self.role = "operator"
+                status, _, body = self.request(path)
+                self.assertEqual((403, {"error": "this route has no declared authorization policy"}),
+                                 (status, json.loads(body)))
+                self.role = "viewer"
+                status, _, body = self.request(path)
+                self.assertEqual((403, {"error": "your role (viewer) cannot do this — operator required",
+                                        "role": "viewer", "needed": "operator"}), (status, json.loads(body)))
+        self.delete.assert_not_called()
+
+
+class UndeclaredDeletes(Served):
+    def test_a_delete_with_no_declared_route_is_403(self):
+        # As GET and POST answer it; before #764's PR 6 the connection closed.
+        for path in ("/api/workloads", "/api/settings", "/api/self/data/move", "/api/workload/lab/web/"):
+            with self.subTest(path=path):
+                status, _, body = self.request(path)
+                self.assertEqual((403, {"error": "this route has no declared authorization policy"}),
+                                 (status, json.loads(body)))
+        self.delete.assert_not_called()
+
+
+class ApiV1Deletes(Served):
+    def test_a_delete_under_api_v1_is_still_404_and_runs_nothing(self):
+        # homestead_api_v1 declares DELETE /api/v1/* only for its role. Now that
+        # do_DELETE dispatches module routes, it still answers as server.py did:
+        # no endpoint runs and nothing is written to the change history.
+        import homestead_api_v1 as API_V1
+        import homestead_mcp as MCP
+        handle = self.enterContext(mock.patch.object(API_V1, "handle", return_value=(200, {})))
+        audit = self.enterContext(mock.patch.object(MCP, "audit_api"))
+        status, _, body = self.request("/api/v1/nodes")
+        self.assertEqual((404, {"error": "no route"}), (status, json.loads(body)))
+        handle.assert_not_called()
+        audit.assert_not_called()
+
+
+class DeclaredInItsModule(unittest.TestCase):
+    def test_delete_routes_are_declared_in_their_module(self):
+        import homestead_routes as ROUTES
+        route = ROUTES.find("DELETE", "/api/workload/lab/web")
+        self.assertIsNotNone(route, "DELETE /api/workload/<ns>/<name> is not a module route")
+        self.assertEqual(("operator", "homestead_deploy_server"), (route.role, route.module))
+        source = (Path(server.__file__)).read_text(encoding="utf-8")
+        self.assertNotIn("delete_workload(parts", source)
+
+    def test_the_workload_prefix_is_no_longer_matched_in_code(self):
+        import homestead_route_policy as POLICY
+        import homestead_routes as ROUTES
+        self.assertNotIn("/api/workload/", POLICY.CODE_PREFIXES)
+        self.assertEqual("homestead_deploy_server", ROUTES.find("DELETE", "/api/workload/lab/web").module)
+        self.assertEqual("operator", POLICY.role("/api/workload/lab/web", "DELETE"))
+
+
 class DeleteErrors(Served):
     def answer(self, error):
         self.delete.side_effect = error
@@ -140,7 +199,7 @@ class DeleteErrors(Served):
 class OtherDeletes(Served):
     def test_delete_on_a_path_with_no_route_answers_nothing_useful(self):
         # No other DELETE route exists: none answers 200.
-        for path in ("/api/workloads", "/api/settings", "/api/self/data/move"):
+        for path in ("/api/workloads", "/api/settings", "/api/self/data/move", "/api/workload/lab/web/"):
             with self.subTest(path=path):
                 self.assertNotEqual(200, self.request(path)[0])
         self.delete.assert_not_called()

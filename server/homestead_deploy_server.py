@@ -565,7 +565,17 @@ def _helm(request):
     return result
 
 
+def _delete_workload(request):
+    # Only /api/workload/<ns>/<name>: any other path under it is not a route
+    # (do_DELETE answers PermissionError 403, in the guard's words for one).
+    found = re.fullmatch(r"/api/workload/([a-z0-9.-]+)/([a-z0-9.-]+)", request.path)
+    if not found:
+        raise PermissionError("this route has no declared authorization policy")
+    return {"ok": True, "services": delete_workload(*found.groups())}
+
+
 ROUTES = {
+    ("DELETE", "/api/workload/*"): ("operator", _delete_workload),
     ("POST", "/api/helm/install"): ("admin", _helm),
     ("POST", "/api/helm/upgrade"): ("admin", _helm),
     ("POST", "/api/helm/uninstall"): ("admin", _helm),
