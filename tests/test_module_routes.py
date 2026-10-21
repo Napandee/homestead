@@ -205,8 +205,9 @@ class SharedCache(unittest.TestCase):
     def test_a_module_route_answers_from_server_py_s_cache_under_the_same_key(self):
         # server.py drops "network" after a VIP repair; the route must see that.
         import server
+        import homestead_network_inventory as INV
         server._cache.pop("network", None)
-        with mock.patch.object(server.NETWORK, "inventory", side_effect=[{"n": 1}, {"n": 2}]) as inventory:
+        with mock.patch.object(INV, "inventory", side_effect=[{"n": 1}, {"n": 2}]) as inventory:
             route = ROUTES.find("GET", "/api/network")
             first = route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer"))
             again = route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer"))

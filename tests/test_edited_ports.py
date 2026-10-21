@@ -2,6 +2,8 @@ import copy, json, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as networking
+import homestead_network_state as STATE
+import homestead_network_services as SVC
 from fakes.platform import plain_platform
 
 
@@ -55,7 +57,7 @@ class EditedPortsReachTheServiceTests(unittest.TestCase):
         networking.bind(get, send, {"kube-system"}, "lab", "192.0.2.242")
 
     def test_changing_the_lan_port_moves_the_listener(self):
-        message = networking.sync_workload_ports("lab", "plex", [
+        message = SVC.sync_workload_ports("lab", "plex", [
             {"name": "web", "container": 32400, "host": 32500, "protocol": "TCP", "expose": True}])
 
         method, path, body = self.sent[-1]
@@ -66,13 +68,13 @@ class EditedPortsReachTheServiceTests(unittest.TestCase):
 
     def test_removing_every_port_removes_the_mapping(self):
         """An editor that submits no ports at all owns that decision."""
-        message = networking.sync_workload_ports("lab", "plex", [])
+        message = SVC.sync_workload_ports("lab", "plex", [])
 
         self.assertEqual(("DELETE", "/api/v1/namespaces/lab/services/plex"), self.sent[-1][:2])
         self.assertIn("released", message)
 
     def test_adding_a_second_port_publishes_both(self):
-        networking.sync_workload_ports("lab", "plex", [
+        SVC.sync_workload_ports("lab", "plex", [
             {"name": "web", "container": 32400, "host": 32400, "protocol": "TCP", "expose": True},
             {"name": "dlna", "container": 1900, "host": 1900, "protocol": "UDP", "expose": True}])
 
@@ -98,20 +100,20 @@ class EditAddressStepTests(EditedPortsReachTheServiceTests):
         self.objects["/api/v1/namespaces/lab/services/plex"] = copy.deepcopy(service)
 
     def test_keeping_its_own_address_changes_nothing(self):
-        self.assertEqual("", networking.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.245"))
-        self.assertEqual("", networking.set_workload_address("lab", "plex", "loadbalancer", "auto"),
+        self.assertEqual("", SVC.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.245"))
+        self.assertEqual("", SVC.set_workload_address("lab", "plex", "loadbalancer", "auto"),
                          "an automatic choice keeps the address it already has")
         self.assertEqual([], self.sent)
 
     def test_another_specific_vip_moves_the_service_in_place(self):
-        networking.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.250")
+        SVC.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.250")
         method, path, body = self.sent[-1]
         self.assertEqual(("PUT", "/api/v1/namespaces/lab/services/plex"), (method, path))
         self.assertIn("192.0.2.250", str(body["metadata"]["annotations"]))
         self.assertEqual("10.43.0.30", body["spec"]["clusterIP"], "the Service is updated, not recreated")
 
     def test_cluster_only_replaces_the_lan_service_with_an_internal_one(self):
-        networking.set_workload_address("lab", "plex", "internal")
+        SVC.set_workload_address("lab", "plex", "internal")
         self.assertEqual(("DELETE", "/api/v1/namespaces/lab/services/plex"), self.sent[0][:2])
         method, path, body = self.sent[-1]
         self.assertEqual("POST", method)
@@ -120,7 +122,7 @@ class EditAddressStepTests(EditedPortsReachTheServiceTests):
 
     def test_only_its_own_service_is_moved(self):
         self.objects["/api/v1/namespaces/lab/services"]["items"][0]["metadata"]["name"] = "shared-plex"
-        self.assertEqual("", networking.set_workload_address("lab", "plex", "internal"))
+        self.assertEqual("", SVC.set_workload_address("lab", "plex", "internal"))
         self.assertEqual([], self.sent)
 
 
@@ -148,17 +150,17 @@ class AddressChangeChecksFirstTests(EditedPortsReachTheServiceTests):
 
     def test_no_free_vip_refuses_and_keeps_the_internal_service(self):
         with self.assertRaisesRegex(ValueError, "no free address"):
-            networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+            SVC.set_workload_address("lab", "plex", "loadbalancer", "auto")
         self.assertEqual([], self.sent)
 
     def test_a_node_address_refuses_and_keeps_the_internal_service(self):
         with self.assertRaisesRegex(ValueError, "cluster node address"):
-            networking.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.10")
+            SVC.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.10")
         self.assertEqual([], self.sent)
 
     def test_a_free_vip_replaces_the_internal_service(self):
         self.register("192.0.2.250")
-        networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        SVC.set_workload_address("lab", "plex", "loadbalancer", "auto")
         self.assertEqual(["DELETE", "POST"], [method for method, _, _ in self.sent])
         body = self.sent[-1][2]
         self.assertEqual("LoadBalancer", body["spec"]["type"])
@@ -168,7 +170,7 @@ class AddressChangeChecksFirstTests(EditedPortsReachTheServiceTests):
         """Edit shows no automatic VIP to review: refusing after the DELETE
         would leave the app with no Service, so it takes the next free one."""
         self.register("192.0.2.250", "192.0.2.251")
-        send = networking.ksend
+        send = STATE.ksend
 
         def taking(method, path, body=None, **kwargs):
             result = send(method, path, body, **kwargs)
@@ -179,8 +181,8 @@ class AddressChangeChecksFirstTests(EditedPortsReachTheServiceTests):
                 self.objects["/api/v1/services"]["items"].append(other)
             return result
 
-        networking.ksend = taking
-        networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        STATE.ksend = taking
+        SVC.set_workload_address("lab", "plex", "loadbalancer", "auto")
         method, _, body = self.sent[-1]
         self.assertEqual("POST", method)
         self.assertIn("192.0.2.251", str(body["metadata"]["annotations"]))
@@ -191,6 +193,6 @@ class AddressChangeChecksFirstTests(EditedPortsReachTheServiceTests):
         self.register("192.0.2.249")
         for path in ("/api/v1/namespaces/lab/services", "/api/v1/services"):
             self.objects[path]["items"][0]["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"] = "192.0.2.249"
-        networking.set_workload_address("lab", "plex", "loadbalancer", "auto")
+        SVC.set_workload_address("lab", "plex", "loadbalancer", "auto")
         self.assertEqual(["DELETE", "POST"], [method for method, _, _ in self.sent])
         self.assertIn("192.0.2.249", str(self.sent[-1][2]["metadata"]["annotations"]))
