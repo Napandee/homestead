@@ -324,6 +324,31 @@ Three are marked **Kept** and cannot be deleted from here: the default (new apps
 go there, and so does Homestead's own state), the namespace Homestead itself runs
 in, and Kubernetes' own `default`.
 
+## Audit log
+
+Every request that changes something - a scale, a delete, a new user, a linked
+cluster, an AI agent's change - writes one line: who, how they came in (browser,
+API key, MCP, a linked Homestead), what, the target, the result and how long it
+took. Opening a console or a host shell writes one line when it ends.
+
+```json
+{"v":1,"at":"2026-10-21T09:14:03.512Z","replica":"homestead-6d9f-abcde","via":"browser","user":"ada","role":"operator","addr":"192.0.2.10","method":"POST","path":"/api/workload/scale","target":{"ns":"lab","kind":"Deployment","name":"app-1"},"status":200,"ms":142}
+```
+
+- **The pod log always has every line**, for Loki, Vector or anything else that
+  reads pod logs.
+- **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two
+  files of 10 MiB at most (about 60,000 lines). **Settings › About › Audit log**
+  turns that off (admin); the pod log keeps writing.
+- So that a flood of refused or anonymous requests cannot push real changes out
+  of those two files, the file keeps at most 5 such lines a minute per address
+  and per user (120 in all), then one line saying how many it left out. A
+  signed-in person's successful change is always kept.
+- Never written: passwords, setup codes, API keys, cookies, request bodies
+  (only the target's namespace, kind and name) and query strings.
+- Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
+  asked for, with their arguments, in the agent audit.
+
 ## Sign-in history
 
 Every sign-in to Homestead, failed attempt, sign-out, password change and

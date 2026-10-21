@@ -1068,6 +1068,7 @@ async function selfHealthPaint() {
   catch (e) { host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message)); return; }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
+  const auditFile = STATE.data.appSettings?.audit?.file !== false;
   STATE.data.sambaInstalled = !!samba.installed;
   const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
@@ -1094,6 +1095,10 @@ async function selfHealthPaint() {
         `<button class="btn sm" onclick="go('shares')">Network shares</button>`)}
       ${row("Permissions", h.permissions?.state === "error" ? "bad" : h.permissions?.state === "current" || h.permissions?.state === "updated" ? "ok" : "neutral",
         h.permissions?.state || "unknown", esc(h.permissions?.detail || ""))}
+      ${row("Audit log", auditFile ? "ok" : "neutral", auditFile ? "kept" : "pod log only",
+        auditFile ? "Every change is written to the pod log and to audit.jsonl on the data volume (two files of 10 MiB at most)."
+          : "Every change is written to the pod log only.",
+        admin ? `<button class="btn sm" onclick="auditFileSet(${!auditFile})">${auditFile ? "Pod log only" : "Keep on the data volume"}</button>` : "")}
       ${h.addresses ? row("Addresses", h.addresses.error ? "neutral" : h.addresses.problem || (h.addresses.clashes || []).length ? "bad" : "ok",
         h.addresses.error ? "unknown" : h.addresses.problem || (h.addresses.clashes || []).length ? "on the cluster's address" : "separate",
         h.addresses.error ? esc(h.addresses.error)
@@ -1147,6 +1152,18 @@ window.sambaSet = async on => {
     toast(r.detail, "ok");
     setTimeout(() => { addonsPaint(); selfHealthPaint(); }, 1500);
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* The audit log (#738): always in the pod log; this keeps it on the data
+   volume too. Takes effect at once, and only this setting changes (#601). */
+window.auditFileSet = async file => {
+  try {
+    await settingsWrite({ audit: { file } });
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    toast(file ? "The audit log is kept on the data volume" : "The audit log goes to the pod log only", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  selfHealthPaint();
 };
 
 window.sambaInstallGo = async (selectedAddress = null) => {

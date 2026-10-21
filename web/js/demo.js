@@ -618,6 +618,7 @@
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
+      audit: { file: true },
       info: { version: "2.8.332-dev.1", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
@@ -3178,6 +3179,7 @@ ssh_pwauth: true
       if (sent.mcp) responses["/api/settings"].mcp = { enabled: !!sent.mcp.enabled };
       if (sent.metrics) responses["/api/settings"].metrics = { enabled: !!sent.metrics.enabled };
       if (sent.updates?.maintenance) responses["/api/settings"].updates.maintenance = sent.updates.maintenance;
+      if (sent.audit) responses["/api/settings"].audit = { file: sent.audit.file !== false };
       return new Response(JSON.stringify({ ok: true, ...responses["/api/settings"] }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];

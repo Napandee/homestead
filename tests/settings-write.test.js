@@ -92,6 +92,12 @@ test("turning AI agents on changes nothing else", async () => {
   assert.deepEqual(posts, [{ ...without(STORED, "info"), mcp: { enabled: true } }]);
 });
 
+test("keeping the audit log in the pod log only changes nothing else (#738)", async () => {
+  const { ctx, posts } = load();
+  await ctx.auditFileSet(false);
+  assert.deepEqual(posts, [{ ...without(STORED, "info"), audit: { file: false } }]);
+});
+
 test("the update window keeps the rest of the update policy as it is now", async () => {
   const { ctx, posts } = load();
   ctx.$ = id => ({ "#set_update_start": { value: "02:00" }, "#set_update_duration": { value: "120" } })[id] || null;
