@@ -152,6 +152,42 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("s/longhorn-r2/harvester-longhorn/g", out)
         self.assertIn("apply -f /tmp/homestead-private/deploy.yaml", out)
 
+    def test_a_setup_code_set_ahead_must_have_the_codes_format(self):
+        """#737: HS_SETUP_CODE is checked before anything is installed."""
+        for bad in ("password", "ABCD-EFGH-J", "ABCD-EFGH-JU"):
+            with self.subTest(bad=bad):
+                code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5",
+                                                                  "HS_LONGHORN": "no", "HS_KUBEVIRT": "no", "HS_YES": "1",
+                                                                  "HS_SETUP_CODE": bad})
+                self.assertNotEqual(0, code)
+                self.assertIn("HS_SETUP_CODE", out)
+                self.assertNotIn("bootstrap-k3s.sh server", out)
+
+    def test_a_setup_code_set_ahead_is_applied_and_never_shown_in_the_commands(self):
+        for env in ({"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "no", "HS_KUBEVIRT": "no"},
+                    {"HS_ROLE": "harvester", "HS_VIP": "192.0.2.250", "HS_CLASS": "harvester-longhorn"}):
+            with self.subTest(role=env["HS_ROLE"]):
+                code, out = run(["--dry-run", "--skip-checks"], dict(env, HS_YES="1", HS_SETUP_CODE="k7qf-2m9x-h4"))
+                self.assertEqual(0, code, out)
+                self.assertIn("apply the Secret lab/homestead-setup with HS_SETUP_CODE", out)
+                self.assertNotIn("K7QF", out.upper())
+
+    def test_the_end_of_an_install_says_where_the_setup_code_is(self):
+        for env in ({"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "no", "HS_KUBEVIRT": "no"},
+                    {"HS_ROLE": "harvester", "HS_VIP": "192.0.2.250", "HS_CLASS": "harvester-longhorn"}):
+            with self.subTest(role=env["HS_ROLE"]):
+                code, out = run(["--dry-run", "--skip-checks"], dict(env, HS_YES="1"))
+                self.assertEqual(0, code, out)
+                self.assertIn("Setup code:", out)
+                self.assertIn("get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d", out)
+                self.assertNotIn("apply the Secret lab/homestead-setup", out)
+
+    def test_bootstrap_prints_the_setup_code_beside_the_address(self):
+        text = (ROOT / "scripts" / "bootstrap-k3s.sh").read_text(encoding="utf-8")
+        tail = text[text.index('say "Homestead is running'):]
+        self.assertIn("homestead-setup", tail)
+        self.assertIn("Setup code:", tail)
+
     def test_a_question_with_no_terminal_and_no_answer_says_which_to_give(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_YES": "1"})
         self.assertNotEqual(0, code)
