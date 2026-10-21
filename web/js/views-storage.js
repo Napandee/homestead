@@ -725,6 +725,10 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
 /* Longhorn's V2 engine in one line: whether it is on, and how many nodes can
    hold its volumes. Shown once it is on or something already uses it. */
 function v2Summary(v2, rows) {
+  // Unread is not "off" (#620); it matters only where a class uses V2.
+  if (v2?.unread) return rows.some(row => row.engine === "v2")
+    ? `<div class="dim xs v2line"><span class="tag warn">Longhorn V2</span> Could not read whether it is on: ${esc(v2.unread)}
+      ${STATE.data.v2 && !STATE.data.v2.unread ? '<a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">last reading</a>' : ""}</div>` : "";
   if (!v2 || (!v2.enabled && !rows.some(row => row.engine === "v2"))) return "";
   const text = !v2.enabled ? "switched off, yet a class uses it: its volumes will not schedule"
     : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} host${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
@@ -795,7 +799,7 @@ async function storageClassesPaint() {
   const host = $("#storageClassesCard");
   if (!host) return;
   const [classes, v2] = await Promise.all([api("/api/storage/classes").catch(e => ({ unread: e.message })),
-    api("/api/storage/v2").catch(() => null)]);
+    api("/api/storage/v2").catch(e => ({ unread: e.message }))]);
   if (classes.unread) {
     // The card says so, rather than vanish as if there were no classes (#620).
     host.innerHTML = UI.callout("bad", "Could not read the storage classes", esc(classes.unread));
@@ -803,7 +807,8 @@ async function storageClassesPaint() {
     return;
   }
   STATE.data.storageClasses = classes;
-  STATE.data.v2 = v2;
+  // An unread answer is shown on the card, but the last good one is kept.
+  if (!v2.unread) STATE.data.v2 = v2;
   host.innerHTML = storageClassCard(classes, v2);
   host.hidden = !host.innerHTML;
   if (window.applyRole) applyRole();
@@ -1130,14 +1135,18 @@ async function viewShares() {
   STATE.data.nfs = nfs;
   STATE.data.sambaInstalled = !!smb.installed;
   // SMB users belong on the SMB server's card, with their count (#370).
-  const smbUserList = can("admin") ? await api("/api/shares/users").catch(() => null) : null;
+  // Unread is not "no SMB users yet" (#620): the card says so.
+  const smbUsersRead = can("admin") ? await api("/api/shares/users").catch(e => ({ unread: e.message })) : null;
+  const smbUserList = Array.isArray(smbUsersRead) ? smbUsersRead : null;
+  const smbUsersUnread = smbUsersRead?.unread || "";
   if (smbUserList) STATE.data.smbUsers = smbUserList;
   const ip = smb.address || "address pending";
   paint(`${UI.pageHeader(`Network shares`, `SMB shares and optional NFSv4 exports backed by Longhorn volumes`, `<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button>`)}
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
-    ${can("admin") && !smb.error ? `<div class="row">${smb.installed && (!smb.in_sync || Object.keys(smb.recovery_failures || {}).length) ? '<button class="btn sm" onclick="repairSamba(this)">Repair / retry recovery</button>' : ""}${smbUserList ? `<button class="btn sm" onclick="smbUsers()">SMB users · ${smbUserList.length}</button>` : ""}<button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
+    ${can("admin") && !smb.error ? `<div class="row">${smb.installed && (!smb.in_sync || Object.keys(smb.recovery_failures || {}).length) ? '<button class="btn sm" onclick="repairSamba(this)">Repair / retry recovery</button>' : ""}${smbUserList ? `<button class="btn sm" onclick="smbUsers()">SMB users · ${smbUserList.length}</button>` : smbUsersUnread ? '<button class="btn sm" onclick="smbUsers()">SMB users</button>' : ""}<button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
+    ${smbUsersUnread && !smb.error ? `<div class="dim small" style="margin-top:8px">Could not read the SMB users: ${esc(smbUsersUnread)}</div>` : ""}
     ${smb.partial ? `<div class="note warn"><b>Partial service · ${plural(smb.offline_shares.length, "share")} offline</b><br>Unavailable storage is temporarily excluded so other shares can start. No volumes, credentials or share definitions were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>After storage is confirmed recoverable for two minutes, Homestead re-adds the shares. This restarts SMB and briefly interrupts connections.</div>` : ""}
     ${smbUserList && !smbUserList.length ? `<div class="dim small" style="margin-top:8px">No SMB users yet. Private shares need one; guest shares don't. <a class="linkish" onclick="smbUserEdit('')">Add a user</a></div>` : ""}
     ${smb.recovery_warning ? `<div class="note warn">${esc(smb.recovery_warning)}</div>` : ""}
@@ -1576,9 +1585,11 @@ async function lhSettingsPaint() {
     host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">Longhorn is not installed on this cluster.</div>`;
     return;
   }
-  let cap, offline = null;
-  try { [cap, offline] = await Promise.all([api("/api/longhorn/capacity"), api("/api/longhorn/offline-rebuilding").catch(() => null)]); }
+  let cap, offline = null, offlineUnread = "";
+  try { [cap, offline] = await Promise.all([api("/api/longhorn/capacity"), api("/api/longhorn/offline-rebuilding").catch(e => ({ unread: e.message }))]); }
   catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div>${UI.error(e, { retry: "lhSettingsPaint()" })}`; return; }
+  // Unread, the setting is named rather than left out, and offers no toggle to save a guess (#620).
+  if (offline?.unread) { offlineUnread = offline.unread; offline = null; }
   STATE.data.lhcap = cap;
   STATE.data.lhOffline = offline;
   const admin = can("admin"), v2 = cap.v2 || {};
@@ -1595,7 +1606,8 @@ async function lhSettingsPaint() {
         ? "Longhorn rebuilds a missing copy only while its volume is attached. With this on, it also attaches a detached volume by itself - nothing can mount it meanwhile - until its copies are whole, so a volume nothing uses is not left with one copy."
         : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot do it offline. With this on, Homestead attaches a detached volume short of copies itself - nothing can mount it meanwhile - one at a time, until its copies are whole, and lets go as soon as anything else asks for it.")}`, "",
       `<label class="toggle"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>
-      ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}` : ""}
+      ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}`
+      : offlineUnread ? `<div class="dim small" style="margin-top:10px">Could not read whether Longhorn rebuilds copies of detached volumes: ${esc(offlineUnread)}</div>` : ""}
     <div class="f" style="margin-top:10px"><label>Pods on a failed host ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead host, so a container moving to another host cannot mount it there until the host is back. Containers > If a host fails chooses which containers move.")}</label>
       <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the host"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
         ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
@@ -1698,9 +1710,10 @@ function nodeTagsLine(node, inv) {
 /* Tags are words Longhorn matches a storage class against: a class that
    asks for "ssd" puts its replicas only on disks tagged ssd. */
 const TAG_IDEAS = ["ssd", "nvme", "hdd", "fast", "bulk"];
-function tagEditor(title, about, current, known, save) {
+function tagEditor(title, about, current, known, save, unread = "") {
   const ideas = [...new Set([...known, ...TAG_IDEAS])].filter(t => !current.includes(t));
   modal(title, `<p class="muted small" style="margin-top:0">${about}</p>
+    ${unread ? `<div class="dim small" style="margin-bottom:8px">Could not read the tags already in use: ${esc(String(unread).replace(/\.\s*$/, ""))}. Only the usual ones are suggested.</div>` : ""}
     <div class="f"><label>Tags</label>
       <input type="text" id="tg_text" value="${esc(current.join(", "))}" placeholder="ssd, fast" autocomplete="off"></div>
     ${ideas.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 14px"><span class="dim xs">Add</span>${ideas.map(t =>
@@ -1721,19 +1734,20 @@ async function tagsSave(path, body, node, reopen) {
     if (reopen) lhDisks(); else setTimeout(() => disksRepaint(node), 500);
   } catch (e) { toast(e.message, "bad"); }
 }
+// The tags in use are only suggestions: unread, the editor still opens and says so (#620).
 window.diskTags = async (node, disk, current) => {
-  const inv = await loadDisks().catch(() => ({}));
+  const inv = await loadDisks().catch(e => ({ unread: e.message }));
   // Opened from the Disks list (a dialog), it goes back there; from a node's page, it stays.
   const reopen = !$("#modal").classList.contains("hidden");
   tagEditor(`Tags · ${disk}`, `A storage class can keep its replicas on disks with a tag: tag the fast disks
       <b>ssd</b>, say, and make a class that asks for ssd.${inv.harvester ? " Harvester keeps a disk's tags with the disk, as its own dashboard does." : ""}`,
-    current, inv.disk_tags || [], tags => tagsSave("/api/disks/tags", { node, disk, tags }, node, reopen));
+    current, inv.disk_tags || [], tags => tagsSave("/api/disks/tags", { node, disk, tags }, node, reopen), inv.unread);
 };
 window.nodeTags = async (node, current) => {
-  const inv = await loadDisks().catch(() => ({}));
+  const inv = await loadDisks().catch(e => ({ unread: e.message }));
   const reopen = !$("#modal").classList.contains("hidden");
   tagEditor(`Node tags · ${node}`, "A storage class can keep its replicas on nodes with a tag as well as, or instead of, disks with one.",
-    current, inv.all_node_tags || [], tags => tagsSave("/api/disks/node-tags", { node, tags }, node, reopen));
+    current, inv.all_node_tags || [], tags => tagsSave("/api/disks/node-tags", { node, tags }, node, reopen), inv.unread);
 };
 
 async function loadDisks(force = false) {
@@ -2141,8 +2155,23 @@ window.reclassWatch = async id => {
   clearInterval(window.__reclassTimer);
   const tick = async () => {
     if ($("#modal").classList.contains("hidden")) return clearInterval(window.__reclassTimer);
-    const op = (await api("/api/operations", { keep: true }).catch(() => [])).find(o => o.id === id);
-    if (!op || window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return;
+    const ops = await api("/api/operations", { keep: true }).catch(e => ({ unread: e.message }));
+    if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return;
+    if (ops.unread) {
+      // A failed poll keeps what was last shown and says so; the next tick tries again (#620).
+      const note = `<div id="rc_unread" class="dim small" style="margin-top:8px">Could not read the job: ${esc(ops.unread)} · still trying</div>`;
+      if (!$("#mbody .rc-steps")) {
+        // Nothing shown yet: the note, and a way out of the dialog.
+        $("#mbody").innerHTML = `${note}${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`;
+        return;
+      }
+      $("#rc_unread")?.remove();
+      $("#mbody").insertAdjacentHTML("beforeend", note);
+      return;
+    }
+    $("#rc_unread")?.remove();
+    const op = ops.find(o => o.id === id);
+    if (!op) return;
     $("#mtitle").textContent = op.title;
     paint(op);
     if (op.status !== "running") { clearInterval(window.__reclassTimer); if (STATE.view === "storage") refresh(true); }

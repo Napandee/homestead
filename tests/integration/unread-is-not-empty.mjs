@@ -398,6 +398,92 @@ try {
     assert.equal(await page.locator("#hf_host").count(), 1, "the path can still be typed");
     await page.evaluate(() => { window.api = window.__realApi; closeModal(); });
 
+    // Data protection: unread backups are not "no backups on the target yet".
+    await page.evaluate(failing, "/api/lh/backupvolumes");
+    await page.evaluate(() => viewProtect());
+    await page.waitForFunction(() => !document.querySelector("#views.refreshing")
+      && /Could not read the backups/.test(document.querySelector("#views")?.innerText || ""));
+    const backups = await page.locator("#views").innerText();
+    assert.match(backups, /Could not read the backups[\s\S]*timed out/);
+    assert.doesNotMatch(backups, /No backups on the target yet|No backup target, so no backups/);
+
+    // A volume's snapshots: its unread backups are not "no backups".
+    await page.evaluate(failing, "/api/lh/backups");
+    await page.evaluate(() => lhSnaps("pvc-demo-frigate", "frigate"));
+    await settled(page);
+    const snaps = await page.locator("#mbody").innerText();
+    assert.match(snaps, /Could not read this volume's backups[\s\S]*timed out/);
+    assert.doesNotMatch(snaps, /no backups — needs a backup target/);
+    await page.evaluate(() => closeModal());
+
+    // Storage classes: a V2 class with Longhorn V2 unread says so, not nothing.
+    await page.evaluate(failing, "/api/storage/v2");
+    await page.evaluate(async () => {
+      document.querySelector("#views").insertAdjacentHTML("beforeend", '<div id="storageClassesCard"></div>');
+      await storageClassesPaint();
+    });
+    assert.match(await page.locator("#storageClassesCard").innerText(), /Longhorn V2[\s\S]*Could not read whether it is on[\s\S]*timed out/);
+    // With no class on V2, an unread V2 answer is not worth a line.
+    await page.evaluate(async () => {
+      const read = window.__realApi;
+      window.api = (asked, ...rest) => {
+        const path = String(asked).split("?")[0];
+        if (path === "/api/storage/v2") return Promise.reject(new Error("timed out"));
+        if (path === "/api/storage/classes") return read(asked, ...rest).then(rows => rows.filter(row => row.engine !== "v2"));
+        return read(asked, ...rest);
+      };
+      await storageClassesPaint();
+    });
+    assert.doesNotMatch(await page.locator("#storageClassesCard").innerText(), /Longhorn V2|Could not read whether it is on/);
+
+    // Network shares: unread SMB users are not "no SMB users yet".
+    await page.evaluate(failing, "/api/shares/users");
+    await page.evaluate(() => viewShares());
+    await page.waitForFunction(() => !document.querySelector("#views.refreshing")
+      && document.querySelector(".phead")?.innerText.includes("Network shares"));
+    const shares = await page.locator("#views").innerText();
+    assert.match(shares, /Could not read the SMB users[\s\S]*timed out/);
+    assert.doesNotMatch(shares, /No SMB users yet/);
+
+    // Longhorn settings: the detached-volume rebuild setting, unread, is named, not left out.
+    await page.evaluate(failing, "/api/longhorn/offline-rebuilding");
+    await page.evaluate(async () => {
+      document.querySelector("#views").insertAdjacentHTML("beforeend", '<div id="lhSettingsCard"></div>');
+      await lhSettingsPaint();
+    });
+    assert.match(await page.locator("#lhSettingsCard").innerText(), /Could not read whether Longhorn rebuilds copies of detached volumes[\s\S]*timed out/);
+
+    // Disk and node tags: the editor opens, and says the tags in use could not be read.
+    await page.evaluate(failing, "/api/disks");
+    for (const open of [() => diskTags("harvester-node1", "disk-1", ["ssd"]), () => nodeTags("harvester-node1", [])]) {
+      await page.evaluate(() => { STATE.data.disks = null; });
+      await page.evaluate(open);
+      await page.waitForSelector("#tg_text");
+      assert.match(await page.locator("#mbody").innerText(), /Could not read the tags already in use[\s\S]*timed out/);
+      await page.evaluate(() => closeModal());
+    }
+
+    // Changing a storage class: a poll that fails says so and keeps trying.
+    await page.evaluate(failing, "/api/operations");
+    await page.evaluate(() => reclassWatch("op1"));
+    await page.waitForFunction(() => /Could not read the job/.test(document.querySelector("#mbody")?.innerText || ""));
+    assert.match(await page.locator("#mbody").innerText(), /Could not read the job[\s\S]*timed out[\s\S]*still trying/);
+    // Nothing was shown yet, so the dialog offers a way out.
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Close"}).count(), 1, "a first failed read can be closed");
+    await page.evaluate(() => { clearInterval(window.__reclassTimer); window.api = window.__realApi; closeModal(); });
+
+    // A good poll, then a failed one: the steps shown stay, with the note under them.
+    await page.evaluate(() => reclassWatch("op4"));
+    await page.waitForSelector("#mbody .rc-steps");
+    await page.evaluate(failing, "/api/operations");
+    await page.waitForSelector("#rc_unread", {timeout: 10000});
+    assert.ok(await page.locator("#mbody .rc-steps").count(), "the last view stays");
+    assert.match(await page.locator("#rc_unread").innerText(), /Could not read the job[\s\S]*timed out[\s\S]*still trying/);
+    // The next good poll takes the note away.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.waitForFunction(() => !document.querySelector("#rc_unread"), null, {timeout: 10000});
+    await page.evaluate(() => { clearInterval(window.__reclassTimer); closeModal(); });
+
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);
     await context.close();

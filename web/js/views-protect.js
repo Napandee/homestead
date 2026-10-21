@@ -126,7 +126,8 @@ async function viewProtect() {
     api("/api/lh/overview"),
     // Unread is not "not deployed": that would offer to set it up again (#620).
     api("/api/objectstore").catch(e => ({ unread: e.message })),
-    api("/api/lh/backupvolumes").catch(() => []),
+    // Unread is not "no backups on the target yet" (#620).
+    api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })),
   ]);
   STATE.data.lh = d;
   protectFilterRead();
@@ -237,7 +238,8 @@ async function viewProtect() {
   </tr></thead><tbody id="pf_rows"></tbody></table></div></div>
 
   <div class="sec">Backups</div>
-  ${backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
+  ${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
+  : backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
     <th>Volume</th><th>Backups</th><th data-nosort>Last backup</th><th>Size</th><th></th></tr></thead><tbody>
     ${backupVolumes.map(b => `<tr>
       <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ' <span class="tag warn" data-tip="The volume is gone; its backups are all that is left of it">volume deleted</span>'}
@@ -693,15 +695,17 @@ window.lhSnaps = async (vol, label) => {
   try {
     const [snaps, bks] = await Promise.all([
       api("/api/lh/snapshots?volume=" + encodeURIComponent(vol)),
-      api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(() => []),
+      // Unread is not "no backups" (#620): the snapshots still show.
+      api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(e => ({ unread: e.message })),
     ]);
     if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
     // One lead, then the timeline; the volume's actions sit in the footer,
     // the main one on the right and the rest in its ⋯ (#501).
     $("#mbody").innerHTML = `${UI.lead("Oldest first. Restore or browse any snapshot or backup.")}
       <div id="snapshot_live" data-token="${token}"><div class="sec">Snapshots (${snaps.length})</div>${snapshotTimeline(snaps, vol, label)}</div>
-      <div class="sec">Backups (${bks.length})</div>
-      ${backupTable(bks, vol, label)}
+      ${bks.unread ? `<div class="sec">Backups</div>${UI.callout("warn", "Could not read this volume's backups", esc(bks.unread))}`
+        : `<div class="sec">Backups (${bks.length})</div>
+      ${backupTable(bks, vol, label)}`}
       ${UI.actions(actionBar([
         { label: "Take snapshot now", run: `lhSnapNow(${jsq(vol)},${jsq(label)})`, need: "operator", pri: true },
         { label: "Back up now", run: `lhBackupNow(${jsq(vol)},${jsq(label)})`, need: "operator" },
