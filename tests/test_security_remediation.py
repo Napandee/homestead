@@ -387,23 +387,25 @@ class HttpTests(unittest.TestCase):
             sock.sendall(b"POST /api/auth/login HTTP/1.1\r\nHost: fixture\r\nX-Homestead-Auth: 1\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{")
             self.assertEqual(b"", sock.recv(4096))
 
-    def test_excess_connections_are_closed_and_capacity_recovers(self):
-        first = socket.create_connection(self.listener.server_address, timeout=3)
-        second = socket.create_connection(self.listener.server_address, timeout=3)
+    def test_excess_connections_are_refused_and_capacity_recovers(self):
+        # Open connections are bounded (max_open, four times the request slots):
+        # one past the bound is answered 503 and closed, and the room comes back.
+        held = [socket.create_connection(self.listener.server_address, timeout=3)
+                for _ in range(self.listener.max_open)]
         try:
             until = time.monotonic() + 2
-            while self.listener._slots._value and time.monotonic() < until:
+            while self.listener.open < self.listener.max_open and time.monotonic() < until:
                 time.sleep(0.01)
-            self.assertEqual(0, self.listener._slots._value)
+            self.assertEqual(self.listener.max_open, self.listener.open)
             with socket.create_connection(self.listener.server_address, timeout=3) as excess:
-                self.assertEqual(b"", excess.recv(1))
+                self.assertIn(b" 503 ", excess.recv(4096).split(b"\r\n", 1)[0])
         finally:
-            first.close()
-            second.close()
+            for sock in held:
+                sock.close()
         until = time.monotonic() + 2
-        while self.listener._slots._value < 2 and time.monotonic() < until:
+        while self.listener.open and time.monotonic() < until:
             time.sleep(0.01)
-        self.assertEqual(2, self.listener._slots._value)
+        self.assertEqual(0, self.listener.open)
 
     def test_retained_passthrough_inventory_is_read_only_but_host_actions_need_admin(self):
         self.assertEqual("viewer", server.needed_role("/api/passthrough/inventory", "GET"))
