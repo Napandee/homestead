@@ -146,6 +146,9 @@ class FakeOps:
     def snapshot(self):
         return copy.deepcopy(self.items)
 
+    def stored(self):
+        return copy.deepcopy(self.items)
+
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -173,6 +176,7 @@ class Base(unittest.TestCase):
         RS.restore_cancel = lambda item: self.cancelled.append(copy.deepcopy(item["ref"])) or "Restore stopped"
         RS.uptime_report = lambda: self.uptime
         RS.settings = lambda: self.settings
+        RS.settings_strict = lambda: self.settings
         RS.is_self = lambda ns, name: self.self_app
         RS.system_namespaces = lambda: {"kube-system", "longhorn-system"}
         RS.is_leader = lambda: self.leader
@@ -429,14 +433,28 @@ class SwapBackTests(Base):
         self.run_until(item, "watching")
         self.step(item, NOW)
         self.kube.objs[DEP]["status"]["readyReplicas"] = 0
-        self.swapped_back(item, "stopped being ready", NOW + 30)
+        self.assertEqual("running", self.step(item, NOW + 30)[0])     # one bad poll is not enough
+        self.assertEqual("watching", item["ref"]["phase"])
+        self.swapped_back(item, "stopped being ready", NOW + 30 + RS.FLAP_WAIT)
+
+    def test_one_bad_poll_that_recovers_does_not_swap_back(self):
+        _, item = self.started()
+        self.run_until(item, "watching")
+        self.step(item, NOW)
+        self.kube.objs[DEP]["status"]["readyReplicas"] = 0
+        self.assertEqual("running", self.step(item, NOW + 30)[0])
+        self.kube.settle(self.kube.objs[DEP])
+        self.uptime = {"lab/app-1": {"state": "up", "last": {"at": NOW + 40}}}
+        self.assertEqual("succeeded", self.step(item, NOW + 30 + RS.FLAP_WAIT)[0])
+        self.assertEqual("app-1-data-restore", self.template_claim())
 
     def test_the_uptime_check_says_down(self):
         _, item = self.started()
         self.run_until(item, "watching")
         self.step(item, NOW)
         self.uptime = {"lab/app-1": {"state": "down", "last": {"at": NOW + 5, "error": "connection refused"}}}
-        self.swapped_back(item, "stopped answering (connection refused)", NOW + 10)
+        self.assertEqual("running", self.step(item, NOW + 10)[0])
+        self.swapped_back(item, "stopped answering (connection refused)", NOW + 10 + RS.FLAP_WAIT)
 
     def test_no_answer_in_time(self):
         _, item = self.started()
@@ -758,11 +776,13 @@ class ProvenanceTests(Base):
         self.step(item, NOW)
         self.kube.objs[OLD]["metadata"]["uid"] = "u-recreated"      # deleted and made again meanwhile
         self.restore_result = ("succeeded", 100, "Restored")
-        self.run_until(item, "watching")
+        status, _, message = self.run_until(item, "watching")
+        self.assertEqual("failed", status)                            # not swapped onto someone else's claim
+        self.assertEqual("app-1-data", self.template_claim())
         self.assertNotIn("lab/app-1-data", self.records)
         RS.expire_tick(NOW + 60 * 86400)
         RS.expire_tick(NOW + 62 * 86400)
-        self.assertEqual([], self.deleted)
+        self.assertEqual([], [d for d in self.deleted if d["name"] == "app-1-data"])
 
     def test_a_restored_claim_made_again_is_not_recorded_when_swapping_back(self):
         _, item = self.started()
@@ -832,6 +852,131 @@ class RecordStoreTests(unittest.TestCase):
             RS.update_records(lambda records: records.update({"lab/a": {"uid": "u1"}}))
             self.assertEqual({"lab/a": {"uid": "u1"}}, RS.read_records())
             self.assertTrue(Path(folder, "previous-volumes.json").exists())
+
+
+class ReviewFixTests(Base):
+    """The fresh review's Important findings, each red first."""
+
+    def test_keep_pressed_while_the_expiry_runs_stops_the_delete(self):
+        put_previous(self, reminded=NOW - 3 * 86400)
+        plan = RS.deletion_plan
+
+        def keep_meanwhile(ns, name):
+            self.records["lab/app-1-data-old"]["kept"] = True        # Keep, between the read and the delete
+            return plan(ns, name)
+        RS.deletion_plan = keep_meanwhile
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+
+    def test_a_swap_back_started_while_the_expiry_runs_stops_the_delete(self):
+        put_previous(self, reminded=NOW - 3 * 86400)
+        plan = RS.deletion_plan
+
+        def swap_back_meanwhile(ns, name):
+            self.ops.items.append({"kind": "restore-swap", "status": "queued", "resource": {"kind": "Deployment", "namespace": NS, "name": "app-1"},
+                                   "ref": {"namespace": NS, "app": "app-1", "old_claim": "app-1-data", "new_claim": "app-1-data-old"}})
+            return plan(ns, name)
+        RS.deletion_plan = swap_back_meanwhile
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+
+    def back_job(self):
+        row = RS.previous_volumes(NOW)["volumes"][0]
+        RS.swap_back({"namespace": NS, "name": "app-1-data-old", "digest": row["digest"]})
+        self.checkpoints = []
+        return {"id": "op2", "status": "running", "ref": self.ops.started[-1]["ref"]}
+
+    def test_a_failed_swap_back_keeps_a_kept_volume_kept(self):
+        put_previous(self, at=NOW - 86400, kept=True)
+        item = self.back_job()
+        self.run_until(item, "watching")
+        self.step(item, NOW)
+        self.uptime = {"lab/app-1": {"state": "down", "last": {"at": NOW + 5, "error": "refused"}}}
+        self.step(item, NOW + 10)
+        self.step(item, NOW + 10 + RS.FLAP_WAIT)                      # swapped back to app-1-data
+        self.assertEqual("app-1-data", self.template_claim())
+        self.assertTrue(self.records["lab/app-1-data-old"]["kept"])
+
+    def test_swap_back_refuses_a_previous_volume_made_again_under_its_name(self):
+        put_previous(self, at=NOW - 86400)
+        item = self.back_job()
+        self.kube.objs[KEPT]["metadata"]["uid"] = "u-someone-else"      # deleted and made again meanwhile
+        status, _, message = self.run_until(item, "watching")
+        self.assertEqual("failed", status)
+        self.assertIn("replaced by another claim", message)
+        self.assertEqual("app-1-data", self.template_claim())
+        self.assertEqual(1, self.kube.objs[DEP]["spec"]["replicas"])
+
+    def failing_swap_back(self, code, times):
+        _, item = self.started()
+        self.run_until(item, "watching")
+        self.step(item, NOW)
+        send, left = self.kube.send, [times]
+
+        def flaky(method, path, body=None, ctype="application/json", **options):
+            if ctype == "application/json-patch+json" and left[0]:
+                left[0] -= 1
+                raise urllib.error.HTTPError(path, code, "error", {}, None)
+            return send(method, path, body, ctype)
+        RS.ksend = flaky
+        self.uptime = {"lab/app-1": {"state": "down", "last": {"at": NOW + 5, "error": "refused"}}}
+        self.step(item, NOW + 10)
+        return item
+
+    def test_a_passing_error_while_swapping_back_is_tried_again(self):
+        item = self.failing_swap_back(500, 1)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.step(item, NOW + 10 + RS.FLAP_WAIT)
+        self.assertEqual("swapping-back", item["ref"]["phase"])
+        self.assertEqual("running", self.step(item, NOW + 20 + RS.FLAP_WAIT)[0])
+        self.assertEqual(("back-starting", "app-1-data"), (item["ref"]["phase"], self.template_claim()))
+
+    def test_a_swap_back_that_cannot_be_done_never_leaves_the_app_stopped(self):
+        item = self.failing_swap_back(422, 99)
+        status, _, message = self.step(item, NOW + 10 + RS.FLAP_WAIT)
+        self.assertEqual("failed", status)
+        self.assertIn("did not work either", message)
+        self.assertEqual(1, self.kube.objs[DEP]["spec"]["replicas"])
+        self.assertIn("app-1 was started again", message)
+
+    def test_a_swap_back_that_keeps_failing_gives_up_and_starts_the_app(self):
+        item = self.failing_swap_back(500, 99)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.step(item, NOW + 10 + RS.FLAP_WAIT)
+        status, _, message = self.step(item, NOW + 10 + RS.FLAP_WAIT + RS.STOP_WAIT + 1)
+        self.assertEqual("failed", status)
+        self.assertEqual(1, self.kube.objs[DEP]["spec"]["replicas"])
+
+    def test_settings_that_cannot_be_read_delete_nothing(self):
+        put_previous(self, reminded=NOW - 3 * 86400)
+        RS.settings_strict = lambda: (_ for _ in ()).throw(ValueError("settings.json is not valid JSON"))
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+
+    def test_other_storage_jobs_refuse_a_claim_a_restore_into_an_app_holds(self):
+        import homestead_storage_conflicts as STORAGE_CONFLICTS
+        import homestead_storage_guard as STORAGE_GUARD
+        running = {"kind": "restore-swap", "status": "running", "resource": {"kind": "Deployment", "namespace": NS, "name": "app-1"},
+                   "ref": {"namespace": NS, "app": "app-1", "old_claim": "app-1-data", "new_claim": "app-1-data-restore",
+                           "old_volume": "pv-u-old"}}
+        for kind, ref, resource in (("reclass", {"namespace": NS, "claim": "app-1-data"}, {"namespace": NS, "name": "app-1-data"}),
+                                    ("snapshot-revert", {"namespace": NS, "claim": "app-1-data", "volume": "pv-u-old"}, {}),
+                                    ("volume-restore", {"namespace": NS, "name": "app-1-data-restore"}, {})):
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError):
+                    STORAGE_CONFLICTS.require_clear([running], kind, ref, resource)
+                STORAGE_CONFLICTS.require_clear([{**running, "status": "failed"}], kind, ref, resource)
+        ops = types.SimpleNamespace(transaction=contextlib.nullcontext, stored=lambda: [running])
+        plan = STORAGE_GUARD.review({"namespace": NS, "name": "app-1-data-restore", "pv": {}, "longhorn": {}}, ops, None)
+        self.assertTrue(plan["blocked"])
+        free = STORAGE_GUARD.review({"namespace": NS, "name": "other", "pv": {}, "longhorn": {}}, ops, None)
+        self.assertFalse(free.get("blocked"))
+
+    def test_the_review_says_when_the_app_has_other_volumes(self):
+        dep = self.kube.objs[DEP]
+        dep["spec"]["template"]["spec"]["volumes"].append({"name": "db", "persistentVolumeClaim": {"claimName": "app-1-db"}})
+        notices = self.plan()["notices"]
+        self.assertTrue(any("app-1-db" in n for n in notices), notices)
 
 
 class SettingsTests(unittest.TestCase):

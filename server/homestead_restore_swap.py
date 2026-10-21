@@ -21,10 +21,19 @@ own and the job fails, saying why: the restored claim is then the previous
 volume, kept for a person to look at. A failure before the swap starts the app
 again unchanged.
 
-A previous volume carries its marks on the claim itself, so whichever replica
-leads carries the expiry on: it is deleted keep_days after it was replaced
-(Settings, default 7; 0 keeps it until a person deletes it), never less than a
-day after its reminder was raised, and never while anything mounts it.
+Which claims are previous volumes is Homestead's own record on its data
+volume (previous-volumes.json), keyed by claim and uid, so whichever replica
+leads carries the expiry on. Labels and annotations on the claim only mirror
+it for people and kubectl: anyone who may edit claims can write those. A
+previous volume is deleted keep_days after it was replaced (default 7; 0 keeps
+it until a person deletes it), never less than a day after its reminder was
+raised, never while anything mounts it or a job holds it, and never when the
+settings could not be read.
+
+While watching, one bad poll is not enough to swap back: not ready, or a
+fresh "down" from the uptime check, must last FLAP_WAIT seconds. The time
+limits (ready within ROLLOUT_WAIT, an answer within ANSWER_WAIT) are windows
+already and act at once.
 """
 import contextlib
 import datetime
@@ -54,7 +63,9 @@ import homestead_updates as UPDATES
 import homestead_volumes as VOLUMES
 
 KIND = "restore-swap"
-STOP_WAIT = 600                   # the app's pods have this long to let go of the claim
+STOP_WAIT = 600                   # the app's pods have this long to let go of the claim;
+                                  # a swap back retries passing errors this long too
+FLAP_WAIT = 60                    # a failed check must last this long before a swap back
 DAY = 86400
 DEFAULT_KEEP_DAYS = 7
 PREVIOUS = NAMES.key("previous-volume")         # label: "true" on a kept previous volume
@@ -103,6 +114,16 @@ def settings():
     return SETTINGS_HELPERS.get_app_settings()
 
 
+def settings_strict():
+    """The settings as saved, or an error: never the defaults in place of a
+    ConfigMap that is missing or does not validate. The expiry deletes data,
+    so it acts only on a keep_days someone actually set (or left as saved)."""
+    import homestead_app_settings as APP_SETTINGS
+    import homestead_settings_helpers as SETTINGS_HELPERS
+    cm = SETTINGS_HELPERS.kget(f"/api/v1/namespaces/{SETTINGS_HELPERS.DEFAULT_NS}/configmaps/{SETTINGS_HELPERS._settings_map()}")
+    return APP_SETTINGS.validate(json.loads((cm.get("data") or {})["settings.json"]))
+
+
 def save_settings(change):
     import homestead_settings_helpers as SETTINGS_HELPERS
     return SETTINGS_HELPERS.save_app_settings(change)
@@ -130,7 +151,7 @@ def update_records(fn):
 
 HOOKS = ("read_records", "update_records", "kget", "ksend", "fence", "OPS", "backup_object", "restore_plan", "restore_backup", "restore_resolver",
          "restore_cancel", "uptime_report", "is_self", "system_namespaces", "is_leader", "note", "deletion_plan",
-         "delete_volume", "settings", "save_settings")
+         "delete_volume", "settings", "settings_strict", "save_settings")
 
 
 # ---- small helpers -----------------------------------------------------------
@@ -320,6 +341,10 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
         notices.append(f"{app} is applied by {managed['by']}"
                        + (f" ({managed['source']})" if managed.get("source") else "")
                        + f": its next sync puts {claim} back. Change the claim where {managed['by']} reads it too.")
+    others_mounted = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName") for v in _volumes(dep)} - {None, "", claim})
+    if others_mounted:
+        notices.append(f"{app} also uses {', '.join(others_mounted)}; only {claim} is restored, "
+                       "so what they hold may no longer match")
     indexes = _indexes(dep, claim) if dep else []
     volume = _volumes(dep)[indexes[0]]["name"] if indexes else ""
     containers = [{"name": c.get("name", ""), "path": m.get("mountPath", "")}
@@ -417,7 +442,7 @@ def _points_at(dep, ref):
     return claims.pop() if len(claims) == 1 else ""
 
 
-def _mark(item, claim, expected_uid, replaced_by, reason, now):
+def _mark(item, claim, expected_uid, replaced_by, reason, now, kept=False):
     """Keep a claim as the app's previous volume, from now: Homestead's own
     record first (what the expiry trusts), then the marks on the claim that
     show it to people and to kubectl. Only the claim the job knows - the uid
@@ -436,14 +461,14 @@ def _mark(item, claim, expected_uid, replaced_by, reason, now):
 
     def put(records):
         records[key] = {"uid": uid, "app": ref["app"], "replaced_by": replaced_by, "replaced_at": int(now),
-                        "job": item.get("id", ""), "reason": reason, "reminded_at": None, "kept": False}
+                        "job": item.get("id", ""), "reason": reason, "reminded_at": None, "kept": bool(kept)}
     update_records(put)
     ksend("PATCH", _pvc_path(ns, claim), {"metadata": {
         "labels": {PREVIOUS: "true"},
         "annotations": {NAMES.key("previous-of"): f"{ns}/{ref['app']}",
                         NAMES.key("replaced-by"): replaced_by, NAMES.key("replaced-at"): str(int(now)),
                         NAMES.key("replaced-job"): item.get("id", ""), NAMES.key("replaced-uid"): uid,
-                        NAMES.key("replaced-reason"): reason, REMINDED: None, KEEP: None}}},
+                        NAMES.key("replaced-reason"): reason, REMINDED: None, KEEP: "true" if kept else None}}},
           ctype="application/merge-patch+json")
     return True
 
@@ -496,7 +521,8 @@ def _swap_back_writes(item, now):
         if _points_at(dep, ref) != ref["old_claim"]:
             _point(ref, None, ref["new_claim"], ref["old_claim"])
         _unmark(ref["namespace"], ref["old_claim"])
-        _mark(item, ref["new_claim"], ref.get("new_uid"), ref["old_claim"], "not-started", now)
+        # A volume a person chose to keep stays kept after a swap back that failed.
+        _mark(item, ref["new_claim"], ref.get("new_uid"), ref["old_claim"], "not-started", now, kept=ref.get("new_kept"))
         _scale(ref, ref.get("replicas_before", 1))
 
 
@@ -514,9 +540,17 @@ def _swap_back(item, to, why, now):
     try:
         _swap_back_writes(item, now)
     except Exception as error:
+        refused = isinstance(error, urllib.error.HTTPError) and error.code in (409, 422)
+        if not refused and now - float(ref.get("since") or now) <= STOP_WAIT:
+            raise           # a passing error: the job stays running and the next poll tries again
+        try:
+            _scale(ref, ref.get("replicas_before", 1))
+            state = f"{ref['app']} was started again, on {_pointed_at(ref)}"
+        except Exception:
+            state = (f"{ref['app']} is stopped (0 replicas) and points at {_pointed_at(ref)}: "
+                     "point it at the volume you want with Edit, then start it with Scale")
         return ("failed", 100, f"On the restored volume {ref['app']} {why}, and swapping back did not work either: "
-                f"{str(error)[:160]}. {ref['app']} now points at {_pointed_at(ref)}; "
-                f"its previous volume is {ref['old_claim']}. Point it back with Edit.")
+                f"{str(error)[:160]}. {state}. Its previous volume is {ref['old_claim']}.")
     to("back-starting", back_at=now)
     return "running", 95, f"Swapped back to {ref['old_claim']}; waiting for {ref['app']} to be ready"
 
@@ -564,6 +598,11 @@ def resolve(item, checkpoint, now=None):
     if phase == "swapping":
         dep = kget(_dep_path(ns, app))
         if _points_at(dep, ref) != new:
+            for claim, uid in ((old, ref.get("old_uid")), (new, ref.get("new_uid"))):
+                live = KUBE.get_optional(_pvc_path(ns, claim), read=kget)
+                if not live or not uid or (live.get("metadata") or {}).get("uid") != uid:
+                    return _put_back(item, f"{claim} was replaced by another claim of the same name, "
+                                           f"so {app} was not swapped", now)
             try:
                 with fence(ref.get("old_volume")):
                     _point(ref, ref.get("generation"), old, new)
@@ -596,18 +635,23 @@ def resolve(item, checkpoint, now=None):
                 return _swap_back(item, to, f"was not ready after {AUTOUPDATE.ROLLOUT_WAIT // 60} minutes", now)
             return "running", 75, f"Waiting for {app} to be ready"
         if not AUTOUPDATE._rolled_out(dep):
-            return _swap_back(item, to, "stopped being ready", now)
+            if _still_bad(ref, now):
+                return _swap_back(item, to, "stopped being ready", now)
+            return "running", 82, f"{app} is not ready; checking again before swapping back"
         state = uptime_report().get(f"{ns}/{app}") or {}
         last = state.get("last") or {}
         fresh = (last.get("at") or 0) > ref["rolled_at"]
+        if fresh and state.get("state") == "down":
+            if _still_bad(ref, now):
+                return _swap_back(item, to, f"stopped answering ({last.get('error') or 'no answer'})", now)
+            return "running", 86, f"{app} did not answer; checking again before swapping back"
+        ref.pop("bad_since", None)
         if state.get("state") == "off" or not state:
             if now - ref["rolled_at"] >= AUTOUPDATE.STEADY:
                 return "succeeded", 100, f"{app} runs on {new}. {_kept(ref, now)}"
             return "running", 85, f"{app} is ready; making sure it stays up"
         if fresh and state.get("state") in ("up", "slow"):
             return "succeeded", 100, f"{app} runs on {new}. {_kept(ref, now)}"
-        if fresh and state.get("state") == "down":
-            return _swap_back(item, to, f"stopped answering ({last.get('error') or 'no answer'})", now)
         if now - ref["rolled_at"] > AUTOUPDATE.ANSWER_WAIT:
             return _swap_back(item, to, f"did not answer within {AUTOUPDATE.ANSWER_WAIT // 60} minutes", now)
         return "running", 88, f"Waiting for {app} to answer"
@@ -625,6 +669,13 @@ def resolve(item, checkpoint, now=None):
             return "failed", 100, said + f" It is not ready on {old} yet either; look at its pods."
         return "running", 96, f"Swapped back to {old}; waiting for {app} to be ready"
     return "failed", item.get("progress", 0), f"Unknown step {phase}"
+
+
+def _still_bad(ref, now):
+    """Whether a failed check has lasted FLAP_WAIT: one bad poll - a pod
+    restarting, a scale by hand - is not a reason to move the app's data."""
+    since = float(ref.setdefault("bad_since", now))
+    return now - since >= FLAP_WAIT
 
 
 def _kept(ref, now):
@@ -822,6 +873,7 @@ def swap_back(body):
                "old_uid": (leaving.get("metadata") or {}).get("uid", ""), "new_uid": record.get("uid", ""),
                "old_volume": _handle(leaving) if leaving else "", "backup": "",
                "generation": (dep.get("metadata") or {}).get("generation"),
+               "new_kept": bool(record.get("kept")),
                "direction": "back", "phase": "stopping", "since": time.time()}
         operation = OPS.start(KIND, f"Swap {app} back to {name}", {"kind": "Deployment", "name": app, "namespace": ns},
                               "/data-protection", ref, f"Stopping {app}")
@@ -889,8 +941,17 @@ def _expire_one(ns, name, record, pvc, days, active, now):
     # delete_data, the choice a person's Delete offers that frees the space:
     # the point of the expiry. The claim is proven Homestead's previous volume
     # by its own record and uid, so nothing else is taken with it.
-    delete_volume({"namespace": ns, "name": name, "action": "delete_data", "uid": record["uid"], "confirmation": name})
-    _forget(ns, name)
+    with OPS.transaction():
+        # Again, under the jobs' lock, right before the delete: a Keep or a
+        # Swap back made while this tick read the cluster stops it.
+        now_record = read_records().get(f"{ns}/{name}") or {}
+        if (now_record.get("uid") != record.get("uid") or now_record.get("kept")
+                or now_record.get("reminded_at") != record.get("reminded_at")):
+            return None
+        if any(_held(item, ns, name) for item in OPS.stored() if item.get("status") not in TERMINAL):
+            return None
+        delete_volume({"namespace": ns, "name": name, "action": "delete_data", "uid": record["uid"], "confirmation": name})
+        _forget(ns, name)
     note({"key": f"previous-volume:{ns}/{name}:deleted:{int(now)}", "category": "degraded", "severity": "info",
           "event": True, "title": f"Deleted {who} previous volume {name} (kept {days} days)",
           "body": f"It ran on {record.get('replaced_by') or 'its restored volume'} instead. "
@@ -904,7 +965,11 @@ def expire_tick(now=None):
     now = now or time.time()
     if not is_leader():
         return []
-    days = keep_days()
+    try:
+        days = keep_days(settings_strict())
+    except Exception as error:
+        print(f"previous volumes: settings not read, nothing deleted this hour: {str(error)[:160]}", flush=True)
+        return []
     if not days:
         return []
     active = [item for item in OPS.snapshot() if item.get("status") not in TERMINAL]

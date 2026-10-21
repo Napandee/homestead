@@ -1086,12 +1086,23 @@ async function loadPreviousVolumes() {
   if (window.applyRole) window.applyRole();
 }
 window.previousKeepDays = async value => {
+  // A shorter time, or a time after "until deleted", brings deletions forward: ask first.
+  const d = STATE.data.previousVolumes || {}, days = +value, before = d.keep_days;
+  if (days && (!before || days < before)) {
+    const due = (d.volumes || []).filter(v => !v.kept && v.replaced_at && v.replaced_at + days * 86400 <= Date.now() / 1000 + 86400).length;
+    const said = due ? `${due} previous volume${due === 1 ? " is" : "s are"} then due; each still gets a day's notice first.`
+      : "Each previous volume still gets a day's notice before it is deleted.";
+    if (!(await ask(`Keep previous volumes ${days} days?` + String.fromCharCode(10, 10) + said,
+        { title: "Keep previous volumes", ok: `Keep ${days} days`, danger: !!due }))) return loadPreviousVolumes();
+  }
   try {
     const r = await api("/api/volumes/previous/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keep_days: +value }) });
     toast(r.detail, "ok"); loadPreviousVolumes();
   } catch (e) { toast(e.message, "bad"); loadPreviousVolumes(); }
 };
 window.previousKeep = async (namespace, name, keep) => {
+  if (!keep && !(await ask(`Let ${name} expire?` + String.fromCharCode(10, 10) + "It is deleted when its time is up, after a day's notice.",
+      { title: "Let it expire", ok: "Let it expire", danger: true }))) return;
   try {
     const r = await api("/api/volumes/previous/keep", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ namespace, name, keep }) });
     toast(r.detail, "ok"); loadPreviousVolumes();

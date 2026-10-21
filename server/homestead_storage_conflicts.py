@@ -35,6 +35,9 @@ def targets(kind, ref, resource=None):
                 handle(row.get("csi_handle"))
     elif kind in ("snapshot-delete", "snapshot-revert"):
         claim(ref.get("claim")); handle(ref.get("volume"))
+    elif kind == "restore-swap":
+        # Restore into an app (#743): both claims and the app's volume, while it runs.
+        claim(ref.get("old_claim")); claim(ref.get("new_claim")); handle(ref.get("old_volume"))
     elif kind in ("volume-delete", "volume-restore"):
         claim(ref.get("name") or resource.get("name"))
         pv(ref.get("pv")); handle(ref.get("volume"))
@@ -43,6 +46,8 @@ def targets(kind, ref, resource=None):
 
 def unresolved(item):
     """A timeout or stopped tracking is not proof that a storage write ended."""
+    if item.get("kind") == "restore-swap":
+        return item.get("status") not in TERMINAL    # it puts things back itself when it ends
     if item.get("kind") not in KINDS:
         return False
     ref = item.get("ref", {})
@@ -61,7 +66,8 @@ def unresolved(item):
 
 def conflicts(items, kind, ref, resource=None):
     wanted = targets(kind, ref, resource)
-    return [item for item in items if (kind in ("reclass", "disk-v2-convert") or item.get("kind") in ("reclass", "disk-v2-convert"))
+    gated = ("reclass", "disk-v2-convert", "restore-swap")
+    return [item for item in items if (kind in gated or item.get("kind") in gated)
             and unresolved(item) and wanted & targets(item.get("kind"), item.get("ref", {}), item.get("resource"))]
 
 
