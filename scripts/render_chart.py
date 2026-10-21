@@ -25,6 +25,8 @@ import render_nodeprobe  # noqa: E402
 
 RBAC_KINDS = ("ServiceAccount", "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding")
 APPS = "{{ .Values.workloadNamespace.name }}"
+# Roles for Homestead's own namespace; every other Role is for the apps'.
+OWN_ROLES = ("homestead-setup",)
 SELF = "{{ .Release.Namespace }}"
 
 
@@ -125,6 +127,12 @@ resources:
 rbac:
   create: true
 
+# A one-time setup code chosen ahead, for the first administrator (#737):
+# 10 characters from 0-9 and A-Z without I, L, O and U, as ABCD-EFGH-JK.
+# Empty: Homestead makes one. Either way it is in the Secret homestead-setup
+# until the first account exists; clear this value after install.
+setupCode: ""
+
 # Temperatures, host devices (a Coral, a Zigbee stick, an iGPU), every disk and
 # drive health from each node. Its SMART reader runs privileged, because
 # smartctl needs the raw drives; turn it off to go without drive health.
@@ -157,13 +165,35 @@ Its address, once the load balancer has given one:
 {{- end }}
 {{- end }}
 
-The first visit sets up the admin account. Apps are deployed to the
-{{ .Values.workloadNamespace.name }} namespace.
+The first visit sets up the admin account. It asks for the one-time setup
+code{{ if .Values.setupCode }} you set in setupCode{{ end }}, which this command shows:
+  kubectl -n {{ .Release.Namespace }} get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d
+
+Apps are deployed to the {{ .Values.workloadNamespace.name }} namespace.
 {{- if .Values.nodeprobe.enabled }}
 The node probe reports temperatures, devices and drive health from every node.
 {{- end }}
 
 There is only one Homestead per cluster: its objects have fixed names.
+"""
+
+SETUP_CODE = """{{- with .Values.setupCode }}
+{{- if not (regexMatch "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{4}-?[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{4}-?[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{2}$" .) }}
+{{- fail "setupCode must be 10 characters from 0-9 and A-Z without I, L, O and U, such as ABCD-EFGH-JK" }}
+{{- end }}
+# The setup code chosen ahead (#737). Homestead deletes this Secret once the
+# first account exists.
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+  name: homestead-setup
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "homestead.labels" $ | nindent 4 }}
+stringData:
+  code: {{ . | upper | quote }}
+{{- end }}
 """
 
 NAMESPACE = """{{- if and .Values.workloadNamespace.create (ne .Values.workloadNamespace.name .Release.Namespace) }}
@@ -376,7 +406,7 @@ def rbac():
         if not kind or kind.group(1) not in RBAC_KINDS:
             continue
         # metadata.namespace sits at two spaces, a subject's at four.
-        if kind.group(1) in ("Role", "RoleBinding"):
+        if kind.group(1) in ("Role", "RoleBinding") and not re.search(r"(?m)^  name: (?:%s)$" % "|".join(OWN_ROLES), doc):
             doc = re.sub(r"(?m)^  namespace: lab$", f"  namespace: {APPS}", doc)
         else:
             doc = re.sub(r"(?m)^  namespace: lab$", f"  namespace: {SELF}", doc)
@@ -409,6 +439,7 @@ def files(release):
         "templates/NOTES.txt": NOTES,
         "templates/namespace.yaml": NAMESPACE,
         "templates/rbac.yaml": rbac(),
+        "templates/setup-code.yaml": SETUP_CODE,
         "templates/homestead.yaml": HOMESTEAD,
         "templates/nodeprobe-scripts.yaml": PROBE_CONFIG,
         "templates/nodeprobe.yaml": probe_daemonset(release),
