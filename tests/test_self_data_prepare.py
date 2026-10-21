@@ -10,9 +10,12 @@ from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import homestead_capacity_review as SIGN
+import homestead_changes as CHANGES
 import homestead_self_data_prepare as P
+import homestead_updates as UPDATES
 import server  # Bind the app before test fixtures install their signing key.
 from homestead_storage_journal import Held
+import test_self_data_coordinator as coordinator_fixture
 import test_self_data_review as review_fixture
 from test_self_data_coordinator import IMAGE, OP, obj
 from fakes.job_store import put
@@ -212,6 +215,66 @@ class PreparationTests(unittest.TestCase):
         self.assertIn(self.path("persistentvolumeclaims"), self.c.objects)
         self.assertNotIn(self.path("pods"), self.c.objects)
 
+    def write_own_deployment(self, method, path, body, ctype=None):
+        """Homestead's own write to its Deployment, as it reaches the cluster:
+        through the change history's write guard (homestead_kube.change_note),
+        then merged onto the live object. A set-up Homestead has the key the
+        mark is signed with."""
+        with mock.patch.object(CHANGES, "_author_key", lambda: b"signing-key"):
+            CHANGES.note_write(method, path, body)
+        self.assertEqual("/apis/apps/v1/namespaces/lab/deployments/homestead", path)
+        dep = self.c.objects[path]
+
+        def merge(into, patch):
+            for key, value in patch.items():
+                if value is None: into.pop(key, None)
+                elif isinstance(value, dict) and isinstance(into.get(key), dict): merge(into[key], value)
+                else: into[key] = copy.deepcopy(value)
+        merge(dep, body)
+        dep["metadata"]["resourceVersion"] = str(int(dep["metadata"]["resourceVersion"]) + 1)
+        return copy.deepcopy(dep)
+
+    def scan_own_image(self, image_id=IMAGE):
+        """The background image scan records the digest Homestead runs on, with
+        the real update-check code and the real write guard."""
+        dep = copy.deepcopy(self.c.objects["/apis/apps/v1/namespaces/lab/deployments/homestead"])
+        pod = {"metadata": {"namespace": "lab", "labels": {}},
+               "status": {"phase": "Running", "containerStatuses": [
+                   {"name": "homestead", "state": {"running": {}}, "imageID": image_id}]}}
+        with mock.patch.object(UPDATES, "ksend", self.write_own_deployment), \
+             mock.patch.object(UPDATES, "PART", lambda ns, name: "self"), \
+             mock.patch.object(UPDATES, "CHANNEL", lambda: "prod"), \
+             mock.patch.object(UPDATES, "VERSION", lambda: ""), \
+             mock.patch.object(UPDATES, "registry_tags", lambda *a, **k: []), \
+             mock.patch.object(UPDATES, "manifest_info", lambda *a, **k: {"digest": IMAGE.split("@")[1], "children": []}), \
+             mock.patch.object(UPDATES, "_secret_credentials", lambda *a: {}):
+            UPDATES._check_deployment(dep, [pod])
+
+    def test_an_image_scan_during_preparation_is_not_a_change_to_homestead(self):
+        # #680 put the change-history mark on every Deployment write, so the
+        # scan's ran-digests record came with homestead.io/changedBy and the
+        # preparation refused: "Homestead or its source changed during preparation".
+        self.tick()
+        self.scan_own_image()
+        annotations = self.c.objects["/apis/apps/v1/namespaces/lab/deployments/homestead"]["metadata"]["annotations"]
+        self.assertIn("homestead.io/ran-digests", annotations, "the scan recorded what runs")
+        self.assertIn(CHANGES.AUTHOR, annotations, "the write guard marked the scan's write")
+        self.tick(); self.bind(); self.tick(); self.tick()
+        self.assertEqual("succeeded", self.tick()[0])
+
+    def test_a_real_edit_to_homestead_during_preparation_still_refuses(self):
+        path = "/apis/apps/v1/namespaces/lab/deployments/homestead"
+        edits = {"image": {"spec": {"template": {"spec": {"containers": [
+                     {"name": "homestead", "image": "ghcr.io/homestead-lab/homestead:other"}]}}}},
+                 "env": {"spec": {"template": {"spec": {"containers": [
+                     {"name": "homestead", "image": IMAGE, "env": [{"name": "EXTRA", "value": "1"}]}]}}}},
+                 "annotation": {"metadata": {"annotations": {"user.example/hold": "true"}}}}
+        for what, body in edits.items():
+            with self.subTest(what):
+                self.setUp(); self.tick()
+                self.write_own_deployment("PATCH", path, body)
+                with self.assertRaisesRegex(Held, "changed during preparation"): self.tick()
+
     def test_no_source_or_deployment_writes_and_no_claim_deletion(self):
         self.tick(); self.tick(); self.bind(); self.tick(); self.tick()
         allowed = {self.path("persistentvolumeclaims"), self.path("pods")}
@@ -337,6 +400,52 @@ class PreparationTests(unittest.TestCase):
              mock.patch.object(server.KUBE_HELPERS, "ksend") as send:
             with self.assertRaises(Held) as error: server.SELF_DATA_ROUTES.self_data_preparation_state()
             self.assertNotIn("private-secret", str(error.exception)); send.assert_not_called()
+
+
+class MoveTests(unittest.TestCase):
+    """The move itself, after preparation: the coordinator's phases."""
+    write_own_deployment = PreparationTests.write_own_deployment
+    scan_own_image = PreparationTests.scan_own_image
+
+    def setUp(self):
+        self.c = coordinator_fixture.Cluster()
+        self.scans = 0
+
+    def step(self):
+        """One coordinator step, after an image scan. The scan writes whenever
+        Homestead is meant to run and reports a digest it has not recorded
+        (before the stop and once restarted); while it is stopped the real
+        check writes nothing. A new digest each time makes every scan that
+        can write do so, as a restart onto a rebuilt image would."""
+        self.scans += 1
+        dep_path = "/apis/apps/v1/namespaces/lab/deployments/homestead"
+        before = self.c.objects[dep_path]["metadata"]["resourceVersion"]
+        self.scan_own_image(IMAGE.split("@")[0] + "@sha256:" + format(self.scans, "064x"))
+        dep = self.c.objects[dep_path]
+        if dep["metadata"]["resourceVersion"] != before:
+            # The Deployment controller copies the app's annotations onto its ReplicaSet.
+            rs = self.c.objects[self.c.rs_path]
+            rs["metadata"].setdefault("annotations", {}).update(
+                {k: v for k, v in dep["metadata"]["annotations"].items() if k in (CHANGES.AUTHOR, UPDATES.RAN)})
+            rs["metadata"]["resourceVersion"] = str(int(rs["metadata"]["resourceVersion"]) + 1)
+            self.marks.append(dep["metadata"]["annotations"][CHANGES.AUTHOR])
+        return self.c.step()["phase"]
+
+    def test_image_scans_through_the_write_guard_do_not_stop_a_move(self):
+        # #680 marks every Deployment write with homestead.io/changedBy. A scan
+        # landing during the move read as an edit to Homestead and held the
+        # move ("specification or metadata changed"); it must reach done.
+        c, self.marks = self.c, []
+        phases = [self.step(), self.step()]
+        c.settle_stop(); phases += [self.step(), self.step()]
+        c.finish_copy(); phases += [self.step(), self.step(), self.step()]
+        del c.objects["/api/v1/namespaces/lab/pods/copy-pod"]
+        phases += [self.step(), self.step()]
+        c.settle_stop(); phases += [self.step(), self.step()]
+        c.settle_start(); phases.append(self.step())
+        self.assertEqual(["quiesce", "quiesce", "copy", "copy", "verify", "verify", "verify",
+                          "switch", "start", "start", "start", "done"], phases)
+        self.assertGreaterEqual(len(self.marks), 3, "scans before the stop and after the restart wrote, marked")
 
 
 if __name__ == "__main__": unittest.main()

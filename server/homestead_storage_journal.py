@@ -90,6 +90,11 @@ def shape(obj):
         # The image in spec (and self-data's live runtime identity) is still
         # checked; this annotation neither schedules nor changes the workload.
         annotations.pop("homestead.io/ran-digests", None)
+        # The change history's mark (homestead_changes.AUTHOR) rides on every
+        # Deployment write Homestead makes, the ran-digests record above
+        # included, and the controller copies it onto ReplicaSets. It says who
+        # wrote and when, not what: whatever the write changed is still compared.
+        annotations.pop("homestead.io/changedBy", None)
     return digest({"spec": obj.get("spec"), "labels": meta.get("labels", {}),
                    "annotations": annotations, "owners": meta.get("ownerReferences", [])})
 
