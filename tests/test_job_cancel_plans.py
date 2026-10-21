@@ -129,7 +129,7 @@ class RegistryTests(unittest.TestCase):
         import types
         ops = types.SimpleNamespace(RESOLVERS={"scan": lambda item: None}, CANCELLERS={}, RESUMABLE={},
                                     LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set(), VIEWS={},
-                                    CANCEL_BLOCKS={}, _public=lambda item: item)
+                                    CANCEL_BLOCKS={}, CONFLICTS={}, _public=lambda item: item)
         self.assertIsNone(KINDS.kind("scan", ops).cancel_block)
 
     def test_a_refusal_registered_later_is_used(self):

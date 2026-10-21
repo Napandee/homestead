@@ -13,7 +13,9 @@ move for it to be right; the registrations and homestead_operations' kind
 branches move into these records later, a few kinds at a time. The view's
 kind branches have moved into a per-kind table in homestead_operations
 (OPS.VIEWS), which a kind's `fields` names, and the cancel plan's into
-another (OPS.CANCEL_BLOCKS), which a kind's `cancel_block` names."""
+another (OPS.CANCEL_BLOCKS), which a kind's `cancel_block` names, and
+start()'s rules for one kind into a third (OPS.CONFLICTS), which a kind's
+`conflicts` names."""
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -21,9 +23,8 @@ import homestead_operations as OPS
 
 
 def _no_rules_of_its_own(items, kind, ref, resource):
-    """start() still holds every conflict rule, the shared ones and those
-    for one kind; a kind's own rules move here later."""
-    return None
+    """A kind no running job refuses: only start()'s shared checks apply."""
+    return ""
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ class Kind:
     view: Callable = OPS._public              # item -> what the job tray is sent
     fields: Optional[Callable] = None         # (item, out) -> what this kind adds to that view
     cancel_block: Optional[Callable] = None   # item -> why it cannot be cancelled now, or ""
-    conflicts: Callable = _no_rules_of_its_own
+    conflicts: Callable = _no_rules_of_its_own  # (items, kind, ref, resource) -> why it cannot start, or ""
 
 
 def kinds(ops=OPS):
@@ -50,7 +51,8 @@ def kinds(ops=OPS):
                        resumable=ops.RESUMABLE.get(name), log=ops.LOGGERS.get(name),
                        cleanup=name in ops.CLEANUPS, cdi_cancellable=name in ops.CDI_CANCELLABLE,
                        view=ops._public, fields=ops.VIEWS.get(name),
-                       cancel_block=ops.CANCEL_BLOCKS.get(name))
+                       cancel_block=ops.CANCEL_BLOCKS.get(name),
+                       conflicts=ops.CONFLICTS.get(name, _no_rules_of_its_own))
             for name in sorted(names)}
 
 
