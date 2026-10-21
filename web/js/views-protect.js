@@ -199,6 +199,7 @@ async function viewProtect() {
 `)}
 
   <div id="restore-tests" class="restore-tests"><div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div></div>
+  <div id="previous-volumes" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
   ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
@@ -252,6 +253,7 @@ async function viewProtect() {
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
   protectVolumesPaint();
   loadRestoreTests();
+  loadPreviousVolumes();
 }
 
 /* ---------------- the Volumes list, filtered (#345) ----------------
@@ -731,6 +733,7 @@ function backupTable(bks, vol, label) {
       <td class="small dim">${fmtWhen(b.created)}</td>
       <td data-actions>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
         b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)},${jsq(label)})`, need: "admin" } : null,
+        b.restorable ? { label: "Restore into app", icon: "rollback", run: `lhRestoreInto(${jsq(b.name)})`, need: "admin", tip: "Restore it and move the app that uses this volume onto it" } : null,
         { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")
       || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
   </tbody></table></div></div>`;
@@ -1006,4 +1009,115 @@ window.restoreTestRun = async (ns, name) => {
     toast(`Restore test of ${name} started; follow it under Jobs`, "ok");
     loadRestoreTests();
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* ---------------- restore into an app (homestead_restore_swap.py, #743) ----------------
+   The backup goes into a new volume and the app is moved onto it; if it does
+   not come up it is swapped back on its own. The volume it left is kept as
+   its previous volume until it expires (Keep stops that). */
+const RESTORE_INTO = { plan: null };
+const keptFor = days => days ? `kept ${days} days, then deleted with a day's notice` : "kept until you delete it";
+window.lhRestoreInto = async backup => {
+  modal("Restore into app", '<div class="empty"><span class="spin2"></span> checking the app and its volume</div>', true);
+  let p;
+  try { p = await api(`/api/restore-swap/plan?backup=${encodeURIComponent(backup)}`); }
+  catch (e) { return void ($("#mbody").innerHTML = UI.error(e, { retry: `lhRestoreInto(${jsArg(backup)})`, dialog: true })); }
+  RESTORE_INTO.plan = p;
+  const app = p.app.name || "the app", title = $("#mtitle");
+  if (title && p.app.name) title.textContent = `Restore into ${p.app.name}`;
+  const managed = p.managed && p.managed.by;
+  $("#mbody").innerHTML = `${UI.lead(`The backup goes into a new volume and ${esc(app)} is moved onto it. If it does not come up, Homestead moves it back on its own.`)}
+    ${UI.facts([["App", `${esc(p.app.namespace)}/${esc(app)}`], ["Volume", `<span class="mono small">${esc(p.claim)}</span>`],
+      ["Backup", `<span class="mono small">${esc(p.backup)}</span>`], ["Taken", esc(fmtWhen(p.created))]])}
+    ${UI.steps([{ title: `Restore into ${p.new_claim}`, detailHtml: `${esc(app)} keeps running meanwhile` },
+      { title: `Stop ${app}` }, { title: `Point ${p.mount.volume || "its volume"} at ${p.new_claim}` }, { title: `Start ${app}` },
+      { title: p.check === "uptime" ? "Wait until it is ready and answers" : "Wait until it is ready and stays ready" }])}
+    ${UI.notices([...p.blockers.map(b => ["bad", b]), ...(managed ? [["warn", p.notices[0] || `Applied by ${managed}`]] : []),
+      ["info", `${p.claim} is ${keptFor(p.keep_days)}.`]], p.blockers.length ? "This cannot start" : managed ? `Applied by ${managed}` : "")}
+    ${managed ? UI.ack("ri_gitops", "Restore it anyway", { onchange: "restoreIntoReady()" }) : ""}
+    ${UI.actions(UI.cancel() + UI.button("Restore into app", "restoreIntoStart()", { kind: "pri", id: "ri_go", icon: "rollback", attrs: 'data-need="admin"', disabled: !p.ready || !!managed }))}`;
+  if (window.applyRole) window.applyRole();
+};
+window.restoreIntoReady = () => {
+  const p = RESTORE_INTO.plan, button = $("#ri_go");
+  if (p && button) button.disabled = !p.ready || (!!(p.managed && p.managed.by) && !$("#ri_gitops")?.checked);
+};
+window.restoreIntoStart = async () => {
+  const p = RESTORE_INTO.plan, button = $("#ri_go");
+  if (!p || !button) return;
+  button.disabled = true;
+  try {
+    const r = await api("/api/restore-swap", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backup: p.backup, namespace: p.app.namespace, app: p.app.name, claim: p.claim,
+        new_name: p.new_claim, digest: p.digest, accept_gitops: !!$("#ri_gitops")?.checked }) });
+    toast(r.detail || "Restoring", "ok"); closeModal();
+    if (window.refreshOperations) window.refreshOperations(true);
+  } catch (e) { toast(e.message, "bad"); lhRestoreInto(p.backup); }
+};
+
+/* Previous volumes: what each app was moved off, and when it goes. */
+const KEEP_CHOICES = [0, 3, 7, 14, 30, 90];
+async function loadPreviousVolumes() {
+  const host = document.getElementById("previous-volumes");
+  if (!host) return;
+  let d;
+  try { d = await api("/api/volumes/previous"); }
+  catch (e) { host.innerHTML = UI.section("Previous volumes", UI.callout("warn", "Previous volumes could not be listed", esc(e.message))); return; }
+  STATE.data.previousVolumes = d;
+  const choices = KEEP_CHOICES.includes(d.keep_days) ? KEEP_CHOICES : [...KEEP_CHOICES, d.keep_days].sort((a, b) => a - b);
+  const choice = `<label class="small" data-need="admin">Keep for <select id="pv_days" onchange="previousKeepDays(this.value)">${choices.map(n =>
+    `<option value="${n}" ${n === d.keep_days ? "selected" : ""}>${n ? `${n} days` : "until deleted"}</option>`).join("")}</select></label>`;
+  const when = v => v.kept ? '<span class="pill info">kept</span>'
+    : v.expires_at ? `<span class="pill ${v.reminded_at ? "med" : ""}">deleted ${esc(fmtAt(v.expires_at))}</span>` : '<span class="dim xs">kept until deleted</span>';
+  const why = { "restored": "replaced by a restore", "not-started": "the app did not start on it", "not-used": "restore not used", "swapped-back": "left by a swap back" };
+  const row = v => `<tr><td><b class="mono small">${esc(v.name)}</b><div class="dim xs">${esc(v.namespace)} · ${esc(v.size)}</div></td>
+      <td data-label="App">${esc(v.app)}<div class="dim xs">runs on ${esc(v.replaced_by)}</div></td>
+      <td data-label="Why" class="small">${esc(why[v.reason] || v.reason)}<div class="dim xs">${esc(fmtAt(v.replaced_at))}</div></td>
+      <td data-label="Goes">${when(v)}${v.in_use ? ' <span class="pill info">in use</span>' : ""}</td>
+      <td data-actions>${actionBar([
+        v.can_swap_back && !v.in_use ? { label: "Swap back", icon: "rollback", run: `previousSwapBack(${jsq(v.namespace)},${jsq(v.name)})`, need: "admin" } : null,
+        v.kept ? { label: "Let it expire", run: `previousKeep(${jsq(v.namespace)},${jsq(v.name)},false)`, need: "admin" }
+          : { label: "Keep", run: `previousKeep(${jsq(v.namespace)},${jsq(v.name)},true)`, need: "operator", tip: "Keep it until someone deletes it" },
+        { label: "Delete", run: `volumeDelete({name:${jsq(v.volume)},pvc_name:${jsq(v.name)},namespace:${jsq(v.namespace)}})`, need: "admin", danger: true }], { label: `Previous volume ${v.name}` })}</td></tr>`;
+  host.innerHTML = UI.section("Previous volumes", d.volumes.length
+    ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact"><thead><tr><th>Volume</th><th>App</th><th>Why</th><th>Goes</th><th data-nosort></th></tr></thead>
+      <tbody>${d.volumes.map(row).join("")}</tbody></table></div></div>`
+    : UI.empty("None. Restore into app keeps the volume an app moves off here."), choice);
+  if (window.applyRole) window.applyRole();
+}
+window.previousKeepDays = async value => {
+  try {
+    const r = await api("/api/volumes/previous/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keep_days: +value }) });
+    toast(r.detail, "ok"); loadPreviousVolumes();
+  } catch (e) { toast(e.message, "bad"); loadPreviousVolumes(); }
+};
+window.previousKeep = async (namespace, name, keep) => {
+  try {
+    const r = await api("/api/volumes/previous/keep", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ namespace, name, keep }) });
+    toast(r.detail, "ok"); loadPreviousVolumes();
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.previousSwapBack = (namespace, name) => {
+  const v = ((STATE.data.previousVolumes || {}).volumes || []).find(x => x.namespace === namespace && x.name === name);
+  if (!v) return toast("That volume is no longer listed; refresh the page", "bad");
+  modal(`Swap ${v.app} back`, `${UI.lead(`${esc(v.app)} is stopped, pointed back at ${esc(v.name)} and started again. If it does not come up, it is moved back to ${esc(v.replaced_by)} on its own.`)}
+    ${UI.facts([["App", `${esc(v.namespace)}/${esc(v.app)}`], ["Runs on now", `<span class="mono small">${esc(v.replaced_by)}</span>`],
+      ["Moves to", `<span class="mono small">${esc(v.name)}</span>`]])}
+    ${UI.notices([...(v.managed ? [["warn", `${v.app} is applied by ${v.managed}: its next sync puts ${v.replaced_by} back.`]] : []),
+      ["info", `${v.replaced_by} becomes its previous volume, ${keptFor((STATE.data.previousVolumes || {}).keep_days)}.`]], v.managed ? `Applied by ${v.managed}` : "")}
+    ${v.managed ? UI.ack("pv_gitops", "Swap it back anyway", { onchange: "$('#pv_go').disabled=!this.checked" }) : ""}
+    ${UI.actions(UI.cancel() + UI.button("Swap back", `previousSwapBackGo(${jsArg(namespace)},${jsArg(name)})`, { kind: "pri", id: "pv_go", icon: "rollback", attrs: 'data-need="admin"', disabled: !!v.managed }))}`, true);
+  if (window.applyRole) window.applyRole();
+};
+window.previousSwapBackGo = async (namespace, name) => {
+  const v = ((STATE.data.previousVolumes || {}).volumes || []).find(x => x.namespace === namespace && x.name === name), button = $("#pv_go");
+  if (!v || !button) return;
+  button.disabled = true;
+  try {
+    const r = await api("/api/volumes/previous/swap-back", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name, digest: v.digest, accept_gitops: !!$("#pv_gitops")?.checked }) });
+    toast(r.detail || "Swapping back", "ok"); closeModal();
+    if (window.refreshOperations) window.refreshOperations(true);
+    loadPreviousVolumes();
+  } catch (e) { toast(e.message, "bad"); closeModal(); loadPreviousVolumes(); }
 };

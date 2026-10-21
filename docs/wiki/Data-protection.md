@@ -193,7 +193,45 @@ A larger destination restores at the original size first, then expands after
 the data is healthy. Its class must allow expansion. If filesystem resizing
 needs a mount, the job says that it will finish when the volume is next used.
 Point the app at the restored volume (**Edit** on its container), or
-restore under the original name once the old volume is deleted.
+restore under the original name once the old volume is deleted - or let
+**Restore into app** do it.
+
+### Restore into app
+
+When the backed-up volume is used by one Deployment, its backups also have
+**Restore into app**. The review shows the app, where the volume is mounted
+and the steps. Homestead then:
+
+1. restores the backup into a new volume, while the app keeps running;
+2. stops the app;
+3. points only the mount that used the old volume at the new one - and only
+   if nothing else changed the app while it was stopped;
+4. starts the app;
+5. waits until it is ready and answers its uptime check (or stays ready for
+   two minutes when it has no check).
+
+If the app does not come up on the restored data, Homestead **swaps it back**
+on its own, and the job fails saying why. The restored volume is then kept for
+you to look at. A failure before the swap starts the app again unchanged, and
+cancelling after the swap is a swap back.
+
+A StatefulSet, a DaemonSet, a volume more than one app uses, a pod that
+belongs to nothing Homestead can stop, and Homestead's own data cannot be
+restored this way yet: restore into a new volume instead. An app Flux or
+Argo CD applies needs the notice accepted, because its next sync puts the old
+volume back.
+
+### Previous volumes
+
+The volume an app was moved off is its **previous volume**, listed under
+**Previous volumes** on this page with **Swap back**, **Keep** and **Delete**.
+It is deleted **7 days** after the swap by default: choose 1 to 90 days, or
+**until deleted**, beside the list. A day before, an alert says it goes
+tomorrow; nothing is deleted less than a day after that alert. **Keep** stops
+the expiry until someone deletes it. A previous volume something mounts again
+is no longer kept for deletion. Homestead keeps its own record of which
+volumes these are; a label on a claim alone never makes one expire. Backups of
+either volume are never touched.
 
 ### Rolling back to a snapshot
 

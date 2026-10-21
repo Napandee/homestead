@@ -617,7 +617,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false },
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       info: { version: "2.8.332-dev.1", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
@@ -2525,6 +2525,48 @@ ssh_pwauth: true
       return { ok: true, enabled: on, detail: on ? "Apps with backups are restore-tested monthly" : "Monthly restore tests are off" };
     },
     "/api/restore-tests/run": () => ({ ok: true, operation: { id: "demo-restore-test", kind: "restore-test", status: "queued" } }),
+    // Restore into an app (views-protect.js, #743): frigate's config volume from
+    // its backup; window.__demoRestoreGitops shows the Flux-managed review.
+    "/api/restore-swap/plan": () => {
+      const flux = !!window.__demoRestoreGitops;
+      return { app: { namespace: "lab", name: "frigate", kind: "Deployment", replicas: 1 }, claim: "frigate-config",
+        mount: { volume: "config", containers: [{ name: "frigate", path: "/config" }] },
+        backup: lhBackups[0].name, created: lhBackups[0].created, new_claim: "frigate-config-restore",
+        storage_class: "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-fast"], size_gb: 20, minimum_size_gb: 20,
+        steps: ["restore", "stop", "swap", "start", "watch"], check: "uptime", keep_days: demoState.keepDays ?? 7,
+        expires_preview: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
+        managed: flux ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {},
+        notices: flux ? ["frigate is applied by Flux (Kustomization flux-system/apps): its next sync puts frigate-config back. Change the claim where Flux reads it too."] : [],
+        blockers: [], digest: "demo-restore-swap", ready: true };
+    },
+    "/api/restore-swap": () => ({ ok: true, name: "frigate-config-restore", detail: "Restoring into frigate-config-restore; frigate keeps running until the data is ready",
+      operation: { id: "demo-restore-swap", kind: "restore-swap", status: "queued" } }),
+    // Previous volumes: one expiring in 6 days, one reminded (goes tomorrow), one kept.
+    "/api/volumes/previous": () => {
+      const now = Date.now() / 1000, day = 86400, kept = demoState.previousKept || {};
+      const row = (name, app, current, at, reminded, reason) => ({ namespace: "lab", name, app, replaced_by: current, replaced_at: Math.round(at),
+        expires_at: kept[name] ? null : Math.round(Math.max(at + 7 * day, reminded ? reminded + day : 0)), reminded_at: reminded ? Math.round(reminded) : null,
+        kept: !!kept[name], reason, size: "20Gi", storage_class: "longhorn-r2", volume: `pvc-demo-${name}`, uid: `demo-${name}`,
+        in_use: false, can_swap_back: true, managed: "", digest: `demo-${name}` });
+      if (!("paperless-data-old" in kept)) kept["paperless-data-old"] = true;
+      demoState.previousKept = kept;
+      return { keep_days: demoState.keepDays ?? 7, volumes: [
+        row("frigate-config", "frigate", "frigate-config-restore", now - day, null, "restored"),
+        row("home-assistant-config", "home-assistant", "home-assistant-config-restore", now - 6.5 * day, now - 2 * 3600, "restored"),
+        row("paperless-data-old", "paperless", "paperless-data", now - 20 * day, null, "not-started")] };
+    },
+    "/api/volumes/previous/keep": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      demoState.previousKept = { ...(demoState.previousKept || {}), [body.name]: !!body.keep };
+      return { ok: true, name: body.name, kept: !!body.keep, detail: body.keep ? `${body.name} is kept until someone deletes it` : `${body.name} expires again, with a reminder the day before` };
+    },
+    "/api/volumes/previous/swap-back": (url, init) => ({ ok: true, detail: `Swapping back to ${JSON.parse(init?.body || "{}").name}`,
+      operation: { id: "demo-swap-back", kind: "restore-swap", status: "queued" } }),
+    "/api/volumes/previous/settings": (url, init) => {
+      const days = +JSON.parse(init?.body || "{}").keep_days;
+      demoState.keepDays = days;
+      return { ok: true, keep_days: days, detail: days ? `Previous volumes are kept ${days} days` : "Previous volumes are kept until deleted" };
+    },
     "/api/vms/monitoring": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const v = demoVms.find(x => x.ns === body.ns && x.name === body.name);
