@@ -456,7 +456,7 @@ class AuditLineTests(Base):
 
     def lines(self, message, k):
         out = []
-        with mock.patch.object(AUDIT_LOG, "emit", side_effect=out.append):
+        with mock.patch.object(AUDIT_LOG, "emit", side_effect=lambda entry, keep=True: out.append(entry)):
             self.ask(message, k)
             conn = ROUTER.Connection(ROUTER.Headers([]), {}, False, False, None, None, k, None)
             AUDIT_LOG.record(ROUTER.Request("POST", "/mcp", None, {}, f"api-key:{k['name']}", k["role"],

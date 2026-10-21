@@ -116,31 +116,14 @@ class WhatIsAudited(unittest.TestCase):
 class Recording(unittest.TestCase):
     def setUp(self):
         self.out = []
-        self.enterContext(mock.patch.object(AUDIT_LOG, "emit", side_effect=self.out.append))
-        AUDIT_LOG._refusals.clear()
-        self.addCleanup(AUDIT_LOG._refusals.clear)
+        self.enterContext(mock.patch.object(AUDIT_LOG, "emit", side_effect=lambda entry, keep=True: self.out.append(entry)))
+        AUDIT_LOG._buckets.clear()
+        self.addCleanup(AUDIT_LOG._buckets.clear)
 
     def test_a_read_writes_nothing_and_a_change_one_line(self):
         AUDIT_LOG.record(view("GET", "/api/overview"), 200, 3)
         AUDIT_LOG.record(view(), 200, 3)
         self.assertEqual(["/api/workload/scale"], [line["path"] for line in self.out])
-
-    def test_refusal_throttle_is_bounded_and_spares_successes(self):
-        clock = [1000.0]
-        self.enterContext(mock.patch.object(AUDIT_LOG.time, "time", side_effect=lambda: clock[0]))
-        stranger = view(user=None, role=None, addr="192.0.2.7")
-        AUDIT_LOG.record(stranger, 401, 1)
-        AUDIT_LOG.record(stranger, 403, 1)
-        self.assertEqual(1, len(self.out))
-        clock[0] += 61
-        AUDIT_LOG.record(stranger, 401, 1)
-        self.assertEqual(2, len(self.out))
-        for _ in range(3):
-            AUDIT_LOG.record(view("POST", "/api/auth/setup", user=None, role=None, addr="192.0.2.7"), 200, 1)
-        self.assertEqual(5, len(self.out), "a no-user success (first admin) is never throttled")
-        for n in range(AUDIT_LOG.REFUSAL_ADDRESSES + 1):
-            AUDIT_LOG.record(view(user=None, role=None, addr=f"198.51.100.{n}"), 401, 1)
-        self.assertLessEqual(len(AUDIT_LOG._refusals), AUDIT_LOG.REFUSAL_ADDRESSES)
 
     def test_record_never_raises(self):
         with mock.patch.object(AUDIT_LOG, "emit", side_effect=OSError("disk")):
@@ -149,12 +132,102 @@ class Recording(unittest.TestCase):
             self.assertIsNone(AUDIT_LOG.record(view(), 200, 1))
 
 
+class Throttle(unittest.TestCase):
+    """A flood of refused, unauthenticated or no-op requests cannot wash real
+    changes out of audit.jsonl's two files: on the data volume they are kept a
+    few a minute per address and per user, and summed up after; stdout still
+    carries every line, and a signed-in person's successful change is always kept."""
+
+    def setUp(self):
+        self.clock = [1000.0]
+        self.enterContext(mock.patch.object(AUDIT_LOG.time, "time", side_effect=lambda: self.clock[0]))
+        self.enterContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=True))
+        self.stdout, self.kept = [], []
+        self.enterContext(mock.patch.object(AUDIT_LOG, "_stdout", side_effect=lambda t: self.stdout.append(json.loads(t))))
+        self.enterContext(mock.patch.object(AUDIT_LOG, "_append", side_effect=lambda t: self.kept.append(json.loads(t))))
+        AUDIT_LOG._buckets.clear()
+        self.addCleanup(AUDIT_LOG._buckets.clear)
+        AUDIT_LOG._swept[0] = 0
+
+    def stranger(self, addr="192.0.2.7", status=401, user=None):
+        AUDIT_LOG.record(view(user=user, role=None if user is None else "viewer", addr=addr), status, 1)
+
+    def summaries(self):
+        return [line for line in self.kept if "suppressed" in line]
+
+    def test_signed_in_successes_are_never_throttled(self):
+        for _ in range(500):
+            AUDIT_LOG.record(view(), 200, 1)
+        self.assertEqual(500, len(self.kept))
+        self.assertEqual(500, len(self.stdout))
+
+    def test_refusals_keep_a_few_per_address_then_a_summary(self):
+        for _ in range(20):
+            self.stranger()
+        self.assertEqual(20, len(self.stdout), "stdout carries every line")
+        self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
+        self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + 1
+        self.stranger()
+        (summary,) = self.summaries()
+        self.assertEqual({"suppressed": 20 - AUDIT_LOG.BURST, "addr": "192.0.2.7", "window_s": AUDIT_LOG.WINDOW_SECONDS},
+                         {k: summary[k] for k in ("suppressed", "addr", "window_s")})
+        self.assertIn("more refused, unauthenticated or no-op requests from 192.0.2.7", summary["detail"])
+        self.assertEqual(401, self.kept[-1]["status"], "a new minute keeps lines again")
+
+    def test_a_summary_comes_even_when_the_flood_stops(self):
+        for _ in range(9):
+            self.stranger()
+        self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + AUDIT_LOG.SWEEP_SECONDS + 1
+        AUDIT_LOG.record(view(), 200, 1)                     # anyone's next change
+        self.assertEqual([9 - AUDIT_LOG.BURST], [line["suppressed"] for line in self.summaries()])
+
+    def test_a_signed_in_users_refusals_are_throttled_across_addresses(self):
+        for n in range(20):
+            self.stranger(addr=f"198.51.100.{n}", status=403, user="node1")
+        self.assertEqual(20, len(self.stdout))
+        self.assertEqual(AUDIT_LOG.BURST, len([line for line in self.kept if line.get("status") == 403]))
+
+    def test_no_op_lines_with_no_user_are_throttled_but_a_first_setup_is_kept(self):
+        AUDIT_LOG.record(view("POST", "/api/auth/setup", user=None, role=None), 200, 1)
+        self.assertEqual("/api/auth/setup", self.kept[0]["path"])
+        for _ in range(20):
+            AUDIT_LOG.record(view("POST", "/api/auth/setup", user=None, role=None), 200, 1)
+        self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
+
+    def test_many_addresses_share_one_ceiling(self):
+        for n in range(1000):
+            self.stranger(addr=f"198.51.{n // 250}.{n % 250}")
+        self.assertEqual(1000, len(self.stdout))
+        self.assertEqual(AUDIT_LOG.ALL_BURST, len(self.kept))
+        self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + 1
+        self.stranger(addr="192.0.2.99")
+        everyone = [line for line in self.summaries() if line.get("addr") == "*"]
+        self.assertEqual([1000 - AUDIT_LOG.ALL_BURST], [line["suppressed"] for line in everyone])
+
+    def test_the_table_is_bounded_and_an_evicted_flood_is_still_summed_up(self):
+        for _ in range(9):
+            self.stranger(addr="192.0.2.7")
+        for n in range(AUDIT_LOG.KEYS_KEPT + 50):
+            self.clock[0] += 0.001
+            self.stranger(addr=f"198.51.{n // 250}.{n % 250}")
+        self.assertLessEqual(len(AUDIT_LOG._buckets), AUDIT_LOG.KEYS_KEPT)
+        self.assertEqual([9 - AUDIT_LOG.BURST],
+                         [line["suppressed"] for line in self.summaries() if line.get("addr") == "192.0.2.7"])
+
+    def test_summaries_are_file_only(self):
+        for _ in range(9):
+            self.stranger()
+        self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + 1
+        self.stranger()
+        self.assertFalse([line for line in self.stdout if "suppressed" in line])
+
+
 class Notes(unittest.TestCase):
     """What a request notes is its own: never the next request's on the same thread."""
 
     def setUp(self):
         self.out = []
-        self.enterContext(mock.patch.object(AUDIT_LOG, "emit", side_effect=self.out.append))
+        self.enterContext(mock.patch.object(AUDIT_LOG, "emit", side_effect=lambda entry, keep=True: self.out.append(entry)))
         AUDIT_LOG._take_notes()
 
     def test_notes_never_reach_the_next_request(self):

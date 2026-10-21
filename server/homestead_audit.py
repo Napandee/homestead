@@ -13,6 +13,7 @@ password, setup code, key or cookie can reach it. What that view cannot know -
 the linked cluster a request was relayed to, an AI agent's tool - is noted
 during the request with note(), and taken by the hook.
 """
+import collections
 import datetime
 import json
 import os
@@ -47,19 +48,28 @@ NOTE_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,252}")     # tool names ha
 EMAIL = re.compile(r"[^\s@]{1,64}@[^\s@]{1,189}")
 DELETE_WORKLOAD = re.compile(r"/api/workload/([a-z0-9.-]+)/([a-z0-9.-]+)")
 PATH_CAP = 200
-# Refused requests with no user: at most one line per address a minute, so a
-# client retrying cannot wash the changes out of the log.
-REFUSED = (401, 403, 429)
-REFUSAL_SECONDS = 60
-REFUSAL_ADDRESSES = 1000
-
+# A flood of refused, unauthenticated or no-op requests must not wash real
+# changes out of the two files on the data volume. stdout carries every line;
+# the file keeps, each WINDOW_SECONDS, at most BURST such lines per address and
+# per user and ALL_BURST in all, then one summary line for what it left out. A
+# signed-in person's successful change is always kept. The table is bounded
+# (least recently used goes first, its summary written), never cleared.
+WINDOW_SECONDS = 60
+BURST = 5
+ALL_BURST = 120
+KEYS_KEPT = 1000
+SWEEP_SECONDS = 5
+# Two rotations closer than this say something is filling the file.
+ROTATION_ALARM_SECONDS = 3600
 # On the data volume as well, so the record survives a restart without a log
 # collector: two files of at most MAX_BYTES, ~60 000 lines.
 FILE = "audit.jsonl"
 LOCK = "audit.lock"
 MAX_BYTES = 10 * 1024 * 1024
-
-_refusals = {}
+_buckets = collections.OrderedDict()   # ("addr"|"user"|"all", name) -> window
+_swept = [0.0]
+_rotated = []
+_throttle = threading.Lock()
 _notes = threading.local()
 _lock = threading.Lock()
 
@@ -109,13 +119,17 @@ def _via(request, conn):
     return "browser" if request.user else "none"
 
 
+def _now_text(seconds):
+    at = datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc)
+    return at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def line(request, status, ms, notes, now=None):
     """The line for one finished request, or None when it gets none."""
     if request.path == MCP_PATH and notes.get("kind") not in CHANGE_TOOLS:
         return None             # initialize, tools/list, ping and read tools are reads
     conn = request.conn
-    at = datetime.datetime.fromtimestamp(time.time() if now is None else now, datetime.timezone.utc)
-    entry = {"v": 1, "at": at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+    entry = {"v": 1, "at": _now_text(time.time() if now is None else now),
              "replica": os.environ.get("HOSTNAME", ""), "via": _via(request, conn),
              "user": request.user or "", "role": request.role, "addr": request.addr}
     email = (conn.access or {}).get("email") if conn is not None and isinstance(conn.access, dict) else None
@@ -138,16 +152,68 @@ def line(request, status, ms, notes, now=None):
     return entry
 
 
-def _throttled(entry):
-    if entry["user"] or entry["status"] not in REFUSED:
-        return False
-    now, addr = time.time(), entry["addr"]
-    if now - _refusals.get(addr, 0) <= REFUSAL_SECONDS:
-        return True
-    if len(_refusals) >= REFUSAL_ADDRESSES:
-        _refusals.clear()           # many addresses at once: start again
-    _refusals[addr] = now
-    return False
+def _always_kept(entry):
+    return bool(entry["user"]) and isinstance(entry["status"], int) and entry["status"] < 400
+
+
+def _summary(key, window):
+    kind, name = key
+    entry = {"v": 1, "at": _now_text(time.time()), "replica": os.environ.get("HOSTNAME", ""),
+             "event": "audit-suppressed", "suppressed": window["dropped"], "window_s": WINDOW_SECONDS,
+             "since": _now_text(window["start"])}
+    if kind == "user":
+        entry["user"] = name
+        who = f"by {name}"
+    else:
+        entry["addr"] = name if kind == "addr" else "*"
+        who = f"from {name}" if kind == "addr" else "from any address"
+    entry["detail"] = (f"{window['dropped']} more refused, unauthenticated or no-op requests {who} "
+                       f"in the {WINDOW_SECONDS} s since {entry['since']}: on stdout, not kept here")
+    return entry
+
+
+def _window(key, now, summaries):
+    window = _buckets.get(key)
+    if window is not None and now - window["start"] >= WINDOW_SECONDS:
+        if window["dropped"]:
+            summaries.append(_summary(key, window))
+        window = None
+    if window is None:
+        window = _buckets[key] = {"start": now, "kept": 0, "dropped": 0}
+    _buckets.move_to_end(key)
+    return window
+
+
+def _keep(entry):
+    """Whether the data volume keeps this line, and the summaries due first."""
+    now, summaries = time.time(), []
+    with _throttle:
+        if now - _swept[0] >= SWEEP_SECONDS:
+            _swept[0] = now
+            for key in [k for k, w in _buckets.items() if now - w["start"] >= WINDOW_SECONDS]:
+                window = _buckets.pop(key)
+                if window["dropped"]:
+                    summaries.append(_summary(key, window))
+        if _always_kept(entry):
+            return True, summaries
+        everyone = _window(("all", ""), now, summaries)
+        mine = [_window(("addr", entry["addr"]), now, summaries)]
+        if entry["user"]:
+            mine.insert(0, _window(("user", entry["user"]), now, summaries))
+        while len(_buckets) > KEYS_KEPT:
+            key, window = _buckets.popitem(last=False)
+            if window["dropped"]:
+                summaries.append(_summary(key, window))
+        if everyone["kept"] >= ALL_BURST:
+            everyone["dropped"] += 1
+            return False, summaries
+        full = next((window for window in mine if window["kept"] >= BURST), None)
+        if full is not None:
+            full["dropped"] += 1
+            return False, summaries
+        for window in [everyone, *mine]:
+            window["kept"] += 1
+        return True, summaries
 
 
 def record(request, status, ms):
@@ -157,8 +223,13 @@ def record(request, status, ms):
         if not audited(request.method, request.path):
             return
         entry = line(request, status, ms, notes)
-        if entry is not None and not _throttled(entry):
-            emit(entry)
+        if entry is None:
+            return
+        keep, summaries = _keep(entry)
+        for summary in summaries:
+            if _file_on():
+                _append(text(summary))
+        emit(entry, keep)
     except Exception:
         pass        # recording never changes or breaks an answer
 
@@ -205,10 +276,18 @@ def _rotate(path, incoming):
             size = os.stat(path).st_size
         except FileNotFoundError:
             return
-        if size + incoming > MAX_BYTES:
-            os.replace(path, path + ".1")
+        if size + incoming <= MAX_BYTES:
+            return
+        os.replace(path, path + ".1")
     finally:
         os.close(fd)
+    now = time.time()
+    if _rotated and now - _rotated[-1] < ROTATION_ALARM_SECONDS:
+        _stdout(text({"v": 1, "at": _now_text(now), "replica": os.environ.get("HOSTNAME", ""),
+                      "event": "audit-file-rotated-quickly",
+                      "detail": f"audit.jsonl filled {MAX_BYTES // (1024 * 1024)} MiB twice within an hour, so "
+                                "something may be flooding Homestead with requests; the pod log keeps every line"}))
+    _rotated[:] = [now]
 
 
 def _append(line_text):
@@ -237,11 +316,12 @@ def _append(line_text):
         pass                        # held, full or unwritable: stdout has the line
 
 
-def emit(entry):
-    """Write a line: to stdout, for a log collector, and to the data volume."""
+def emit(entry, keep=True):
+    """Write a line: always to stdout, for a log collector, and to the data
+    volume unless the throttle leaves it out (keep False)."""
     line_text = text(entry)
     _stdout(line_text)
-    if _file_on():
+    if keep and _file_on():
         _append(line_text)
 
 

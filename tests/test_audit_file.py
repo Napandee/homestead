@@ -85,6 +85,28 @@ class OnTheDataVolume(unittest.TestCase):
         self.assertEqual(1, len(self.kept()), "after the freeze it writes again")
         self.assertEqual(2, self.stdout.call_count)
 
+    def test_rotating_twice_within_an_hour_says_so(self):
+        """A flood that fills 10 MB twice in an hour is worth a look: one line
+        on stdout, and one at the top of the new file."""
+        clock = [5000.0]
+        self.enterContext(mock.patch.object(AUDIT_LOG.time, "time", side_effect=lambda: clock[0]))
+        AUDIT_LOG._rotated.clear()
+        self.addCleanup(AUDIT_LOG._rotated.clear)
+        def full_then_emit():
+            Path(self.path).write_text("x" * 300, encoding="utf-8")
+            self.emit()                                                # exactly one rotation
+        with mock.patch.object(AUDIT_LOG, "MAX_BYTES", 200):
+            full_then_emit()                                           # the first: nothing to say
+            self.assertFalse([c for c in self.stdout.call_args_list if "rotated" in c.args[0]])
+            clock[0] += 60
+            full_then_emit()                                           # again within the hour
+            clock[0] += AUDIT_LOG.ROTATION_ALARM_SECONDS + 1
+            full_then_emit()                                           # an hour later: quiet again
+        alarms = [json.loads(c.args[0]) for c in self.stdout.call_args_list if "rotated" in c.args[0]]
+        self.assertEqual(1, len(alarms))
+        self.assertEqual("audit-file-rotated-quickly", alarms[0]["event"])
+        self.assertIn("the pod log keeps every line", alarms[0]["detail"])
+
     def test_the_fence_sees_the_audit_path(self):
         guard = mock.Mock()
         with mock.patch.object(SHARED, "WRITE_GUARD", guard):

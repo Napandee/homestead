@@ -117,8 +117,8 @@ class EndToEnd(unittest.TestCase):
                 self.lines.append(json.loads(text))
                 self.arrived.notify_all()
         self.enterContext(mock.patch.object(AUDIT_LOG, "_stdout", side_effect=out))
-        AUDIT_LOG._refusals.clear()
-        self.addCleanup(AUDIT_LOG._refusals.clear)
+        AUDIT_LOG._buckets.clear()
+        self.addCleanup(AUDIT_LOG._buckets.clear)
         self.assertTrue(any(fn is AUDIT_LOG.record for fn, _ in ROUTES._hooks), "the audit hook is registered")
         self.who = self.enterContext(mock.patch.object(
             self.server.H, "_who", return_value={"user": "ada", "role": "admin", "stale": False,
@@ -177,12 +177,12 @@ class EndToEnd(unittest.TestCase):
         (line,) = self.wait_for(1)
         self.assertEqual(500, line["status"])
 
-    def test_a_refused_stranger_is_written_once_a_minute(self):
+    def test_a_refused_stranger_is_on_stdout_every_time(self):
         self.who.return_value = None
         self.assertEqual(401, self.send("POST", "/api/audit-test/save", {}))
         self.assertEqual(401, self.send("POST", "/api/audit-test/save", {}))
-        lines = self.wait_for(2)          # waits out the 3 s for a second line that must not come
-        self.assertEqual(1, len(lines))
+        lines = self.wait_for(2)          # stdout carries every line; the file keeps a few (test_audit.Throttle)
+        self.assertEqual(2, len(lines))
         self.assertEqual(("none", "", 401), (lines[0]["via"], lines[0]["user"], lines[0]["status"]))
 
     def test_a_read_writes_nothing(self):
