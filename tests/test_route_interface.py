@@ -63,14 +63,32 @@ class Interface(unittest.TestCase):
             with self.subTest(cookie=bad), self.assertRaises(ROUTES.Refused):
                 ROUTES.cookie_header(bad, tls=False)
 
+    def test_each_cookie_keeps_its_own_path(self):                          # review minor 2
+        for bad in (C("homestead_session", "a", path="/api/"), C("homestead_cluster", "a", path="/api/fleet/"),
+                    C("homestead-data-move", "t"), C("homestead_session", "a", max_age=True)):
+            with self.subTest(cookie=bad), self.assertRaises(ROUTES.Refused):
+                ROUTES.cookie_header(bad, tls=False)
+        self.assertEqual("homestead-data-move=t; Path=/api/self/data/handoff/; HttpOnly; SameSite=Strict; Max-Age=60",
+                         ROUTES.cookie_header(C("homestead-data-move", "t", "/api/self/data/handoff/", 60), tls=False))
+
     def test_headers_refuse_injection_and_owned_names(self):
-        for name, value in (("X-A", "a\r\nSet-Cookie: x=1"), ("X-A", "a\nb"), ("Bad Name", "v"), ("X:A", "v"),
-                            ("Set-Cookie", "x=1"), ("content-security-policy", "x"), ("Cache-Control", "max-age=9"),
-                            ("X-A", "☃")):
+        for name, value in (("Content-Disposition", "a\r\nSet-Cookie: x=1"), ("Retry-After", "a\nb"),
+                            ("Bad Name", "v"), ("X:A", "v"), ("Set-Cookie", "x=1"), ("content-security-policy", "x"),
+                            ("Cache-Control", "max-age=9"), ("Content-Disposition", "☃"), ("Vary", "a\x00")):
             with self.subTest(name=name, value=value), self.assertRaises(ROUTES.Refused):
                 ROUTES.check_header(name, value)
         self.assertEqual(("Content-Disposition", 'attachment; filename="a.zip"'),
                          ROUTES.check_header("Content-Disposition", 'attachment; filename="a.zip"'))
+
+    def test_only_the_headers_a_route_needs_may_be_set(self):         # security review 3
+        for name in ("Transfer-Encoding", "content-encoding", "Upgrade", "Refresh", "Access-Control-Allow-Origin",
+                     "access-control-allow-credentials", "Set-Cookie2", "X-A", "Link", "Content-Length"):
+            with self.subTest(name=name), self.assertRaises(ROUTES.Refused):
+                ROUTES.check_header(name, "1")
+        for name in ("Location", "Content-Disposition", "Retry-After", "ETag", "last-modified", "Vary",
+                     "X-Homestead-Fleet-Missing"):
+            value = "/" if name == "Location" else "1"
+            self.assertEqual((name, value), ROUTES.check_header(name, value))
 
     def test_location_refuses_scheme_relative_and_backslash(self):      # Review Focus 1
         self.assertEqual(("Location", "/"), ROUTES.check_header("Location", "/"))
@@ -104,14 +122,47 @@ class PrefixRoutes(unittest.TestCase):
         self.assertEqual("/api/t/u/*", ROUTES.find("GET", "/api/t/u/v").path)
         self.assertEqual("admin", ROUTES.role("/api/t/a", "GET"))
 
+    def test_a_prefix_route_answers_only_plain_paths_under_it(self):     # review minor 1
+        for path in ("/api/t/", "/api/t/../auth/keys", "/api/t//a", "/api/t/a/", "/api/t/%2e%2e/x",
+                     "/api/t/a\\b", "/api/t/./a", "/api/t/a/.."):
+            with self.subTest(path=path):
+                self.assertIsNone(ROUTES.find("GET", path))
+        self.assertEqual("/api/t/*", ROUTES.find("GET", "/api/t/a.b/c-d").path)
+
+    def declare(self, method, path):
+        """table() as it reads a module that declares only this route."""
+        module = type(sys)("homestead_test_star")
+        module.ROUTES = {(method, path): ("viewer", lambda request: {})}
+        with mock.patch.dict(sys.modules, {"homestead_test_star": module}), \
+                mock.patch.object(ROUTES, "MODULES", ("homestead_test_star",)), mock.patch.object(ROUTES, "_table", {}):
+            return ROUTES.table()
+
     def test_a_star_anywhere_but_the_end_is_refused(self):
         for path in ("/api/a*/b", "/api/a*", "/api/*/b"):
-            module = type(sys)("homestead_test_star")
-            module.ROUTES = {("GET", path): ("viewer", lambda request: {})}
-            with self.subTest(path=path), mock.patch.dict(sys.modules, {"homestead_test_star": module}), \
-                    mock.patch.object(ROUTES, "MODULES", ("homestead_test_star",)), \
-                    mock.patch.object(ROUTES, "_table", {}), self.assertRaises(ValueError):
-                ROUTES.table()
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.declare("GET", path)
+
+    def test_a_prefix_route_may_not_cover_another_answer(self):          # security review 2
+        # a POLICY row, a public path, /api/v1, a page or the app's own routes
+        for method, path in (("GET", "/api/vm/store/*"), ("POST", "/api/auth/*"), ("GET", "/api/fleet/*"),
+                             ("GET", "/api/v1/*"), ("GET", "/api/v1/nodes/*"), ("POST", "/api/*"), ("GET", "/*"),
+                             ("GET", "/settings/*"), ("GET", "/vms/*"), ("GET", "/js/*"),
+                             # server.py's own prefix answers (review I2)
+                             ("GET", "/api/self/data/handoff/*"), ("GET", "/api/self/data/*"),
+                             ("DELETE", "/api/workload/*"), ("DELETE", "/api/workload/lab/*"),
+                             ("GET", "/api/fleet/all/*"), ("GET", "/api/icons/*")):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.declare(method, path)
+        self.assertIn(("GET", "/api/test-free/*"), self.declare("GET", "/api/test-free/*"))
+
+    def test_a_prefix_route_never_loosens_the_policys_role(self):         # security review 2
+        import homestead_route_policy as POLICY
+        ROUTES._table[("POST", "/api/t/*")] = ROUTES.Route("POST", "/api/t/*", "admin", lambda request: {}, "test")
+        self.added.append(("POST", "/api/t/*"))
+        with mock.patch.dict(POLICY.POLICY, {("POST", "/api/t/open"): "viewer", ("GET", "/api/t/locked"): "admin"}):
+            self.assertEqual("admin", POLICY.role("/api/t/open", "POST"))
+            self.assertEqual("admin", POLICY.role("/api/t/locked", "GET"))     # the policy's, stricter than viewer
+        self.assertEqual("admin", POLICY.role("/api/t/other", "POST"))
 
 
 class Connections(unittest.TestCase):
@@ -179,11 +230,56 @@ class Connections(unittest.TestCase):
         handler.headers = {"X-Forwarded-Proto": "https"}
         self.assertTrue(ROUTES.connection(handler).tls)
 
+    def test_connection_on_a_handler_with_no_headers(self):
+        import server
+        conn = ROUTES.connection(object.__new__(server.H))
+        self.assertEqual((0, {}, False), (len(conn.headers), dict(conn.cookies), conn.tls))
+
     def test_a_route_that_needs_conn_refuses_an_in_process_call(self):
         with self.assertRaises(PermissionError):
             ROUTES.connected(ROUTES.Request("GET", "/api/x", {}, None, "ada", "admin"))
         conn = ROUTES.connection(bare_handler())
         self.assertIs(conn, ROUTES.connected(ROUTES.Request("GET", "/api/x", {}, None, "ada", "admin", "", conn)))
+
+
+class AccessIdentity(unittest.TestCase):                                  # security review 1
+    def test_begin_forgets_the_previous_access_identity(self):
+        seen = []
+        handler = Answering.handler(self, "/api/test/access", {"ok": True})
+        ROUTES._table[("POST", "/api/test/access")] = ROUTES.Route(
+            "POST", "/api/test/access", "admin", lambda request: seen.append(request.conn.access) or {}, "test")
+        handler._access = {"email": "ada@example.com"}
+        handler.do_POST()
+        self.assertEqual([None], seen)
+
+    def test_a_kept_alive_request_does_not_keep_the_previous_access_identity(self):
+        import threading
+        from http.client import HTTPConnection
+        import server
+        import homestead_http as HTTP
+        seen = []
+        ROUTES.table()
+        ROUTES._table[("GET", "/api/test/access")] = ROUTES.Route(
+            "GET", "/api/test/access", "viewer", lambda request: seen.append(request.conn.access) or {}, "test")
+        self.addCleanup(ROUTES._table.pop, ("GET", "/api/test/access"), None)
+        self.enterContext(mock.patch.object(server.H, "_who", return_value={
+            "user": "ada", "role": "viewer", "stale": False, "remember": False, "started": None}))
+        self.enterContext(mock.patch.object(server.CFACCESS, "enabled", return_value=True))
+        verify = self.enterContext(mock.patch.object(server.CFACCESS, "verify",
+                                                     return_value={"email": "ada@example.com"}))
+        listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H)
+        threading.Thread(target=listener.serve_forever, daemon=True).start()
+        self.addCleanup(listener.server_close)
+        self.addCleanup(listener.shutdown)
+        connection = HTTPConnection(*listener.server_address, timeout=3)
+        self.addCleanup(connection.close)
+        for headers in ({"Cf-Ray": "1", "Cf-Access-Jwt-Assertion": "a.b.c"}, {}):
+            connection.request("GET", "/api/test/access", headers=headers)
+            response = connection.getresponse()
+            response.read()
+            self.assertEqual(200, response.status)
+        verify.assert_called_once_with("a.b.c")
+        self.assertEqual([{"email": "ada@example.com"}, None], seen)
 
 
 class Answering(unittest.TestCase):
@@ -225,6 +321,24 @@ class Answering(unittest.TestCase):
         self.assertEqual(500, handler._send.call_args.args[0])
         self.assertFalse(any("homestead_session=ok" in value for _, value in handler._extra_headers))
         self.assertFalse(any(value == "x=1" for _, value in handler._extra_headers))
+
+    def test_a_content_type_or_status_that_breaks_the_answer_is_refused(self):    # review I1
+        for answer in (ROUTES.Reply(200, {}, "application/json\r\nSet-Cookie: CF_Authorization=x"),
+                       ROUTES.Reply(200, {}, "text/plain\nAccess-Control-Allow-Origin: *"),
+                       ROUTES.Reply(200, {}, "text/plain\x00"), ROUTES.Reply(200, {}, "json"),
+                       ROUTES.Reply(200, {}, "text/plain; charset"), ROUTES.Raw(b"x", "image/png\r\nRefresh: 0"),
+                       ROUTES.Stream(iter([b"a"]), "application/zip\r\nX: 1", "a.zip", 1),
+                       ROUTES.Reply(101, {}), ROUTES.Reply(204, {}), ROUTES.Reply(304, {}), ROUTES.Reply(99, {}),
+                       ROUTES.Reply(600, {}), ROUTES.Reply("200", {}), ROUTES.Reply(True, {})):
+            with self.subTest(answer=answer):
+                handler = self.handler("/api/test/broken", answer)
+                handler.do_POST()
+                self.assertEqual(500, handler._send.call_args.args[0])
+                handler._send_stream.assert_not_called()
+        for ctype in ("text/html; charset=utf-8", 'multipart/mixed; boundary="a b"', "image/svg+xml"):
+            handler = self.handler("/api/test/fine", ROUTES.Reply(202, "x", ctype))
+            handler.do_POST()
+            self.assertEqual((202, "x", ctype), handler._send.call_args.args)
 
     def test_raw_stream_and_plain_answers_are_unchanged(self):
         handler = self.handler("/api/test/raw", ROUTES.Raw(b"PNG", "image/png"))

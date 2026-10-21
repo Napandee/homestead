@@ -1539,7 +1539,7 @@ class H(HTTP.LimitedHandler):
         self._extra_headers = []
         self._raw = None
         self._fleet_who = False
-        self._fleet_from = None
+        self._fleet_from = self._access = None    # who the guard finds, this request's alone
         self._diagnostic_authorized = False
         self._diagnostic_started = time.monotonic()
         HOSTACCESS.set_role(None)

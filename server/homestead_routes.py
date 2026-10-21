@@ -34,10 +34,11 @@ refuses a call made without one): its headers, without Cookie, Authorization,
 Proxy-Authorization, Cf-Access-Jwt-Assertion and the fleet signature; Homestead's
 own cookies; whether it came over TLS or through Cloudflare; and who the guard
 found - the Access sign-in, the linked Homestead, the API key - with `who()` for
-the session. A Reply sets Homestead's own cookies (`cookies=(Cookie(...),)`) and
-headers the server does not own (`headers=(("Location", "/"),)`), checked before
-any is written: one that is refused (`Refused`) is answered 500, with none of them.
-A path ending "/*" is a prefix route: it answers every path under it.
+the session. A Reply sets Homestead's own cookies (`cookies=(Cookie(...),)`, each
+at its own path) and only the ROUTE_HEADERS (`headers=(("Location", "/"),)`); its
+status and type are checked too, all before anything is written: one that is
+refused (`Refused`) is answered 500, with none of them. A path ending "/*" is a
+prefix route: it answers the plain paths under it (no ., .., // or %).
 
 A module is listed in MODULES to be read. A route stays in server.py while it
 needs the handler itself: a WebSocket, /mcp, a file served with its own headers.
@@ -182,19 +183,23 @@ Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 Reply = collections.namedtuple("Reply", "code body ctype headers cookies", defaults=("application/json", (), ()))
 # max_age None: a cookie that lasts as long as the browser keeps it.
 Cookie = collections.namedtuple("Cookie", "name value path max_age", defaults=("/", None))
-# The only cookies a route may read or set.
-COOKIES = ("homestead_session", "homestead_cluster", "homestead-data-move")
-# Headers the server writes itself; a route may not set or weaken them.
-OWNED_HEADERS = ("set-cookie", "content-type", "content-length", "connection", "content-security-policy",
-                 "strict-transport-security", "x-frame-options", "x-content-type-options",
-                 "referrer-policy", "permissions-policy", "x-homestead-version", "cache-control")
+# The only cookies a route may read or set, each with the one path it is set at.
+COOKIES = {"homestead_session": "/", "homestead_cluster": "/", "homestead-data-move": "/api/self/data/handoff/"}
+# The only response headers a route may set: everything else (framing,
+# encoding, caching, security, cross-origin, cookies) is the server's own.
+ROUTE_HEADERS = ("location", "content-disposition", "retry-after", "etag", "last-modified", "vary",
+                 "x-homestead-fleet-missing")
 # Request headers a route never sees: they carry a secret, or the fleet
 # signature that conn.fleet already checked.
 SECRET_HEADERS = ("cookie", "authorization", "proxy-authorization", "cf-access-jwt-assertion", "x-homestead-fleet")
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _VALUE = re.compile(r"[\t\x20-\x7e\x80-\xff]*")
 _COOKIE_VALUE = re.compile(r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*")
-_COOKIE_PATH = re.compile(r"/[\x21-\x3a\x3c-\x7e]*")
+_TOKEN_TEXT = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+# type/subtype, then ; name=value parameters, the value a token or a quoted string.
+_MEDIA = re.compile(rf"{_TOKEN_TEXT}/{_TOKEN_TEXT}(?:[ \t]*;[ \t]*{_TOKEN_TEXT}=(?:{_TOKEN_TEXT}|\"[^\"\\\x00-\x1f\x7f]*\"))*")
+# The rest of a path under a prefix route: plain segments, none empty, no . or .., no % or \.
+_REST = re.compile(r"(?!\.\.?(?:/|$))[^/%\\]+(?:/(?!\.\.?(?:/|$))[^/%\\]+)*")
 # A path on this site: never //host or /\host, which a browser reads as another site.
 _LOCATION = re.compile(r"/(?![/\\])[^\s\\]*")
 
@@ -259,8 +264,8 @@ def cookie_header(cookie, tls):
         raise Refused(f"a route may set only Homestead's own cookies, not {name!r}")
     if not isinstance(value, str) or not _COOKIE_VALUE.fullmatch(value):
         raise Refused(f"cookie {name} has a value a cookie cannot carry")
-    if not isinstance(path, str) or not _COOKIE_PATH.fullmatch(path):
-        raise Refused(f"cookie {name} has a path a cookie cannot carry")
+    if path != COOKIES[name]:
+        raise Refused(f"cookie {name} is set at {COOKIES[name]}, not {path!r}")
     if max_age is not None and (type(max_age) is not int or max_age < 0):
         raise Refused(f"cookie {name} has a Max-Age that is not a whole number of seconds")
     return (f"{name}={value}; Path={path}; HttpOnly; SameSite=Strict{'; Secure' if tls else ''}"
@@ -271,13 +276,22 @@ def check_header(name, value):
     """(name, value) when a route may send it; Refused otherwise."""
     if not isinstance(name, str) or not _TOKEN.fullmatch(name):
         raise Refused(f"{name!r} is not a header name")
-    if name.lower() in OWNED_HEADERS:
-        raise Refused(f"{name} is written by the server, not by a route")
+    if name.lower() not in ROUTE_HEADERS:
+        raise Refused(f"a route may not set {name}: only {', '.join(ROUTE_HEADERS)}")
     if not isinstance(value, str) or not _VALUE.fullmatch(value):
         raise Refused(f"{name} has a value a header cannot carry")
     if name.lower() == "location" and not _LOCATION.fullmatch(value):
         raise Refused("Location must be a path on this site")
     return name, value
+
+
+def check_answer(code, ctype):
+    """A status and Content-Type a route may answer with; Refused otherwise.
+    No 1xx, 204 or 304: each would break the framing of the answer's body."""
+    if type(code) is not int or not 200 <= code <= 599 or code in (204, 304):
+        raise Refused(f"a route may not answer with status {code!r}")
+    if not isinstance(ctype, str) or not _MEDIA.fullmatch(ctype):
+        raise Refused(f"{ctype!r} is not a media type")
 
 
 def _tls(handler):
@@ -288,7 +302,9 @@ def _tls(handler):
 
 
 def _headers(handler):
-    return getattr(handler, "headers", None) or {}
+    if getattr(handler, "headers", None) is None:
+        handler.headers = {}    # none read: a request refused before its headers, or a test's handler
+    return handler.headers
 
 
 def connection(handler):
@@ -306,11 +322,14 @@ def answer(handler, answer):
     """Send what a route returned. A Reply's cookies and headers are all checked
     before any is added, after what the guard already set (a refreshed session)."""
     if isinstance(answer, Stream):
+        check_answer(200, answer.ctype)
         handler._send_stream(answer)
     elif isinstance(answer, Raw):
+        check_answer(200, answer.ctype)
         handler._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
         handler._send(200, answer.body, answer.ctype)
     elif isinstance(answer, Reply):
+        check_answer(answer.code, answer.ctype)
         tls = _tls(handler) if answer.cookies else False
         lines = ([("Set-Cookie", cookie_header(Cookie(*cookie), tls)) for cookie in answer.cookies] +
                  [check_header(*header) for header in answer.headers])
@@ -375,9 +394,24 @@ def table():
                 raise ValueError(f"{method} {path} in {name} has no handler")
             if "*" in path and not (path.endswith("/*") and path.count("*") == 1):
                 raise ValueError(f"{method} {path} in {name}: a prefix route ends in /* and has no other *")
+            if path.endswith("/*") and _covers(key[0], path[:-1]):
+                raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)
     _table.update(found)
     return _table
+
+
+def _covers(method, stem):
+    """Whether a prefix route under stem would take a path the route policy,
+    the public paths, server.py's own prefix branches, a page or a file of the
+    app already answer."""
+    import homestead_route_policy as POLICY
+    import homestead_web_paths as WEB
+    taken = [p for m, p in POLICY.POLICY if m == method] + sorted(WEB.PUBLIC) + sorted(WEB.SPA_ROUTES)
+    probe = stem + "x"
+    return (any(p.startswith(stem) for p in taken)
+            or any(p.startswith(stem) or stem.startswith(p) for p in POLICY.CODE_PREFIXES)
+            or WEB.is_page_path(probe) or WEB.is_public_path(probe) or not stem.startswith("/api/"))
 
 
 def find(method, path):
@@ -387,7 +421,8 @@ def find(method, path):
     route = routes.get((method, path))
     if route is not None or "*" in path:
         return route
-    stems = [p for m, p in routes if m == method and p.endswith("/*") and path.startswith(p[:-1])]
+    stems = [p for m, p in routes if m == method and p.endswith("/*") and path.startswith(p[:-1])
+             and _REST.fullmatch(path[len(p) - 1:])]
     return routes[(method, max(stems, key=len))] if stems else None
 
 
@@ -467,8 +502,6 @@ def after_request(handler):
     table()     # the modules that register hooks are read
     if not _hooks:
         return
-    if getattr(handler, "headers", None) is None:
-        handler.headers = {}    # refused before its headers were read
     raw = _headers(handler)
     view = Request(handler.command or "", urllib.parse.urlparse(handler.path or "").path, None, None,
                    getattr(handler, "user", None), getattr(handler, "role", None),
