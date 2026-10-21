@@ -85,6 +85,7 @@ MODULES = (
     "homestead_lhv2_upgrade",
     "homestead_lifecycle",
     "homestead_longhorn",
+    "homestead_metrics",
     "homestead_move",
     "homestead_move_engine",
     "homestead_move_source",

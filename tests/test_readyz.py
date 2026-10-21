@@ -10,7 +10,9 @@ from unittest import mock
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import server
 import homestead_fleet as FLEET
+import homestead_metrics as METRICS
 import homestead_readyz as READYZ
+import homestead_routes as MODULE_ROUTES
 import homestead_self_data_fence as FENCE
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
@@ -196,6 +198,21 @@ class ReadyzThroughTheServer(unittest.TestCase):
         with mock.patch.object(server, "_self_data_boot_pending", False):
             self.assertEqual(503, self.sent("/healthz")[0])
             self.assertEqual((503, {"ready": False}), self.sent("/readyz"))
+
+    def test_metrics_while_the_fence_holds_never_writes_to_data(self):
+        """/metrics is not in the guard's fence paths: it is read while the
+        fence holds, and must not reach the probe write."""
+        MODULE_ROUTES.forget("metrics"); self.addCleanup(MODULE_ROUTES.forget, "metrics")
+        h = handler("/metrics")
+        h._who.return_value = {"user": "viewer1", "role": "viewer", "remember": False, "started": 0}
+        h.client_address = ("192.0.2.10", 40000)
+        with mock.patch.object(server, "_self_data_boot_pending", False), \
+             mock.patch.object(METRICS.SETTINGS_HELPERS, "get_app_settings", return_value={"metrics": {"enabled": True}}), \
+             mock.patch.object(READYZ.KUBE, "raw_get", return_value="{}"):
+            h.do_GET()
+        code, body = h._send.call_args.args[:2]
+        self.assertEqual(200, code)
+        self.assertIn('homestead_metrics_source_up{source="kube_api"} 1', body)
 
     def tearDown(self):
         # In every fence state the guard answers first: /readyz never writes

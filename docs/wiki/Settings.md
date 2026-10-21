@@ -286,7 +286,11 @@ working, refreshed every 15 seconds:
 - **Samba** - running, and on which address. Switch it off here (shares stop
   being served; volumes, settings and passwords are kept) and on again, which
   installs it if needed;
-- the permissions check, backup storage and MQTT.
+- the permissions check, backup storage and MQTT;
+- **Metrics for Prometheus** - off until an admin turns it on here. On,
+  `/metrics` gives the same health in the Prometheus text format to anyone with
+  an API key, or signed in. See
+  [Monitoring Homestead itself](Troubleshooting#monitoring-homestead-itself).
 
 ## Homestead's data
 

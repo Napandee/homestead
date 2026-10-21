@@ -1459,11 +1459,11 @@ class H(HTTP.LimitedHandler):
         return None
 
     def _api_key_guard(self, path, token):
-        """An API key: for /api/v1 alone, checked, and the request let through
-        with the key's scopes - which /api/v1 enforces per endpoint. No cookie
+        """An API key: for /api/v1, /mcp and /metrics (every key reads), checked,
+        and let through with its scopes, which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
-        if not path.startswith("/api/v1/") and path != MCP.PATH:
-            self._send(401, {"error": "API keys work only on /api/v1 and /mcp; GET /api/v1/openapi.json lists what they can do"})
+        if not path.startswith("/api/v1/") and path not in (MCP.PATH, "/metrics"):
+            self._send(401, {"error": "API keys work only on /api/v1, /mcp and /metrics; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
             key = API_KEYS.verify(token, self._client_ip(), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
