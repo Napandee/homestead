@@ -48,12 +48,14 @@ NOTE_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,252}")     # tool names ha
 EMAIL = re.compile(r"[^\s@]{1,64}@[^\s@]{1,189}")
 DELETE_WORKLOAD = re.compile(r"/api/workload/([a-z0-9.-]+)/([a-z0-9.-]+)")
 PATH_CAP = 200
-# A flood of refused, unauthenticated or no-op requests must not wash real
-# changes out of the two files on the data volume. stdout carries every line;
-# the file keeps, each WINDOW_SECONDS, at most BURST such lines per address and
-# per user and ALL_BURST in all, then one summary line for what it left out. A
-# signed-in person's successful change is always kept. The table is bounded
-# (least recently used goes first, its summary written), never cleared.
+# A flood of refused requests must not wash real changes out of the two files
+# on the data volume. stdout carries every line; the file keeps every success
+# (anonymous ones too: first-admin setup) and every 5xx, and of 4xx refusals,
+# each WINDOW_SECONDS, at most BURST per address and per user, then ALL_BURST in
+# all - one ceiling for refusals with no user, another for signed-in people -
+# and always the first refusal from each address or user. What it leaves out is
+# summed up in one line. The table is bounded (least recently used goes first,
+# its summary written), never cleared.
 WINDOW_SECONDS = 60
 BURST = 5
 ALL_BURST = 120
@@ -152,8 +154,9 @@ def line(request, status, ms, notes, now=None):
     return entry
 
 
-def _always_kept(entry):
-    return bool(entry["user"]) and isinstance(entry["status"], int) and entry["status"] < 400
+def _refusal(entry):
+    status = entry["status"]
+    return isinstance(status, int) and 400 <= status < 500
 
 
 def _summary(key, window):
@@ -164,10 +167,16 @@ def _summary(key, window):
     if kind == "user":
         entry["user"] = name
         who = f"by {name}"
+    elif kind == "addr":
+        entry["addr"] = name
+        who = f"from {name}"
+    elif name == "signed-in":
+        entry["user"] = "*"
+        who = "by signed-in people"
     else:
-        entry["addr"] = name if kind == "addr" else "*"
-        who = f"from {name}" if kind == "addr" else "from any address"
-    entry["detail"] = (f"{window['dropped']} more refused, unauthenticated or no-op requests {who} "
+        entry["addr"] = "*"
+        who = "with no user, from any address"
+    entry["detail"] = (f"{window['dropped']} more refused requests {who} "
                        f"in the {WINDOW_SECONDS} s since {entry['since']}: on stdout, not kept here")
     return entry
 
@@ -194,22 +203,23 @@ def _keep(entry):
                 window = _buckets.pop(key)
                 if window["dropped"]:
                     summaries.append(_summary(key, window))
-        if _always_kept(entry):
+        if not _refusal(entry):
             return True, summaries
-        everyone = _window(("all", ""), now, summaries)
         mine = [_window(("addr", entry["addr"]), now, summaries)]
         if entry["user"]:
             mine.insert(0, _window(("user", entry["user"]), now, summaries))
+        everyone = _window(("all", "signed-in" if entry["user"] else "anonymous"), now, summaries)
         while len(_buckets) > KEYS_KEPT:
             key, window = _buckets.popitem(last=False)
             if window["dropped"]:
                 summaries.append(_summary(key, window))
-        if everyone["kept"] >= ALL_BURST:
-            everyone["dropped"] += 1
-            return False, summaries
         full = next((window for window in mine if window["kept"] >= BURST), None)
         if full is not None:
             full["dropped"] += 1
+            return False, summaries
+        first = any(window["kept"] == 0 for window in mine)
+        if everyone["kept"] >= ALL_BURST and not first:
+            everyone["dropped"] += 1
             return False, summaries
         for window in [everyone, *mine]:
             window["kept"] += 1

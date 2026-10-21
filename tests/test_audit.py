@@ -171,7 +171,7 @@ class Throttle(unittest.TestCase):
         (summary,) = self.summaries()
         self.assertEqual({"suppressed": 20 - AUDIT_LOG.BURST, "addr": "192.0.2.7", "window_s": AUDIT_LOG.WINDOW_SECONDS},
                          {k: summary[k] for k in ("suppressed", "addr", "window_s")})
-        self.assertIn("more refused, unauthenticated or no-op requests from 192.0.2.7", summary["detail"])
+        self.assertIn("more refused requests from 192.0.2.7", summary["detail"])
         self.assertEqual(401, self.kept[-1]["status"], "a new minute keeps lines again")
 
     def test_a_summary_comes_even_when_the_flood_stops(self):
@@ -187,22 +187,41 @@ class Throttle(unittest.TestCase):
         self.assertEqual(20, len(self.stdout))
         self.assertEqual(AUDIT_LOG.BURST, len([line for line in self.kept if line.get("status") == 403]))
 
-    def test_no_op_lines_with_no_user_are_throttled_but_a_first_setup_is_kept(self):
-        AUDIT_LOG.record(view("POST", "/api/auth/setup", user=None, role=None), 200, 1)
-        self.assertEqual("/api/auth/setup", self.kept[0]["path"])
+    def test_only_refusals_are_throttled(self):
+        """Successes, anonymous ones too (first-admin setup), and 5xx are always kept."""
         for _ in range(20):
             AUDIT_LOG.record(view("POST", "/api/auth/setup", user=None, role=None), 200, 1)
-        self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
+            self.stranger(status=500)
+            self.stranger(status=None)
+        self.assertEqual(60, len(self.kept))
+        for _ in range(20):
+            self.stranger(status=409, user="ada")
+        self.assertEqual(60 + AUDIT_LOG.BURST, len(self.kept), "a 4xx refusal is throttled")
 
-    def test_many_addresses_share_one_ceiling(self):
-        for n in range(1000):
-            self.stranger(addr=f"198.51.{n // 250}.{n % 250}")
-        self.assertEqual(1000, len(self.stdout))
-        self.assertEqual(AUDIT_LOG.ALL_BURST, len(self.kept))
-        self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + 1
-        self.stranger(addr="192.0.2.99")
+    def test_a_flood_from_one_address_suppresses_nothing_else(self):
+        for _ in range(300):
+            self.stranger(addr="192.0.2.7")
+        kept_before = len(self.kept)
+        self.stranger(addr="192.0.2.8", status=403, user="ada")             # (a) a signed-in refusal
+        AUDIT_LOG.record(view("POST", "/api/auth/setup", user=None, role=None, addr="192.0.2.7"), 200, 1)  # (b)
+        self.stranger(addr="192.0.2.7", status=500)                          # (c)
+        self.stranger(addr="192.0.2.9")                                       # (d) a second address's first 401
+        self.assertEqual([403, 200, 500, 401], [line["status"] for line in self.kept[kept_before:]])
+
+    def test_many_addresses_each_keep_their_first_refusal(self):
+        addresses = [f"198.51.{n // 250}.{n % 250}" for n in range(500)]     # within KEYS_KEPT
+        for addr in addresses:
+            self.stranger(addr=addr)
+        self.assertEqual(500, len(self.kept), "the first refusal from each address is kept")
+        for addr in addresses:
+            self.stranger(addr=addr)
+        self.assertEqual(500, len(self.kept), "past the ceiling, second refusals wait for the summary")
+        self.stranger(addr="192.0.2.8", status=403, user="ada")
+        self.assertEqual(403, self.kept[-1]["status"], "signed-in refusals have their own ceiling")
+        self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + AUDIT_LOG.SWEEP_SECONDS + 1
+        AUDIT_LOG.record(view(), 200, 1)
         everyone = [line for line in self.summaries() if line.get("addr") == "*"]
-        self.assertEqual([1000 - AUDIT_LOG.ALL_BURST], [line["suppressed"] for line in everyone])
+        self.assertEqual([500], [line["suppressed"] for line in everyone])
 
     def test_the_table_is_bounded_and_an_evicted_flood_is_still_summed_up(self):
         for _ in range(9):

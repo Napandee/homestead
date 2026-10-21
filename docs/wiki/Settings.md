@@ -340,10 +340,11 @@ took. Opening a console or a host shell writes one line when it ends.
 - **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two
   files of 10 MiB at most (about 60,000 lines). **Settings › About › Audit log**
   turns that off (admin); the pod log keeps writing.
-- So that a flood of refused or anonymous requests cannot push real changes out
-  of those two files, the file keeps at most 5 such lines a minute per address
-  and per user (120 in all), then one line saying how many it left out. A
-  signed-in person's successful change is always kept.
+- So that a flood of refused requests cannot push real changes out of those two
+  files, the file keeps every success and every server error, but of refused
+  requests (4xx) at most 5 a minute per address and per user - always the first
+  from each - and 120 a minute in all (one ceiling for requests with no user,
+  another for signed-in people), then one line saying how many it left out.
 - Never written: passwords, setup codes, API keys, cookies, request bodies
   (only the target's namespace, kind and name) and query strings.
 - Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
