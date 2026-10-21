@@ -19,8 +19,11 @@ VALUES is server.py's own value. Tests patch kget and ksend here (server.py
 imports this module as KUBE_HELPERS)."""
 import base64
 import copy
+import http.client
+import io
 import json
 import re
+import threading
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_auth as AUTH
@@ -225,18 +228,13 @@ def _never_started(pod):
 
 def raw_get(path, timeout=20):
     """Plain-text GET against the API (pod logs and similar)."""
-    req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {TOKEN}"})
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+    return _request("GET", path, None, {}, timeout).decode("utf-8", "replace")
 
 
 def ktable(path, timeout=20):
     """A list as the API server prints it: the columns kubectl get shows."""
-    req = urllib.request.Request(API + path, headers={
-        "Authorization": f"Bearer {TOKEN}",
-        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"})
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    return json.loads(_request("GET", path, None, {
+        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"}, timeout).decode())
 
 
 def kget(path, timeout=10):
@@ -422,12 +420,112 @@ def transport(method, path, body=None, ctype=None, timeout=15):
     """One request to the API server: its JSON answer, or urllib's HTTPError.
     kget and _ksend reach the cluster only through here, after their own
     checks, so it is the one place tests put a fake API (tests/fakes/kube.py)."""
-    headers = {"Authorization": f"Bearer {TOKEN}"}
-    if ctype:
-        headers["Content-Type"] = ctype
+    headers = {"Content-Type": ctype} if ctype else {}
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-        raw = r.read().decode()
+    raw = _request(method, path, data, headers, timeout).decode()
     # A write may answer with no body; a read always has one.
     return json.loads(raw) if raw.strip() or method == "GET" else {}
+
+
+# The API server keeps a connection open between requests (#705): a page that
+# makes thirty reads opens one connection and does one TLS handshake, not thirty.
+# Idle connections wait in a small pool shared by every thread; a thread takes
+# one, or opens one, and gives it back when the answer has been read in full.
+# An idle connection over a minute old is not reused (the API server closes idle
+# ones at 90 s), and any failure of a connection drops the whole idle pool: an
+# API server that went away without a reset would otherwise cost a full timeout
+# for every pooled connection in turn.
+_IDLE_MAX = 8
+_IDLE_SECONDS = 60
+_idle = []
+_idle_lock = threading.Lock()
+_READS = ("GET", "HEAD")
+_STALE = (http.client.RemoteDisconnected, http.client.BadStatusLine, ConnectionResetError,
+          BrokenPipeError, ConnectionAbortedError)
+
+
+def close_connections():
+    """Forget every idle connection (a failed connection; tests)."""
+    with _idle_lock:
+        idle, _idle[:] = list(_idle), []
+    for _, connection, _ in idle:
+        connection.close()
+
+
+def _open(timeout):
+    target = urllib.parse.urlsplit(API)
+    if target.scheme == "http":
+        return http.client.HTTPConnection(target.hostname, target.port or 80, timeout=timeout)
+    return http.client.HTTPSConnection(target.hostname, target.port or 443, timeout=timeout, context=CTX)
+
+
+def _take(timeout):
+    """An idle connection to this API with this TLS context, or None."""
+    key, now, connection, expired = (API, id(CTX)), time.monotonic(), None, []
+    with _idle_lock:
+        for index in range(len(_idle) - 1, -1, -1):
+            if now - _idle[index][2] > _IDLE_SECONDS:
+                expired.append(_idle.pop(index)[1])
+            elif connection is None and _idle[index][0] == key:
+                connection = _idle.pop(index)[1]
+    for old in expired:
+        old.close()
+    if connection is None:
+        return None
+    connection.timeout = timeout
+    if connection.sock is not None:
+        connection.sock.settimeout(timeout)
+    return connection
+
+
+def _give_back(connection):
+    with _idle_lock:
+        if len(_idle) < _IDLE_MAX:
+            _idle.append(((API, id(CTX)), connection, time.monotonic()))
+            return
+    connection.close()
+
+
+def _request(method, path, data, headers, timeout):
+    """One request to the API server on a kept-open connection: the answer's
+    bytes, or urllib's HTTPError for any answer that is not a success. A
+    redirect is an HTTPError too, never followed with the token. A connection
+    the server closed while it sat idle is replaced and a read asked once more
+    on a new one; a write is sent once only, always on a fresh connection, since
+    whether a dropped write took effect cannot be known.
+
+    Failures reach callers as urlopen's did, with two differences: a timeout is
+    the socket's TimeoutError (connecting or reading), and a connection dropped
+    mid-answer (RemoteDisconnected, IncompleteRead and other http.client errors)
+    is a URLError wrapping it. Every caller catches OSError or Exception, or
+    URLError, TimeoutError and ConnectionError, which cover both."""
+    headers = {**headers, "Authorization": f"Bearer {TOKEN}"}
+    pooled = _take(timeout) if method in _READS else None
+    connection = pooled or _open(timeout)
+    try:
+        try:
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+        except _STALE:
+            connection.close()
+            close_connections()
+            if pooled is None:
+                raise
+            connection = _open(timeout)
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+        payload = response.read()
+    except BaseException as error:
+        connection.close()
+        close_connections()
+        if isinstance(error, http.client.HTTPException):
+            raise urllib.error.URLError(error) from error
+        raise
+    if response.will_close:
+        connection.close()
+    else:
+        _give_back(connection)
+    if not 200 <= response.status < 300:
+        raise urllib.error.HTTPError(API + path, response.status, response.reason, response.headers,
+                                     io.BytesIO(payload))
+    return payload
