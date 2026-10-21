@@ -9,7 +9,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_csi_restore as CSI
 import homestead_longhorn as LH
-import homestead_move_engine as ENGINE
+import homestead_move_state as STATE
+import homestead_move_target as TARGET
+import homestead_move_plan as PLAN
+import homestead_move_phases as PHASE
+import homestead_move_actions as ACT
 import homestead_move_source as SOURCE
 import homestead_transfer_cleanup as CLEANUP
 import test_move_flow as fixtures
@@ -329,52 +333,52 @@ class CleanupRecoveryTests(unittest.TestCase):
                      "status": "running", "phase": "starting", "created_at": "2026-10-02T12:00:00Z",
                      "updated_at": "2026-10-02T12:00:00Z", "cleanup_protocol": 1,
                      "flags": {"quiesced": True}}
-        self.remote = self.enterContext(mock.patch.object(ENGINE.CLIENT, "remote",
+        self.remote = self.enterContext(mock.patch.object(STATE.CLIENT, "remote",
             return_value={"complete": True, "retained": []}))
 
     def test_success_is_persisted_before_remote_cleanup_and_restart_does_not_replay_transfer(self):
         def unavailable(*args):
-            self.assertEqual("succeeded", ENGINE._find(ID)["status"])
+            self.assertEqual("succeeded", STATE._find(ID)["status"])
             raise TimeoutError("source unavailable")
         self.remote.side_effect = unavailable
-        ENGINE._finish(self.move, "succeeded", "Finished")
-        ENGINE._store(self.move)
-        self.assertTrue(ENGINE._public(ENGINE._find(ID))["resource_cleanup_pending"])
+        PHASE._finish(self.move, "succeeded", "Finished")
+        STATE._store(self.move)
+        self.assertTrue(STATE._public(STATE._find(ID))["resource_cleanup_pending"])
         with self.assertRaisesRegex(ValueError, "cleanup"):
-            ENGINE.dismiss(ID)
+            ACT.dismiss(ID)
         self.remote.side_effect = None
-        with mock.patch.object(ENGINE, "_tick", side_effect=AssertionError("Do not restore again")):
-            ENGINE.tick_all()
-        done = ENGINE._find(ID)
+        with mock.patch.object(PHASE, "_tick", side_effect=AssertionError("Do not restore again")):
+            PHASE.tick_all()
+        done = STATE._find(ID)
         self.assertFalse(done["flags"]["resource_cleanup_pending"])
         self.assertEqual("cleanup", self.remote.call_args.args[2]["action"])
         self.assertEqual(UID, self.remote.call_args.args[2]["expected_uid"])
-        ENGINE.dismiss(ID)
-        self.assertIsNone(ENGINE._find(ID))
+        ACT.dismiss(ID)
+        self.assertIsNone(STATE._find(ID))
 
     def test_failed_transfer_keeps_backup_for_retry_and_cannot_be_silently_dismissed(self):
-        ENGINE._finish(self.move, "failed", "Restore failed")
+        PHASE._finish(self.move, "failed", "Restore failed")
         self.remote.assert_not_called()
-        self.assertFalse(ENGINE._public(self.move)["can_dismiss"])
+        self.assertFalse(STATE._public(self.move)["can_dismiss"])
         with self.assertRaisesRegex(ValueError, "failed transfer"):
-            ENGINE.dismiss(ID)
+            ACT.dismiss(ID)
 
     def test_destination_finalizers_delay_source_cleanup(self):
-        with mock.patch.object(ENGINE.CLEANUP, "destination", return_value={"pending": ["restore"], "retained": []}):
-            ENGINE._finish(self.move, "succeeded", "Finished")
+        with mock.patch.object(CLEANUP, "destination", return_value={"pending": ["restore"], "retained": []}):
+            PHASE._finish(self.move, "succeeded", "Finished")
         self.remote.assert_not_called()
         self.assertTrue(self.move["flags"]["resource_cleanup_pending"])
 
     def test_restart_during_cancellation_recovers_source_before_deleting_resources(self):
         self.move.update(status="cancelled", flags={"quiesced": True, "cancelling": True, "resource_cleanup_pending": True})
-        ENGINE._store(self.move)
+        STATE._store(self.move)
         actions = []
-        with mock.patch.object(ENGINE, "_source_action", side_effect=lambda *a: actions.append("release") or {"detail": "Resumed"}), \
-                mock.patch.object(ENGINE, "_remove_created", side_effect=lambda *a: actions.append("remove") or []):
-            ENGINE.tick_all()
-            ENGINE.tick_all()
+        with mock.patch.object(STATE, "_source_action", side_effect=lambda *a: actions.append("release") or {"detail": "Resumed"}), \
+                mock.patch.object(PHASE, "_remove_created", side_effect=lambda *a: actions.append("remove") or []):
+            PHASE.tick_all()
+            PHASE.tick_all()
         self.assertEqual(["release", "remove", "remove"], actions)
-        done = ENGINE._find(ID)
+        done = STATE._find(ID)
         self.assertEqual("cancelled", done["status"])
         self.assertTrue(done["flags"]["source_released"])
         self.assertNotIn("cancelling", done["flags"])
@@ -382,15 +386,15 @@ class CleanupRecoveryTests(unittest.TestCase):
 
     def test_lost_source_stop_reply_preserves_recovery_intent_for_moves(self):
         self.move["flags"] = {}
-        with mock.patch.object(ENGINE, "_source_action", side_effect=TimeoutError("reply lost")):
+        with mock.patch.object(STATE, "_source_action", side_effect=TimeoutError("reply lost")):
             with self.assertRaises(TimeoutError):
-                ENGINE._quiescing(self.move)
-        self.assertTrue(ENGINE._source_held(ENGINE._find(ID)))
+                PHASE._quiescing(self.move)
+        self.assertTrue(STATE._source_held(STATE._find(ID)))
 
     def test_cleanup_retry_is_separate_from_restarting_a_successful_transfer(self):
         self.move.update(status="succeeded", flags={"quiesced": True, "resource_cleanup_pending": True})
-        ENGINE._store(self.move)
-        result = ENGINE.retry(ID)
+        STATE._store(self.move)
+        result = ACT.retry(ID)
         self.assertEqual("succeeded", result["status"])
         self.assertFalse(result["resource_cleanup_pending"])
 
@@ -400,12 +404,12 @@ class CleanupRecoveryTests(unittest.TestCase):
         api.put(path, artifact("transfer-token"))
         api.delayed.add(path)
         self.move.update(status="succeeded", transfer_target={"secret": "transfer-token"})
-        with mock.patch.multiple(ENGINE, kget=api.get, ksend=api.send):
-            ENGINE._cleanup_target(self.move)
+        with mock.patch.multiple(STATE, kget=api.get, ksend=api.send):
+            TARGET._cleanup_target(self.move)
             self.assertTrue(self.move["flags"]["target_cleanup_pending"])
             self.assertIn("transfer_target", self.move)
             del api.objects[path]
-            ENGINE._cleanup_target(self.move)
+            TARGET._cleanup_target(self.move)
         self.assertNotIn("target_cleanup_pending", self.move["flags"])
         self.assertNotIn("transfer_target", self.move)
 
@@ -414,8 +418,8 @@ class CleanupRecoveryTests(unittest.TestCase):
         rows += [{**copy.deepcopy(self.move), "id": f"{n:012x}", "created_at": str(n), "status": "succeeded",
                   "flags": {"resource_cleanup_pending": True}} for n in range(60, 120)]
         rows += [{**copy.deepcopy(self.move), "id": f"{n:012x}", "created_at": str(n), "status": "succeeded", "flags": {}} for n in range(120, 220)]
-        ENGINE._write(rows)
-        saved = ENGINE._read()
+        STATE._write(rows)
+        saved = STATE._read()
         self.assertEqual(170, len(saved))
         self.assertTrue(all(any(m["id"] == f"{n:012x}" for m in saved) for n in range(120)))
 
@@ -445,7 +449,7 @@ class TransferCleanupFlowTests(unittest.TestCase):
         return {p for p in self.cluster.objects if p.startswith((CLEANUP.LH + "/backups/", CLEANUP.LH + "/snapshots/"))}
 
     def test_success_reclaims_real_backup_artifacts_but_keeps_both_final_disks(self):
-        move = ENGINE.start("source", "container", "frigate", "moved", "automatic")
+        move = PLAN.start("source", "container", "frigate", "moved", "automatic")
         done = self.run_until_settled(move_id=move["id"])
         self.assertEqual("succeeded", done["status"], done["message"])
         self.assertFalse(done["resource_cleanup_pending"], done["cleanup_message"])
@@ -455,21 +459,21 @@ class TransferCleanupFlowTests(unittest.TestCase):
 
     def fail_transfer(self):
         self.pending_backup = True
-        move = ENGINE.start("source", "container", "frigate", "moved", "automatic")
+        move = PLAN.start("source", "container", "frigate", "moved", "automatic")
         for _ in range(15):
             self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
-            ENGINE.tick_all()
+            PHASE.tick_all()
             if self.lh.made:
                 break
         self.lh.made[0].update(state="Error", error="backup failed")
-        ENGINE.tick_all()
-        self.assertEqual("failed", ENGINE._find(move["id"])["status"])
+        PHASE.tick_all()
+        self.assertEqual("failed", STATE._find(move["id"])["status"])
         return move
 
     def test_failure_retains_real_backup_artifacts_until_cancel(self):
         move = self.fail_transfer()
         self.assertEqual(2, len(self.artifact_paths()))
-        cancelled = ENGINE.abandon(move["id"])
+        cancelled = ACT.abandon(move["id"])
         self.assertEqual("cancelled", cancelled["status"])
         self.assertFalse(cancelled["resource_cleanup_pending"], cancelled["cleanup_message"])
         self.assertEqual(set(), self.artifact_paths())
@@ -479,7 +483,7 @@ class TransferCleanupFlowTests(unittest.TestCase):
         move = self.fail_transfer()
         self.assertEqual(2, len(self.artifact_paths()))
         self.pending_backup = False
-        ENGINE.retry(move["id"])
+        ACT.retry(move["id"])
         done = self.run_until_settled(move_id=move["id"])
         self.assertEqual("succeeded", done["status"], done["message"])
         self.assertEqual(2, len(self.lh.made))
@@ -490,7 +494,7 @@ class TransferCleanupFlowTests(unittest.TestCase):
         self.vm_path = copy_fixtures.ClusterCopyTests.vm_path
         self.vmi_path = copy_fixtures.ClusterCopyTests.vmi_path
         copy_fixtures.ClusterCopyTests.seed_vm(self)
-        move = ENGINE.start("source", "vm", "desktop", "copied", transfer_mode="copy")
+        move = PLAN.start("source", "vm", "desktop", "copied", transfer_mode="copy")
         done = copy_fixtures.ClusterCopyTests.settle(self, move["id"])
         self.assertEqual("succeeded", done["status"], done["message"])
         self.assertFalse(done["resource_cleanup_pending"], done["cleanup_message"])

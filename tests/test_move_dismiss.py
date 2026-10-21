@@ -8,7 +8,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_move as MOVE
-import homestead_move_engine as ENGINE
+import homestead_move_state as STATE
+import homestead_move_actions as ACT
 
 
 def move(id, status, source_removed=False):
@@ -19,48 +20,48 @@ def move(id, status, source_removed=False):
 class DismissTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        self.saved = ENGINE.DATA_DIR
-        ENGINE.DATA_DIR = self.dir.name
+        self.saved = STATE.DATA_DIR
+        STATE.DATA_DIR = self.dir.name
         # server.py binds the engine's client to homestead_move; do the same here.
-        client = mock.patch.object(ENGINE, "CLIENT", MOVE)
+        client = mock.patch.object(STATE, "CLIENT", MOVE)
         client.start()
         self.addCleanup(client.stop)
-        with open(os.path.join(self.dir.name, ENGINE.STORE), "w", encoding="utf-8") as handle:
+        with open(os.path.join(self.dir.name, STATE.STORE), "w", encoding="utf-8") as handle:
             json.dump([move("mosquitto", "succeeded"), move("zigbee", "running"), move("birdnet", "failed"),
                        move("frigate", "cancelled"), move("ha", "succeeded", True)], handle)
 
     def tearDown(self):
-        ENGINE.DATA_DIR = self.saved
+        STATE.DATA_DIR = self.saved
         self.dir.cleanup()
 
     def names(self):
-        return sorted(m["id"] for m in ENGINE.moves())
+        return sorted(m["id"] for m in STATE.moves())
 
     def test_one_finished_move_is_cleared_and_the_source_is_not_asked_anything(self):
-        with mock.patch.object(ENGINE.CLIENT, "remote", side_effect=AssertionError("nothing is asked of the source")):
-            result = ENGINE.dismiss("mosquitto")
+        with mock.patch.object(STATE.CLIENT, "remote", side_effect=AssertionError("nothing is asked of the source")):
+            result = ACT.dismiss("mosquitto")
         self.assertEqual(["birdnet", "frigate", "ha", "zigbee"], self.names())
         self.assertIn("oldcluster still has the stopped original of mosquitto", result["detail"])
 
     def test_all_finished_moves_clear_at_once_and_failed_ones_stay(self):
-        ENGINE.dismiss()
+        ACT.dismiss()
         self.assertEqual(["birdnet", "zigbee"], self.names())
 
     def test_a_failed_move_is_cleared_only_by_itself_and_says_what_stays(self):
-        rows = json.load(open(os.path.join(self.dir.name, ENGINE.STORE), encoding="utf-8"))
+        rows = json.load(open(os.path.join(self.dir.name, STATE.STORE), encoding="utf-8"))
         for row in rows:
             if row["id"] == "birdnet":
                 row.update(flags={"quiesced": True, "created_at": 1}, claims=[{"claim": "birdnet-data", "created": True}])
-        json.dump(rows, open(os.path.join(self.dir.name, ENGINE.STORE), "w", encoding="utf-8"))
-        with mock.patch.object(ENGINE.CLIENT, "remote", side_effect=AssertionError("neither cluster is touched")):
-            result = ENGINE.dismiss("birdnet")
+        json.dump(rows, open(os.path.join(self.dir.name, STATE.STORE), "w", encoding="utf-8"))
+        with mock.patch.object(STATE.CLIENT, "remote", side_effect=AssertionError("neither cluster is touched")):
+            result = ACT.dismiss("birdnet")
         self.assertNotIn("birdnet", self.names())
         self.assertIn("birdnet stays stopped on oldcluster", result["detail"])
         self.assertIn("what it made here stays (birdnet, birdnet-data)", result["detail"])
 
     def test_a_running_move_is_not_cleared(self):
         with self.assertRaisesRegex(ValueError, "still running"):
-            ENGINE.dismiss("zigbee")
+            ACT.dismiss("zigbee")
         self.assertIn("zigbee", self.names())
 
 
