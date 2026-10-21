@@ -1,5 +1,6 @@
 """Routes declared beside their handlers (homestead_routes.py, #363), and the
 guard that keeps server.py to routing: it may only shrink."""
+import ast
 import re
 import sys
 import unittest
@@ -10,8 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
+import source_scan as SS
 
-SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
+SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
 MAX_LINES = 2063
@@ -69,12 +71,15 @@ INLINE_ROUTES = (
 )
 
 
+def handler_methods(source=SS.SERVER_PY):
+    """class H's own methods in server.py, by name."""
+    return {name[2:]: found for name, found in SS.functions(source).items()
+            if name.startswith("H.") and name.count(".") == 1}
+
+
 def handler_body(method):
     """The text of server.py's do_GET, do_POST, ... method."""
-    lines = SERVER.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip().startswith(f"def do_{method}(self"))
-    end = next((i for i in range(start + 1, len(lines)) if re.match(r"    def |\S", lines[i])), len(lines))
-    return "\n".join(lines[start:end])
+    return handler_methods()[f"do_{method}"].text
 
 
 def literals_in(text):
@@ -89,20 +94,18 @@ def api_literals(method):
     return literals_in(handler_body(method))
 
 
-def helper_literals():
-    """Every "/api/..." path written in a method of class H other than do_*:
-    helpers such as _fleet_post answer routes too."""
-    lines = SERVER.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("class H("))
-    end = next(i for i in range(start + 1, len(lines)) if re.match(r"\S", lines[i]))
-    keep, inside = [], False
-    for line in lines[start:end]:
-        match = re.match(r"    def (\w+)\(", line)
-        if match:
-            inside = not match.group(1).startswith("do_")
-        if inside:
-            keep.append(line)
-    return literals_in("\n".join(keep))
+def helper_literals(source=SS.SERVER_PY):
+    """Every "/api/..." path written in class H outside its do_* methods:
+    helpers such as _fleet_post answer routes too, and so could a class
+    attribute they read."""
+    lines = (source if isinstance(source, SS.Code) else SS.text(source)).splitlines()
+    cls = next(node for node in SS.tree(source).body if isinstance(node, ast.ClassDef) and node.name == "H")
+    keep = set(range(cls.lineno, cls.end_lineno + 1))
+    for name, found in handler_methods(source).items():
+        if name.startswith("do_"):
+            first = min([found.node.lineno, *(d.lineno for d in found.node.decorator_list)])
+            keep -= set(range(first, found.node.end_lineno + 1))
+    return literals_in("\n".join(lines[number - 1] for number in sorted(keep)))
 
 
 class DeclaredRoutes(unittest.TestCase):
@@ -223,6 +226,17 @@ class RouteLiterals(unittest.TestCase):
             with self.subTest(form=form):
                 self.assertTrue(any(path.startswith("/api/x/new") for path in literals_in(f"if {form}:")), form)
 
+    def test_a_path_anywhere_in_class_h_outside_its_do_methods_is_seen(self):
+        """Helpers, class attributes and comments of H count; do_* and
+        anything outside H do not."""
+        source = SS.code('def before():\n    return "/api/x/before"\n\n\n'
+                         'class H(Base):\n    PUBLIC = ("/api/x/attribute",)\n\n'
+                         '    @wrap\n    def do_GET(self):\n        if p == "/api/x/get":\n            pass\n\n'
+                         '    def _helper(self):\n        return "/api/x/helper"\n    # "/api/x/comment"\n'
+                         '    LATER = "/api/x/later"\n\n\ndef outside():\n    return "/api/x/outside"\n')
+        self.assertEqual({"/api/x/attribute", "/api/x/helper", "/api/x/comment", "/api/x/later"},
+                         helper_literals(source))
+
 
 class MovedHelpers(unittest.TestCase):
     def test_each_moved_helper_lives_in_its_module_and_is_not_late_bound_there(self):
@@ -317,7 +331,7 @@ class ServerStaysRouting(unittest.TestCase):
                 imported[name] = module
         offenders = []
         for path in sorted((ROOT / "tests").glob("test_*.py")):
-            text = path.read_text(encoding="utf-8")
+            text = SS.text(path)
             patched = set(re.findall(r'patch\.object\(server, "(\w+)"', text)) | set(re.findall(r"^\s*server\.(\w+) = ", text, re.M))
             offenders += [f"{path.name} patches server.{name}, which server.py imports from {imported[name]}: "
                           f"patch {imported[name]}.{name}" for name in sorted(patched & set(imported))]

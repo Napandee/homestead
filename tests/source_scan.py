@@ -1,0 +1,128 @@
+"""Reading Homestead's own source, for the guard tests (#732).
+
+A guard test reads the source and fails when a structural rule is broken.
+This is the one place those tests read files and pick them apart, so each
+guard does not write its own little parser with its own idea of comments,
+strings and what a function is. Standard library only.
+
+- text(path): a file's text, read once per run.
+- server_modules(): every server/homestead_*.py, in a fixed order.
+- tree(source), functions(source), calls(source, *names): Python, found
+  with ast, so a commented-out def or call is never counted.
+
+`source` names a file, as for text(): a Path, or a str path relative to the
+repository root. Source text itself goes in as code("..."), and tree() and
+calls() also take a tree already parsed. A str holding source text is
+refused rather than read as a path: either way round, a mix-up would parse
+into something that finds nothing, and the guard would pass for ever.
+
+Files are read and parsed once per run: don't read a file through here that
+a test writes.
+"""
+import ast
+import functools
+from collections import namedtuple
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SERVER = ROOT / "server"
+SERVER_PY = SERVER / "server.py"
+
+Function = namedtuple("Function", "name node text")
+
+
+class Code(str):
+    """Source text, as opposed to the path of a file."""
+
+
+def code(source_text):
+    """Mark source text, so the helpers parse it instead of reading a file."""
+    return Code(source_text)
+
+
+def _path(path):
+    if isinstance(path, str) and not isinstance(path, Code) and "\n" in path:
+        raise TypeError("source text given where a file is expected: pass it as source_scan.code(...)")
+    path = Path(path)
+    return (path if path.is_absolute() else ROOT / path).resolve()
+
+
+@functools.lru_cache(maxsize=None)
+def _read(path):
+    return path.read_text(encoding="utf-8")
+
+
+def text(path):
+    """The text of a file, read once per run. A relative path is taken from
+    the repository root."""
+    return _read(_path(path))
+
+
+def server_modules():
+    """Every server/homestead_*.py, sorted by name."""
+    return sorted(SERVER.glob("homestead_*.py"))
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed(path):
+    return ast.parse(_read(path), filename=str(path))
+
+
+def tree(source):
+    """The ast of a file (parsed once per run), of code("..."), or the tree
+    itself when it is one already."""
+    if isinstance(source, ast.AST):
+        return source
+    if isinstance(source, Code):
+        return ast.parse(source)
+    return _parsed(_path(source))
+
+
+def _source_text(source):
+    if isinstance(source, ast.AST):
+        raise TypeError("functions() needs a file or code(...), to give each function's text")
+    return source if isinstance(source, Code) else text(source)
+
+
+def functions(source):
+    """Every def and async def, nested ones too, by qualified name
+    ("H.do_GET", "outer.inner"), in source order. Each comes with its
+    node and its text: from its first decorator (or its def line) through
+    its last statement. Class attributes, and comments between or after
+    functions, belong to none. Two defs with one name: the last one wins."""
+    lines = _source_text(source).splitlines()
+    found = {}
+
+    def visit(node, prefix):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = prefix + child.name
+                if not isinstance(child, ast.ClassDef):
+                    first = min([child.lineno, *(d.lineno for d in child.decorator_list)])
+                    found[name] = Function(name, child, "\n".join(lines[first - 1:child.end_lineno]))
+                visit(child, name + ".")
+            else:
+                visit(child, prefix)
+
+    visit(tree(source), "")
+    return found
+
+
+def dotted(node):
+    """"OPS.start" for OPS.start, "go" for go; None for anything else
+    (a call on a call, a subscript)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = dotted(node.value)
+        return None if base is None else f"{base}.{node.attr}"
+    return None
+
+
+def calls(source, *names):
+    """Every call whose callee is written as one of names ("OPS.start",
+    "go"), in source order. A call in a comment or a string is not a call."""
+    wanted = set(names)
+    found = [node for node in ast.walk(tree(source))
+             if isinstance(node, ast.Call) and dotted(node.func) in wanted]
+    return sorted(found, key=lambda node: (node.lineno, node.col_offset))
