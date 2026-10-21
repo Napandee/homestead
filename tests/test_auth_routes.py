@@ -373,5 +373,38 @@ class SignInAndSessions(Routes):
                 self.assertEqual((*answer, []), (a.status, a.body, a.cookies))
 
 
+class Home(unittest.TestCase):
+    def test_signin_routes_are_declared_in_their_module(self):
+        import homestead_routes as ROUTES
+        for method, path in (("GET", "/api/auth/state"), ("GET", "/api/auth/preferences/dashboard"),
+                             ("POST", "/api/auth/setup"), ("POST", "/api/auth/login"), ("POST", "/api/auth/logout"),
+                             ("POST", "/api/auth/preferences/dashboard"), ("POST", "/api/auth/password"),
+                             ("POST", "/api/auth/signout-everywhere")):
+            with self.subTest(method=method, path=path):
+                self.assertEqual("homestead_auth_routes", getattr(ROUTES.find(method, path), "module", None))
+
+    def test_an_in_process_call_without_a_connection_changes_nothing(self):
+        """homestead_agent_tools calls module routes in-process, with no conn:
+        a route that needs the connection refuses before it changes anything."""
+        import homestead_routes as ROUTES
+        calls = []
+        record = lambda name: (lambda *a, **k: calls.append(name))
+        with mock.patch.object(AUTH, "change_password", record("password")), \
+                mock.patch.object(AUTH, "logout_everywhere", record("everywhere")), \
+                mock.patch.object(AUTH, "login", record("login")), \
+                mock.patch.object(AUTH, "issue_token", record("token")), \
+                mock.patch.object(SETUP_CODE, "first_admin", record("setup")), \
+                mock.patch.object(SIGNINS, "record", record("history")):
+            for method, path in (("POST", "/api/auth/setup"), ("POST", "/api/auth/login"),
+                                 ("POST", "/api/auth/logout"), ("POST", "/api/auth/password"),
+                                 ("POST", "/api/auth/signout-everywhere"), ("GET", "/api/auth/state")):
+                with self.subTest(path=path):
+                    request = ROUTES.Request(method, path, {}, {"username": "ada", "password": "p", "old": "a",
+                                                                "new": "b"}, "ada", "admin")
+                    with self.assertRaises(PermissionError):
+                        ROUTES.find(method, path).handler(request)
+        self.assertEqual([], calls)
+
+
 if __name__ == "__main__":
     unittest.main()

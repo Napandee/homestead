@@ -9,10 +9,7 @@ TARGET_CHECKED = ("/api/move", "/api/move/preview", "/api/image-updates/apply", 
                   "/api/image-updates/preview")
 
 POLICY = {
-    ('GET', '/api/auth/preferences/dashboard'): 'viewer',
-    ('POST', '/api/auth/preferences/dashboard'): 'viewer',
     ('GET', '/api/diagnostics/download'): 'admin',
-    ('GET', '/api/auth/state'): 'viewer',
     ('GET', '/api/console'): 'operator',
     ('GET', '/api/fleet'): 'viewer',
     ('GET', '/api/fleet/home'): 'viewer',
@@ -22,12 +19,7 @@ POLICY = {
     ('POST', '/api/auth/keys'): 'admin',
     ('POST', '/api/auth/keys/revoke'): 'admin',
     ('POST', '/api/auth/keys/edit'): 'admin',
-    ('POST', '/api/auth/login'): 'operator',
-    ('POST', '/api/auth/logout'): 'viewer',
-    ('POST', '/api/auth/password'): 'viewer',
     ('POST', '/api/auth/role'): 'admin',
-    ('POST', '/api/auth/setup'): 'operator',
-    ('POST', '/api/auth/signout-everywhere'): 'viewer',
     ('POST', '/api/auth/users'): 'admin',
     ('POST', '/api/auth/users/delete'): 'admin',
     ('POST', '/api/self/data/move'): 'admin',

@@ -16,8 +16,8 @@ import source_scan as SS
 SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 2053
-MAX_PATH_BRANCHES = 27
+MAX_LINES = 1985
+MAX_PATH_BRANCHES = 19
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
 # Lines in server.py's alias block (names tests still patch on server). Only lowered.
@@ -34,27 +34,19 @@ INLINE_ROUTES = (
     ("GET", "/api/node/shell", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/vm/console", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/icons/", "connection-bound: serves a file with its own headers (path prefix)"),
-    ("GET", "/api/auth/state", "connection-bound: cookies/session"),
     ("GET", "/api/fleet", "connection-bound: fleet forwarding"),
     ("GET", "/api/fleet/state", "connection-bound: fleet forwarding"),
     ("GET", "/api/fleet/home", "connection-bound: cookies/session"),
     ("GET", "/api/fleet/all/", "connection-bound: fleet forwarding"),
-    ("GET", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
     ("POST", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
     ("POST", "/api/auth/keys", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/auth/keys/revoke", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/auth/keys/edit", "connection-bound: fleet forwarding (refused when relayed)"),
     ("POST", "/api/fleet/", "connection-bound: fleet forwarding"),
-    ("POST", "/api/auth/setup", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/login", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/logout", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
-    ("POST", "/api/auth/password", "connection-bound: cookies/session"),
     ("POST", "/api/auth/users", "connection-bound: sign-in history (address, User-Agent)"),
     ("POST", "/api/auth/role", "connection-bound: sign-in history (address, User-Agent)"),
     ("POST", "/api/auth/users/delete", "connection-bound: sign-in history (address, User-Agent)"),
-    ("POST", "/api/auth/signout-everywhere", "connection-bound: cookies/session"),
     ("POST", "/api/self/data/move", "connection-bound: cookies/session"),
     ("ANY", "/api/self/data/abandon", "not a route here: _guard lets the recovery action through while boot is pending; the route is in homestead_self_data_server"),
     ("ANY", "/api/fleet/accept", "stays: fleet forwarding (_fleet_post)"),
@@ -66,6 +58,9 @@ INLINE_ROUTES = (
     ("ANY", "/api/fleet/switch", "stays: fleet forwarding (_fleet_post)"),
     ("ANY", "/api/fleet/sync", "stays: fleet forwarding (_fleet_post)"),
     ("ANY", "/api/v1/openapi.json", "connection-bound: API keys and sessions (homestead_api_v1)"),
+    ("ANY", "/api/auth/login", "not a route here: the guard checks it before routing"),
+    ("ANY", "/api/auth/setup", "not a route here: the guard checks it before routing"),
+    ("ANY", "/api/auth/state", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/auth/", "not a route: a prefix _send tests before it hides a diagnostic report"),
     ("ANY", "/api/diagnostics", "not a route: a prefix _send tests before it hides a diagnostic report"),
 )

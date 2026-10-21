@@ -46,15 +46,6 @@ class Interface(unittest.TestCase):
         self.assertEqual("homestead_cluster=node1; Path=/; HttpOnly; SameSite=Strict",
                          ROUTES.cookie_header(C("homestead_cluster", "node1"), tls=False))
 
-    def test_cookie_header_is_what_server_py_writes(self):
-        import server
-        handler = bare_handler([("X-Forwarded-Proto", "https")], _extra_headers=[])
-        handler._set_cookie("tok", max_age=60)
-        handler._set_cookie("", clear=True)
-        self.assertEqual([("Set-Cookie", ROUTES.cookie_header(C(server.AUTH.COOKIE, "tok", max_age=60), tls=True)),
-                          ("Set-Cookie", ROUTES.cookie_header(C(server.AUTH.COOKIE, "", max_age=0), tls=True))],
-                         handler._extra_headers)
-
     def test_only_homesteads_cookies_with_plain_values(self):
         for bad in (C("CF_Authorization", "x"), C("homestead_session", "a;b"), C("homestead_session", "a b"),
                     C("homestead_session", "a,b"), C("homestead_session", "a\r\n"), C("homestead_session", "a\x00"),

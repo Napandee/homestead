@@ -29,8 +29,10 @@ def handler(body):
     h.connection = None
     h.rfile = io.BytesIO(raw)
     sent, cookies = [], []
-    h._send = lambda code, payload, ctype="application/json": sent.append((code, payload))
-    h._set_cookie = lambda token, max_age=None: cookies.append(token)
+    def send(code, payload, ctype="application/json"):
+        sent.append((code, payload))
+        cookies.extend(v.split(";")[0].split("=", 1)[1] for k, v in h._extra_headers if k == "Set-Cookie")
+    h._send = send
     return h, sent, cookies
 
 
