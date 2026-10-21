@@ -42,10 +42,14 @@ def is_page_path(path):
 
     An API path or anything that looks like a file keeps its plain 404, so a
     missing endpoint or script is never answered with a web page.
+
+    A page path passes the guard before any sign-in check, so a path a
+    module serves at the top level (/readyz, /metrics) must not be one:
+    it would be served to anyone (#736).
     """
     clean = path or "/"
     last = clean.rstrip("/").rsplit("/", 1)[-1]
-    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz", "/mcp")
+    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz", "/mcp", "/readyz", "/metrics")
             and "." not in last and ".." not in clean and len(clean) < 200)
 
 
