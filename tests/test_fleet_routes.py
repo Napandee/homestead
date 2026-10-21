@@ -22,6 +22,8 @@ import server
 LISTS = ("workloads", "vms", "nodes", "volumes", "flow")
 SENDER = {"id": "loft1", "name": "Loft", "handle": "loft"}
 CLEAR = "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+# Under TLS a cleared cluster cookie is Secure, as the one it clears was (#764, PR 4).
+CLEAR_TLS = "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0"
 NO_POLICY = {"error": "this route has no declared authorization policy"}
 
 
@@ -142,8 +144,7 @@ class ReadingTests(Served):
                 code, headers, body = self.ask("GET", "/api/fleet/home", tls=tls)
                 self.assertEqual((302, {"ok": True}), (code, body))
                 self.assertEqual("/", self.header(headers, "Location"))
-                # Today's bytes: the clear carries no Secure even under TLS.
-                self.assertEqual([CLEAR], self.cookies(headers))
+                self.assertEqual([CLEAR_TLS if tls else CLEAR], self.cookies(headers))
 
     def test_home_is_the_way_back_even_without_a_session(self):
         # A public path: the page a cluster that does not answer shows links to it.
@@ -155,7 +156,8 @@ class ReadingTests(Served):
     def test_home_is_get_only(self):
         for session in (True, False):
             code, headers, body = self.ask("POST", "/api/fleet/home", session=session)
-            self.assertEqual((404, {"error": "not found"}), (code, body))
+            # Answered by server.py's own "no route" now that no fleet helper is left there.
+            self.assertEqual((404, {"error": "no route"}), (code, body))
             self.assertEqual([], self.cookies(headers))
         code, headers, body = self.ask("POST", "/api/fleet/home", headers={"X-Homestead-Auth": "0"})
         self.assertEqual((403, {"error": "missing X-Homestead-Auth header"}), (code, body))
@@ -210,8 +212,7 @@ class SwitchTests(Served):
                 for back in ({"id": "me"}, {"id": ""}, {}):
                     code, headers, body = self.ask("POST", "/api/fleet/switch", back, tls=tls)
                     self.assertEqual((200, {"ok": True, "id": "me"}), (code, body))
-                    # Today's bytes: the clear carries no Secure even under TLS.
-                    self.assertEqual([CLEAR], self.cookies(headers))
+                    self.assertEqual([CLEAR_TLS if tls else CLEAR], self.cookies(headers))
 
     def test_an_unknown_or_silent_cluster_is_not_switched_to(self):
         self.reachable(False)
@@ -238,6 +239,15 @@ class SwitchTests(Served):
         self.assertEqual(["homestead_session=fresh; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600",
                           "homestead_cluster=shed1; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"],
                          self.cookies(headers))
+
+    def test_a_forgotten_cluster_cookie_is_cleared_secure_under_tls(self):
+        self.enterContext(mock.patch.object(FLEET, "summary", return_value={"members": []}))
+        for tls in (False, True):
+            with self.subTest(tls=tls):
+                code, headers, _ = self.ask("GET", "/api/fleet", tls=tls,
+                                            headers={"Cookie": "homestead_session=tok; homestead_cluster=gone1"})
+                self.assertEqual(200, code)
+                self.assertEqual([CLEAR_TLS if tls else CLEAR], self.cookies(headers))
 
     def test_a_browser_switched_away_still_switches_here(self):
         self.reachable()
@@ -333,6 +343,30 @@ class RolesTests(Served):
         self.assertEqual(403, code)
         self.assertEqual("admin", body["needed"])
         sync.assert_not_called()
+
+
+class DeclaredTests(unittest.TestCase):
+    def test_fleet_routes_are_declared_in_their_module(self):
+        import homestead_routes as ROUTES
+        declared = [("GET", "/api/fleet"), ("GET", "/api/fleet/state"), ("GET", "/api/fleet/home")]
+        declared += [("GET", f"/api/fleet/all/{what}") for what in LISTS]
+        declared += [("POST", f"/api/fleet/{action}") for action in (
+            "switch", "join", "accept", "sync", "remove", "leave", "address", "link-legacy")]
+        for method, path in declared:
+            route = ROUTES.find(method, path)
+            self.assertEqual("homestead_fleet_routes", route and route.module, f"{method} {path}")
+        self.assertIsNone(ROUTES.find("GET", "/api/fleet/all/secrets"))
+
+    def test_the_combined_lists_are_routes_not_a_code_prefix(self):
+        # The five lists are this module's exact routes, so server.py keeps no
+        # /api/fleet/all/ branch; an unknown list still has no role (403).
+        import homestead_route_policy as POLICY
+        self.assertNotIn("/api/fleet/all/", POLICY.CODE_PREFIXES)
+        for what in LISTS:
+            self.assertEqual("viewer", POLICY.role(f"/api/fleet/all/{what}", "GET"), what)
+            self.assertIsNone(POLICY.role(f"/api/fleet/all/{what}", "POST"), what)
+        for path in ("/api/fleet/all/secrets", "/api/fleet/all/", "/api/fleet/all/vms/x"):
+            self.assertIsNone(POLICY.role(path, "GET"), path)
 
 
 if __name__ == "__main__":

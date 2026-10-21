@@ -11,21 +11,10 @@ TARGET_CHECKED = ("/api/move", "/api/move/preview", "/api/image-updates/apply", 
 POLICY = {
     ('GET', '/api/diagnostics/download'): 'admin',
     ('GET', '/api/console'): 'operator',
-    ('GET', '/api/fleet'): 'viewer',
-    ('GET', '/api/fleet/home'): 'viewer',
-    ('GET', '/api/fleet/state'): 'viewer',
     ('GET', '/api/node/shell'): 'admin',
     ('GET', '/api/vm/console'): 'operator',
     ('POST', '/api/self/data/move'): 'admin',
 }
-
-POLICY.update({
-    ("POST", "/api/fleet/switch"): "viewer",
-    **{("POST", path): "admin" for path in (
-        "/api/fleet/join", "/api/fleet/accept", "/api/fleet/sync", "/api/fleet/remove",
-        "/api/fleet/leave", "/api/fleet/address", "/api/fleet/link-legacy")},
-})
-
 
 POLICY.update({
     ('GET', '/api/addons/kube-vip'): "admin",
@@ -51,19 +40,12 @@ POLICY.update({
     ('POST', '/api/config/parts'): "admin",
     ('GET', '/api/config/restore'): "admin",
     ('GET', '/api/fleet/accept'): "admin",
-    ('POST', '/api/fleet/accept'): "admin",
     ('GET', '/api/fleet/address'): "admin",
-    ('POST', '/api/fleet/address'): "admin",
     ('GET', '/api/fleet/join'): "admin",
-    ('POST', '/api/fleet/join'): "admin",
     ('GET', '/api/fleet/leave'): "admin",
-    ('POST', '/api/fleet/leave'): "admin",
     ('GET', '/api/fleet/link-legacy'): "admin",
-    ('POST', '/api/fleet/link-legacy'): "admin",
     ('GET', '/api/fleet/remove'): "admin",
-    ('POST', '/api/fleet/remove'): "admin",
     ('GET', '/api/fleet/sync'): "admin",
-    ('POST', '/api/fleet/sync'): "admin",
     ('GET', '/api/images/cleanup'): "admin",
     ('GET', '/api/images/forget-rollback'): "admin",
     ('GET', '/api/images/scan'): "admin",
@@ -175,9 +157,9 @@ def role(path, method):
 
 # The paths _declared() answers by prefix or pattern, and server.py by its own
 # prefix branch: no module prefix route may cover them. A PR that moves one into
-# a module lifts exactly its entry (#764: v1 in part 5, fleet/all in part 4,
+# a module lifts exactly its entry (#764: v1 in part 5,
 # workload DELETE in part 6, the handoff in part 7).
-CODE_PREFIXES = ("/api/v1/", "/api/self/data/handoff/", "/api/workload/", "/api/fleet/all/", "/api/icons/")
+CODE_PREFIXES = ("/api/v1/", "/api/self/data/handoff/", "/api/workload/", "/api/icons/")
 
 
 def _declared(path, method):
@@ -186,10 +168,5 @@ def _declared(path, method):
     if method == "DELETE" and __import__("re").fullmatch(r"/api/workload/[a-z0-9.-]+/[a-z0-9.-]+", path):
         return "operator"
     if method == "GET" and __import__("re").fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path):
-        return "viewer"
-    # The combined lists and Architecture across linked clusters
-    # (FLEET_LISTS in server.py, gathered by homestead_fleet.gather); each member applies its own roles.
-    if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes",
-                                    "/api/fleet/all/volumes", "/api/fleet/all/flow"):
         return "viewer"
     return POLICY.get((method, path))

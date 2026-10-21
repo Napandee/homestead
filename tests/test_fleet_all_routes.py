@@ -9,12 +9,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_fleet_routes as FLEET_ROUTES
 import homestead_route_policy as ROUTE_POLICY
 
 
 class FleetAllRouteTests(unittest.TestCase):
     def test_every_combined_list_is_readable_by_a_viewer(self):
-        for name in server.FLEET_LISTS:
+        for name in FLEET_ROUTES.FLEET_LISTS:
             path = f"/api/fleet/all/{name}"
             self.assertEqual("viewer", server.needed_role(path, "GET"), path)
 
