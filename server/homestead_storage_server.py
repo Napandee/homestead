@@ -257,7 +257,7 @@ def _storage_classes():
 def restore_tests_tick():
     """On the leader, hourly: test the app longest untested, when switched on."""
     settings = get_app_settings()
-    chosen = RESTORE_TEST.pick(cached("wl", 5, WORKLOADS.get_workloads), OPS.list_operations(),
+    chosen = RESTORE_TEST.pick(cached("wl", 5, WORKLOADS.get_workloads), OPS.snapshot(),
                                settings.get("restore_tests", {}).get("enabled", False),
                                update_policy_status(settings)["window_open"], time.time(), _storage_classes())
     if chosen:

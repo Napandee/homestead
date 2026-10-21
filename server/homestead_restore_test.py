@@ -377,7 +377,7 @@ def view():
     """Every app with Longhorn volumes: what a test would restore, and its last result."""
     out = []
     running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
-               for o in OPS.list_operations() if o.get("kind") == KIND and o.get("status") in ("queued", "running")}
+               for o in OPS.snapshot() if o.get("kind") == KIND and o.get("status") in ("queued", "running")}
     for w in workloads():
         if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
                 or w.get("managed_nfs") or w.get("site"):
@@ -408,7 +408,7 @@ def switch(enabled):
 def run_now(b):
     """Test one app now; one test runs at a time."""
     ns, name = dns_name(b.get("ns"), "namespace"), dns_name(b.get("name"), "workload name")
-    if any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
+    if any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.snapshot()):
         raise ValueError("a restore test is already running; one runs at a time")
     return {"ok": True, "operation": start_test(ns, name)}
 

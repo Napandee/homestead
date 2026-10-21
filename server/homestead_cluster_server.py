@@ -35,10 +35,7 @@ import homestead_operations as OPS
 import homestead_os_rollout as OS_ROLLOUT
 import homestead_place as PLACE
 import homestead_ports as PORTS
-import homestead_priority as PRIORITY
 import homestead_probe as PROBE
-import homestead_rebalance as REBALANCE
-import homestead_requests as RESERVE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_routes as MODULE_ROUTES
 import homestead_self as SELF
@@ -192,20 +189,11 @@ def preview_image_update(body):
             "images": images, "action": action}
 
 
-def _power_jobs_loop():
-    """The leader looks after host power jobs itself: a job's resolver runs
-    when someone lists jobs, and that may be another replica, or nobody."""
-    while True:
-        time.sleep(15)
-        try:
-            if not LEADER.is_leader():
-                continue
-            active = [i for i in OPS.stored() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND, RESERVE.KIND, PRIORITY.KIND)
-                      and i.get("status") not in OPS.TERMINAL]
-            if active:
-                OPS.list_operations()   # runs each job's resolver, which resumes it if needed
-        except Exception as error:
-            print(f"host power jobs not checked: {str(error)[:160]}", flush=True)
+def _jobs_loop():
+    """Only the leader advances jobs (#622): every 3 s while one is active, every
+    20 s otherwise, or at once when something asks (OPS.advance_soon). Requests
+    read the saved jobs (OPS.snapshot) and never run a resolver themselves."""
+    OPS.run_jobs(LEADER.is_leader)
 
 
 def _detached_copies_loop():
@@ -396,7 +384,7 @@ def autoupdate_tick():
     """On the leader: start the next automatic update if the window is open,
     and tidy old snapshots after ones that worked. Returns the app started."""
     status = update_policy_status()
-    operations = OPS.list_operations()
+    operations = OPS.snapshot()
     AUTOUPDATE.tidy(operations)
     report = UPDATES._LATEST.get("report") or {}
     chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,

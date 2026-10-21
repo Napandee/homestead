@@ -136,7 +136,9 @@ class Cluster:
     def start(self, plan=None):
         plan = plan or self.review()
         return V.start({k: plan[k] for k in ('node', 'disk', 'request_id', 'capacity_token')} | {'confirm_capacity': True})
-    def tick(self): return V.status(self.ops.stored()[0]['id'])
+    def tick(self):
+        self.ops.list_operations()  # what the leader's jobs loop does (#622)
+        return V.status(self.ops.stored()[0]['id'])
     def evacuate(self):
         for replica in self.replicas:
             if replica['spec']['nodeID'] == 'node-1':
@@ -360,16 +362,17 @@ class DiskV2Tests(unittest.TestCase):
             V.bind(self.c.get, self.c.send, lambda force=False: {}, OPS, 'lab', lambda path: 'helper log')
             self.c.ops = OPS
             item = self.c.start(); operation_id = item['id']
-            V.status(operation_id); self.c.evacuate(); V.status(operation_id)
+            advanced = lambda: (OPS.list_operations(), V.status(operation_id))[1]  # the jobs loop, then a look
+            advanced(); self.c.evacuate(); advanced()
             review = V.prepare_review(operation_id)
             body = {k: review[k] for k in ('operation_id', 'request_id', 'capacity_token')}
             V.prepare(body | {'confirm_capacity': True, 'confirm_device': '/dev/sdb'})
             for phase in ('dispatching', 'preparing', 'preparing'):
                 # Every read is a deserialized record; no in-memory coordinator survives.
-                self.assertEqual(V.status(operation_id)['phase'], phase)
+                self.assertEqual(advanced()['phase'], phase)
             self.assertEqual(sum(method == 'POST' for method, _, _ in self.c.writes), 1)
             saved = OPS.stored()[0]; saved['ref']['phase'] = 'complete'; OPS.checkpoint(saved)
-            self.assertEqual(V.status(operation_id)['status'], 'succeeded')
+            self.assertEqual(advanced()['status'], 'succeeded')
 
 
 

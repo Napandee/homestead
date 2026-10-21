@@ -707,7 +707,7 @@ def start_run(request):
     """The reviewed moves, started as a job: 202 while it runs, 409 when the
     review no longer holds."""
     b = request.body
-    running = next((i for i in OPS.list_operations() if i.get("kind") == KIND
+    running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
         return ROUTER.Reply(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})

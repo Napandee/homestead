@@ -684,7 +684,7 @@ def start(body, role=None):
     now; role is theirs, and each app is checked for them again as it is
     changed. Refused while another such job runs, or without the restarts
     confirmed."""
-    running = next((i for i in operations.list_operations() if i.get("kind") == KIND
+    running = next((i for i in operations.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in operations.TERMINAL), None)
     if running:
         raise ValueError("Tiers are already being set; follow it in Jobs")
@@ -735,7 +735,7 @@ def protect():
     now_value = priority_of(spec, lad)[0] if current else d
 
     def busy():
-        return operations and any(i.get("status") not in operations.TERMINAL for i in operations.list_operations())
+        return operations and any(i.get("status") not in operations.TERMINAL for i in operations.snapshot())
 
     def send(cls):
         ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",

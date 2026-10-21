@@ -221,7 +221,7 @@ class TickTests(unittest.TestCase):
         settings = {"placement": {"rebalance": "suggest", "mode": "standby", "standby_nodes": ["pi"]},
                     "updates": {"maintenance": {"days": [], "start": "02:00", "duration_minutes": 60}}}
         plans = []
-        jobs = mock.Mock(TERMINAL={"succeeded"}, list_operations=lambda: [])
+        jobs = mock.Mock(TERMINAL={"succeeded"}, snapshot=lambda: [])
         bound = (recovery.read, recovery.settings, recovery.operations, recovery.plan, recovery.start, recovery.WAITS_FOR)
         self.addCleanup(lambda: recovery.bind(recovery.DATA_DIR, *bound[:5], waits_for=bound[5]))
         recovery.bind(recovery.DATA_DIR, lambda path: {"items": [node("a"), node("pi")]}, lambda: settings, jobs,
