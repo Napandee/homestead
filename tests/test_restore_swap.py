@@ -192,7 +192,7 @@ class Base(unittest.TestCase):
         self.restored.append(copy.deepcopy(cfg))
         made = claim(cfg["name"], "u-new", annotations=cfg["annotations"])
         self.kube.add(f"/api/v1/namespaces/{cfg['namespace']}/persistentvolumeclaims/{cfg['name']}", made)
-        return {"created": True, "name": cfg["name"], "source_size_bytes": 10 * 1024 ** 3, "message": "Restore started"}
+        return {"created": True, "name": cfg["name"], "uid": "u-new", "source_size_bytes": 10 * 1024 ** 3, "message": "Restore started"}
 
     def fake_deletion_plan(self, ns, name):
         pods = [p for p in self.kube._pods(ns) if any((v.get("persistentVolumeClaim") or {}).get("claimName") == name
@@ -654,6 +654,7 @@ class PreviousTests(Base):
                          {k: row[k] for k in ("namespace", "name", "app", "replaced_by", "replaced_at", "expires_at",
                                               "reminded_at", "kept", "reason", "in_use")})
         self.assertTrue(row["digest"])
+        self.assertEqual((True, ""), (row["can_swap_back"], row["managed"]))
 
     def test_keep_is_for_an_operator_and_un_keep_for_an_admin(self):
         put_previous(self, at=NOW - 86400, reminded=NOW - 60)
@@ -750,6 +751,26 @@ class ProvenanceTests(Base):
         RS.expire_tick(NOW)
         self.assertEqual([], self.deleted)
         self.assertEqual({}, self.records)
+
+    def test_a_claim_made_again_under_the_same_name_is_never_recorded_or_deleted(self):
+        _, item = self.started()
+        self.restore_result = ("running", 50, "Restoring")
+        self.step(item, NOW)
+        self.kube.objs[OLD]["metadata"]["uid"] = "u-recreated"      # deleted and made again meanwhile
+        self.restore_result = ("succeeded", 100, "Restored")
+        self.run_until(item, "watching")
+        self.assertNotIn("lab/app-1-data", self.records)
+        RS.expire_tick(NOW + 60 * 86400)
+        RS.expire_tick(NOW + 62 * 86400)
+        self.assertEqual([], self.deleted)
+
+    def test_a_restored_claim_made_again_is_not_recorded_when_swapping_back(self):
+        _, item = self.started()
+        self.run_until(item, "watching")
+        self.kube.objs[NEW]["metadata"]["uid"] = "u-recreated"
+        RS.cancel_run(item, {})
+        self.assertNotIn("lab/app-1-data-restore", self.records)
+        self.assertEqual("app-1-data", self.template_claim())
 
     def test_an_app_name_that_is_not_a_kubernetes_name_is_not_shown(self):
         put_previous(self, at=NOW - 6.5 * 86400, reminded=NOW - 3600, app="<b>x</b>")

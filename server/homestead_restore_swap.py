@@ -382,6 +382,7 @@ def start(body):
                "indexes": p["_internal"]["indexes"], "old_claim": old, "new_claim": new,
                "old_uid": (pvc.get("metadata") or {}).get("uid", ""), "old_volume": _handle(pvc),
                "backup": p["backup"], "generation": (dep.get("metadata") or {}).get("generation"),
+               "new_uid": result.get("uid", "") if result.get("created") else "",
                "direction": "restore", "phase": "restoring", "since": time.time(),
                "restore": {"namespace": ns, "name": new, "backup": p["backup"], "restore_config": cfg,
                            "restore_started": bool(result.get("created"))}}
@@ -416,20 +417,22 @@ def _points_at(dep, ref):
     return claims.pop() if len(claims) == 1 else ""
 
 
-def _mark(item, claim, replaced_by, reason, now):
+def _mark(item, claim, expected_uid, replaced_by, reason, now):
     """Keep a claim as the app's previous volume, from now: Homestead's own
     record first (what the expiry trusts), then the marks on the claim that
-    show it to people and to kubectl."""
+    show it to people and to kubectl. Only the claim the job knows - the uid
+    it reviewed or made: one made again under the name since is someone's
+    data, and is neither recorded nor marked. True when it is recorded."""
     ref = item["ref"]
     ns = ref["namespace"]
     pvc = KUBE.get_optional(_pvc_path(ns, claim), read=kget)
-    if not pvc:
-        return
-    uid = (pvc.get("metadata") or {}).get("uid", "")
+    uid = ((pvc or {}).get("metadata") or {}).get("uid", "")
+    if not pvc or not expected_uid or uid != expected_uid:
+        return False
     key = f"{ns}/{claim}"
     known = read_records().get(key) or {}
     if known.get("job") == item.get("id") and known.get("reason") == reason and known.get("uid") == uid:
-        return          # marked by this job already: a restart keeps its date
+        return True     # marked by this job already: a restart keeps its date
 
     def put(records):
         records[key] = {"uid": uid, "app": ref["app"], "replaced_by": replaced_by, "replaced_at": int(now),
@@ -442,6 +445,7 @@ def _mark(item, claim, replaced_by, reason, now):
                         NAMES.key("replaced-job"): item.get("id", ""), NAMES.key("replaced-uid"): uid,
                         NAMES.key("replaced-reason"): reason, REMINDED: None, KEEP: None}}},
           ctype="application/merge-patch+json")
+    return True
 
 
 def _forget(ns, claim):
@@ -475,8 +479,8 @@ def _put_back(item, why, now):
         if ref["direction"] == "restore":
             pvc = KUBE.get_optional(_pvc_path(ref["namespace"], ref["new_claim"]), read=kget)
             restore_id = ref.get("restore", {}).get("restore_config", {}).get("restore_id")
-            if pvc and ((pvc.get("metadata") or {}).get("annotations") or {}).get("homestead.io/restore-id") == restore_id:
-                _mark(item, ref["new_claim"], ref["old_claim"], "not-used", now)
+            if pvc and ((pvc.get("metadata") or {}).get("annotations") or {}).get("homestead.io/restore-id") == restore_id \
+                    and _mark(item, ref["new_claim"], ref.get("new_uid"), ref["old_claim"], "not-used", now):
                 made = ref["new_claim"]
     ref.update(phase="put-back", since=now)
     tail = f" The restored volume {made} is kept {_until(now, _days())}." if made else ""
@@ -492,7 +496,7 @@ def _swap_back_writes(item, now):
         if _points_at(dep, ref) != ref["old_claim"]:
             _point(ref, None, ref["new_claim"], ref["old_claim"])
         _unmark(ref["namespace"], ref["old_claim"])
-        _mark(item, ref["new_claim"], ref["old_claim"], "not-started", now)
+        _mark(item, ref["new_claim"], ref.get("new_uid"), ref["old_claim"], "not-started", now)
         _scale(ref, ref.get("replicas_before", 1))
 
 
@@ -536,7 +540,10 @@ def resolve(item, checkpoint, now=None):
         if status != "succeeded":
             return _put_back(item, f"The restore did not finish ({message})", now)
         pvc = kget(_pvc_path(ns, new))
-        to("stopping", new_uid=(pvc.get("metadata") or {}).get("uid", ""))
+        uid = (pvc.get("metadata") or {}).get("uid", "")
+        if ref.get("new_uid") and uid != ref["new_uid"]:
+            return _put_back(item, f"{new} was replaced by another claim of the same name", now)
+        to("stopping", new_uid=uid)
         phase = "stopping"
     if phase == "stopping":
         if not ref.get("stopped"):
@@ -564,7 +571,7 @@ def resolve(item, checkpoint, now=None):
                 if error.code not in (409, 422):
                     raise
                 return _put_back(item, f"{app} was changed while it was stopped, so it was not swapped", now)
-        _mark(item, old, new, "restored" if ref["direction"] == "restore" else "swapped-back", now)
+        _mark(item, old, ref.get("old_uid"), new, "restored" if ref["direction"] == "restore" else "swapped-back", now)
         if ref["direction"] == "restore":
             ksend("PATCH", _pvc_path(ns, new), {"metadata": {"annotations": {RESTORED_INTO: f"{ns}/{app}"}}},
                   ctype="application/merge-patch+json")
@@ -706,6 +713,7 @@ def _row(ns, name, record, pvc, days, pods=None, dep=None):
             "uid": record.get("uid", ""),
             "in_use": any(name in RECLASS._claims_in(p.get("spec")) for p in pods or []),
             "can_swap_back": bool(dep and _indexes(dep, current)),
+            "managed": (UPDATES.managed_by(dep) or {}).get("by", "") if dep else "",
             "digest": _back_digest(ns, app, current, name, record.get("uid", ""), dep) if dep else ""}
 
 
