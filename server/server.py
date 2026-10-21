@@ -965,6 +965,7 @@ SIGNINS.bind(DATA_DIR)
 import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
+import homestead_setup_code as SETUP_CODE
 API_KEYS.bind(DATA_DIR)
 API_KEYS.CLIENTADDR.bind(lambda path: KUBE_HELPERS.kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
@@ -1839,16 +1840,14 @@ class H(HTTP.LimitedHandler):
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
             if p == "/api/auth/setup":
-                # Whoever finishes setup becomes the first administrator, so it is
-                # not offered to the internet, however the hostname is protected.
+                # The first administrator: from the LAN only, and with the setup code (#737).
                 if self._via_cloudflare():
                     return self._send(403, {"error": "finish setting Homestead up from your LAN; "
                                                      "setup is not offered through the tunnel"})
-                AUTH.create_user(b.get("username"), b.get("password"), first_only=True)
-                self._signin("setup", (b.get("username") or "").strip().lower(), detail="the first administrator")
+                first = SETUP_CODE.first_admin(b, addr)
+                self._signin("setup", first, detail="the first administrator")
                 remember = bool(b.get("remember"))
-                tok = AUTH.issue_token((b.get("username") or "").strip().lower(), remember)
-                self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
+                self._set_cookie(AUTH.issue_token(first, remember), max_age=AUTH.idle_ttl(remember))
                 return self._send(200, {"ok": True, "user": b.get("username")})
             if p == "/api/auth/login":
                 tried = (b.get("username") or "").strip().lower()
@@ -1953,6 +1952,7 @@ def start_background_tasks():
     """Start only after normal boot or the independent move's verified completion."""
     require_self_data_write()
     threading.Thread(target=DIAGNOSTICS.run, name="diagnostics-expiry", daemon=True).start()
+    threading.Thread(target=SETUP_CODE.run, name="setup-code", daemon=True).start()
     threading.Thread(target=_storage_runtime_loop, daemon=True).start()
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
