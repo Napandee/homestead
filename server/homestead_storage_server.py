@@ -33,6 +33,7 @@ import homestead_objectstore as OBJECTS
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_reclass as RECLASS
+import homestead_restore_swap as RESTORE_SWAP
 import homestead_restore_test as RESTORE_TEST
 import homestead_revert as REVERT
 import homestead_root_guard as ROOT_GUARD
@@ -647,3 +648,5 @@ def register(ops):
         lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
     ops.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
     ops.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
+    # Restore into this app (#743) registers here, so server.py gets no line.
+    RESTORE_SWAP.register(ops)
