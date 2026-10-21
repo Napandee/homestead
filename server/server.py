@@ -1891,16 +1891,16 @@ class H(HTTP.LimitedHandler):
                 AUTH.create_user(b.get("username"), b.get("password"),
                                  role=b.get("role", "operator"))
                 self._signin("user-added", (b.get("username") or "").strip().lower(),
-                             detail=f"as {b.get('role', 'operator')}, by {self.user}")
+                             detail=f"as {b.get('role', 'operator')}, by {FLEET.words(self.user)}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/role":
                 AUTH.set_role(b["username"], b["role"], self.user)
-                self._signin("role", b["username"], detail=f"now {b['role']}, by {self.user}")
+                self._signin("role", b["username"], detail=f"now {b['role']}, by {FLEET.words(self.user)}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/users/delete":
                 AUTH.delete_user(b.get("username"), self.user)
                 ALERTS.forget_user(str(b.get("username") or "").strip().lower())
-                self._signin("user-removed", b.get("username"), detail=f"by {self.user}")
+                self._signin("user-removed", b.get("username"), detail=f"by {FLEET.words(self.user)}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/signout-everywhere":
                 AUTH.logout_everywhere(self.user)

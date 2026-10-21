@@ -82,3 +82,27 @@ test("someone viewing this Homestead from a linked one sees their own name in wo
   assert.equal(fields["#whonm"].textContent, "alice (via Office)");
   assert.equal(fields["#whoav"].textContent, "AL");
 });
+
+test("UI.who reads every shared case as the server's homestead_fleet.words does", () => {
+  // tests/fixtures/who-cases.json is checked by tests/test_identity_words.py too.
+  const table = JSON.parse(fs.readFileSync("tests/fixtures/who-cases.json", "utf8"));
+  const { c } = load(table.members);
+  for (const [stored, words] of table.cases) assert.equal(c.UI.who(stored), words, stored);
+});
+
+test("a name nested thousands deep is read without throwing, three levels at most", () => {
+  const { c } = load(OFFICE);
+  const text = c.UI.who("approving:a:".repeat(200000) + "ada");   // deeper than the stack allows
+  assert.equal(typeof text, "string");
+  assert.ok(text.endsWith("approving a approving a approving a"));
+  for (const odd of ["approving:", "approving::", "fleet:", "fleet::", ":", "api-key:", null, 42])
+    assert.equal(typeof c.UI.who(odd), "string", String(odd));
+});
+
+test("with no linked Homesteads known, every shared case names a Homestead by its handle", () => {
+  const table = JSON.parse(fs.readFileSync("tests/fixtures/who-cases.json", "utf8"));
+  const { c } = load();
+  assert.equal(c.UI.who("fleet:office:alice"), "alice (via office)");
+  assert.equal(c.UI.who("fleet:office"), "office");
+  for (const [stored] of table.cases) assert.equal(typeof c.UI.who(stored), "string", stored);
+});

@@ -24,6 +24,7 @@ import time
 import homestead_agent_audit as AUDIT
 import homestead_agent_tools as TOOLS
 import homestead_auth as AUTH
+import homestead_fleet as FLEET
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -190,9 +191,9 @@ def _end(rid, **changes):
 
 def deny(rid, user, role):
     row = _take(rid, user, role, "denied")
-    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "denied", detail=f"denied by {user}",
+    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "denied", detail=f"denied by {FLEET.words(user)}",
                  addr=row.get("addr", ""), approved_by=user)
-    return public(_end(rid, detail=f"Denied by {user}"))
+    return public(_end(rid, detail=f"Denied by {FLEET.words(user)}"))
 
 
 def approve(rid, user, role):
@@ -219,9 +220,9 @@ def approve(rid, user, role):
                      addr=row.get("addr", ""), approved_by=user)
         return public(_end(rid, status="failed", detail=str(error)[:400]))
     clipped, _ = TOOLS.clip(result)
-    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "approved", detail=f"approved by {user}",
+    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "approved", detail=f"approved by {FLEET.words(user)}",
                  addr=row.get("addr", ""), approved_by=user)
-    return public(_end(rid, status="done", result=clipped, detail=f"Approved by {user}"))
+    return public(_end(rid, status="done", result=clipped, detail=f"Approved by {FLEET.words(user)}"))
 
 
 def alert_facts():

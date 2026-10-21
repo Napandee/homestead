@@ -1,0 +1,80 @@
+{
+  "_about": "How a recorded identity reads in words. UI.who (web/js/ui.js) and homestead_fleet.words (server) both follow this table; tests/who-label.test.js and tests/test_identity_words.py check both against it. members are the linked Homesteads known when it is shown. Nesting is read at most three levels deep; past that the rest is shown as recorded, so a crafted name cannot make reading it fail.",
+  "members": [
+    {
+      "id": "a1",
+      "name": "Office",
+      "handle": "office"
+    },
+    {
+      "id": "c1",
+      "handle": "barn"
+    }
+  ],
+  "cases": [
+    [
+      "fleet:office:alice",
+      "alice (via Office)"
+    ],
+    [
+      "fleet:office:alice@example.com",
+      "alice@example.com (via Office)"
+    ],
+    [
+      "fleet:office",
+      "Office"
+    ],
+    [
+      "fleet:loft:robin",
+      "robin (via loft)"
+    ],
+    [
+      "api-key:backup",
+      "API key backup"
+    ],
+    [
+      "approving:Claude Code:ada",
+      "ada approving Claude Code"
+    ],
+    [
+      "approving:Claude Code:fleet:office:alice",
+      "alice (via Office) approving Claude Code"
+    ],
+    [
+      "approving:Claude∶ laptop:ada",
+      "ada approving Claude∶ laptop"
+    ],
+    [
+      "ada",
+      "ada"
+    ],
+    [
+      "alice@office",
+      "alice@office"
+    ],
+    [
+      "",
+      ""
+    ],
+    [
+      "approving:a:approving:b:approving:c:approving:d:ada",
+      "approving:d:ada approving c approving b approving a"
+    ],
+    [
+      "fleet:office:fleet:office:fleet:office:fleet:office:alice",
+      "fleet:office:alice (via Office) (via Office) (via Office)"
+    ],
+    [
+      "fleet:office:",
+      "Office"
+    ],
+    [
+      "fleet:loft:fleet:office:alice",
+      "alice (via Office) (via loft)"
+    ],
+    [
+      "fleet:barn:robin",
+      "robin (via barn)"
+    ]
+  ]
+}

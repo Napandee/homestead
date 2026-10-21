@@ -57,15 +57,24 @@ const UI = (() => {
   /* Who did something, as Homestead records it, in words. A person relayed by a
      linked Homestead is fleet:<handle>:<name>, that Homestead's own call
      fleet:<handle>, an API key api-key:<name>, and an agent request run on
-     approval approving:<key>:<name>. Plain text: escape it where it is shown. */
+     approval approving:<key>:<name>. Plain text: escape it where it is shown.
+     A name may come from a linked Homestead, so it is read at most WHO_DEPTH
+     levels deep (the rest is shown as recorded), and reading it never throws:
+     the server's homestead_fleet.words follows the same rules. */
+  const WHO_DEPTH = 3;
   const fleetName = handle => (typeof FLEET !== "undefined" && FLEET.view?.members || []).find(m => m.handle === handle)?.name || handle;
-  const who = name => {
-    const s = String(name ?? ""), rest = s.slice(s.indexOf(":") + 1), cut = rest.indexOf(":");
+  const whoAt = (s, depth) => {
+    if (depth >= WHO_DEPTH) return s;
+    const rest = s.slice(s.indexOf(":") + 1), cut = rest.indexOf(":");
     if (s.startsWith("api-key:")) return `API key ${rest}`;
-    if (s.startsWith("approving:") && cut > 0) return `${who(rest.slice(cut + 1))} approving ${rest.slice(0, cut)}`;
+    if (s.startsWith("approving:") && cut > 0) return `${whoAt(rest.slice(cut + 1), depth + 1)} approving ${rest.slice(0, cut)}`;
     if (!s.startsWith("fleet:")) return s;
     return cut < 0 || cut === rest.length - 1 ? fleetName(cut < 0 ? rest : rest.slice(0, cut))
-      : `${who(rest.slice(cut + 1))} (via ${fleetName(rest.slice(0, cut))})`;
+      : `${whoAt(rest.slice(cut + 1), depth + 1)} (via ${fleetName(rest.slice(0, cut))})`;
+  };
+  const who = name => {
+    const s = String(name ?? "");
+    try { return whoAt(s, 0); } catch { return s; }
   };
 
   /* The opening sentences: what this dialog does, plainly. */

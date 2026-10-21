@@ -95,5 +95,51 @@ class LoginRouteTests(unittest.TestCase):
         self.assertEqual(("signin", "robin", True, "kept signed in"), (row["event"], row["user"], row["ok"], row["detail"]))
 
 
+class UserAdminHistoryTests(LoginRouteTests):
+    """Who added, changed or removed an account reads in words, also when it was
+    an administrator using this Homestead from a linked one."""
+
+    def admin_post(self, path, body, user="fleet:office:alice"):
+        h = object.__new__(self.server.H)
+        raw = json.dumps(body).encode()
+        h.path, h.command = path, "POST"
+        h.headers = {"Content-Length": str(len(raw)), "User-Agent": "curl/8.4.0", "Content-Type": "application/json"}
+        h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
+        h.client_address, h.connection = ("192.0.2.50", 1), None
+        h._send = mock.Mock()
+
+        def guard(p):
+            h.user, h.role, h._fleet_from = user, "admin", "a1"
+            return False
+        members = [{"id": "a1", "name": "Office", "handle": "office"}]
+        with mock.patch.object(h, "_guard", guard), mock.patch.object(h, "_fleet_target", lambda p: ""), \
+                mock.patch.object(self.server.FLEET, "members", lambda: members), \
+                mock.patch.object(self.server.AUTH, "create_user"), mock.patch.object(self.server.AUTH, "set_role"), \
+                mock.patch.object(self.server.AUTH, "delete_user"), mock.patch.object(self.server.AUTH, "list_users", lambda: []), \
+                mock.patch.object(self.server.ALERTS, "forget_user"):
+            h.do_POST()
+        return self.server.SIGNINS.history()[0]
+
+    def test_adding_changing_and_removing_an_account_name_a_relayed_admin_in_words(self):
+        for path, body, detail in (
+                ("/api/auth/users", {"username": "robin", "password": "x" * 16, "role": "viewer"},
+                 "as viewer, by alice (via Office)"),
+                ("/api/auth/role", {"username": "robin", "role": "operator"}, "now operator, by alice (via Office)"),
+                ("/api/auth/users/delete", {"username": "robin"}, "by alice (via Office)")):
+            with self.subTest(path=path):
+                self.assertEqual(detail, self.admin_post(path, body)["detail"])
+
+    def test_a_deeply_nested_name_still_leaves_the_history_line(self):
+        # The account change is made before the line is written; reading the
+        # name must not stop the line being written.
+        row = self.admin_post("/api/auth/users/delete", {"username": "robin"}, user="fleet:office:" + "fleet:a:" * 5000 + "x")
+        self.assertEqual(("user-removed", "robin"), (row["event"], row["user"]))
+        self.assertTrue(row["detail"].startswith("by "))
+
+    def test_a_local_admin_is_named_as_they_are(self):
+        row = self.admin_post("/api/auth/users/delete", {"username": "robin"}, user="ada")
+        self.assertEqual("by ada", row["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()
