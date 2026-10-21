@@ -140,6 +140,11 @@ class DeclaredRoutes(unittest.TestCase):
             for header in ("cf-connecting-ip", "x-forwarded-for", "x-forwarded-proto", "cf-ray"):
                 self.assertNotIn(header, text, f"{module.name} reads {header}: use request.conn")
 
+    def test_h_wires_the_hook_and_keeps_handle_one_request(self):
+        import server
+        self.assertIs(server.H.after_request, ROUTES.after_request)
+        self.assertNotIn("handle_one_request", vars(server.H))
+
     def test_handlers_get_the_request(self):
         seen = []
         ROUTES._table[("POST", "/api/test/echo")] = ROUTES.Route("POST", "/api/test/echo", "admin",

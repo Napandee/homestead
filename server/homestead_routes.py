@@ -45,8 +45,14 @@ needs the handler itself: a WebSocket, /mcp, a file served with its own headers.
 import collections
 import collections.abc
 import importlib
+import json
+import queue
 import re
+import threading
+import time
 import types
+import urllib.parse
+import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
 
 MODULES = (
@@ -191,6 +197,19 @@ _COOKIE_VALUE = re.compile(r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*")
 _COOKIE_PATH = re.compile(r"/[\x21-\x3a\x3c-\x7e]*")
 # A path on this site: never //host or /\host, which a browser reads as another site.
 _LOCATION = re.compile(r"/(?![/\\])[^\s\\]*")
+
+# The body fields an after-request hook may ask for, and the values it gets:
+# names, never free text. A hook gets no body at all unless it asks.
+HOOK_FIELDS = ("ns", "namespace", "kind", "name")
+_HOOK_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+_HOOK_BODY = 64 * 1024
+# How many requests' hooks may wait for the hooks' thread before more are dropped.
+HOOK_QUEUE = 256
+_hooks = []
+_queue = queue.Queue(HOOK_QUEUE)
+_served = []
+_dropped = [0]
+_worker_lock = threading.Lock()
 
 
 class Refused(Exception):
@@ -376,3 +395,95 @@ def role(path, method):
     """The role a declared route needs, or None when it is not one."""
     route = find(method, path)
     return route.role if route else None
+
+
+def after(fn=None, fields=()):
+    """Register fn(request, status, ms) to run after each request that reached
+    its request line, answered or refused, wherever it was answered. request is
+    what a route gets, without its body, query, cookies or session; status is
+    all it learns of the answer (None when the headers never arrived). fields
+    names the HOOK_FIELDS it needs from a JSON body. Usable as @after or
+    @after(fields=(...)).
+
+    Hooks run one after another on one worker thread, after the answer is
+    sent; when they fall HOOK_QUEUE requests behind, a request's hooks are
+    dropped and counted (hooks_dropped()). What a hook sees came from the
+    client: escape and cut the path and headers before keeping them. It must
+    not read thread-locals (homestead_changes.REQUEST, the host-access role):
+    it runs on another thread."""
+    if isinstance(fields, str) or any(field not in HOOK_FIELDS for field in fields):
+        raise ValueError(f"a hook may ask only for {', '.join(HOOK_FIELDS)}, not {fields!r}")
+
+    def register(fn):
+        if not callable(fn):
+            raise TypeError(f"a hook is a function, not {fn!r}")
+        _hooks.append((fn, tuple(fields)))
+        return fn
+    return register if fn is None else register(fn)
+
+
+def hooks_dropped():
+    """How many requests' hooks were dropped because the hooks fell behind."""
+    return _dropped[0]
+
+
+def _ensure_worker():
+    """One daemon thread runs the hooks queued on the current _queue."""
+    with _worker_lock:
+        if _queue not in _served:
+            _served.append(_queue)
+            threading.Thread(target=_run_hooks, args=(_queue,), name="after-request", daemon=True).start()
+
+
+def _run_hooks(jobs):
+    while True:
+        for fn, request, status, ms in jobs.get():
+            try:
+                fn(request, status, ms)
+            except Exception:
+                pass    # one hook's failure is not another's, and never the answer's
+
+
+def _hook_fields(raw, fields):
+    """The asked-for fields of a body the request already read; the socket is
+    never read for a hook."""
+    try:
+        body = json.loads(raw) if raw and len(raw) <= _HOOK_BODY else {}
+    except (ValueError, RecursionError):
+        body = {}
+    if not isinstance(body, dict):
+        return {}
+    return AUDIT.redact({field: body[field] for field in fields
+                         if isinstance(body.get(field), str) and _HOOK_VALUE.fullmatch(body[field])})
+
+
+def _read_only(value):
+    return types.MappingProxyType(dict(value)) if isinstance(value, dict) else value
+
+
+def after_request(handler):
+    """Queue every hook for the request handler just answered (homestead_http):
+    what they see is taken now, and they run on the hooks' own thread."""
+    table()     # the modules that register hooks are read
+    if not _hooks:
+        return
+    if getattr(handler, "headers", None) is None:
+        handler.headers = {}    # refused before its headers were read
+    raw = _headers(handler)
+    view = Request(handler.command or "", urllib.parse.urlparse(handler.path or "").path, None, None,
+                   getattr(handler, "user", None), getattr(handler, "role", None),
+                   handler._client_ip() if getattr(handler, "client_address", None) else "",
+                   Connection(Headers(raw.items()), types.MappingProxyType({}), _tls(handler),
+                              handler._via_cloudflare(), _read_only(getattr(handler, "_access", None)),
+                              getattr(handler, "_fleet_from", None), _read_only(getattr(handler, "api_key", None)),
+                              None))
+    ms = round((time.monotonic() - handler._started) * 1000)
+    body = getattr(handler, "_raw", None)
+    jobs = [(fn, view._replace(body=_hook_fields(body, fields)) if fields else view, handler._status, ms)
+            for fn, fields in list(_hooks)]
+    _ensure_worker()
+    try:
+        _queue.put_nowait(jobs)
+    except queue.Full:
+        with _worker_lock:
+            _dropped[0] += 1

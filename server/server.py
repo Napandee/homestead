@@ -1197,7 +1197,7 @@ class H(HTTP.LimitedHandler):
     protocol_version = "HTTP/1.1"
     timeout = HTTP.IDLE_SECONDS
     max_body = MAX_BODY
-
+    after_request = MODULE_ROUTES.after_request
 
     def log_message(self, fmt, *a):
         pass
