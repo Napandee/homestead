@@ -54,11 +54,20 @@ def is_page_path(path):
 
 
 # Paths reachable without a session. Everything else needs one.
-PUBLIC = {"/healthz", "/style.css", "/index.html", "/sw.js", "/manifest.webmanifest",
+PUBLIC = {"/healthz", "/readyz", "/style.css", "/index.html", "/sw.js", "/manifest.webmanifest",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup",
           # Back to this cluster from one that stopped answering: it only
           # forgets which linked cluster this browser was looking at.
           "/api/fleet/home"}
+
+
+def handoff_body(path, body):
+    """What the self-data fence in server.py's guard sends to a health probe.
+
+    /readyz gets the same status /healthz gets, with nothing but whether
+    that status means ready: {"ready": true} beside a 200, {"ready": false}
+    beside a 503 (#736). Every other path gets body itself."""
+    return {"ready": bool(body.get("ok"))} if path == "/readyz" else body
 
 
 def is_public_path(path):

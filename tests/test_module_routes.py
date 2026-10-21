@@ -107,11 +107,14 @@ def helper_literals():
 
 class DeclaredRoutes(unittest.TestCase):
     def test_every_route_has_a_role_and_a_handler(self):
+        import homestead_web_paths as WEB_PATHS
         table = ROUTES.table()
         self.assertTrue(table)
         for (method, path), route in table.items():
             self.assertIn(method, ("GET", "POST", "PUT", "DELETE"), path)
-            self.assertTrue(path.startswith("/api/"), path)
+            # Outside /api/ only where the guard does not take it for a page,
+            # which it lets through before sign-in (/readyz, /metrics: #736).
+            self.assertTrue(path.startswith("/api/") or not WEB_PATHS.is_page_path(path), path)
             self.assertIn(route.role, ROUTES.ROLES, path)
             self.assertTrue(callable(route.handler), path)
 

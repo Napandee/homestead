@@ -1359,12 +1359,12 @@ class H(HTTP.LimitedHandler):
             try:
                 boot_state = self_data_boot_status()
             except SELF_DATA_FENCE.Held as error:
-                self._send(503, {"error": str(error), "data_handoff": True})
+                self._send(503, WEB_PATHS.handoff_body(path, {"error": str(error), "data_handoff": True}))
                 return True
             # Ready means the real app loaded and can read its copied journal
             # and account key, not that normal writers have been released.
-            if self.command == "GET" and path == "/healthz":
-                self._send(200, {"ok": True, "data_handoff": True, "read_only": True})
+            if self.command == "GET" and path in ("/healthz", "/readyz"):
+                self._send(200, WEB_PATHS.handoff_body(path, {"ok": True, "data_handoff": True, "read_only": True}))
                 return True
             if self.command == "GET" and path == "/api/auth/state":
                 detail = {"recovery": True, "operation": boot_state["operation"]} if boot_state.get("mode") == "recovery" else {}
@@ -1399,19 +1399,19 @@ class H(HTTP.LimitedHandler):
             if not recovery_action and (self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)):
                 self._send(503, {"error": "Homestead is verifying its new data volume. Wait for the move to finish before changing anything.", "data_handoff": True})
                 return True
-        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/api/auth/state", "/api/console", "/api/node/shell", "/api/vm/console")):
+        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/readyz", "/api/auth/state", "/api/console", "/api/node/shell", "/api/vm/console")):
             try:
                 require_self_data_write()
             except SELF_DATA_FENCE.Held as error:
-                if self.command == "GET" and path in ("/healthz", "/api/auth/state") and _self_data_fence is not None:
+                if self.command == "GET" and path in ("/healthz", "/readyz", "/api/auth/state") and _self_data_fence is not None:
                     try:
                         recovery = _self_data_fence.recovery()
-                        self._send(200, {"ok": True, "read_only": True, "data_handoff": True, "setup": False,
-                                         "recovery": True, "operation": recovery["operation"]})
+                        self._send(200, WEB_PATHS.handoff_body(path, {"ok": True, "read_only": True, "data_handoff": True, "setup": False,
+                                         "recovery": True, "operation": recovery["operation"]}))
                         return True
                     except Exception:
                         pass
-                self._send(503, {"error": str(error), "data_handoff": True})
+                self._send(503, WEB_PATHS.handoff_body(path, {"error": str(error), "data_handoff": True}))
                 return True
         if self.command in ("POST", "PUT", "PATCH", "DELETE") and path in ("/api/auth/login", "/api/auth/setup", "/api/fleet/home"):
             if self.headers.get("X-Homestead-Auth") != "1":

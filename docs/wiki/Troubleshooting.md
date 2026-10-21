@@ -91,6 +91,31 @@ gate can take through the sign-in and back. If that keeps failing, it asks you
 to sign in rather than reloading in a loop. The installed app (PWA) does the
 same.
 
+## Monitoring Homestead itself
+
+Homestead answers these addresses for monitors. None of them needs the page.
+
+| Address | Who may ask | Says |
+|---|---|---|
+| `/healthz` | anyone | `{"ok": true}` while the process answers. The pod's probes use it. |
+| `/readyz` | anyone | `{"ready": true}` (200) or `{"ready": false}` (503) |
+
+**`/readyz`** is ready when the Kubernetes API answered within the last 30
+seconds and Homestead could write to its data volume. It says nothing else, so
+it is safe to leave open. Which check failed is in `/metrics`
+(`homestead_ready_check`); Settings → Homestead shows the API check too.
+It checks the API at most every 10 seconds and the volume at most every 30, so
+an uptime checker can ask as often as it likes. During a move of Homestead's own
+data it answers as `/healthz` does, and its write to the volume goes through
+the same fence as every other write, so it never writes while the move holds
+the volume. Point an uptime checker at it:
+
+```text
+https://homestead.example.com/readyz    expect: HTTP 200
+```
+
+The pod's own probes still use `/healthz`.
+
 ## Containers
 
 **A VPN container logs `RTNETLINK answers: Operation not permitted`.** It needs

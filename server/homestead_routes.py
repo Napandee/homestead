@@ -109,6 +109,7 @@ MODULES = (
     "homestead_promote",
     "homestead_probe",
     "homestead_push",
+    "homestead_readyz",
     "homestead_rebalance",
     "homestead_reclass",
     "homestead_requests",

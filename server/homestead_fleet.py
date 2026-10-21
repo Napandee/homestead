@@ -61,7 +61,7 @@ LOCAL = {"/api/fleet/switch", "/api/fleet/home", "/api/auth/login", "/api/auth/l
          "/api/auth/setup", "/api/auth/password", "/api/auth/signout-everywhere",
          "/api/auth/preferences/dashboard",
          "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test", "/api/push/status",
-         "/api/alerts/pending", "/api/alerts/delivered", "/healthz"}
+         "/api/alerts/pending", "/api/alerts/delivered", "/healthz", "/readyz", "/metrics"}
 ROLES = ("viewer", "operator", "admin")
 # Not passed on: they describe one connection, or who is asking, which the
 # signature says instead.
