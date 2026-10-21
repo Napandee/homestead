@@ -4,8 +4,9 @@ homestead_kube_helpers; #619 grew it into this client).
 
 Reads: get, get_optional (None when the object is not there), items (a whole
 list or an error). Writes: send and delete_if_present, which go round
-WRITE_GUARDS in order before _ksend, and update_json, which changes JSON
-kept in a ConfigMap or Secret without losing another writer's change (#621).
+WRITE_GUARDS in order before _ksend (or through the module's own sender,
+when it passes one: send=), and update_json, which changes JSON kept in a
+ConfigMap or Secret without losing another writer's change (#621).
 Both reach the cluster through transport, the one place tests put a fake API
 (tests/fakes/kube.py). kget and ksend stay as the old names; the new
 functions call them, so a test that patches kget or ksend here reaches the
@@ -321,10 +322,11 @@ def send(method, path, body=None, **options):
     return ksend(method, path, body, **options)
 
 
-def delete_if_present(path, body=None, **options):
-    """Delete it; None when it was already gone (404). Any other failure raises."""
+def delete_if_present(path, body=None, send=_CLIENT, **options):
+    """Delete it; None when it was already gone (404). Any other failure raises.
+    send is a module's own sender, as read is for get_optional."""
     try:
-        return ksend("DELETE", path, body, **options)
+        return (ksend if send is _CLIENT else send)("DELETE", path, body, **options)
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise

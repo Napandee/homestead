@@ -290,6 +290,21 @@ class VmTests(unittest.TestCase):
                          "Harvester is not asked to remove them either")
         self.assertIn("iso-win11-1, shared-data kept", result["detail"])
 
+    def test_a_disk_already_gone_counts_as_removed_and_one_refused_does_not(self):
+        for code, count in ((404, "1 disk"), (500, "0 disks")):
+            with self.subTest(code=code):
+                c = self.use()
+                send = c.send
+
+                def refusing(method, path, body=None, code=code, **kw):
+                    if method == "DELETE" and "/persistentvolumeclaims/" in path:
+                        c.sent.append((method, path, body))
+                        raise urllib.error.HTTPError(path, code, "no", None, None)
+                    return send(method, path, body, **kw)
+                VMS.bind(c.get, refusing, lambda *a, **k: [])
+                result = VMS.delete("default", "win11", with_disks=True)
+                self.assertIn(f"with {count}", result["detail"])
+
     def test_deleting_with_its_disks(self):
         c = self.use()
         VMS.delete("default", "win11", with_disks=True)
