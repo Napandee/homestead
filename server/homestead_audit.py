@@ -22,6 +22,12 @@ import threading
 import time
 
 import homestead_routes as MODULE_ROUTES
+import homestead_shared as SHARED
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 CHANGE = ("POST", "PUT", "PATCH", "DELETE")
 # Opening a shell or a console is what people ask "who did that" about; one
@@ -46,6 +52,12 @@ PATH_CAP = 200
 REFUSED = (401, 403, 429)
 REFUSAL_SECONDS = 60
 REFUSAL_ADDRESSES = 1000
+
+# On the data volume as well, so the record survives a restart without a log
+# collector: two files of at most MAX_BYTES, ~60 000 lines.
+FILE = "audit.jsonl"
+LOCK = "audit.lock"
+MAX_BYTES = 10 * 1024 * 1024
 
 _refusals = {}
 _notes = threading.local()
@@ -162,9 +174,61 @@ def _stdout(line_text):
         sys.stdout.flush()
 
 
+def _file_on():
+    return True
+
+
+def _rotate(path, incoming):
+    """audit.jsonl becomes audit.jsonl.1 (replacing it) when the next line would
+    not fit. Under audit.lock, and checked again there, so two replicas that
+    both saw a full file rotate it once."""
+    fd = os.open(os.path.join(os.path.dirname(path), LOCK),
+                 os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            size = os.stat(path).st_size
+        except FileNotFoundError:
+            return
+        if size + incoming > MAX_BYTES:
+            os.replace(path, path + ".1")
+    finally:
+        os.close(fd)
+
+
+def _append(line_text):
+    """One line onto the data volume, only through the self-data write fence:
+    while a data move holds /data nothing is written here, and nothing raises."""
+    folder = SHARED.DIR
+    if not os.path.isdir(folder):
+        return                      # no data volume: never made here
+    path, data = os.path.join(folder, FILE), (line_text + "\n").encode("ascii")
+    try:
+        with SHARED.write_scope(path):
+            if SHARED.WRITE_GUARD is not None:
+                SHARED.WRITE_GUARD(path)
+            try:
+                size = os.stat(path).st_size
+            except FileNotFoundError:
+                size = 0
+            if size + len(data) > MAX_BYTES:
+                _rotate(path, len(data))
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+    except Exception:
+        pass                        # held, full or unwritable: stdout has the line
+
+
 def emit(entry):
-    """Write a line: to stdout, for a log collector."""
-    _stdout(text(entry))
+    """Write a line: to stdout, for a log collector, and to the data volume."""
+    line_text = text(entry)
+    _stdout(line_text)
+    if _file_on():
+        _append(line_text)
 
 
 MODULE_ROUTES.after(record, fields=MODULE_ROUTES.HOOK_FIELDS)
