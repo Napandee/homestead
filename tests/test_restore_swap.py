@@ -179,6 +179,9 @@ class Base(unittest.TestCase):
         RS.note = self.notes.append
         RS.delete_volume = lambda cfg: self.deleted.append(cfg) or {"ok": True}
         RS.deletion_plan = self.fake_deletion_plan
+        self.records = {}
+        RS.read_records = lambda: copy.deepcopy(self.records)
+        RS.update_records = lambda fn: fn(self.records)
 
     def fake_restore_plan(self, backup, ns, name):
         taken = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}" in self.kube.objs
@@ -523,10 +526,22 @@ def previous(uid="u-prev", at=NOW - 10 * 86400, reminded=None, kept=False, reaso
     return claim("app-1-data-old", uid, annotations=notes, labels={"homestead.io/previous-volume": "true"})
 
 
+def record(uid="u-prev", at=NOW - 10 * 86400, reminded=None, kept=False, reason="restored", app="app-1"):
+    return {"uid": uid, "app": app, "replaced_by": "app-1-data", "replaced_at": int(at), "job": "op0",
+            "reason": reason, "reminded_at": int(reminded) if reminded else None, "kept": kept}
+
+
+def put_previous(test, uid="u-prev", **kw):
+    """A previous volume as Homestead keeps one: its own record, and the
+    marks on the claim that mirror it."""
+    test.kube.objs[KEPT] = previous(uid=uid, **{k: v for k, v in kw.items() if k != "app"})
+    test.records["lab/app-1-data-old"] = record(**kw)
+
+
 class ExpireTests(Base):
     def setUp(self):
         super().setUp()
-        self.kube.add(KEPT, previous())
+        put_previous(self)
 
     def tick(self, now=NOW):
         return RS.expire_tick(now)
@@ -538,17 +553,17 @@ class ExpireTests(Base):
 
     def test_keep_days_0_keeps_everything(self):
         self.settings = {"restore_swap": {"keep_days": 0}}
-        self.kube.objs[KEPT] = previous(reminded=NOW - 3 * 86400)
+        put_previous(self, reminded=NOW - 3 * 86400)
         self.tick()
         self.assertEqual(([], []), (self.deleted, self.kube.sent))
 
     def test_a_kept_volume_is_left_alone(self):
-        self.kube.objs[KEPT] = previous(reminded=NOW - 3 * 86400, kept=True)
+        put_previous(self, reminded=NOW - 3 * 86400, kept=True)
         self.tick()
         self.assertEqual(([], []), (self.deleted, self.kube.sent))
 
     def test_a_day_before_its_expiry_it_is_reminded_not_deleted(self):
-        self.kube.objs[KEPT] = previous(at=NOW - 6.5 * 86400)
+        put_previous(self, at=NOW - 6.5 * 86400)
         self.tick()
         self.assertEqual(str(int(NOW)), self.marks(KEPT)[1]["homestead.io/reminded-at"])
         self.assertEqual([], self.deleted)
@@ -559,19 +574,19 @@ class ExpireTests(Base):
         self.assertEqual([], self.deleted)
 
     def test_nothing_goes_less_than_a_day_after_its_reminder(self):
-        self.kube.objs[KEPT] = previous(reminded=NOW - 20 * 3600)
+        put_previous(self, reminded=NOW - 20 * 3600)
         self.tick()
         self.assertEqual([], self.deleted)
 
     def test_past_expiry_and_reminded_a_day_ago_it_is_deleted_the_way_a_person_would(self):
-        self.kube.objs[KEPT] = previous(reminded=NOW - 86400)
+        put_previous(self, reminded=NOW - 86400)
         self.tick()
         self.assertEqual([{"namespace": NS, "name": "app-1-data-old", "action": "delete_data", "uid": "u-prev",
                            "confirmation": "app-1-data-old"}], self.deleted)
         self.assertIn("Deleted app-1's previous volume app-1-data-old", self.notes[0]["title"])
 
     def test_a_volume_mounted_again_is_no_longer_kept_and_never_deleted(self):
-        self.kube.objs[KEPT] = previous(reminded=NOW - 3 * 86400)
+        put_previous(self, reminded=NOW - 3 * 86400)
         self.kube.objs[DEP]["spec"]["template"]["spec"]["volumes"][1]["persistentVolumeClaim"]["claimName"] = "app-1-data-old"
         self.tick()
         self.assertEqual([], self.deleted)
@@ -581,12 +596,13 @@ class ExpireTests(Base):
         self.assertIn("app-1 uses app-1-data-old again", self.notes[0]["title"])
 
     def test_a_claim_made_again_under_the_same_name_is_never_taken(self):
-        self.kube.objs[KEPT] = previous(uid="u-someone-else", reminded=NOW - 3 * 86400)
+        put_previous(self, reminded=NOW - 3 * 86400)
+        self.kube.objs[KEPT]["metadata"]["uid"] = "u-someone-else"
         self.tick()
         self.assertEqual([], self.deleted)
 
     def test_a_volume_a_job_holds_is_skipped(self):
-        self.kube.objs[KEPT] = previous(reminded=NOW - 3 * 86400)
+        put_previous(self, reminded=NOW - 3 * 86400)
         self.ops.items.append({"kind": "reclass", "status": "running", "resource": {"namespace": NS, "name": "app-1-data-old"},
                                "ref": {"namespace": NS, "claim": "app-1-data-old"}})
         self.tick()
@@ -594,10 +610,11 @@ class ExpireTests(Base):
 
     def test_an_error_on_one_claim_leaves_the_others_to_carry_on(self):
         other = f"/api/v1/namespaces/{NS}/persistentvolumeclaims/b-old"
-        self.kube.objs[KEPT] = previous(reminded=NOW - 3 * 86400)
+        put_previous(self, reminded=NOW - 3 * 86400)
         second = previous(reminded=NOW - 3 * 86400)
         second["metadata"]["name"] = "b-old"
         self.kube.add(other, second)
+        self.records["lab/b-old"] = record(reminded=NOW - 3 * 86400)
         plan = RS.deletion_plan
         RS.deletion_plan = lambda ns, name: (_ for _ in ()).throw(ValueError("Longhorn did not answer")) \
             if name == "app-1-data-old" else plan(ns, name)
@@ -607,7 +624,7 @@ class ExpireTests(Base):
 
 class AlertFactTests(Base):
     def test_a_reminded_volume_that_is_not_kept_is_one_info_alert_offering_keep(self):
-        self.kube.add(KEPT, previous(at=NOW - 6.5 * 86400, reminded=NOW - 3600))
+        put_previous(self, at=NOW - 6.5 * 86400, reminded=NOW - 3600)
         facts = RS.alert_facts(NOW)
         self.assertEqual(1, len(facts))
         self.assertEqual(("info", "previous-volume:lab/app-1-data-old"), (facts[0]["severity"], facts[0]["key"]))
@@ -616,16 +633,16 @@ class AlertFactTests(Base):
         self.assertTrue(facts[0]["href"].startswith("/data-protection"))
 
     def test_kept_or_not_yet_reminded_raises_nothing(self):
-        self.kube.add(KEPT, previous(at=NOW - 6.5 * 86400, reminded=NOW - 3600, kept=True))
+        put_previous(self, at=NOW - 6.5 * 86400, reminded=NOW - 3600, kept=True)
         self.assertEqual([], RS.alert_facts(NOW))
-        self.kube.objs[KEPT] = previous(at=NOW - 86400)
+        put_previous(self, at=NOW - 86400)
         self.assertEqual([], RS.alert_facts(NOW))
 
 
 class PreviousTests(Base):
     def setUp(self):
         super().setUp()
-        self.kube.add(KEPT, previous(at=NOW - 86400))
+        put_previous(self, at=NOW - 86400)
 
     def test_the_list(self):
         listing = RS.previous_volumes(NOW)
@@ -639,12 +656,13 @@ class PreviousTests(Base):
         self.assertTrue(row["digest"])
 
     def test_keep_is_for_an_operator_and_un_keep_for_an_admin(self):
-        self.kube.objs[KEPT] = previous(at=NOW - 86400, reminded=NOW - 60)
+        put_previous(self, at=NOW - 86400, reminded=NOW - 60)
         row = RS.keep({"namespace": NS, "name": "app-1-data-old", "keep": True}, "operator")
         self.assertTrue(row["kept"])
         notes = self.marks(KEPT)[1]
         self.assertEqual("true", notes["homestead.io/keep-previous"])
         self.assertNotIn("homestead.io/reminded-at", notes)
+        self.assertEqual((True, None), (self.records["lab/app-1-data-old"]["kept"], self.records["lab/app-1-data-old"]["reminded_at"]))
         with self.assertRaises(PermissionError):
             RS.keep({"namespace": NS, "name": "app-1-data-old", "keep": False}, "operator")
         self.assertFalse(RS.keep({"namespace": NS, "name": "app-1-data-old", "keep": False}, "admin")["kept"])
@@ -669,6 +687,8 @@ class PreviousTests(Base):
         self.assertEqual("app-1-data-old", self.template_claim())
         self.assertEqual("swapped-back", self.marks(OLD)[1]["homestead.io/replaced-reason"])
         self.assertNotIn("homestead.io/previous-volume", self.marks(KEPT)[0])
+        self.assertEqual(["lab/app-1-data"], list(self.records))
+        self.assertEqual(("u-old", "swapped-back"), (self.records["lab/app-1-data"]["uid"], self.records["lab/app-1-data"]["reason"]))
 
     def test_swap_back_refuses_when_the_app_no_longer_uses_what_replaced_it(self):
         self.kube.objs[DEP]["spec"]["template"]["spec"]["volumes"][1]["persistentVolumeClaim"]["claimName"] = "other"
@@ -692,6 +712,105 @@ class PreviousTests(Base):
                                    ("POST", "/api/volumes/previous/settings", "admin")):
             with self.subTest(path=path):
                 self.assertEqual(role, POLICY.role(path, method))
+
+
+class ProvenanceTests(Base):
+    """Only Homestead's own record makes a claim a previous volume: labels and
+    annotations anyone who may edit claims can write prove nothing (security
+    review of the first draft)."""
+
+    def foreign(self):
+        foreign = previous(uid="u-foreign", reminded=NOW - 30 * 86400)
+        foreign["metadata"]["name"] = "someones-data"
+        foreign["metadata"]["annotations"]["homestead.io/replaced-uid"] = "u-foreign"
+        self.kube.add(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/someones-data", foreign)
+
+    def test_a_hand_labelled_claim_is_never_deleted_listed_or_alerted(self):
+        self.foreign()
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+        self.assertEqual([], [s for s in self.kube.sent if "someones-data" in s[1]])
+        self.assertEqual([], RS.previous_volumes(NOW)["volumes"])
+        self.assertEqual([], RS.alert_facts(NOW))
+        for call in (lambda: RS.keep({"namespace": NS, "name": "someones-data", "keep": False}, "admin"),
+                     lambda: RS.swap_back({"namespace": NS, "name": "someones-data", "digest": "x"})):
+            with self.assertRaisesRegex(ValueError, "not a previous volume"):
+                call()
+
+    def test_a_forged_reminder_on_the_claim_does_not_hasten_the_deletion(self):
+        put_previous(self)                                  # Homestead has not reminded anyone yet
+        self.kube.objs[KEPT]["metadata"]["annotations"]["homestead.io/reminded-at"] = str(int(NOW - 30 * 86400))
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+        self.assertEqual(int(NOW), self.records["lab/app-1-data-old"]["reminded_at"])
+
+    def test_a_record_whose_claim_was_made_again_is_dropped_not_deleted(self):
+        put_previous(self, reminded=NOW - 3 * 86400)
+        self.kube.objs[KEPT]["metadata"]["uid"] = "u-new-owner"
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+        self.assertEqual({}, self.records)
+
+    def test_an_app_name_that_is_not_a_kubernetes_name_is_not_shown(self):
+        put_previous(self, at=NOW - 6.5 * 86400, reminded=NOW - 3600, app="<b>x</b>")
+        self.assertEqual("An app's previous volume app-1-data-old will be deleted tomorrow", RS.alert_facts(NOW)[0]["title"])
+
+
+class SwapBackBlockerTests(Base):
+    def setUp(self):
+        super().setUp()
+        put_previous(self, at=NOW - 86400)
+
+    def go(self, **extra):
+        row = RS.previous_volumes(NOW)["volumes"][0]
+        return RS.swap_back({"namespace": NS, "name": "app-1-data-old", "digest": row["digest"], **extra})
+
+    def refused(self, needle, **extra):
+        with self.assertRaisesRegex(ValueError, needle):
+            self.go(**extra)
+        self.assertEqual([], self.ops.started)
+
+    def test_homesteads_own_app(self):
+        self.self_app = True
+        self.refused("Homestead's own data")
+
+    def test_a_system_namespace(self):
+        RS.system_namespaces = lambda: {NS}
+        self.refused("system namespaces")
+
+    def test_another_workload_on_the_claim_it_would_leave(self):
+        self.kube.add(f"/apis/apps/v1/namespaces/{NS}/deployments/app-2", deployment("app-2"))
+        self.refused("app-2")
+
+    def test_a_loose_pod_on_the_previous_volume(self):
+        self.kube.loose.append({"metadata": {"name": "debug"}, "status": {"phase": "Running"},
+                                "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "app-1-data-old"}}]}})
+        self.refused("debug")
+
+    def test_a_flux_app_needs_the_notice_accepted(self):
+        self.kube.objs[DEP]["metadata"]["labels"] = {"kustomize.toolkit.fluxcd.io/name": "apps"}
+        self.refused("Flux")
+        self.go(accept_gitops=True)
+        self.assertEqual("back", self.ops.started[-1]["ref"]["direction"])
+
+    def test_the_app_and_claim_come_from_the_record_not_the_annotations(self):
+        self.kube.objs[KEPT]["metadata"]["annotations"]["homestead.io/previous-of"] = "lab/app-2"
+        self.kube.add(f"/apis/apps/v1/namespaces/{NS}/deployments/app-2", deployment("app-2", claim="other"))
+        self.go()
+        self.assertEqual("app-1", self.ops.started[-1]["ref"]["app"])
+
+
+class RecordStoreTests(unittest.TestCase):
+    def test_records_live_on_homesteads_data_volume(self):
+        import tempfile
+        import homestead_shared as SHARED
+        saved = SHARED.DIR
+        self.addCleanup(lambda: setattr(SHARED, "DIR", saved))
+        with tempfile.TemporaryDirectory() as folder:
+            SHARED.DIR = folder
+            RS.update_records(lambda records: records.update({"lab/a": {"uid": "u1"}}))
+            self.assertEqual({"lab/a": {"uid": "u1"}}, RS.read_records())
+            self.assertTrue(Path(folder, "previous-volumes.json").exists())
 
 
 class SettingsTests(unittest.TestCase):
