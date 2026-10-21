@@ -75,6 +75,7 @@ MODULES = (
     "homestead_host_os",
     "homestead_housekeeping",
     "homestead_icons",
+    "homestead_image_cleanup",
     "homestead_imports",
     "homestead_ipam",
     "homestead_isos",

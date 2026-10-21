@@ -71,6 +71,9 @@ DEFAULTS = {
     "restore_tests": {"enabled": False},
     # The MCP server for AI agents (homestead_mcp): off until an admin turns it on.
     "mcp": {"enabled": False},
+    # Removing container images nothing uses (homestead_image_cleanup): off
+    # until an admin turns it on, then images unused this many days go.
+    "image_cleanup": {"auto": False, "after_days": 14},
 }
 
 
@@ -150,6 +153,17 @@ def validate(value):
     if not isinstance(mcp, bool):
         raise ValueError("the MCP server must be on or off")
     out["mcp"] = {"enabled": mcp}
+    cleanup = (value or {}).get("image_cleanup") or {}
+    auto = cleanup.get("auto", False)
+    if not isinstance(auto, bool):
+        raise ValueError("automatic image clean-up must be on or off")
+    try:
+        after = int(cleanup.get("after_days", out["image_cleanup"]["after_days"]))
+    except (TypeError, ValueError):
+        raise ValueError("image clean-up days must be a whole number")
+    if after < 1 or after > 365:
+        raise ValueError("unused images are cleaned up after 1 to 365 days")
+    out["image_cleanup"] = {"auto": auto, "after_days": after}
     site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")
