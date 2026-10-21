@@ -50,8 +50,17 @@ def _snapshot(fact):
 
 
 def _worse(current, baseline):
+    """A higher severity, or a signal that grew. A signal is a number that
+    grows as things get worse; one that is text (an error message) is worse
+    when it changed, rather than compared by alphabetical order."""
+    def grew(value, before):
+        numbers = (int, float)
+        if isinstance(value, numbers) and isinstance(before, numbers) and not isinstance(value, bool):
+            return value > before
+        return before is not None and value != before or before is None and bool(value)
+    signals = baseline.get("signals", {})
     return current["severity"] > baseline.get("severity", 0) or any(
-        value > baseline.get("signals", {}).get(key, 0)
+        grew(value, signals.get(key, 0 if isinstance(value, (int, float)) else None))
         for key, value in current["signals"].items())
 
 

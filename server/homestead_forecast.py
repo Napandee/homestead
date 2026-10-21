@@ -185,6 +185,15 @@ def forecast_href(r):
     return "/volumes"
 
 
+def nearness(days_left):
+    """How close to full, as a number that grows as it gets worse: an
+    acknowledged alert comes back when it does (homestead_alerts), so the
+    days left - which shrink as it worsens, and wobble day to day - can't be
+    the signal. 0 is more than a week, 1 a week or less, 2 CRIT_DAYS or
+    less, 3 a day or less."""
+    return 3 if days_left <= 1 else 2 if days_left <= CRIT_DAYS else 1 if days_left <= 7 else 0
+
+
 def alert_facts(rows):
     """Something fills within WARN_DAYS: degraded; within CRIT_DAYS: critical."""
     facts = []
@@ -200,7 +209,7 @@ def alert_facts(rows):
                       "title": f"{what} fills up {when}",
                       "body": f"It is {r['pct']}% full and has grown {rate} over the last weeks; at that rate it is full by {r['full_on']}.",
                       "resolved": f"{what} is no longer forecast to fill within {WARN_DAYS} days",
-                      "href": forecast_href(r), "signals": {"days_left": round(left)}})
+                      "href": forecast_href(r), "signals": {"nearness": nearness(left)}})
     return facts
 
 

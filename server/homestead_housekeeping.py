@@ -260,7 +260,9 @@ def alert_facts(rep):
              "body": f"The most is in {biggest}. Homestead now keeps less of its logs and logos; if it keeps filling, "
                      "make its data volume larger under Volumes.",
              "resolved": "Homestead's data volume has room again", "href": "/settings?tab=about#homestead-data",
-             "signals": {"pct": round(pct)}}]
+             # In 5% bands, as a host's root disk is: an acknowledged alert comes
+             # back when it is fuller by a band, not at every percent.
+             "signals": {"used_percent_band": int(pct // 5)}}]
 
 
 # Its routes and who may use them (homestead_routes.py).
