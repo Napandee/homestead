@@ -1,11 +1,13 @@
 """Storage routes that answer more than 200 keep their status codes now
 their modules answer them (#363)."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_operations as OPS
 import homestead_routes as ROUTES
 
 
@@ -15,6 +17,12 @@ def call(method, path, body):
 
 
 class StorageReplies(unittest.TestCase):
+    def setUp(self):
+        # A restore takes the job store's lock, which lives under OPS.DATA_DIR
+        # (/data, which a non-root runner cannot write).
+        data = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", data))
+
     def test_a_second_rebalance_is_a_409_with_the_running_job(self):
         import homestead_rebalance as REBALANCE
         running = {"kind": REBALANCE.KIND, "status": "running", "id": "r1"}
