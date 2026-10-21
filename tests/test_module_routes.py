@@ -16,7 +16,7 @@ import source_scan as SS
 SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 1884
+MAX_LINES = 1870
 MAX_PATH_BRANCHES = 5
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -28,18 +28,16 @@ ALIAS_END = "# End of the names tests still patch on server."
 # The routes server.py's handler still answers itself, each with the reason it
 # needs the handler. Every other route is declared in its module's ROUTES.
 INLINE_ROUTES = (
-    ("GET", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
     ("GET", "/api/diagnostics/download", "connection-bound: sets Content-Disposition"),
     ("GET", "/api/console", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/node/shell", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/vm/console", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/icons/", "connection-bound: serves a file with its own headers (path prefix)"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
-    ("POST", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
     ("POST", "/api/self/data/move", "connection-bound: cookies/session"),
     ("ANY", "/api/self/data/abandon", "not a route here: _guard lets the recovery action through while boot is pending; the route is in homestead_self_data_server"),
     ("ANY", "/api/fleet/home", "not a route here: the guard checks it before routing"),
-    ("ANY", "/api/v1/openapi.json", "connection-bound: API keys and sessions (homestead_api_v1)"),
+    ("ANY", "/api/v1/", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/auth/login", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/auth/setup", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/auth/state", "not a route here: the guard checks it before routing"),

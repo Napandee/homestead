@@ -15,6 +15,9 @@ within v1.
 import re
 import urllib.error
 
+import homestead_api_keys as API_KEYS
+import homestead_routes as MODULE_ROUTES
+
 VERSION = "1"
 NAME = re.compile(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?")
 ctx = {}
@@ -327,3 +330,28 @@ def openapi(version, scopes):
             "schemas": SCHEMAS},
         "paths": dict(sorted(paths.items())),
     }
+
+
+def route(request):
+    """One /api/v1 request, for a key or for someone signed in: a session
+    gets the scopes its role gives. server.py's guard checked either."""
+    import homestead_mcp as MCP     # it reaches this module through its tools
+    key = MODULE_ROUTES.connected(request).key
+    auth = key or {"name": request.user, "kind": "session", "expires": None,
+                   "scopes": API_KEYS.scopes_for_role(request.role)}
+    if request.path == "/api/v1/openapi.json" and request.method == "GET":
+        return openapi(ctx["version"](), {s: text for s, (_, text) in API_KEYS.SCOPES.items()})
+    code, answer = handle(request.method, request.path, request.query, request.body, auth)
+    MCP.audit_api(key, request.method, request.path, request.body, code, request.addr)
+    return MODULE_ROUTES.Reply(code, answer)
+
+
+# Its routes and who may use them (homestead_routes.py): a key's scopes, or a
+# session's role, decide each endpoint above. No endpoint takes a DELETE; it
+# is declared so a session's DELETE is still checked as an operator's and
+# answered 404, not refused unanswered by do_DELETE's guard.
+ROUTES = {
+    ("GET", "/api/v1/*"): ("viewer", route),
+    ("POST", "/api/v1/*"): ("operator", route),
+    ("DELETE", "/api/v1/*"): ("operator", route),
+}

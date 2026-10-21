@@ -227,6 +227,40 @@ class ApiV1RouteTests(unittest.TestCase):
         self.handle.assert_not_called()
 
 
+class DeclaredTests(unittest.TestCase):
+    def test_api_v1_is_declared_by_its_module(self):
+        import homestead_routes as ROUTES
+        for method, role in (("GET", "viewer"), ("POST", "operator"), ("DELETE", "operator")):
+            for path in ("/api/v1/openapi.json", "/api/v1/nodes", "/api/v1/containers/lab/web/stop"):
+                route = ROUTES.find(method, path)
+                self.assertEqual(("homestead_api_v1", "/api/v1/*", role),
+                                 route and (route.module, route.path, route.role), f"{method} {path}")
+        self.assertIsNone(ROUTES.find("PUT", "/api/v1/nodes"))
+
+    def test_no_other_module_may_declare_a_path_under_api_v1(self):
+        # A key passes the guard for any /api/v1/ path before its role is
+        # checked, so a route there must be homestead_api_v1's, scopes and all.
+        import types
+        import homestead_routes as ROUTES
+        for method, path in (("GET", "/api/v1/whoami"), ("POST", "/api/v1/containers/lab/web/stop"),
+                             ("GET", "/api/v1/nodes/*"), ("GET", "/api/v1/")):
+            module = types.ModuleType("homestead_test_v1")
+            module.ROUTES = {(method, path): ("viewer", lambda request: {})}
+            with self.subTest(method=method, path=path), \
+                    mock.patch.dict(sys.modules, {"homestead_test_v1": module}), \
+                    mock.patch.object(ROUTES, "MODULES", ("homestead_test_v1",)), \
+                    mock.patch.object(ROUTES, "_table", {}), self.assertRaises(ValueError):
+                ROUTES.table()
+
+    def test_only_homestead_api_v1_may_declare_the_api_v1_prefix(self):
+        import homestead_route_policy as POLICY
+        import homestead_routes as ROUTES
+        self.assertNotIn("/api/v1/", POLICY.CODE_PREFIXES)
+        self.assertEqual("homestead_api_v1", ROUTES.table()[("GET", "/api/v1/*")].module)
+        self.assertEqual([("DELETE", "/api/v1/*"), ("GET", "/api/v1/*"), ("POST", "/api/v1/*")],
+                         sorted(k for k in ROUTES.table() if k[1].startswith("/api/v1/")))
+
+
 REAL_HANDLE = API_V1.handle
 
 

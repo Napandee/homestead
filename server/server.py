@@ -1472,16 +1472,6 @@ class H(HTTP.LimitedHandler):
         HOSTACCESS.set_role(self.role)
         return None
 
-    def _api_v1(self, method, path, query, body):
-        """One /api/v1 request, for a key or for someone signed in."""
-        auth = self.api_key or {"name": self.user, "kind": "session", "expires": None,
-                                "scopes": API_KEYS.scopes_for_role(self.role)}
-        if path == "/api/v1/openapi.json" and method == "GET":
-            return self._send(200, API_V1.openapi(HOMESTEAD_VERSION, {s: text for s, (_, text) in API_KEYS.SCOPES.items()}))
-        code, answer = API_V1.handle(method, path, query, body, auth)
-        MCP.audit_api(self.api_key, method, path, body, code, self._client_ip())
-        return self._send(code, answer)
-
     def _module_route(self, method, path, query, body):
         """A route a feature module declares (homestead_routes.py), answered;
         False when server.py answers it itself. The guard has already
@@ -1617,8 +1607,6 @@ class H(HTTP.LimitedHandler):
         try:
             if self._guard(p):
                 return
-            if p.startswith("/api/v1/"):
-                return self._api_v1("GET", p, q, None)
             if p == MCP.PATH:       # no event stream: one JSON answer per POST
                 return self._send(405 if MCP.enabled() else 404, {"error": "POST JSON-RPC to /mcp"})
             if self._module_route("GET", p, q, None):
@@ -1717,8 +1705,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(400, {"error": "a JSON object is required"})
             if p in ROUTE_POLICY.TARGET_CHECKED:
                 KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
-            if p.startswith("/api/v1/"):
-                return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
             if p == "/api/self/data/move":
