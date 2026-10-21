@@ -121,8 +121,10 @@ class ReviewTests(unittest.TestCase):
     def test_optional_api_is_absent_only_when_discovery_confirms_it(self):
         path='/apis/kubevirt.io/v1/namespaces/lab/virtualmachines'
         self.extra[path]=urllib.error.HTTPError(path,404,'missing',{},None)
-        self.extra['/apis']={'groups':[]}
+        self.extra['/apis']={'groups':[{'name':'apps'}]}
         self.assertTrue(rc.preview(self.body,'admin',self.ops)['ok'])
+        self.extra['/apis']={'groups':[]}  # names no group: says nothing about KubeVirt
+        with self.assertRaisesRegex(ValueError,'inventory is incomplete'):rc.preview(self.body,'admin',self.ops)
         self.extra['/apis']={'groups':[{'name':'kubevirt.io'}]}
         with self.assertRaises(urllib.error.HTTPError):rc.preview(self.body,'admin',self.ops)
         self.extra['/apis']={}

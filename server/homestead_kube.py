@@ -278,7 +278,8 @@ def items(path, optional_group=None, read=_CLIENT):
         if error.code != 404 or not optional_group:
             raise
         groups = read("/apis").get("groups")
-        if not isinstance(groups, list) or any(not isinstance(g, dict) or not g.get("name") for g in groups):
+        if (not isinstance(groups, list) or not groups
+                or any(not isinstance(g, dict) or not g.get("name") for g in groups)):
             raise Incomplete("Kubernetes did not say which APIs it serves; refresh and try again")
         if any(g["name"] == optional_group for g in groups):
             raise
