@@ -199,7 +199,9 @@ def approve(rid, user, role):
     """Plan it again as user; run it only if that plan is the one reviewed."""
     row = _take(rid, user, role, "running")
     tool = TOOLS.BY_NAME.get(row["tool"])
-    ctx = {"user": f"{user} (approving {row['key'].get('name')})", "role": role, "fresh": True,
+    # In a form no account can have (a username cannot contain ':'). A key's
+    # name may hold ':', written as the look-alike '\u2236' so the name ends at the next ':'.
+    ctx = {"user": f"approving:{str(row['key'].get('name')).replace(':', chr(0x2236))}:{user}", "role": role, "fresh": True,
            "auth": {"name": user, "kind": "session", "expires": None, "scopes": [s for s in ("read",)]}}
     try:
         if tool is None:

@@ -114,13 +114,13 @@ class SigningTests(unittest.TestCase):
     def test_a_signed_request_says_who_it_is_for(self):
         headers = self.a.fleet.sign("POST", "/api/workloads/restart", b'{"name":"x"}', "robin", "operator")
         who = self.b.fleet.verify(headers, "POST", "/api/workloads/restart", b'{"name":"x"}')
-        self.assertEqual("robin@loft", who["user"])
+        self.assertEqual("fleet:loft:robin", who["user"])
         self.assertEqual("operator", who["role"])
 
     def test_homestead_itself_is_admin(self):
         headers = self.a.fleet.sign("GET", "/api/move/inventory")
         who = self.b.fleet.verify(headers, "GET", "/api/move/inventory")
-        self.assertEqual(("homestead@loft", "admin"), (who["user"], who["role"]))
+        self.assertEqual(("fleet:loft", "admin"), (who["user"], who["role"]))
 
     def test_an_altered_body_is_refused(self):
         headers = self.a.fleet.sign("POST", "/api/vm/delete", b'{"name":"a"}')
@@ -192,7 +192,7 @@ class LinkingTests(unittest.TestCase):
         self.assertEqual(self.ids(self.a), self.ids(self.b))
         self.assertEqual(self.ids(self.a), self.ids(self.c))
         headers = self.c.fleet.sign("GET", "/api/nodes")
-        self.assertEqual("homestead@garage", self.a.fleet.verify(headers, "GET", "/api/nodes")["user"])
+        self.assertEqual("fleet:garage", self.a.fleet.verify(headers, "GET", "/api/nodes")["user"])
 
     def test_an_already_linked_cluster_cannot_be_pulled_into_another_group(self):
         self.b.fleet.join(self.c.url, "admin", "secret")

@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "server"))
 import homestead_agent_audit as AUDIT
 import homestead_agent_requests as REQUESTS
 import homestead_agent_tools as TOOLS
+import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_mcp as MCP
 import homestead_route_policy as ROUTE_POLICY
@@ -40,7 +41,7 @@ class Base(unittest.TestCase):
         MCP.bind(self.folder.name, lambda: self.settings, "9.9.9", ROUTE_POLICY.role, lambda m, p, b: None,
                  self.kget, self.delete_workload)
         MCP._calls.clear()
-        self.deleted, self.objects = [], {}
+        self.deleted, self.objects, self.deleted_by = [], {}, []
 
     def tearDown(self):
         self.folder.cleanup()
@@ -52,6 +53,7 @@ class Base(unittest.TestCase):
 
     def delete_workload(self, ns, name):
         self.deleted.append((ns, name))
+        self.deleted_by.append(getattr(CHANGES.REQUEST, "user", None))
         return [name]
 
     def ask(self, message, k=None, origin="", host="homestead.example.com"):
@@ -316,6 +318,21 @@ class ApprovalTests(Base):
         self.assertEqual("approved", AUDIT.recent()[0]["outcome"])
         self.assertEqual("ada", AUDIT.recent()[0]["approved_by"])
         self.assertEqual([], MCP.alert_facts(), "answered: the bell clears")
+
+    def test_a_request_run_on_approval_is_credited_in_a_form_no_account_can_have(self):
+        # "<user> (approving <key>)" could be an account's name; "approving:" cannot,
+        # since a username cannot contain ':'.
+        rid = self.ask_delete()["request"]
+        with mock.patch.object(ROUTE_POLICY, "role", return_value="operator"):
+            REQUESTS.approve(rid, "ada", "admin")
+        self.assertEqual(["approving:claude:ada"], self.deleted_by)
+
+    def test_a_key_named_with_a_colon_still_reads_as_one_key(self):
+        self.k = key(["read", "containers:manage"], role="operator", name="Claude: laptop")
+        rid = self.ask_delete()["request"]
+        with mock.patch.object(ROUTE_POLICY, "role", return_value="operator"):
+            REQUESTS.approve(rid, "ada", "admin")
+        self.assertEqual(["approving:Claude\u2236 laptop:ada"], self.deleted_by)
 
     def test_two_copies_of_homestead_cannot_both_run_a_request(self):
         import os

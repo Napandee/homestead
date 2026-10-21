@@ -50,9 +50,17 @@ A signed request acts as:
 
 | Signed for | Acts as | Role |
 |---|---|---|
-| A person relayed by a member | `name@member` | Their role on the member they signed in to |
-| The member itself (a move, a sync) | `homestead@member` | admin |
+| A person relayed by a member | `fleet:<member's handle>:<name>` | Their role on the member they signed in to |
+| The member itself (a move, a sync) | `fleet:<member's handle>` | admin |
 | Nobody (the app's pages and scripts) | not signed in | - |
+
+No account made since usernames stopped taking `:` can have such a name. So
+a person relayed here does not share alert acknowledgements, setup,
+diagnostics or change history with a local account, an email-style one such
+as `alice@example.com` included. A handle is letters, digits and `-`; one that
+is not is made so when the member list is taken. Pages show the name as
+"alice (via Office)". The receiving Homestead builds the name, so a receiver
+on an older release keeps the old `name@member` form until it is upgraded.
 
 The receiving cluster applies its own route rules to that role
 (`needed_role`), so a viewer is a viewer everywhere. Every member is admin

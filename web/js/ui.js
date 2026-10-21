@@ -54,6 +54,20 @@ const UI = (() => {
   const TONE_ICON = { info: "info", ok: "check", warn: "alert", bad: "alert" };
   const svg = name => `<svg class="ui-icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
+  /* Who did something, as Homestead records it, in words. A person relayed by a
+     linked Homestead is fleet:<handle>:<name>, that Homestead's own call
+     fleet:<handle>, an API key api-key:<name>, and an agent request run on
+     approval approving:<key>:<name>. Plain text: escape it where it is shown. */
+  const fleetName = handle => (typeof FLEET !== "undefined" && FLEET.view?.members || []).find(m => m.handle === handle)?.name || handle;
+  const who = name => {
+    const s = String(name ?? ""), rest = s.slice(s.indexOf(":") + 1), cut = rest.indexOf(":");
+    if (s.startsWith("api-key:")) return `API key ${rest}`;
+    if (s.startsWith("approving:") && cut > 0) return `${who(rest.slice(cut + 1))} approving ${rest.slice(0, cut)}`;
+    if (!s.startsWith("fleet:")) return s;
+    return cut < 0 || cut === rest.length - 1 ? fleetName(cut < 0 ? rest : rest.slice(0, cut))
+      : `${who(rest.slice(cut + 1))} (via ${fleetName(rest.slice(0, cut))})`;
+  };
+
   /* The opening sentences: what this dialog does, plainly. */
   const lead = html => `<p class="ui-lead">${html}</p>`;
 
@@ -346,7 +360,7 @@ const UI = (() => {
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
-    quantity, parseMemory, parseCpu };
+    quantity, parseMemory, parseCpu, who };
 })();
 window.UI = UI;
 

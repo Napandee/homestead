@@ -9,7 +9,7 @@ const HISTORY = { ns: "", name: "" };
 const historyWhen = at => fmtAt(at);
 
 const historyWho = e => e.source === "outside" ? '<span class="tag warn" data-tip="kubectl, Helm, GitOps or another tool changed it, not Homestead">outside Homestead</span>'
-  : `<span class="dim small">${esc(e.by ? e.by.replace(/^api-key:/, "API key ") : "Homestead")}</span>`;
+  : `<span class="dim small">${esc(e.by ? UI.who(e.by) : "Homestead")}</span>`;
 
 const historyValue = v => v === null || v === undefined ? '<span class="dim">—</span>' : `<span class="mono">${esc(v)}</span>`;
 

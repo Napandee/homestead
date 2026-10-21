@@ -102,6 +102,17 @@ def handle(name, taken=()):
     return out
 
 
+# A member's handle is part of the name a person it relays acts as here
+# (fleet:<handle>:<name>), so it holds no ':'.
+HANDLE = re.compile(r"[a-z0-9-]{1,40}")
+
+
+def _plain_handles(rows):
+    """Member records as kept: a handle that is not plain is made plain."""
+    return [dict(m, handle=handle(m["handle"])) if m.get("handle") and not HANDLE.fullmatch(str(m["handle"])) else m
+            for m in rows]
+
+
 def _read():
     try:
         found = kget(f"/api/v1/namespaces/{NS}/configmaps/{CONFIG}")
@@ -234,9 +245,11 @@ def signed(headers):
 def verify(headers, method, target, body=b""):
     """Who a signed request is from and for, or PermissionError.
 
-    A person forwarded by another member is `name@that-member`, with the role
-    they hold there. A call Homestead makes itself - a move, a sync - is
-    `homestead@that-member`, as admin.
+    A person forwarded by another member is `fleet:<that member's handle>:<name>`,
+    with the role they hold there. A call Homestead makes itself - a move, a
+    sync - is `fleet:<handle>`, as admin. No account made since usernames
+    stopped taking ':' can have such a name, so a person relayed here does not
+    share alerts, setup, diagnostics or history with a local account.
     """
     sender, stamp = headers.get(H_FROM, ""), headers.get(H_TIME, "")
     nonce, user, role = headers.get(H_NONCE, ""), headers.get(H_USER, ""), headers.get(H_ROLE, "")
@@ -265,8 +278,8 @@ def verify(headers, method, target, body=b""):
         _nonces[nonce] = now + 2 * SKEW
     if role and role not in ROLES:
         raise PermissionError("unknown role")
-    return {"sender": origin, "role": role,
-            "user": f"{user or 'homestead'}@{origin.get('handle', sender)}" if role else ""}
+    via = f"fleet:{origin['handle'] if HANDLE.fullmatch(origin.get('handle') or '') else sender}"
+    return {"sender": origin, "role": role, "user": (f"{via}:{user}" if user else via) if role else ""}
 
 
 def _claim_nonce(sender, nonce):
@@ -478,7 +491,7 @@ def adopt(incoming, sender=None):
         state, key = _ensure()
         revision = int(incoming.get("revision") or 0)
         ours = int(state.get("revision") or 0)
-        rows = [m for m in incoming.get("members") or [] if isinstance(m, dict) and m.get("id")]
+        rows = _plain_handles([m for m in incoming.get("members") or [] if isinstance(m, dict) and m.get("id")])
         if revision < ours or (revision == ours and rows == state.get("members")):
             return {"changed": False, "revision": ours}
         if not any(m["id"] == state["self"] for m in rows):
@@ -576,7 +589,7 @@ def join(url, username, password, own_url="", plain_ok=False):
             "key": base64.b64encode(key).decode(), "members": rows, "revision": revision, "url": url}, token=token)
         if not record.get("id"):
             raise ValueError("that Homestead did not say who it is")
-        record = {k: record.get(k, "") for k in ("id", "handle", "name", "added")}
+        record = _plain_handles([{k: record.get(k, "") for k in ("id", "handle", "name", "added")}])[0]
         record["url"] = url
         state = {"self": state["self"], "revision": revision, "updated": time.time(), "members": rows + [record]}
         _write(state)
@@ -591,7 +604,7 @@ def accept(body):
         state, _ = _ensure()
         if len(state.get("members", [])) > 1:
             raise ValueError("this Homestead is already linked; unlink it first")
-        rows = [m for m in body.get("members") or [] if isinstance(m, dict) and m.get("id")]
+        rows = _plain_handles([m for m in body.get("members") or [] if isinstance(m, dict) and m.get("id")])
         if not rows or not body.get("key"):
             raise ValueError("nothing to link to")
         mine = _self_record(state, url=_clean_url(body.get("url") or ""))
@@ -854,6 +867,15 @@ main{{max-width:440px;padding:24px}}h1{{font-size:20px;margin:0 0 8px}}p{{color:
 <a href="/api/fleet/home">Back to this cluster</a></main></body></html>"""
 
 
+def _own_name(user):
+    """The name to ask another member for: a person relayed here by their own,
+    as the member that relayed them would; a local account's whole."""
+    user = str(user or "")
+    if not user.startswith("fleet:"):
+        return user
+    return user.split(":", 2)[2] if user.count(":") >= 2 else ""
+
+
 def gather(what, local, user, role):
     """Gather tagged resource lists or Architecture graphs from linked clusters.
 
@@ -868,8 +890,7 @@ def gather(what, local, user, role):
 
     def ask(m):
         try:
-            result = call(m, "GET", f"/api/{what}", timeout=12,
-                                user=str(user or "").split("@", 1)[0], role=role)
+            result = call(m, "GET", f"/api/{what}", timeout=12, user=_own_name(user), role=role)
             if what == "flow" and (not isinstance(result, dict) or
                     any(not isinstance(result.get(key), list) for key in ("workloads", "volumes", "nodes", "vips"))):
                 raise ValueError("Architecture data is unavailable")

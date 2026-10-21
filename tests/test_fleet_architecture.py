@@ -16,7 +16,7 @@ class FleetArchitectureTests(unittest.TestCase):
 
     def test_matching_resource_names_stay_in_distinct_cluster_graphs_and_relay_uses_caller_role(self):
         with mock.patch.object(server.FLEET,"call",return_value=copy.deepcopy(self.graph)) as relay:
-            result,missing=server.FLEET.gather("flow",server.FLEET_LISTS["flow"],"alice@entry","viewer")
+            result,missing=server.FLEET.gather("flow",server.FLEET_LISTS["flow"],"fleet:entry:alice","viewer")
         self.assertEqual(["home","away"],[c["site"]["id"] for c in result["clusters"]])
         self.assertEqual(["w:app","w:app"],[c["workloads"][0]["id"] for c in result["clusters"]])
         self.assertEqual("offline",missing[0]["id"])
