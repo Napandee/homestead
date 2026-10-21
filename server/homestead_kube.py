@@ -24,6 +24,7 @@ import re
 import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_auth as AUTH
+import homestead_cache as CACHE
 import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_names as NAMES
@@ -90,7 +91,30 @@ def storage_guard(method, path, body, proceed):
     return STORAGE_GUARD.send(method, path, body, proceed, OPS, kget, own_controller=(SELF.NS, NAMES.BRAND))
 
 
-WRITE_GUARDS = [self_data_fence, workload_access, change_note, storage_guard]
+# The pages' main reads are kept PAGE_SECONDS (homestead_routes, #705). A write
+# that lands on what they show drops them, so whoever made it sees it on the
+# next refresh. Leases, ConfigMaps and Secrets are Homestead's own bookkeeping
+# (the leader renews its lease every 2 s) and leave them be.
+_SHOWN = re.compile(r"/(deployments|statefulsets|daemonsets|replicasets|cronjobs|jobs|pods|nodes|namespaces/[^/]+$"
+                    r"|services|persistentvolumeclaims|persistentvolumes|volumesnapshots|virtualmachines"
+                    r"|virtualmachineinstances|virtualmachineinstancemigrations|datavolumes|volumes|replicas"
+                    r"|engines|volumeattachments|snapshots|backups)(/|\?|$)")
+SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor")
+SHOWN_PREFIXES = ("node:", "impact:")
+
+
+def _shown(key):
+    return key in SHOWN_KEYS or key.startswith(SHOWN_PREFIXES)
+
+
+def fresh_reads(method, path, body, proceed):
+    result = proceed()
+    if method != "GET" and _SHOWN.search(str(path).split("?", 1)[0]):
+        CACHE.forget_where(_shown)
+    return result
+
+
+WRITE_GUARDS = [self_data_fence, workload_access, change_note, storage_guard, fresh_reads]
 
 
 def add_write_guard(guard, *, before=None):

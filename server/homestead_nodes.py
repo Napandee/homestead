@@ -645,7 +645,7 @@ def _drain(request):
 
 
 ROUTES = {
-    ("GET", "/api/nodes"): ("viewer", lambda request: cached("nodes", 5, get_nodes)),
+    ("GET", "/api/nodes"): ("viewer", lambda request: cached("nodes", ROUTER.PAGE_SECONDS, get_nodes)),
     ("GET", "/api/node"): ("viewer", _node),
     ("GET", "/api/nodes/ports"): ("viewer", _ports),
     ("GET", "/api/node/smart"): ("viewer", _smart),
