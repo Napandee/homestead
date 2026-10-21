@@ -29,3 +29,4 @@
 
 **Help**
 - [Troubleshooting](Troubleshooting)
+- [Security](https://github.com/homestead-lab/homestead/blob/main/docs/security.md)

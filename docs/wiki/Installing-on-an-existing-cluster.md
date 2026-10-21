@@ -75,8 +75,11 @@ curl -sfLO https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy
 ```
 
 1. `storageClassName: longhorn-r2` and the `STORAGE_CLASS` value - to a class
-   `kubectl get storageclass` lists. Keep `ReadWriteMany` for a shareable
-   Longhorn class; use `ReadWriteOnce` for anything else.
+   `kubectl get storageclass` lists. Longhorn makes `longhorn`, not
+   `longhorn-r2`, so use `longhorn` (or create `longhorn-r2` first); otherwise
+   the data claim stays Pending, and `kubectl describe pvc -n lab` shows why.
+   Keep `ReadWriteMany` for a shareable Longhorn class; use `ReadWriteOnce`
+   for anything else.
 2. `LB_IP` and every `192.0.2.242` - to Homestead's address.
 3. The `kube-vip.io/loadbalancerIPs` annotation - delete it unless kube-vip is
    your load balancer.

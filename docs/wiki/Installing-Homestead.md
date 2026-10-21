@@ -125,10 +125,11 @@ everywhere.
 ## The setup guide
 
 The first time an administrator signs in, Homestead opens its **setup guide**
-(`/setup`): six chapters - *Is it healthy?*, *Reach it*, *Keep data safe*,
-*Make it yours*, *Connect* and *First apps* - each step a sentence on why it
-matters, the cluster as it is now (a diagram where it helps: quorum, the VIP,
-copies across nodes, the HTTPS path from a phone), and one thing to do.
+(`/setup`): seven chapters - *Cluster health*, *Access*, *LAN networking*,
+*Storage and backups*, *Preferences and users*, *Connections* and
+*Applications and console* - each step a sentence on why it matters, the
+cluster as it is now (a diagram where it helps: quorum, the VIP, copies across
+nodes, the HTTPS path from a phone), and one thing to do.
 
 - Homestead **checks each step itself**, every time: a VIP set, backups
   configured, disks in use, the default storage class matching the nodes,
@@ -142,9 +143,9 @@ copies across nodes, the HTTPS path from a phone), and one thing to do.
   set up from the step, disks Longhorn is not using yet, a default class with
   too many or too few copies, an encrypted export of Homestead's own settings,
   and a second administrator.
-- Until it is done, the Dashboard says **Setup: 9 of 21**; **Hide from the
-  Dashboard** removes that, and **Settings → Homestead → Setup guide** always
-  opens it.
+- The guide has 25 steps across its seven chapters. Open it again any time,
+  also after setup is complete, from the book icon in the top bar or
+  **Settings → Homestead → Open setup guide**.
 
 ## Things worth doing first
 
@@ -189,10 +190,14 @@ reapplying the full install manifest over a customised installation just to
 gain a new permission.
 
 For a Helm-managed installation, update the existing release using its actual
-release name and namespace (shown by `helm list -A`). For example:
+release name and namespace (shown by `helm list -A`). Replace `<version>` with
+the release you want; the newest is at the top of the
+[releases page](https://github.com/homestead-lab/homestead/releases). Drop the
+release tag's leading `v`: release `v2.8.332`, for example, is
+`--version 2.8.332 --set-string image.tag=2.8.332`, as image tags carry no `v`.
 
 ```bash
-helm upgrade homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --version 2.8.167 --reuse-values --set-string image.tag=2.8.167 --wait --timeout 5m
+helm upgrade homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --version <version> --reuse-values --set-string image.tag=<version> --wait --timeout 5m
 ```
 
 This preserves saved values while explicitly updating the image even if an older

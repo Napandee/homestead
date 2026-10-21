@@ -334,6 +334,8 @@ checks what the cluster has, and each page works with that.
   building a cluster, installing Homestead, then each page in turn.
 - **[Reference](docs/reference.md)** - every feature in depth, security notes,
   and how releases are made.
+- **[Security](docs/security.md)** - how Homestead protects the cluster it
+  runs, who may change what, and what the audits found and fixed.
 - **[Troubleshooting](https://github.com/homestead-lab/homestead/wiki/Troubleshooting)** -
   the problems people actually hit, and the node doctor.
 
