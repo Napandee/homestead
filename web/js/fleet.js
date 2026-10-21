@@ -62,13 +62,27 @@ window.fleetSocketUrl = url => {
   return `${url}${url.includes("?") ? "&" : "?"}hs_cluster=${encodeURIComponent(target)}`;
 };
 
-/* A cluster that did not answer the view of all of them is said once. */
+/* A cluster missing from the view of all of them is said once per state (#705):
+   one that has not answered yet fills in on a later refresh; one that keeps
+   missing, or failed, is said so, with how old the rows still shown are.
+   what names them: "rows" on a list, "graph" on the Architecture page. */
+window.fleetMissingSentence = (row, what = "rows") => {
+  const state = row.state || "not answering";
+  const shown = row.age_s == null ? ""
+    : `its ${what} shown ${what === "rows" ? "are" : "is"} from ${row.age_s < 60 ? `${row.age_s} s` : `${Math.floor(row.age_s / 60)} min`} ago`;
+  if (state === "waiting") return shown ? `${row.name} is slow to answer; ${shown}.` : `${row.name} has not answered yet; its ${what} ${what === "rows" ? "appear" : "appears"} when it does.`;
+  const why = state === "error" ? `${row.name} could not answer (${row.error || "unknown error"})` : `${row.name} is not answering`;
+  return shown ? `${why}; ${shown}.` : `${why}, so it is missing here.`;
+};
 window.fleetNoteMissing = header => {
   let rows = [];
   try { rows = JSON.parse(decodeURIComponent(header)); } catch (e) { return; }
-  rows.filter(row => !FLEET.missingSaid.has(row.id)).forEach(row => {
-    FLEET.missingSaid.add(row.id);
-    toast(`${row.name} is not answering, so it is missing from this list`, "warn");
+  rows.forEach(row => {
+    const state = row.state || "not answering";
+    const said = `${row.id}:${state}`;
+    if (FLEET.missingSaid.has(said)) return;
+    FLEET.missingSaid.add(said);
+    toast(fleetMissingSentence(row), state === "waiting" ? "" : "warn");
   });
 };
 
