@@ -163,6 +163,7 @@ _table = {}
 PAGE_SECONDS = 20
 _cached = [lambda key, seconds, fn: fn()]
 _store = [{}]
+_snapshot = [lambda key: None]
 
 
 def bind(cached, store=None):
@@ -191,6 +192,21 @@ def forget_prefix(prefix):
 def cached(key, seconds, fn):
     """fn(), or what it returned less than seconds ago under key."""
     return _cached[0](key, seconds, fn)
+
+
+def use_snapshot(read):
+    """The leader's page snapshot (homestead_page_snapshot.read): read(key)
+    gives (as_of, value) while a part is fresh, else None."""
+    _snapshot[0] = read
+
+
+def page(key, fn, seconds=PAGE_SECONDS):
+    """A page's main read: the leader's snapshot part for key while it is
+    fresh, else fn() kept seconds under key, as cached() does (#705)."""
+    part = _snapshot[0](key)
+    if part is not None:
+        return part[1]
+    return cached(key, seconds, fn)
 
 
 def table():

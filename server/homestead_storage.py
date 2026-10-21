@@ -402,9 +402,10 @@ def get_volumes():
     return sorted(out, key=lambda x: x["name"])
 
 
-def get_storage():
-    """Cluster storage rollup for the dashboard: capacity, usage, replica health."""
-    vols = get_volumes()
+def get_storage(vols=None):
+    """Cluster storage rollup for the dashboard: capacity, usage, replica health.
+    vols: get_volumes(), when the caller has it already (the page snapshot)."""
+    vols = get_volumes() if vols is None else vols
     try:
         lhnodes = kget("/apis/longhorn.io/v1beta2/nodes").get("items", [])
     except Exception:
@@ -570,11 +571,11 @@ def _q(request, name, default=""):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.cached("vol", homestead_routes.PAGE_SECONDS, get_volumes)),
+    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.page("vol", get_volumes)),
     ("GET", "/api/volumes/other"): ("viewer", lambda request: homestead_routes.cached("volother", 10, other_volumes)),
     ("GET", "/api/volumes/edit-options"): ("viewer", lambda request: volume_edit_options(
         _q(request, "ns", DEFAULT_NS), _q(request, "name"))),
-    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.cached("stor", homestead_routes.PAGE_SECONDS, get_storage)),
+    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.page("stor", get_storage)),
     ("GET", "/api/pvcs"): ("viewer", lambda request: claims(_q(request, "ns", DEFAULT_NS))),
     ("POST", "/api/volumes/create"): ("operator", lambda request: create_volume(request.body)),
     ("POST", "/api/volumes/edit"): ("operator", lambda request: edit_volume(request.body)),

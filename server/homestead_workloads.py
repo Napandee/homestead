@@ -245,9 +245,11 @@ def move_to_host(request):
     return result
 
 
-def get_workloads():
+def get_workloads(pods=None):
+    """Every app for the Apps page; pods: the pod list, when the caller has
+    read it already (the leader's page snapshot)."""
     deps = kget("/apis/apps/v1/deployments").get("items", [])
-    pods = kget("/api/v1/pods").get("items", [])
+    pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
     try:
         pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m
               for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])}
@@ -780,7 +782,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 # Its routes and who may use them (homestead_routes.py). server.py checks
 # /api/move's target is an app before it gets here.
 ROUTES = {
-    ("GET", "/api/workloads"): ("viewer", lambda request: ROUTER.cached("wl", ROUTER.PAGE_SECONDS, get_workloads)),
+    ("GET", "/api/workloads"): ("viewer", lambda request: ROUTER.page("wl", get_workloads)),
     ("GET", "/api/workloads/start-plan"): ("viewer", lambda request: workload_start_plan(
         _arg(request, "ns"), _arg(request, "name"), int((request.query.get("replicas") or [1])[0]))),
     ("GET", "/api/workload"): ("viewer", edit_form),
