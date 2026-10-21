@@ -188,7 +188,7 @@ def samba_state():
     dep = KUBE.get_optional(_smb_path("deployments", SMB_NAME), read=kget) or KUBE.get_optional(
         _smb_path("deployments", "samba"), read=kget)
     try:
-        rows, credentials, *_ = SHARES._state()
+        rows, credentials, *_ = SHARES._state(tolerant=True)
         configured = {row["name"] for row in rows}
         config_error = ""
     except Exception as error:
@@ -308,7 +308,7 @@ def nfs_state():
     """The opt-in NFSv4 gateway is independent of the SMB server and PVCs."""
     dep = KUBE.get_optional(_smb_path("deployments", NFS.NAME), read=kget)
     svc = KUBE.get_optional(_smb_path("services", NFS.NAME), read=kget)
-    rows, *_ = SHARES._state()
+    rows, *_ = SHARES._state(tolerant=True)
     names = [row["name"] for row in rows if row.get("nfs_clients")]
     desired = int(((dep or {}).get("spec") or {}).get("replicas", 0) or 0)
     ingress = ((((svc or {}).get("status") or {}).get("loadBalancer") or {}).get("ingress") or [])
@@ -349,7 +349,7 @@ def nfs_recovery(rows, deployment=None):
 
 
 def _nfs_inventory(current=None):
-    rows, _, config, _, _ = SHARES._state()
+    rows, _, config, _, _ = SHARES._state(tolerant=True)
     identified = NFS.export_ids(rows, current)
     if identified != rows:
         SHARES._save_config(identified, config)
@@ -457,7 +457,7 @@ def remove_nfs():
 def set_nfs_export(name, clients, read_only=True):
     """Save one explicit export; an empty client network removes that export."""
     with SHARES.LOCK:
-        rows, _, config_obj, _, _ = SHARES._state()
+        rows, _, config_obj, _, _ = SHARES._state(tolerant=True)
         rows = NFS.export_ids(rows, KUBE.get_optional(_smb_path("deployments", NFS.NAME), read=kget))
         row = next((item for item in rows if item.get("name") == name), None)
         if row is None:

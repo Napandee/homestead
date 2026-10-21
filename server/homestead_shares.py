@@ -187,7 +187,7 @@ def _config_rows():
     return rows, obj
 
 
-def _credentials():
+def _credentials(tolerant=False):
     obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}")
     if not obj:
         return {}, None
@@ -195,14 +195,23 @@ def _credentials():
         raw = base64.b64decode((obj.get("data") or {}).get("credentials.json", "e30="))
         value = json.loads(raw.decode())
     except (TypeError, ValueError):
-        value = {}
-    return value if isinstance(value, dict) else {}, obj
+        value = None
+    if not isinstance(value, dict):
+        if tolerant:
+            return {}, obj
+        # Taken as "no passwords", the next save would write every share's
+        # password away, and Samba would be set up without them (#621).
+        raise ValueError("the saved share passwords could not be read; nothing was changed")
+    return value, obj
 
 
-def _state():
+def _state(tolerant=False):
+    """The shares, their passwords, and the objects they were read from.
+    tolerant is for lists that only show them: passwords that cannot be read
+    are then shown as none, where anything that saves or applies stops."""
     configured, config_obj = _config_rows()
     discovered, deployment_users, deployment = _deployment_state()
-    credentials, secret_obj = _credentials()
+    credentials, secret_obj = _credentials(tolerant)
     # Once Homestead has saved a ConfigMap it is authoritative, including an
     # empty list. Merging old deployment arguments back in resurrected a share
     # after deletion and made the next create produce duplicate mount paths.
@@ -253,7 +262,7 @@ def _public(row, credentials, pvc=None):
 
 
 def list_shares():
-    rows, credentials, _, _, _ = _state()
+    rows, credentials, _, _, _ = _state(tolerant=True)
     out = []
     for row in rows:
         try:
@@ -264,24 +273,41 @@ def list_shares():
     return sorted(out, key=lambda row: row.get("name", ""))
 
 
-def _metadata(name, current=None):
-    meta = {"name": name, "namespace": NAMESPACE}
-    version = ((current or {}).get("metadata") or {}).get("resourceVersion")
-    if version:
-        meta["resourceVersion"] = version
-    return meta
+CHANGED = ("The share settings were changed elsewhere meanwhile (another tab or another copy of "
+           "Homestead), so this change was not saved over them; open them again and retry")
+
+
+def _save(kind, plural, name, key, value, current):
+    """Save one key of the ConfigMap or Secret read as current, keeping its
+    labels, annotations and other keys. The write names the version read, so
+    a save made meanwhile is refused (409) rather than undone (#621); that is
+    said in words, and nothing is saved over it."""
+    if current:
+        body = copy.deepcopy(current)
+        body["metadata"].pop("managedFields", None)
+        body["data"] = {**(body.get("data") or {}), key: value}
+        method, path = "PUT", f"/api/v1/namespaces/{NAMESPACE}/{plural}/{name}"
+    else:
+        body = {"apiVersion": "v1", "kind": kind, "metadata": {"name": name, "namespace": NAMESPACE},
+                "data": {key: value}}
+        if kind == "Secret":
+            body["type"] = "Opaque"
+        method, path = "POST", f"/api/v1/namespaces/{NAMESPACE}/{plural}"
+    try:
+        return ksend(method, path, body)
+    except urllib.error.HTTPError as error:
+        # 409: saved, or made, meanwhile. 404 on the update: deleted meanwhile.
+        if error.code != 409 and not (error.code == 404 and current):
+            raise
+        error.close()
+        raise ValueError(CHANGED) from None
 
 
 def _save_config(rows, current=None):
     clean = [{key: value for key, value in row.items()
               if key not in ("password", "has_password", "actual_size_gb", "pvc_status")}
              for row in rows]
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": _metadata(CONFIGMAP(), current),
-            "data": {"shares.json": json.dumps(clean, indent=2)}}
-    if current:
-        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP()}", body)
-    return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/configmaps", body)
+    return _save("ConfigMap", "configmaps", CONFIGMAP(), "shares.json", json.dumps(clean, indent=2), current)
 
 
 def _save_credentials(credentials, current=None):
@@ -291,13 +317,8 @@ def _save_credentials(credentials, current=None):
     for name, value in list(clean.items()):
         if not name.startswith("user:"):
             clean["user:" + value["user"]] = dict(value)
-    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": _metadata(SECRET(), current),
-            "data": {"credentials.json": base64.b64encode(
-                json.dumps(clean, separators=(",", ":")).encode()).decode()}}
-    if current:
-        return ksend("PUT", f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}", body)
-    return ksend("POST", f"/api/v1/namespaces/{NAMESPACE}/secrets", body)
+    return _save("Secret", "secrets", SECRET(), "credentials.json",
+                 base64.b64encode(json.dumps(clean, separators=(",", ":")).encode()).decode(), current)
 
 
 def _restore_object(path, previous, written):
@@ -392,7 +413,7 @@ def _set_account_password(credentials, rows, user, password):
 
 def list_users():
     """Only account names, password presence and share membership leave the Secret."""
-    rows, credentials, _, _, _ = _state()
+    rows, credentials, _, _, _ = _state(tolerant=True)
     names = {_user(row.get("user")) for row in rows if not row.get("public")}
     names.update(_user(value.get("user")) for value in credentials.values())
     return [{"user": user, "has_password": bool(account_password(credentials, user)),

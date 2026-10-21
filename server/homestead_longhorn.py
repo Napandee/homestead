@@ -67,6 +67,47 @@ def _bust(*keys):
             _cache.pop(k, None)
 
 
+JOB_CHANGED = "This job was changed or deleted elsewhere since you opened it; open it again to see it"
+
+
+class _Changed(Exception):
+    """A job's settings were saved elsewhere since the editor opened it."""
+
+
+def _plain(obj):
+    """A copy of an object as read, without what a write must not send back."""
+    obj = json.loads(json.dumps(obj))
+    obj.setdefault("metadata", {}).pop("managedFields", None)
+    return obj
+
+
+def _update(path, change, create=None, attempts=4):
+    """Change the object at path as it is stored now, without undoing a change
+    another writer made meanwhile (#621). change(obj) gets a copy as stored and
+    returns it changed; the write names the resourceVersion read, so Kubernetes
+    refuses it (409) if anything was saved in between, and then it is read and
+    changed again. Without the object, create() is made, if given; one made
+    meanwhile is a 409 too, and one deleted meanwhile is made next time round."""
+    for _ in range(attempts):
+        try:
+            current = kget(path)
+        except urllib.error.HTTPError as error:
+            if error.code != 404 or create is None:
+                raise
+            error.close()
+            current = None
+        try:
+            if current is None:
+                return ksend("POST", path.rsplit("/", 1)[0], create())
+            return ksend("PUT", path, change(_plain(current)))
+        except urllib.error.HTTPError as error:
+            if error.code != 409 and not (error.code == 404 and current is not None):
+                raise
+            error.close()
+    raise RuntimeError(f"{path.rsplit('/', 1)[-1]} kept changing while it was being saved, "
+                       "so this change was not saved; try again")
+
+
 # ------------------------------------------------------------------ jobs
 def list_jobs():
     try:
@@ -85,7 +126,8 @@ def list_jobs():
                    if v["labels"].get(JOB_LABEL + name) == "enabled"
                    or any(v["labels"].get(GROUP_LABEL + g) == "enabled" for g in groups)]
         out.append({
-            "name": name, "task": sp.get("task", ""), "cron": sp.get("cron", ""),
+            "name": name, "generation": str(j["metadata"].get("generation") or ""),
+            "task": sp.get("task", ""), "cron": sp.get("cron", ""),
             "retain": sp.get("retain", 0), "concurrency": sp.get("concurrency", 1),
             "groups": groups, "covers": len(covered), "volumes": sorted(covered),
             "desc": TASKS.get(sp.get("task", ""), ""),
@@ -172,29 +214,56 @@ def save_job(cfg):
         raise ValueError("retain must be at least 1 for snapshot and backup jobs")
     if cfg["task"] not in KEEPING:
         retain = 0
-    body = {
-        "apiVersion": "longhorn.io/v1beta2", "kind": "RecurringJob",
-        "metadata": {"name": name, "namespace": LHNS,
-                     "labels": {NAMES.key("managed"): "true"}},
-        "spec": {"name": name, "task": cfg["task"], "cron": cfg["cron"],
-                 "retain": retain, "concurrency": int(cfg.get("concurrency", 1)),
-                 "groups": cfg.get("groups") or [], "labels": cfg.get("labels") or {}},
-    }
+    spec = {"name": name, "task": cfg["task"], "cron": cfg["cron"],
+            "retain": retain, "concurrency": int(cfg.get("concurrency", 1)),
+            "groups": cfg.get("groups") or [], "labels": cfg.get("labels") or {}}
+    managed = {NAMES.key("managed"): "true"}
+    path = f"{API}/namespaces/{LHNS}/recurringjobs/{name}"
+
+    def change(job):
+        # The fields the form edits; labels, annotations and anything else
+        # on the job stay as stored.
+        job.setdefault("spec", {}).update(spec)
+        job["metadata"]["labels"] = {**(job["metadata"].get("labels") or {}), **managed}
+        return job
+
+    def create():
+        return {"apiVersion": "longhorn.io/v1beta2", "kind": "RecurringJob",
+                "metadata": {"name": name, "namespace": LHNS, "labels": dict(managed)},
+                "spec": dict(spec)}
+
+    # The editor names the generation of the job it opened ("" for a new
+    # job): a job whose settings were saved since, or that was deleted or
+    # made since, is not saved over (#621). The generation moves only when
+    # the spec does; Longhorn counting a run in the status does not move it,
+    # so a job that has merely run is still saved, on its current version.
+    generation = cfg.get("generation")
     try:
-        cur = kget(f"{API}/namespaces/{LHNS}/recurringjobs/{name}")
-        body["metadata"]["resourceVersion"] = cur["metadata"]["resourceVersion"]
-        ksend("PUT", f"{API}/namespaces/{LHNS}/recurringjobs/{name}", body)
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
+        if generation is None:
+            _update(path, change, create)
+        elif generation == "":
+            ksend("POST", path.rsplit("/", 1)[0], create())
+        else:
+            def checked(job):
+                if str(job["metadata"].get("generation") or "") != str(generation):
+                    raise _Changed()
+                return change(job)
+            _update(path, checked)
+    except _Changed:
+        return homestead_routes.Reply(409, {"error": JOB_CHANGED})
+    except urllib.error.HTTPError as error:
+        if generation is None or error.code not in (404, 409):
             raise
-        ksend("POST", f"{API}/namespaces/{LHNS}/recurringjobs", body)
-    _bust("lhjobs", "lhvols")
+        error.close()
+        return homestead_routes.Reply(409, {"error": JOB_CHANGED if generation else
+                                            f"There is already a job called {name}; edit that one instead"})
+    _bust("lhjobs", "lhvols", "lhov")
     return {"ok": True, "name": name}
 
 
 def delete_job(name):
     ksend("DELETE", f"{API}/namespaces/{LHNS}/recurringjobs/{name}")
-    _bust("lhjobs", "lhvols")
+    _bust("lhjobs", "lhvols", "lhov")
     return {"ok": True}
 
 
@@ -372,12 +441,20 @@ def _job_objects():
         return []
 
 
-def _set_job_groups(job, wanted):
-    """Save a recurring job with a new list of groups, the rest unchanged."""
-    job = json.loads(json.dumps(job))
-    job["spec"]["groups"] = wanted
-    job["metadata"].pop("managedFields", None)
-    ksend("PUT", f"{API}/namespaces/{LHNS}/recurringjobs/{job['metadata']['name']}", job)
+def _set_job_groups(name, regroup):
+    """Change a recurring job's groups, the rest unchanged. regroup(groups)
+    works out the new list from the groups as stored when it is saved, so a
+    group the job joined or left meanwhile is kept that way (#621). Returns
+    the groups saved."""
+    saved = []
+
+    def change(job):
+        spec = job.setdefault("spec", {})
+        spec["groups"] = regroup(list(spec.get("groups") or []))
+        saved[:] = [spec["groups"]]
+        return job
+    _update(f"{API}/namespaces/{LHNS}/recurringjobs/{name}", change)
+    return saved[0]
 
 
 def _only_default(labels):
@@ -444,15 +521,15 @@ def save_group(cfg):
         if changes:
             _patch_labels(vol, changes)
     for job_name, job in jobs.items():
-        current = list((job.get("spec") or {}).get("groups") or [])
-        has = original in current
-        want = job_name in wanted_jobs
-        if has and (not want or original != name):
-            current = [g for g in current if g != original]
-        if want and name not in current:
-            current.append(name)
-        if current != list((job.get("spec") or {}).get("groups") or []):
-            _set_job_groups(job, current)
+        def regroup(current, want=job_name in wanted_jobs):
+            if original in current and (not want or original != name):
+                current = [g for g in current if g != original]
+            if want and name not in current:
+                current = current + [name]
+            return current
+        stored = list((job.get("spec") or {}).get("groups") or [])
+        if regroup(stored) != stored:
+            _set_job_groups(job_name, regroup)
     _bust("lhvols", "lhjobs", "lhov")
     return {"ok": True, "name": name, "added": added, "removed": removed, "left_default": left_default,
             "back_to_default": back_to_default, "kept_in_default": kept}
@@ -481,8 +558,7 @@ def delete_group(name):
     for job in _job_objects():
         current = list((job.get("spec") or {}).get("groups") or [])
         if name in current:
-            left = [g for g in current if g != name]
-            _set_job_groups(job, left)
+            left = _set_job_groups(job["metadata"]["name"], lambda groups: [g for g in groups if g != name])
             if not left:
                 idle.append(job["metadata"]["name"])
     _bust("lhvols", "lhjobs", "lhov")
@@ -569,16 +645,21 @@ def _target_secret(name, keys):
     data = {"AWS_ACCESS_KEY_ID": keys["access_key"], "AWS_SECRET_ACCESS_KEY": keys["secret_key"]}
     if keys.get("endpoint"):
         data["AWS_ENDPOINTS"] = keys["endpoint"]
-    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": {"name": name, "namespace": LHNS, "labels": {NAMES.key("managed"): "true"}},
-            "stringData": data}
-    path = f"/api/v1/namespaces/{LHNS}/secrets"
-    current = KUBE.get_optional(f"{path}/{name}", read=kget)
-    if current:
-        body["metadata"]["resourceVersion"] = current["metadata"]["resourceVersion"]
-        ksend("PUT", f"{path}/{name}", body)
-    else:
-        ksend("POST", path, body)
+
+    def change(secret):
+        # The typed keys replace their own; anything else in the Secret (a
+        # CA certificate, an addressing style) stays. No endpoint typed means
+        # none, as before.
+        secret["data"] = {key: value for key, value in (secret.get("data") or {}).items()
+                          if key not in data and key != "AWS_ENDPOINTS"}
+        secret["stringData"] = dict(data)
+        return secret
+
+    def create():
+        return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {"name": name, "namespace": LHNS, "labels": {NAMES.key("managed"): "true"}},
+                "stringData": dict(data)}
+    _update(f"/api/v1/namespaces/{LHNS}/secrets/{name}", change, create)
 
 
 # On Harvester the backup target is Harvester's own setting: it writes
@@ -775,18 +856,14 @@ def set_backup_target(url, secret="", poll="5m", keys=None):
     elif url.startswith("s3://") and not secret:
         raise ValueError("an S3 target needs its keys, or the name of a Secret that holds them")
     name = "default"
-    body = {"apiVersion": "longhorn.io/v1beta2", "kind": "BackupTarget",
-            "metadata": {"name": name, "namespace": LHNS},
-            "spec": {"backupTargetURL": url, "credentialSecret": secret or "",
-                     "pollInterval": poll}}
-    try:
-        cur = kget(f"{API}/namespaces/{LHNS}/backuptargets/{name}")
-        body["metadata"]["resourceVersion"] = cur["metadata"]["resourceVersion"]
-        ksend("PUT", f"{API}/namespaces/{LHNS}/backuptargets/{name}", body)
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
-        ksend("POST", f"{API}/namespaces/{LHNS}/backuptargets", body)
+    spec = {"backupTargetURL": url, "credentialSecret": secret or "", "pollInterval": poll}
+
+    def change(target):
+        target.setdefault("spec", {}).update(spec)
+        return target
+    _update(f"{API}/namespaces/{LHNS}/backuptargets/{name}", change,
+            lambda: {"apiVersion": "longhorn.io/v1beta2", "kind": "BackupTarget",
+                     "metadata": {"name": name, "namespace": LHNS}, "spec": dict(spec)})
     _bust("lhtarget")
     return {"ok": True, "url": url}
 
