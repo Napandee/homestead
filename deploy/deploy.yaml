@@ -295,7 +295,7 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [homestead-setup]
-    verbs: [get, update, delete]
+    verbs: [get, delete]
   - apiGroups: [""]
     resources: [secrets]
     verbs: [create]

@@ -121,7 +121,8 @@ kubectl -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d
 To choose the code yourself, set `HS_SETUP_CODE=ABCD-EFGH-JK` for the installer
 or `--set setupCode=ABCD-EFGH-JK` for Helm: 10 characters from 0-9 and A-Z
 without I, L, O and U. The code stops working once the first administrator
-exists, and Homestead then deletes the Secret.
+exists, and Homestead then deletes the Secret; clear `setupCode` from your Helm
+values after install (a code that was used once never works again anyway).
 
 That account can then add others under **Settings → Users and access → Add user**:
 

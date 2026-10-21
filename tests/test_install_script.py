@@ -182,11 +182,15 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn("get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d", out)
                 self.assertNotIn("apply the Secret lab/homestead-setup", out)
 
-    def test_bootstrap_prints_the_setup_code_beside_the_address(self):
+    def test_bootstrap_says_how_to_show_the_setup_code_but_never_prints_it(self):
+        """Its output goes to /var/log/homestead-install.log under install.sh's
+        menus, and with HS_SETUP_CODE the code it could read is about to be
+        replaced: only install.sh's closing message, which is not logged, shows it."""
         text = (ROOT / "scripts" / "bootstrap-k3s.sh").read_text(encoding="utf-8")
         tail = text[text.index('say "Homestead is running'):]
-        self.assertIn("homestead-setup", tail)
         self.assertIn("Setup code:", tail)
+        self.assertIn("get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d", tail)
+        self.assertNotRegex(tail, r"\$\([^)]*get secret homestead-setup")
 
     def test_a_question_with_no_terminal_and_no_answer_says_which_to_give(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_YES": "1"})

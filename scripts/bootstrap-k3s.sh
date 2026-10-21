@@ -589,9 +589,8 @@ i=0; until $KUBECTL -n lab rollout status deployment/homestead --timeout=10s >/d
 first_snapshot
 
 say "Homestead is running at http://$IP:8088. Open this address to create the administrator account."
-# The first admin's one-time setup code (#737): Homestead makes it as it starts.
-i=0; code=""; until [ -n "$code" ] || [ $i -gt 30 ]; do
-  code=$($KUBECTL -n lab get secret homestead-setup -o jsonpath='{.data.code}' 2>/dev/null | base64 -d 2>/dev/null); i=$((i+1)); [ -n "$code" ] || sleep 2; done
-if [ -n "$code" ]; then echo "   Setup code: $code"
-else echo "   Setup code: $KUBECTL -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d"; fi
+# The first admin's one-time setup code (#737). Only the command that shows it:
+# under install.sh's menus this output is kept in its log, and install.sh shows
+# the code itself at the end, after any HS_SETUP_CODE has replaced it.
+echo "   Setup code: $KUBECTL -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d"
 echo "   To add nodes, see Cluster > Add a host in Homestead."

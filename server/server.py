@@ -1844,7 +1844,7 @@ class H(HTTP.LimitedHandler):
                 if self._via_cloudflare():
                     return self._send(403, {"error": "finish setting Homestead up from your LAN; "
                                                      "setup is not offered through the tunnel"})
-                first = SETUP_CODE.first_admin(b, addr)
+                first = SETUP_CODE.first_admin(b, addr, self.headers.get("User-Agent", ""))
                 self._signin("setup", first, detail="the first administrator")
                 remember = bool(b.get("remember"))
                 self._set_cookie(AUTH.issue_token(first, remember), max_age=AUTH.idle_ttl(remember))

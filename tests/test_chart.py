@@ -41,6 +41,8 @@ class ChartTests(unittest.TestCase):
         self.assertIn("  namespace: {{ .Release.Namespace }}", role)
         self.assertIn("resources: [secrets]", role)
         self.assertIn("resourceNames: [homestead-setup]", role)
+        self.assertIn("verbs: [get, delete]", role)
+        self.assertNotIn("update", role.split("rules:", 1)[1])
         binding = next(doc for doc in rbac.split("\n---\n") if "kind: RoleBinding" in doc and "name: homestead-setup" in doc)
         self.assertIn("  namespace: {{ .Release.Namespace }}", binding)
         self.assertIn("homestead-setup", (ROOT / "deploy" / "rbac.yaml").read_text(encoding="utf-8"))

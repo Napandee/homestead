@@ -130,7 +130,9 @@ rbac:
 # A one-time setup code chosen ahead, for the first administrator (#737):
 # 10 characters from 0-9 and A-Z without I, L, O and U, as ABCD-EFGH-JK.
 # Empty: Homestead makes one. Either way it is in the Secret homestead-setup
-# until the first account exists; clear this value after install.
+# until the first account exists; clear this value after install. A code that
+# made the first admin never opens setup again. Set it at install: added on a
+# later upgrade it clashes with the Secret Homestead already made.
 setupCode: ""
 
 # Temperatures, host devices (a Coral, a Zigbee stick, an iGPU), every disk and

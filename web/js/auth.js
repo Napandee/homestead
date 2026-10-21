@@ -218,14 +218,14 @@ function loginForm(err, setup) {
     <div class="f"><label for="lg_code">Setup code</label>
       <input type="text" id="lg_code" autocomplete="one-time-code" autocapitalize="characters"
         spellcheck="false" placeholder="ABCD-EFGH-JK" aria-describedby="lg_code_hint">
-      <div class="gatehint" id="lg_code_hint">The installer printed it beside the address. Or run
+      <details class="gatehint" id="lg_code_hint"><summary>Where to find it</summary>The installer
+        printed it beside the address. Or run
         <code>kubectl -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d</code>
-        (Helm: use the release's namespace).</div></div>` : ""}
+        (Helm: use the release's namespace).</details></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
       ${remember ? "checked" : ""}>Keep me signed in on this device</label>
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
-    ${setup ? `<div class="gatehint">Minimum 10 characters. Stored as PBKDF2-SHA256 with a
-      per-user salt in a Kubernetes Secret — never in plain text.</div>`
+    ${setup ? `<div class="gatehint">A password needs at least 10 characters.</div>`
       : `<div class="gatehint">Homestead can deploy, move and delete apps and VMs.<br>
         A session stays signed in while you keep using it. Leave the box unticked on a
         shared computer.</div>`}`);

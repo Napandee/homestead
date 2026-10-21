@@ -1284,6 +1284,7 @@ html[data-motion="off"] .modalbox,html[data-motion="off"] .askbox,html[data-moti
 html[data-motion="off"] .tst,html[data-motion="off"] .stagger>*{animation:none}
 @media(prefers-reduced-motion:reduce){.modalbox,.askbox,.gatebox,.tst,.stagger>*{animation:none}}
 .gatebox .mark{width:46px;height:46px;border-radius:14px;font-size:21px;margin:0 auto 16px}
+@media(max-height:700px){.gatebox .mark{display:none}}
 .gatebox h2{margin:0 0 4px;text-align:center;font-size:19px;font-weight:700}
 .gatebox p.sub{margin:0 0 22px;text-align:center;color:var(--mut);font-size:12.5px}
 .gateerr{border-radius:11px;padding:10px 13px;font-size:12.5px;margin-bottom:14px;

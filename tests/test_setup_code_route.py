@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_auth as AUTH
+import homestead_kube as K
 import homestead_self as SELF
 import homestead_setup_code as CODE
 import homestead_shared as SHARED
@@ -42,6 +43,10 @@ class SetupRouteTests(unittest.TestCase):
         self.enterContext(mock.patch.object(SHARED, "DIR", data))
         self.enterContext(mock.patch.object(AUTH, "ITERATIONS", 1000))
         self.enterContext(mock.patch.object(server.SIGNINS, "record", lambda *a, **k: None))
+        # Whatever earlier tests left bound: this file's own cluster and names.
+        for target, name, value in ((AUTH, "kget", K.kget), (AUTH, "ksend", K.ksend), (AUTH, "NS", "lab"),
+                                    (AUTH, "SECRET_NAME", lambda: "homestead-auth"), (SELF, "NS", "lab")):
+            self.enterContext(mock.patch.object(target, name, value))
         self.kube = self.enterContext(Kube())
         self.addCleanup(AUTH._store_cache.update, at=0, data=None)
         self.addCleanup(AUTH._attempts.clear)
@@ -67,6 +72,29 @@ class SetupRouteTests(unittest.TestCase):
         self.assertEqual((200, {"ok": True, "user": "Robin"}), sent[0])
         self.assertEqual("robin", AUTH.verify_token(cookies[0])["user"])
         self.assertIsNone(self.kube.object(f"/api/v1/namespaces/{SELF.NS}/secrets/{CODE.SECRET}"))
+
+    def test_a_failed_tidy_still_signs_the_new_admin_in_and_records_it(self):
+        code = self.code()
+        self.kube.fail(f"/api/v1/namespaces/{SELF.NS}/secrets/{CODE.SECRET}", 503, times=5, method="DELETE")
+        records = []
+        h, sent, cookies = handler({"username": "robin", "password": "a-long-password", "setup_code": code})
+        with mock.patch.object(server.SIGNINS, "record", lambda *a, **k: records.append(a)), \
+                mock.patch.object(CODE, "_tidy_later", lambda: None):
+            h.do_POST()
+        self.assertEqual(200, sent[0][0])
+        self.assertEqual("robin", AUTH.verify_token(cookies[0])["user"])
+        self.assertEqual("setup", records[0][0])
+
+    def test_a_wrong_code_is_in_the_sign_in_history_with_its_device(self):
+        self.code()
+        records = []
+        h, sent, cookies = handler({"username": "mallory", "password": "a-long-password", "setup_code": "WRONG-CODE-00"})
+        h.headers["User-Agent"] = "curl/8.0"
+        with mock.patch.object(server.SIGNINS, "record", lambda *a, **k: records.append((a, k))):
+            h.do_POST()
+        self.assertEqual(403, sent[0][0])
+        self.assertEqual(("signin-failed", "mallory", "192.0.2.50", False), records[0][0][:4])
+        self.assertEqual("curl/8.0", records[0][1]["agent"])
 
     def test_every_replica_runs_the_setup_code_start(self):
         source = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
