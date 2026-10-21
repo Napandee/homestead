@@ -27,8 +27,9 @@ leads carries the expiry on. Labels and annotations on the claim only mirror
 it for people and kubectl: anyone who may edit claims can write those. A
 previous volume is deleted keep_days after it was replaced (default 7; 0 keeps
 it until a person deletes it), never less than a day after its reminder was
-raised, never while anything mounts it or a job holds it, and never when the
-settings could not be read.
+raised, and never while anything mounts it or a job holds it. Settings never
+saved mean the default; settings that cannot be read right now mean nothing
+is deleted that hour.
 
 While watching, one bad poll is not enough to swap back: not ready, or a
 fresh "down" from the uptime check, must last FLAP_WAIT seconds. The time
@@ -115,13 +116,39 @@ def settings():
 
 
 def settings_strict():
-    """The settings as saved, or an error: never the defaults in place of a
-    ConfigMap that is missing or does not validate. The expiry deletes data,
-    so it acts only on a keep_days someone actually set (or left as saved)."""
-    import homestead_app_settings as APP_SETTINGS
+    """The expiry's own reading of keep_days (Andreas, 2026-10-21):
+    - settings never saved (no ConfigMap, no settings.json, or no
+      restore_swap.keep_days in it): {} - the 7-day default;
+    - settings that cannot be read right now (an error or a timeout on the
+      read, or a stored value that is not valid): an error, so the expiry
+      deletes nothing this hour and tries again the next.
+    Only its own section is read: another setting someone broke does not
+    stop the expiry."""
     import homestead_settings_helpers as SETTINGS_HELPERS
-    cm = SETTINGS_HELPERS.kget(f"/api/v1/namespaces/{SETTINGS_HELPERS.DEFAULT_NS}/configmaps/{SETTINGS_HELPERS._settings_map()}")
-    return APP_SETTINGS.validate(json.loads((cm.get("data") or {})["settings.json"]))
+    path = f"/api/v1/namespaces/{SETTINGS_HELPERS.DEFAULT_NS}/configmaps/{SETTINGS_HELPERS._settings_map()}"
+    try:
+        cm = SETTINGS_HELPERS.kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return {}
+        raise
+    text = (cm.get("data") or {}).get("settings.json")
+    if not text:
+        return {}
+    stored = json.loads(text)
+    if not isinstance(stored, dict):
+        raise ValueError("the saved settings are not an object")
+    section = stored.get("restore_swap")
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise ValueError("restore_swap is not saved as a section")
+    if "keep_days" not in section:
+        return {}
+    days = section["keep_days"]
+    if isinstance(days, bool) or not isinstance(days, int) or days < 0 or days > 90:
+        raise ValueError(f"restore_swap.keep_days is saved as {days!r}")
+    return {"restore_swap": {"keep_days": days}}
 
 
 def save_settings(change):
@@ -968,7 +995,8 @@ def expire_tick(now=None):
     try:
         days = keep_days(settings_strict())
     except Exception as error:
-        print(f"previous volumes: settings not read, nothing deleted this hour: {str(error)[:160]}", flush=True)
+        print(f"previous volumes: settings could not be read, nothing deleted this hour; trying again next hour: "
+              f"{str(error)[:160]}", flush=True)
         return []
     if not days:
         return []

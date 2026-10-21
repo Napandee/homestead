@@ -1187,6 +1187,43 @@ errors across browser or Homestead restarts. See the
 [Longhorn StorageClass parameters](https://longhorn.io/docs/1.12.1/references/storage-class-parameters/)
 reference for the underlying mechanism.
 
+### Restore into an app
+
+**Restore into app** (#743) does the swap the restore otherwise leaves to you,
+as one job, `restore-swap`, for a Deployment that alone uses the backed-up
+claim. The backup is restored into a new claim exactly as above while the app
+keeps running; then the Deployment is scaled to 0, the template volume that
+mounted the old claim is pointed at the new one with a JSON patch that first
+tests the Deployment's `metadata.generation` and the old `claimName` (an edit
+made meanwhile makes Kubernetes refuse it, and the app starts again
+unchanged), the replicas are put back, and the app is watched as an automatic
+update is: ready within 10 minutes, then an answer from its uptime check
+within 5 (or ready for 2 minutes with no check). Each step is checkpointed
+before it writes, so a restart carries on without repeating one. Both claims'
+uids are checked before the app is pointed at either.
+
+Once it was ready, a failed check must last 60 seconds before the app is
+swapped back. Swapping back retries a passing error for up to 10 minutes, then
+starts the app again. The review is `GET /api/restore-swap/plan` (viewer); the
+start is `POST /api/restore-swap` (admin), carrying the review's digest - a
+stale review gets a 409 with a fresh plan. While the job runs, a storage-class
+move, a snapshot revert, a restore under either claim's name and a volume
+delete refuse its claims.
+
+The claim the app left is its previous volume: `GET /api/volumes/previous`
+(viewer), `POST /api/volumes/previous/keep` (operator to keep, admin to let it
+expire), `POST /api/volumes/previous/swap-back` (admin), and
+`POST /api/volumes/previous/settings` (admin) for `restore_swap.keep_days` -
+default 7, 0 for until deleted, otherwise 1 to 90. Which claims these are is
+Homestead's own record, `previous-volumes.json` on its data volume, keyed by
+namespace, name and uid; the `homestead.io/previous-volume` label and
+annotations on the claim only mirror it. The leader checks them hourly: it
+stamps a reminder (an info alert) a day before the expiry and deletes no
+sooner than 24 hours after it, through the same reviewed delete a person
+uses (`delete_data`), re-checking the record, Keep and running jobs under the
+jobs' lock right before. Settings never saved mean the 7-day default; settings
+that cannot be read right now mean nothing is deleted that hour.
+
 ## Moving workloads between clusters
 
 A container or VM can move from one Harvester cluster to another when both run

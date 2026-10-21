@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_restore_swap as RS
+from unittest import mock
+
+STRICT = RS.settings_strict          # the real reader, before any test replaces it
 import homestead_routes as MODULE_ROUTES
 
 NS = "lab"
@@ -977,6 +980,55 @@ class ReviewFixTests(Base):
         dep["spec"]["template"]["spec"]["volumes"].append({"name": "db", "persistentVolumeClaim": {"claimName": "app-1-db"}})
         notices = self.plan()["notices"]
         self.assertTrue(any("app-1-db" in n for n in notices), notices)
+
+
+class SettingsFallbackTests(Base):
+    """keep_days for the expiry (Andreas, 2026-10-21): settings never saved
+    mean the 7-day default; settings that cannot be read right now mean
+    nothing is deleted this hour."""
+
+    def setUp(self):
+        super().setUp()
+        RS.settings_strict = STRICT
+        put_previous(self, reminded=NOW - 3 * 86400)
+        import homestead_settings_helpers as SETTINGS_HELPERS
+        self.helpers = SETTINGS_HELPERS
+        for name, value in (("DEFAULT_NS", "homestead"), ("_settings_map", lambda: "homestead-settings")):
+            patcher = mock.patch.object(SETTINGS_HELPERS, name, value, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def read(self, answer):
+        def kget(path, **_):
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+        patcher = mock.patch.object(self.helpers, "kget", kget, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_settings_never_saved_use_the_7_day_default(self):
+        self.read(urllib.error.HTTPError("/configmaps/homestead-settings", 404, "not found", {}, None))
+        RS.expire_tick(NOW)
+        self.assertEqual(["app-1-data-old"], [d["name"] for d in self.deleted])
+
+    def test_saved_settings_without_the_key_use_the_7_day_default(self):
+        self.read({"data": {"settings.json": json.dumps({"site_name": "Main site"})}})
+        RS.expire_tick(NOW)
+        self.assertEqual(["app-1-data-old"], [d["name"] for d in self.deleted])
+
+    def test_settings_that_cannot_be_read_right_now_delete_nothing(self):
+        for failure in (urllib.error.HTTPError("/configmaps/homestead-settings", 500, "error", {}, None),
+                        TimeoutError("timed out"), urllib.error.URLError("connection refused")):
+            with self.subTest(failure=type(failure).__name__):
+                self.read(failure)
+                self.assertEqual([], RS.expire_tick(NOW))
+                self.assertEqual([], self.deleted)
+
+    def test_0_still_keeps_until_deleted(self):
+        self.read({"data": {"settings.json": json.dumps({"restore_swap": {"keep_days": 0}})}})
+        self.assertEqual([], RS.expire_tick(NOW))
+        self.assertEqual([], self.deleted)
 
 
 class SettingsTests(unittest.TestCase):
