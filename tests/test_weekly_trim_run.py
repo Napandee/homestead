@@ -343,5 +343,48 @@ class TickTests(StateCase):
         self.assertEqual({"created": True, "groups": ["default"]}, self.state())
 
 
+class RouteTests(StateCase):
+    def view(self, operations=(), jobs=()):
+        lh = Jobs(jobs)
+        LH.bind(lh.get, lh.send, {}, "longhorn")
+        with mock.patch.object(OPS, "snapshot", return_value=list(operations)), \
+                mock.patch.object(WT.time, "time", return_value=SAT + 3 * 86400):
+            return WT.view()
+
+    def test_view_reports_the_last_result_and_the_next_slot(self):
+        last = {"slot": SAT, "at": SAT + 120, "trimmed": ["pvc-a", "pvc-c"], "unconfirmed": [], "failed": [],
+                "skipped": [{"volume": "pvc-b", "pvc": "data-pvc-b", "why": "detached"}]}
+        self.save({"enabled": True, "retired": True, "last": last})
+        self.assertEqual({"enabled": True, "next": "2026-10-31T04:00:00Z", "last": last, "running": False, "theirs": ""},
+                         self.view())
+        self.assertTrue(self.view([{"kind": WT.KIND, "status": "running"}])["running"])
+        self.assertEqual("weekly-trim", self.view(jobs=[recurring("weekly-trim", labels={})])["theirs"])
+        self.save({"enabled": False})
+        self.assertEqual({"enabled": False, "next": "", "last": None, "running": False, "theirs": ""}, self.view())
+
+    def test_run_now_refuses_a_second_run(self):
+        with mock.patch.object(OPS, "snapshot", return_value=[{"kind": WT.KIND, "status": "queued"}]), \
+                self.assertRaisesRegex(ValueError, "already running"):
+            WT.run_now()
+        with mock.patch.object(OPS, "snapshot", return_value=[]), \
+                mock.patch.object(WT, "start", return_value={"id": "j1"}) as start:
+            self.assertEqual({"ok": True, "operation": {"id": "j1"}}, WT.run_now())
+        start.assert_called_once_with("Run now")
+
+    def test_settings_take_only_true_or_false(self):
+        for bad in ("yes", 1, None):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "enabled must be true or false"):
+                WT.switch(bad)
+        self.save({"retired": True, "enabled": True, "last": {"slot": SAT}})
+        self.assertEqual(False, WT.switch(False)["enabled"])
+        self.assertEqual({"retired": True, "enabled": False, "last": {"slot": SAT}}, self.state())
+        self.assertIn("Saturday", WT.switch(True)["detail"])
+
+    def test_its_routes_and_who_may_use_them(self):
+        self.assertEqual({("GET", "/api/weekly-trim"): "viewer", ("POST", "/api/weekly-trim/run"): "operator",
+                          ("POST", "/api/weekly-trim/settings"): "admin"},
+                         {key: role for key, (role, _) in WT.ROUTES.items()})
+
+
 if __name__ == "__main__":
     unittest.main()

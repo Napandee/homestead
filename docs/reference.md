@@ -1169,6 +1169,15 @@ whichever group you pick. The jobs a plan makes are ordinary jobs afterwards.
 Any volume's snapshots and backups are also a click away on Volumes: take one
 now, back up now, or restore.
 
+The weekly trim is Homestead's own: each Saturday at 04:00 UTC a `weekly-trim`
+job trims every attached Longhorn volume through Longhorn's `trimFilesystem`
+action, one at a time, and skips detached volumes and VM disks (Block volumes),
+naming them. **Housekeeping** shows the last result, **Run now** and the
+switch (`GET /api/weekly-trim`, `POST /api/weekly-trim/run` for operators,
+`POST /api/weekly-trim/settings` for admins). The Longhorn `RecurringJob`
+`homestead-weekly-trim` earlier releases made is removed once if unchanged; a
+changed one is kept as yours and Homestead's own trim stays off.
+
 ## Restore a Longhorn backup
 
 Completed backups have a **Restore** action in Data Protection. Homestead always

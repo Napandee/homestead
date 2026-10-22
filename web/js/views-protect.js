@@ -238,6 +238,8 @@ async function viewProtect() {
     <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Protected by</th><th data-nosort>Last backup</th><th></th>
   </tr></thead><tbody id="pf_rows"></tbody></table></div></div>
 
+  <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim…</div>')}</div>
+
   <div class="sec">Backups</div>
   ${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
   : backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
@@ -251,6 +253,7 @@ async function viewProtect() {
       <td data-actions>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
+  loadWeeklyTrim();
   protectVolumesPaint();
   loadRestoreTests();
   loadPreviousVolumes();
@@ -963,6 +966,62 @@ window.lhTargetSave = async () => {
       body: JSON.stringify({ url: $("#bt_url").value.trim(), secret: $("#bt_secret").value.trim(),
         poll: $("#bt_poll").value.trim() || "5m", ...(keys.access_key || keys.secret_key ? { keys } : {}) }) });
     toast("Backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+
+/* ---------------- weekly trim (homestead_weekly_trim.py, #591) ----------------
+   Homestead trims every attached volume itself each Saturday: the last run's
+   result, Run now, and the switch. */
+const trimName = r => r.pvc || r.volume;
+const trimPlural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function trimSummary(last) {
+  const whys = {};
+  for (const s of last.skipped || []) whys[s.why] = (whys[s.why] || 0) + 1;
+  const said = Object.entries(whys).map(([why, n]) => why === "no filesystem (VM disk)" ? trimPlural(n, "VM disk") : `${n} ${why}`).join(", ");
+  return `Trimmed ${trimPlural((last.trimmed || []).length, "volume")}, skipped ${(last.skipped || []).length}${said ? ` (${said})` : ""}`;
+}
+
+function weeklyTrimCard(d) {
+  const last = d.last, failed = last?.failed || [], unconfirmed = last?.unconfirmed || [], skipped = last?.skipped || [];
+  const status = d.running ? UI.chip("trimming now", "info") : !last ? UI.chip("not run yet", "neutral")
+    : failed.length ? UI.chip("failed", "bad") : UI.chip("trimmed", "ok");
+  const lines = !last ? '<div class="dim small">Not run yet.</div>'
+    : `<div class="small">${esc(trimSummary(last))} <span class="dim xs">${esc(fmtAt(last.at))}</span></div>
+      ${failed.length ? `<div class="small wt-line">Failed: ${failed.map(f => `<b>${esc(trimName(f))}</b>: ${esc(f.message)}`).join("; ")}</div>` : ""}
+      ${unconfirmed.length ? `<div class="dim xs wt-line">Not confirmed: ${esc(unconfirmed.map(u => `${trimName(u)} (${u.why})`).join(", "))}</div>` : ""}
+      ${skipped.length ? `<div class="dim xs wt-line">Skipped: ${esc(skipped.map(s => `${trimName(s)} (${s.why})`).join(", "))}</div>` : ""}`;
+  return `<div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", `
+    <div class="card flat">
+      <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
+        <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
+        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
+      <div style="margin-top:10px">${lines}</div>
+      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well.</div>` : ""}
+      <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
+        <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
+      ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
+    </div>`)}</div>`;
+}
+
+async function loadWeeklyTrim() {
+  const host = document.getElementById("housekeeping");
+  if (!host) return;
+  try { host.outerHTML = weeklyTrimCard(await api("/api/weekly-trim")); }
+  catch (e) { host.innerHTML = UI.section("Housekeeping", UI.callout("warn", "The weekly trim could not be read", esc(e.message))); }
+}
+
+window.weeklyTrimSwitch = async on => {
+  try { const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); loadWeeklyTrim(); }
+  catch (e) { toast(e.message, "bad"); const box = $("#wt_on"); if (box) box.checked = !on; }
+};
+
+window.weeklyTrimRun = async () => {
+  try {
+    await api("/api/weekly-trim/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast("Weekly trim started; follow it under Jobs", "ok");
+    loadWeeklyTrim();
   } catch (e) { toast(e.message, "bad"); }
 };
 

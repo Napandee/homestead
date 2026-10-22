@@ -270,6 +270,50 @@ def tick(now, operations):
     return "; ".join(s for s in said if s)
 
 
+def _running():
+    return any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.snapshot())
+
+
+def view():
+    """Data protection's Housekeeping card: on or off, the next run, the
+    last result, and a trim job of the user's that keeps ours from running."""
+    state = SHARED.read_json(_path(), {})
+    enabled = state.get("enabled", True) is not False
+    try:
+        mine = theirs(LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs").get("items", []))
+    except Exception:
+        mine = ""
+    upcoming = last_slot(time.time()) + WEEK
+    return {"enabled": enabled, "next": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(upcoming)) if enabled else "",
+            "last": state.get("last"), "running": _running(), "theirs": mine}
+
+
+def run_now():
+    """Trim every attached volume now; one run at a time."""
+    if _running():
+        raise ValueError("a weekly trim is already running; one runs at a time")
+    return {"ok": True, "operation": start("Run now")}
+
+
+def switch(enabled):
+    """Homestead's weekly trim on or off."""
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be true or false")
+    _update(lambda state: state.update(enabled=enabled))
+    return {"ok": True, "enabled": enabled,
+            "detail": "Attached volumes are trimmed every Saturday at 04:00 UTC" if enabled
+            else "The weekly trim is off; Run now still trims every attached volume"}
+
+
+# Its routes and who may use them (homestead_routes.py): trimming is an
+# operator's, as Trim now is; switching it off is an admin's.
+ROUTES = {
+    ("GET", "/api/weekly-trim"): ("viewer", lambda request: view()),
+    ("POST", "/api/weekly-trim/run"): ("operator", lambda request: run_now()),
+    ("POST", "/api/weekly-trim/settings"): ("admin", lambda request: switch(request.body.get("enabled"))),
+}
+
+
 def register(ops):
     """The job store's entry for the weekly trim (#622)."""
     ops.RESOLVERS[KIND] = lambda item: resolve(item, ops.checkpoint)
