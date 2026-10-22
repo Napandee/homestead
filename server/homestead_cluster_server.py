@@ -347,7 +347,11 @@ def _upgrade_node_probe():
     Deliberately not fatal and deliberately quiet: a cluster where the probe
     is absent, or where Homestead lacks the rights to touch it, is a cluster
     that simply has no probe - not a reason to refuse to start.
+
+    This replica's loop that reads the probes in the background starts
+    here too, so the pages never wait on one (#705).
     """
+    NODES.start_probes()
     try:
         with self_data_activity():
             result = PROBE.reconcile(HOMESTEAD_VERSION)
