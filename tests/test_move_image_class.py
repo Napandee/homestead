@@ -1,7 +1,8 @@
 import io, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import homestead_move_engine as ENGINE
+import homestead_move_state as STATE
+import homestead_move_phases as PHASE
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 
@@ -22,28 +23,28 @@ class ImageClassTests(unittest.TestCase):
     storageClass found for backingImage" - on a cluster with no default."""
 
     def setUp(self):
-        self.saved = ENGINE.kget, ENGINE.ksend, ENGINE.LH
+        self.saved = STATE.kget, STATE.ksend, STATE.LH
         self.sent = []
-        ENGINE.LH = Longhorn()
+        STATE.LH = Longhorn()
 
     def tearDown(self):
-        ENGINE.kget, ENGINE.ksend, ENGINE.LH = self.saved
+        STATE.kget, STATE.ksend, STATE.LH = self.saved
 
     def classes(self, *rows):
-        ENGINE.kget = lambda path: {"items": list(rows)}
+        STATE.kget = lambda path: {"items": list(rows)}
 
     def test_homesteads_own_class_is_used_when_it_is_here(self):
-        ENGINE.LH.STORAGE_CLASS = "longhorn-r2"
+        STATE.LH.STORAGE_CLASS = "longhorn-r2"
         self.classes(klass("harvester-longhorn"), klass("longhorn-r2"))
-        self.assertEqual("longhorn-r2", ENGINE._image_class())
+        self.assertEqual("longhorn-r2", PHASE._image_class())
 
     def test_with_no_default_harvesters_stock_class_is_used(self):
         self.classes(klass("longhorn-ubuntu", backing="ubuntu"), klass("harvester-longhorn"), klass("longhorn"))
-        self.assertEqual("harvester-longhorn", ENGINE._image_class())
+        self.assertEqual("harvester-longhorn", PHASE._image_class())
 
     def test_an_images_own_class_is_never_chosen(self):
         self.classes(klass("longhorn-ubuntu", backing="ubuntu"), klass("fast"))
-        self.assertEqual("fast", ENGINE._image_class())
+        self.assertEqual("fast", PHASE._image_class())
 
     def test_the_restored_image_names_its_class(self):
         classes = {"items": [klass("harvester-longhorn")]}
@@ -54,10 +55,10 @@ class ImageClassTests(unittest.TestCase):
             if "/backingimages/" in path:
                 raise urllib.error.HTTPError(path, 404, "not found", {}, io.BytesIO(b""))
             return classes
-        ENGINE.kget = read
-        ENGINE.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body))
+        STATE.kget = read
+        STATE.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body))
 
-        ENGINE._ensure_image({"id": "m1"}, "ubuntu")
+        PHASE._ensure_image({"id": "m1"}, "ubuntu")
 
         method, path, body = self.sent[0]
         self.assertEqual(("POST", f"{LH}/backingimages"), (method, path))

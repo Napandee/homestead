@@ -14,7 +14,8 @@ sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__
 import homestead_kube as KUBE
 import homestead_lhv2_setup as LHV2
 import homestead_longhorn as LH
-import homestead_move_engine as ENGINE
+import homestead_move_state as STATE
+import homestead_move_phases as PHASE
 import homestead_platform as PLATFORM
 import homestead_rename as RENAME
 import homestead_restore_test as RESTORE_TEST
@@ -69,18 +70,18 @@ class StorageHostReadTests(unittest.TestCase):
 
     def test_move_engine_makes_a_namespace_only_when_it_is_missing(self):
         sent = []
-        patch = mock.patch.object(ENGINE, "ksend", lambda *args, **_: sent.append(args))
+        patch = mock.patch.object(STATE, "ksend", lambda *args, **_: sent.append(args))
         patch.start()
         self.addCleanup(patch.stop)
-        self.reading(ENGINE, Paths(http_error(404)))
-        ENGINE._ensure_namespace("lab")
+        self.reading(STATE, Paths(http_error(404)))
+        PHASE._ensure_namespace("lab")
         self.assertEqual([("POST", "/api/v1/namespaces")], [call[:2] for call in sent])
-        self.reading(ENGINE, Paths({"metadata": {"name": "lab"}}))
-        ENGINE._ensure_namespace("lab")
+        self.reading(STATE, Paths({"metadata": {"name": "lab"}}))
+        PHASE._ensure_namespace("lab")
         self.assertEqual(1, len(sent))
-        self.reading(ENGINE, Paths(http_error(500)))
+        self.reading(STATE, Paths(http_error(500)))
         with self.assertRaises(urllib.error.HTTPError):
-            ENGINE._ensure_namespace("lab")
+            PHASE._ensure_namespace("lab")
 
     def lhv2_plan(self, reader):
         self.reading(LHV2, reader)

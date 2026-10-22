@@ -17,6 +17,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_move as client
 import homestead_move_engine as engine
+import homestead_move_state as STATE
+import homestead_move_plan as PLAN
+import homestead_move_phases as PHASE
+import homestead_move_actions as ACT
+import homestead_transfer_cleanup as CLEANUP
 import homestead_move_source as source
 
 
@@ -511,11 +516,11 @@ class EngineTests(unittest.TestCase):
                     self.ops, self.tmp.name, "lab")
         # The destination's own endpoint for the bucket matches the source's, so
         # this pair counts as already sharing backup storage.
-        engine._here_endpoint = lambda target: ""
+        STATE._here_endpoint = lambda target: ""
 
     def run_until_settled(self, limit=40, move_id=None):
         for _ in range(limit):
-            move = next((m for m in engine.moves() if m["id"] == move_id), engine.moves()[0])
+            move = next((m for m in STATE.moves() if m["id"] == move_id), STATE.moves()[0])
             if move["status"] != "running":
                 return move
             if move["phase"] == "quiescing":
@@ -524,14 +529,14 @@ class EngineTests(unittest.TestCase):
                 path = "/apis/apps/v1/namespaces/moved/deployments/frigate"
                 if path in self.cluster.objects:
                     self.cluster.objects[path].setdefault("status", {})["readyReplicas"] = 1
-            engine.tick_all()
-        return next((m for m in engine.moves() if m["id"] == move_id), engine.moves()[0])
+            PHASE.tick_all()
+        return next((m for m in STATE.moves() if m["id"] == move_id), STATE.moves()[0])
 
     def test_snapshot_installation_does_not_stop_source_and_survives_engine_restart(self):
         with mock.patch.object(self.lh, "ensure_restore_support", return_value={"ready": False, "message": "Installing snapshots"}):
-            move = engine.start("shed", "container", "frigate", "moved", "automatic")
-            engine.tick_all()
-            self.assertEqual("joining", engine._find(move["id"])["phase"])
+            move = PLAN.start("shed", "container", "frigate", "moved", "automatic")
+            PHASE.tick_all()
+            self.assertEqual("joining", STATE._find(move["id"])["phase"])
             self.assertEqual(1, self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["spec"]["replicas"])
             self.assertNotIn("/api/move/source", self.remote_calls)
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(), self.ops, self.tmp.name, "lab")
@@ -541,17 +546,17 @@ class EngineTests(unittest.TestCase):
     def test_plan_rejects_wait_for_consumer_and_filesystem_migratable_classes(self):
         klass = self.cluster.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"]
         klass["volumeBindingMode"] = "WaitForFirstConsumer"
-        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
         self.assertFalse(planned["ok"])
         self.assertTrue(any("Immediate" in reason for reason in planned["blockers"]))
         klass.pop("volumeBindingMode")
         klass.setdefault("parameters", {})["migratable"] = "true"
-        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
         self.assertFalse(planned["ok"])
         self.assertTrue(any("migratable disabled" in reason for reason in planned["blockers"]))
 
     def test_effective_destination_class_is_frozen_when_default_changes(self):
-        move = engine.start("shed", "container", "frigate", "moved", "automatic")
+        move = PLAN.start("shed", "container", "frigate", "moved", "automatic")
         self.assertEqual("longhorn-r2", move["storage_class"])
         with mock.patch.object(self.lh, "STORAGE_CLASS", "missing-new-default"):
             finished = self.run_until_settled(move_id=move["id"])
@@ -559,7 +564,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual("longhorn-r2", self.lh.restored[0]["storage_class"])
 
     def fail_backup(self):
-        move = engine.start("shed", "container", "frigate", "moved", "automatic")
+        move = PLAN.start("shed", "container", "frigate", "moved", "automatic")
         self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
         create = self.lh.ensure_move_backup
         def pending(*args, **kwargs):
@@ -568,13 +573,13 @@ class EngineTests(unittest.TestCase):
             return result
         with mock.patch.object(self.lh, "ensure_move_backup", side_effect=pending):
             for _ in range(10):
-                engine.tick_all()
+                PHASE.tick_all()
                 if self.lh.made:
                     break
         self.assertEqual(1, len(self.lh.made))
         self.lh.made[0].update(state="Error", error="cannot find matched snapshot in longhorn engine")
-        engine.tick_all()
-        failed = engine._find(move["id"])
+        PHASE.tick_all()
+        failed = STATE._find(move["id"])
         self.assertEqual(("failed", "backing-up"), (failed["status"], failed["phase"]))
         return failed
 
@@ -583,7 +588,7 @@ class EngineTests(unittest.TestCase):
         old = self.lh.made[0]["name"]
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                     self.ops, self.tmp.name, "lab")
-        engine.retry(failed["id"])
+        ACT.retry(failed["id"])
         move = self.run_until_settled(move_id=failed["id"])
         self.assertEqual("succeeded", move["status"], move["message"])
         self.assertEqual(2, len(self.lh.made))
@@ -593,8 +598,8 @@ class EngineTests(unittest.TestCase):
     def test_dismissed_activity_then_new_attempt_recovers_source_backup_references(self):
         import homestead_operations as operations
         operations.bind(self.cluster.get, self.tmp.name, lambda *args: {})
-        with mock.patch.object(engine, "OPS", operations), \
-             mock.patch.dict(operations.RESOLVERS, {"move": engine.op_state}):
+        with mock.patch.object(STATE, "OPS", operations), \
+             mock.patch.dict(operations.RESOLVERS, {"move": PLAN.op_state}):
             failed = self.fail_backup()
             item = next(o for o in operations.list_operations() if o["id"] == failed["op"])
             self.assertEqual("failed", item["status"])
@@ -604,17 +609,17 @@ class EngineTests(unittest.TestCase):
             # the failed migration journal intact across a restart.
             engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                         operations, self.tmp.name, "lab")
-            new = engine.start("shed", "container", "frigate", "moved", "automatic")
+            new = PLAN.start("shed", "container", "frigate", "moved", "automatic")
             move = self.run_until_settled(move_id=new["id"])
             self.assertEqual("succeeded", move["status"], move["message"])
             self.assertEqual(2, len(self.lh.made))
             self.assertNotEqual(self.lh.made[0]["name"], self.lh.restored[0]["backup"])
-            self.assertEqual("failed", engine._find(failed["id"])["status"])
+            self.assertEqual("failed", STATE._find(failed["id"])["status"])
 
     def test_new_attempt_recovers_when_old_destination_journal_was_cleared(self):
         self.fail_backup()
-        engine._write([])
-        new = engine.start("shed", "container", "frigate", "moved", "automatic")
+        STATE._write([])
+        new = PLAN.start("shed", "container", "frigate", "moved", "automatic")
         move = self.run_until_settled(move_id=new["id"])
         self.assertEqual("succeeded", move["status"], move["message"])
         self.assertEqual(2, len(self.lh.made))
@@ -624,10 +629,10 @@ class EngineTests(unittest.TestCase):
         self.cluster.put("/apis/storage.k8s.io/v1/storageclasses/fast", {
             "metadata": {"name": "fast"}, "provisioner": "driver.longhorn.io",
             "parameters": {"numberOfReplicas": "3", "diskSelector": "ssd"}})
-        planned = engine.plan("shed", "container", "frigate", "moved", "automatic", "", "fast")
+        planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic", "", "fast")
         self.assertTrue(planned["ok"], planned["blockers"])
         self.assertEqual(["fast", "longhorn-r2"], planned["storage_classes"])
-        engine.start("shed", "container", "frigate", "moved", "automatic", "", "fast")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic", "", "fast")
         move = self.run_until_settled()
         self.assertEqual("succeeded", move["status"], move["message"])
         self.assertEqual("fast", move["storage_class"])
@@ -635,7 +640,7 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn("replicas", self.lh.restored[0], "chosen class supplies replicas")
 
     def test_a_clean_plan_has_no_blockers(self):
-        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
 
         self.assertTrue(planned["ok"], planned["blockers"])
         self.assertTrue(planned["joined"])
@@ -651,23 +656,23 @@ class EngineTests(unittest.TestCase):
             return real(name, path, body)
 
         client.remote = remote
-        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
 
         self.assertFalse(planned["ok"])
         self.assertIn("Update shed first", planned["blockers"][0])
         with self.assertRaisesRegex(ValueError, "too old"):
-            engine.start("shed", "container", "frigate", "moved", "automatic")
-        self.assertEqual([], engine.moves())
+            PLAN.start("shed", "container", "frigate", "moved", "automatic")
+        self.assertEqual([], STATE.moves())
         self.assertNotIn("/api/move/source", self.remote_calls, "nothing was stopped")
 
     def test_a_name_already_taken_here_blocks_the_move(self):
-        planned = engine.plan("shed", "container", "frigate", "lab", "automatic")
+        planned = PLAN.plan("shed", "container", "frigate", "lab", "automatic")
 
         self.assertFalse(planned["ok"])
         self.assertTrue(any("already exists" in b for b in planned["blockers"]))
 
     def test_a_bucket_only_the_source_can_reach_blocks_a_move_that_needs_it(self):
-        engine._here_endpoint = lambda target: "http://elsewhere:9000"
+        STATE._here_endpoint = lambda target: "http://elsewhere:9000"
         real = client.remote
 
         def remote(name, path, body=None):
@@ -677,13 +682,13 @@ class EngineTests(unittest.TestCase):
             return real(name, path, body)
 
         client.remote = remote
-        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
 
         self.assertTrue(any("only reachable inside" in b for b in planned["blockers"]))
         self.assertTrue(any("changes from" in w for w in planned["warnings"]))
 
     def test_a_move_runs_every_phase_and_lands_running(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
 
         move = self.run_until_settled()
 
@@ -708,7 +713,7 @@ class EngineTests(unittest.TestCase):
         self.lh.target = {"configured": True, "url": "nfs://nas:/backups", "secret": ""}
         move = {"id": "0123456789ab", "cluster": "shed", "claims": [], "phase": "joining"}
         with mock.patch.object(client, "remote", lambda name, path, body=None: there),                 mock.patch.object(client, "answers", lambda endpoint, timeout=3: self.reachable):
-            engine._joining(move)
+            PHASE._joining(move)
         return move
 
     reachable = True
@@ -722,24 +727,24 @@ class EngineTests(unittest.TestCase):
 
     def test_a_kubernetes_refusal_stops_the_move_with_its_reason(self):
         import io, urllib.error
-        engine.start("shed", "container", "frigate", "moved", "automatic")
-        move = engine.moves()[0]
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
+        move = STATE.moves()[0]
         refusal = urllib.error.HTTPError("x", 422, "Unprocessable", {}, io.BytesIO(
             b'{"message": "admission webhook denied the request: backup target unreachable"}'))
         def refuse(m):
             raise refusal
-        with mock.patch.dict(engine.HANDLERS, {move["phase"]: refuse}):
-            engine.tick_all()
-        move = engine.moves()[0]
+        with mock.patch.dict(PHASE.HANDLERS, {move["phase"]: refuse}):
+            PHASE.tick_all()
+        move = STATE.moves()[0]
         self.assertEqual("failed", move["status"])
         self.assertIn("backup target unreachable", move["message"])
 
     def test_cancelling_before_anything_stopped_does_not_ask_the_source(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
-        move = engine.moves()[0]
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
+        move = STATE.moves()[0]
         self.remote_calls.clear()
         self.unreachable = True
-        result = engine.abandon(move["id"])
+        result = ACT.abandon(move["id"])
         self.assertEqual("cancelled", result["status"])
         self.assertFalse(result["source_stopped"])
         self.assertNotIn("/api/move/source", self.remote_calls)
@@ -753,14 +758,14 @@ class EngineTests(unittest.TestCase):
 
     def test_on_longhorn_the_join_names_the_secret(self):
         self._join()
-        self.assertTrue(self.lh.target["secret"].startswith(engine.JOIN_SECRET + "-0123456789ab-"))
+        self.assertTrue(self.lh.target["secret"].startswith(STATE.JOIN_SECRET + "-0123456789ab-"))
         self.assertIsNone(self.lh.keys)
 
     def test_a_restart_part_way_through_picks_up_where_it_was(self):
         """The move lives on disk, not in memory."""
-        engine.start("shed", "container", "frigate", "moved", "automatic")
-        engine.tick_all()
-        engine.tick_all()
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
+        PHASE.tick_all()
+        PHASE.tick_all()
         on_disk = json.loads((Path(self.tmp.name) / "moves.json").read_text())
 
         self.assertEqual("quiescing", on_disk[0]["phase"])
@@ -769,13 +774,13 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(1, len(self.lh.made), "resuming does not back up twice")
 
     def test_an_unreachable_source_is_waited_out_not_failed(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
         self.unreachable = True
 
         for _ in range(5):
-            engine.tick_all()
+            PHASE.tick_all()
 
-        move = engine.moves()[0]
+        move = STATE.moves()[0]
         self.assertEqual("running", move["status"])
         self.assertIn("could not reach shed", move["message"])
 
@@ -783,7 +788,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual("succeeded", self.run_until_settled()["status"])
 
     def test_a_refusal_fails_the_move_and_retry_resumes_it(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
         # Someone creates the claim by hand in the meantime.
         self.cluster.put("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config",
                          {"metadata": {"name": "frigate-config"}})
@@ -793,17 +798,17 @@ class EngineTests(unittest.TestCase):
         self.assertIn("not made by this move", move["message"])
 
         del self.cluster.objects["/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config"]
-        engine.retry(move["id"])
+        ACT.retry(move["id"])
         self.assertEqual("succeeded", self.run_until_settled()["status"])
         self.assertEqual(2, len(self.ops.started), "a retry is a fresh entry in Activity")
 
     def test_putting_it_back_restarts_the_source_and_removes_only_what_the_move_made(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
         move = self.run_until_settled()
         self.cluster.put("/api/v1/namespaces/moved/services/unrelated",
                          {"metadata": {"name": "unrelated"}})
 
-        engine.abandon(move["id"])
+        ACT.abandon(move["id"])
 
         self.assertNotIn("/apis/apps/v1/namespaces/moved/deployments/frigate", self.cluster.objects)
         self.assertNotIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config",
@@ -811,45 +816,45 @@ class EngineTests(unittest.TestCase):
         self.assertIn("/api/v1/namespaces/moved/services/unrelated", self.cluster.objects)
         source_copy = self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]
         self.assertEqual(1, source_copy["spec"]["replicas"])
-        self.assertEqual("cancelled", engine.moves()[0]["status"])
+        self.assertEqual("cancelled", STATE.moves()[0]["status"])
 
     def test_finishing_removes_the_stopped_original_and_nothing_can_be_put_back_after(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
         move = self.run_until_settled()
 
-        engine.finish(move["id"])
+        ACT.finish(move["id"])
 
         self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
-        self.assertTrue(engine.moves()[0]["source_removed"])
+        self.assertTrue(STATE.moves()[0]["source_removed"])
         with self.assertRaisesRegex(ValueError, "nothing to put back"):
-            engine.abandon(move["id"])
+            ACT.abandon(move["id"])
 
     def test_a_volume_moves_on_its_own_and_lands_restored(self):
         self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
-        engine.start("shed", "volume", "frigate-config", "moved")
+        PLAN.start("shed", "volume", "frigate-config", "moved")
         move = self.run_until_settled()
         self.assertEqual("succeeded", move["status"], move["message"])
-        self.assertEqual(list(engine.VOLUME_PHASES), move["phases"])
+        self.assertEqual(list(STATE.VOLUME_PHASES), move["phases"])
         self.assertEqual("frigate-config", self.lh.restored[0]["name"])
         self.assertIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", self.cluster.objects)
         self.assertNotIn("/apis/apps/v1/namespaces/moved/deployments/frigate", self.cluster.objects)
         self.assertEqual(1, self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["spec"]["replicas"],
                          "the app that names it is left running as it was")
-        engine.finish(move["id"])
+        ACT.finish(move["id"])
         self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config", self.cluster.objects)
 
     def test_putting_a_volume_back_removes_only_its_restored_copy(self):
         self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
-        engine.start("shed", "volume", "frigate-config", "moved")
+        PLAN.start("shed", "volume", "frigate-config", "moved")
         move = self.run_until_settled()
-        engine.abandon(move["id"])
+        ACT.abandon(move["id"])
         self.assertNotIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", self.cluster.objects)
         source_claim = self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config"]
         self.assertNotIn("homestead.io/move-origin", source_claim["metadata"].get("annotations") or {})
-        self.assertEqual("cancelled", engine.moves()[0]["status"])
+        self.assertEqual("cancelled", STATE.moves()[0]["status"])
 
     def test_a_volume_made_blank_here_is_empty_at_its_chosen_size_and_nothing_is_backed_up(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic",
+        PLAN.start("shed", "container", "frigate", "moved", "automatic",
                      volumes={"frigate-config": {"action": "blank", "size_gb": 5}})
         move = self.run_until_settled()
         self.assertEqual("succeeded", move["status"], move["message"])
@@ -859,22 +864,22 @@ class EngineTests(unittest.TestCase):
         self.assertEqual("5Gi", claim["spec"]["resources"]["requests"]["storage"])
         self.assertEqual(move["id"], claim["metadata"]["annotations"]["homestead.io/move-id"])
         self.assertEqual("blank", move["claims"][0]["action"])
-        engine.abandon(move["id"])
+        ACT.abandon(move["id"])
         self.assertNotIn("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", self.cluster.objects,
                          "putting it back removes the blank volume this move made")
 
     def test_a_skipped_volume_uses_the_one_already_here_and_is_never_touched(self):
-        plan = engine.plan("shed", "container", "frigate", "moved", "automatic",
+        plan = PLAN.plan("shed", "container", "frigate", "moved", "automatic",
                            volumes={"frigate-config": {"action": "skip"}})
         self.assertTrue(any("no volume of that name" in b for b in plan["blockers"]))
         mine = {"metadata": {"name": "frigate-config"}, "spec": {"storageClassName": "local-path"}}
         self.cluster.put("/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config", mine)
-        engine.start("shed", "container", "frigate", "moved", "automatic",
+        PLAN.start("shed", "container", "frigate", "moved", "automatic",
                      volumes={"frigate-config": {"action": "skip"}})
         move = self.run_until_settled()
         self.assertEqual("succeeded", move["status"], move["message"])
         self.assertEqual(([], []), (self.lh.made, self.lh.restored))
-        engine.abandon(move["id"])
+        ACT.abandon(move["id"])
         self.assertEqual(mine, self.cluster.objects["/api/v1/namespaces/moved/persistentvolumeclaims/frigate-config"])
 
     def test_each_volume_has_its_own_storage_class_and_a_moved_one_needs_longhorn(self):
@@ -882,47 +887,47 @@ class EngineTests(unittest.TestCase):
                          {"metadata": {"name": "local-path"}, "provisioner": "rancher.io/local-path"})
         self.cluster.put("/apis/storage.k8s.io/v1/storageclasses/longhorn-fast",
                          {"metadata": {"name": "longhorn-fast"}, "provisioner": "driver.longhorn.io", "parameters": {}})
-        moved = engine.plan("shed", "container", "frigate", "moved", "automatic",
+        moved = PLAN.plan("shed", "container", "frigate", "moved", "automatic",
                             volumes={"frigate-config": {"storage_class": "local-path"}})
         self.assertTrue(any("needs a Longhorn class" in b for b in moved["blockers"]), moved["blockers"])
-        blank = engine.plan("shed", "container", "frigate", "moved", "automatic",
+        blank = PLAN.plan("shed", "container", "frigate", "moved", "automatic",
                             volumes={"frigate-config": {"action": "blank", "storage_class": "local-path"}})
         self.assertTrue(blank["ok"], blank["blockers"])
         self.assertIn("local-path", blank["all_storage_classes"])
-        engine.start("shed", "container", "frigate", "moved", "automatic",
+        PLAN.start("shed", "container", "frigate", "moved", "automatic",
                      volumes={"frigate-config": {"storage_class": "longhorn-fast"}})
         self.run_until_settled()
         self.assertEqual("longhorn-fast", self.lh.restored[0]["storage_class"])
 
     def test_removing_the_source_keeps_volumes_it_did_not_move(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic",
+        PLAN.start("shed", "container", "frigate", "moved", "automatic",
                      volumes={"frigate-config": {"action": "blank"}})
         move = self.run_until_settled()
         with mock.patch.object(client, "check_cluster", lambda name: {"version": "2.8.249"}):
             with self.assertRaisesRegex(ValueError, "update it to 2.8.250"):
-                engine.finish(move["id"], volumes=True)
+                ACT.finish(move["id"], volumes=True)
         with mock.patch.object(client, "check_cluster", lambda name: {"version": "2.8.250"}):
-            engine.finish(move["id"], volumes=True)
+            ACT.finish(move["id"], volumes=True)
         self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
         self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-config", self.cluster.objects,
                       "the only copy of its data stays")
 
     def test_the_browser_never_sees_definitions_or_keys(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
         self.run_until_settled()
 
-        public = json.dumps(engine.moves())
+        public = json.dumps(STATE.moves())
 
         self.assertNotIn("containers", public)
         self.assertNotIn("credentials", public)
         self.assertNotIn("origin", public)
 
     def test_two_starts_of_one_workload_at_once_make_one_move_and_one_refusal(self):
-        real_definition, outcomes, arrived = engine._definition, [], []
+        real_definition, outcomes, arrived = STATE._definition, [], []
 
         def start():
             try:
-                outcomes.append(engine.start("shed", "container", "frigate", "moved", "automatic"))
+                outcomes.append(PLAN.start("shed", "container", "frigate", "moved", "automatic"))
             except ValueError as error:
                 outcomes.append(error)
 
@@ -936,14 +941,14 @@ class EngineTests(unittest.TestCase):
                 worker.join()
             return real_definition(*args, **kwargs)
 
-        with mock.patch.object(engine, "_definition", definition):
+        with mock.patch.object(STATE, "_definition", definition):
             start()
 
         refused = [o for o in outcomes if isinstance(o, ValueError)]
         self.assertEqual(1, len(refused), [o if isinstance(o, ValueError) else o["id"] for o in outcomes])
         self.assertEqual("frigate is already being moved", str(refused[0]))
         started = [o["id"] for o in outcomes if isinstance(o, dict)]
-        self.assertEqual(started, [m["id"] for m in engine.moves()])
+        self.assertEqual(started, [m["id"] for m in STATE.moves()])
         self.assertEqual(1, len(self.ops.started), "one Activity item, for the move that started")
 
     def test_a_busy_activity_tray_does_not_turn_a_started_move_into_an_error(self):
@@ -953,56 +958,56 @@ class EngineTests(unittest.TestCase):
             raise TimeoutError("Shared job store is busy; no operation was started")
 
         with mock.patch.object(self.ops, "start", busy):
-            move = engine.start("shed", "container", "frigate", "moved", "automatic")
+            move = PLAN.start("shed", "container", "frigate", "moved", "automatic")
 
         self.assertEqual("running", move["status"])
         self.assertIn("Activity", move["message"], "the person is told its Activity item follows")
         self.assertEqual([], self.ops.started)
         with mock.patch.object(self.ops, "start", real_start):
-            engine.tick_all()
-            engine.tick_all()
+            PHASE.tick_all()
+            PHASE.tick_all()
         self.assertEqual(1, len(self.ops.started), "the engine adds the Activity item once")
-        self.assertEqual("op1", engine._find(move["id"])["op"])
+        self.assertEqual("op1", STATE._find(move["id"])["op"])
 
     def _landed_with_cleanup_pending(self):
-        engine.start("shed", "container", "frigate", "moved", "automatic")
+        PLAN.start("shed", "container", "frigate", "moved", "automatic")
         move = self.run_until_settled()
         self.assertEqual("succeeded", move["status"], move["message"])
-        stored = engine._find(move["id"])
+        stored = STATE._find(move["id"])
         stored["flags"]["resource_cleanup_pending"] = True
-        engine._store(stored)
+        STATE._store(stored)
         return move["id"]
 
     def test_removing_the_original_while_the_engine_tidies_up_is_not_undone(self):
         move_id = self._landed_with_cleanup_pending()
-        real_destination = engine.CLEANUP.destination
+        real_destination = CLEANUP.destination
 
         def destination(*args, **kwargs):
             # "Remove original" lands between the engine's read and its store,
             # within the same second.
-            if not engine._find(move_id)["source_removed"]:
-                engine.finish(move_id)
+            if not STATE._find(move_id)["source_removed"]:
+                ACT.finish(move_id)
             return real_destination(*args, **kwargs)
 
-        with mock.patch.object(engine, "_now", lambda: "2026-10-18T12:00:00Z"), \
-                mock.patch.object(engine.CLEANUP, "destination", destination):
-            engine.tick_all()
+        with mock.patch.object(STATE, "_now", lambda: "2026-10-18T12:00:00Z"), \
+                mock.patch.object(CLEANUP, "destination", destination):
+            PHASE.tick_all()
 
-        move = engine._find(move_id)
+        move = STATE._find(move_id)
         self.assertTrue(move["source_removed"])
         self.assertIn("lives here now", move["message"])
         self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
 
     def test_tidying_up_writes_only_its_own_fields_over_a_newer_record(self):
         move_id = self._landed_with_cleanup_pending()
-        stale = engine._find(move_id)
+        stale = STATE._find(move_id)
         newer = copy.deepcopy(stale)
         newer.update(source_removed=True, message="frigate lives here now; removed on shed")
-        engine._store(newer)
+        STATE._store(newer)
 
-        engine._cleanup_resources(stale)
+        PHASE._cleanup_resources(stale)
 
-        move = engine._find(move_id)
+        move = STATE._find(move_id)
         self.assertTrue(move["source_removed"])
         self.assertEqual("frigate lives here now; removed on shed", move["message"])
         self.assertFalse(move["flags"]["resource_cleanup_pending"], "its own outcome is still recorded")
@@ -1017,14 +1022,14 @@ class EngineTests(unittest.TestCase):
             return real_remote(name, path, body)
 
         with mock.patch.object(client, "remote", remote):
-            with engine._serialized(move_id):
-                worker = threading.Thread(target=engine.finish, args=(move_id,))
+            with STATE._serialized(move_id):
+                worker = threading.Thread(target=ACT.finish, args=(move_id,))
                 worker.start()
                 # Held by the engine's step: finish() must not reach the source.
                 self.assertFalse(asked.wait(0.3))
             worker.join(10)
         self.assertTrue(asked.is_set())
-        self.assertTrue(engine._find(move_id)["source_removed"])
+        self.assertTrue(STATE._find(move_id)["source_removed"])
 
 
 if __name__ == "__main__":
