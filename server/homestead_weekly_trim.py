@@ -18,6 +18,7 @@ import time
 
 import homestead_longhorn as LH
 import homestead_longhorn_jobs as LH_JOBS
+import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_shared as SHARED
 
@@ -208,6 +209,65 @@ def _finish(ref):
     if last["skipped"]:
         message += ". Skipped: " + ", ".join(name(s) for s in last["skipped"])
     return ("failed" if last["failed"] else "succeeded"), 100, message
+
+
+def _as_homestead_left_it(job, state):
+    """Homestead's old trim job, exactly as Homestead last wrote it: its
+    schedule, its groups and its label. Changed in any of these, it is the
+    user's (state["groups"] is None once someone chose its groups)."""
+    spec, labels = job.get("spec") or {}, (job.get("metadata") or {}).get("labels") or {}
+    if labels.get(NAMES.key("managed")) != "true" or spec.get("task") != "filesystem-trim" \
+            or spec.get("cron") != LH_JOBS.TRIM_CRON:
+        return False
+    if "groups" not in state:
+        return True
+    return state["groups"] is not None and sorted(spec.get("groups") or []) == sorted(state["groups"])
+
+
+def _retire(jobs, state):
+    """Once: remove the Longhorn trim job Homestead made, unless someone
+    changed it (theirs, so Homestead's own run stays off) or deleted it
+    (they did not want a trim, so it stays off too). Returns (what changed,
+    whether it was removed)."""
+    ours = next((j for j in jobs if j["metadata"]["name"] == LH_JOBS.TRIM_JOB), None)
+    if ours is not None and _as_homestead_left_it(ours, state):
+        LH_JOBS.delete_job(LH_JOBS.TRIM_JOB)
+        state.update(retired=True, enabled=True)
+        return f"Longhorn trim job {LH_JOBS.TRIM_JOB} removed: Homestead trims attached volumes itself", True
+    if ours is not None:
+        state.update(retired=True, enabled=False)
+        return f"Longhorn trim job {LH_JOBS.TRIM_JOB} was changed, so it is kept as yours; Homestead's own trim is off", False
+    state.update(retired=True, enabled=False if state.get("created") else state.get("enabled", True))
+    return "", False
+
+
+def theirs(jobs):
+    """A trim job of the user's that covers the default group: while one is
+    there Homestead does not trim as well."""
+    return next((j["metadata"]["name"] for j in jobs if (j.get("spec") or {}).get("task") == "filesystem-trim"
+                 and "default" in ((j.get("spec") or {}).get("groups") or [])), "")
+
+
+def tick(now, operations):
+    """On the leader, every ten minutes: retire the old trim job once, then
+    start this week's run when it is due. Returns what changed, or ""."""
+    try:
+        jobs = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs").get("items", [])
+        state = SHARED.read_json(_path(), {})
+    except Exception as error:
+        return f"weekly trim not checked: {str(error)[:160]}"
+    said = []
+    if not state.get("retired"):
+        change, removed = _retire(jobs, state)
+        SHARED.write_json(_path(), state, durable=True)
+        said.append(change)
+        if removed:
+            jobs = [j for j in jobs if j["metadata"]["name"] != LH_JOBS.TRIM_JOB]
+    busy = any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in operations)
+    if due(state, now) and not busy and not theirs(jobs):
+        start("weekly")
+        said.append("weekly trim started")
+    return "; ".join(s for s in said if s)
 
 
 def register(ops):

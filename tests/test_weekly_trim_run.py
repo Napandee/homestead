@@ -19,6 +19,8 @@ import homestead_operations as OPS
 import homestead_weekly_trim as WT
 
 VOLS = f"{LH.API}/namespaces/{LH.LHNS}/volumes"
+JOBS = f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs"
+MANAGED = {"homestead.io/managed": "true"}
 PVS = "/api/v1/persistentvolumes"
 DETACHED = ValueError("Longhorn refused the trim: Action [trimFilesystem] not available on [&{pvc-c volume map[]")
 
@@ -99,7 +101,8 @@ class Cluster:
         return {}
 
 
-class JobTests(unittest.TestCase):
+class StateCase(unittest.TestCase):
+    """A data folder of its own for weekly-trim.json."""
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
@@ -117,6 +120,8 @@ class JobTests(unittest.TestCase):
         with open(os.path.join(self.dir.name, WT.STATE), "w", encoding="utf-8") as handle:
             json.dump(state, handle)
 
+
+class JobTests(StateCase):
     def run_job(self, cluster, ref=None):
         """Step the job to its end, as the job store would; returns the last answer."""
         LH.bind(cluster.get, cluster.send, {}, "longhorn")
@@ -222,6 +227,120 @@ class JobTests(unittest.TestCase):
         with mock.patch.object(WT, "resolve") as resolve:
             ops.RESOLVERS[WT.KIND]({"id": "j1"})
         resolve.assert_called_once_with({"id": "j1"}, ops.checkpoint)
+
+
+def recurring(name, task="filesystem-trim", cron=LH_JOBS.TRIM_CRON, groups=("default", "media"), labels=MANAGED):
+    return {"metadata": {"name": name, "labels": dict(labels)},
+            "spec": {"name": name, "task": task, "cron": cron, "groups": list(groups)}}
+
+
+class Jobs:
+    """Longhorn's RecurringJobs as the API server answers."""
+    def __init__(self, jobs=(), unreadable=False):
+        self.jobs, self.unreadable, self.sent = {j["metadata"]["name"]: j for j in jobs}, unreadable, []
+
+    def get(self, path):
+        if path == JOBS:
+            if self.unreadable:
+                raise OSError("api down")
+            return {"items": list(self.jobs.values())}
+        raise AssertionError(path)
+
+    def send(self, method, path, body=None, **kw):
+        self.sent.append((method, path))
+        if method == "DELETE":
+            self.jobs.pop(path.rsplit("/", 1)[1], None)
+        return {}
+
+
+class TickTests(StateCase):
+    NOW = SAT + 600
+
+    def tick(self, lh, operations=(), now=None):
+        LH.bind(lh.get, lh.send, {}, "longhorn")
+        with mock.patch.object(WT, "start", return_value={"id": "j1"}) as start:
+            said = WT.tick(now or self.NOW, list(operations))
+        return said, start
+
+    def test_an_untouched_homestead_trim_job_is_replaced_by_the_weekly_run(self):
+        self.save({"created": True, "groups": ["default", "media"]})
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB, groups=("media", "default"))])
+        said, start = self.tick(lh)
+        self.assertIn(("DELETE", f"{JOBS}/{LH_JOBS.TRIM_JOB}"), lh.sent)
+        state = self.state()
+        self.assertEqual((True, True), (state["enabled"], state["retired"]))
+        self.assertIn("removed", said)
+        start.assert_called_once_with("weekly")
+
+    def test_one_made_before_groups_were_recorded_is_replaced_too(self):
+        self.save({"created": True})
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
+        self.tick(lh)
+        self.assertIn(("DELETE", f"{JOBS}/{LH_JOBS.TRIM_JOB}"), lh.sent)
+
+    def test_a_trim_job_someone_changed_is_left_theirs(self):
+        for changed in (recurring(LH_JOBS.TRIM_JOB, cron="0 2 * * 0"),
+                        recurring(LH_JOBS.TRIM_JOB, groups=("default",)),
+                        recurring(LH_JOBS.TRIM_JOB, labels={})):
+            with self.subTest(changed=changed):
+                self.save({"created": True, "groups": ["default", "media"]})
+                lh = Jobs([changed])
+                said, start = self.tick(lh)
+                self.assertEqual([], lh.sent)
+                state = self.state()
+                self.assertEqual((False, True), (state["enabled"], state["retired"]))
+                start.assert_not_called()
+        self.save({"created": True, "groups": None})          # someone chose its groups before
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
+        self.tick(lh)
+        self.assertEqual(([], False), (lh.sent, self.state()["enabled"]))
+
+    def test_one_someone_deleted_stays_off(self):
+        self.save({"created": True, "groups": ["default"]})
+        said, start = self.tick(Jobs([]))
+        self.assertEqual((False, True), (self.state()["enabled"], self.state()["retired"]))
+        start.assert_not_called()
+
+    def test_a_new_install_runs_it(self):
+        said, start = self.tick(Jobs([]))
+        self.assertEqual((True, True), (self.state()["enabled"], self.state()["retired"]))
+        start.assert_called_once_with("weekly")
+
+    def test_their_own_trim_of_default_keeps_ours_off(self):
+        lh = Jobs([recurring("weekly-trim", cron="0 3 * * 0", labels={})])
+        said, start = self.tick(lh)
+        start.assert_not_called()
+        self.assertEqual([], lh.sent)
+        # Their trim of other groups only does not.
+        said, start = self.tick(Jobs([recurring("media-trim", groups=("media",), labels={})]))
+        start.assert_called_once_with("weekly")
+
+    def test_due_starts_one_run(self):
+        self.save({"retired": True, "enabled": True, "last": {"slot": SAT - 7 * 86400}})
+        said, start = self.tick(Jobs([]))
+        start.assert_called_once_with("weekly")
+        self.assertEqual("weekly trim started", said)
+        self.save({"retired": True, "enabled": True, "last": {"slot": SAT}})
+        said, start = self.tick(Jobs([]))
+        start.assert_not_called()
+        self.assertEqual("", said)
+
+    def test_only_one_weekly_trim_runs_at_a_time(self):
+        self.save({"retired": True, "enabled": True})
+        for status in ("queued", "running"):
+            said, start = self.tick(Jobs([]), [{"kind": WT.KIND, "status": status}])
+            start.assert_not_called()
+        said, start = self.tick(Jobs([]), [{"kind": WT.KIND, "status": "failed"}])
+        start.assert_called_once_with("weekly")
+
+    def test_nothing_is_done_when_the_jobs_cannot_be_read(self):
+        self.save({"created": True, "groups": ["default"]})
+        lh = Jobs(unreadable=True)
+        said, start = self.tick(lh)
+        self.assertEqual("weekly trim not checked: api down", said)
+        self.assertEqual([], lh.sent)
+        start.assert_not_called()
+        self.assertEqual({"created": True, "groups": ["default"]}, self.state())
 
 
 if __name__ == "__main__":

@@ -40,7 +40,6 @@ import homestead_revert as REVERT
 import homestead_root_guard as ROOT_GUARD
 import homestead_self as SELF
 import homestead_share_servers as SHARE_SERVERS
-import homestead_shared as SHARED
 import homestead_shares as SHARES
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import homestead_snapshot_files as SNAPSHOT_FILES
@@ -305,27 +304,9 @@ def _prune_snapshot(volume, name):
 
 
 def weekly_trim():
-    """Homestead's weekly trim job kept in place (homestead_longhorn), made
-    once: remembered here, so one someone deleted is not made again."""
-    path = os.path.join(DATA_DIR, "weekly-trim.json")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            state = json.load(handle)
-    except (OSError, ValueError):
-        state = {}
-    try:
-        result = LH.ensure_weekly_trim(bool(state.get("created")), state.get("groups"))
-    except Exception as error:
-        return f"weekly trim not checked: {str(error)[:160]}"
-    if result is None:
-        return ""
-    made, change, groups = result
-    # Once someone has chosen its groups (groups is None), the last ones
-    # Homestead wrote stay recorded, so it keeps telling theirs apart.
-    if made or (groups is not None and groups != state.get("groups")):
-        SHARED.write_json(path, {**state, "created": True, "groups": groups,
-                                 "at": state.get("at") or int(time.time())}, durable=True)
-    return change
+    """Homestead's weekly trim of every attached Longhorn volume
+    (homestead_weekly_trim): started here when it is due."""
+    return WEEKLY_TRIM.tick(time.time(), OPS.snapshot())
 
 
 def _storage_pending_loop():
@@ -427,7 +408,7 @@ def _host_fix_loop():
                             print(f"storage: {LH_ACCESS.LOG[access]}", flush=True)
                     except Exception as error:
                         print(f"storage: way in to Longhorn's API not checked: {str(error)[:160]}", flush=True)
-                    # A weekly trim for every Longhorn volume, unless someone removed it.
+                    # A weekly trim of every attached Longhorn volume, unless someone turned it off.
                     trimmed = weekly_trim()
                     if trimmed:
                         print(f"storage: {trimmed}", flush=True)
