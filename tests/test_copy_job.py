@@ -165,11 +165,17 @@ class CopyJobTests(unittest.TestCase):
     def test_releasing_the_hold_carries_the_change_mark(self):
         CH = self.guarded()
         result = self.start(); self.poll(); self.complete(failed=True); self.poll()
-        ops.cancel(result["operation"]["id"], {"ack": True}, "app")
+        ops.cancel(result["operation"]["id"], {"ack": True}, "app", by="ada")
+        CH.REQUEST.user = None   # the jobs loop's thread serves no request
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
         self.poll()  # the jobs loop applies a copy job's cancel (#622)
         self.assertNotIn(flow.MARKER, self.dep["metadata"]["annotations"])
-        self.assertIn(CH.AUTHOR, self.dep["metadata"]["annotations"])
         self.assertEqual(0, self.dep["spec"]["replicas"])
+        mark = json.loads(self.dep["metadata"]["annotations"][CH.AUTHOR])
+        meta = self.dep["metadata"]
+        self.assertEqual(CH._signed(b"copy-mark", meta["namespace"], meta["name"], mark["at"], "ada"), mark["by"],
+                         "the release is credited to whoever cancelled, not to the job")
+        self.assertIsNone(CH.REQUEST.user, "the loop thread is left serving no one")
 
     def test_capacity_changed_during_copy_leaves_app_stopped_and_data_retained(self):
         self.start(); self.poll(); self.complete()
