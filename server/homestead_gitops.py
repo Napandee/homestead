@@ -157,6 +157,14 @@ def document(dep, body):
     return dump({**head, **{key: value for key, value in body.items() if key != "metadata"}})
 
 
+def git_image(item):
+    """An update check's image line for git: the new tag, or - when only what
+    the tag points at moved - the tag pinned to the new digest."""
+    if item.get("candidate") != item.get("deployed") or not item.get("remote_digest"):
+        return item["candidate"]
+    return f"{item['candidate'].split('@', 1)[0]}@{item['remote_digest']}"
+
+
 def image_yaml(dep, images):
     """An image bump to commit: the image: line of each container that
     changes ({container: image}), init containers under their own key."""

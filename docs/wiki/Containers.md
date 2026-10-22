@@ -147,6 +147,21 @@ brings the old one back, so you would have two copies. Rename it in git
 instead. An AI agent renaming such an app has to say the same, with
 `confirm_managed: true`.
 
+#### Copy as YAML for git
+
+The edit review has **YAML for git**: the change as a patch, with only the
+fields it sets, under the app's kind, name and namespace. **Copy as YAML for
+git** puts it on the clipboard; paste it into a kustomize patch, or set the same
+fields in the app's manifest. Containers, environment variables and volumes are
+listed by name, so the patch merges into the ones there; one you removed is
+marked `$patch: delete`. Homestead's own bookkeeping - update history, the
+digests it last ran, restart stamps - is left out; settings you chose, such as
+the group or logo, stay in. Services and volumes are not in it.
+
+On **Image updates**, an app Flux or Argo CD updates has the same button: the
+new `image:` line for each container, pinned to the new digest when only what
+the tag points at moved.
+
 ### Start and scale capacity checks
 
 Before increasing a Deployment's replica count, Homestead reads reservations

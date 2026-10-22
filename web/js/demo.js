@@ -277,6 +277,13 @@
   // Flux applies paperless from git (#734): its edit, move and rename reviews say so.
   const demoGitops = body => body.ns === "lab" && body.name === "paperless"
     ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {};
+  // The edit as YAML for git (#735): the demo shows the containers' image and memory as sent.
+  const demoEditYaml = body => body.workload_name && body.workload_name !== body.name ? "" : [
+    "apiVersion: apps/v1", "kind: Deployment", "metadata:", `  name: ${body.name}`, `  namespace: ${body.ns || "lab"}`,
+    "spec:", "  template:", "    spec:", "      containers:",
+    ...(body.containers || []).flatMap(c => [`      - name: ${c.name || c.original_name}`,
+      ...(c.image ? [`        image: ${c.image}`] : []),
+      ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
@@ -2624,7 +2631,7 @@ ssh_pwauth: true
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const rename = body.workload_name && body.workload_name !== body.name;
-      return { capacity_token: "demo-review", managed: demoGitops(body), capacity: {
+      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
       candidates: [
         { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,
@@ -2719,6 +2726,7 @@ ssh_pwauth: true
       // Deployed by Flux from git: its update is a notice, made in git (#296).
       { ns: "monitoring", name: "loki", available: true, can_rollback: false,
         managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
+        yaml: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: loki\n  namespace: monitoring\nspec:\n  template:\n    spec:\n      containers:\n      - name: loki\n        image: grafana/loki:3.5.0",
         images: [{ container: "loki", deployed: "grafana/loki:3.4.2", candidate: "grafana/loki:3.5.0", candidate_tag: "3.5.0", remote_digest: "sha256:aaa", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },

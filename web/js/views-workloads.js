@@ -224,6 +224,7 @@ window.imageUpdateCenter = async () => {
         ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
         ${owner && !owner.detected ? `<button class="btn sm" data-need="operator" onclick="clearUpdatesElsewhere(${jsq(w.ns)},${jsq(w.name)})">Update here</button>`
           : !owner && w.available ? `<button class="btn sm" data-need="operator" onclick="markUpdatesElsewhere(${jsq(w.ns)},${jsq(w.name)})">Updated elsewhere…</button>` : ""}
+        ${owner && w.yaml ? gitopsCopyButton(w.yaml) : ""}
         <button class="btn sm" onclick="openUpdateWorkload(${jsq(w.name)})">Open</button></div></div>`;
     }).join("")}</div>`).join("") : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
     ${UI.actions(available.length ? UI.button(`Review selected (${available.length})`, "imageUpdateBatchReview()", {kind:"pri",id:"updateStage",attrs:'data-need="operator"'}) : "", UI.cancel("Close") + UI.button("Check now", "checkImageUpdates()"))}</div>`, true);

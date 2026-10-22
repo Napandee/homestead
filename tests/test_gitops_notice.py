@@ -66,6 +66,25 @@ class ReviewsSayWhoAppliesTheApp(unittest.TestCase):
         self.current = deployment(annotations={"homestead.io/updates-managed": "Renovate"})
         self.assertEqual({"by": "Renovate", "source": "", "detected": False}, self.edit_review()["managed"])
 
+    def test_edit_review_offers_the_patch(self):
+        """#735: the edit as YAML for git - only what changed."""
+        proposed = copy.deepcopy(self.current)
+        proposed["spec"]["template"]["spec"]["containers"][0]["image"] = "example/web:2"
+        plan = {"blocked": False, "warnings": [], "requires_confirmation": True}
+        with mock.patch.object(W, "edit_capacity_plan", return_value=({"deployment": proposed}, {}, plan)):
+            reply = W.preview_edit(Request({"ns": "lab", "name": "web"}))
+        self.assertEqual("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: lab\n"
+                         "spec:\n  template:\n    spec:\n      containers:\n      - name: main\n        image: example/web:2",
+                         reply["yaml"])
+
+    def test_a_review_that_changes_nothing_to_commit_has_no_yaml(self):
+        self.assertEqual("", self.edit_review()["yaml"])
+
+    def test_rename_review_has_no_yaml(self):
+        plan = {"blocked": False, "warnings": [], "rename": {"from": "web", "to": "web2"}}
+        with mock.patch.object(W, "edit_capacity_plan", return_value=({"deployment": self.current}, {"action": RENAME.KIND}, plan)):
+            self.assertEqual("", W.preview_edit(Request({"ns": "lab", "name": "web", "workload_name": "web2"}))["yaml"])
+
     def test_every_spec_review_returns_managed(self):
         """Guard: every review in the apps module is listed in GITOPS.REVIEWS
         and carries managed. A new review that writes a Deployment's spec

@@ -178,8 +178,11 @@ def preview_edit(request):
     b = request.body
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
     prepared, context, plan = edit_capacity_plan(b)
+    current = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
+    # The edit as YAML for git (#735); a rename is made in git as a rename.
+    change = {} if context.get("action") == RENAME.KIND else GITOPS.patch(current, prepared["deployment"])
     return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
-            "managed": GITOPS.notice(kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}"))}
+            "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else ""}
 
 
 def edit(request):
