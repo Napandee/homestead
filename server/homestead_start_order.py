@@ -639,6 +639,23 @@ def pod_wait(dep, pods, deployments):
     return None
 
 
+def waiting_in_gate(dep, get):
+    """(the apps it waits for, the gate's timeout in seconds) while a pod of
+    dep is in its start gate, else None: a rollout that is waiting there is
+    waiting, not broken (the auto-update job reads this)."""
+    import urllib.parse
+    setting = _setting_of(dep)
+    labels = ((dep.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+    if not setting or not labels:
+        return None
+    ns = _ref(dep)[0]
+    selector = urllib.parse.quote(",".join(f"{k}={v}" for k, v in sorted(labels.items())))
+    pods = get(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}").get("items", []) or []
+    if not any(((_gate_status(p) or {}).get("state") or {}).get("running") for p in pods):
+        return None
+    return [a["app"] for a in setting["after"]], setting["timeout"]
+
+
 def row_fields(dep, pods, deployments):
     """What the Apps list shows of it: the apps it starts after, its gate,
     whether a pod is waiting, and the setting the alerts read."""
