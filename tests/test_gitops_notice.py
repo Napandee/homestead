@@ -77,6 +77,35 @@ class ReviewsSayWhoAppliesTheApp(unittest.TestCase):
                          "spec:\n  template:\n    spec:\n      containers:\n      - name: main\n        image: example/web:2",
                          reply["yaml"])
 
+    def test_the_patch_never_carries_a_secret_value(self):
+        """Security: values the save keeps in the app's own Secret - masked
+        fields, secret-looking names, and ones already there - appear in the
+        YAML only as secretKeyRef, never as a value in any encoding."""
+        import base64
+        import urllib.parse
+        secrets = {"DB_PASSWORD": "hunter2-old-pass", "WEBHOOK": "s3cr3t-hook-value", "API_TOKEN": "tok-123-new-value",
+                   "KEPT": "kept-in-secret-value"}
+        self.current["metadata"]["annotations"]["homestead.io/env-secret"] = "web-env"
+        self.current["spec"]["template"]["spec"]["containers"][0]["env"] = [
+            {"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "web-env", "key": "main.DB_PASSWORD"}}},
+            {"name": "KEPT", "valueFrom": {"secretKeyRef": {"name": "web-env", "key": "main.KEPT"}}},
+            {"name": "TZ", "value": "UTC"}]
+        proposed = copy.deepcopy(self.current)
+        # What prepare_edit hands over: the form's values as plain literals.
+        proposed["spec"]["template"]["spec"]["containers"][0]["env"] = [
+            {"name": name, "value": value} for name, value in {**secrets, "TZ": "Europe/Example"}.items()]
+        plan = {"blocked": False, "warnings": [], "requires_confirmation": True}
+        with mock.patch.object(W, "edit_capacity_plan", return_value=({"deployment": proposed}, {}, plan)):
+            reply = W.preview_edit(Request({"ns": "lab", "name": "web", "masked_env": ["WEBHOOK"]}))
+        text = reply["yaml"]
+        for value in secrets.values():
+            for form in (value, base64.b64encode(value.encode()).decode(), urllib.parse.quote(value),
+                         base64.b64encode(value.encode()).decode().rstrip("=")):
+                self.assertNotIn(form, text)
+        self.assertIn("secretKeyRef", text)
+        self.assertIn("key: main.WEBHOOK", text)
+        self.assertIn("Europe/Example", text)
+
     def test_a_review_that_changes_nothing_to_commit_has_no_yaml(self):
         self.assertEqual("", self.edit_review()["yaml"])
 

@@ -180,7 +180,10 @@ def preview_edit(request):
     prepared, context, plan = edit_capacity_plan(b)
     current = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
     # The edit as YAML for git (#735); a rename is made in git as a rename.
-    change = {} if context.get("action") == RENAME.KIND else GITOPS.patch(current, prepared["deployment"])
+    # Secret-looking and masked values go to the app's own Secret when saved,
+    # and the patch shows them that way: never a secret value in YAML for git.
+    change = {} if context.get("action") == RENAME.KIND else GITOPS.patch(
+        current, ENVSEC.as_saved(copy.deepcopy(prepared["deployment"]), current, b.get("masked_env")))
     return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
             "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else ""}
 

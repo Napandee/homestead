@@ -42,11 +42,9 @@ def _refs(dep, name):
             if ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == name}
 
 
-def externalize(ns, dep, read, send, masked=()):
-    """Move secret-looking literal values into the workload's Secret, writing
-    the Secret first. Changes dep in place and returns it; a Deployment with
-    nothing secret-looking, and no Secret yet, is left exactly as it was."""
-    name = secret_name(dep)
+def _move(dep, name, masked):
+    """Turn each secret-looking literal into a reference to Secret name, in
+    place; {key: base64 value} of what moved."""
     moved = {}
     for container in _containers(dep):
         for item in container.get("env") or []:
@@ -57,6 +55,31 @@ def externalize(ns, dep, read, send, masked=()):
             moved[key] = base64.b64encode(str(value).encode()).decode()
             item.pop("value")
             item["valueFrom"] = {"secretKeyRef": {"name": name, "key": key}}
+    return moved
+
+
+def kept(dep):
+    """Names of the variables the workload keeps in its own Secret now."""
+    name = own(dep)
+    return {item.get("name") for container in _containers(dep) for item in container.get("env") or []
+            if name and ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == name}
+
+
+def as_saved(dep, current, masked=()):
+    """dep as a save would write it, with nothing written: every variable
+    the save would keep in the Secret - and every one the Secret holds now,
+    which editing shows as a plain value - becomes its secretKeyRef. For
+    showing a change (the YAML for git, #735) without its secret values."""
+    _move(dep, secret_name(current), set(masked or ()) | kept(current))
+    return dep
+
+
+def externalize(ns, dep, read, send, masked=()):
+    """Move secret-looking literal values into the workload's Secret, writing
+    the Secret first. Changes dep in place and returns it; a Deployment with
+    nothing secret-looking, and no Secret yet, is left exactly as it was."""
+    name = secret_name(dep)
+    moved = _move(dep, name, masked)
     if not moved and not own(dep):
         return dep  # nothing secret here, and no Secret of its own to tidy
     path = f"/api/v1/namespaces/{ns}/secrets/{name}"

@@ -158,6 +158,10 @@ marked `$patch: delete`. Homestead's own bookkeeping - update history, the
 digests it last ran, restart stamps - is left out; settings you chose, such as
 the group or logo, stay in. Services and volumes are not in it.
 
+A variable Homestead keeps in the app's own Secret - a masked field, a name
+that looks like a password or token, or one already there - is in the YAML
+as its `secretKeyRef`, never as its value; the Secret itself stays out of git.
+
 On **Image updates**, an app Flux or Argo CD updates has the same button: the
 new `image:` line for each container, pinned to the new digest when only what
 the tag points at moved.
