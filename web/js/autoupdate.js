@@ -15,7 +15,7 @@ function maintenanceWords(policy) {
 }
 
 const autoUpdateTag = w => w.update_mode === "auto"
-  ? `<span class="tag info" data-tip="Updates itself in the maintenance window: a newer build of the same tag, snapshotted first, rolled back if it stops answering">Auto</span>` : "";
+  ? UI.chip("Auto", "info", { tip: "Updates itself in the maintenance window: a newer build of the same tag, snapshotted first, rolled back if it stops answering" }) : "";
 
 function lastAutoUpdate(w) {
   const ops = (STATE.data.operations || []).filter(o => o.kind === "auto-update" && o.auto_update?.namespace === w.ns && o.auto_update?.name === w.name);

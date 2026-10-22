@@ -146,7 +146,7 @@ const SETUP_STEPS = {
       "Review the reported issues before continuing with setup.",
     body: s => s.done ? "" : `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Resource</th><th>Severity</th><th>Details</th></tr></thead><tbody>
       ${(s.issues || []).map(i => `<tr><td><b>${esc(i.name || i.kind)}</b><div class="dim xs">${esc(i.kind)}</div></td>
-        <td data-label="Severity"><span class="pill ${i.severity === "critical" ? "crit" : "med"}">${esc(i.severity)}</span></td>
+        <td data-label="Severity">${UI.chip(i.severity, i.severity === "critical" ? "bad" : "warn")}</td>
         <td data-label="Details" class="small">${esc(i.reason)}</td></tr>`).join("")}</tbody></table></div>`,
     actions: () => [{ label: "Open the cluster check", run: "go('cluster')", pri: true }],
     more: "<p>The Cluster page shows these checks in detail. Reported issues also appear in notifications.</p>",
@@ -227,7 +227,7 @@ const SETUP_STEPS = {
     title: "Disks for Longhorn", lead: s => s.done ? "No unused non-system disks are reported in the inventory."
       : `${(s.unused || []).length} unused non-system disk${(s.unused || []).length === 1 ? " is" : "s are"} reported. Review each disk before assigning it to Longhorn. Disk tags let storage classes select HDD, SSD or NVMe storage.`,
     body: s => (s.unused || []).length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Disk</th><th>Host</th><th>Size</th><th></th></tr></thead><tbody>
-      ${s.unused.map(d => `<tr><td><b class="mono">${esc(d.device)}</b> ${d.kind ? `<span class="tag">${esc(d.kind)}</span>` : ""}</td><td data-label="Node">${esc(d.node)}</td>
+      ${s.unused.map(d => `<tr><td><b class="mono">${esc(d.device)}</b> ${d.kind ? UI.chip(d.kind, "neutral") : ""}</td><td data-label="Node">${esc(d.node)}</td>
         <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GiB</td>
         <td data-actions>${actionBar([{ label: "Set up", run: `nodeDetail(${jsq(d.node)});setTimeout(() => window.nodeSectionGo && nodeSectionGo('storage'), 900)`, need: "admin" }])}</td></tr>`).join("")}</tbody></table></div>` : "",
     actions: () => [],

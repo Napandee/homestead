@@ -89,7 +89,7 @@ window.resOpen = async (ns, name, reveal = false) => {
   api(`/api/resources/events?${new URLSearchParams({ ns, name, uid })}`).then(events => {
     const host = $("#res_events");
     if (host) host.innerHTML = events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>
-      ${events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
+      ${events.map(e => `<tr><td>${UI.chip(e.type, e.type === "Warning" ? "warn" : "neutral", { size: "slim" })}</td><td class="small">${esc(e.reason)}</td>
         <td class="small">${esc(e.message)}</td><td class="mono">${e.count}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>`
       : "No recent events.";
   }, e => { const host = $("#res_events"); if (host) host.innerHTML = UI.callout("warn", "Could not read the events", esc(e.message)); });
