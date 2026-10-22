@@ -1067,13 +1067,13 @@ async function loadPreviousVolumes() {
   const choices = KEEP_CHOICES.includes(d.keep_days) ? KEEP_CHOICES : [...KEEP_CHOICES, d.keep_days].sort((a, b) => a - b);
   const choice = `<label class="small" data-need="admin">Keep for <select id="pv_days" onchange="previousKeepDays(this.value)">${choices.map(n =>
     `<option value="${n}" ${n === d.keep_days ? "selected" : ""}>${n ? `${n} days` : "until deleted"}</option>`).join("")}</select></label>`;
-  const when = v => v.kept ? '<span class="pill info">kept</span>'
-    : v.expires_at ? `<span class="pill ${v.reminded_at ? "med" : ""}">deleted ${esc(fmtAt(v.expires_at))}</span>` : '<span class="dim xs">kept until deleted</span>';
+  const when = v => v.kept ? UI.chip("kept", "info")
+    : v.expires_at ? UI.chip(`deleted ${fmtAt(v.expires_at)}`, v.reminded_at ? "warn" : "") : '<span class="dim xs">kept until deleted</span>';
   const why = { "restored": "replaced by a restore", "not-started": "the app did not start on it", "not-used": "restore not used", "swapped-back": "left by a swap back" };
   const row = v => `<tr><td><b class="mono small">${esc(v.name)}</b><div class="dim xs">${esc(v.namespace)} · ${esc(v.size)}</div></td>
       <td data-label="App">${esc(v.app)}<div class="dim xs">runs on ${esc(v.replaced_by)}</div></td>
       <td data-label="Why" class="small">${esc(why[v.reason] || v.reason)}<div class="dim xs">${esc(fmtAt(v.replaced_at))}</div></td>
-      <td data-label="Goes">${when(v)}${v.in_use ? ' <span class="pill info">in use</span>' : ""}</td>
+      <td data-label="Goes">${when(v)}${v.in_use ? " " + UI.chip("in use", "info") : ""}</td>
       <td data-actions>${actionBar([
         v.can_swap_back && !v.in_use ? { label: "Swap back", icon: "rollback", run: `previousSwapBack(${jsq(v.namespace)},${jsq(v.name)})`, need: "admin" } : null,
         v.kept ? { label: "Let it expire", run: `previousKeep(${jsq(v.namespace)},${jsq(v.name)},false)`, need: "admin" }
