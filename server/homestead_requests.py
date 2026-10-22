@@ -25,6 +25,7 @@ import json
 import time
 import urllib.error
 
+import homestead_gitops as GITOPS
 import homestead_place as PLACE
 import homestead_pod_resources as RESOURCES
 import homestead_priority as PRIORITY
@@ -77,15 +78,9 @@ def _resources(container):
 
 def _yaml(dep, changes):
     """The change as a patch to commit where Flux or Argo CD reads the app
-    from - a kustomize patch, or the same fields in the Deployment itself.
-    Containers are named, so it merges into the ones there."""
-    meta = dep.get("metadata") or {}
-    lines = ["apiVersion: apps/v1", "kind: Deployment", "metadata:", f"  name: {meta.get('name', '')}",
-             f"  namespace: {meta.get('namespace', '')}", "spec:", "  template:", "    spec:", "      containers:"]
-    for c in changes:
-        lines += [f"      - name: {c['container']}", "        resources:", "          requests:",
-                  f"            cpu: {c['cpu']}", f"            memory: {c['memory']}"]
-    return "\n".join(lines)
+    from. Containers are named, so it merges into the ones there."""
+    return GITOPS.document(dep, {"spec": {"template": {"spec": {"containers": [
+        {"name": c["container"], "resources": {"requests": {"cpu": c["cpu"], "memory": c["memory"]}}} for c in changes]}}}})
 
 
 def _changes(dep):
