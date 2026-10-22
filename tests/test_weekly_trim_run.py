@@ -51,8 +51,8 @@ class PlanTests(unittest.TestCase):
         vols = [vol("pvc-c", "attached"), vol("pvc-b", "detached"), vol("pvc-a", "attached"), vol("pvc-d", "attaching")]
         got = WT.plan(vols, {"pvc-a": "Filesystem", "pvc-c": "Block"})
         self.assertEqual(["pvc-a"], got["trim"])
-        self.assertEqual([("pvc-b", "data-pvc-b", "detached"), ("pvc-c", "data-pvc-c", "no filesystem (VM disk)"),
-                          ("pvc-d", "data-pvc-d", "attaching")],
+        self.assertEqual([("pvc-b", "apps/data-pvc-b", "detached"), ("pvc-c", "apps/data-pvc-c", "no filesystem (VM disk)"),
+                          ("pvc-d", "apps/data-pvc-d", "attaching")],
                          [(s["volume"], s["pvc"], s["why"]) for s in got["skipped"]])
 
     def test_a_volume_with_no_claim_counts_as_a_filesystem(self):
@@ -71,6 +71,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(("failed", "Longhorn refused the trim: no space left"),
                          WT.classify(ValueError("Longhorn refused the trim: no space left")))
         self.assertEqual(300, len(WT.classify(ValueError("x" * 400))[1]))
+
+    def test_a_volume_deleted_mid_run_is_skipped(self):
+        try:
+            try:
+                raise urllib.error.HTTPError("/volumes/pvc-x", 404, "Not Found", {}, None)
+            except urllib.error.HTTPError as error:
+                raise ValueError("Longhorn refused the trim: not found") from error
+        except ValueError as wrapped:
+            self.assertEqual(("skipped", "deleted"), WT.classify(wrapped))
 
 
 class Cluster:
@@ -135,43 +144,43 @@ class JobTests(StateCase):
 
     def test_a_run_trims_attached_skips_detached_and_says_so(self):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-b", "detached"), vol("pvc-c", "attached")])
-        self.assertEqual(("succeeded", 100, "Trimmed 2 volumes, skipped 1 (1 detached). Skipped: data-pvc-b"),
+        self.assertEqual(("succeeded", 100, "Trimmed 2 volumes, skipped 1 (1 detached). Skipped: apps/data-pvc-b"),
                          self.run_job(lh))
         self.assertEqual([("POST", "/volumes/pvc-a?action=trimFilesystem", {}),
                           ("POST", "/volumes/pvc-c?action=trimFilesystem", {})], lh.trimmed)
         last = self.state()["last"]
         self.assertEqual((SAT, ["pvc-a", "pvc-c"], [], []), (last["slot"], last["trimmed"], last["failed"], last["unconfirmed"]))
-        self.assertEqual([{"volume": "pvc-b", "pvc": "data-pvc-b", "why": "detached"}], last["skipped"])
+        self.assertEqual([{"volume": "pvc-b", "pvc": "apps/data-pvc-b", "why": "detached"}], last["skipped"])
         self.assertTrue(self.checkpoints, "each step is checkpointed")
 
     def test_a_volume_that_detaches_mid_run_counts_as_skipped(self):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-c", "attached")], answers={"pvc-c": DETACHED})
         status, _, message = self.run_job(lh)
         self.assertEqual("succeeded", status)
-        self.assertEqual("Trimmed 1 volume, skipped 1 (1 detached). Skipped: data-pvc-c", message)
-        self.assertEqual([{"volume": "pvc-c", "pvc": "data-pvc-c", "why": "detached"}], self.state()["last"]["skipped"])
+        self.assertEqual("Trimmed 1 volume, skipped 1 (1 detached). Skipped: apps/data-pvc-c", message)
+        self.assertEqual([{"volume": "pvc-c", "pvc": "apps/data-pvc-c", "why": "detached"}], self.state()["last"]["skipped"])
 
     def test_a_failure_on_an_attached_volume_fails_the_run_and_names_it(self):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-b", "detached"), vol("pvc-c", "attached")],
                      answers={"pvc-c": ValueError("Longhorn refused the trim: engine is not running")})
         status, _, message = self.run_job(lh)
         self.assertEqual("failed", status)
-        self.assertEqual("Trimmed 1 volume, skipped 1 (1 detached). Failed: data-pvc-c: Longhorn refused the trim: "
-                         "engine is not running. Skipped: data-pvc-b", message)
+        self.assertEqual("Trimmed 1 volume, skipped 1 (1 detached). Failed: apps/data-pvc-c: Longhorn refused the trim: "
+                         "engine is not running. Skipped: apps/data-pvc-b", message)
         failed = self.state()["last"]["failed"]
-        self.assertEqual([("pvc-c", "data-pvc-c", "Longhorn refused the trim: engine is not running")],
+        self.assertEqual([("pvc-c", "apps/data-pvc-c", "Longhorn refused the trim: engine is not running")],
                          [(f["volume"], f["pvc"], f["message"]) for f in failed])
 
     def test_block_volumes_are_skipped_not_failed(self):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-v", "attached")], modes={"pvc-a": "Filesystem", "pvc-v": "Block"})
-        self.assertEqual(("succeeded", 100, "Trimmed 1 volume, skipped 1 (1 VM disk). Skipped: data-pvc-v"), self.run_job(lh))
+        self.assertEqual(("succeeded", 100, "Trimmed 1 volume, skipped 1 (1 VM disk). Skipped: apps/data-pvc-v"), self.run_job(lh))
         self.assertEqual(["/volumes/pvc-a?action=trimFilesystem"], [path for _, path, _ in lh.trimmed])
 
     def test_a_timeout_is_unconfirmed_not_failed(self):
         lh = Cluster([vol("pvc-a", "attached")], answers={"pvc-a": urllib.error.URLError(socket.timeout("timed out"))})
         status, _, message = self.run_job(lh)
         self.assertEqual("succeeded", status)
-        self.assertEqual("Trimmed 0 volumes, skipped 0. Not confirmed: data-pvc-a (Longhorn did not answer within 60 s)",
+        self.assertEqual("Trimmed 0 volumes, skipped 0. Not confirmed: apps/data-pvc-a (Longhorn did not answer within 60 s)",
                          message)
         self.assertEqual(["pvc-a"], [u["volume"] for u in self.state()["last"]["unconfirmed"]])
 
@@ -190,7 +199,7 @@ class JobTests(StateCase):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-c", "attached")])
         ref = {"phase": "trim", "why": "weekly", "slot": SAT, "todo": ["pvc-c"],
                "done": [{"volume": "pvc-a", "outcome": "trimmed", "why": ""}],
-               "skipped": [], "pvcs": {"pvc-a": "data-pvc-a", "pvc-c": "data-pvc-c"}}
+               "skipped": [], "pvcs": {"pvc-a": "apps/data-pvc-a", "pvc-c": "apps/data-pvc-c"}}
         self.assertEqual(("succeeded", 100, "Trimmed 2 volumes, skipped 0"), self.run_job(lh, ref))
         self.assertEqual(["/volumes/pvc-c?action=trimFilesystem"], [path for _, path, _ in lh.trimmed])
 
@@ -208,7 +217,7 @@ class JobTests(StateCase):
             first = WT.resolve(item, lambda i: None)
             second = WT.resolve(item, lambda i: None)
         self.assertEqual("running", first[0])
-        self.assertEqual(("running", "Trimmed data-pvc-a (1 of 2)"), (second[0], second[2]))
+        self.assertEqual(("running", "Trimmed apps/data-pvc-a (1 of 2)"), (second[0], second[2]))
 
     def test_start_is_one_job_at_a_time_and_records_the_try(self):
         with mock.patch.object(OPS, "start", return_value={"id": "j1"}) as start, \
@@ -270,7 +279,8 @@ class TickTests(StateCase):
         state = self.state()
         self.assertEqual((True, True), (state["enabled"], state["retired"]))
         self.assertIn("removed", said)
-        start.assert_called_once_with("weekly")
+        start.assert_not_called()       # the first run is the next Saturday's
+        self.assertEqual(SAT, state["tried"])
 
     def test_one_made_before_groups_were_recorded_is_replaced_too(self):
         self.save({"created": True})
@@ -301,10 +311,48 @@ class TickTests(StateCase):
         self.assertEqual((False, True), (self.state()["enabled"], self.state()["retired"]))
         start.assert_not_called()
 
-    def test_a_new_install_runs_it(self):
-        said, start = self.tick(Jobs([]))
+    def test_a_new_install_runs_it_from_the_next_saturday(self):
+        wednesday = SAT + 4 * 86400
+        said, start = self.tick(Jobs([]), now=wednesday)
         self.assertEqual((True, True), (self.state()["enabled"], self.state()["retired"]))
+        start.assert_not_called()       # no trim of every volume on the day of an update
+        said, start = self.tick(Jobs([]), now=SAT + WT.WEEK + 60)
         start.assert_called_once_with("weekly")
+
+    def test_a_crash_after_the_delete_still_counts_it_as_removed(self):
+        self.save({"created": True, "groups": ["default", "media"]})
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
+        def lost(method, path, body=None, **kw):     # Longhorn deleted it; the answer never came back
+            lh.jobs.pop(LH_JOBS.TRIM_JOB, None)
+            raise TimeoutError("timed out")
+        lh.send = lost
+        said, start = self.tick(lh)
+        self.assertTrue(said.startswith("weekly trim not checked"), said)
+        said, start = self.tick(Jobs([]))
+        state = self.state()
+        self.assertEqual((True, True), (state["enabled"], state["retired"]))
+
+    def test_a_job_already_gone_when_deleted_counts_as_removed(self):
+        self.save({"created": True, "groups": ["default", "media"]})
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
+        def gone(method, path, body=None, **kw):
+            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+        lh.send = gone
+        said, start = self.tick(lh)
+        self.assertEqual((True, True), (self.state()["enabled"], self.state()["retired"]))
+
+    def test_an_error_while_acting_is_reported_not_raised(self):
+        self.save({"created": True, "groups": ["default", "media"]})
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
+        def refused(method, path, body=None, **kw):
+            raise urllib.error.HTTPError(path, 403, "forbidden", {}, None)
+        lh.send = refused
+        said, start = self.tick(lh)
+        self.assertTrue(said.startswith("weekly trim not checked: "), said)
+        self.save({"retired": True, "enabled": True})
+        LH.bind(Jobs([]).get, Jobs([]).send, {}, "longhorn")
+        with mock.patch.object(WT, "start", side_effect=ValueError("Weekly trim is running")):
+            self.assertEqual("weekly trim not checked: Weekly trim is running", WT.tick(self.NOW, []))
 
     def test_their_own_trim_of_default_keeps_ours_off(self):
         lh = Jobs([recurring("weekly-trim", cron="0 3 * * 0", labels={})])
@@ -312,7 +360,7 @@ class TickTests(StateCase):
         start.assert_not_called()
         self.assertEqual([], lh.sent)
         # Their trim of other groups only does not.
-        said, start = self.tick(Jobs([recurring("media-trim", groups=("media",), labels={})]))
+        said, start = self.tick(Jobs([recurring("media-trim", groups=("media",), labels={})]), now=SAT + WT.WEEK + 60)
         start.assert_called_once_with("weekly")
 
     def test_due_starts_one_run(self):
@@ -343,6 +391,13 @@ class TickTests(StateCase):
         self.assertEqual({"created": True, "groups": ["default"]}, self.state())
 
 
+class LockTests(unittest.TestCase):
+    def test_a_trim_step_runs_outside_the_job_stores_lock(self):
+        # A step waits up to 60 s for Longhorn; under the store's lock every
+        # start, cancel and save would wait with it.
+        self.assertIn(WT.KIND, OPS.OUTSIDE_LOCK)
+
+
 class RouteTests(StateCase):
     def view(self, operations=(), jobs=()):
         lh = Jobs(jobs)
@@ -353,7 +408,7 @@ class RouteTests(StateCase):
 
     def test_view_reports_the_last_result_and_the_next_slot(self):
         last = {"slot": SAT, "at": SAT + 120, "trimmed": ["pvc-a", "pvc-c"], "unconfirmed": [], "failed": [],
-                "skipped": [{"volume": "pvc-b", "pvc": "data-pvc-b", "why": "detached"}]}
+                "skipped": [{"volume": "pvc-b", "pvc": "apps/data-pvc-b", "why": "detached"}]}
         self.save({"enabled": True, "retired": True, "last": last})
         self.assertEqual({"enabled": True, "next": "2026-10-31T04:00:00Z", "last": last, "running": False, "theirs": ""},
                          self.view())

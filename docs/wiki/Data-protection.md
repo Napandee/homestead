@@ -155,8 +155,10 @@ job tray.
 Earlier releases made a Longhorn recurring job, **homestead-weekly-trim**,
 for this. Homestead removes it once, if it is as Homestead left it. If you
 changed its schedule or groups, it is yours: it stays, and Homestead's own
-weekly trim is off. If you had deleted it, Homestead's weekly trim starts
-off; turn it on under Housekeeping.
+weekly trim is off; to use Homestead's instead, delete that job and turn the
+weekly trim on under Housekeeping. If you had deleted it, Homestead's weekly
+trim starts off; turn it on there. After the update, Homestead's first run is
+the next Saturday's.
 
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster

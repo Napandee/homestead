@@ -15,6 +15,7 @@ skipped and named. The result is kept in DATA_DIR/weekly-trim.json under
 import os
 import socket
 import time
+import urllib.error
 
 import homestead_longhorn as LH
 import homestead_longhorn_jobs as LH_JOBS
@@ -51,9 +52,15 @@ def due(state, now):
     return (state.get("last") or {}).get("slot") != slot and state.get("tried") != slot
 
 
-def _row(volume, why):
+def _claim(volume):
+    """The volume's claim as people know it, namespace/name; "" without one."""
     k8s = (volume.get("status") or {}).get("kubernetesStatus") or {}
-    return {"volume": volume["metadata"]["name"], "pvc": k8s.get("pvcName") or "", "why": why}
+    pvc = k8s.get("pvcName") or ""
+    return f"{k8s['namespace']}/{pvc}" if pvc and k8s.get("namespace") else pvc
+
+
+def _row(volume, why):
+    return {"volume": volume["metadata"]["name"], "pvc": _claim(volume), "why": why}
 
 
 def plan(volumes, pvs):
@@ -85,6 +92,9 @@ def classify(error):
     no answer within the backend call's 60 s is not confirmed, not failed."""
     if error is None:
         return "trimmed", ""
+    cause = error if isinstance(error, urllib.error.HTTPError) else error.__cause__
+    if isinstance(cause, urllib.error.HTTPError) and cause.code == 404:
+        return "skipped", "deleted"             # removed since the run read the list
     message = str(error)
     if DETACHED_ANSWER in message:
         return "skipped", "detached"
@@ -153,8 +163,7 @@ def resolve(item, checkpoint):
         except Exception as error:
             return "failed", 0, f"Longhorn's volumes could not be read: {str(error)[:200]}"
         chosen = plan(volumes, modes)
-        pvcs = {v["metadata"]["name"]: ((v.get("status") or {}).get("kubernetesStatus") or {}).get("pvcName") or ""
-                for v in volumes}
+        pvcs = {v["metadata"]["name"]: _claim(v) for v in volumes}
         ref.update(phase="trim", todo=chosen["trim"], done=[], skipped=chosen["skipped"],
                    pvcs={name: pvc for name, pvc in pvcs.items() if pvc})
         checkpoint(item)
@@ -230,10 +239,21 @@ def _retire(jobs, state):
     (they did not want a trim, so it stays off too). Returns (what changed,
     whether it was removed)."""
     ours = next((j for j in jobs if j["metadata"]["name"] == LH_JOBS.TRIM_JOB), None)
+    removed = f"Longhorn trim job {LH_JOBS.TRIM_JOB} removed: Homestead trims attached volumes itself"
+    if ours is None and state.get("retiring"):
+        state.update(retired=True, enabled=True)    # deleted by an earlier check that did not finish
+        return removed, True
     if ours is not None and _as_homestead_left_it(ours, state):
-        LH_JOBS.delete_job(LH_JOBS.TRIM_JOB)
+        # Said before the delete: if Homestead stops before it is saved, the
+        # job missing next time is still ours to have removed, not theirs.
+        _update(lambda saved: saved.update(retiring=True))
+        try:
+            LH_JOBS.delete_job(LH_JOBS.TRIM_JOB)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
         state.update(retired=True, enabled=True)
-        return f"Longhorn trim job {LH_JOBS.TRIM_JOB} removed: Homestead trims attached volumes itself", True
+        return removed, True
     if ours is not None:
         state.update(retired=True, enabled=False)
         return f"Longhorn trim job {LH_JOBS.TRIM_JOB} was changed, so it is kept as yours; Homestead's own trim is off", False
@@ -257,16 +277,23 @@ def tick(now, operations):
     except Exception as error:
         return f"weekly trim not checked: {str(error)[:160]}"
     said = []
-    if not state.get("retired"):
-        change, removed = _retire(jobs, state)
-        SHARED.write_json(_path(), state, durable=True)
-        said.append(change)
-        if removed:
-            jobs = [j for j in jobs if j["metadata"]["name"] != LH_JOBS.TRIM_JOB]
-    busy = any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in operations)
-    if due(state, now) and not busy and not theirs(jobs):
-        start("weekly")
-        said.append("weekly trim started")
+    # Nothing here may stop the rest of the leader's ten-minute checks.
+    try:
+        if not state.get("retired"):
+            change, removed = _retire(jobs, state)
+            state.pop("retiring", None)
+            # The first run is the next Saturday's, not one on the day of the update.
+            state.setdefault("tried", last_slot(now))
+            SHARED.write_json(_path(), state, durable=True)
+            said.append(change)
+            if removed:
+                jobs = [j for j in jobs if j["metadata"]["name"] != LH_JOBS.TRIM_JOB]
+        busy = any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in operations)
+        if due(state, now) and not busy and not theirs(jobs):
+            start("weekly")
+            said.append("weekly trim started")
+    except Exception as error:
+        return "; ".join([s for s in said if s] + [f"weekly trim not checked: {str(error)[:160]}"])
     return "; ".join(s for s in said if s)
 
 

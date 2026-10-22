@@ -983,7 +983,8 @@ def run_jobs(is_leader, stop=None):
 # only if nobody changed the job meanwhile. Every other kind is resolved under
 # the store's lock, as before; more kinds move here once their requests that
 # change a running job are checked.
-OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy"}
+# The weekly trim (homestead_weekly_trim) waits up to 60 s on Longhorn per step.
+OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy", "weekly-trim"}
 _resolving = threading.local()
 
 

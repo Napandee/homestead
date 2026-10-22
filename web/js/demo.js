@@ -2514,7 +2514,7 @@ ssh_pwauth: true
       if (slot > now) slot -= 7 * 86400;
       return { enabled: demoState.weeklyTrimOn !== false, next: new Date((slot + 7 * 86400) * 1000).toISOString(), running: false, theirs: "",
         last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", "pvc-demo-frigate"], unconfirmed: [], failed: [],
-          skipped: [{ volume: "pvc-demo-oldapp", pvc: "oldapp-data", why: "detached" }] } };
+          skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
     },
     "/api/weekly-trim/settings": (url, init) => {
       const on = !!JSON.parse(init?.body || "{}").enabled;
