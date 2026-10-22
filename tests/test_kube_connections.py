@@ -263,14 +263,14 @@ class ParallelListTests(unittest.TestCase):
     """Lists that do not depend on each other are read at the same time, and a
     list that fails still counts exactly as before."""
 
-    def test_claim_references_reads_its_five_lists_at_once(self):
+    def test_claim_references_reads_its_nine_lists_at_once(self):
         def slow(path, **kw):
             time.sleep(0.3)
             return {"items": [], "metadata": {}}
         self.enterContext(mock.patch.object(STORAGE, "kget", slow))
         started = time.monotonic()
         STORAGE.claim_references()
-        self.assertLess(time.monotonic() - started, 1.0)  # five reads one after another take 1.5 s
+        self.assertLess(time.monotonic() - started, 1.0)  # nine reads one after another take 2.7 s
 
     def test_a_list_that_fails_is_still_unread_and_in_the_same_order(self):
         def answers(path, **kw):

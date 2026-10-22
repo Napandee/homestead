@@ -667,7 +667,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
 
 
 def page_inputs():
-    """What one snapshot cycle reads once and shares: the pod list."""
+    """What one snapshot cycle reads once and shares: the pod list (the
+    Volumes page's bare pods read it too)."""
     return {"pods": lambda: kget("/api/v1/pods")}
 
 
@@ -676,7 +677,7 @@ def page_builders():
     volumes are read once, for the Volumes page, the hosts' duties, storage
     and the overview."""
     return [
-        ("vol", lambda got: STORAGE.get_volumes()),
+        ("vol", lambda got: STORAGE.get_volumes(pods=got.get("pods"))),
         ("nodes", lambda got: NODES.get_nodes(pods=got["pods"], vols=got.get("vol"))),
         ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
         ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),

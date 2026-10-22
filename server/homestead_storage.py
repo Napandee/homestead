@@ -118,9 +118,10 @@ def _engine_progress(engines):
     return {name: entry for name, entry in out.items() if entry}
 
 
-def claim_references():
+def claim_references(pods=None):
     """Every claim something is defined to use, running or not: (namespace,
-    claim) -> ["Deployment/plex", ...].
+    claim) -> ["Deployment/plex", ...]. pods: the pod list a page snapshot
+    cycle already read, so it is not read twice; None reads it here.
 
     Longhorn knows only the pods using a volume now, so a stopped container's
     volume looked the same as one nothing uses at all - and only the second
@@ -186,17 +187,56 @@ def claim_references():
                   for v in volumes]
         note(obj["metadata"]["namespace"], claims, f"VM/{obj['metadata']['name']}")
 
+    def template(obj):
+        return obj["spec"]["template"]["spec"]
     kinds = (
-            ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
-            ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
-            ("DaemonSet", "/apis/apps/v1/daemonsets", lambda o: o["spec"]["template"]["spec"]),
+            ("Deployment", "/apis/apps/v1/deployments", template),
+            ("StatefulSet", "/apis/apps/v1/statefulsets", template),
+            ("DaemonSet", "/apis/apps/v1/daemonsets", template),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"]))
-    # The five lists do not depend on each other: read at the same time (#705),
+    # Made on their own, these use a claim with nothing above them: a finished
+    # bare Job or a bare Pod left its volume looking orphaned (gap 12). Made by
+    # something that was read, they are already named by it.
+    made = (
+            ("Job", "/apis/batch/v1/jobs", template),
+            ("ReplicaSet", "/apis/apps/v1/replicasets", template),
+            ("ReplicationController", "/api/v1/replicationcontrollers", template),
+            ("Pod", "/api/v1/pods", lambda o: o["spec"]))
+    vms = "/apis/kubevirt.io/v1/virtualmachines"
+    # The lists do not depend on each other: read at the same time (#705),
     # then judged in this order, so what counts as unread is as before.
-    fetched = _read_all([path for _, path, _ in kinds] + ["/apis/kubevirt.io/v1/virtualmachines"])
+    fetched = _read_all([path for _, path, _ in kinds] + [vms]
+                        + [path for _, path, _ in made if pods is None or path != "/api/v1/pods"])
+    if pods is not None:
+        fetched["/api/v1/pods"] = pods
     for kind, path, spec_of in kinds:
         each(kind, listed(kind, path), workload(kind, spec_of))
-    each("VM", listed("VM", "/apis/kubevirt.io/v1/virtualmachines", absent_ok=True), vm)
+    each("VM", listed("VM", vms, absent_ok=True), vm)
+    # A made row names only a claim that nothing above has named, and that its
+    # own owner (a Job for its Pod, say) has not: so a Deployment's Pods or a
+    # VM's launcher pod add nothing, while a claim the owner's template no
+    # longer names (a CronJob edited, a rollout, a volume hotplugged into a VM
+    # or added by a webhook) is still named by what mounts it. Never by
+    # trusting that an owner's template matches what it made.
+    above = {key: list(users) for key, users in refs.items()}
+    named_by = {}
+
+    def named_above(ns, claim):
+        return bool(above.get((ns, claim))) or any(
+            key[0] == "__prefix__" and key[1] == ns and claim.startswith(key[2]) for key in above)
+
+    def bare(kind, spec_of):
+        def read(obj):
+            name, ns = obj["metadata"]["name"], obj["metadata"]["namespace"]
+            owners = {owner.get("uid") for owner in obj["metadata"].get("ownerReferences") or []} - {None, ""}
+            for claim in claims_of(spec_of(obj)):
+                if not claim or named_above(ns, claim) or owners & named_by.get((ns, claim), set()):
+                    continue
+                note(ns, [claim], f"{kind}/{name}")
+                named_by.setdefault((ns, claim), set()).add(obj["metadata"].get("uid"))
+        return read
+    for kind, path, spec_of in made:
+        each(kind, listed(kind, path), bare(kind, spec_of))
     if unread:
         refs[UNREAD] = unread
     return refs
@@ -307,7 +347,7 @@ def volume_copies():
     return out
 
 
-def get_volumes():
+def get_volumes(pods=None):
     try:
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
     except Exception:
@@ -317,7 +357,7 @@ def get_volumes():
     except Exception:
         copies = {}
     try:
-        refs = claim_references()
+        refs = claim_references(pods)
     except Exception:
         refs = None
     try:
