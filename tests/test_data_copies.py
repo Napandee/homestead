@@ -27,9 +27,22 @@ def lh_node(name, ready=True):
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
-def volume(copies, robustness="degraded", size=2 * GiB):
+def volume(copies, robustness="degraded", size=2 * GiB, unschedulable=True):
+    """unschedulable: Longhorn's own proof that a copy cannot be placed - its
+    Scheduled condition False, reason ReplicaSchedulingFailure."""
+    scheduled = ({"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure",
+                  "message": "replica scheduling failed"} if unschedulable else
+                 {"type": "Scheduled", "status": "True", "reason": ""})
     return {"metadata": {"name": "pvc-0001"}, "spec": {"numberOfReplicas": copies, "size": str(size)},
-            "status": {"robustness": robustness}}
+            "status": {"robustness": robustness, "conditions": [scheduled]}}
+
+
+ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines?labelSelector=longhornvolume%3Dpvc-0001"
+
+
+def engines(*modes):
+    return {"items": [{"spec": {"volumeName": "pvc-0001"},
+                       "status": {"replicaModeMap": {f"pvc-0001-r-{i}": mode for i, mode in enumerate(modes)}}}]}
 
 
 class Cluster:
@@ -46,6 +59,7 @@ class Cluster:
                          "resources": {"requests": {"storage": "2Gi"}}}},
             f"{PARITY.LH_VOLUMES}/pvc-0001": volume(copies, robustness),
             f"{PARITY.LH_VOLUMES}/pvc-0002": volume(3),
+            ENGINES: engines("RW"),
             **(extra or {})}
         self.sent = []
         self.fail = set()
@@ -76,7 +90,9 @@ class FitSingleHostTests(unittest.TestCase):
         self.bind(cluster)
         line = COPIES.fit_single_host()
         self.assertEqual("Homestead's data volume homestead-data keeps 1 copy: this cluster has one host", line)
-        self.assertEqual([("PATCH", f"{PARITY.LH_VOLUMES}/pvc-0001", {"spec": {"numberOfReplicas": 1}})], cluster.sent)
+        self.assertEqual([("PATCH", f"{PARITY.LH_VOLUMES}/pvc-0001",
+                           {"metadata": {"annotations": {"homestead.io/one-host-copies": "3"}},
+                            "spec": {"numberOfReplicas": 1}})], cluster.sent)
         self.assertEqual(1, PARITY._load()["own_copies"])
 
     def test_other_volumes_and_settings_untouched(self):
@@ -122,6 +138,38 @@ class FitSingleHostTests(unittest.TestCase):
                 self.bind(cluster, **kwargs)
                 self.assertIsNone(COPIES.fit_single_host())
                 self.assertEqual([], cluster.sent)
+
+    def test_degraded_alone_is_not_proof(self):
+        # Soft anti-affinity on one host with several disks: after a reboot the
+        # volume reads degraded while its copies rebuild, and Longhorn can
+        # place them. Only a copy Longhorn cannot schedule is proof.
+        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"] = volume(3, unschedulable=False)
+        self.bind(cluster)
+        self.assertIsNone(COPIES.fit_single_host())
+        self.assertEqual([], cluster.sent)
+
+    def test_a_rebuilding_copy_lowers_nothing(self):
+        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster.objects[ENGINES] = engines("RW", "WO")
+        self.bind(cluster)
+        self.assertIsNone(COPIES.fit_single_host())
+        self.assertEqual([], cluster.sent)
+
+    def test_unreadable_engines_lower_nothing(self):
+        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster.fail = {ENGINES}
+        self.bind(cluster)
+        self.assertIsNone(COPIES.fit_single_host())
+        self.assertEqual([], cluster.sent)
+
+    def test_a_copy_longhorn_cannot_place_is_proof(self):
+        # The older map form of Longhorn's conditions counts too.
+        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]["status"]["conditions"] = {
+            "scheduled": {"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure"}}
+        self.bind(cluster)
+        self.assertTrue(COPIES.fit_single_host())
 
     def test_already_one_does_nothing(self):
         cluster = Cluster([node("node-a")], [lh_node("node-a")], copies=1, robustness="healthy")

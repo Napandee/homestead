@@ -86,6 +86,7 @@ Each is done once. One you remove later is not put back.
 | Weekly trim for every Longhorn volume, made once and kept covering every group ([details](Data-protection#weekly-trim-by-default)) | Longhorn `RecurringJob` `homestead-weekly-trim` | delete it: it is not made again |
 | Lets Homestead's own pods reach Longhorn's API (`longhorn-manager`, TCP 9500), only while another network policy fences the manager in (Longhorn 1.13's own, by default, or one you made). Those policies own it, so it goes when they do; Homestead removes it too | `NetworkPolicy` `homestead-backend-access` in `longhorn-system` | always; without it, rolling back and **Trim now** cannot reach Longhorn |
 | More copies of each volume as storage hosts are added (up to 3), while the value is still the installer's or Homestead's own | Longhorn `HelmChart` values and `Setting`, Homestead's own Longhorn `Volume` | change the value yourself; k3s and RKE2 only |
+| On a cluster of one host, Homestead's own data volume asks for the one copy that host can keep, once Longhorn says another cannot be placed and none is being rebuilt; no other volume, class or setting | Homestead's own Longhorn `Volume` | always, with Longhorn on exactly one host; not on Harvester |
 | Longhorn rebuilds copies of detached volumes: Homestead turns Longhorn's `offline-replica-rebuilding` on, once. On older Longhorn without that setting, Homestead attaches a detached volume that is a copy short itself (no frontend, nothing can mount it), for up to 6 hours, until its copies are whole | Longhorn `Setting`; Longhorn `VolumeAttachment` ticket `homestead-rebuild` | the offline rebuilding switch on **Volumes** (on by default) |
 | Stops Longhorn using a host's root disk when it has less than 15 % or 10 GB free, and allows it again above 20 % or 15 GB, only for disks it turned off itself ([details](Storage#room-for-the-system)) | Longhorn `Node` | always |
 | Tags a new Longhorn disk the first time it sees it | Longhorn `Node` | always |
@@ -139,6 +140,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/restore-tested` | `Deployment` | a restore test of the app finishes |
 | `homestead.io/renamed-from`, `renamed-at` | `Deployment` | you rename an app |
 | `homestead.io/rebalancing` | Longhorn `Volume` | a volume's copies move to balance hosts |
+| `homestead.io/one-host-copies` | Homestead's own Longhorn `Volume` | on a one-host cluster Homestead lowers its data volume to one copy; it holds the count asked for before |
 | `homestead.io/iso-unused-since` | ISO `PersistentVolumeClaim` | an ISO volume no VM uses |
 
 Apps deployed through Homestead also carry the `homestead.io/managed=true`

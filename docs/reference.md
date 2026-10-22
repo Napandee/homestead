@@ -176,20 +176,28 @@ otherwise the data claim stays Pending and Homestead never starts
 
 Longhorn's `longhorn` class asks for three copies. On a cluster with exactly
 one host (one Kubernetes node and one Longhorn node) the leader lowers
-Homestead's own data volume to one copy, so it reads healthy; no other volume,
-class or Longhorn setting is changed. Once a second host can hold a copy,
+Homestead's own data volume to one copy once Longhorn says another cannot be
+placed and none is being rebuilt, so it reads healthy; no other volume, class
+or Longhorn setting is changed. Once a second host can hold a copy,
 `longhorn-r2` ("Longhorn, two copies") is the class to move Homestead's data
 onto: create it under **Settings > Hardware and storage > Storage
 classes** (two copies, not migratable) and move from **Settings > About >
 Redundancy**. On k3s and RKE2 Homestead raises its own volume's copies in
 place as hosts join.
 
-A claim's class cannot change. A cluster installed from an older manifest
-that said `longhorn-r2`, whose `homestead-data` claim is still Pending, holds
-nothing on it: `kubectl -n lab delete pvc homestead-data` and apply again (or
-create `longhorn-r2` first). A Bound claim keeps its class and keeps working,
-and in-app updates change only the image; to apply the manifest again over
-it, set `storageClassName` back to the claim's class first.
+A claim's class cannot change. On a cluster installed from an older manifest
+that said `longhorn-r2`, check the claim first:
+
+```bash
+kubectl -n lab get pvc homestead-data
+```
+
+Only if its STATUS is `Pending` does it hold nothing: then
+`kubectl -n lab delete pvc homestead-data` and apply again (or create
+`longhorn-r2` first). **Never delete a `Bound` claim: that can lose
+Homestead's data.** A Bound claim keeps its class and keeps working, and
+in-app updates change only the image; to apply the manifest again over it,
+set `storageClassName` back to the claim's class first.
 
 ### 2. Configure and install
 

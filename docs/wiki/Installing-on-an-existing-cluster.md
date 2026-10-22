@@ -91,20 +91,27 @@ kubectl -n lab rollout status deployment/homestead --timeout=5m
 ```
 
 Longhorn's `longhorn` class asks for three copies. On a cluster with one host
-Homestead lowers its own data volume to the one copy that host can keep, so it
-reads healthy; no other volume or Longhorn setting is changed. Once a second
+Homestead lowers its own data volume to the one copy that host can keep, once
+Longhorn says another cannot be placed, so it reads healthy; no other volume
+or Longhorn setting is changed. Once a second
 host can hold a copy, `longhorn-r2` ("Longhorn, two copies") is the class to
 move Homestead's data onto: create it under **Settings > Hardware and
 storage > Storage classes** (two copies, not migratable) and move from
 **Settings > About > Redundancy**.
 
 Installed earlier from a manifest that said `longhorn-r2`? A claim's class
-cannot change. While `homestead-data` is still Pending it holds nothing:
+cannot change. Check the claim first:
+
+```bash
+kubectl -n lab get pvc homestead-data
+```
+
+Only if its STATUS is `Pending` does it hold nothing: then
 `kubectl -n lab delete pvc homestead-data` and apply again (or create
-`longhorn-r2` first). A Bound claim keeps its class and keeps working, and
+`longhorn-r2` first). **Never delete a `Bound` claim: that can lose
+Homestead's data.** A Bound claim keeps its class and keeps working, and
 in-app updates change only the image; to apply the manifest again over it,
-set `storageClassName` back to the class `kubectl -n lab get pvc
-homestead-data` shows.
+set `storageClassName` back to the class that command shows.
 
 ## What Homestead is allowed to do
 

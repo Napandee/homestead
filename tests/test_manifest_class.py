@@ -68,7 +68,11 @@ class ManifestClassTests(unittest.TestCase):
                         self.assertEqual(target, env_class(out))
                         for kept in ("longhorn.io", "longhorn-system"):
                             self.assertEqual(text.count(kept), out.count(kept), kept)
-                        self.assertEqual(len(text.splitlines()), len(out.splitlines()))
+                        before, after = text.splitlines(), out.splitlines()
+                        self.assertEqual(len(before), len(after))
+                        changed = [b for b, a in zip(before, after) if b != a]
+                        expected = 0 if target in (claim_class(text),) else 2
+                        self.assertEqual(expected, len(changed), changed)
 
     def test_old_manifest_helper_really_says_longhorn_r2(self):
         old = old_manifest(MANIFEST.read_text(encoding="utf-8"))

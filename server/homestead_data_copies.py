@@ -9,7 +9,10 @@ cluster has one host.
 
 fit_single_host() lowers Homestead's own data volume, and nothing else, to
 the one copy that host can keep, while the cluster has exactly one
-Kubernetes node and one Longhorn node record: a host that is only down or
+Kubernetes node and one Longhorn node record, Longhorn says a copy cannot be
+placed (Scheduled False, ReplicaSchedulingFailure) and none is being rebuilt.
+The copies it asked for before are kept on the volume (homestead.io/
+one-host-copies). Counted are all node records: a host that is only down or
 rebooting on a bigger cluster still counts as a host, so nothing is lowered
 there. Any distribution, since a manifest install may be on any; never on
 Harvester, whose copies are Harvester's. The count it sets is recorded as
@@ -21,10 +24,14 @@ own Deployment, so one bind serves both.
 """
 import re
 
+import homestead_names as NAMES
 import homestead_node_parity as NODE_PARITY
 import homestead_shared as SHARED
 
 GiB = 1024 ** 3
+ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
+# On the volume Homestead lowered: the copies it asked for before.
+LOWERED_FROM = NAMES.key("one-host-copies")
 UNITS = {"": 1, "k": 1000, "M": 1000 ** 2, "G": 1000 ** 3, "T": 1000 ** 4,
          "Ki": 1024, "Mi": 1024 ** 2, "Gi": GiB, "Ti": 1024 ** 4}
 
@@ -76,6 +83,27 @@ def _one_host():
     return isinstance(nodes, list) and isinstance(lh_nodes, list) and len(nodes) == 1 and len(lh_nodes) == 1
 
 
+def _cannot_place(volume):
+    """Longhorn's own proof that a copy cannot be placed: the volume's
+    Scheduled condition False for ReplicaSchedulingFailure. Degraded alone is
+    not proof - copies rebuilding after a reboot read degraded too."""
+    conditions = (volume.get("status") or {}).get("conditions") or []
+    if isinstance(conditions, dict):
+        conditions = list(conditions.values())
+    return any(isinstance(c, dict) and str(c.get("type", "")).lower() == "scheduled"
+               and c.get("status") == "False" and c.get("reason") == "ReplicaSchedulingFailure"
+               for c in conditions)
+
+
+def _rebuilding(pv):
+    """Whether any copy of the volume is being rebuilt (WO). Raises when the
+    engines cannot be read."""
+    found = NODE_PARITY.kget(f"{ENGINES}?labelSelector=longhornvolume%3D{pv}") or {}
+    return any(mode == "WO" for engine in found.get("items") or []
+               if ((engine.get("spec") or {}).get("volumeName") or pv) == pv
+               for mode in ((engine.get("status") or {}).get("replicaModeMap") or {}).values())
+
+
 def fit_single_host():
     """On a one-host Longhorn cluster, Homestead's own data volume asks for
     the one copy that host can keep. Returns a line for the log, or None.
@@ -95,11 +123,18 @@ def fit_single_host():
         if not volume:
             continue
         copies = int((volume.get("spec") or {}).get("numberOfReplicas") or 0)
-        # Only a volume Longhorn calls degraded: copies the host does hold
-        # (soft anti-affinity, several disks) are not thrown away.
-        if copies <= 1 or (volume.get("status") or {}).get("robustness") != "degraded":
+        # Only when Longhorn says a copy cannot be placed, and none is being
+        # rebuilt: copies the host can hold (soft anti-affinity, several
+        # disks) are never thrown away.
+        if copies <= 1 or (volume.get("status") or {}).get("robustness") != "degraded" or not _cannot_place(volume):
             continue
-        NODE_PARITY.ksend("PATCH", f"{NODE_PARITY.LH_VOLUMES}/{found['pv']}", {"spec": {"numberOfReplicas": 1}},
+        try:
+            if _rebuilding(found["pv"]):
+                continue
+        except Exception:
+            continue
+        NODE_PARITY.ksend("PATCH", f"{NODE_PARITY.LH_VOLUMES}/{found['pv']}",
+                          {"metadata": {"annotations": {LOWERED_FROM: str(copies)}}, "spec": {"numberOfReplicas": 1}},
                           ctype="application/merge-patch+json")
         lowered.append(found["claim"])
     if not lowered:
