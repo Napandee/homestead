@@ -11,7 +11,7 @@ import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_cdi_cleanup as CDI_CLEANUP
-from homestead_storage_journal import Held as StorageHeld
+import homestead_storage_journal as STORAGE_JOURNAL
 import json
 import contextlib
 import copy
@@ -931,7 +931,7 @@ def snapshot():
 def list_operations():
     try:
         require_write()
-    except StorageHeld:
+    except STORAGE_JOURNAL.Held:
         return snapshot()  # inspection stays available without advancing old jobs
     with _lock:
         items = _read()

@@ -9,8 +9,8 @@ import copy
 import json
 import os
 import stat
-import urllib.error
 
+import homestead_kube as KUBE
 import homestead_shared as SHARED
 import homestead_self_data_anchor as A
 import homestead_self_data_bootstrap as B
@@ -77,10 +77,7 @@ def read(directory, namespace, deployment):
 
 
 def _get(read_api, path):
-    try: return read_api(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404: return None
-        raise
+    return KUBE.get_optional(path, read=read_api)
 
 
 def _save(directory, value):

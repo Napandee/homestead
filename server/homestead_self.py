@@ -16,6 +16,7 @@ import re
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_yaml as YAML
 import homestead_shared as SHARED
@@ -54,12 +55,7 @@ def command():
 
 
 def _get(path):
-    try:
-        return kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
+    return KUBE.get_optional(path, read=kget)
 
 
 # ------------------------------------------------------------ the manifest
