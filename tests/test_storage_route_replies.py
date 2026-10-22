@@ -26,14 +26,14 @@ class StorageReplies(unittest.TestCase):
     def test_a_second_rebalance_is_a_409_with_the_running_job(self):
         import homestead_rebalance as REBALANCE
         running = {"kind": REBALANCE.KIND, "status": "running", "id": "r1"}
-        with mock.patch.object(REBALANCE.OPS, "list_operations", return_value=[running]):
+        with mock.patch.object(REBALANCE.OPS, "snapshot", return_value=[running]):
             answer = call("POST", "/api/longhorn/rebalance", {})
         self.assertEqual(409, answer.code)
         self.assertEqual(running, answer.body["operation"])
 
     def test_a_changed_rebalance_review_is_a_409_with_the_plan_now(self):
         import homestead_rebalance as REBALANCE
-        with mock.patch.object(REBALANCE.OPS, "list_operations", return_value=[]), \
+        with mock.patch.object(REBALANCE.OPS, "snapshot", return_value=[]), \
                 mock.patch.object(REBALANCE, "plan", return_value={"review_token": "new", "moves": []}):
             answer = call("POST", "/api/longhorn/rebalance", {"review_token": "old"})
         self.assertEqual((409, "new"), (answer.code, answer.body["plan"]["review_token"]))

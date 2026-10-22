@@ -141,7 +141,7 @@ OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: global
 import homestead_cluster_server as CLUSTER_ROUTES
 from homestead_cluster_server import (
     _autoupdate_loop, _baseline_loop, _detached_copies_loop, _hardware_loop, _host_console_loop,
-    _housekeeping_loop, _os_updates_loop, _power_jobs_loop, _upgrade_node_probe,
+    _housekeeping_loop, _os_updates_loop, _jobs_loop, _upgrade_node_probe,
     allocation_probe_capacity, cluster_shutdown, pod_container_rows, preview_image_update,
     reviewed_image_update, set_update_mode,
 )
@@ -1954,7 +1954,7 @@ def start_background_tasks():
     # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
-    threading.Thread(target=_power_jobs_loop, daemon=True).start()
+    threading.Thread(target=_jobs_loop, daemon=True).start()
     threading.Thread(target=_detached_copies_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_longhorn_copies_loop, daemon=True).start()

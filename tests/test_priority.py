@@ -202,7 +202,7 @@ class PriorityTests(unittest.TestCase):
 
     def test_starting_needs_the_restarts_confirmed_and_no_other_run(self):
         started, self.running = [], []
-        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: list(self.running),
+        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, snapshot=lambda: list(self.running),
                          start=lambda *a: started.append(a) or {"id": "op1"})
         plan = priority.plan()
         body = {"changes": [a for a in plan["apps"] if a["tier"] != a["current"]], "review_token": plan["review_token"],
@@ -431,7 +431,7 @@ class PriorityTests(unittest.TestCase):
 
     def test_the_job_and_its_summary_name_statefulsets(self):
         self.stss = {"lab/x-db": statefulset("x-db")}
-        started, jobs = [], mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: [],
+        started, jobs = [], mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, snapshot=lambda: [],
                                       start=lambda *a: started.append(a) or {"id": "op1"})
         plan = priority.plan({"sts:lab/x-db": "critical", "lab/home-assistant": "normal"})
         body = {"changes": [a for a in plan["apps"] if a["tier"] != a["current"]], "review_token": plan["review_token"], "restart": True}
@@ -456,7 +456,7 @@ class PriorityTests(unittest.TestCase):
         self.assertFalse([a for a in after["apps"] if a["kind"] == "sts"])
 
     def test_homestead_joins_critical_once_anything_runs_there(self):
-        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: list(self.running))
+        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, snapshot=lambda: list(self.running))
         self.running = []
         # protect() acts only on the classes as listed, never on a guess (#429).
         self.listable = True
@@ -788,7 +788,7 @@ class ProtectTests(unittest.TestCase):
 
     def test_it_waits_for_jobs(self):
         self.app(100000)
-        ops = mock.Mock(TERMINAL={"succeeded"}, list_operations=lambda: [{"status": "running"}])
+        ops = mock.Mock(TERMINAL={"succeeded"}, snapshot=lambda: [{"status": "running"}])
         with mock.patch.object(P, "operations", ops):
             self.assertIsNone(P.protect())
 

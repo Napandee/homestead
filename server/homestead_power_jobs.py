@@ -53,7 +53,7 @@ class PowerNotSent(Exception):
 
 def active_power_job(node):
     """A reboot or shutdown job for this host that has not finished."""
-    return next((item for item in OPS.list_operations()
+    return next((item for item in OPS.snapshot()
                  if item.get("kind") == "node-power" and item.get("resource", {}).get("name") == node
                  and item.get("status") not in ("succeeded", "failed", "cancelled")), None)
 
