@@ -13,6 +13,7 @@ import time
 import homestead_copy_checks as COPY_CHECKS
 import urllib.error
 import urllib.parse
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_pod_resources as RESOURCES
 import homestead_import_job as IMPORT_JOB
@@ -197,12 +198,7 @@ def chown_claim(namespace, pvc, uid, gid):
     if owner_uid is None:
         raise ValueError("a user id is required")
     job = NAMES.fitted(f"homestead-chown-{pvc}")
-    try:
-        existing = I.kget(f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        existing = None
+    existing = KUBE.get_optional(f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}", read=I.kget)
     if existing:
         # Only this volume's last chown is replaced, never another volume's.
         if NAMES.label_of(existing.get("metadata") or {}, "app") != pvc:
@@ -451,12 +447,9 @@ def prepare_import(cfg):
     for volume in volumes:
         if volume["create"]:
             continue
-        try:
-            existing = I.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{volume['name']}")
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                raise ValueError(f"existing PVC {volume['name']} was not found") from error
-            raise
+        existing = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{volume['name']}", read=I.kget)
+        if existing is None:
+            raise ValueError(f"existing PVC {volume['name']} was not found")
         modes = (existing.get("spec", {}) or {}).get("accessModes", []) or []
         volume["access_mode"] = modes[0] if modes else volume["access_mode"]
         volume["storage_class"] = (existing.get("spec", {}) or {}).get(
@@ -668,16 +661,14 @@ def import_container(cfg):
 def import_inventory(prepared, read):
     """Fail closed on collisions and active writers; return identities to sign."""
     ns = prepared.get("namespace") or I.NS
-    def optional(path):
-        try:
-            obj = read(path)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return None
-            raise
+    def identified(path):
+        obj = read(path)
         if not isinstance(obj, dict) or not (obj.get("metadata") or {}).get("uid"):
             raise ValueError("Import inventory is incomplete; refresh before importing")
         return obj
+
+    def optional(path):
+        return KUBE.get_optional(path, read=identified)
 
     for kind, resource in (("deployment", "deployments"), ("service", "services"), ("job", "jobs")):
         obj = prepared[kind]
@@ -876,11 +867,7 @@ def delete_import(name, ns=None):
     # Preserve successful completion before removing its proof. Failed copies
     # deliberately leave the workload interlocked, never silently startable.
     try:
-        job = I.kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        job = {}
+        job = KUBE.get_optional(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", read=I.kget) or {}
     except ValueError:
         job = {}  # legacy client reports a missing Job this way
     if IMPORT_JOB.journalled(ns, name, job, OPS):
@@ -891,12 +878,9 @@ def delete_import(name, ns=None):
         if not complete or owner.get("kind") != "Deployment":
             continue
         path = f"/apis/apps/v1/namespaces/{ns}/deployments/{owner['name']}"
-        try:
-            dep = I.kget(path)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                continue
-            raise
+        dep = KUBE.get_optional(path, read=I.kget)
+        if dep is None:
+            continue
         if dep["metadata"].get("uid") != owner.get("uid"):
             raise ValueError("Import workload identity changed; review cleanup again")
         annotations = dep["metadata"].get("annotations") or {}
@@ -905,12 +889,8 @@ def delete_import(name, ns=None):
             annotations["homestead.io/import-completed-job"] = job["metadata"]["uid"]
             dep["metadata"]["annotations"] = annotations
             I.ksend("PUT", path, dep)  # resourceVersion protects concurrent edits
-    try:
-        I.ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{name}"
-                        "?propagationPolicy=Background")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
+    KUBE.delete_if_present(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}?propagationPolicy=Background",
+                           send=I.ksend)
     stopped = I._stop_job_pods(name, ns=ns)
     _drop_source_copy(name, ns)
     # A pre-pull started for this app outlives the import that wanted it: it is
@@ -987,11 +967,7 @@ def _drop_source_copy(job, ns):
     copy no longer needs it. Only ever the copy: the original stays."""
     if ns == I.NS:
         return
-    try:
-        I.ksend("DELETE", f"/api/v1/namespaces/{ns}/secrets/{job}-source")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
+    KUBE.delete_if_present(f"/api/v1/namespaces/{ns}/secrets/{job}-source", send=I.ksend)
 
 
 def _drop_finished_copies():

@@ -210,6 +210,15 @@ class SendTests(unittest.TestCase):
         with mock.patch.object(K, "ksend", gone):
             self.assertIsNone(K.delete_if_present(PODS + "/a"))
 
+    def test_delete_if_present_sends_through_a_modules_own_sender(self):
+        calls = []
+        with mock.patch.object(K, "ksend", lambda *a, **k: self.fail("sent through the shared client")):
+            self.assertEqual(K.delete_if_present(PODS + "/a", send=lambda *a, **k: calls.append(a) or {}), {})
+            self.assertIsNone(K.delete_if_present(PODS + "/a", send=lambda *a, **k: (_ for _ in ()).throw(http_error(404))))
+            with self.assertRaises(urllib.error.HTTPError):
+                K.delete_if_present(PODS + "/a", send=lambda *a, **k: (_ for _ in ()).throw(http_error(500)))
+        self.assertEqual(calls, [("DELETE", PODS + "/a", None)])
+
     def test_delete_if_present_raises_any_other_failure(self):
         for code in (403, 409, 422, 500):
             def refused(*_a, code=code, **_k):
