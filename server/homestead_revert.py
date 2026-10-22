@@ -19,6 +19,14 @@ job ends rather than keep the app stopped. A revert whose answer is lost may
 still be running in Longhorn: the volume is held until Longhorn's engine
 shows whether it happened, and if that cannot be told it stays held and the
 app stopped, saying so. Before anything is stopped, Longhorn's API must answer.
+
+What is about to be sent - the kept snapshot's name, then the revert - is
+saved first (OPS.checkpoint), so a leader that takes over mid-step never
+makes a second snapshot or sends the revert twice: a revert that may have
+gone out is only ever confirmed. Confirming assumes a revert cannot still
+start once the confirming wait (5 minutes) is over - the request itself
+gives up after 30 s - so a chain still on the kept snapshot then means it
+did not happen.
 """
 import json
 import time
@@ -43,7 +51,13 @@ TRIES, RETRY_AFTER = 3, 5
 
 
 class Refused(ValueError):
-    """Longhorn answered, and turned the request down."""
+    """Longhorn answered, and turned the request down (an HTTP 4xx)."""
+
+
+class ServerError(RuntimeError):
+    """Longhorn answered with an error of its own (an HTTP 5xx): the request
+    may have done its work anyway - an engine call can time out while the
+    replicas carry on."""
 
 kget = ksend = None
 reclass = None          # homestead_reclass, for what uses a claim
@@ -67,6 +81,8 @@ def _backend(method, path, body=None):
             text = response.read().decode() or "{}"
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")[:300]
+        if error.code >= 500:
+            raise ServerError(f"Longhorn failed: {detail or error.reason}") from error
         raise Refused(f"Longhorn refused it: {detail or error.reason}") from error
     return json.loads(text)
 
@@ -212,15 +228,16 @@ def _drop_ticket(ref):
 
 
 def _let_go(ref):
-    """Detach the volume from the rollback; "" once done, else why not."""
+    """Detach the volume from the rollback. ("", None) once done, else why not
+    and the error Longhorn's API gave."""
     try:
         lh_call("POST", f"/volumes/{ref['volume']}?action=detach",
                 {"attachmentID": ATTACHMENT, "hostId": ref.get("node", ""), "forceDetach": False})
     except Exception as error:
         dropped = _drop_ticket(ref)
-        return f"{_why(error)}; {dropped}" if dropped else ""
+        return (f"{_why(error)}; {dropped}", error) if dropped else ("", None)
     ref["attached"] = False
-    return ""
+    return "", None
 
 
 def _held(ref, stuck):
@@ -238,7 +255,7 @@ def _put_back(ref, why, stuck=""):
     started = "everything that was running is starting again"
     try:
         if ref.get("attached"):
-            stuck = _let_go(ref)
+            stuck = _let_go(ref)[0]
     finally:
         try:
             if ref.get("namespace"):
@@ -290,9 +307,9 @@ def _head_parent(volume, kept):
 def _reverted(ref):
     ref["reverted"] = True
     _phase(ref, "detaching")
-    if _let_go(ref):                    # tried again while detaching
-        ref.setdefault("tries", {})["detach"] = 1
-        ref["retry_at"] = time.time() + RETRY_AFTER
+    stuck, error = _let_go(ref)
+    if stuck and not _again(ref, "detach", error):     # else tried again while detaching
+        ref["stuck"] = stuck
     return "running", 70, f"Rolled back to {ref['snapshot']}; the state before is kept as {ref.get('kept', '')}"
 
 
@@ -337,28 +354,42 @@ def resolve(item):
             except Exception as error:
                 if _again(ref, "attach", error):
                     return "running", 25, f"Longhorn's API did not answer ({_why(error)}); trying again"
-                return _put_back(ref, f"Longhorn's API did not attach {volume} for the rollback: {_why(error)}")
+                ref["attached"] = False         # its API is not answering: let go through Kubernetes
+                return _put_back(ref, f"Longhorn's API did not attach {volume} for the rollback: {_why(error)}",
+                                 _drop_ticket(ref))
             ref["reattach"] = False
         if _state(volume) != "attached":
             if _late(ref):
                 return _put_back(ref, f"{volume} did not attach for the rollback")
             return "running", 35, f"Attaching {volume} to {ref.get('node')}"
+        if ref.get("revert_sent"):
+            # A leader before this one may have sent the revert: confirm it, never send it again.
+            ref.setdefault("revert_error", "Homestead restarted before Longhorn answered")
+            _phase(ref, "confirming")
+            return "running", 60, f"Checking whether Longhorn rolled {volume} back"
         if not ref.get("kept"):
-            keep = ref.setdefault("keep", f"before-rollback-{int(time.time())}")
-            try:
-                lh_call("POST", f"/volumes/{volume}?action=snapshotCreate", {"name": keep})
-            except Exception as error:
-                if not _snapshot_made(volume, keep):
-                    if _again(ref, "snapshotCreate", error):
-                        return "running", 40, f"Longhorn's API did not answer ({_why(error)}); trying again"
-                    return _put_back(ref, f"Longhorn's API did not keep the present state of {volume}: {_why(error)}")
-            ref["kept"] = keep
-        ref["reverting"] = True
+            if ref.get("keep") and _snapshot_made(volume, ref["keep"]):
+                ref["kept"] = ref["keep"]               # made before a restart lost the answer
+            else:
+                if not ref.get("keep"):
+                    ref["keep"] = f"before-rollback-{int(time.time())}"
+                    OPS.checkpoint(item)                # one name, whoever sends it
+                keep = ref["keep"]
+                try:
+                    lh_call("POST", f"/volumes/{volume}?action=snapshotCreate", {"name": keep})
+                except Exception as error:
+                    if not _snapshot_made(volume, keep):
+                        if _again(ref, "snapshotCreate", error):
+                            return "running", 40, f"Longhorn's API did not answer ({_why(error)}); trying again"
+                        return _put_back(ref, f"Longhorn's API did not keep the present state of {volume}: {_why(error)}")
+                ref["kept"] = keep
+        ref.update(reverting=True, revert_sent=True)
+        OPS.checkpoint(item)                            # saved before it goes out
         try:
             lh_call("POST", f"/volumes/{volume}?action=snapshotRevert", {"name": ref["snapshot"]})
         except Exception as error:
             if _never_sent(error):
-                ref["reverting"] = False
+                ref.update(reverting=False, revert_sent=False)
                 return _put_back(ref, f"Longhorn did not roll {volume} back: {_why(error)}")
             # The request went out: Longhorn may still be reverting. Never let
             # go of the volume, or start what uses it, until that is known.
@@ -382,11 +413,11 @@ def resolve(item):
                                f"{ref.get('kept', '')}. Then remove the Longhorn attachment ticket {ATTACHMENT} on "
                                f"it (see What Homestead changes) and start {_names(ref)} again")
     if phase == "detaching":
-        if ref.get("attached"):
+        if ref.get("attached") and not ref.get("stuck"):
             if _pausing(ref) and not _late(ref):
                 return "running", 75, f"Letting go of {volume}"
-            stuck = _let_go(ref)
-            if stuck and _again(ref, "detach") and not _late(ref):
+            stuck, error = _let_go(ref)
+            if stuck and _again(ref, "detach", error) and not _late(ref):
                 return "running", 75, f"Letting go of {volume}: {stuck}"
             ref["stuck"] = stuck
         if _state(volume) != "detached" and not _late(ref):
@@ -406,16 +437,29 @@ def resolve(item):
     return "failed", 100, f"unknown step {phase}"
 
 
-def cancel_plan(item):
-    ref = item["ref"]
+CONFIRMING = "The rollback is being confirmed; Homestead will finish or stop it safely"
+
+
+def _uncancellable(ref):
     if ref.get("reverted"):
-        return {"mode": "stop", "can": False,
-                "why_not": "The volume is rolled back already; what is left is starting things again"}
+        return "The volume is rolled back already; what is left is starting things again"
+    if ref.get("reverting") or ref.get("revert_sent") or ref.get("phase") == "confirming":
+        return CONFIRMING           # Longhorn may still be reverting: letting go now could corrupt it
+    return ""
+
+
+def cancel_plan(item):
+    why = _uncancellable(item["ref"])
+    if why:
+        return {"mode": "stop", "can": False, "why_not": why}
     return {"mode": "rollback", "undo": ["The volume is let go and everything that was stopped is started again"],
             "keeps": ["The volume's data, which has not been changed"], "severity": "low", "needs": "admin"}
 
 
 def cancel_run(item, _options):
+    why = _uncancellable(item["ref"])
+    if why:
+        raise ValueError(why)
     return _put_back(item["ref"], "Cancelled")[2]
 
 

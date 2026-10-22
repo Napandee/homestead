@@ -231,6 +231,6 @@ is tried again, up to three times, a few seconds apart. If the revert itself
 gets no answer, Homestead waits until Longhorn's engine shows whether it
 happened. If that cannot be told, the volume stays in maintenance mode and the
 app stays stopped, so it never starts on a half-reverted volume; the job says
-what to check and how to let go of the volume. Longhorn 1.13's chart fences
+what to check and how to let go of the volume. Once the revert has been sent, **Cancel** is refused until it is confirmed. Longhorn 1.13's chart fences
 its manager in with network policies; where any policy does, Homestead keeps a
 narrow policy of its own beside them ([What Homestead changes](What-Homestead-changes)).

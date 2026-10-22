@@ -1,4 +1,4 @@
-import json, sys, time, unittest, urllib.error
+import copy, json, sys, time, unittest, urllib.error
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -27,6 +27,10 @@ class FakeReclass:
         return []
 
 
+class Crash(BaseException):
+    """The pod dies mid-step: nothing after this point is saved."""
+
+
 class RevertTests(unittest.TestCase):
     """Snapshots could be taken and deleted but never rolled back to."""
 
@@ -49,6 +53,10 @@ class RevertTests(unittest.TestCase):
         pause.start()
         self.addCleanup(pause.stop)
         self.made_anyway = False    # a snapshotCreate that fails after Longhorn made it
+        self.saved = []             # what the job store durably holds, at each checkpoint
+        keep = mock.patch.object(REVERT.OPS, "checkpoint", lambda item: self.saved.append(copy.deepcopy(item)))
+        keep.start()
+        self.addCleanup(keep.stop)
 
     def lh_call(self, method, path, body=None):
         self.calls.append((path, body))
@@ -153,6 +161,9 @@ class RevertTests(unittest.TestCase):
         self.assertEqual([["paperless"]], self.reclass.started)
         self.assertEqual(3, self.actions().count("attach"))
         self.assertNotIn("snapshotCreate", self.actions())
+        self.assertNotIn("detach", self.actions(), "the API is not answering: let go through Kubernetes")
+        self.assertIn(("PATCH", f"{API}/volumeattachments/pvc-1",
+                       {"spec": {"attachmentTickets": {"homestead-revert": None}}}), self.sent)
 
     def test_a_brief_blip_on_attach_is_ridden_out(self):
         self.failing["attach"] = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
@@ -369,6 +380,137 @@ class RevertTests(unittest.TestCase):
         status, _, message = REVERT.resolve(item)
         self.assertEqual("succeeded", status)
         self.assertIn("homestead-revert", message)
+
+    def _to_the_revert(self):
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        return item
+
+    def test_a_server_error_on_the_revert_is_confirmed_not_assumed(self):
+        """A 5xx does not prove nothing happened: the engine can time out
+        while the replicas carry on reverting."""
+        self.failing["snapshotRevert"] = REVERT.ServerError("Longhorn failed: context deadline exceeded")
+        item = self._to_the_revert()
+        status, _, _ = REVERT.resolve(item)
+        self.assertEqual("running", status)
+        self.assertEqual("confirming", item["ref"]["phase"])
+        self.assertEqual([], self.reclass.started)
+
+    def test_a_connection_refused_before_the_revert_was_sent_puts_the_app_back(self):
+        self.failing["snapshotRevert"] = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        item = self._to_the_revert()
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertIn("Nothing was rolled back", message)
+        self.assertEqual([["paperless"]], self.reclass.started)
+
+    def test_http_answers_are_told_apart(self):
+        for code, kind in ((400, REVERT.Refused), (409, REVERT.Refused), (500, REVERT.ServerError), (503, REVERT.ServerError)):
+            error = urllib.error.HTTPError("http://x", code, "x", {}, None)
+            error.read = lambda: b"busy"
+            with self.subTest(code=code), mock.patch("urllib.request.urlopen", side_effect=error):
+                with self.assertRaises(kind):
+                    REVERT._backend("POST", "/volumes/pvc-1?action=snapshotRevert", {})
+
+    def test_cancel_is_refused_once_the_revert_may_be_running(self):
+        self.failing["snapshotRevert"] = urllib.error.URLError(TimeoutError("timed out"))
+        item = self._to_the_revert()
+        REVERT.resolve(item)
+        self.assertEqual("confirming", item["ref"]["phase"])
+        plan = REVERT.cancel_plan(item)
+        self.assertFalse(plan["can"])
+        self.assertIn("being confirmed", plan["why_not"])
+        with self.assertRaisesRegex(ValueError, "being confirmed"):
+            REVERT.cancel_run(item, {})
+        self.assertNotIn("detach", self.actions())
+        self.assertFalse([s for s in self.sent if "volumeattachments" in s[1]])
+        self.assertEqual([], self.reclass.started)
+
+    def test_cancel_before_the_revert_still_puts_things_back(self):
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.assertTrue(REVERT.cancel_plan(item).get("mode") == "rollback")
+        REVERT.cancel_run(item, {})
+        self.assertEqual([["paperless"]], self.reclass.started)
+
+    def test_the_revert_is_recorded_before_it_is_sent(self):
+        item = self._to_the_revert()
+        sent = []
+        def lh_call(method, path, body=None):
+            if "snapshotRevert" in path:
+                sent.append(copy.deepcopy(self.saved[-1]["ref"]))
+            return self.lh_call(method, path, body)
+        REVERT.lh_call = lh_call
+        REVERT.resolve(item)
+        self.assertTrue(sent[0].get("revert_sent"), "a new leader must know the revert may have gone out")
+        self.assertEqual(item["ref"]["kept"], sent[0].get("kept"))
+
+    def test_a_restart_while_the_revert_was_out_confirms_and_never_sends_it_again(self):
+        item = self._to_the_revert()
+        def crash(method, path, body=None):
+            if "snapshotRevert" in path:
+                raise Crash()
+            return self.lh_call(method, path, body)
+        REVERT.lh_call = crash
+        with self.assertRaises(Crash):
+            REVERT.resolve(item)
+        resumed = {"ref": copy.deepcopy(self.saved[-1]["ref"])}    # the next leader reads the store
+        REVERT.lh_call = self.lh_call
+        self.calls.clear()
+        status, _, _ = REVERT.resolve(resumed)
+        self.assertEqual("running", status)
+        self.assertEqual("confirming", resumed["ref"]["phase"])
+        self.assertEqual([], self.calls, "no new snapshot, no second revert")
+        self.head_after("snap-a", known=[resumed["ref"]["kept"], "snap-a"])
+        REVERT.resolve(resumed)
+        self.assertTrue(resumed["ref"]["reverted"])
+
+    def test_a_restart_while_the_snapshot_was_out_keeps_the_one_made(self):
+        item = self._to_the_revert()
+        def crash(method, path, body=None):
+            if "snapshotCreate" in path:
+                self.objects[f"{API}/snapshots/{body['name']}"] = {"spec": {"volume": "pvc-1"}}
+                raise Crash()
+            return self.lh_call(method, path, body)
+        REVERT.lh_call = crash
+        with self.assertRaises(Crash):
+            REVERT.resolve(item)
+        resumed = {"ref": copy.deepcopy(self.saved[-1]["ref"])}
+        REVERT.lh_call = self.lh_call
+        self.calls.clear()
+        REVERT.resolve(resumed)
+        self.assertEqual(["snapshotRevert", "detach"], self.actions(), "the snapshot Longhorn made is the kept one")
+        self.assertEqual(self.saved[0]["ref"]["keep"], resumed["ref"]["kept"])
+
+    def test_a_restart_before_the_snapshot_was_made_makes_it_under_the_same_name(self):
+        item = self._to_the_revert()
+        def crash(method, path, body=None):
+            if "snapshotCreate" in path:
+                raise Crash()
+            return self.lh_call(method, path, body)
+        REVERT.lh_call = crash
+        with self.assertRaises(Crash):
+            REVERT.resolve(item)
+        resumed = {"ref": copy.deepcopy(self.saved[-1]["ref"])}
+        name = resumed["ref"]["keep"]
+        REVERT.lh_call = self.lh_call
+        self.calls.clear()
+        REVERT.resolve(resumed)
+        self.assertEqual(["snapshotCreate", "snapshotRevert", "detach"], self.actions())
+        self.assertEqual(name, self.calls[0][1]["name"])
+
+    def test_a_detach_longhorn_refuses_is_not_tried_again(self):
+        item = self._to_the_revert()
+        self.failing["detach"] = REVERT.Refused("Longhorn refused it: no")
+        def send(method, path, body=None, **kw):
+            raise urllib.error.URLError("timed out")
+        REVERT.ksend = send
+        REVERT.resolve(item)
+        self.state = "detached"
+        REVERT.resolve(item)
+        self.assertEqual(1, self.actions().count("detach"))
+        self.assertEqual([["paperless"]], self.reclass.started)
 
     def test_homesteads_own_data_is_refused(self):
         self.reclass.consumers = lambda ns, claim: [{"kind": "Deployment", "name": "homestead", "replicas": 1}]
