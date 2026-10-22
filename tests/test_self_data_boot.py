@@ -222,6 +222,7 @@ from unittest import mock
 sys.path.insert(0, sys.argv[1])
 import homestead_self_data_fence as F
 import homestead_auth as AUTH
+import homestead_http as HTTP
 import http.server
 root = pathlib.Path(sys.argv[2]) / "uncreated"
 os.environ.update(DATA_DIR=str(root), HOSTNAME="pod1", PORT="0", STORAGE_CLASS="fixture")
@@ -250,6 +251,7 @@ with mock.patch("builtins.open", side_effect=file_open), mock.patch("os.path.exi
      mock.patch.object(F, "Fence") as fence, mock.patch("threading.Thread") as threads, \
      mock.patch.object(AUTH, "review_signing_key", return_value=b"fixture"), \
      mock.patch.object(http.server, "ThreadingHTTPServer", Server), \
+     mock.patch.object(HTTP, "BoundedHTTPServer", Server), \
      mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("unexpected cluster request")):
     fence.return_value.inspect.return_value = {"mode": "start", "writable": False}
     runpy.run_path(str(pathlib.Path(sys.argv[1]) / "server.py"), run_name="__main__")

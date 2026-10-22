@@ -74,7 +74,6 @@ _swept = [0.0]
 _rotated = []
 _throttle = threading.Lock()
 _drops_seen = [0]
-_notes = threading.local()
 _lock = threading.Lock()
 
 
@@ -88,17 +87,18 @@ def audited(method, path):
 
 
 def note(**fields):
-    """Something this request's line should say that the hook cannot see."""
+    """Something this request's line should say that the hook cannot see:
+    homestead_routes.note() for each, kept on the request's thread and handed
+    to the hook. A value that is not a short name is left out, never raised:
+    noting never breaks the request."""
     unknown = sorted(set(fields) - set(NOTE_KEYS))
     if unknown:
         raise ValueError(f"an audit note may say only {', '.join(NOTE_KEYS)}, not {', '.join(unknown)}")
-    _notes.__dict__.update({key: str(value) for key, value in fields.items()})
-
-
-def _take_notes():
-    taken = dict(_notes.__dict__)
-    _notes.__dict__.clear()
-    return taken
+    for key, value in fields.items():
+        try:
+            MODULE_ROUTES.note(key, value)
+        except ValueError:
+            pass
 
 
 def _name(value):
@@ -240,12 +240,12 @@ def _report_drops():
                         "lines (if they changed something) are missing here and from the pod log"})
 
 
-def record(request, status, ms, noted=None):
+def record(request, status, ms, notes=None):
     """The hook, on homestead_routes' hooks thread: one line for a finished
-    change request. noted is what the request noted on its own thread. Never
+    change request. notes is what the request noted on its own thread. Never
     raises."""
     try:
-        notes = dict(noted or {})
+        notes = dict(notes or {})
         _report_drops()
         if not audited(request.method, request.path):
             return
@@ -352,4 +352,4 @@ def emit(entry, keep=True):
         _append(line_text)
 
 
-MODULE_ROUTES.after(record, fields=MODULE_ROUTES.HOOK_FIELDS, capture=_take_notes)
+MODULE_ROUTES.after(record, fields=MODULE_ROUTES.HOOK_FIELDS, notes=NOTE_KEYS)

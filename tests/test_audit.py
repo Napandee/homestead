@@ -117,7 +117,7 @@ class WhatIsAudited(unittest.TestCase):
     def test_notes_refuse_unknown_keys(self):
         with self.assertRaises(ValueError):
             AUDIT_LOG.note(password="x")
-        AUDIT_LOG._take_notes()
+        ROUTES._clear_notes()
 
 
 class Recording(unittest.TestCase):
@@ -276,20 +276,20 @@ class Notes(unittest.TestCase):
     def setUp(self):
         self.out = []
         self.enterContext(mock.patch.object(AUDIT_LOG, "emit", side_effect=lambda entry, keep=True: self.out.append(entry)))
-        AUDIT_LOG._take_notes()
+        ROUTES._clear_notes()
 
     def test_notes_never_reach_the_next_request(self):
-        """Each request's capture (on its own thread) takes its notes, and only its notes."""
-        capture = next(ROUTES._captures[fn] for fn, _ in ROUTES._hooks if fn is AUDIT_LOG.record)
+        """Each request's notes are taken with it, and only its notes."""
+        capture = ROUTES._take_notes         # what after_request does on the request's thread
         AUDIT_LOG.note(tool="container_restart", kind="change")
-        AUDIT_LOG.record(view("GET", "/api/overview"), 200, 1, noted=capture())    # a read takes them too
-        AUDIT_LOG.record(view(), 200, 1, noted=capture())
+        AUDIT_LOG.record(view("GET", "/api/overview"), 200, 1, notes=capture())    # a read takes them too
+        AUDIT_LOG.record(view(), 200, 1, notes=capture())
         self.assertNotIn("tool", self.out[0])
         AUDIT_LOG.note(to="member-2")
         taken = capture()
         with mock.patch.object(AUDIT_LOG, "line", side_effect=RuntimeError("bug")):
-            AUDIT_LOG.record(view(), 200, 1, noted=taken)
-        AUDIT_LOG.record(view(), 200, 1, noted=capture())
+            AUDIT_LOG.record(view(), 200, 1, notes=taken)
+        AUDIT_LOG.record(view(), 200, 1, notes=capture())
         self.assertNotIn("to", self.out[1])
 
     def test_a_relayed_request_names_the_cluster(self):
@@ -299,7 +299,7 @@ class Notes(unittest.TestCase):
                 mock.patch.object(FLEET, "_connect", side_effect=OSError("no route")):
             with self.assertRaises(FLEET.Unreachable):
                 FLEET.forward(handler, "member-2", b"{}", "ada", "operator")
-        AUDIT_LOG.record(view(), 502, 1, noted=AUDIT_LOG._take_notes())
+        AUDIT_LOG.record(view(), 502, 1, notes=ROUTES._take_notes())
         self.assertEqual(("member-2", 502), (self.out[0]["to"], self.out[0]["status"]))
 
 

@@ -56,6 +56,7 @@ import types
 import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
+import homestead_http as HTTP
 
 MODULES = (
     "homestead_addons",
@@ -216,7 +217,14 @@ _HOOK_BODY = 64 * 1024
 # How many requests' hooks may wait for the hooks' thread before more are dropped.
 HOOK_QUEUE = 256
 _hooks = []
-_captures = {}      # hook -> what it takes on the request's own thread
+# What a request may note for its hooks (note()): keys each hook declared,
+# values short names or whole numbers, kept on the request's thread and
+# cleared when the next request on it starts.
+NOTE_CAP = 64
+_NOTE_KEY = re.compile(r"[a-z][a-z_]{0,31}")
+_NOTE_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_note_keys = {}
+_notes = threading.local()
 _queue = queue.Queue(HOOK_QUEUE)
 _served = []
 _dropped = [0]
@@ -454,7 +462,7 @@ def role(path, method):
     return route.role if route else None
 
 
-def after(fn=None, fields=(), capture=None):
+def after(fn=None, fields=(), notes=()):
     """Register fn(request, status, ms) to run after each request that reached
     its request line, answered or refused, wherever it was answered. request is
     what a route gets, without its body, query, cookies or session; status is
@@ -468,20 +476,51 @@ def after(fn=None, fields=(), capture=None):
     client: escape and cut the path and headers before keeping them. It must
     not read thread-locals (homestead_changes.REQUEST, the host-access role):
     it runs on another thread. What it needs from the request's own thread
-    comes through capture: called there when the request is answered (even if
-    its hooks are then dropped), and what it returns is passed to fn as
-    noted=."""
+    comes through notes: the keys it declares here, which code handling the
+    request sets with note(key, value); fn is then called with notes={...}
+    holding those of its keys that were set."""
     if isinstance(fields, str) or any(field not in HOOK_FIELDS for field in fields):
         raise ValueError(f"a hook may ask only for {', '.join(HOOK_FIELDS)}, not {fields!r}")
+    if isinstance(notes, str) or any(not isinstance(key, str) or not _NOTE_KEY.fullmatch(key) for key in notes):
+        raise ValueError(f"a hook declares its note keys as names, not {notes!r}")
 
     def register(fn):
         if not callable(fn):
             raise TypeError(f"a hook is a function, not {fn!r}")
         _hooks.append((fn, tuple(fields)))
-        if capture is not None:
-            _captures[fn] = capture
+        if notes:
+            _note_keys[fn] = tuple(notes)
+        else:
+            _note_keys.pop(fn, None)
         return fn
     return register if fn is None else register(fn)
+
+
+def note(key, value):
+    """Something about this request for the hooks that declared key: a short
+    name (cut to NOTE_CAP) or a whole number, never free text."""
+    if key not in {k for keys in _note_keys.values() for k in keys}:
+        raise ValueError(f"no hook takes a note called {key!r}")
+    if isinstance(value, str) and value:
+        value = value[:NOTE_CAP]
+        if not _NOTE_VALUE.fullmatch(value):
+            raise ValueError(f"a note is a name or a number, not {value!r}")
+    elif type(value) is not int:
+        raise ValueError(f"a note is a name or a number, not {value!r}")
+    _notes.__dict__.update(AUDIT.redact({key: value}))
+
+
+def _take_notes():
+    taken = dict(_notes.__dict__)
+    _notes.__dict__.clear()
+    return taken
+
+
+def _clear_notes():
+    _notes.__dict__.clear()
+
+
+HTTP.REQUEST_STARTED.append(_clear_notes)
 
 
 def hooks_dropped():
@@ -519,16 +558,9 @@ def _hook_fields(raw, fields):
                          if isinstance(body.get(field), str) and _HOOK_VALUE.fullmatch(body[field])})
 
 
-def _captured(fn):
-    """fn, given what its capture took on this thread, if it has one."""
-    capture = _captures.get(fn)
-    if capture is None:
-        return fn
-    try:
-        noted = capture()
-    except Exception:
-        noted = None
-    return functools.partial(fn, noted=noted)
+def _with_notes(fn, noted):
+    keys = _note_keys.get(fn)
+    return functools.partial(fn, notes={k: v for k, v in noted.items() if k in keys}) if keys else fn
 
 
 def _read_only(value):
@@ -551,8 +583,9 @@ def after_request(handler):
                               None))
     ms = round((time.monotonic() - handler._started) * 1000)
     body = getattr(handler, "_raw", None)
-    jobs = [(_captured(fn), view._replace(body=_hook_fields(body, fields)) if fields else view, handler._status, ms)
-            for fn, fields in list(_hooks)]
+    noted = _take_notes()
+    jobs = [(_with_notes(fn, noted), view._replace(body=_hook_fields(body, fields)) if fields else view,
+             handler._status, ms) for fn, fields in list(_hooks)]
     _ensure_worker()
     try:
         _queue.put_nowait(jobs)

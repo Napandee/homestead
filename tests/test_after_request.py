@@ -352,5 +352,94 @@ class ThroughServer(unittest.TestCase):
                           request.conn.tls, request.addr, request.path))
 
 
+
+class DeclaredNotes(unittest.TestCase):
+    """What a request notes for its hooks (#738): only keys a hook declared,
+    short names or numbers, cleared at every request's start."""
+
+    def setUp(self):
+        import homestead_routes as ROUTES
+        self.ROUTES = ROUTES
+        ROUTES.table()
+        self.addCleanup(ROUTES._hooks.__setitem__, slice(None), list(ROUTES._hooks))
+        self.addCleanup(ROUTES._note_keys.update, dict(ROUTES._note_keys))
+        self.addCleanup(ROUTES._clear_notes)
+        ROUTES._clear_notes()
+        self.fn = lambda request, status, ms, notes=None: None
+        ROUTES.after(self.fn, notes=("to", "count"))
+
+    def test_only_declared_keys_may_be_noted(self):
+        self.ROUTES.note("to", "member-2")
+        for key in ("password", "body", "setup_code", ""):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.ROUTES.note(key, "x")
+        self.assertEqual({"to": "member-2"}, self.ROUTES._take_notes())
+
+    def test_values_are_short_names_or_numbers(self):
+        self.ROUTES.note("to", "a" * 500)
+        self.assertEqual("a" * self.ROUTES.NOTE_CAP, self.ROUTES._take_notes()["to"])
+        self.ROUTES.note("count", 3)
+        self.assertEqual({"count": 3}, self.ROUTES._take_notes())
+        for value in ("a b", "Bearer hsk_x", "-x", "", None, True, 1.5, {"a": 1}, ["x"], b"x"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.ROUTES.note("to", value)
+
+    def test_declared_keys_are_names(self):
+        for notes in ("to", ("bad key",), ("",), (3,)):
+            with self.subTest(notes=notes), self.assertRaises(ValueError):
+                self.ROUTES.after(lambda *a, **k: None, notes=notes)
+
+    def test_a_request_start_clears_what_the_last_one_noted(self):
+        self.ROUTES.note("to", "member-2")
+        for reset in HTTP.REQUEST_STARTED:
+            reset()
+        self.assertEqual({}, self.ROUTES._take_notes())
+
+
+class NotesThroughServer(ThroughServer):
+    """Notes reach the hooks' thread, only the declared ones, and never the next request."""
+
+    def run(self, result=None):         # only this class's tests, not ThroughServer's again
+        if not self._testMethodName.startswith("test_notes"):
+            return result
+        return super().run(result)
+
+    def noting(self, declared=("to",)):
+        self.ROUTES.after(lambda request, status, ms, notes=None: self.seen.append((request.path, notes)),
+                          notes=declared)
+        self.ROUTES.after(lambda request, status, ms: self.seen.append((request.path, "undeclared")))
+        self.route("POST", "/api/test/noting", "admin", lambda request: self.ROUTES.note("to", "member-2") or {})
+        self.route("POST", "/api/test/plain", "admin", lambda request: {"ok": True})
+
+    def kept_alive(self, *paths):
+        client = HTTPConnection(*self.listener.server_address, timeout=3)
+        self.addCleanup(client.close)
+        for path in paths:
+            client.request("POST", path, "{}", {"Content-Type": "application/json", "X-Homestead-Auth": "1"})
+            client.getresponse().read()
+
+    def test_notes_reach_only_the_hooks_that_declared_them(self):
+        self.noting()
+        self.kept_alive("/api/test/noting")
+        self.assertTrue(until(lambda: len(self.seen) == 2))
+        self.assertEqual({("/api/test/noting", "undeclared")}, {s for s in self.seen if s[1] == "undeclared"})
+        self.assertIn(("/api/test/noting", {"to": "member-2"}), self.seen)
+
+    def test_notes_never_carry_over_on_a_kept_alive_connection(self):
+        """Even when the hook point failed for the request that noted them."""
+        self.noting()
+        real, failed = self.ROUTES._read_only, []
+
+        def once(value):
+            if not failed:
+                failed.append(1)
+                raise RuntimeError("the hook point failed for this request")
+            return real(value)
+        self.enterContext(mock.patch.object(self.ROUTES, "_read_only", side_effect=once))
+        self.kept_alive("/api/test/noting", "/api/test/plain")
+        self.assertTrue(until(lambda: len(self.seen) == 2))
+        self.assertEqual([("/api/test/plain", {})], [s for s in self.seen if s[1] != "undeclared"])
+
+
 if __name__ == "__main__":
     unittest.main()
