@@ -4,6 +4,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_addons as ADDONS
 import homestead_networking as networking
+import homestead_network_services as SVC
 import homestead_platform as PLATFORM
 import test_networking
 
@@ -102,7 +103,7 @@ class K3sVipServiceTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_an_automatic_vip_gets_kube_vips_class_and_its_address(self):
-        networking.create_service({"namespace": "lab", "name": "pihole", "workload": "pihole", "type": "LoadBalancer",
+        SVC.create_service({"namespace": "lab", "name": "pihole", "workload": "pihole", "type": "LoadBalancer",
                                    "vip_mode": "automatic",
                                    "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
         body = self.sent[-1][2]
@@ -110,14 +111,14 @@ class K3sVipServiceTests(unittest.TestCase):
         self.assertEqual("192.0.2.80", body["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"])
 
     def test_the_nodes_addresses_stay_on_offer_and_a_vip_does_not_take_a_node_port(self):
-        plan = networking.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "nodes",
+        plan = SVC.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "nodes",
                                         "ports": [{"port": 9000, "target_port": 80, "protocol": "TCP"}]})
         self.assertEqual(("nodes", ""), (plan["vip_mode"], plan["vip"]))
         with self.assertRaisesRegex(ValueError, "port 8088/TCP is already answered by lab/homestead"):
-            networking.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "shared",
+            SVC.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "shared",
                                      "ports": [{"port": 8088, "target_port": 80, "protocol": "TCP"}]})
         # 8088 on a VIP of its own is fine: only the nodes' addresses have it.
-        plan = networking.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "automatic",
+        plan = SVC.service_plan({"namespace": "lab", "name": "web", "workload": "pihole", "vip_mode": "automatic",
                                         "ports": [{"port": 8088, "target_port": 80, "protocol": "TCP"}]})
         self.assertEqual("192.0.2.80", plan["vip"])
 

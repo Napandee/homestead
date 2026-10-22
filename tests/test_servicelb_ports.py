@@ -3,6 +3,9 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as networking
+import homestead_network_services as SVC
+import homestead_platform as PLATFORM
+import urllib.error
 import test_networking
 
 
@@ -33,16 +36,16 @@ class ServiceLbTests(unittest.TestCase):
 
         def strict(path):
             if path not in base.objects:
-                raise networking.urllib.error.HTTPError(path, 404, "missing", {}, None)
+                raise urllib.error.HTTPError(path, 404, "missing", {}, None)
             return get(path)
         networking.bind(strict, lambda m, p, b=None, **k: self.sent.append((m, p, b)) or b,
                         {"kube-system"}, "lab", "")  # no LB_IP, as a k3s install has
-        patcher = mock.patch.object(networking.PLATFORM, "detect", return_value={"load_balancer": "servicelb"})
+        patcher = mock.patch.object(PLATFORM, "detect", return_value={"load_balancer": "servicelb"})
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def test_exposing_a_port_needs_no_shared_vip(self):
-        message = networking.sync_workload_ports("lab", "pihole", [
+        message = SVC.sync_workload_ports("lab", "pihole", [
             {"name": "dns", "container": 53, "host": 53, "protocol": "UDP", "expose": True}])
         method, path, body = self.sent[-1]
         self.assertEqual(("POST", "/api/v1/namespaces/lab/services"), (method, path))
@@ -52,14 +55,14 @@ class ServiceLbTests(unittest.TestCase):
 
     def test_a_port_another_service_has_is_refused_before_anything_changes(self):
         with self.assertRaisesRegex(ValueError, r"port 80/TCP is already answered by kube-system/traefik.*another LAN port"):
-            networking.prepare_deploy({"name": "web", "namespace": "lab", "network_mode": "loadbalancer",
+            SVC.prepare_deploy({"name": "web", "namespace": "lab", "network_mode": "loadbalancer",
                                        "ports": [{"container": 8080, "host": 80, "protocol": "TCP", "expose": True}]})
         self.assertEqual([], self.sent)
 
     def test_every_mode_becomes_the_nodes_addresses(self):
         for mode in ("shared", "auto", "manual"):
             with self.subTest(mode=mode):
-                cfg = networking.prepare_deploy({"name": "web", "namespace": "lab", "network_mode": "loadbalancer",
+                cfg = SVC.prepare_deploy({"name": "web", "namespace": "lab", "network_mode": "loadbalancer",
                                                  "vip_mode": mode, "lb_ip": "192.0.2.99",
                                                  "ports": [{"container": 8080, "host": 8080, "protocol": "TCP",
                                                             "expose": True}]})

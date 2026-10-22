@@ -9,7 +9,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_baseline as BASELINE
-import homestead_networking as NETWORK
+import homestead_network_state as STATE
+import homestead_network_inventory as INV
+import homestead_vip_registry as REG
+import homestead_platform as PLATFORM
 import homestead_self_address as SELF_ADDRESS
 
 
@@ -122,25 +125,25 @@ class ChangeVipTests(unittest.TestCase):
             service("frigate", "frigate", [{"port": 5000, "protocol": "TCP"}], ["192.0.2.200"], ["192.0.2.200"]),
             service("other", "other", [{"port": 80, "protocol": "TCP"}], ["192.0.2.201"])]}
         self.services["frigate"] = copy.deepcopy(self.services["homestead-vip"])
-        patches = [mock.patch.object(NETWORK, "inventory", lambda: copy.deepcopy(inventory)),
-                   mock.patch.object(NETWORK, "registered", lambda: copy.deepcopy(self.rows)),
-                   mock.patch.object(NETWORK, "check_address", lambda ip, state=None: None),
-                   mock.patch.object(NETWORK, "_update_registered", lambda change: self.saved.append(change(copy.deepcopy(self.rows)))),
-                   mock.patch.object(NETWORK, "kget", lambda path: copy.deepcopy(self.services[path.rsplit("/", 1)[-1]])),
-                   mock.patch.object(NETWORK, "ksend", lambda method, path, body=None, **k: self.sent.append((method, path, body))),
-                   mock.patch.object(NETWORK.PLATFORM, "vip_annotations", lambda vip: {"kube-vip.io/loadbalancerIPs": vip})]
+        patches = [mock.patch.object(INV, "inventory", lambda: copy.deepcopy(inventory)),
+                   mock.patch.object(REG, "registered", lambda: copy.deepcopy(self.rows)),
+                   mock.patch.object(INV, "check_address", lambda ip, state=None: None),
+                   mock.patch.object(REG, "_update_registered", lambda change: self.saved.append(change(copy.deepcopy(self.rows)))),
+                   mock.patch.object(STATE, "kget", lambda path: copy.deepcopy(self.services[path.rsplit("/", 1)[-1]])),
+                   mock.patch.object(STATE, "ksend", lambda method, path, body=None, **k: self.sent.append((method, path, body))),
+                   mock.patch.object(PLATFORM, "vip_annotations", lambda vip: {"kube-vip.io/loadbalancerIPs": vip})]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
 
     def test_the_review_lists_everything_on_the_old_address_and_changes_nothing(self):
-        plan = NETWORK.change_vip("192.0.2.200", "192.0.2.210")
+        plan = REG.change_vip("192.0.2.200", "192.0.2.210")
         self.assertEqual(["homestead-vip", "frigate"], [s["name"] for s in plan["services"]])
         self.assertTrue(plan["default"])
         self.assertEqual(([], []), (self.sent, self.saved))
 
     def test_applied_every_service_moves_and_the_vip_keeps_its_label_and_default(self):
-        NETWORK.change_vip("192.0.2.200", "192.0.2.210", apply=True)
+        REG.change_vip("192.0.2.200", "192.0.2.210", apply=True)
         self.assertEqual(2, len(self.sent))
         for method, path, body in self.sent:
             self.assertEqual("PUT", method)
@@ -153,8 +156,8 @@ class ChangeVipTests(unittest.TestCase):
     def test_an_address_added_meanwhile_ends_as_one_entry(self):
         # Another tab adds the new address while the Services move (#621).
         stored = self.rows + [{"ip": "192.0.2.210", "label": "", "default": False}]
-        with mock.patch.object(NETWORK, "_update_registered", lambda change: self.saved.append(change(copy.deepcopy(stored)))):
-            NETWORK.change_vip("192.0.2.200", "192.0.2.210", apply=True)
+        with mock.patch.object(REG, "_update_registered", lambda change: self.saved.append(change(copy.deepcopy(stored)))):
+            REG.change_vip("192.0.2.200", "192.0.2.210", apply=True)
         rows = self.saved[-1]
         self.assertEqual(["192.0.2.210"], [row["ip"] for row in rows])
         self.assertEqual(("Homestead and apps", True, "192.0.2.200"), (rows[0]["label"], rows[0]["default"], rows[0]["previous"]))
@@ -162,7 +165,7 @@ class ChangeVipTests(unittest.TestCase):
     def test_a_new_address_in_use_or_a_node_address_is_refused(self):
         for new, words in (("192.0.2.21", "node's own"), ("192.0.2.201", "already used by a Service")):
             with self.subTest(words=words), self.assertRaisesRegex(ValueError, words):
-                NETWORK.change_vip("192.0.2.200", new)
+                REG.change_vip("192.0.2.200", new)
 
 
 class InstallerVipTests(unittest.TestCase):
