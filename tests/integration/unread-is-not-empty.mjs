@@ -14,6 +14,12 @@ const failing = path => {
     ? Promise.reject(new Error("timed out")) : read(asked, ...rest);
 };
 const settled = page => page.waitForFunction(() => !document.querySelector("#mbody .spin2, #mbody .loading"));
+// The same for one exact URL, query included (a page that reads two views of one path).
+const failingExact = url => {
+  window.__realApi = window.__realApi || window.api;
+  const read = window.__realApi;
+  window.api = (asked, ...rest) => String(asked) === url ? Promise.reject(new Error("timed out")) : read(asked, ...rest);
+};
 
 try {
   for (const width of [1440, 390]) {
@@ -483,6 +489,91 @@ try {
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.waitForFunction(() => !document.querySelector("#rc_unread"), null, {timeout: 10000});
     await page.evaluate(() => { clearInterval(window.__reclassTimer); closeModal(); });
+
+    // Apps (part 9). The image cache: unread VM images are said, not left out.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/images/vm");
+    await page.evaluate(() => viewImages());
+    await page.waitForFunction(() => /Could not read the VM images/.test(document.body.innerText), null, {timeout: 10000});
+    assert.match(await page.locator("body").innerText(), /Could not read the VM images[\s\S]*timed out/);
+
+    // Import: unread hosts and storage class details are named with the rest.
+    for (const [setup, arg, what] of [[failing, "/api/nodes", "hosts"],
+      [failingExact, "/api/storageclasses?facts=1", "storage class details"]]) {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(setup, arg);
+      await page.evaluate(() => viewImport());
+      await page.waitForFunction(w => document.body.innerText.includes(`${w}: timed out`), what, {timeout: 10000});
+    }
+
+    // Choosing another namespace: unread volumes there are not the old namespace's.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/deploy/options");
+    const left = await page.evaluate(async () => {
+      STATE.data.importStorage = {storage_classes: ["longhorn"], pvcs: [{name: "old-claim"}]};
+      document.body.insertAdjacentHTML("beforeend", '<select id="im_ns"><option value="other" selected>other</option></select>'
+        + '<datalist id="im_pvc_list"><option value="old-claim"></option></datalist>');
+      await imNamespace("other");
+      const found = {pvcs: STATE.data.importStorage.pvcs.length,
+        options: document.querySelectorAll("datalist#im_pvc_list option").length};
+      document.querySelector("#im_ns").remove(); document.querySelector("datalist#im_pvc_list").remove();
+      return found;
+    });
+    assert.deepEqual(left, {pvcs: 0, options: 0}, "another namespace's volumes are not offered");
+    await page.waitForFunction(() => /Could not read the volumes in other/.test(document.body.innerText), null, {timeout: 5000});
+
+    // The import wizard: hosts not read just now are said; the hardware shown is from earlier.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/nodes");
+    await page.evaluate(() => importSetup("unraid", "media-server"));
+    await settled(page);
+    assert.match(await body(), /Could not read the hosts just now[\s\S]*timed out/);
+    await close();
+
+    // If a host fails: Longhorn's policy unread is said, not left out.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/longhorn/capacity");
+    await page.evaluate(() => wlFailover());
+    await settled(page);
+    assert.match(await body(), /Could not read Longhorn's node-failure policy[\s\S]*timed out/);
+    await close();
+
+    // If a host fails: an unread container list is said, and nothing is saved against an old one.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/workloads");
+    await page.evaluate(() => wlFailover());
+    await settled(page);
+    assert.match(await body(), /Could not read the containers[\s\S]*timed out/);
+    assert.equal(await page.locator("#mbody select[data-fo]").count(), 0, "no policy is offered against an old list");
+    assert.equal(await page.locator("#mbody button", {hasText: "Save changes"}).count(), 0, "Save is not offered");
+    await close();
+
+    // A container's LAN address: unread networks are not "No LAN network yet", and the failure is not kept.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/vm/create-options");
+    const lan = await page.evaluate(async () => {
+      const kept = window.__vmCreateOptions; delete window.__vmCreateOptions;
+      const html = await containerLanFields("t");
+      const cached = window.__vmCreateOptions !== undefined;
+      window.__vmCreateOptions = kept;
+      return {html, cached};
+    });
+    assert.match(lan.html, /Could not read the networks[\s\S]*timed out/);
+    assert.doesNotMatch(lan.html, /No LAN network/);
+    assert.equal(lan.cached, false, "a failed read is not kept as the answer");
+
+    // Checking images: a progress read that fails says so while the check goes on.
+    await page.evaluate(() => { window.api = window.__realApi; go("workloads"); });
+    await page.waitForSelector("#scanprogress", {state: "attached"});
+    await page.evaluate(failing, "/api/image-updates/scan-progress");
+    await page.evaluate(() => {
+      window.__realLoadUpdates = window.loadImageUpdates;
+      window.loadImageUpdates = () => new Promise(resolve => { window.__finishScan = resolve; });
+      checkImageUpdates();
+    });
+    await page.waitForFunction(() => /could not read the progress/i.test(document.querySelector("#scanprogress")?.innerText || ""),
+      null, {timeout: 10000});
+    await page.evaluate(() => { window.loadImageUpdates = window.__realLoadUpdates; window.__finishScan(null); window.api = window.__realApi; });
 
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);
