@@ -68,7 +68,8 @@ repository evidence, not an independent determination of copyright ownership.
 | grpcio, protobuf, typing-extensions | Apache-2.0, BSD-3-Clause and PSF-2.0 respectively; permitted alongside the new terms, with package notices retained. Versions and wheel hashes remain in `requirements-topology.txt`. |
 | Python / Alpine and rsync / smartmontools | Independently licensed runtime and executables. rsync and smartctl are invoked as subprocesses, not linked or copied into Homestead. Their GPL rights and corresponding-source obligations remain intact. The root licence expressly excludes these components. |
 | Kubernetes, KubeVirt, Longhorn, Harvester and other cluster services | Interoperate as separately installed services. Installing or managing them does not place them under the Commons Clause. |
-| Fonts, app catalogue, workload icons and optional service images | External content retains its original terms. This change supplies no permission to redistribute the catalogue or relicense third-party images. |
+| App catalogue, workload icons and optional service images | External content retains its original terms. This change supplies no permission to redistribute the catalogue or relicense third-party images. |
+| Inter Tight 3.004 and JetBrains Mono 2.304 (bundled; formerly loaded from Google Fonts) | SIL Open Font License 1.1, which allows bundling with any software, sold or not, as long as the fonts are not sold by themselves. Neither declares a Reserved Font Name. The upstream woff2 files are shipped unmodified in `web/vendor/fonts/`, each family with its copyright notice and the full licence in `OFL.txt`. No Commons Clause restriction applies to the fonts. |
 
 Published npm archives were compared with the bundled executable/source files
 (normalising CRLF only); Monaco, noVNC, xterm and its fit add-on matched.

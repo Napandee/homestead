@@ -1,4 +1,15 @@
 /* Homestead — premium dark control surface */
+/* Fonts ship with Homestead (web/vendor/fonts, SIL OFL 1.1; see THIRD_PARTY_NOTICES.md), so the first
+   screen never waits on another host. swap: text shows in the fallback until a face arrives. */
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:400;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-Regular.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:500;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-Medium.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:600;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-SemiBold.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:700;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-Bold.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:800;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-ExtraBold.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:500;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-Medium.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:600;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-SemiBold.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:700;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-Bold.woff2) format("woff2")}
 :root{
   --hdr:74px; --blur:26px;
   --bg:#070708; --surf:#111113; --surf2:#161618; --surf3:#1d1d20;

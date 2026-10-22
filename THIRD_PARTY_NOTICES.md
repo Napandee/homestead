@@ -20,6 +20,8 @@ are listed here with their terms.
 | [noVNC](https://github.com/novnc/noVNC) 1.7.0 (`core` and `vendor` from the npm package) | `web/vendor/novnc/` | MPL-2.0 - © the noVNC authors (see [`AUTHORS`](web/vendor/novnc/AUTHORS)); [overview](web/vendor/novnc/LICENSE.txt), [full MPL text](web/vendor/novnc/docs/LICENSE.MPL-2.0). Unmodified source is included in `core/`; the exact package is [@novnc/novnc 1.7.0](https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz). MPL-covered files and modifications remain under MPL-2.0, independently of Homestead's licence. |
 | noVNC DES implementation | `web/vendor/novnc/core/crypto/des.js` | Its retained header includes Widget Workshop, AT&T and Jef Poskanzer attributions and permissive terms; see that source file and noVNC's BSD licence texts. |
 | [xterm.js](https://github.com/xtermjs/xterm.js) 6.0.0 and its fit add-on 0.11.0 (`lib` and `css` from the npm packages) | `web/vendor/xterm/` | MIT - © The xterm.js authors; [`LICENSE`](web/vendor/xterm/LICENSE) and the add-on's separate [`LICENSE-addon-fit`](web/vendor/xterm/LICENSE-addon-fit). Unmodified. |
+| [Inter Tight](https://github.com/rsms/inter-tight) 3.004, weights 400–800 (woff2 from [googlefonts/inter-gf-tight](https://github.com/googlefonts/inter-gf-tight) at `c194f94c`) | `web/vendor/fonts/inter-tight/` | [SIL OFL 1.1](web/vendor/fonts/inter-tight/OFL.txt) - © 2022 The Inter Project Authors. No Reserved Font Name. Unmodified. |
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) 2.304, weights 400–700 (woff2 from the `v2.304` tag) | `web/vendor/fonts/jetbrains-mono/` | [SIL OFL 1.1](web/vendor/fonts/jetbrains-mono/OFL.txt) - © 2020 The JetBrains Mono Project Authors. No Reserved Font Name. Unmodified. |
 | pako, shipped with noVNC | `web/vendor/novnc/vendor/pako/` | MIT - © Vitaly Puzrin; see [`web/vendor/novnc/vendor/pako/LICENSE`](web/vendor/novnc/vendor/pako/LICENSE) |
 
 ## In the Homestead container image
@@ -58,9 +60,6 @@ bundled or modified.
 
 ## Loaded at runtime
 
-- **Fonts** - [Inter Tight](https://github.com/rsms/inter) and
-  [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), both under the
-  [SIL Open Font License 1.1](https://openfontlicense.org), served by Google Fonts.
 - **App Store listings** - read on demand from the public
   [Community Applications feed](https://github.com/Squidly271/AppFeed) (or a feed
   set in Settings) and never bundled. Templates, descriptions and icons belong to
