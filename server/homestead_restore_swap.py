@@ -52,7 +52,7 @@ import homestead_autoupdate as AUTOUPDATE
 import homestead_cancel as CANCEL
 import homestead_kube as KUBE
 import homestead_leader as LEADER
-import homestead_longhorn as LH
+import homestead_longhorn_restore as RESTORE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_reclass as RECLASS
@@ -96,9 +96,9 @@ def fence(handle):
     return STORAGE_GUARD.volume(OPS, kget, handle) if handle else contextlib.nullcontext()
 
 
-backup_object = lambda name: LH._backup(name)
-restore_plan = lambda backup, ns, name: LH.restore_plan(backup, ns, name)
-restore_backup = lambda cfg: LH.restore_backup(cfg)
+backup_object = lambda name: RESTORE._backup(name)
+restore_plan = lambda backup, ns, name: RESTORE.restore_plan(backup, ns, name)
+restore_backup = lambda cfg: RESTORE.restore_backup(cfg)
 restore_resolver = lambda item: OPS.RESOLVERS["volume-restore"](item)
 restore_cancel = lambda item: CANCEL.restore_cancel(item, {})
 uptime_report = lambda: AUTOUPDATE.uptime_report()
@@ -348,7 +348,7 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     status = item.get("status") or {}
     blockers, notices = [], []
     try:
-        LH._restore_source(item)
+        RESTORE._restore_source(item)
     except ValueError as error:
         blockers.append(str(error))
     source_ns, source_claim = _backup_claim(status)
