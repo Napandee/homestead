@@ -10,6 +10,7 @@ import json
 import re
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -41,12 +42,19 @@ def _path(namespace, name=""):
 
 
 def _items(path, optional=False):
-    try:
+    """The rows, or none when the list has no "items" key; when optional, also
+    when it is not there (404). Tolerant on purpose: making it strict is #620's."""
+    if not optional:
         return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if optional and error.code == 404:
-            return []
-        raise
+    answered = []   # what kget answered: still empty after a 404
+
+    def read(where):
+        answered.append(kget(where))
+        return answered[0]
+    KUBE.get_optional(path, read=read)
+    # A null answer is not a 404: .get fails on it, as before, so nothing
+    # acts on it as an empty list.
+    return answered[0].get("items", []) if answered else []
 
 
 def matches(selector, labels):

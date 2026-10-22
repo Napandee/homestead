@@ -37,6 +37,7 @@ import urllib.parse
 
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_pod_resources as RESOURCES
 import homestead_routes as ROUTER
@@ -92,12 +93,17 @@ def mem(value):
 
 
 def _items(path):
-    try:
-        return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return []
-        raise
+    """The rows, or none when the list is not there (404) or has no "items"
+    key. Tolerant on purpose: making it strict is #620's."""
+    answered = []   # what kget answered: still empty after a 404
+
+    def read(where):
+        answered.append(kget(where))
+        return answered[0]
+    KUBE.get_optional(path, read=read)
+    # A null answer is not a 404: .get fails on it, as before, so nothing
+    # acts on it as an empty list.
+    return answered[0].get("items", []) if answered else []
 
 
 def _deployment_of(pod, sets):

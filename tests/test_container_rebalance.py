@@ -308,6 +308,14 @@ class JobTests(unittest.TestCase):
         self.assertEqual("succeeded", state)
         self.assertIn("Moved 1 container", message)
 
+    def test_a_null_budget_list_moves_nothing(self):
+        """Budgets are checked again before each move: an answer of null is
+        not "no budgets"."""
+        self.c.objects["/apis/policy/v1/poddisruptionbudgets"] = None
+        with self.assertRaises(AttributeError):
+            C.status(self.item)
+        self.assertEqual([], self.c.moved)
+
     def test_one_that_does_not_start_stops_the_rest(self):
         C.status(self.item)
         self.item["ref"]["started"] = time.time() - 700

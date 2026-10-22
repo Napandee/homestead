@@ -50,6 +50,18 @@ class FirewallTests(unittest.TestCase):
         self.cfg.update(uid="policy-1", resource_version="10")
         return obj
 
+    def test_a_null_pod_list_stops_the_save(self):
+        """Its pods are checked for host-network and platform pods before the
+        policy is written: an answer of null is not "no pods"."""
+        self.pod["spec"]["hostNetwork"] = True
+        get = self.get
+        F.bind(lambda path: None if path == "/api/v1/namespaces/apps/pods" else get(path),
+               lambda *args: self.sent.append(args), lambda: {"distribution": "k3s"}, "lab")
+        with self.assertRaises(AttributeError):
+            self.cfg["review"] = F.preview(self.cfg)["review"]
+            F.save(self.cfg)
+        self.assertEqual([], self.sent)
+
     def test_default_deny_ingress_does_not_isolate_egress(self):
         plan = F.preview(self.cfg)
         self.assertEqual({"podSelector": {"matchLabels": {"app": "web"}}, "policyTypes": ["Ingress"], "ingress": []}, plan["manifest"]["spec"])
