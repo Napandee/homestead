@@ -3,6 +3,7 @@ the VM goes, and if that can't be done or checked, nothing is deleted (#600).
 Runs on the shared fake API (tests/fakes/kube.py), which deletes what a
 deleted VM still owns, as Kubernetes' garbage collector does."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
+import homestead_operations as OPS
 import homestead_vms as VMS
 from fakes.kube import Kube
 
@@ -38,6 +40,10 @@ PVC = "/api/v1/namespaces/lab/persistentvolumeclaims/web-disk"
 
 class KeepDisksTests(unittest.TestCase):
     def setUp(self):
+        # The shared fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under OPS.DATA_DIR (/data, not writable as non-root).
+        data = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", data))
         VMS.bind(K.kget, K.ksend, lambda *a, **k: [])
         platform = mock.patch.object(VMS, "platform", lambda: {"harvester": False, "cdi": True})
         platform.start()
