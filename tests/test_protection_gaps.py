@@ -466,6 +466,29 @@ class RevertTests(unittest.TestCase):
         REVERT.resolve(resumed)
         self.assertTrue(resumed["ref"]["reverted"])
 
+    def test_a_resumed_revert_is_confirmed_even_when_late_and_not_attached(self):
+        """The step began long ago and Longhorn reports something other than
+        attached: still, a revert that may have gone out is only confirmed."""
+        item = self._to_the_revert()
+        def crash(method, path, body=None):
+            if "snapshotRevert" in path:
+                raise Crash()
+            return self.lh_call(method, path, body)
+        REVERT.lh_call = crash
+        with self.assertRaises(Crash):
+            REVERT.resolve(item)
+        resumed = {"ref": copy.deepcopy(self.saved[-1]["ref"])}
+        resumed["ref"]["since"] = time.time() - 3600
+        self.state = "attaching"
+        REVERT.lh_call = self.lh_call
+        self.calls.clear()
+        status, _, _ = REVERT.resolve(resumed)
+        self.assertEqual("running", status)
+        self.assertEqual("confirming", resumed["ref"]["phase"])
+        self.assertEqual([], self.calls)
+        self.assertFalse([s for s in self.sent if "volumeattachments" in s[1]])
+        self.assertEqual([], self.reclass.started)
+
     def test_a_restart_while_the_snapshot_was_out_keeps_the_one_made(self):
         item = self._to_the_revert()
         def crash(method, path, body=None):

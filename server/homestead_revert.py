@@ -317,6 +317,13 @@ def resolve(item):
     ref = item["ref"]
     ns, volume = ref.get("namespace", ""), ref["volume"]
     phase = ref.get("phase")
+    if ref.get("revert_sent") and not ref.get("reverted") and phase != "confirming":
+        # A leader before this one may have sent the revert: confirm it, never
+        # send it again - and before any step's own checks, which could put
+        # things back while Longhorn may still be reverting.
+        ref.setdefault("revert_error", "Homestead restarted before Longhorn answered")
+        _phase(ref, "confirming")
+        return "running", 60, f"Checking whether Longhorn rolled {volume} back"
     if phase == "stopping":
         if ns:
             _stop(ns, ref)
@@ -362,11 +369,6 @@ def resolve(item):
             if _late(ref):
                 return _put_back(ref, f"{volume} did not attach for the rollback")
             return "running", 35, f"Attaching {volume} to {ref.get('node')}"
-        if ref.get("revert_sent"):
-            # A leader before this one may have sent the revert: confirm it, never send it again.
-            ref.setdefault("revert_error", "Homestead restarted before Longhorn answered")
-            _phase(ref, "confirming")
-            return "running", 60, f"Checking whether Longhorn rolled {volume} back"
         if not ref.get("kept"):
             if ref.get("keep") and _snapshot_made(volume, ref["keep"]):
                 ref["kept"] = ref["keep"]               # made before a restart lost the answer
