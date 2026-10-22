@@ -14,8 +14,8 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 2063
-MAX_PATH_BRANCHES = 57
+MAX_LINES = 2053
+MAX_PATH_BRANCHES = 27
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
 # Lines in server.py's alias block (names tests still patch on server). Only lowered.
@@ -130,6 +130,23 @@ class DeclaredRoutes(unittest.TestCase):
     def test_server_py_has_no_branch_for_a_declared_route(self):
         for method, path in ROUTES.table():
             self.assertNotIn(f'p == "{path}"', handler_body(method), f"{method} {path} is answered by its module")
+
+    def test_prefix_routes_end_in_slash_star(self):
+        for method, path in ROUTES.table():
+            self.assertNotIn("*", path.removesuffix("/*"), f"{method} {path}: only a final /* makes a prefix route")
+
+    def test_no_module_reads_forwarding_headers(self):
+        """Who sent a request, and over what, is decided once in server.py
+        (_client_ip, _over_tls, _via_cloudflare); a module reads request.conn."""
+        for module in sorted((ROOT / "server").glob("homestead_*.py")):
+            text = module.read_text(encoding="utf-8").lower()
+            for header in ("cf-connecting-ip", "x-forwarded-for", "x-forwarded-proto", "cf-ray"):
+                self.assertNotIn(header, text, f"{module.name} reads {header}: use request.conn")
+
+    def test_h_wires_the_hook_and_keeps_handle_one_request(self):
+        import server
+        self.assertIs(server.H.after_request, ROUTES.after_request)
+        self.assertNotIn("handle_one_request", vars(server.H))
 
     def test_handlers_get_the_request(self):
         seen = []

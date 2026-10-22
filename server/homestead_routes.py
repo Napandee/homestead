@@ -29,11 +29,31 @@ network picture after a VIP repair, say) is dropped for the route too. A
 route that changes something drops what it made stale with `forget(*keys)`,
 or every key that starts with a prefix with `forget_prefix(prefix)`.
 
+A route that needs the connection reads `request.conn` (`connected(request)`
+refuses a call made without one): its headers, without Cookie, Authorization,
+Proxy-Authorization, Cf-Access-Jwt-Assertion and the fleet signature; Homestead's
+own cookies; whether it came over TLS or through Cloudflare; and who the guard
+found - the Access sign-in, the linked Homestead, the API key - with `who()` for
+the session. A Reply sets Homestead's own cookies (`cookies=(Cookie(...),)`, each
+at its own path) and only the ROUTE_HEADERS (`headers=(("Location", "/"),)`); its
+status and type are checked too, all before anything is written: one that is
+refused (`Refused`) is answered 500, with none of them. A path ending "/*" is a
+prefix route: it answers the plain paths under it (no ., .., // or %).
+
 A module is listed in MODULES to be read. A route stays in server.py while it
-needs the handler itself - headers, streaming, a redirect.
+needs the handler itself: a WebSocket, /mcp, a file served with its own headers.
 """
 import collections
+import collections.abc
 import importlib
+import json
+import queue
+import re
+import threading
+import time
+import types
+import urllib.parse
+import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
 
 MODULES = (
@@ -146,8 +166,14 @@ MODULES = (
 )
 ROLES = ("viewer", "operator", "admin")
 
-# addr: the address the request came from, as server.py sees it.
-Request = collections.namedtuple("Request", "method path query body user role addr", defaults=("",))
+# addr: the address the request came from, as server.py sees it; conn: the
+# Connection it came on, or None when a route is called in-process.
+Request = collections.namedtuple("Request", "method path query body user role addr conn", defaults=("", None))
+# What a route may know of the connection. headers: a Headers; cookies: Homestead's
+# own, by name; tls, cloudflare: how it reached us; access: the Cloudflare Access
+# claims; fleet: the linked Homestead that sent it; key: the API key it carried;
+# who: a call that answers who is signed in (it may read the account store).
+Connection = collections.namedtuple("Connection", "headers cookies tls cloudflare access fleet key who")
 Route = collections.namedtuple("Route", "method path role handler module")
 Raw = collections.namedtuple("Raw", "body ctype")
 # A download sent as it is read: chunks (an iterator of bytes), its type, the
@@ -155,7 +181,164 @@ Raw = collections.namedtuple("Raw", "body ctype")
 Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 # An answer with its own status: a refusal that carries more than its words,
 # or a 202 for work that carries on. JSON unless told otherwise.
-Reply = collections.namedtuple("Reply", "code body ctype", defaults=("application/json",))
+# headers: (name, value) pairs; cookies: Cookies. Both are checked before sending.
+Reply = collections.namedtuple("Reply", "code body ctype headers cookies", defaults=("application/json", (), ()))
+# max_age None: a cookie that lasts as long as the browser keeps it.
+Cookie = collections.namedtuple("Cookie", "name value path max_age", defaults=("/", None))
+# The only cookies a route may read or set, each with the one path it is set at.
+COOKIES = {"homestead_session": "/", "homestead_cluster": "/", "homestead-data-move": "/api/self/data/handoff/"}
+# The only response headers a route may set: everything else (framing,
+# encoding, caching, security, cross-origin, cookies) is the server's own.
+ROUTE_HEADERS = ("location", "content-disposition", "retry-after", "etag", "last-modified", "vary",
+                 "x-homestead-fleet-missing")
+# Request headers a route never sees: they carry a secret, or the fleet
+# signature that conn.fleet already checked.
+SECRET_HEADERS = ("cookie", "authorization", "proxy-authorization", "cf-access-jwt-assertion", "x-homestead-fleet")
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_VALUE = re.compile(r"[\t\x20-\x7e\x80-\xff]*")
+_COOKIE_VALUE = re.compile(r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*")
+_TOKEN_TEXT = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+# type/subtype, then ; name=value parameters, the value a token or a quoted string.
+_MEDIA = re.compile(rf"{_TOKEN_TEXT}/{_TOKEN_TEXT}(?:[ \t]*;[ \t]*{_TOKEN_TEXT}=(?:{_TOKEN_TEXT}|\"[^\"\\\x00-\x1f\x7f]*\"))*")
+# The rest of a path under a prefix route: plain segments, none empty, no . or .., no % or \.
+_REST = re.compile(r"(?!\.\.?(?:/|$))[^/%\\]+(?:/(?!\.\.?(?:/|$))[^/%\\]+)*")
+# A path on this site: never //host or /\host, which a browser reads as another site.
+_LOCATION = re.compile(r"/(?![/\\])[^\s\\]*")
+
+# The body fields an after-request hook may ask for, and the values it gets:
+# names, never free text. A hook gets no body at all unless it asks.
+HOOK_FIELDS = ("ns", "namespace", "kind", "name")
+_HOOK_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+_HOOK_BODY = 64 * 1024
+# How many requests' hooks may wait for the hooks' thread before more are dropped.
+HOOK_QUEUE = 256
+_hooks = []
+_queue = queue.Queue(HOOK_QUEUE)
+_served = []
+_dropped = [0]
+_worker_lock = threading.Lock()
+
+
+class Refused(Exception):
+    """A reply a route may not send: Homestead's own mistake, answered 500."""
+
+
+class Headers(collections.abc.Mapping):
+    """The request's headers, read-only, by any case, without SECRET_HEADERS.
+    A header sent twice is read as its first value."""
+
+    def __init__(self, pairs):
+        self._pairs = [(str(name), str(value)) for name, value in pairs if not _secret(str(name))]
+        self._first = {}
+        for name, value in self._pairs:
+            self._first.setdefault(name.lower(), (name, value))
+
+    def __getitem__(self, name):
+        return self._first[str(name).lower()][1]
+
+    def __iter__(self):
+        return (name for name, _ in self._first.values())
+
+    def __len__(self):
+        return len(self._first)
+
+    def __repr__(self):
+        return f"Headers({self._pairs!r})"
+
+
+def _secret(name):
+    name = name.lower()
+    return name in SECRET_HEADERS or name.startswith("x-homestead-fleet-")
+
+
+def connected(request):
+    """The request's Connection; a route that needs one is refused in-process."""
+    if request.conn is None:
+        raise PermissionError(f"{request.path} answers only over HTTP")
+    return request.conn
+
+
+def cookie_header(cookie, tls):
+    """The Set-Cookie value for one of Homestead's cookies, as server.py writes
+    its session cookie: Secure only behind TLS."""
+    name, value, path, max_age = cookie
+    if name not in COOKIES:
+        raise Refused(f"a route may set only Homestead's own cookies, not {name!r}")
+    if not isinstance(value, str) or not _COOKIE_VALUE.fullmatch(value):
+        raise Refused(f"cookie {name} has a value a cookie cannot carry")
+    if path != COOKIES[name]:
+        raise Refused(f"cookie {name} is set at {COOKIES[name]}, not {path!r}")
+    if max_age is not None and (type(max_age) is not int or max_age < 0):
+        raise Refused(f"cookie {name} has a Max-Age that is not a whole number of seconds")
+    return (f"{name}={value}; Path={path}; HttpOnly; SameSite=Strict{'; Secure' if tls else ''}"
+            f"{f'; Max-Age={max_age}' if max_age is not None else ''}")
+
+
+def check_header(name, value):
+    """(name, value) when a route may send it; Refused otherwise."""
+    if not isinstance(name, str) or not _TOKEN.fullmatch(name):
+        raise Refused(f"{name!r} is not a header name")
+    if name.lower() not in ROUTE_HEADERS:
+        raise Refused(f"a route may not set {name}: only {', '.join(ROUTE_HEADERS)}")
+    if not isinstance(value, str) or not _VALUE.fullmatch(value):
+        raise Refused(f"{name} has a value a header cannot carry")
+    if name.lower() == "location" and not _LOCATION.fullmatch(value):
+        raise Refused("Location must be a path on this site")
+    return name, value
+
+
+def check_answer(code, ctype):
+    """A status and Content-Type a route may answer with; Refused otherwise.
+    No 1xx, 204 or 304: each would break the framing of the answer's body."""
+    if type(code) is not int or not 200 <= code <= 599 or code in (204, 304):
+        raise Refused(f"a route may not answer with status {code!r}")
+    if not isinstance(ctype, str) or not _MEDIA.fullmatch(ctype):
+        raise Refused(f"{ctype!r} is not a media type")
+
+
+def _tls(handler):
+    try:
+        return handler._over_tls()
+    except AttributeError:      # a handler with no socket: the proxy's word alone
+        return False
+
+
+def _headers(handler):
+    if getattr(handler, "headers", None) is None:
+        handler.headers = {}    # none read: a request refused before its headers, or a test's handler
+    return handler.headers
+
+
+def connection(handler):
+    """The Connection a route sees, from server.py's handler after its guard."""
+    raw = _headers(handler)
+    if raw.get("X-Homestead-Fleet") and getattr(handler, "_fleet_who", None) is False:
+        handler._fleet_identity()       # a public path: the guard did not check the sender
+    cookies = {name: value for name, value in handler._cookies().items() if name in COOKIES}
+    return Connection(Headers(raw.items()), types.MappingProxyType(cookies), _tls(handler),
+                      handler._via_cloudflare(), getattr(handler, "_access", None),
+                      getattr(handler, "_fleet_from", None), getattr(handler, "api_key", None), handler._who)
+
+
+def answer(handler, answer):
+    """Send what a route returned. A Reply's cookies and headers are all checked
+    before any is added, after what the guard already set (a refreshed session)."""
+    if isinstance(answer, Stream):
+        check_answer(200, answer.ctype)
+        handler._send_stream(answer)
+    elif isinstance(answer, Raw):
+        check_answer(200, answer.ctype)
+        handler._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
+        handler._send(200, answer.body, answer.ctype)
+    elif isinstance(answer, Reply):
+        check_answer(answer.code, answer.ctype)
+        tls = _tls(handler) if answer.cookies else False
+        lines = ([("Set-Cookie", cookie_header(Cookie(*cookie), tls)) for cookie in answer.cookies] +
+                 [check_header(*header) for header in answer.headers])
+        handler._extra_headers += lines
+        handler._send(answer.code, answer.body, answer.ctype)
+    else:
+        handler._send(200, answer)
 
 _table = {}
 # How long the pages' main reads (overview, hosts, apps, VMs, volumes,
@@ -211,17 +394,131 @@ def table():
                 raise ValueError(f"{method} {path} in {name} has no known role: {role!r}")
             if not callable(handler):
                 raise ValueError(f"{method} {path} in {name} has no handler")
+            if "*" in path and not (path.endswith("/*") and path.count("*") == 1):
+                raise ValueError(f"{method} {path} in {name}: a prefix route ends in /* and has no other *")
+            if path.endswith("/*") and _covers(key[0], path[:-1]):
+                raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)
     _table.update(found)
     return _table
 
 
+def _covers(method, stem):
+    """Whether a prefix route under stem would take a path the route policy,
+    the public paths, server.py's own prefix branches, a page or a file of the
+    app already answer."""
+    import homestead_route_policy as POLICY
+    import homestead_web_paths as WEB
+    taken = [p for m, p in POLICY.POLICY if m == method] + sorted(WEB.PUBLIC) + sorted(WEB.SPA_ROUTES)
+    probe = stem + "x"
+    return (any(p.startswith(stem) for p in taken)
+            or any(p.startswith(stem) or stem.startswith(p) for p in POLICY.CODE_PREFIXES)
+            or WEB.is_page_path(probe) or WEB.is_public_path(probe) or not stem.startswith("/api/"))
+
+
 def find(method, path):
-    """The Route for a request, or None when server.py answers it itself."""
-    return table().get((method.upper(), path))
+    """The Route for a request, or None when server.py answers it itself: the
+    exact path, or else the longest prefix route ("/api/x/*") above it."""
+    method, routes = method.upper(), table()
+    route = routes.get((method, path))
+    if route is not None or "*" in path:
+        return route
+    stems = [p for m, p in routes if m == method and p.endswith("/*") and path.startswith(p[:-1])
+             and _REST.fullmatch(path[len(p) - 1:])]
+    return routes[(method, max(stems, key=len))] if stems else None
 
 
 def role(path, method):
     """The role a declared route needs, or None when it is not one."""
     route = find(method, path)
     return route.role if route else None
+
+
+def after(fn=None, fields=()):
+    """Register fn(request, status, ms) to run after each request that reached
+    its request line, answered or refused, wherever it was answered. request is
+    what a route gets, without its body, query, cookies or session; status is
+    all it learns of the answer (None when the headers never arrived). fields
+    names the HOOK_FIELDS it needs from a JSON body. Usable as @after or
+    @after(fields=(...)).
+
+    Hooks run one after another on one worker thread, after the answer is
+    sent; when they fall HOOK_QUEUE requests behind, a request's hooks are
+    dropped and counted (hooks_dropped()). What a hook sees came from the
+    client: escape and cut the path and headers before keeping them. It must
+    not read thread-locals (homestead_changes.REQUEST, the host-access role):
+    it runs on another thread."""
+    if isinstance(fields, str) or any(field not in HOOK_FIELDS for field in fields):
+        raise ValueError(f"a hook may ask only for {', '.join(HOOK_FIELDS)}, not {fields!r}")
+
+    def register(fn):
+        if not callable(fn):
+            raise TypeError(f"a hook is a function, not {fn!r}")
+        _hooks.append((fn, tuple(fields)))
+        return fn
+    return register if fn is None else register(fn)
+
+
+def hooks_dropped():
+    """How many requests' hooks were dropped because the hooks fell behind."""
+    return _dropped[0]
+
+
+def _ensure_worker():
+    """One daemon thread runs the hooks queued on the current _queue."""
+    with _worker_lock:
+        if _queue not in _served:
+            _served.append(_queue)
+            threading.Thread(target=_run_hooks, args=(_queue,), name="after-request", daemon=True).start()
+
+
+def _run_hooks(jobs):
+    while True:
+        for fn, request, status, ms in jobs.get():
+            try:
+                fn(request, status, ms)
+            except Exception:
+                pass    # one hook's failure is not another's, and never the answer's
+
+
+def _hook_fields(raw, fields):
+    """The asked-for fields of a body the request already read; the socket is
+    never read for a hook."""
+    try:
+        body = json.loads(raw) if raw and len(raw) <= _HOOK_BODY else {}
+    except (ValueError, RecursionError):
+        body = {}
+    if not isinstance(body, dict):
+        return {}
+    return AUDIT.redact({field: body[field] for field in fields
+                         if isinstance(body.get(field), str) and _HOOK_VALUE.fullmatch(body[field])})
+
+
+def _read_only(value):
+    return types.MappingProxyType(dict(value)) if isinstance(value, dict) else value
+
+
+def after_request(handler):
+    """Queue every hook for the request handler just answered (homestead_http):
+    what they see is taken now, and they run on the hooks' own thread."""
+    table()     # the modules that register hooks are read
+    if not _hooks:
+        return
+    raw = _headers(handler)
+    view = Request(handler.command or "", urllib.parse.urlparse(handler.path or "").path, None, None,
+                   getattr(handler, "user", None), getattr(handler, "role", None),
+                   handler._client_ip() if getattr(handler, "client_address", None) else "",
+                   Connection(Headers(raw.items()), types.MappingProxyType({}), _tls(handler),
+                              handler._via_cloudflare(), _read_only(getattr(handler, "_access", None)),
+                              getattr(handler, "_fleet_from", None), _read_only(getattr(handler, "api_key", None)),
+                              None))
+    ms = round((time.monotonic() - handler._started) * 1000)
+    body = getattr(handler, "_raw", None)
+    jobs = [(fn, view._replace(body=_hook_fields(body, fields)) if fields else view, handler._status, ms)
+            for fn, fields in list(_hooks)]
+    _ensure_worker()
+    try:
+        _queue.put_nowait(jobs)
+    except queue.Full:
+        with _worker_lock:
+            _dropped[0] += 1

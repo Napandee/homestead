@@ -1198,7 +1198,7 @@ class H(HTTP.LimitedHandler):
     protocol_version = "HTTP/1.1"
     timeout = HTTP.IDLE_SECONDS
     max_body = MAX_BODY
-
+    after_request = MODULE_ROUTES.after_request
 
     def log_message(self, fmt, *a):
         pass
@@ -1347,7 +1347,7 @@ class H(HTTP.LimitedHandler):
         if CFACCESS.enabled() and self._via_cloudflare() and not is_app_identity(path):
             token = self.headers.get("Cf-Access-Jwt-Assertion") or self._cookies().get("CF_Authorization", "")
             try:
-                CFACCESS.verify(token)
+                self._access = CFACCESS.verify(token)
             except ValueError as error:
                 self._send(403, {"error": f"Cloudflare Access did not sign this request: {error}"})
                 return True
@@ -1507,21 +1507,11 @@ class H(HTTP.LimitedHandler):
         False when server.py answers it itself. The guard has already
         checked the role the module declared for it."""
         route = MODULE_ROUTES.find(method, path)
-        if route is None:
-            return False
-        answer = route.handler(MODULE_ROUTES.Request(method, path, query, body,
-                                                     getattr(self, "user", None), getattr(self, "role", None),
-                                                     self._client_ip() if getattr(self, "client_address", None) else ""))
-        if isinstance(answer, MODULE_ROUTES.Stream):
-            return self._send_stream(answer) or True
-        if isinstance(answer, MODULE_ROUTES.Raw):
-            self._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
-            self._send(200, answer.body, answer.ctype)
-        elif isinstance(answer, MODULE_ROUTES.Reply):
-            self._send(answer.code, answer.body, answer.ctype)
-        else:
-            self._send(200, answer)
-        return True
+        if route is not None:
+            MODULE_ROUTES.answer(self, route.handler(MODULE_ROUTES.Request(
+                method, path, query, body, getattr(self, "user", None), getattr(self, "role", None),
+                self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))))
+        return route is not None
 
     def _send_stream(self, stream):
         """A download as it is read. Without a size the connection ends it; a
@@ -1550,7 +1540,7 @@ class H(HTTP.LimitedHandler):
         self._extra_headers = []
         self._raw = None
         self._fleet_who = False
-        self._fleet_from = None
+        self._fleet_from = self._access = None    # who the guard finds, this request's alone
         self._diagnostic_authorized = False
         self._diagnostic_started = time.monotonic()
         HOSTACCESS.set_role(None)
