@@ -50,6 +50,7 @@ case "${1:-}" in
   pages-dashboard)
     INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
     NODE_HEALTH_SCREENSHOTS=release-assets/pages/node-health node tests/integration/dashboard-node-health.mjs
+    node tests/integration/node-probe-states.mjs
     DASH_WARNING_SCREENSHOTS=release-assets/pages/dashboard-warning node tests/integration/dashboard-one-warning.mjs
     RESOURCE_WIDGET_SCREENSHOTS=release-assets/pages/resources node tests/integration/dashboard-resources.mjs
     ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
