@@ -102,7 +102,7 @@ Each is done once. One you remove later is not put back.
 | Unused images removed from hosts | helper `Pod` | image **Automatic clean-up** (off by default) |
 | Automatic image updates: a snapshot of each volume, then the new image (keeping the two newest snapshots) | Longhorn `Snapshot`, `Deployment` | per app, **Updates** set to automatic, and the update window |
 | Update checks about twice a day record the image digests an app ran | `Deployment` annotation | always |
-| Power schedules stop and start apps and VMs | `Deployment` (scale), `VirtualMachine` | an app's or VM's own schedule |
+| Power schedules stop and start apps and VMs | `Deployment` (replicas), `VirtualMachine` | an app's or VM's own schedule |
 | Outage actions restart an app or VM that stays down | `Deployment`, `VirtualMachine` | an app's or VM's outage actions |
 | A rebalance moves apps back onto a host that returned | `Deployment` | **Settings → When a host comes back** |
 | OS updates on a schedule: cordon, drain, reboot, apps held and given back. Taking over updates also turns Ubuntu's own automatic updates off on each host (`/etc/apt/apt.conf.d/99-homestead-hold`) | helper `Pod`s, `Node`, `Eviction`, `Deployment`, `StatefulSet`, `VirtualMachine` | **Nodes → OS updates** (off by default); k3s and RKE2 only |
@@ -124,7 +124,7 @@ writes starts with `homestead.io/`. Among them:
 
 | Annotation | On | When |
 |---|---|---|
-| `homestead.io/changedBy` | `Deployment` | each create, replace or merge-patch Homestead makes to an app, automatic ones too: who (a person, a job or a schedule) and when. Scaling and JSON-patch writes do not carry it |
+| `homestead.io/changedBy` | `Deployment` | each write Homestead makes to an app, automatic ones too: who (a person, a job or a schedule) and when. Every write carries it, scaling and JSON patches included |
 | `homestead.io/update-action`, `update-previous`, `update-sources`, `update-rollout-at`, `updates-managed` | `Deployment` | an update or a rollback, automatic ones too |
 | `homestead.io/update-mode` | `Deployment` | you set the app's updates to automatic |
 | `homestead.io/ran-digests` | `Deployment` | update checks, about twice a day |
