@@ -8,6 +8,16 @@
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
 
+  /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
+     two copies; window.__demoDataCopies = true shows the one-copy cluster that
+     can now keep two, for the checks and screenshots of that offer. */
+  const demoDataCopies = () => window.__demoDataCopies
+    ? { state: "can-keep-two", claim: "homestead-data", storage_class: "longhorn", copies: 1, storage_hosts: 2, room_hosts: 2, size_gb: 2,
+      r2: window.__demoTwoCopiesMade
+        ? { exists: true, replicas: 2, migratable: false, longhorn: true, usable: true, why: "" }
+        : { exists: false, replicas: 0, migratable: false, longhorn: false, usable: true, why: "" } }
+    : { state: "ok", claim: "homestead-data", storage_class: "longhorn-r2", copies: 2, storage_hosts: 3, room_hosts: 3, size_gb: 2, r2: null };
+
   /* What the counters add up to, the way the server computes it. */
   const diskHealth = smart => {
     const issues = [];
@@ -1621,7 +1631,8 @@ ssh_pwauth: true
         permissions: { state: "current", detail: "Homestead's permissions match this release" },
         backups: { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000" },
         addresses: { lb_ip: "192.0.2.242", problem: "", clashes: [], platform: ["192.0.2.210"] },
-        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 } };
+        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 },
+        data_copies: demoDataCopies() };
     },
     "/api/network/vips/add": { ok: true, added: ["192.0.2.232"], skipped: [], detail: "1 address added" },
     "/api/network/vips/remove": { ok: true, detail: "192.0.2.231 is no longer reserved for Homestead" },

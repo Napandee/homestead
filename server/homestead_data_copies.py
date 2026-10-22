@@ -24,6 +24,7 @@ own Deployment, so one bind serves both.
 """
 import re
 
+import homestead_lhcapacity as LHCAP
 import homestead_names as NAMES
 import homestead_node_parity as NODE_PARITY
 import homestead_shared as SHARED
@@ -32,6 +33,8 @@ GiB = 1024 ** 3
 ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
 # On the volume Homestead lowered: the copies it asked for before.
 LOWERED_FROM = NAMES.key("one-host-copies")
+TWO_COPIES = "longhorn-r2"
+LONGHORN_DRIVER = "driver.longhorn.io"
 UNITS = {"": 1, "k": 1000, "M": 1000 ** 2, "G": 1000 ** 3, "T": 1000 ** 4,
          "Ki": 1024, "Mi": 1024 ** 2, "Gi": GiB, "Ti": 1024 ** 4}
 
@@ -143,3 +146,68 @@ def fit_single_host():
     state["own_copies"] = 1
     SHARED.write_json(NODE_PARITY._path(), state, indent=1, sort_keys=True)
     return "; ".join(f"Homestead's data volume {claim} keeps 1 copy: this cluster has one host" for claim in lowered)
+
+
+def two_copy_class():
+    """longhorn-r2 as the cluster has it: whether it exists, and whether
+    Homestead's data may move onto it - a Longhorn class keeping two or more
+    copies, not migratable (a migratable class gives a volume only one node
+    can mount). Raises when the class cannot be read."""
+    try:
+        found = NODE_PARITY.kget(f"/apis/storage.k8s.io/v1/storageclasses/{TWO_COPIES}") or {}
+    except Exception as error:
+        if getattr(error, "code", None) != 404:
+            raise
+        return {"exists": False, "replicas": 0, "migratable": False, "longhorn": False, "usable": True, "why": ""}
+    params = found.get("parameters") or {}
+    longhorn = found.get("provisioner") == LONGHORN_DRIVER
+    try:
+        replicas = int(params.get("numberOfReplicas") or 0)
+    except ValueError:
+        replicas = 0
+    migratable = str(params.get("migratable") or "").lower() == "true"
+    why = (f"{TWO_COPIES} is not a Longhorn class ({found.get('provisioner') or 'no provisioner'})" if not longhorn else
+           f"{TWO_COPIES} keeps {replicas} {'copy' if replicas == 1 else 'copies'}, not two" if replicas < 2 else
+           f"{TWO_COPIES} is migratable: its volumes can be mounted on only one node at a time" if migratable else "")
+    return {"exists": True, "replicas": replicas, "migratable": migratable, "longhorn": longhorn,
+            "usable": not why, "why": why}
+
+
+def facts():
+    """How many copies of Homestead's data Longhorn keeps, and whether the
+    cluster can now keep two. Reads only. state is:
+      n/a           no Longhorn, Harvester, not a Longhorn volume, or unreadable;
+      ok            two or more copies;
+      single-host   one copy, and fewer than two hosts with room for another;
+      rising        one copy, and k3s/RKE2 raise it in place within a minute;
+      can-keep-two  one copy, and two hosts Longhorn stores on have room."""
+    out = {"state": "n/a", "claim": "", "storage_class": "", "copies": 0, "storage_hosts": 0, "room_hosts": 0,
+           "size_gb": 0.0, "r2": None}
+    p = NODE_PARITY.platform() or {}
+    if p.get("harvester") or not p.get("longhorn"):
+        return out
+    try:
+        own = next((v for v in own_data_volumes() if v["volume"]), None)
+        if not own:
+            return out
+        out.update(claim=own["claim"], storage_class=own["storage_class"], size_gb=own["size_gb"],
+                   copies=int((own["volume"].get("spec") or {}).get("numberOfReplicas") or 0))
+        if out["copies"] >= 2:
+            out["state"] = "ok"
+            return out
+        storing = NODE_PARITY._storage_hosts(NODE_PARITY._ready_nodes())
+        if storing is None:
+            return out
+        out["storage_hosts"] = len(storing)
+        rooms = {n["name"]: n["room_gb"] for n in LHCAP.capacity()["nodes"]}
+        out["room_hosts"] = sum(1 for name in storing if rooms.get(name, 0) >= out["size_gb"])
+        if len(storing) >= 2 and NODE_PARITY.own_copies_due(storing):
+            out["state"] = "rising"
+        elif out["room_hosts"] >= 2:
+            out["state"] = "can-keep-two"
+            out["r2"] = two_copy_class()
+        else:
+            out["state"] = "single-host"
+    except Exception as error:
+        out.update(state="n/a", error=str(error)[:160])
+    return out

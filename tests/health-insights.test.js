@@ -76,3 +76,15 @@ test("compact resource lists exclude platform helpers and preserve unknown and s
  const vms=H.resourceRows('vms',[{name:'vm',status:'Running',usage:{cpu_pct:25,mem:1024}},{name:'broken',status:'CrashLoopBackOff'},{name:'off',status:'Stopped',usage:{cpu_pct:30}}]);
  assert.equal(vms[0].tone,'bad');assert.equal(vms[1].cpu,null);assert.equal(vms[2].cpu,25);assert.equal(vms[2].memory,1024);
 });
+test("#731: Homestead's data on one copy, on a cluster that can now keep two, is low advice to Redundancy",()=>{
+ const title="Homestead's data has one copy; this cluster can now keep two";
+ const s=base();s.self={data_copies:{state:"can-keep-two",copies:1,storage_hosts:2,room_hosts:2}};
+ const rows=H.advice(s).filter(r=>r.id==="self-data-copies");
+ assert.equal(rows.length,1);assert.equal(rows[0].severity,"low");assert.equal(rows[0].title,title);
+ assert.equal(rows[0].route,"settings:about#replicaCard");
+ for(const state of ["n/a","single-host","rising","ok"]){
+  const other=base();other.self={data_copies:{state}};
+  assert.equal(H.advice(other).filter(r=>r.id==="self-data-copies").length,0,state);
+ }
+ assert.equal(H.advice(base()).filter(r=>r.id==="self-data-copies").length,0,"no data_copies: no row");
+});

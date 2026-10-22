@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_node_parity as PARITY
 import homestead_data_copies as COPIES
+import homestead_lhcapacity as LHCAP
 
 LH_NODES = PARITY.LH_NODES
 GiB = 1024 ** 3
@@ -212,6 +213,140 @@ class FitSingleHostTests(unittest.TestCase):
         [found] = COPIES.own_data_volumes()
         self.assertIsNone(found["volume"])
         self.assertEqual(2.0, found["size_gb"])
+
+
+def lh_store(name, room_gib=20, ready=True):
+    """A Longhorn node with one disk and room_gib of room left on it."""
+    found = lh_node(name, ready)
+    found["status"]["diskStatus"] = {"d": {"storageMaximum": 40 * GiB, "storageAvailable": 40 * GiB,
+                                           "storageScheduled": (40 - room_gib) * GiB}}
+    return found
+
+
+R2 = "/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"
+
+
+def r2_class(replicas="2", migratable="false", provisioner="driver.longhorn.io"):
+    return {"metadata": {"name": "longhorn-r2"}, "provisioner": provisioner,
+            "parameters": {"numberOfReplicas": replicas, "migratable": migratable}}
+
+
+class FactsTests(unittest.TestCase):
+    def setUp(self):
+        self.data = tempfile.mkdtemp()
+
+    def cluster(self, names=("node-a", "node-b"), copies=1, rooms=None, distribution="kubeadm", harvester=False,
+                longhorn=True, storage_class="longhorn", extra=None):
+        rooms = rooms or [20] * len(names)
+        cluster = Cluster([node(n) for n in names], [lh_store(n, r) for n, r in zip(names, rooms)], copies=copies,
+                          robustness="healthy", storage_class=storage_class, extra=extra)
+        hostrun = type("H", (), {"run": staticmethod(lambda *a, **k: ("", ""))})
+        PARITY.bind(cluster.kget, cluster.ksend, hostrun,
+                    lambda force=False: {"distribution": distribution, "longhorn": longhorn, "harvester": harvester},
+                    lambda: {}, self.data, ("lab", "homestead"))
+        LHCAP.bind(cluster.kget, cluster.ksend, lambda: {})
+        return cluster
+
+    def test_facts_single_host(self):
+        self.cluster(names=("node-a",))
+        facts = COPIES.facts()
+        self.assertEqual("single-host", facts["state"])
+        self.assertEqual(1, facts["copies"])
+        self.assertEqual(1, facts["storage_hosts"])
+
+    def test_facts_can_keep_two(self):
+        cluster = self.cluster()
+        facts = COPIES.facts()
+        self.assertEqual("can-keep-two", facts["state"])
+        self.assertEqual({"claim": "homestead-data", "storage_class": "longhorn", "copies": 1, "storage_hosts": 2,
+                          "room_hosts": 2, "size_gb": 2.0},
+                         {k: facts[k] for k in ("claim", "storage_class", "copies", "storage_hosts", "room_hosts", "size_gb")})
+        self.assertEqual({"exists": False, "replicas": 0, "migratable": False, "longhorn": False, "usable": True, "why": ""},
+                         facts["r2"])
+        self.assertEqual([], cluster.sent, "facts only read")
+
+    def test_facts_rising_on_k3s(self):
+        # Review focus 4: own_copies() raises it within a minute; nothing to offer.
+        for distribution in ("k3s", "rke2"):
+            with self.subTest(distribution=distribution):
+                self.cluster(distribution=distribution)
+                self.assertTrue(PARITY.own_copies_due(PARITY._storage_hosts(PARITY._ready_nodes())))
+                self.assertEqual("rising", COPIES.facts()["state"])
+
+    def test_own_copies_due_matches_own_copies(self):
+        cluster = self.cluster(distribution="k3s")
+        storing = PARITY._storage_hosts(PARITY._ready_nodes())
+        self.assertTrue(PARITY.own_copies_due(storing))
+        self.assertEqual([], cluster.sent, "a pure read")
+        self.assertEqual([("homestead-data", 2)], PARITY.own_copies(storing))
+        cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]["spec"].update(cluster.sent[-1][2]["spec"])
+        self.assertFalse(PARITY.own_copies_due(storing), "raised: nothing left to do")
+
+    def test_own_copies_due_not_on_other_distributions_or_harvester(self):
+        for kwargs in ({"distribution": "kubeadm"}, {"distribution": "k3s", "harvester": True}):
+            with self.subTest(**kwargs):
+                self.cluster(**kwargs)
+                self.assertFalse(PARITY.own_copies_due(PARITY._storage_hosts(PARITY._ready_nodes())))
+
+    def test_facts_no_room(self):
+        self.cluster(rooms=[20, 1])
+        facts = COPIES.facts()
+        self.assertEqual("single-host", facts["state"])
+        self.assertEqual(1, facts["room_hosts"])
+
+    def test_a_host_longhorn_cannot_store_on_does_not_count(self):
+        cluster = self.cluster(names=("node-a", "node-b"))
+        cluster.objects[LH_NODES]["items"][1]["status"]["conditions"][0]["status"] = "False"
+        self.assertEqual("single-host", COPIES.facts()["state"])
+
+    def test_facts_two_copies_ok(self):
+        self.cluster(copies=2)
+        self.assertEqual("ok", COPIES.facts()["state"])
+
+    def test_facts_harvester_and_local_path_na(self):
+        self.cluster(harvester=True)
+        self.assertEqual("n/a", COPIES.facts()["state"])
+        self.cluster(longhorn=False)
+        self.assertEqual("n/a", COPIES.facts()["state"])
+        cluster = self.cluster(storage_class="local-path")
+        del cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]
+        self.assertEqual("n/a", COPIES.facts()["state"])
+
+    def test_facts_unreadable_is_na(self):
+        cluster = self.cluster()
+        cluster.fail = {LH_NODES}
+        self.assertEqual("n/a", COPIES.facts()["state"])
+
+    def test_facts_r2_description(self):
+        cases = ((r2_class(), True, ""),
+                 (r2_class(migratable="true"), False, "migratable"),
+                 (r2_class(replicas="1"), False, "1 copy"),
+                 (r2_class(provisioner="rancher.io/local-path"), False, "not a Longhorn class"))
+        for found, usable, why in cases:
+            with self.subTest(found=found):
+                self.cluster(extra={R2: found})
+                r2 = COPIES.facts()["r2"]
+                self.assertTrue(r2["exists"])
+                self.assertEqual(usable, r2["usable"])
+                self.assertIn(why, r2["why"])
+
+
+class SelfHealthTests(unittest.TestCase):
+    def test_health_carries_data_copies(self):
+        from unittest import mock
+        import homestead_self_health as SELF_HEALTH
+        fake = {"state": "can-keep-two", "copies": 1}
+        with mock.patch.object(COPIES, "facts", lambda: fake):
+            self.assertEqual(fake, SELF_HEALTH.data_copies())
+
+    def test_health_says_na_when_facts_fail(self):
+        from unittest import mock
+        import homestead_self_health as SELF_HEALTH
+
+        def broken():
+            raise RuntimeError("Longhorn did not answer")
+        with mock.patch.object(COPIES, "facts", broken):
+            self.assertEqual({"state": "n/a", "error": "Longhorn did not answer"}, SELF_HEALTH.data_copies())
 
 
 if __name__ == "__main__":
