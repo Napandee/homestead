@@ -460,7 +460,7 @@ class AuditLineTests(Base):
             self.ask(message, k)
             conn = ROUTER.Connection(ROUTER.Headers([]), {}, False, False, None, None, k, None)
             AUDIT_LOG.record(ROUTER.Request("POST", "/mcp", None, {}, f"api-key:{k['name']}", k["role"],
-                                            "192.0.2.40", conn), 200, 4)
+                                            "192.0.2.40", conn), 200, 4, noted=AUDIT_LOG._take_notes())
         return out
 
     def tool(self, name, args):

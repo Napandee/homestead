@@ -185,6 +185,43 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(2, len(lines))
         self.assertEqual(("none", "", 401), (lines[0]["via"], lines[0]["user"], lines[0]["status"]))
 
+    def test_a_relayed_request_names_its_cluster(self):
+        """to is noted on the request's thread; the line is written on the hooks' thread."""
+        F = self.server.FLEET
+        self.enterContext(mock.patch.object(F, "member", return_value={"id": "member-2", "name": "loft",
+                                                                       "url": "https://192.0.2.20"}))
+        self.enterContext(mock.patch.object(F, "_connect", side_effect=OSError("no route")))
+        client = HTTPConnection(*self.listener.server_address, timeout=5)
+        try:
+            client.request("POST", "/api/audit-test/save", "{}", {"Content-Type": "application/json",
+                           "X-Homestead-Auth": "1", "X-Homestead-Cluster": "member-2"})
+            self.assertEqual(502, client.getresponse().status)
+        finally:
+            client.close()
+        (line,) = self.wait_for(1)
+        self.assertEqual(("member-2", 502), (line.get("to"), line["status"]))
+
+    def test_what_one_request_noted_never_reaches_the_next(self):
+        route = ROUTES.Route("POST", "/api/audit-test/note", "operator",
+                             lambda request: AUDIT_LOG.note(tool="container_restart", kind="change") or {}, "test")
+        plain = ROUTES.Route("POST", "/api/audit-test/save", "operator", lambda request: {"ok": True}, "test")
+        self.enterContext(mock.patch.dict(ROUTES._table, {("POST", "/api/audit-test/note"): route,
+                                                          ("POST", "/api/audit-test/save"): plain}))
+        self.send("POST", "/api/audit-test/note", {})
+        self.send("POST", "/api/audit-test/save", {})
+        first, second = self.wait_for(2)
+        self.assertEqual("container_restart", first.get("tool"))
+        self.assertNotIn("tool", second)
+
+    def test_no_line_is_lost_in_normal_use(self):
+        route = ROUTES.Route("POST", "/api/audit-test/save", "operator", lambda request: {"ok": True}, "test")
+        self.enterContext(mock.patch.dict(ROUTES._table, {("POST", "/api/audit-test/save"): route}))
+        before = ROUTES.hooks_dropped()
+        for _ in range(300):
+            self.assertEqual(200, self.send("POST", "/api/audit-test/save", {}))
+        self.assertEqual(300, len(self.wait_for(300)))
+        self.assertEqual(before, ROUTES.hooks_dropped())
+
     def test_a_read_writes_nothing(self):
         route = ROUTES.Route("GET", "/api/audit-test/read", "viewer", lambda request: {}, "test")
         self.enterContext(mock.patch.dict(ROUTES._table, {("GET", "/api/audit-test/read"): route}))

@@ -42,6 +42,13 @@ class TheLine(unittest.TestCase):
             with self.subTest(access=bad):
                 self.assertNotIn("access", self.line(view(access=bad)))
 
+    def test_read_only_copies_of_claims_and_key_are_read(self):
+        """PR 1 hands hooks MappingProxyType copies, not dicts."""
+        import types
+        line = self.line(view(access=types.MappingProxyType({"email": "ada@example.com"}),
+                              key=types.MappingProxyType(KEY), user="api-key:ha", path="/api/v1/x"))
+        self.assertEqual(("ada@example.com", "k1", "ada"), (line["access"], line["key"], line["owner"]))
+
     def test_an_api_key_says_which_key_and_whose(self):
         line = self.line(view(path="/api/v1/apps/restart", user="api-key:ha", key=KEY))
         self.assertEqual(("key", "api-key:ha", "k1", "ada"), (line["via"], line["user"], line["key"], line["owner"]))
@@ -241,6 +248,28 @@ class Throttle(unittest.TestCase):
         self.assertFalse([line for line in self.stdout if "suppressed" in line])
 
 
+class Drops(unittest.TestCase):
+    """When the hooks' queue is full, PR 1 drops a request's hooks and counts
+    it; the next line written says how many, on stdout and in the file."""
+
+    def setUp(self):
+        self.lines = []
+        self.enterContext(mock.patch.object(AUDIT_LOG, "_stdout", side_effect=lambda t: self.lines.append(json.loads(t))))
+        self.enterContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=False))
+        self.dropped = self.enterContext(mock.patch.object(ROUTES, "hooks_dropped", return_value=0))
+        AUDIT_LOG._drops_seen[0] = 0
+
+    def test_dropped_requests_are_reported_once(self):
+        AUDIT_LOG.record(view(), 200, 1)
+        self.assertEqual(1, len(self.lines))
+        self.dropped.return_value = 7
+        AUDIT_LOG.record(view("GET", "/api/overview"), 200, 1)        # even a read reports it
+        AUDIT_LOG.record(view(), 200, 1)
+        events = [line for line in self.lines if line.get("event") == "audit-lines-dropped"]
+        self.assertEqual([7], [line["dropped"] for line in events])
+        self.assertIn("pod log", events[0]["detail"])
+
+
 class Notes(unittest.TestCase):
     """What a request notes is its own: never the next request's on the same thread."""
 
@@ -250,14 +279,17 @@ class Notes(unittest.TestCase):
         AUDIT_LOG._take_notes()
 
     def test_notes_never_reach_the_next_request(self):
+        """Each request's capture (on its own thread) takes its notes, and only its notes."""
+        capture = next(ROUTES._captures[fn] for fn, _ in ROUTES._hooks if fn is AUDIT_LOG.record)
         AUDIT_LOG.note(tool="container_restart", kind="change")
-        AUDIT_LOG.record(view("GET", "/api/overview"), 200, 1)      # a read takes them too
-        AUDIT_LOG.record(view(), 200, 1)
+        AUDIT_LOG.record(view("GET", "/api/overview"), 200, 1, noted=capture())    # a read takes them too
+        AUDIT_LOG.record(view(), 200, 1, noted=capture())
         self.assertNotIn("tool", self.out[0])
         AUDIT_LOG.note(to="member-2")
+        taken = capture()
         with mock.patch.object(AUDIT_LOG, "line", side_effect=RuntimeError("bug")):
-            AUDIT_LOG.record(view(), 200, 1)
-        AUDIT_LOG.record(view(), 200, 1)
+            AUDIT_LOG.record(view(), 200, 1, noted=taken)
+        AUDIT_LOG.record(view(), 200, 1, noted=capture())
         self.assertNotIn("to", self.out[1])
 
     def test_a_relayed_request_names_the_cluster(self):
@@ -267,7 +299,7 @@ class Notes(unittest.TestCase):
                 mock.patch.object(FLEET, "_connect", side_effect=OSError("no route")):
             with self.assertRaises(FLEET.Unreachable):
                 FLEET.forward(handler, "member-2", b"{}", "ada", "operator")
-        AUDIT_LOG.record(view(), 502, 1)
+        AUDIT_LOG.record(view(), 502, 1, noted=AUDIT_LOG._take_notes())
         self.assertEqual(("member-2", 502), (self.out[0]["to"], self.out[0]["status"]))
 
 

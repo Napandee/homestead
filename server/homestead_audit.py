@@ -14,6 +14,7 @@ the linked cluster a request was relayed to, an AI agent's tool - is noted
 during the request with note(), and taken by the hook.
 """
 import collections
+import collections.abc
 import datetime
 import json
 import os
@@ -72,6 +73,7 @@ _buckets = collections.OrderedDict()   # ("addr"|"user"|"all", name) -> window
 _swept = [0.0]
 _rotated = []
 _throttle = threading.Lock()
+_drops_seen = [0]
 _notes = threading.local()
 _lock = threading.Lock()
 
@@ -134,7 +136,7 @@ def line(request, status, ms, notes, now=None):
     entry = {"v": 1, "at": _now_text(time.time() if now is None else now),
              "replica": os.environ.get("HOSTNAME", ""), "via": _via(request, conn),
              "user": request.user or "", "role": request.role, "addr": request.addr}
-    email = (conn.access or {}).get("email") if conn is not None and isinstance(conn.access, dict) else None
+    email = conn.access.get("email") if conn is not None and isinstance(conn.access, collections.abc.Mapping) else None
     if isinstance(email, str) and len(email) <= 254 and EMAIL.fullmatch(email):
         entry["access"] = email
     if conn is not None and conn.key:
@@ -226,10 +228,25 @@ def _keep(entry):
         return True, summaries
 
 
-def record(request, status, ms):
-    """The hook: one line for a finished change request. Never raises."""
+def _report_drops():
+    """Requests whose hooks homestead_routes dropped because its queue was
+    full: one line saying how many, before the next one written."""
+    dropped = MODULE_ROUTES.hooks_dropped()
+    if dropped > _drops_seen[0]:
+        missed, _drops_seen[0] = dropped - _drops_seen[0], dropped
+        emit({"v": 1, "at": _now_text(time.time()), "replica": os.environ.get("HOSTNAME", ""),
+              "event": "audit-lines-dropped", "dropped": missed,
+              "detail": f"{missed} request(s) were answered while the audit could not keep up, so their "
+                        "lines (if they changed something) are missing here and from the pod log"})
+
+
+def record(request, status, ms, noted=None):
+    """The hook, on homestead_routes' hooks thread: one line for a finished
+    change request. noted is what the request noted on its own thread. Never
+    raises."""
     try:
-        notes = _take_notes()
+        notes = dict(noted or {})
+        _report_drops()
         if not audited(request.method, request.path):
             return
         entry = line(request, status, ms, notes)
@@ -335,4 +352,4 @@ def emit(entry, keep=True):
         _append(line_text)
 
 
-MODULE_ROUTES.after(record, fields=MODULE_ROUTES.HOOK_FIELDS)
+MODULE_ROUTES.after(record, fields=MODULE_ROUTES.HOOK_FIELDS, capture=_take_notes)
