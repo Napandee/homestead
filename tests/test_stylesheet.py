@@ -6,7 +6,10 @@ from pathlib import Path
 CSS = Path(__file__).resolve().parents[1] / "web" / "style.css"
 LIGHT = 'html[data-theme="light"] '
 # The tag classes that carry a state colour; a plain tag has none of them.
-TONES = ("ok", "warn", "bad", "info", "capacity", "hw", "gpu")
+TONES = ("ok", "warn", "bad", "info", "capacity", "hw", "gpu", "link", "neutral")
+# One tone set for every chip (#543), and the older names that alias it.
+CHIP_TONES = ("ok", "warn", "bad", "info", "hw", "link", "neutral")
+CHIP_ALIASES = {"med": "warn", "crit": "bad", "low": "neutral"}
 
 
 # Each rule as its selectors and declarations, those inside @media too.
@@ -36,8 +39,23 @@ def light_style(selector):
         if LIGHT + selector in selectors:
             light.update(declarations)
     style = {**plain, **light}
-    resolve = lambda value: re.sub(r"var\((--[\w-]+)\)", lambda m: tokens[m.group(1)], value)
+    def resolve(value):
+        # A token can point at another (--tone-bad: var(--crit)): repeat until none is left.
+        while "var(" in value:
+            value = re.sub(r"var\((--[\w-]+)\)", lambda m: tokens[m.group(1)], value)
+        return value
     return resolve(style["color"]), resolve(style.get("background", "#ffffff"))
+
+
+# A selector's specificity (ids, classes, types): :where() counts nothing,
+# :not() counts its argument. Enough for this stylesheet's selectors.
+def specificity(selector):
+    selector = re.sub(r":where\([^)]*\)", "", selector)
+    selector = re.sub(r":not\(([^)]*)\)", r" \1", selector)
+    ids = len(re.findall(r"#[\w-]+", selector))
+    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+", selector))
+    types = len(re.findall(r"(?:^|[\s>+~])([a-z][\w-]*)", selector))
+    return ids, classes, types
 
 
 def rgba(value):
@@ -95,8 +113,50 @@ class StylesheetTests(unittest.TestCase):
             for selector in selectors:
                 rest = selector[len(LIGHT):]
                 if selector.startswith(LIGHT) and "color" in declarations and re.match(r"\.tag(?![\w.-])[^ >]*$", rest):
+                    # A rule for one tone (.tag:where(.neutral)) greys only that tone.
+                    if set(re.findall(r"\.([\w-]+)", re.sub(r":not\([^)]*\)", "", rest))) - {"tag"}:
+                        continue
                     for tone in TONES:
                         self.assertIn(tone, excluded(rest), f"{selector} turns a .tag.{tone} grey")
+
+    def test_one_tone_set(self):
+        """#543: pills, tags and chips spoke three colour vocabularies; one set of tokens underlies them."""
+        blocks = {}
+        for selectors, declarations in rules():
+            if selectors in ([":root"], ['html[data-theme="light"]']):
+                blocks.setdefault(selectors[0], {}).update(declarations)
+        for tone in CHIP_TONES:
+            for theme in (":root", 'html[data-theme="light"]'):
+                for token in (f"--tone-{tone}", f"--tone-{tone}-bg", f"--tone-{tone}-line"):
+                    self.assertIn(token, blocks.get(theme, {}), f"{theme} defines {token}")
+            colours = [d.get("color") for selectors, d in rules() if f".ui-chip.{tone}" in selectors and "color" in d]
+            self.assertIn(f"var(--tone-{tone})", colours, f".ui-chip.{tone} takes its colour from --tone-{tone}")
+
+    def test_legacy_tone_names_alias_the_set(self):
+        """med, crit and low are older names for warn, bad and neutral: one rule draws both."""
+        for alias, tone in CHIP_ALIASES.items():
+            holding = [selectors for selectors, d in rules() if f".ui-chip.{tone}" in selectors and "color" in d]
+            self.assertTrue(holding, f"a rule draws .ui-chip.{tone}")
+            self.assertTrue(any(f".ui-chip.{alias}" in selectors for selectors in holding),
+                            f".ui-chip.{alias} is drawn by the .ui-chip.{tone} rule")
+
+    def test_every_chip_tone_reads_in_the_light_theme(self):
+        white = (255, 255, 255, 1.0)
+        for tone in CHIP_TONES:
+            color, background = light_style(f".ui-chip.{tone}")
+            ground = over(rgba(background), white)
+            ratio = contrast(over(rgba(color), ground), ground)
+            self.assertGreaterEqual(ratio, 4.5, f".ui-chip.{tone} is {ratio:.2f}:1 in the light theme")
+
+    def test_neutral_tags_keep_their_hover(self):
+        """A neutral tag is the plain tag: a rule for it must not outrank .tag:hover (Settings health)."""
+        ordered = [(i, s, d) for i, (selectors, d) in enumerate(rules()) for s in selectors]
+        for theme in ("", LIGHT):
+            hover = max((specificity(s), i) for i, s, d in ordered if s == theme + ".tag:hover")
+            for i, s, d in ordered:
+                if s.startswith(theme) and ".neutral" in re.sub(r":not\([^)]*\)", "", s) and re.match(r"\.tag\b", s[len(theme):]) and "background" in d \
+                        and ":hover" not in s and (s.startswith(LIGHT) == bool(theme)):
+                    self.assertLess((specificity(s), i), hover, f"{s} outranks {theme}.tag:hover, so a neutral tag never lights up")
 
     def test_light_theme_meters_keep_their_warning_colour(self):
         """The light theme's black bar once beat the amber and red ones."""
