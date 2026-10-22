@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_job_kinds as KINDS
+import source_scan as SS
 
 
 def stand_in(**dicts):
@@ -126,11 +127,11 @@ def _strings(node):
     return []
 
 
-def branch_kinds(text):
+def branch_kinds(source):
     """Job kinds a module compares a kind against. Kubernetes kinds
     ("Deployment") are capitalised and are not jobs."""
     found = set()
-    for node in ast.walk(ast.parse(text)):
+    for node in ast.walk(SS.tree(source)):
         if isinstance(node, ast.Compare) and any(_names_kind(part) for part in [node.left, *node.comparators]):
             found |= {text for part in [node.left, *node.comparators] for text in _strings(part)
                       if JOB_NAME.fullmatch(text)}
@@ -152,21 +153,20 @@ def _start_kind(module, node):
     return None
 
 
-def start_calls(text, module):
+STARTS = ("OPS.start", "ops.start", "operations.start")
+
+
+def start_calls(source, module):
     """The kinds the starts in one module's source pass, and how many starts
     pass a kind that cannot be read. A start is OPS.start(...) under the
     names modules give the job store, or a module-level alias of it
     (homestead_promote's OPS_START = OPS.start)."""
-    tree = ast.parse(text)
-    def is_start(node):
-        return (isinstance(node, ast.Attribute) and node.attr == "start" and isinstance(node.value, ast.Name)
-                and node.value.id in ("OPS", "ops", "operations"))
-    aliases = {target.id for node in tree.body if isinstance(node, ast.Assign) and is_start(node.value)
+    tree = SS.tree(source)
+    aliases = {target.id for node in tree.body if isinstance(node, ast.Assign) and SS.dotted(node.value) in STARTS
                for target in node.targets if isinstance(target, ast.Name)}
     found, dynamic = set(), 0
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and node.args and (
-                is_start(node.func) or isinstance(node.func, ast.Name) and node.func.id in aliases):
+    for node in SS.calls(tree, *STARTS, *aliases):
+        if node.args:
             kinds = _start_kind(module, node.args[0])
             if kinds is None:
                 dynamic += 1
@@ -179,8 +179,8 @@ def started_kinds():
     """(kind, file) for every start whose kind can be read, and the files
     with a start whose kind is a variable."""
     found, dynamic = set(), set()
-    for path in sorted((ROOT / "server").glob("*.py")):
-        kinds, unread = start_calls(path.read_text(encoding="utf-8"), importlib.import_module(path.stem))
+    for path in sorted(SS.SERVER.glob("*.py")):
+        kinds, unread = start_calls(path, importlib.import_module(path.stem))
         found |= {(kind, path.name) for kind in kinds}
         if unread:
             dynamic.add(path.name)
@@ -198,7 +198,7 @@ def page_job_kinds(text):
 
 def page_kinds():
     for path in sorted((ROOT / "web" / "js").glob("*.js")):
-        text = path.read_text(encoding="utf-8")
+        text = SS.text(path)
         for kind in page_job_kinds(text):
             if (path.name, kind) not in NOT_JOBS:
                 yield path.name, kind
@@ -209,11 +209,11 @@ class ScanTests(unittest.TestCase):
 
     def test_a_start_through_a_module_alias_is_read(self):
         source = "OPS_START = OPS.start\n\ndef go():\n    OPS_START('host-promote', 'Promote', {}, '/', {})\n"
-        self.assertEqual(({"host-promote"}, 0), start_calls(source, types.SimpleNamespace()))
+        self.assertEqual(({"host-promote"}, 0), start_calls(SS.code(source), types.SimpleNamespace()))
 
     def test_a_start_with_a_variable_kind_is_counted_not_guessed(self):
         source = "def go(kind):\n    ops.start(kind, 'x', {}, '/', {})\n    OPS.start(KIND, 'y', {}, '/', {})\n"
-        self.assertEqual(({"copy"}, 1), start_calls(source, types.SimpleNamespace(KIND="copy")))
+        self.assertEqual(({"copy"}, 1), start_calls(SS.code(source), types.SimpleNamespace(KIND="copy")))
 
     def test_the_page_is_read_in_either_quote_and_in_includes_lists(self):
         text = """operation.kind === 'cluster-shutdown'; op?.kind==="vm-power";
@@ -241,7 +241,7 @@ class GuardTests(unittest.TestCase):
 
     def branches(self):
         return {(name, kind) for name in BRANCHING
-                for kind in branch_kinds((ROOT / "server" / name).read_text(encoding="utf-8"))}
+                for kind in branch_kinds(SS.SERVER / name)}
 
     def test_every_kind_a_branch_names_exists(self):
         named = {(name, kind) for name, kind in self.branches() - NOT_JOB_BRANCHES if kind not in KNOWN_STRAYS}
