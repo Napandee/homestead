@@ -1,8 +1,8 @@
 /* Platform health: Harvester/Kubernetes control plane, quorum and onboarding. */
 
 function clusterPill(state, text) {
-  const cls = state === "healthy" ? "low" : state === "critical" ? "bad" : state === "unknown" ? "neutral" : "med";
-  return `<span class="pill ${cls}">${esc(text || state || "unknown")}</span>`;
+  const tone = state === "healthy" ? "neutral" : state === "critical" ? "bad" : state === "unknown" ? "neutral" : "warn";
+  return UI.chip(text || state || "unknown", tone);
 }
 
 function clusterMetric(value, suffix = "%") {
@@ -36,7 +36,7 @@ function clusterServiceCard(service) {
 /* The etcd members, a tiebreaker told apart (homestead_roles): with two there
    is no failure margin, and a small machine can be the third vote. */
 function etcdMembersHtml(cp, admin) {
-  const members = (cp.members || []).map(m => `${esc(m.name)}${m.role === "tiebreaker" ? ' <span class="pill slim neutral">tiebreaker</span> <span class="dim xs">votes only</span>' : ""}${m.ready ? "" : ' <span class="pill slim crit">down</span>'}`);
+  const members = (cp.members || []).map(m => `${esc(m.name)}${m.role === "tiebreaker" ? ` ${UI.chip("tiebreaker", "neutral", { size: "slim" })} <span class="dim xs">votes only</span>` : ""}${m.ready ? "" : ` ${UI.chip("down", "bad", { size: "slim" })}`}`);
   // The join guide is for k3s and RKE2; Harvester adds hosts its own way.
   const joinable = ["k3s", "rke2"].includes(STATE.platform?.distribution) && !STATE.platform?.harvester;
   const add = cp.etcd_total === 2 && admin && joinable ? ` ${UI.button("Add a tiebreaker", "platformJoinGuide('tiebreaker')")}` : "";
@@ -94,7 +94,7 @@ async function viewCluster() {
       <div class="dim xs">${esc(certs.note || "")}</div></section>
 
     <section class="card flat">${UI.moduleHeader(`Recent platform warnings`, `Warning events from system namespaces and node objects in the last 24 hours`, `${clusterPill(warnings.length ? "attention" : "healthy", warnings.length ? `${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : "clear")}`)}
-      <div class="cluster-warning-list">${warnings.slice(0, 8).map(row => `<div><span class="pill med">${esc(row.reason)}</span><span><b>${esc(row.object)}</b><small>${esc(row.namespace)} · ${esc(row.message)}</small></span><time>${esc(fmtAgo(row.age_seconds))}</time></div>`).join("") || '<div class="empty small">No recent platform warnings.</div>'}</div>
+      <div class="cluster-warning-list">${warnings.slice(0, 8).map(row => `<div>${UI.chip(row.reason, "warn")}<span><b>${esc(row.object)}</b><small>${esc(row.namespace)} · ${esc(row.message)}</small></span><time>${esc(fmtAgo(row.age_seconds))}</time></div>`).join("") || '<div class="empty small">No recent platform warnings.</div>'}</div>
       ${warnings.length ? '<button class="btn sm" onclick="go(\'events\')">View all events</button>' : ""}</section>
 
     <section class="card flat cluster-wide cluster-onboard-preview"><div><span class="cluster-kicker">NEXT NODE</span>
@@ -147,15 +147,15 @@ function componentRow(c) {
   const running = (STATE.data.operations || []).find(op => op.kind === "platform-upgrade" && !["succeeded", "failed", "cancelled"].includes(op.status)
     && op.title.startsWith(`Upgrade ${c.name} `));
   const state = c.id === "cluster" && c.how === "harvester" ? ""
-    : !c.installed ? '<span class="pill slim">not reported</span>'
-    : c.behind ? `<span class="pill slim ${c.next ? "warn" : ""}" ${c.next ? "" : `data-tip="${esc(c.note || "")}"`}>${esc(c.newest)} is out</span>` : '<span class="pill slim ok">up to date</span>';
+    : !c.installed ? UI.chip("not reported", "neutral", { size: "slim" })
+    : c.behind ? UI.chip(`${c.newest} is out`, c.next ? "warn" : "neutral", { size: "slim", tip: c.next ? "" : c.note || "" }) : UI.chip("up to date", "ok", { size: "slim" });
   const nodes = c.mixed && c.nodes ? `<div class="dim xs">${Object.entries(c.nodes).map(([n, v]) => `${esc(n)} ${esc(v)}`).join(" · ")}</div>` : "";
-  const action = running ? `<span class="pill slim info">upgrading</span>`
+  const action = running ? UI.chip("upgrading", "info", { size: "slim" })
     : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade(${jsq(c.id)})">Upgrade to ${esc(c.next)}</button>` : "";
   return `<div class="release-row component-row"><div>
       <span class="cluster-kicker">${esc(c.name.toUpperCase())}</span>
       <div><b class="mono">${esc(c.installed || "—")}</b> ${state}
-        ${c.phase && c.phase !== "Deployed" ? `<span class="pill slim med">${esc(c.phase)}</span>` : ""}</div>
+        ${c.phase && c.phase !== "Deployed" ? UI.chip(c.phase, "warn", { size: "slim" }) : ""}</div>
       <div class="dim xs">${esc(c.note || COMPONENT_HOW[c.how] || "")}${c.steps_left ? ` · ${esc(c.next)} first, then on to ${esc(c.newest)}: one minor version at a time` : ""}${c.error ? ` · could not check for releases: ${esc(c.error)}` : ""}</div>
       ${nodes}</div>
     <div class="row">${c.id === "longhorn" ? actionBar([
@@ -269,8 +269,8 @@ function releaseDate(value) {
 function releaseRow(label, row, kind) {
   if (!row) return "";
   return `<div class="release-row"><div><span class="cluster-kicker">${esc(label)}</span>
-      <div><b>${esc(row.tag)}</b> <span class="pill slim ${kind === "stable" ? "ok" : "warn"}">${esc(row.channel === "stable" ? "stable" : row.channel)}</span>
-        ${row.offered ? '<span class="pill slim info" data-tip="Harvester lists this version, so its dashboard shows an Upgrade button for it">offered by Harvester</span>' : ""}</div>
+      <div><b>${esc(row.tag)}</b> ${UI.chip(row.channel === "stable" ? "stable" : row.channel, kind === "stable" ? "ok" : "warn", { size: "slim" })}
+        ${row.offered ? UI.chip("offered by Harvester", "info", { size: "slim", tip: "Harvester lists this version, so its dashboard shows an Upgrade button for it" }) : ""}</div>
       <div class="dim xs">${esc(releaseDate(row.published))}${row.channel !== "stable" ? " · a test build: for a lab cluster, not one you depend on" : ""}</div></div>
     ${row.url ? `<a class="btn sm" href="${safeHref(row.url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}</div>`;
 }
@@ -287,7 +287,7 @@ function upgradeProgress(up) {
     <div class="upgrade-steps">${up.steps.map(step => `<span class="upgrade-step ${esc(step.state)}" ${step.message ? `data-tip="${esc(step.message)}"` : ""}>${esc(step.label)}</span>`).join("")}</div>
     ${up.nodes.length ? `<table class="tbl dense stack upgrade-nodes"><thead><tr><th>Host</th><th>State</th><th data-nosort>Detail</th></tr></thead><tbody>
       ${up.nodes.map(node => `<tr><td><b>${esc(node.name)}</b></td>
-        <td data-label="State"><span class="pill slim ${/succeed/i.test(node.state) ? "ok" : /fail/i.test(node.state) ? "crit" : "med"}">${esc(node.state || "waiting")}</span></td>
+        <td data-label="State">${UI.chip(node.state || "waiting", /succeed/i.test(node.state) ? "ok" : /fail/i.test(node.state) ? "bad" : "warn", { size: "slim" })}</td>
         <td data-label="Detail" class="dim xs">${esc(node.message || node.reason || "")}</td></tr>`).join("")}</tbody></table>` : ""}</div>`;
 }
 
@@ -313,9 +313,9 @@ function upgradesCard(r) {
       ${!r.stable && !r.test ? `<div class="dim small">${r.error ? `Could not reach GitHub for Harvester's releases: ${esc(r.error)}` : "Nothing newer than this cluster's version has been published."}</div>` : ""}
     </div>
     ${(r.offered || []).length ? `<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px"><span class="dim xs">Harvester offers:</span>
-      ${r.offered.filter(o => !r.current || upgradeNewer(o.version, r.current)).map(o => `<span class="tag">${esc(o.version)}</span>${r.active ? "" :
+      ${r.offered.filter(o => !r.current || upgradeNewer(o.version, r.current)).map(o => `${UI.chip(o.version, "neutral")}${r.active ? "" :
         `<button class="btn sm pri" data-need="admin" onclick="harvesterUpgradeStart(${jsq(o.version)})">Upgrade to ${esc(o.version)}</button>`}`).join("")
-        || r.offered.map(o => `<span class="tag">${esc(o.version)}</span>`).join("")}</div>` : ""}
+        || r.offered.map(o => UI.chip(o.version, "neutral")).join("")}</div>` : ""}
     ${r.stable && !r.stable.offered ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
   </section>`;
 }

@@ -155,7 +155,7 @@ window.addonsPaint = async () => {
   }
   card.hidden = false;
   // An unread health report is said, and nothing is installed or switched on a guess (#620).
-  const probe = health.probe || {}, smb = health.samba || {}, unknown = '<span class="pill crit">status unavailable</span>';
+  const probe = health.probe || {}, smb = health.samba || {}, unknown = UI.chip("status unavailable", "bad");
   if (!health.unread) STATE.data.sambaInstalled = !!smb.installed;
   const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the hosts have hardware virtualisation.</span>'
     : s.kvm_everywhere ? "Every host has hardware virtualisation."
@@ -164,8 +164,8 @@ window.addonsPaint = async () => {
   const row = (key, state) => {
     const a = ADDONS[key];
     const runtime = key === "multus" && state.state;
-    const pill = runtime ? `<span class="pill ${state.ready ? "ok" : "med"}">${esc(state.state)}</span>` : state.installed ? '<span class="pill ok">installed</span>'
-      : state.installing ? '<span class="pill low">installing</span>' : '<span class="pill">not installed</span>';
+    const pill = runtime ? UI.chip(state.state, state.ready ? "ok" : "warn") : state.installed ? UI.chip("installed", "ok")
+      : state.installing ? UI.chip("installing", "neutral") : UI.chip("not installed", "neutral");
     const button = state.repairable ? '<button class="btn sm pri" data-need="admin" onclick="multusRepair()">Repair configuration</button>' : state.installed || state.installing ? ""
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
@@ -185,9 +185,9 @@ window.addonsPaint = async () => {
         ${diagnostic}</div>
       <div class="row">${button}${emulationButton}</div></div>`;
   };
-  const probePill = health.unread ? unknown : !probe.installed ? '<span class="pill">not installed</span>'
-    : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill low">${probe.ready || 0}/${probe.desired || 0} ready</span>`
-    : '<span class="pill ok">installed</span>';
+  const probePill = health.unread ? unknown : !probe.installed ? UI.chip("not installed", "neutral")
+    : probe.ready < probe.desired || probe.reporting < probe.desired ? UI.chip(`${probe.ready || 0}/${probe.desired || 0} ready`, "neutral")
+    : UI.chip("installed", "ok");
   const probeButton = !can("admin") || health.unread ? "" : !probe.installed
     ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
     : '<button class="btn sm" onclick="allocationProbeSettings()">VM placement checks</button><button class="btn sm" onclick="probeRemove()">Remove</button>';
@@ -195,10 +195,10 @@ window.addonsPaint = async () => {
       <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
       <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every host; SMART tests use its separate privileged sidecar.</div></div>
     <div class="row">${probeButton}</div></div>`;
-  const smbPill = health.unread ? unknown : !smb.installed ? '<span class="pill">not installed</span>'
-    : !smb.enabled ? '<span class="pill med">off</span>'
-    : smb.ready < smb.desired ? '<span class="pill low">starting</span>'
-    : smb.partial ? '<span class="pill med">partial service</span>' : '<span class="pill ok">serving</span>';
+  const smbPill = health.unread ? unknown : !smb.installed ? UI.chip("not installed", "neutral")
+    : !smb.enabled ? UI.chip("off", "warn")
+    : smb.ready < smb.desired ? UI.chip("starting", "neutral")
+    : smb.partial ? UI.chip("partial service", "warn") : UI.chip("serving", "ok");
   const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
       <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
       <div class="dim xs" style="margin-top:4px">${health.unread ? "shares and address not read" : `${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"}`} · stopping or removing SMB keeps all PVCs and share settings</div></div>
@@ -206,9 +206,9 @@ window.addonsPaint = async () => {
       ${can("admin") && !health.unread ? actionBar([{ label: smb.enabled ? "Disable" : "Enable", run: `sambaSet(${!smb.enabled})` },
         smb.installed && { label: "Remove server", run: "sambaRemove()", danger: true }].filter(Boolean), { shown: 1, label: "SMB server" }) : ""}</div></div>`;
   STATE.data.nfs = nfs;
-  const nfsPill = nfs.error ? '<span class="pill crit">status unavailable</span>' : !nfs.installed ? '<span class="pill">not installed</span>'
-    : !nfs.enabled ? '<span class="pill med">off</span>'
-    : nfs.ready < nfs.desired ? '<span class="pill low">starting</span>' : '<span class="pill ok">serving</span>';
+  const nfsPill = nfs.error ? UI.chip("status unavailable", "bad") : !nfs.installed ? UI.chip("not installed", "neutral")
+    : !nfs.enabled ? UI.chip("off", "warn")
+    : nfs.ready < nfs.desired ? UI.chip("starting", "neutral") : UI.chip("serving", "ok");
   const nfsRow = `<div class="addon-row"><div><b>NFSv4 network shares</b> ${nfsPill}
       <div class="dim small">A separate, opt-in NFS container serving selected RWX shares to allowed client networks</div>
       <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div>${nfsRecovery(nfs)}</div>
@@ -229,13 +229,13 @@ window.addonsPaint = async () => {
 function hostConsoleRow(c) {
   if (!c || c.harvester) return "";
   // Unread is said, not a row left out; nothing is switched on a guess (#620).
-  if (c.unread) return `<div class="addon-row"><div><b>Host console</b> <span class="pill crit">status unavailable</span>
+  if (c.unread) return `<div class="addon-row"><div><b>Host console</b> ${UI.chip("status unavailable", "bad")}
       ${UI.callout("warn", "Could not read the host console", esc(c.unread))}</div></div>`;
   const hosts = c.nodes.filter(n => !n.native);
-  const pill = c.enabled === null ? '<span class="pill">not checked yet</span>'
-    : !c.enabled ? (c.installed ? `<span class="pill low">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
-    : c.settled ? '<span class="pill ok">installed</span>'
-    : `<span class="pill low">${c.current} of ${c.hosts} up to date</span>`;
+  const pill = c.enabled === null ? UI.chip("not checked yet", "neutral")
+    : !c.enabled ? (c.installed ? UI.chip(`removing · ${c.installed} left`, "neutral") : UI.chip("off", "neutral"))
+    : c.settled ? UI.chip("installed", "ok")
+    : UI.chip(`${c.current} of ${c.hosts} up to date`, "neutral");
   // A host behind this release, or one that failed, can be done now rather
   // than on the next pass (failed hosts wait an hour between tries).
   const behind = n => c.enabled && n.ready && (!n.enabled || n.current === false || /failed/.test(n.detail || ""));

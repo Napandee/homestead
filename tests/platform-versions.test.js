@@ -12,7 +12,7 @@ function card(report) {
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-cluster.js", "utf8"), ctx);
   const html = vm.runInContext("componentsCard", ctx)(report);
-  return { html, pill: (html.match(/<span class="pill [^"]*">([^<]*)<\/span>/) || [])[1] };
+  return { html, pill: (html.match(/<span class="ui-chip [^"]*">([^<]*)<\/span>/) || [])[1] };
 }
 const part = (id, fields) => ({ id, name: id, installed: "v1.0.0", newest: "v1.0.0", next: "", behind: false, ...fields });
 

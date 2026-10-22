@@ -81,7 +81,7 @@ test("rows and cards show the same tags, scheduled included, and name an update 
   const row=c.workloadTableRows([a]).split('<tr class="wl-detail-row"')[0],card=c.workloadCard(a);
   for(const html of [row,card])assert.match(html,/sched-tag/,"scheduled shows in both views");
   assert.match(card,/update available/);
-  assert.doesNotMatch(row,/class="tag warn">(Update|update available)</,"a row says it once, with its Update button");
+  assert.doesNotMatch(row,/class="ui-chip warn">(Update|update available)</,"a row says it once, with its Update button");
   assert.match(row,/aria-label="Update example-app"/);
   vm.runInContext('this.can=()=>false',c);
   assert.match(c.workloadTableRows([a]).split('<tr class="wl-detail-row"')[0],/update available/,"someone who can't update still sees it");

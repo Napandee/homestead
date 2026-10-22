@@ -23,7 +23,7 @@ function updateOwnerTip(owner) {
 function updateOwnerPill(update, slim = false) {
   const owner = updateOwner(update);
   if (!owner) return "";
-  return `<span class="pill${slim ? " slim" : ""} info" tabindex="0" data-tip="${esc(updateOwnerTip(owner))}">${update.available ? "update in " : "updated by "}${esc(owner.by)}</span>`;
+  return UI.chip(`${update.available ? "update in " : "updated by "}${owner.by}`, "info", { size: slim ? "slim" : "", tip: updateOwnerTip(owner) });
 }
 window.markUpdatesElsewhere = async (ns, name) => {
   const by = await askText(`Who updates ${name} - Renovate, CI, git? Homestead then shows its updates as a notice and does not offer to update it here.`,
@@ -93,14 +93,15 @@ function workloadHierarchy(w) {
     <div class="tree-body">${pods.map(p => `<div class="tree-pod">
       <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.hostname || p.name)}</b>
         ${p.hostname ? `<span class="mono dim tree-resource" title="Kubernetes runtime name">${esc(p.name)}</span>` : ""}
-        <span class="pill ${p.terminating ? "low" : p.ready ? "ok" : p.phase === "Pending" ? "med" : "crit"}" ${p.terminating ? 'data-tip="Told to stop and not gone yet. One that never started is cleared when the container is stopped or started again"' : ""}>${p.terminating ? "stopping" : p.ready ? "ready" : esc(p.phase || "pending")}</span>
+        ${UI.chip(p.terminating ? "stopping" : p.ready ? "ready" : p.phase || "pending", p.terminating ? "neutral" : p.ready ? "ok" : p.phase === "Pending" ? "warn" : "bad",
+          { tip: p.terminating ? "Told to stop and not gone yet. One that never started is cleared when the container is stopped or started again" : "" })}
         <span class="dim xs tree-node">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
       ${p.pull?.total_bytes ? `<div class="tree-pull">${pullBar(p.pull)}</div>` : ""}
       ${p.unplaced ? `<div class="tree-why unplaced" title="${esc(p.unplaced)}">Cannot be placed: ${esc(p.unplaced)}</div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
-        <b>${esc(c.name)}</b><span class="pill ${c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "low"}">${esc(c.state || "pending")}</span>
-        ${c.restarts ? `<span class="tag warn">${c.restarts} restart${c.restarts === 1 ? "" : "s"}</span>` : ""}
+        <b>${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}
+        ${c.restarts ? UI.chip(`${c.restarts} restart${c.restarts === 1 ? "" : "s"}`, "warn") : ""}
         <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
       </div>${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
         ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
@@ -220,8 +221,8 @@ window.imageUpdateCenter = async () => {
       return `<div class="settings-list-row update-center-row">${pick ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" aria-label="Select ${esc(w.name)}" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
         ${owner ? `<div class="dim xs">${esc(updateOwnerTip(owner))}</div>` : ""}
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
-        <div class="row">${owner ? updateOwnerPill(w) : w.available ? '<span class="pill warn">update available</span>' : ""}
-        ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
+        <div class="row">${owner ? updateOwnerPill(w) : w.available ? UI.chip("update available", "warn") : ""}
+        ${failures.length ? UI.chip("check failed", "bad") : ""}
         ${owner && !owner.detected ? `<button class="btn sm" data-need="operator" onclick="clearUpdatesElsewhere(${jsq(w.ns)},${jsq(w.name)})">Update here</button>`
           : !owner && w.available ? `<button class="btn sm" data-need="operator" onclick="markUpdatesElsewhere(${jsq(w.ns)},${jsq(w.name)})">Updated elsewhere…</button>` : ""}
         <button class="btn sm" onclick="openUpdateWorkload(${jsq(w.name)})">Open</button></div></div>`;
@@ -836,7 +837,7 @@ function workloadStateTags(w, update, { row = false } = {}) {
   const owner = updateOwner(update);
   const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
   return `${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
-    : update?.available && !button ? `<span class="${row ? "tag" : "pill"} warn">update available</span>` : ""}${uncheckedMark(update)}`;
+    : update?.available && !button ? UI.chip("update available", "warn") : ""}${uncheckedMark(update)}`;
 }
 
 function workloadCard(w) {
@@ -851,9 +852,9 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · ${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink"
                 onclick="moveWorkload(${jsq(w.name)},${jsq(w.ns)})">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}</div></div>
           </div>
-          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${workloadStateTags(w, update)}
+          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? UI.chip(`managed ${w.managed_nfs ? "NFS" : "SMB"}`, "info", { size: "slim", tip: "Managed by Homestead under Network Shares" }) : ""}${workloadStateTags(w, update)}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
-          <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
+          ${UI.chip(`${w.ready}/${w.desired}`, ok ? "ok" : off ? "neutral" : "bad")}</div>
         </div>
         <div class="wmeta">
           <div><div class="dim xs">UPTIME</div>${w.uptime ? upChip(w.uptime) : '<span class="dim">—</span>'}</div>
@@ -923,13 +924,13 @@ function workloadTableRows(rows) {
       run:`workloadToggleDetails(${jsq(key)},this)`,bodyHtml:`${appAvatar(w.name, w.icon)}<span class="wtitle"><b>${esc(w.name)}</b> ${clusterTag(w)}</span>`});
     return `<tr class="wl-row${off ? " wl-off" : ""}${quiet ? " wl-quiet" : ""}${open ? " wl-expanded" : ""}" data-row-key="${esc(key)}"${clusterAttr(w)}>
       <td class="wl-name" data-sort="${esc(w.name)}">${disclosure}
-        <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
+        <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `${UI.chip(`managed ${w.managed_nfs ? "NFS" : "SMB"}`, "info", { size: "slim" })} ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
-        <span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${off ? "Stopped" : `${w.ready}/${w.desired}`}</span>
+        ${UI.chip(off ? "Stopped" : `${w.ready}/${w.desired}`, ok ? "ok" : off ? "neutral" : "bad", { size: "slim", tip: `${w.ready} of ${w.desired} ready` })}
         ${answerTag(w)}${workloadStateTags(w, update, { row: true })}
         ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
-        ${pull ? `<span class="tag" title="Fetching ${esc(pull.image || "image")}">Pulling ${Math.min(100, pull.percent || 0)}%</span>` : ""}
-        ${blocked ? `<span class="tag bad" data-tip="${esc(blocked)}">Blocked</span>` : ""}</div></td>
+        ${pull ? UI.chip(`Pulling ${Math.min(100, pull.percent || 0)}%`, "neutral", { tip: `Fetching ${pull.image || "image"}` }) : ""}
+        ${blocked ? UI.chip("Blocked", "bad", { tip: blocked }) : ""}</div></td>
       <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${imageTitle(w.images)}">${imageShort(w.images)}</div>
         ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</td>
       <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
@@ -1507,7 +1508,7 @@ window.wlFailover = async () => {
       ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value=${jsq(v)})">${esc(l)}</button>`).join("")}</div>
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its host fails</th></tr></thead><tbody>
       ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
-          ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
+          ${(w.hardware || []).length ? UI.chip(w.hardware.join(", "), "hw", { tip: "Tied to hardware on its host" }) : ""}</td>
         <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s host fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
@@ -2015,13 +2016,13 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
   const row = item => {
       const key = rolloutKey(item), state = states[key], startError = failureMap[key];
       const phase = startError ? "failed" : state?.phase || "starting";
-      const tone = phase === "ready" || phase === "up to date" ? "ok" : phase === "failed" ? "crit" : phase === "not started" ? "neutral" : "warn";
+      const tone = phase === "ready" || phase === "up to date" ? "ok" : phase === "failed" ? "bad" : phase === "not started" ? "neutral" : "warn";
       // The ready count can be the old pod's: what the new one waits for says more.
       const waiting = !["ready", "up to date"].includes(phase) && (state?.pods || []).find(pod => pod.blocked);
       const actions = startError && queueMode ? [startError.job ? UI.button("Open job", `imageQueueJob(${jsArg(startError.job)})`) : "",
         IMAGE_QUEUE && notStarted.length ? UI.button(`Skip and continue with ${notStarted.length} more`, "imageQueueSkip()") : ""].join("") : "";
       return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
-        <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError.error)}</div>` : ""}
+        ${UI.chip(phase, tone)}${startError ? `<div class="updateerror">${esc(startError.error)}</div>` : ""}
         ${actions ? `<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">${actions}</div>` : ""}
         ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
     };
@@ -2033,7 +2034,7 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
     ${reconnecting?UI.callout("warn","Some updates could not be checked","Showing last-known progress. Reconnecting automatically."):""}
     <div class="between"><div><b>${items.length} app${items.length === 1 ? "" : "s"}${counts ? ` · ${counts}` : ""}</b>
       <div class="dim xs">Updates run one app at a time${queueMode ? "; a failure stops the ones after it" : ""}.</div></div>
-      ${failed ? `<span class="pill warn">${queueMode ? (IMAGE_QUEUE ? "queue stopped" : "queue ended") : "needs attention"}</span>` : done === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
+      ${failed ? UI.chip(queueMode ? (IMAGE_QUEUE ? "queue stopped" : "queue ended") : "needs attention", "warn") : done === items.length ? UI.chip("finished", "ok") : reconnecting ? UI.chip("reconnecting", "warn") : UI.chip("monitoring", "ok")}</div>
     ${UI.progress(items.length ? done/items.length*100 : 100, {label:`${done} of ${items.length} done`,kind:failed?"bad":"info"})}
     ${running?UI.section(`Updating ${running.name}`,rolloutProgress(states[rolloutKey(running)])):""}
     <div class="batch-rollout-list">${pending.filter(item=>item!==running).map(row).join("")}</div>
@@ -2388,7 +2389,7 @@ async function viewDeploy(pre) {
   const sections = appFormSections("deploy", {
     basics: `
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "low"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, UI.chip(DCFG.app_profile.intent || "template", DCFG.app_profile.level === "dependency" ? "warn" : "neutral"))}
         ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
@@ -2560,9 +2561,9 @@ function syncSummary() {
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
     row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
     row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +
-    row("⇄", "Ports", c.ports.length ? c.ports.map(p => `<span class="tag ${p.expose ? "info" : ""}">${p.host}→${p.container}</span>`).join("") : '<span class="dim">—</span>') +
-    row("▥", "Storage", c.volumes.length ? c.volumes.map(v => `<span class="tag">${esc(v.source || (v.kind === "ephemeral" ? "temporary" : "choose source"))} · ${esc(v.kind)}</span>`).join("") : '<span class="dim">—</span>') +
-    row("≡", "Env vars", Object.keys(c.env).length ? `<span class="tag">${Object.keys(c.env).length} set</span>` : '<span class="dim">—</span>');
+    row("⇄", "Ports", c.ports.length ? c.ports.map(p => UI.chip(`${p.host}→${p.container}`, p.expose ? "info" : "neutral")).join(" ") : '<span class="dim">—</span>') +
+    row("▥", "Storage", c.volumes.length ? c.volumes.map(v => UI.chip(`${v.source || (v.kind === "ephemeral" ? "temporary" : "choose source")} · ${v.kind}`, "neutral")).join(" ") : '<span class="dim">—</span>') +
+    row("≡", "Env vars", Object.keys(c.env).length ? UI.chip(`${Object.keys(c.env).length} set`, "neutral") : '<span class="dim">—</span>');
 }
 function addPort(cp = "", hp = "", ex = true, protocol = "TCP") {
   const d = document.createElement("div"); d.className = "f4 port-row";
@@ -2895,9 +2896,9 @@ function storeCard(app, mode) {
     <div class="row" style="gap:11px">${storeIcon(app)}
       <div style="min-width:0"><div class="nm">${esc(app.name)}</div>
         <div class="dim xs store-by">${esc(app.maintainer || "")}${app.official ? ' · <span class="store-official">official</span>' : ""}</div></div></div>
-    <div class="row store-tags">${label ? `<span class="tag">${esc(label)}</span>` : ""}
-      ${app.deploy?.app_profile ? `<span class="tag${app.deploy.app_profile.level === "dependency" ? " warn" : ""}">${esc(app.deploy.app_profile.label)}</span>` : ""}
-      ${app.beta ? '<span class="tag warn">beta</span>' : ""}</div>
+    <div class="row store-tags">${label ? UI.chip(label, "neutral") : ""}
+      ${app.deploy?.app_profile ? UI.chip(app.deploy.app_profile.label, app.deploy.app_profile.level === "dependency" ? "warn" : "neutral") : ""}
+      ${app.beta ? UI.chip("beta", "warn") : ""}</div>
     <div class="store-metric">${storeMetric(app, mode)}</div>
     ${mode === "spotlight" && app.spotlight?.reason ? `<div class="store-why">“${esc(app.spotlight.reason)}”</div>` : ""}
     <div class="ds">${esc(app.desc || "No description provided.")}</div>
@@ -3011,8 +3012,8 @@ window.storeDetails = async key => {
     <div class="store-detail-head">${storeIcon(app, "store-detail-icon")}
       <div class="store-detail-title"><h3>${esc(app.name)}</h3>
         <div class="dim small">${esc(app.maintainer || "")}${app.official ? ' · <span class="store-official">official container</span>' : ""}</div>
-        <div class="row store-tags">${(app.categories || []).slice(0, 4).map(c => `<span class="tag">${esc(c)}</span>`).join("")}
-          ${app.beta ? '<span class="tag warn">beta</span>' : ""}${app.privileged ? '<span class="tag bad">asks for privileged</span>' : ""}</div></div>
+        <div class="row store-tags">${(app.categories || []).slice(0, 4).map(c => UI.chip(c, "neutral")).join("")}
+          ${app.beta ? UI.chip("beta", "warn") : ""}${app.privileged ? UI.chip("asks for privileged", "bad") : ""}</div></div>
       <button class="btn pri" onclick="storeInstall(${jsKey})">Configure &amp; deploy</button></div>
     <div class="row store-links">${STORE_LINKS.filter(([k]) => app.links?.[k]).map(([k, label]) =>
       `<a class="btn sm" href="${safeHref(app.links[k])}" target="_blank" rel="noopener noreferrer">${label} ${icon("ext")}</a>`).join("")}</div>

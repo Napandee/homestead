@@ -225,7 +225,7 @@ const Dashboard = (() => {
     const focus=document.activeElement, focusId=focus?.dataset.dashDrag;
     paint(`${UI.pageHeader("Edit dashboard", "Arrange your widgets. Your layout follows your account.")}
       <div class="dashboard-mobile-notice only-sm" role="status">Use a larger screen to continue arranging widgets. Your unsaved changes are kept.</div>
-      <div class="dashboard-edit-toolbar"><div class="row"><span class="tag">Editing</span><span class="dim small">${draft.length} widgets</span><span class="dim small">${dirty()?"Unsaved changes":"Layout saved"}</span></div>
+      <div class="dashboard-edit-toolbar"><div class="row">${UI.chip("Editing", "neutral")}<span class="dim small">${draft.length} widgets</span><span class="dim small">${dirty()?"Unsaved changes":"Layout saved"}</span></div>
         <div class="row"><button class="btn sm" onclick="Dashboard.history(-1)" ${undo.length?"":"disabled"}>Undo</button><button class="btn sm" onclick="Dashboard.history(1)" ${redo.length?"":"disabled"}>Redo</button><button class="btn sm" onclick="Dashboard.reset()">Reset layout</button>
         <button class="btn sm" aria-pressed="${phone}" onclick="Dashboard.preview()">${phone?"Desktop canvas":"Phone preview"}</button>${UI.button("Cancel", "Dashboard.cancel()", {disabled:saving, attrs: 'data-dialog-dismiss="true"' })}${UI.button(saving?"Saving…":"Save layout", "Dashboard.save()", {kind:"pri",disabled:saving})}</div></div>
       ${(STATE.data.ov?.health_issues || []).length ? UI.callout("warn", "Cluster needs attention", esc(STATE.data.ov.health_summary || "Review cluster health after editing.")) : ""}
