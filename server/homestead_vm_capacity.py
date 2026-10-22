@@ -4,7 +4,6 @@ The API layer must bind/recheck context and exact prepared input before writes.
 This module never sends power, changes policy or provisions a dependency.
 """
 import copy
-import urllib.error
 from urllib.parse import quote
 
 import homestead_kube as KUBE
@@ -26,15 +25,12 @@ def _items(read, path):
 
 
 def _optional(read, path):
-    try:
+    def named(path):
         value = read(path)
         if not (value.get("metadata") or {}).get("name"):
             raise ValueError("incomplete VM dependency response")
         return value
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
+    return KUBE.get_optional(path, read=named)
 
 
 def dependencies(vm, read, planned_claims=None, *, pods=None):

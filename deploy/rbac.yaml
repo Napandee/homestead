@@ -152,6 +152,14 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: [virtualmachines, virtualmachineinstances, virtualmachineinstancemigrations]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Read only: image clean-up keeps the container disks a VM pool or VM
+  # replica set scaled to zero starts from.
+  - apiGroups: ["kubevirt.io"]
+    resources: [virtualmachineinstancereplicasets]
+    verbs: [get, list]
+  - apiGroups: ["pool.kubevirt.io"]
+    resources: [virtualmachinepools]
+    verbs: [get, list]
   # KubeVirt's one operator-owned configuration object. Homestead reads its
   # software-emulation fallback and can enable it on an explicitly requested
   # k3s/RKE2 installation whose hosts do not expose /dev/kvm.
@@ -283,6 +291,38 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: homestead-console
+subjects:
+  - kind: ServiceAccount
+    name: homestead
+    namespace: lab
+---
+# The one-time setup code for the first administrator (#737) lives in a Secret
+# in Homestead's own namespace. Homestead makes it, reads it back when another
+# copy made it first, and deletes it once the first account exists. Kubernetes
+# cannot limit create to one name, so create stands apart.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homestead-setup
+  namespace: lab
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [homestead-setup]
+    verbs: [get, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homestead-setup
+  namespace: lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homestead-setup
 subjects:
   - kind: ServiceAccount
     name: homestead

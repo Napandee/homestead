@@ -44,8 +44,13 @@ connection itself (cookies, request headers, forwarding to a linked Homestead,
 a WebSocket). Every other route is declared in its module's `ROUTES`, and code
 moved out of `server.py` reaches what `server.py` still owns through
 `bind_routes()` and `_late`, so a test that patches `server.kget` reaches it
-too. Three tests in `tests/test_module_routes.py` hold this, and each failure
-says what to do:
+too. A module route that needs the connection reads `request.conn` (headers
+without the secret ones, Homestead's own cookies, who the guard found) and
+answers with `Reply(..., headers=..., cookies=(Cookie(...),))`; both are
+checked before anything is sent. Code that runs after every request registers
+with `homestead_routes.after(fn)`: it gets no body, query, cookies or session,
+and asks by name for any of `HOOK_FIELDS` it needs. Three tests in
+`tests/test_module_routes.py` hold this, and each failure says what to do:
 
 - **the ratchet:** `server.py` may not grow past `MAX_LINES`; when it shrinks
   by more than 20 lines, lower `MAX_LINES` to its new length in the same commit;

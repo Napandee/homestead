@@ -82,6 +82,8 @@ def report():
     except Exception:
         probe.update(installed=False, desired=0, ready=0)
     try:
+        # Hosts whose probe is answering: node_temps() leaves out one that
+        # has stopped (homestead_node_probes).
         temps = node_temps()
         probe["reporting"] = len(temps)
         probe["smart"] = sum(1 for t in temps.values() if (t.get("smart_helper") or {}).get("available"))

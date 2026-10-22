@@ -45,10 +45,12 @@ case "${1:-}" in
     UI_TABLE_SCREENSHOTS=release-assets/pages/ui-table node tests/integration/ui-table-phone.mjs
     IPAM_FIGURES_SCREENSHOTS=release-assets/pages/ipam-figures node tests/integration/ipam-figures.mjs
     node tests/integration/unread-is-not-empty.mjs
+    node tests/integration/settings-reads.mjs
     ;;
   pages-dashboard)
     INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
     NODE_HEALTH_SCREENSHOTS=release-assets/pages/node-health node tests/integration/dashboard-node-health.mjs
+    node tests/integration/node-probe-states.mjs
     DASH_WARNING_SCREENSHOTS=release-assets/pages/dashboard-warning node tests/integration/dashboard-one-warning.mjs
     RESOURCE_WIDGET_SCREENSHOTS=release-assets/pages/resources node tests/integration/dashboard-resources.mjs
     ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
@@ -71,6 +73,7 @@ case "${1:-}" in
     node tests/integration/volume-files-cleanup.mjs
     node scripts/check_update_channels.mjs
     node scripts/check_troubleshooting.mjs
+    node tests/integration/navigation-aborts-reads.mjs
     ;;
   *)
     echo "Usage: sh scripts/ci_ui_checks.sh dialogs-0|dialogs-1|dialogs-2|dialog-flows|pages|pages-dashboard|pages-setup|pages-live" >&2

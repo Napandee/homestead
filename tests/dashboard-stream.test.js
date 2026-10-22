@@ -77,7 +77,7 @@ test("an older history request cannot repaint over a newer range",async()=>{
 });
 
 test("refreshing faster than history responds reuses its request and eventually paints",async()=>{
-  const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
+  const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,now:1000000,Date:{now:()=>ctx.now},STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
     document:{createElement:()=>({})},morph:(_,next)=>painted.push(next.innerHTML),api:(_path,opts)=>new Promise(resolve=>requests.push({resolve,signal:opts.signal}))};
   ctx.$=()=>ctx.host;vm.createContext(ctx);
   const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(between(code,"let historyRequest","window.historyPaint"),ctx);
@@ -85,7 +85,9 @@ test("refreshing faster than history responds reuses its request and eventually 
   assert.equal(requests.length,1);assert.equal(requests[0].signal.aborted,false);
   requests[0].resolve({samples:0});await Promise.all(refreshes);
   assert.equal(painted.length,1);assert.ok(ctx.STATE.data.historyHtml);
-  const later=ctx.historyPaint();assert.equal(requests.length,2);requests[1].resolve({samples:0});await later;
+  // Within five minutes a refresh reuses what was painted; after that it reads again (#705).
+  await ctx.historyPaint();assert.equal(requests.length,1);
+  ctx.now+=300000;const later=ctx.historyPaint();assert.equal(requests.length,2);requests[1].resolve({samples:0});await later;
 });
 
 test("single observed CPU and RAM samples both render without inventing zero-valued data",()=>{

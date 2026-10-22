@@ -600,7 +600,7 @@ class JobTests(unittest.TestCase):
         self.cluster.unreadable = http(500, MAP)
         began = []
         ops = mock.Mock(TERMINAL=("succeeded", "failed"), RESOLVERS={}, CANCELLERS={})
-        ops.list_operations.return_value = []
+        ops.snapshot.return_value = []
         ops.start.side_effect = lambda *args: began.append(args) or {"id": "op"}
         P.operations = ops
         self.addCleanup(setattr, P, "operations", None)

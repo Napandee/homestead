@@ -133,11 +133,23 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
 
 class LimitedHandler(BaseHTTPRequestHandler):
-    """For standalone helpers: header deadline plus strict small body framing."""
+    """For standalone helpers: header deadline plus strict small body framing.
+
+    after_request, when set, is called once per request whose request line
+    arrived, after its answer is sent and its slot given back, with _status
+    (the status sent, None if its headers never came) and _started set; what
+    it raises is ignored. It must return at once: a connection refused at the
+    cap, a request line too long or never sent reaches no hook. Everything known
+    about a request is cleared before the next one on a kept-alive connection,
+    so nothing from one request is read as the next one's."""
     timeout = IDLE_SECONDS
     max_body = 4096
     _slot = False
     _served = False
+    after_request = None
+    _status = _started = None
+    PER_REQUEST = ("user", "role", "_access", "_status", "_started", "_raw", "_fleet_from", "api_key",
+                   "headers", "path")
 
     def _next_request_arrives(self):
         """Wait, holding no request slot, for the client's next request on a
@@ -173,6 +185,8 @@ class LimitedHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         self._served = True
+        for name in self.PER_REQUEST:
+            setattr(self, name, None)
         self._header_deadline = deadline(self.connection, HEADER_SECONDS)
         self._header_deadline.__enter__()
         try:
@@ -185,6 +199,11 @@ class LimitedHandler(BaseHTTPRequestHandler):
             if self._slot:
                 self._slot = False
                 self.server.give_slot()
+            if self.after_request is not None and self._started is not None:
+                try:
+                    self.after_request()
+                except Exception:
+                    pass    # a hook never changes what was answered
 
     def _take_slot(self):
         """A request holds a slot until it is answered; with none free it gets 503."""
@@ -200,7 +219,12 @@ class LimitedHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         return False
 
+    def send_response(self, code, message=None):
+        self._status = code
+        super().send_response(code, message)
+
     def parse_request(self):
+        self._started = time.monotonic()
         valid = super().parse_request()
         self._header_deadline.__exit__(None, None, None)
         self._header_deadline = None

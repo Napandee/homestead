@@ -27,7 +27,7 @@ class ShutdownAuthenticationTests(unittest.TestCase):
         self.version = 1
         self.saved = []
         self.enterContext(mock.patch.object(self.auth, "kget", side_effect=self.get))
-        self.network = self.enterContext(mock.patch.object(server.urllib.request, "urlopen", side_effect=self.send))
+        self.network = self.enterContext(mock.patch.object(server.KUBE_HELPERS, "_request", side_effect=self.send))
         self.shutdown = self.enterContext(mock.patch.object(server.CLUSTER_SHUTDOWN.Shutdown, "state",
                                                             return_value={"phase": "handoff"}))
         self.revoke = self.enterContext(mock.patch.object(self.auth.SESSIONS, "revoke"))
@@ -37,17 +37,15 @@ class ShutdownAuthenticationTests(unittest.TestCase):
         return {"metadata": {"resourceVersion": str(self.version)},
                 "data": {"store.json": base64.b64encode(json.dumps(self.store).encode()).decode()}}
 
-    def send(self, request, **kwargs):
-        self.assertEqual(request.full_url, server.API + "/api/v1/namespaces/lab/secrets/homestead-auth")
-        self.assertEqual(request.method, "PUT")
-        body = json.loads(request.data)
+    def send(self, method, path, data, headers, timeout):
+        self.assertEqual(path, "/api/v1/namespaces/lab/secrets/homestead-auth")
+        self.assertEqual(method, "PUT")
+        body = json.loads(data)
         self.assertEqual(body["metadata"]["resourceVersion"], str(self.version))
         self.store = json.loads(base64.b64decode(body["data"]["store.json"]))
         self.saved.append(copy.deepcopy(self.store))
         self.version += 1
-        response = mock.MagicMock()
-        response.__enter__.return_value.read.return_value = json.dumps({"metadata": {"resourceVersion": str(self.version)}}).encode()
-        return response
+        return json.dumps({"metadata": {"resourceVersion": str(self.version)}}).encode()
 
     def body(self):
         return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",

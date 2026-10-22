@@ -227,6 +227,7 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", un
         STORAGE_CONFLICTS.require_clear(items, kind, ref, resource)
         items.append(item)
         _write(items)
+    advance_soon()  # its first step runs within a tick on the leader, not after the idle wait
     return _public(item)
 
 
@@ -920,15 +921,53 @@ def _hide_data_move(item):
 
 
 def snapshot():
-    """Inspect atomic saved files without creating locks or advancing jobs.
+    """Inspect atomic saved files without creating locks or advancing jobs,
+    newest first. GET /api/operations and every request read this (#622).
 
     This is a display snapshot, not a mutation authorization. The two journals
     are not a transaction; inconsistent/unavailable reads remain an error.
     """
-    return [_public(item) for item in _read() if not _history_hidden(item)]
+    items = sorted(_read(), key=lambda item: item.get("started_at", ""), reverse=True)
+    return [_public(item) for item in items if not _history_hidden(item)]
+
+
+# Only the leader advances jobs, in one loop (#622): every ACTIVE_SECONDS while a
+# job is active, every IDLE_SECONDS otherwise, or at once when something asks.
+ACTIVE_SECONDS, IDLE_SECONDS = 3, 20
+_wake = threading.Event()
+
+
+def advance_soon():
+    """Ask the jobs loop to run now rather than at its next tick (a job just
+    started or changed that should not wait)."""
+    _wake.set()
+
+
+def tick(is_leader):
+    """One round of the jobs loop: on the leader, run every active job's
+    resolver. Returns how long to wait before the next round."""
+    if not is_leader():
+        return IDLE_SECONDS
+    try:
+        jobs = list_operations()
+    except Exception as error:
+        print(f"jobs not advanced: {str(error)[:160]}", flush=True)
+        return IDLE_SECONDS
+    return ACTIVE_SECONDS if any(job.get("status") not in TERMINAL for job in jobs) else IDLE_SECONDS
+
+
+def run_jobs(is_leader, stop=None):
+    """The jobs loop: one thread per process; only the leader's does anything."""
+    while not (stop and stop.is_set()):
+        wait = tick(is_leader)
+        _wake.wait(wait)
+        _wake.clear()
 
 
 def list_operations():
+    """Advance every active job by running its resolver, under the job store's
+    lock, and save. Only the leader's jobs loop calls this (tick); requests read
+    snapshot()."""
     try:
         require_write()
     except StorageHeld:
@@ -996,6 +1035,7 @@ def resume(operation_id):
                      message="Carrying on from where it stopped")
         _note(match, "running", match.get("progress", 0), match["message"])
         _write(items)
+    advance_soon()
     return {"ok": True, "id": operation_id}
 
 
@@ -1184,6 +1224,7 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
                 match.update(status=match.pop("previous_status", "running"), updated_at=_now(),
                              message=f"Cancelling did not finish: {error}"[:500])
                 _write(items)
+        advance_soon()  # the job is running again
         raise ValueError(f"cancelling did not finish: {error}") from error
     message = message or ("Stopped tracking it here; it carries on in Kubernetes"
                           if plan["mode"] == "forget" else "Cancelled")
@@ -1208,6 +1249,7 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
             else:
                 _finish(match, "cancelled", match.get("progress", 0), message)
             _write(items)
+    advance_soon()
     return {"ok": True, "id": operation_id, "detail": message,
             "operation": _public(match) if match else None}
 
@@ -1290,7 +1332,7 @@ ROUTES = {
     ("POST", "/api/operations/vm-recovery/resolve"): ("admin", _recover("vm", "resolve")),
     ("POST", "/api/operations/storage-recovery/preview"): ("admin", _recover("storage", "preview")),
     ("POST", "/api/operations/storage-recovery/act"): ("admin", _recover("storage", "act")),
-    ("GET", "/api/operations"): ("viewer", lambda request: list_operations()),
+    ("GET", "/api/operations"): ("viewer", lambda request: snapshot()),
     ("GET", "/api/operations/log"): ("viewer", lambda request: log((request.query.get("id") or [""])[0])),
     ("POST", "/api/operations/resume"): ("admin", lambda request: resume(request.body.get("id", ""))),
     ("POST", "/api/operations/cancel-plan"): ("operator", lambda request: cancel_plan(request.body.get("id", ""))),

@@ -1488,15 +1488,20 @@ window.wlStopSelfGo = async (ns, name) => {
    its policy is shown here too. */
 window.wlFailover = async () => {
   modal("If a host fails", '<div class="empty"><span class="spin2"></span></div>', true);
-  const [rows, lh] = await Promise.all([api("/api/workloads").catch(() => STATE.data.wl || []),
-    api("/api/longhorn/capacity").catch(() => null)]);
-  const policy = lh?.node_down || "";
+  // An unread container list is said; no policy is offered or saved against an old one (#620).
+  const [rows, lh] = await Promise.all([api("/api/workloads").catch(e => ({ unread: e.message })),
+    // Without Longhorn there is no policy to show; with it, an unread one is said (#620).
+    STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(e => ({ unread: e.message }))]);
+  const policy = lh?.unread ? "" : lh?.node_down || "";
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
-    ${lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
+    ${lh?.unread ? UI.callout("warn", "Could not read Longhorn's node-failure policy", esc(lh.unread)) : lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
       ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another host takes its volume with it.`
       : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
+    ${rows.unread ? `${UI.callout("warn", "Could not read the containers", esc(rows.unread))}
+    ${UI.actions(`<button class="btn" onclick="wlFailover()">Try again</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}` : `
     <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
       ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value=${jsq(v)})">${esc(l)}</button>`).join("")}</div>
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its host fails</th></tr></thead><tbody>
@@ -1505,7 +1510,7 @@ window.wlFailover = async () => {
         <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s host fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
-      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`}`;
   if (window.applyRole) applyRole();
 };
 window.wlFailoverSave = async () => {
@@ -1533,8 +1538,13 @@ window.wlFailoverPolicy = async () => {
    a bridged VM network, beside its pod network, so it answers there directly
    without a Service - what an app that wants to be found on the LAN needs. */
 async function containerLanFields(p, current) {
-  const opts = window.__vmCreateOptions || await api("/api/vm/create-options").catch(() => ({}));
-  window.__vmCreateOptions = opts;
+  // Unread networks are not "no LAN network yet", and the failure is not kept as the answer (#620).
+  let opts = window.__vmCreateOptions;
+  if (!opts) {
+    try { opts = await api("/api/vm/create-options"); }
+    catch (e) { return UI.callout("warn", "Could not read the networks", esc(e.message)); }
+    window.__vmCreateOptions = opts;
+  }
   const lan = vmLanNetworks(opts);
   if (!lan.length) return vmNetworkNote(opts);
   return `<div class="f"><label>LAN network ${tip("Its bridge and VLAN; the container joins it as a second interface, lan0, and keeps the pod network for everything else.")}</label>
@@ -1693,7 +1703,14 @@ window.checkImageUpdates = async () => {
     while (watching) {
       await new Promise(r => setTimeout(r, 500));
       if (!watching) break;
-      const at = await api("/api/image-updates/scan-progress", { keep: true }).catch(() => null);
+      const at = await api("/api/image-updates/scan-progress", { keep: true }).catch(e => ({ unread: e.message }));
+      // The check goes on; the bar says this read failed, until the next one answers.
+      if (at?.unread) {
+        const bar = $("#scanprogress");
+        if (bar && !bar.querySelector(".scan-unread"))
+          bar.insertAdjacentHTML("beforeend", ` <span class="scan-unread">· could not read the progress just now: ${esc(at.unread)}</span>`);
+        continue;
+      }
       if (!at || !at.total) continue;
       const done = Math.min(at.done, at.total);
       if (button && at.running) button.textContent = `Checking ${done}/${at.total}…`;

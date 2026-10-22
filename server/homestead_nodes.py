@@ -10,7 +10,6 @@ and watch ports stay there and call in here.
 import json
 import time
 import urllib.parse
-import urllib.request
 
 import homestead_disks as DISKS
 import homestead_hardware as HW
@@ -19,6 +18,7 @@ import homestead_impact as IMPACT
 import homestead_lhcapacity as LHCAP
 import homestead_lifecycle as LC
 import homestead_names as NAMES
+import homestead_node_probes as PROBES
 import homestead_networking as NETWORK
 import homestead_nfs as NFS
 import homestead_operations as OPS
@@ -60,53 +60,20 @@ def rate(key, value, now=None):
     return (value - prev[0]) / (now - prev[1])
 
 
-_TEMP_CACHE = {"at": 0, "data": {}}
+def node_temps(wait=True, unreachable=False):
+    """Each host's last reading from the optional homestead-nodeprobe DaemonSet.
+
+    Absent probe is not an error - it just means no thermal data, which the UI
+    reports rather than showing a blank gauge. The reading happens in the
+    background (homestead_node_probes): asking never waits on a probe once
+    this replica's loop runs. A host whose probe has stopped answering is left
+    out unless asked for: its last reading is too old to act on."""
+    return PROBES.node_temps(DEFAULT_NS, wait=wait, unreachable=unreachable)
 
 
-def node_temps():
-    """Temperatures from the optional homestead-nodeprobe DaemonSet.
-
-    Absent probe is not an error — it just means no thermal data, which the UI
-    reports rather than showing a blank gauge.
-    """
-    if time.time() - _TEMP_CACHE["at"] < 20:
-        return _TEMP_CACHE["data"]
-    out = {}
-    pods = NAMES.nodeprobe_pods(DEFAULT_NS)
-    for p in pods:
-        ip = p.get("status", {}).get("podIP")
-        node = p.get("spec", {}).get("nodeName")
-        if not ip or not node or p.get("status", {}).get("phase") != "Running":
-            continue
-        payload = {"node": node, "thermal": [], "hwmon": [], "devices": {},
-                   "disks": [], "sensors": 0, "smart_helper": {"available": False}}
-        try:
-            with urllib.request.urlopen(f"http://{ip}:9099/", timeout=4) as r:
-                raw = r.read(4 * 1024**2 + 1)
-                if len(raw) > 4 * 1024**2:
-                    raise ValueError("node telemetry exceeds the size limit")
-                payload.update(json.loads(raw.decode()))
-            # Provenance is assigned by this backend, never accepted from the
-            # probe response. Consumers still verify Pod/DaemonSet ownership,
-            # current host boot and sample age before trusting NUMA data.
-            payload["numa_source"] = {"pod": {key: p.get("metadata", {}).get(key) for key in ("namespace", "name", "uid")},
-                                      "received_at": time.time()}
-        except Exception:
-            payload.pop("numa_source", None)
-            pass
-        try:
-            with urllib.request.urlopen(f"http://{ip}:9100/", timeout=20) as r:
-                smart = json.loads(r.read().decode())
-            rows = {row.get("name"): row for row in smart.get("disks", [])}
-            for disk in payload.get("disks", []):
-                disk["smart"] = rows.get(disk.get("name"))
-            payload["smart_helper"] = {"available": True, "disks": len(rows)}
-        except Exception:
-            payload["smart_helper"] = {"available": False,
-                "reason": "SMART helper unavailable; install or update deploy/nodeprobe.yaml"}
-        out[node] = payload
-    _TEMP_CACHE.update(at=time.time(), data=out)
-    return out
+def start_probes():
+    """This replica's background probe loop (#705)."""
+    PROBES.start(DEFAULT_NS)
 
 
 def reconcile_hardware(fresh=False):
@@ -116,7 +83,10 @@ def reconcile_hardware(fresh=False):
     they have to follow a device plugged in later - not wait until someone
     opens the Nodes page."""
     if fresh:
-        _TEMP_CACHE["at"] = 0
+        try:
+            PROBES.run_round()
+        except Exception:
+            pass             # the probe pods could not be listed: use what is known
     temps = node_temps()
     found = {}
     for n in kget("/api/v1/nodes").get("items", []):
@@ -350,7 +320,10 @@ def get_nodes():
         duties = node_duties(pods)
     except Exception:
         duties = {}
-    temps = node_temps()
+    # Never waits on a probe: a host not read yet shows its probe as waiting,
+    # and one that stopped answering shows its last reading with its age.
+    temps = node_temps(wait=False, unreachable=True)
+    probes = PROBES.status()
     try:
         disk_lines = DISKS.summary()
     except Exception:
@@ -431,6 +404,7 @@ def get_nodes():
             "uptime_s": (temp_payload or {}).get("uptime_s"),
             **node_stats(name),
             "temps": temp_payload,
+            "probe": probes.get(name) or {"state": "absent"},
             "disk_issues": disk_issues,
             "smart_notify": smart_cfg.get("notify_failures", True),
             "duties": duties.get(name) or {"vips": [], "rwx": [], "control_plane_vip": False, "management_vip": []},
@@ -631,7 +605,7 @@ def _smart_test(request):
          "test": result["test"], "expected_seconds": result["expected_seconds"],
          "baseline": result["baseline"], "started_epoch": result["started_epoch"]},
         result["message"])
-    _TEMP_CACHE["at"] = 0
+    PROBES.read_smart_again()
     ROUTER.forget("node:" + result["node"])
     return result
 

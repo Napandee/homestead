@@ -439,7 +439,8 @@ from homestead_scheduled_jobs import (  # noqa: E402,F401
 )
 from homestead_image_cache import (  # noqa: E402,F401
     _canonical_image, _image_digest, _system_image, _needed_list, _group_absent,
-    image_retention_inventory, _stopped_references, _holds, image_cache, SCAN_TASK, SCAN_FRESH,
+    image_retention_inventory, _stopped_references, _rollback_note, _unreadable, _scaled_to_zero, _dig,
+    _rows, _holds, image_cache, SCAN_TASK, SCAN_FRESH,
     SCAN_RETRY, SCAN_STORE, _SCANS, _SCAN_FAILED, _SCAN_STARTED, _scan_lock, _scan_path,
     _load_scans, _save_scans, _merged, tick, _scannable, _rescan_if_stale, start_image_scan,
     _collect_scans, _scanned_images, PREPULL_NAMES, _pullable_nodes, prepull, prepull_status,

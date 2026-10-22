@@ -136,7 +136,7 @@ class RequestsTests(unittest.TestCase):
 
     def test_starting_needs_the_restarts_confirmed_and_no_other_run(self):
         started = []
-        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, list_operations=lambda: list(self.running),
+        jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, snapshot=lambda: list(self.running),
                          start=lambda *a: started.append(a) or {"id": "op1"})
         self.running = []
         plan = reserve.plan()

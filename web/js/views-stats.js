@@ -150,11 +150,17 @@ function historyStat(label, values, unit, peak, times, key) {
 let historyRequest = 0;
 let historyAbort = null;
 let historyPending = null, historyHost = null, historyPendingRange = null;
-function historyPaint() {
+// Long history is sampled every 5 minutes or hourly: read it again when its range
+// changes or five minutes have passed, not on every dashboard refresh (#705).
+const HISTORY_FRESH = 300000;
+let historyLoaded = null;
+function historyPaint({ fresh = false } = {}) {
   const host = $("#historyCard");
   if (!host) { historyAbort?.abort(); return Promise.resolve(); }
   const range = historyRange();
   if (historyPending && historyHost === host && historyPendingRange === range) return historyPending;
+  if (!fresh && STATE.data.historyHtml && historyLoaded?.range === range && Date.now() - historyLoaded.at < HISTORY_FRESH
+      && !host.querySelector?.(".history-error")) return Promise.resolve();
   const request = ++historyRequest;
   historyAbort?.abort();
   const abort = new AbortController();
@@ -184,6 +190,7 @@ async function historyLoad(host, range, request, abort) {
     if (historyAbort === abort) { historyAbort = null; historyPending = null; }
   }
   if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
+  historyLoaded = { range, at: Date.now() };
   const since = h.since ? fmtDay(h.since) : "";
   STATE.data.historyHtml = `<div class="between"><div><div class="ctitle">Over time</div>
       <div class="csub">${h.samples ? `Recorded every ${h.step === 300 ? "5 minutes" : "hour"} by Homestead, open or not${since ? ` · since ${esc(since)}` : ""}` : "Homestead records a sample every 5 minutes; the first appears shortly."}</div></div>

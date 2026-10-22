@@ -6,6 +6,7 @@ Split by feature from homestead_vms (#623), moved unchanged. Names that stay
 there, that server.py binds there, or that tests replace there, are read
 through it (V.name); homestead_vms re-exports everything here.
 """
+import concurrent.futures
 import re
 import time
 import urllib.error
@@ -257,10 +258,15 @@ def list_vms():
     except Exception:
         vmis = {}
     # An unreadable or partial inventory cannot prove that an instance is gone.
-    claims = {}
-    for ns in {v["metadata"]["namespace"] for v in vms}:
-        claims.update(V._claims(ns))
-    dvs = V._datavolumes()
+    # Each namespace's claims and the DataVolumes do not depend on each other:
+    # read at the same time (#705). Each read keeps its own way of failing.
+    namespaces = sorted({v["metadata"]["namespace"] for v in vms})
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(namespaces) + 1)) as pool:
+        dv_read = pool.submit(V._datavolumes)
+        claims = {}
+        for found in pool.map(V._claims, namespaces):
+            claims.update(found)
+        dvs = dv_read.result()
     rows = sorted((V._row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs, instance_known) for v in vms),
                   key=lambda r: (r["ns"], r["name"]))
     try:

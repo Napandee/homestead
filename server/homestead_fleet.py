@@ -61,7 +61,7 @@ LOCAL = {"/api/fleet/switch", "/api/fleet/home", "/api/auth/login", "/api/auth/l
          "/api/auth/setup", "/api/auth/password", "/api/auth/signout-everywhere",
          "/api/auth/preferences/dashboard",
          "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test", "/api/push/status",
-         "/api/alerts/pending", "/api/alerts/delivered", "/healthz"}
+         "/api/alerts/pending", "/api/alerts/delivered", "/healthz", "/readyz", "/metrics"}
 ROLES = ("viewer", "operator", "admin")
 # Not passed on: they describe one connection, or who is asking, which the
 # signature says instead.
@@ -686,6 +686,7 @@ def remove(ref, plain_ok=False):
     with _lock:
         _write(state, fresh)
     _status.pop(target["id"], None)
+    forget_answers(target["id"])
     return {"ok": True, "told": told, "missed": missed}
 
 
@@ -704,6 +705,7 @@ def leave(plain_ok=False):
         _write({"self": state["self"], "revision": revision + 1, "updated": time.time(),
                 "members": [_self_record(state)]}, secrets.token_bytes(32))
     _status.clear()
+    forget_answers()
     return {"ok": True, "missed": missed}
 
 
@@ -923,41 +925,114 @@ def _own_name(user):
     return user.split(":", 2)[2] if user.count(":") >= 2 else ""
 
 
+# Each linked Homestead's last answer, per list and per person asking (#705). The
+# view of all clusters answers at once with what has arrived; a Homestead that is
+# slow fills in on a later refresh instead of holding up the rest, and is asked
+# again only once its earlier question has come back.
+ANSWER_BUDGET = 2          # seconds a gather waits for linked Homesteads
+ANSWER_KEEP = 300          # a last answer older than this is no longer shown (out of reach only)
+NOT_ANSWERING = 3          # misses in a row before a Homestead is said not to be answering
+_answers = {}
+_answers_lock = threading.Lock()
+
+
+def forget_answers(member_id=None):
+    """Drop the kept answers of one member, or of every member (unlinking)."""
+    with _answers_lock:
+        for key in [key for key in _answers if member_id in (None, key[1])]:
+            del _answers[key]
+
+
+def _said(error, m):
+    """What went wrong, said once: without the member's name again or its address."""
+    if isinstance(error, Unreachable):
+        return "it did not answer"
+    text = str(error)
+    if text.startswith(f"{m['name']}: "):
+        text = text[len(m["name"]) + 2:]
+    return text[:200]
+
+
+def _ask(entry, m, what, user, role):
+    try:
+        result = call(m, "GET", f"/api/{what}", timeout=12, user=_own_name(user), role=role)
+        if what == "flow" and (not isinstance(result, dict) or
+                any(not isinstance(result.get(key), list) for key in ("workloads", "volumes", "nodes", "vips"))):
+            raise ValueError("Architecture data is unavailable")
+        if what != "flow" and not isinstance(result, list):
+            raise ValueError("the answer is not a list")
+        with _answers_lock:
+            entry.update(result=result, at=time.time(), misses=0, error="")
+    except ValueError as error:
+        # A refusal (HTTP 4xx) or an answer that makes no sense: the rows
+        # kept from before are not shown any more.
+        with _answers_lock:
+            entry.update(result=None, at=0, misses=entry["misses"] + 1, error=_said(error, m))
+    except Exception as error:
+        # Out of reach, timed out or failing (5xx): the last rows stay, with their age.
+        with _answers_lock:
+            entry.update(misses=entry["misses"] + 1, error=_said(error, m))
+    finally:
+        with _answers_lock:
+            entry["pending"] = False
+        entry["done"].set()
+
+
 def gather(what, local, user, role):
     """Gather tagged resource lists or Architecture graphs from linked clusters.
 
     Each cluster is asked as the person asking, so it shows them what their
-    role lets them see there. A cluster that does not answer is left out and
-    named, rather than holding up the rest. local answers for this cluster.
+    role lets them see there. A cluster that has not answered within
+    ANSWER_BUDGET is named rather than holding up the rest: its last answer, if
+    recent, is shown with its age, and it fills in on a later refresh. local
+    answers for this cluster.
     """
     view = summary()
     tags = {m["id"]: {"id": m["id"], "name": m["name"], "handle": m["handle"], "self": m["self"]}
             for m in view["members"]}
-    results, missing = {}, []
-
-    def ask(m):
-        try:
-            result = call(m, "GET", f"/api/{what}", timeout=12, user=_own_name(user), role=role)
-            if what == "flow" and (not isinstance(result, dict) or
-                    any(not isinstance(result.get(key), list) for key in ("workloads", "volumes", "nodes", "vips"))):
-                raise ValueError("Architecture data is unavailable")
-            results[m["id"]] = result
-        except Exception as error:
-            missing.append({"id": m["id"], "name": m["name"], "error": str(error)[:200]})
-    threads = [threading.Thread(target=ask, args=(m,), daemon=True)
-               for m in view["members"] if not m["self"] and m["reachable"]]
-    missing += [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering"}
-                for m in view["members"] if not m["self"] and not m["reachable"]]
-    for thread in threads:
-        thread.start()
+    deadline = time.monotonic() + ANSWER_BUDGET
+    asked = []
+    for m in view["members"]:
+        if m["self"] or not m["reachable"]:
+            continue
+        with _answers_lock:
+            entry = _answers.setdefault((what, m["id"], user, role),
+                                        {"result": None, "at": 0, "misses": 0, "error": "",
+                                         "pending": False, "done": threading.Event()})
+            start = not entry["pending"]
+            if start:
+                entry["pending"], entry["done"] = True, threading.Event()
+        if start:
+            threading.Thread(target=_ask, args=(entry, m, what, user, role), daemon=True).start()
+        asked.append((m, entry))
+    results = {}
+    missing = [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering",
+                "state": "not answering"}
+               for m in view["members"] if not m["self"] and not m["reachable"]]
     try:
         results[view["self"]] = local()
     except Exception as error:
         if what != "flow":
             raise
-        missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200]})
-    for thread in threads:
-        thread.join(15)
+        missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200],
+                        "state": "error"})
+    now = time.time()
+    for m, entry in asked:
+        entry["done"].wait(max(0.0, deadline - time.monotonic()))
+        with _answers_lock:
+            pending, misses, error = entry["pending"], entry["misses"], entry["error"]
+            result, at = entry["result"], entry["at"]
+        if not pending and not misses:
+            results[m["id"]] = result
+            continue
+        note = {"id": m["id"], "name": m["name"],
+                "state": "not answering" if misses >= NOT_ANSWERING else "waiting" if pending else "error",
+                "error": error or "has not answered yet"}
+        if result is not None and now - at <= ANSWER_KEEP:
+            note["age_s"] = int(now - at)
+            results[m["id"]] = result
+            tags[m["id"]] = {**tags[m["id"]], "age_s": note["age_s"]}
+        missing.append(note)
     rows = []
     for m in view["members"]:
         result = results.get(m["id"])

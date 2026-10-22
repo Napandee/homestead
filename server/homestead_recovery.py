@@ -358,7 +358,7 @@ def tick(now=None):
         return None
     # Not beside other work that moves or restarts apps or hosts: a host
     # uncordoned mid OS rollout is "back", and the next one is about to drain.
-    if any(i.get("kind") in WAITS_FOR and i.get("status") not in operations.TERMINAL for i in operations.list_operations()):
+    if any(i.get("kind") in WAITS_FOR and i.get("status") not in operations.TERMINAL for i in operations.snapshot()):
         return None
     # A plan reads every pod and volume: worked out again every five minutes.
     if now - _planned[0] >= 300:

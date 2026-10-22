@@ -2,6 +2,7 @@ import json, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as NET
+import homestead_network_vms as VMNET
 
 
 class VmNetworkTests(unittest.TestCase):
@@ -12,11 +13,11 @@ class VmNetworkTests(unittest.TestCase):
         self.sent, self.harvester, self.multus = [], True, True
 
         def get(path):
-            if path == NET.CLUSTER_NETWORKS:
+            if path == VMNET.CLUSTER_NETWORKS:
                 if not self.harvester:
                     raise urllib.error.HTTPError(path, 404, "missing", {}, None)
                 return {"items": [{"metadata": {"name": "mgmt"}}]}
-            if path == NET.NAD_API + "/network-attachment-definitions" and self.multus:
+            if path == VMNET.NAD_API + "/network-attachment-definitions" and self.multus:
                 return {"resources": []}
             if path == "/apis/apps/v1/namespaces/kube-system/daemonsets" and self.multus:
                 return {"items": [{"metadata": {"name": "multus", "generation": 1}, "status": {
@@ -25,7 +26,7 @@ class VmNetworkTests(unittest.TestCase):
         NET.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {"kube-system"}, "lab", "")
 
     def test_an_untagged_network_on_the_hosts_lan(self):
-        NET.create_vm_network({"name": "lan"})
+        VMNET.create_vm_network({"name": "lan"})
         method, path, body = self.sent[0]
         self.assertEqual("/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions", path)
         config = json.loads(body["spec"]["config"])
@@ -34,7 +35,7 @@ class VmNetworkTests(unittest.TestCase):
         self.assertEqual("UntaggedNetwork", body["metadata"]["labels"]["network.harvesterhci.io/type"])
 
     def test_a_vlan_network(self):
-        NET.create_vm_network({"name": "iot", "vlan": "20"})
+        VMNET.create_vm_network({"name": "iot", "vlan": "20"})
         body = self.sent[0][2]
         self.assertEqual(20, json.loads(body["spec"]["config"])["vlan"])
         self.assertEqual(("L2VlanNetwork", "20"), (body["metadata"]["labels"]["network.harvesterhci.io/type"],
@@ -42,7 +43,7 @@ class VmNetworkTests(unittest.TestCase):
 
     def test_a_bad_vlan_is_refused(self):
         with self.assertRaisesRegex(ValueError, "1 to 4094"):
-            NET.create_vm_network({"name": "x", "vlan": "5000"})
+            VMNET.create_vm_network({"name": "x", "vlan": "5000"})
 
 
 class HostInterfaceNetworkTests(VmNetworkTests):
@@ -58,11 +59,11 @@ class HostInterfaceNetworkTests(VmNetworkTests):
         self.harvester = False
 
     def make(self, **cfg):
-        NET.create_vm_network(dict({"name": "lan", "_probes": self.PROBES}, **cfg))
+        VMNET.create_vm_network(dict({"name": "lan", "_probes": self.PROBES}, **cfg))
         return json.loads(self.sent[-1][2]["spec"]["config"])
 
     def test_options_list_the_hosts_interfaces_those_on_every_host_first(self):
-        options = NET.vm_network_options(self.PROBES)
+        options = VMNET.vm_network_options(self.PROBES)
         self.assertFalse(options["harvester"])
         self.assertTrue(options["multus"])
         self.assertEqual(["eth0", "br0", "enp2s0"], [row["name"] for row in options["interfaces"]])

@@ -184,6 +184,22 @@ POLICY.update({
 })
 
 def role(path, method):
+    """The role a request needs: the policy's or the module route's, and when
+    a module's prefix route covers a path the policy names, the stricter."""
+    declared, route = _declared(path, method), MODULE_ROUTES.find(method, path)
+    if route is None or declared is None:
+        return declared if route is None else route.role
+    return max(declared, route.role, key=MODULE_ROUTES.ROLES.index)
+
+
+# The paths _declared() answers by prefix or pattern, and server.py by its own
+# prefix branch: no module prefix route may cover them. A PR that moves one into
+# a module lifts exactly its entry (#764: v1 in part 5, fleet/all in part 4,
+# workload DELETE in part 6, the handoff in part 7).
+CODE_PREFIXES = ("/api/v1/", "/api/self/data/handoff/", "/api/workload/", "/api/fleet/all/", "/api/icons/")
+
+
+def _declared(path, method):
     if path.startswith("/api/v1/"):
         return "viewer" if method == "GET" else "operator"
     if method == "DELETE" and __import__("re").fullmatch(r"/api/workload/[a-z0-9.-]+/[a-z0-9.-]+", path):
@@ -195,5 +211,4 @@ def role(path, method):
     if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes",
                                     "/api/fleet/all/volumes", "/api/fleet/all/flow"):
         return "viewer"
-    declared = POLICY.get((method, path))
-    return declared if declared is not None else MODULE_ROUTES.role(path, method)
+    return POLICY.get((method, path))

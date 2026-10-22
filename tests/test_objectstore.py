@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_kube as KUBE
 import homestead_objectstore as store
+import homestead_network_state as STATE
 
 
 class ObjectStoreTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class ObjectStoreTests(unittest.TestCase):
         for path in ("/api/v1/services", "/apis/discovery.k8s.io/v1/endpointslices",
                      "/apis/apps/v1/deployments", "/api/v1/nodes"):
             self.objects[path] = {"items": []}
-        reads = mock.patch.object(store.NETWORK, "kget", side_effect=lambda path, **kw: self._get(path))
+        reads = mock.patch.object(STATE, "kget", side_effect=lambda path, **kw: self._get(path))
         reads.start()
         self.addCleanup(reads.stop)
 

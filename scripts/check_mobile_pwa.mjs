@@ -129,6 +129,9 @@ try {
       // Sign-in/setup stays reachable when the phone is held sideways.
       await page.evaluate(()=>loginForm(null,true));
       await page.locator("#lg_go").waitFor();
+      // Upright on a small phone the whole setup form fits: nothing to scroll
+      // while it is still settling into place (#737 made it taller).
+      if(viewport.height>=640) assert.equal(await page.locator("#gate").evaluate(el=>el.scrollHeight<=el.clientHeight),true,"the setup form fits the screen");
       await page.locator("#lg_go").scrollIntoViewIfNeeded();
       const login=await page.locator("#lg_go").boundingBox();
       assert.ok(login.y>=0 && login.y+login.height<=viewport.height);

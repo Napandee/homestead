@@ -214,18 +214,24 @@ function loginForm(err, setup) {
     <div class="f"><label for="lg_pass">Password</label>
       <input type="password" id="lg_pass" autocomplete="${setup ? "new-password" : "current-password"}"></div>
     ${setup ? `<div class="f"><label for="lg_pass2">Confirm password</label>
-      <input type="password" id="lg_pass2" autocomplete="new-password"></div>` : ""}
+      <input type="password" id="lg_pass2" autocomplete="new-password"></div>
+    <div class="f"><label for="lg_code">Setup code</label>
+      <input type="text" id="lg_code" autocomplete="one-time-code" autocapitalize="characters"
+        spellcheck="false" placeholder="ABCD-EFGH-JK" aria-describedby="lg_code_hint">
+      <details class="gatehint" id="lg_code_hint"><summary>Where to find it</summary>The installer
+        printed it beside the address. Or run
+        <code>kubectl -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d</code>
+        (Helm: use the release's namespace).</details></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
       ${remember ? "checked" : ""}>Keep me signed in on this device</label>
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
-    ${setup ? `<div class="gatehint">Minimum 10 characters. Stored as PBKDF2-SHA256 with a
-      per-user salt in a Kubernetes Secret — never in plain text.</div>`
+    ${setup ? `<div class="gatehint">A password needs at least 10 characters.</div>`
       : `<div class="gatehint">Homestead can deploy, move and delete apps and VMs.<br>
         A session stays signed in while you keep using it. Leave the box unticked on a
         shared computer.</div>`}`);
   const go = () => setup ? doSetup() : doLogin();
   $("#lg_go").onclick = go;
-  ["lg_user", "lg_pass", "lg_pass2"].forEach(id => {
+  ["lg_user", "lg_pass", "lg_pass2", "lg_code"].forEach(id => {
     const el = $("#" + id);
     if (el) el.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
   });
@@ -261,14 +267,15 @@ async function doLogin() {
 
 async function doSetup() {
   const username = $("#lg_user").value.trim(), password = $("#lg_pass").value,
-        confirm = $("#lg_pass2").value;
+        confirm = $("#lg_pass2").value, setup_code = $("#lg_code").value.trim();
   if (password !== confirm) return loginForm("Passwords do not match", true);
   if (password.length < 10) return loginForm("Password must be at least 10 characters", true);
+  if (!setup_code) return loginForm("Enter the setup code", true);
   $("#lg_go").textContent = "Creating…"; $("#lg_go").disabled = true;
   try {
     const r = await _fetch("/api/auth/setup", { method: "POST",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
-      body: JSON.stringify({ username, password, remember: !!$("#lg_remember")?.checked }) });
+      body: JSON.stringify({ username, password, setup_code, remember: !!$("#lg_remember")?.checked }) });
     const b = await r.json();
     if (!r.ok) return loginForm(b.error || "Setup failed", true);
     ME = b.user; ROLE = "admin"; ungate(); afterAuth();

@@ -5,8 +5,9 @@ self-hosting and is the most widely tested platform with Homestead.** This
 guide is for installing on a cluster you already have.
 
 Already run RKE2, k3s, kubeadm, Talos or a managed Kubernetes, and look after
-it with Headlamp, Lens or kubectl? Homestead installs beside whatever is there
-and changes nothing until you ask it to.
+it with Headlamp, Lens or kubectl? Homestead installs beside whatever is there.
+It changes your apps only when you ask; what it makes for itself, and when, is
+on [What Homestead changes](What-Homestead-changes).
 
 On a **k3s or RKE2 server**, the one-line installer does it for you - it
 finds the cluster, adds Longhorn if it is missing, and installs Homestead:
@@ -75,8 +76,11 @@ curl -sfLO https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy
 ```
 
 1. `storageClassName: longhorn-r2` and the `STORAGE_CLASS` value - to a class
-   `kubectl get storageclass` lists. Keep `ReadWriteMany` for a shareable
-   Longhorn class; use `ReadWriteOnce` for anything else.
+   `kubectl get storageclass` lists. Longhorn makes `longhorn`, not
+   `longhorn-r2`, so use `longhorn` (or create `longhorn-r2` first); otherwise
+   the data claim stays Pending, and `kubectl describe pvc -n lab` shows why.
+   Keep `ReadWriteMany` for a shareable Longhorn class; use `ReadWriteOnce`
+   for anything else.
 2. `LB_IP` and every `192.0.2.242` - to Homestead's address.
 3. The `kube-vip.io/loadbalancerIPs` annotation - delete it unless kube-vip is
    your load balancer.
@@ -95,6 +99,16 @@ more. That is close to cluster-admin, and is said plainly in
 [`deploy/rbac.yaml`](https://github.com/homestead-lab/homestead/blob/main/deploy/rbac.yaml).
 Container consoles are limited to the namespace your apps go in. If that is more than
 you want in a shared cluster, Homestead is not the right fit there.
+[What Homestead changes](What-Homestead-changes) lists what it actually makes
+and changes, and when.
+
+Some kinds a feature depends on are also named in a rule of their own, so the
+role says what each is for. Image clean-up, for one, has read-only `get` and
+`list` on KubeVirt's `virtualmachinepools` (`pool.kubevirt.io`) and
+`virtualmachineinstancereplicasets` (`kubevirt.io`): a VM pool or replica set
+scaled to zero still starts from its template's container disks, and only these
+lists name them. Without that read, Homestead keeps every image and says why on
+the Image cache page; it never cleans up an image it cannot account for.
 
 ## Next
 

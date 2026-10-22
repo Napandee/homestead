@@ -42,19 +42,32 @@ def is_page_path(path):
 
     An API path or anything that looks like a file keeps its plain 404, so a
     missing endpoint or script is never answered with a web page.
+
+    A page path passes the guard before any sign-in check, so a path a
+    module serves at the top level (/readyz, /metrics) must not be one:
+    it would be served to anyone (#736).
     """
     clean = path or "/"
     last = clean.rstrip("/").rsplit("/", 1)[-1]
-    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz", "/mcp")
+    return (not clean.startswith("/api/") and clean not in ("/api", "/healthz", "/mcp", "/readyz", "/metrics")
             and "." not in last and ".." not in clean and len(clean) < 200)
 
 
 # Paths reachable without a session. Everything else needs one.
-PUBLIC = {"/healthz", "/style.css", "/index.html", "/sw.js", "/manifest.webmanifest",
+PUBLIC = {"/healthz", "/readyz", "/style.css", "/index.html", "/sw.js", "/manifest.webmanifest",
           "/api/auth/login", "/api/auth/state", "/api/auth/setup",
           # Back to this cluster from one that stopped answering: it only
           # forgets which linked cluster this browser was looking at.
           "/api/fleet/home"}
+
+
+def handoff_body(path, body):
+    """What the self-data fence in server.py's guard sends to a health probe.
+
+    /readyz gets the same status /healthz gets, with nothing but whether
+    that status means ready: {"ready": true} beside a 200, {"ready": false}
+    beside a 503 (#736). Every other path gets body itself."""
+    return {"ready": bool(body.get("ok"))} if path == "/readyz" else body
 
 
 def is_public_path(path):

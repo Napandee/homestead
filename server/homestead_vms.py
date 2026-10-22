@@ -26,8 +26,8 @@ import urllib.parse
 import homestead_vm_hardware as HARDWARE
 import homestead_vm_profiles as PROFILES
 import homestead_routes
-# Not used here since the split (#623); tests reach them through this module.
-import homestead_kube as KUBE  # noqa: F401
+import homestead_kube as KUBE
+# Not used here since the split (#623); tests reach it through this module.
 import homestead_hvimage as HVIMAGE  # noqa: F401
 import homestead_lifecycle as LC
 import homestead_operations as OPS
@@ -188,11 +188,12 @@ def _get(ns, name):
 def detail(ns, name, include_sensitive=True):
     vm = _get(ns, name)
     try:
-        vmi = kget(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
-        instance_known = bool(vmi.get("metadata"))
-    except urllib.error.HTTPError as exc:
-        vmi = {}
-        instance_known = exc.code == 404
+        vmi = KUBE.get_optional(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}", read=kget)
+        # No instance (404) is known too: the VM is off.
+        instance_known = vmi is None or bool(vmi.get("metadata"))
+    except urllib.error.HTTPError:
+        vmi, instance_known = None, False
+    vmi = vmi or {}
     row = _row(vm, vmi, _claims(ns), _datavolumes(ns), instance_known)
     row["resource_profile"] = copy.deepcopy(vm["spec"].get("instancetype") or {})
     row["preference_profile"] = copy.deepcopy(vm["spec"].get("preference") or {})
@@ -244,12 +245,7 @@ def _halt_crash_retries(ns, name):
         raise ValueError("The VM identity changed or is deleting; refresh before stopping it")
     if status.get("stateChangeRequests"):
         raise ValueError("A VM power request is already queued; wait for it before stopping retries")
-    try:
-        vmi = kget(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        vmi = None
+    vmi = KUBE.get_optional(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}", read=kget)
     if vmi is not None:
         imeta = vmi.get("metadata") or {}
         if (imeta.get("namespace"), imeta.get("name")) != (ns, name) or not imeta.get("uid"):
@@ -403,10 +399,10 @@ def delete(ns, name, with_disks=False):
         gone = False
         for path in paths:
             try:
-                ksend("DELETE", path)
-                gone = True
-            except urllib.error.HTTPError as error:
-                gone = gone or error.code == 404
+                KUBE.delete_if_present(path, send=ksend)
+                gone = True  # deleted now, or already gone
+            except urllib.error.HTTPError:
+                pass
         if gone:
             removed.append(claim)
     detail = f"{name} is being deleted"

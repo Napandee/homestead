@@ -198,7 +198,7 @@ class PlanBase(unittest.TestCase):
                                                                   "total": 2, "quorum_needs": 2, "can_lose": 0}),
             mock.patch.object(CAPACITY, "every_host", lambda: {"hosts": [{"node": "app-1", "verdict": "fits", "sentence": "fits"}]}),
             mock.patch.object(MAINTENANCE, "inventory", lambda get, pods, **k: {"local_storage": [], "blockers": []}),
-            mock.patch.object(OPS, "list_operations", lambda: []),
+            mock.patch.object(OPS, "snapshot", lambda: []),
         ]
         for p in self.patches:
             p.start()
@@ -269,7 +269,7 @@ class PlanTests(PlanBase):
             self.blocked("server-2")
 
     def test_blocks_a_running_promotion(self):
-        with mock.patch.object(OPS, "list_operations", lambda: [{"kind": PROMOTE.KIND, "status": "running"}]):
+        with mock.patch.object(OPS, "snapshot", lambda: [{"kind": PROMOTE.KIND, "status": "running"}]):
             self.blocked("already")
 
     def test_blocks_when_apps_do_not_fit(self):
@@ -312,7 +312,7 @@ class PlanTests(PlanBase):
         self.assertTrue(any("--with-node-id" in b for b in PROMOTE.plan("app-1")["blockers"]))
     def test_blocks_while_a_host_job_runs(self):
         for kind in ("node-power", "host-os", "os-rollout", "cluster-shutdown"):
-            with mock.patch.object(OPS, "list_operations", lambda k=kind: [{"kind": k, "status": "running"}]):
+            with mock.patch.object(OPS, "snapshot", lambda k=kind: [{"kind": k, "status": "running"}]):
                 self.assertTrue(any(kind in b for b in PROMOTE.plan("app-1")["blockers"]), kind)
 
     def test_route_is_admin(self):

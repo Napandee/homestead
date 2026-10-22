@@ -242,7 +242,7 @@ def _alert_sources():
             results[name] = None
 
     take("health", lambda: ALERTS.health_facts(cached("ov", MODULE_ROUTES.PAGE_SECONDS, get_overview)))
-    take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
+    take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
@@ -330,7 +330,7 @@ def outage_tick():
     found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
     if not found:
         return []
-    operations = OPS.list_operations()
+    operations = OPS.snapshot()
     working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
                for o in operations if o.get("status") in ("queued", "running")}
 

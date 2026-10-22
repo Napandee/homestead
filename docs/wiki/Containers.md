@@ -421,8 +421,18 @@ some. Two ways clear them from every host at once:
   host doesn't record when an image was last used. The page shows its last run.
 
 Neither ever removes a running image, a stopped app's or scheduled job's image,
+a stopped VM's container disk (a VM pool's or replica set's at zero too),
 a Roll back copy, or Harvester's and Kubernetes' own images. An image removed
 is pulled again if something needs it later.
+
+If a record that says which images are in use can't be read - a Roll back note
+or a template that is malformed, or a VM pool list Homestead may not read -
+every image is kept and tagged *unreadable* with the app it belongs to, and
+nothing is cleaned up until it is fixed. Reading VM pools and replica sets
+needs read-only `get` and `list` on `virtualmachinepools` and
+`virtualmachineinstancereplicasets`; Homestead adds them to its own role when
+it starts, or apply the release's `deploy/rbac.yaml` (see
+[updating](Installing-Homestead#updating-homestead)).
 
 On Harvester the page also lists **VM images** - the cloud images VMs are
 made from. Each is downloaded once and kept as a Longhorn backing image, with

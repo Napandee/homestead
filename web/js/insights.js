@@ -39,7 +39,8 @@ const HealthInsights = (() => {
     const temp=data.settings?.thresholds?.temperature, diskLimit=data.settings?.thresholds?.disk;
     for (const n of data.nodes || []) {
       if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free space or expand capacity before storage fills.","node:"+n.name));
-      if (temp && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","node:"+n.name));
+      // An unreachable probe's reading is old: no temperature verdict from it (#705).
+      if (temp && n.probe?.state !== "unreachable" && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","node:"+n.name));
       for (const d of n.temps?.disks || []) {
         if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","disk:"+n.name+":"+d.name));
         else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","disk:"+n.name+":"+d.name));
@@ -143,9 +144,11 @@ const HealthInsights = (() => {
     window.refreshPwaAlerts?.(true);
   }
   function healthBody(compact=false) {
-    const rows=advice(data), max=Math.max(...(data.nodes || []).map(n=>n.temps?.max_c).filter(known));
+    // Hosts whose probe answers; an unreachable probe's reading is old (#705).
+    const current=(data.nodes || []).filter(n=>n.probe?.state!=="unreachable");
+    const rows=advice(data), max=Math.max(...current.map(n=>n.temps?.max_c).filter(known));
     // Where the hottest reading is: which host, and which of its sensors.
-    const hottest=(data.nodes || []).find(n=>n.temps?.max_c===max), where=hottest?[hottest.name,hottest.temps?.max_source].filter(Boolean).join(" · "):"";
+    const hottest=current.find(n=>n.temps?.max_c===max), where=hottest?[hottest.name,hottest.temps?.max_source].filter(Boolean).join(" · "):"";
     const open=rows.filter(r=>!r.alert?.acknowledged), acked=rows.length-open.length;
     const counts=["critical","medium","low"].map(level=>`${open.filter(r=>r.severity===level).length} ${level}`).join(" · ")+(acked?` · ${acked} acknowledged`:"");
     return `<div class="insight-summary">${esc(counts)}${Number.isFinite(max)?`<span>Max observed temperature ${esc(max)}°C${where?` (${esc(where)})`:""}</span>`:""}</div>`+
@@ -182,6 +185,9 @@ const HealthInsights = (() => {
     title.textContent=done?"Acknowledged until it gets worse":title.dataset.text;
   }
   function paint() {paintBanner();for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();}
+  let seeded={};
+  const SEED_FRESH=15000;
+  function seed(key,value){if(value && typeof value==="object" && !value.error && (key!=="overview" || value.health_issues!==undefined)){data={...data,[key]:value};seeded[key]=Date.now();}}
   async function load(force=false) {
     if(request){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
@@ -189,7 +195,8 @@ const HealthInsights = (() => {
     if(!force && checkedAt>Date.now()-30000 && keys.every(key=>key in data)){paint();return;}
     const token=window.NAV_TOKEN, epoch=generation;
     request=(async()=>{
-      const results=await Promise.all(keys.map(async key=>{
+      // What the page itself just read (the overview, every refresh) is not read twice (#705).
+      const results=await Promise.all(keys.filter(key=>!(seeded[key] && Date.now()-seeded[key]<SEED_FRESH)).map(async key=>{
         if(key==="protection" && STATE.platform?.longhorn===false)return [key,{volumes:[]}];
         if(key==="vms" && STATE.platform?.kubevirt===false)return [key,[]];
         try{
@@ -204,7 +211,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
+  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

@@ -327,7 +327,7 @@ def deploy_options(ns):
 
 def operation_item(operation_id):
     """A job-tray item as it stands now, or None."""
-    return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
+    return next((item for item in OPS.snapshot() if item.get("id") == operation_id), None) if operation_id else None
 
 
 def apply_deploy_bindings(cfg):

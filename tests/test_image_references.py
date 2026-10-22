@@ -1,5 +1,6 @@
 """The image cache lists every image a node holds, and never calls one unused
 while a stopped container or a scheduled job still starts from it."""
+import json
 import sys
 import tempfile
 import time
@@ -12,6 +13,8 @@ import urllib.error
 import homestead_imports as imports
 
 VMS = "/apis/kubevirt.io/v1/virtualmachines"
+POOLS = "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools"
+VMIRS = "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets"
 ESPHOME = "sha256:" + "e" * 64
 BACKUP = "sha256:" + "f" * 64
 
@@ -37,6 +40,8 @@ class Fixture(unittest.TestCase):
             {"names": ["quay.io/containerdisks/debian:12"], "sizeBytes": 400 << 20}])]
         self.objects = {
             "/api/v1/pods": {"items": []},
+            POOLS: {"items": []},
+            VMIRS: {"items": []},
             "/apis/apps/v1/deployments": {"items": [
                 {"metadata": {"name": "esphome", "namespace": "lab"},
                  "spec": {"replicas": 0, "template": {"spec": {"containers": [
@@ -60,7 +65,10 @@ class Fixture(unittest.TestCase):
                  "status": {"printableStatus": "Running", "ready": True}}]},
         }
 
+        self.asked = []
+
         def get(path):
+            self.asked.append(path)
             if path == "/api/v1/nodes":
                 return {"items": self.nodes}
             if "/pods?" in path or "/daemonsets?" in path:
@@ -174,7 +182,7 @@ class UnreadInventoryTests(Fixture):
     """Every source of "still needed" is read in full, or nothing is removed (#620)."""
     UNUSED = "sha256:" + "a" * 64
     LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
-             VMS)
+             VMS, POOLS, VMIRS)
 
     def setUp(self):
         super().setUp()
@@ -224,6 +232,163 @@ class UnreadInventoryTests(Fixture):
                 return {"groups": [{"name": name} for name in served]}
             return read(path)
         return mock.patch.object(imports, "kget", get)
+
+    # Today's behaviour, pinned before the unreadable-state changes: what can
+    # be read still decides alone, and only an unreadable record keeps more.
+    def test_a_rollback_annotation_keeps_only_the_image_it_names(self):
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        web["metadata"]["annotations"] = {"homestead.io/update-previous": json.dumps(
+            {"images": {"web": "docker.io/library/unused@" + self.UNUSED}, "at": "2026-10-01T00:00:00Z"})}
+        report = imports.image_cache()
+        self.assertEqual([("rollback", "web")],
+                         [(r["reason"], r["workload"]) for r in self.image(report, "unused")["retained_by"]])
+        self.assertFalse(self.image(report, "debian")["protected"])
+
+    def test_a_rollback_annotation_naming_no_images_keeps_nothing(self):
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        web["metadata"]["annotations"] = {"homestead.io/update-previous": json.dumps({"images": {}})}
+        imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual(1, len(self.posted()))
+
+    def test_an_unreadable_ran_digests_note_still_keeps_the_image_by_name(self):
+        dep = self.objects["/apis/apps/v1/deployments"]["items"][0]
+        dep["metadata"]["annotations"] = {"homestead.io/ran-digests": "not json"}
+        self.assertTrue(self.image(imports.image_cache(), "esphome")["protected"])
+
+    # Gap 11: a record Homestead cannot read keeps every image until it can,
+    # and says whose it is, rather than reading as "this keeps nothing".
+    def assert_everything_kept_by(self, workload, what):
+        report = imports.image_cache()
+        for name in ("unused", "debian"):
+            rows = self.image(report, name)["retained_by"]
+            self.assertIn(("unreadable", "lab", workload, what),
+                          [(r["reason"], r["namespace"], r["workload"], r["container"]) for r in rows])
+        with self.assertRaisesRegex(PermissionError, f"unreadable:lab/{workload}"):
+            imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
+        import homestead_image_cleanup as cleanup
+        self.assertEqual([], cleanup.unused(report))
+
+    def test_an_unreadable_rollback_annotation_keeps_every_image(self):
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        for value in ("{not json", "[]", '"text"', json.dumps({"images": ["nginx"]}), json.dumps({"images": []}),
+                      json.dumps({"images": None}), json.dumps({"images": ""}),
+                      json.dumps({"images": {"web": 7}})):
+            with self.subTest(value=value):
+                web["metadata"]["annotations"] = {"homestead.io/update-previous": value}
+                self.assert_everything_kept_by("web", "update-previous")
+
+    def test_a_stopped_workload_with_an_unreadable_template_keeps_every_image(self):
+        for kind, path, index, broken in (
+                ("Deployment", "/apis/apps/v1/deployments", 0, lambda o: o["spec"].pop("template")),
+                ("Deployment", "/apis/apps/v1/deployments", 0, lambda o: o["spec"]["template"]["spec"].update(containers="x")),
+                ("Deployment", "/apis/apps/v1/deployments", 0, lambda o: o["spec"]["template"]["spec"].update(containers=["x"])),
+                ("CronJob", "/apis/batch/v1/cronjobs", 0, lambda o: o["spec"]["jobTemplate"].update(spec=None)),
+                ("VM", VMS, 0, lambda o: o["spec"].update(template="x")),
+                ("VM", VMS, 0, lambda o: o["spec"]["template"]["spec"].update(volumes={"rootdisk": {}}))):
+            with self.subTest(kind=kind):
+                obj = self.objects[path]["items"][index]
+                saved = json.loads(json.dumps(obj))
+                broken(obj)
+                try:
+                    self.assert_everything_kept_by(obj["metadata"]["name"], "template")
+                finally:
+                    self.objects[path]["items"][index] = saved
+
+    # Gap 13: a VM pool or VM replica set scaled to zero still starts from its
+    # template's container disks; with no VM or pod to name them they were unused.
+    def test_a_vm_pool_or_replica_set_at_zero_keeps_its_container_disks(self):
+        disk = {"name": "rootdisk", "containerDisk": {"image": "docker.io/library/unused:1"}}
+        for path, item in (
+                (POOLS, {"metadata": {"name": "workers", "namespace": "lab"}, "spec": {"replicas": 0,
+                 "virtualMachineTemplate": {"spec": {"template": {"spec": {"volumes": [disk]}}}}}}),
+                (VMIRS, {"metadata": {"name": "workers", "namespace": "lab"}, "spec": {"replicas": 0,
+                 "template": {"spec": {"volumes": [disk]}}}})):
+            with self.subTest(path=path):
+                self.objects[path] = {"items": [item]}
+                try:
+                    rows = self.image(imports.image_cache(), "unused")["retained_by"]
+                    self.assertEqual([("stopped", "lab", "workers", "rootdisk")],
+                                     [(r["reason"], r["namespace"], r["workload"], r["container"]) for r in rows])
+                    with self.assertRaisesRegex(PermissionError, "stopped:lab/workers"):
+                        imports.cleanup_image(self.UNUSED, ["node1"])
+                    self.assertEqual([], self.posted())
+                    item["spec"]["replicas"] = 2       # running ones are named by their VMs and pods
+                    self.asked.clear()
+                    self.assertFalse(self.image(imports.image_cache(), "unused")["protected"])
+                    self.assertIn(path, self.asked)
+                finally:
+                    self.objects[path] = {"items": []}
+
+    def test_no_permission_to_list_vm_pools_or_replica_sets_keeps_every_image(self):
+        # An older Homestead role may not let it list these; the page still
+        # opens, every image is kept, and the row says which list and why.
+        read = imports.kget
+        for path, kind in ((POOLS, "VirtualMachinePools"), (VMIRS, "VirtualMachineInstanceReplicaSets")):
+            def get(asked, path=path):
+                if asked == path:
+                    raise urllib.error.HTTPError(asked, 403, "Forbidden", {}, None)
+                return read(asked)
+            with self.subTest(path=path), mock.patch.object(imports, "kget", get):
+                report = imports.image_cache()
+                for name in ("unused", "debian"):
+                    self.assertIn(("unreadable", "", kind, "no permission to list"),
+                                  [(r["reason"], r["namespace"], r["workload"], r["container"])
+                                   for r in self.image(report, name)["retained_by"]])
+                with self.assertRaisesRegex(PermissionError, f"unreadable:/{kind}"):
+                    imports.cleanup_image(self.UNUSED, ["node1"])
+                self.assertEqual([], self.posted())
+
+    def test_other_errors_on_those_lists_still_stop_the_page(self):
+        read = imports.kget
+
+        def get(asked):
+            if asked == POOLS:
+                raise urllib.error.HTTPError(asked, 500, "Server Error", {}, None)
+            return read(asked)
+        with mock.patch.object(imports, "kget", get):
+            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                imports.image_cache()
+
+    def test_replicas_count_as_zero_unless_a_positive_number(self):
+        for replicas, zero in ((0, True), (2, False), (-1, True), ("2", True), ("x", True),
+                               (True, True), (2.0, True)):
+            with self.subTest(replicas=replicas):
+                self.assertIs(zero, imports._scaled_to_zero({"replicas": replicas}))
+        self.assertFalse(imports._scaled_to_zero({}), "missing means one, the Kubernetes default")
+        self.assertFalse(imports._scaled_to_zero({"replicas": None}))
+
+    def test_without_vm_pools_installed_clean_up_still_works(self):
+        read = imports.kget
+
+        asked = []
+
+        def get(path):
+            asked.append(path)
+            if path == POOLS:
+                raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+            if path == "/apis":
+                return {"groups": [{"name": "apps"}, {"name": "kubevirt.io"}]}
+            return read(path)
+        with mock.patch.object(imports, "kget", get):
+            imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertIn(POOLS, asked, "the pool list is asked for, and its 404 then checked with discovery")
+        self.assertIn("/apis", asked)
+        self.assertEqual(1, len(self.posted()))
+
+    def test_a_404_for_vm_pools_while_their_group_is_served_removes_nothing(self):
+        read = imports.kget
+
+        def get(path):
+            if path == POOLS:
+                raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+            if path == "/apis":
+                return {"groups": [{"name": "apps"}, {"name": "kubevirt.io"}, {"name": "pool.kubevirt.io"}]}
+            return read(path)
+        with mock.patch.object(imports, "kget", get):
+            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
 
     def test_without_kubevirt_installed_clean_up_still_works(self):
         with self.kubevirt_answers_404(["apps", "batch"]):

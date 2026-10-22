@@ -16,7 +16,7 @@ try{for(const width of [1440,390]){
    if(path==='/api/history'||path.startsWith('/api/history/long'))throw new Error('history store unreachable');
    if(path==='/api/auth/preferences/dashboard')throw new Error('preferences unreachable');
    return original(path,opts);
-  };Dashboard.invalidate();await Dashboard.load();await viewDash();
+  };Dashboard.invalidate();await Dashboard.load();await viewDash();await historyPaint({fresh:true});
  });
  const views=page.locator('#views');
  await views.locator('.dash-alert').waitFor();

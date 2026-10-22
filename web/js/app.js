@@ -176,8 +176,10 @@ function go(v, options = {}) {
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
   // Anything still loading belongs to the page being left behind - and a
   // quiet refresh waiting on it never finishes (its reads are abandoned), so
-  // it no longer counts as running.
+  // it no longer counts as running. Its reads are cancelled, so they stop
+  // holding the browser's connections the new page needs.
   window.NAV_TOKEN++;
+  window.abortPageReads?.();
   STATE.busy = false;
   STATE.view = v;
   // A search narrows the page it was typed on. Going somewhere else starts
@@ -229,9 +231,28 @@ function go(v, options = {}) {
   pagePlaceholder(v);
   // A new page starts at its top, not wherever the last one was scrolled to.
   window.scrollPageTop();
+  // The page is loading: a refresh tick (or coming back to the tab) waits for
+  // it rather than starting a second load beside it. Its own marker, not
+  // STATE.busy: views read STATE.busy as "a quiet refresh is running".
+  const page = window.NAV_TOKEN;
+  STATE.loadingFor = page; STATE.loadingSince = Date.now();
   Promise.resolve(fn()).then(() => applyDeepLink(v, locationParams || options.params || {}))
     .then(() => { if (anchor && STATE.view === v) window.focusInPage?.(anchor, mark); })
-    .catch(e => { resetPaint(); V().innerHTML = UI.error(e, { retry: `go(${jsArg(v)})` }); });
+    .catch(e => { resetPaint(); V().innerHTML = UI.error(e, { retry: `go(${jsArg(v)})` }); })
+    .finally(() => {
+      if (STATE.loadingFor !== page) return;
+      STATE.loadingFor = null;
+      // A refresh asked for while the page loaded (after a change was saved,
+      // say) runs now, so the page shows what the load may have missed.
+      if (STATE.refreshAfterLoad === page) { STATE.refreshAfterLoad = null; refresh(true); }
+    });
+}
+
+/* A page load still running - for at most 20 s, so a load stuck on a read
+   that never answers cannot hold the refresh tick off for good. */
+const LOAD_HOLDS_REFRESH_MS = 20000;
+function pageLoading(page) {
+  return STATE.loadingFor === page && Date.now() - (STATE.loadingSince || 0) < LOAD_HOLDS_REFRESH_MS;
 }
 window.go = go;
 
@@ -245,6 +266,9 @@ async function refresh(force) {
   // abandoned reads for ever, and must not hold up the next.
   const page = window.NAV_TOKEN;
   if (STATE.busy && STATE.busyFor === page) return false;
+  // While the page is still loading, a tick has nothing to add; a refresh
+  // asked for on purpose waits and runs once the load has finished.
+  if (pageLoading(page)) { if (force) STATE.refreshAfterLoad = page; return false; }
   STATE.busy = true; STATE.busyFor = page;
   try { await fn(); return true; }
   catch (e) { if (force) toast(e.message || "Could not refresh this page", "bad"); return false; }

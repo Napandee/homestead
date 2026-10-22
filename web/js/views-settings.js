@@ -80,7 +80,7 @@ const SETTINGS_SECTIONS = [
 ];
 const settingsSection = topic => (SETTINGS_SECTIONS.find(([id, , , topics]) => id === topic || topics.includes(topic)) || SETTINGS_SECTIONS[0])[0];
 
-function settingsTab(pick) {
+function settingsTab(pick, load = true) {
   if (pick) {
     const section = settingsSection(pick);
     try { localStorage.setItem("homestead.settings.tab", section); } catch (e) { /* this visit only */ }
@@ -96,8 +96,13 @@ function settingsTab(pick) {
     // Asked for: open it, on a phone as well, where the list comes first.
     STATE.settingsOpen = true;
     UI.selectWorkspace($(".settings-layout"), section, {gridSelector:".settings-grid"});
-    // Shown without a repaint: the forecast is loaded once it can be seen.
-    if (section === "placement" && $("#capacityForecast .spin2")) capacityForecastLoad();
+    // Shown without a repaint: its cards read their data once they can be seen.
+    // A link that goes on to open Settings repaints, and that repaint reads
+    // them, so the load waits to see whether a navigation followed.
+    if (load && STATE.view === "settings" && $(".settings-layout")) {
+      const nav = window.NAV_TOKEN;
+      queueMicrotask(() => { if (window.NAV_TOKEN === nav) settingsLoad(section); });
+    }
     if (typeof window !== "undefined" && window.scrollPageTop) window.scrollPageTop();
     return section;
   }
@@ -328,30 +333,39 @@ async function viewSettings() {
   STATE.settingsDirty = new Set();
   if (settings === HEALTH_DEFAULTS) toast("The settings could not be read, so the defaults are shown and saving them is refused. Reload to try again.", "bad");
   if (window.bindAppearance) bindAppearance();
-  pwaPaint();
-  if (window.troubleshootingPaint) troubleshootingPaint();
-  namespacesPaint();
-  replicasPaint();
-  homesteadDataPaint();
-  mqttPaint();
-  lhSettingsPaint();
-  // Every host's preview at once is not cheap: only when it is to be seen.
-  if (tab === "placement") capacityForecastLoad();
-  if (window.storageClassesPaint) storageClassesPaint();
-  if (window.addonsPaint) addonsPaint();
-  if (window.apiKeysPaint) apiKeysPaint();
-  if (window.mcpCardPaint) mcpCardPaint();
-  if (window.fleetSettingsPaint) fleetSettingsPaint();
-  if (window.homesteadUpdateCardPaint) {
-    homesteadUpdateCardPaint();
-    if (!STATE.data.imageUpdates) loadImageUpdates(false, true);
-  }
-  clusterComponentsPaint();
-  if (window.osUpdatesCardPaint) osUpdatesCardPaint();
-  selfHealthPaint();
-  // The UniFi card needs the IPAM record, which Settings does not otherwise load.
-  api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
+  STATE.settingsLoaded = new Set();
+  settingsLoad(tab);
 }
+
+// What each section's cards read (#705). Every card is painted, but only the
+// section on screen reads its data: opening Settings read every section's,
+// some twice, and each section switch read them all again.
+const SETTINGS_LOADERS = {
+  homestead: [() => replicasPaint(), () => homesteadDataPaint(), () => selfHealthPaint()],
+  updates: [
+    () => { if (window.homesteadUpdateCardPaint) { homesteadUpdateCardPaint(); if (!STATE.data.imageUpdates) loadImageUpdates(false, true); } },
+    () => clusterComponentsPaint(), () => window.osUpdatesCardPaint?.(),
+  ],
+  // Every host's preview at once is not cheap: only when it is to be seen.
+  placement: [() => capacityForecastLoad()],
+  hardware: [() => namespacesPaint(), () => lhSettingsPaint(), () => window.storageClassesPaint?.(), () => window.addonsPaint?.()],
+  fleet: [() => window.fleetSettingsPaint?.()],
+  connections: [() => mqttPaint(),
+    // The UniFi card needs the IPAM record, which Settings does not otherwise load.
+    () => api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {})],
+  access: [() => window.apiKeysPaint?.(), () => window.mcpCardPaint?.()],
+  troubleshooting: [() => window.troubleshootingPaint?.()],
+  you: [() => pwaPaint()],
+};
+/* Read the section's cards once per painted page: a section shown again
+   without a repaint keeps what it read. */
+function settingsLoad(section) {
+  const loaded = STATE.settingsLoaded || (STATE.settingsLoaded = new Set());
+  if (loaded.has(section)) return;
+  loaded.add(section);
+  for (const load of SETTINGS_LOADERS[section] || []) load();
+}
+window.settingsLoad = settingsLoad;
 
 /* ---------------- Homestead's own redundancy ----------------
    More than one copy: a node failure leaves another already serving, and
@@ -959,7 +973,7 @@ window.settingsGo = async id => {
   }
   const url = new URL(location.href);
   if (url.searchParams.has("tab")) {url.searchParams.set("tab",settingsSection(id));history.replaceState(history.state,"",url);}
-  settingsTab(id);
+  settingsTab(id, false);  // the repaint below reads the section's data
   resetPaint(); return viewSettings();
 };
 
@@ -1053,6 +1067,7 @@ async function selfHealthPaint() {
   try { h = await api("/api/self/health"); }
   catch (e) { host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message)); return; }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
+  const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   STATE.data.sambaInstalled = !!samba.installed;
   const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
@@ -1091,11 +1106,27 @@ async function selfHealthPaint() {
         h.backups?.ready ? "ready" : h.backups?.deployed ? "starting" : "none", h.backups?.endpoint ? `<span class="mono">${esc(h.backups.endpoint)}</span>` : "Set up under Data protection.")}
       ${h.mqtt?.state && h.mqtt.state !== "off" ? row("MQTT", h.mqtt.state === "publishing" ? "ok" : "warn", h.mqtt.state,
         h.mqtt.error ? `<span class="badtext">${esc(h.mqtt.error)}</span>` : esc(h.mqtt.detail || "")) : ""}
+      ${row("Metrics for Prometheus", metricsOn ? "ok" : "neutral", metricsOn ? "on" : "off",
+        metricsOn ? `<span class="mono">${esc(location.origin)}/metrics</span>, read with an API key as a bearer token.`
+          : "When on, Prometheus or an uptime checker reads Homestead's own health from /metrics with an API key.",
+        admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}
     </div>`;
   clearTimeout(window.__selfHealthTimer);
   window.__selfHealthTimer = setTimeout(() => { if (STATE.view === "settings" && settingsTab() === "about") selfHealthPaint(); }, 15000);
 }
 window.selfHealthPaint = selfHealthPaint;
+
+/* /metrics (#736): takes effect at once, like the MCP switch, rather than
+   waiting for Save. Only this setting changes (#601). */
+window.metricsSet = async enabled => {
+  try {
+    await settingsWrite({ metrics: { enabled } });
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    toast(enabled ? "Metrics are on at /metrics" : "Metrics are off", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  selfHealthPaint();
+};
 
 /* The SMB and NFS servers are actions, not settings: Enable or Disable acts
    at once, so they are buttons, not switches beside fields (#511). */

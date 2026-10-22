@@ -632,7 +632,7 @@ def _step(item, now=None):
 def network_guard(node):
     """What a host network change waits for: another host's change still
     being checked, and the other servers' readiness (ready, total)."""
-    busy = next((op.get("title", "") for op in OPS.list_operations()
+    busy = next((op.get("title", "") for op in OPS.snapshot()
                  if op.get("kind") in (KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
     servers = [n for n in kget("/api/v1/nodes").get("items", [])
                if n["metadata"]["name"] != node and any(k in (n["metadata"].get("labels") or {}) for k in

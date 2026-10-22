@@ -1,5 +1,6 @@
 """Routes declared beside their handlers (homestead_routes.py, #363), and the
 guard that keeps server.py to routing: it may only shrink."""
+import ast
 import re
 import sys
 import unittest
@@ -10,12 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
+import source_scan as SS
 
-SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
+SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 2063
-MAX_PATH_BRANCHES = 57
+MAX_LINES = 2053
+MAX_PATH_BRANCHES = 27
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
 # Lines in server.py's alias block (names tests still patch on server). Only lowered.
@@ -69,12 +71,15 @@ INLINE_ROUTES = (
 )
 
 
+def handler_methods(source=SS.SERVER_PY):
+    """class H's own methods in server.py, by name."""
+    return {name[2:]: found for name, found in SS.functions(source).items()
+            if name.startswith("H.") and name.count(".") == 1}
+
+
 def handler_body(method):
     """The text of server.py's do_GET, do_POST, ... method."""
-    lines = SERVER.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip().startswith(f"def do_{method}(self"))
-    end = next((i for i in range(start + 1, len(lines)) if re.match(r"    def |\S", lines[i])), len(lines))
-    return "\n".join(lines[start:end])
+    return handler_methods()[f"do_{method}"].text
 
 
 def literals_in(text):
@@ -89,29 +94,30 @@ def api_literals(method):
     return literals_in(handler_body(method))
 
 
-def helper_literals():
-    """Every "/api/..." path written in a method of class H other than do_*:
-    helpers such as _fleet_post answer routes too."""
-    lines = SERVER.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("class H("))
-    end = next(i for i in range(start + 1, len(lines)) if re.match(r"\S", lines[i]))
-    keep, inside = [], False
-    for line in lines[start:end]:
-        match = re.match(r"    def (\w+)\(", line)
-        if match:
-            inside = not match.group(1).startswith("do_")
-        if inside:
-            keep.append(line)
-    return literals_in("\n".join(keep))
+def helper_literals(source=SS.SERVER_PY):
+    """Every "/api/..." path written in class H outside its do_* methods:
+    helpers such as _fleet_post answer routes too, and so could a class
+    attribute they read."""
+    lines = (source if isinstance(source, SS.Code) else SS.text(source)).splitlines()
+    cls = next(node for node in SS.tree(source).body if isinstance(node, ast.ClassDef) and node.name == "H")
+    keep = set(range(cls.lineno, cls.end_lineno + 1))
+    for name, found in handler_methods(source).items():
+        if name.startswith("do_"):
+            first = min([found.node.lineno, *(d.lineno for d in found.node.decorator_list)])
+            keep -= set(range(first, found.node.end_lineno + 1))
+    return literals_in("\n".join(lines[number - 1] for number in sorted(keep)))
 
 
 class DeclaredRoutes(unittest.TestCase):
     def test_every_route_has_a_role_and_a_handler(self):
+        import homestead_web_paths as WEB_PATHS
         table = ROUTES.table()
         self.assertTrue(table)
         for (method, path), route in table.items():
             self.assertIn(method, ("GET", "POST", "PUT", "DELETE"), path)
-            self.assertTrue(path.startswith("/api/"), path)
+            # Outside /api/ only where the guard does not take it for a page,
+            # which it lets through before sign-in (/readyz, /metrics: #736).
+            self.assertTrue(path.startswith("/api/") or not WEB_PATHS.is_page_path(path), path)
             self.assertIn(route.role, ROUTES.ROLES, path)
             self.assertTrue(callable(route.handler), path)
 
@@ -127,6 +133,23 @@ class DeclaredRoutes(unittest.TestCase):
     def test_server_py_has_no_branch_for_a_declared_route(self):
         for method, path in ROUTES.table():
             self.assertNotIn(f'p == "{path}"', handler_body(method), f"{method} {path} is answered by its module")
+
+    def test_prefix_routes_end_in_slash_star(self):
+        for method, path in ROUTES.table():
+            self.assertNotIn("*", path.removesuffix("/*"), f"{method} {path}: only a final /* makes a prefix route")
+
+    def test_no_module_reads_forwarding_headers(self):
+        """Who sent a request, and over what, is decided once in server.py
+        (_client_ip, _over_tls, _via_cloudflare); a module reads request.conn."""
+        for module in sorted((ROOT / "server").glob("homestead_*.py")):
+            text = module.read_text(encoding="utf-8").lower()
+            for header in ("cf-connecting-ip", "x-forwarded-for", "x-forwarded-proto", "cf-ray"):
+                self.assertNotIn(header, text, f"{module.name} reads {header}: use request.conn")
+
+    def test_h_wires_the_hook_and_keeps_handle_one_request(self):
+        import server
+        self.assertIs(server.H.after_request, ROUTES.after_request)
+        self.assertNotIn("handle_one_request", vars(server.H))
 
     def test_handlers_get_the_request(self):
         seen = []
@@ -205,8 +228,9 @@ class SharedCache(unittest.TestCase):
     def test_a_module_route_answers_from_server_py_s_cache_under_the_same_key(self):
         # server.py drops "network" after a VIP repair; the route must see that.
         import server
+        import homestead_network_inventory as INV
         server._cache.pop("network", None)
-        with mock.patch.object(server.NETWORK, "inventory", side_effect=[{"n": 1}, {"n": 2}]) as inventory:
+        with mock.patch.object(INV, "inventory", side_effect=[{"n": 1}, {"n": 2}]) as inventory:
             route = ROUTES.find("GET", "/api/network")
             first = route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer"))
             again = route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer"))
@@ -222,6 +246,17 @@ class RouteLiterals(unittest.TestCase):
                      'f"/api/x/new/{name}"', 'p.startswith("/api/x/new?")'):
             with self.subTest(form=form):
                 self.assertTrue(any(path.startswith("/api/x/new") for path in literals_in(f"if {form}:")), form)
+
+    def test_a_path_anywhere_in_class_h_outside_its_do_methods_is_seen(self):
+        """Helpers, class attributes and comments of H count; do_* and
+        anything outside H do not."""
+        source = SS.code('def before():\n    return "/api/x/before"\n\n\n'
+                         'class H(Base):\n    PUBLIC = ("/api/x/attribute",)\n\n'
+                         '    @wrap\n    def do_GET(self):\n        if p == "/api/x/get":\n            pass\n\n'
+                         '    def _helper(self):\n        return "/api/x/helper"\n    # "/api/x/comment"\n'
+                         '    LATER = "/api/x/later"\n\n\ndef outside():\n    return "/api/x/outside"\n')
+        self.assertEqual({"/api/x/attribute", "/api/x/helper", "/api/x/comment", "/api/x/later"},
+                         helper_literals(source))
 
 
 class MovedHelpers(unittest.TestCase):
@@ -317,7 +352,7 @@ class ServerStaysRouting(unittest.TestCase):
                 imported[name] = module
         offenders = []
         for path in sorted((ROOT / "tests").glob("test_*.py")):
-            text = path.read_text(encoding="utf-8")
+            text = SS.text(path)
             patched = set(re.findall(r'patch\.object\(server, "(\w+)"', text)) | set(re.findall(r"^\s*server\.(\w+) = ", text, re.M))
             offenders += [f"{path.name} patches server.{name}, which server.py imports from {imported[name]}: "
                           f"patch {imported[name]}.{name}" for name in sorted(patched & set(imported))]

@@ -412,7 +412,7 @@ def start(body, role=None):
     now; role is theirs, and each app is checked for them again as it is
     changed. Refused while another such job runs, or without the restarts
     confirmed."""
-    running = next((i for i in operations.list_operations() if i.get("kind") == KIND
+    running = next((i for i in operations.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in operations.TERMINAL), None)
     if running:
         raise ValueError("Reservations are already being set; follow it in Jobs")

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_addons as ADDONS
 import homestead_baseline as BASELINE
 import homestead_macvtap as MACVTAP
-import homestead_networking as NET
+import homestead_network_vms as VMNET
 import homestead_vms as VMS
 import test_vm_network_create as network_fixture
 
@@ -146,7 +146,7 @@ class NetworkTests(network_fixture.HostInterfaceNetworkTests):
     """A plain NIC for VMs: macvtap, with the device the plugin offers."""
 
     def test_a_plain_nic_gives_vms_macvtap(self):
-        with mock.patch.object(NET, "_macvtap", lambda: True):
+        with mock.patch.object(VMNET, "_macvtap", lambda: True):
             config = self.make(interface="eth0", **{"for": "vms"})
             self.assertEqual({"cniVersion": "0.3.1", "name": "lan", "type": "macvtap"}, config)
             self.assertEqual({"k8s.v1.cni.cncf.io/resourceName": "macvtap.network.kubevirt.io/eth0"},
@@ -156,7 +156,7 @@ class NetworkTests(network_fixture.HostInterfaceNetworkTests):
             self.assertEqual("bridge", self.make(interface="br0", **{"for": "vms"})["type"], "a bridge carries VMs as it is")
 
     def test_without_macvtap_it_says_how_to_get_it(self):
-        with mock.patch.object(NET, "_macvtap", lambda: False), self.assertRaisesRegex(ValueError, "install it"):
+        with mock.patch.object(VMNET, "_macvtap", lambda: False), self.assertRaisesRegex(ValueError, "install it"):
             self.make(interface="eth0", **{"for": "vms"})
 
     test_options_list_the_hosts_interfaces_those_on_every_host_first = None

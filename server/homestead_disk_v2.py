@@ -370,7 +370,10 @@ def public(item):
 
 
 def status(operation_id):
-    ops.list_operations()
+    # The leader's jobs loop moves the job on (#622); a look at it only asks the
+    # loop to run soon, so the page polling here sees progress within a tick.
+    if hasattr(ops, "advance_soon"):
+        ops.advance_soon()
     with ops.transaction():
         return public(_saved(operation_id))
 
