@@ -17,7 +17,7 @@
      UI.fields      a grid of form fields, one column on a phone
      UI.field       one labelled form control, with help beneath
      UI.quantity    a CPU or memory amount, with its unit
-     UI.chip        a short status label
+     UI.chip        a short status label: tone from one set, size "slim" in dense rows
      UI.button      a button
      UI.actions     one footer: dismissal left, primary action last on the right
      UI.sectionForm section rail, phone selector, mounted panes and footer
@@ -185,7 +185,15 @@ const UI = (() => {
   const statusDot = kind => `<i class="ui-status-dot ${["ok","bad","warn","info","neutral"].includes(kind)?kind:"neutral"}" aria-hidden="true"></i>`;
   const insightList = rows => `<div class="ui-insight-list">${rows.map(r=>`<div class="ui-insight-row">${statusDot(r.tone)}<div><b>${text(r.title)}</b><small>${text(r.detail)}</small></div><div class="ui-insight-action">${chip(r.label,r.tone)}${r.actionsHtml || (r.onclick?button(r.action || "Review",r.onclick):"")}</div></div>`).join("")}</div>`;
 
-  const chip = (label, kind = "") => `<span class="ui-chip ${TONES.has(kind) ? kind : ""}">${text(label)}</span>`;
+  // #543: one tone set for every chip; med, crit and low are the older names.
+  const CHIP_TONES = new Set(["ok", "warn", "bad", "info", "hw", "link", "neutral"]);
+  const CHIP_ALIASES = { med: "warn", crit: "bad", low: "neutral" };
+  const chip = (label, tone = "", { size = "", tip = "" } = {}) => {
+    const kind = Object.hasOwn(CHIP_ALIASES, tone) ? CHIP_ALIASES[tone] : CHIP_TONES.has(tone) ? tone : "";
+    // A tip works by keyboard focus too (design.md), as tip() and host-ports' chips do.
+    const tipped = tip ? ` tabindex="0" aria-label="${text(`${label}: ${tip}`)}" data-tip="${text(tip)}"` : "";
+    return `<span class="ui-chip ${kind}${size === "slim" ? " slim" : ""}"${tipped}>${text(label)}</span>`;
+  };
 
   /* kind: pri | danger | "" ; attrs are extra attributes, already escaped. */
   const button = (label, onclick, { kind = "", icon: iconName = "", id = "", attrs = "", disabled = false } = {}) =>
