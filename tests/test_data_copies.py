@@ -331,7 +331,18 @@ class FactsTests(unittest.TestCase):
                 self.assertIn(why, r2["why"])
 
 
+def uncached(test):
+    """homestead_routes.cached is server.py's own cache once another test has
+    imported server: these tests read through it, never from it."""
+    from unittest import mock
+    import homestead_routes
+    test.enterContext(mock.patch.object(homestead_routes, "_cached", [lambda key, seconds, fn: fn()]))
+
+
 class SelfHealthTests(unittest.TestCase):
+    def setUp(self):
+        uncached(self)
+
     def test_health_carries_data_copies(self):
         from unittest import mock
         import homestead_self_health as SELF_HEALTH
@@ -356,6 +367,7 @@ class KeepTwoCopiesTests(unittest.TestCase):
     def setUp(self):
         from unittest import mock
         self.mock = mock
+        uncached(self)
         self.created = []
         self.facts = {"state": "can-keep-two", "copies": 1,
                       "r2": {"exists": False, "replicas": 0, "migratable": False, "longhorn": False, "usable": True, "why": ""}}
