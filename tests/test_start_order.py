@@ -552,5 +552,70 @@ class GuardTests(SaveTests):
         self.assertEqual("rendered", START.gate_state(self.live("lab", "app-1")))
 
 
+def item(name, ns="lab", kind="app"):
+    return {"kind": kind, "ns": ns, "name": name}
+
+
+def names(layers):
+    return [[i["name"] for i in layer] for layer in layers]
+
+
+class OrderTests(Fixture):
+    """Homestead's own starts of several apps go dependencies first."""
+
+    def test_order_layers(self):
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432)))
+        self.put("lab", "app-2", stored(("data", "db", 5432)))
+        self.deps.append(deployment("lab", "web"))
+        got = START.order([item("app-1"), item("app-2"), item("db", "data"), item("web")], self.deps)
+        self.assertEqual([["db", "web"], ["app-2"], ["app-1"]], names(got))
+
+    def test_outside_cycle_is_one_layer(self):
+        for a, b in (("a", "b"), ("b", "a"), ("c", "a")):
+            self.deps.append(deployment("lab", a, after=stored(("lab", b, 80))))
+        got = names(START.order([item("c"), item("b"), item("a")], self.deps))
+        self.assertEqual(2, len(got))
+        self.assertEqual({"a", "b"}, set(got[0]))
+        self.assertEqual(["c"], got[1])
+
+    def test_order_ignores_edges_to_apps_not_starting(self):
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432)))
+        self.put("lab", "app-3", stored(("data", "db", 5432)))
+        got = START.order([item("app-1"), item("app-3"), item("vm-1", kind="vm")], self.deps)
+        self.assertEqual([["app-1", "app-3", "vm-1"]], names(got))
+        self.assertEqual([], START.order([], self.deps))
+
+    def test_arrange_reads_through_the_bound_kget(self):
+        import homestead_lifecycle as LC
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432)))
+        with mock.patch.object(LC, "kget", lambda path: {"items": copy.deepcopy(self.deps)}):
+            got = START.arrange([item("app-1"), item("app-2")])
+        self.assertEqual(["app-2", "app-1"], [i["name"] for i in got])
+
+    def test_start_plan_names_stopped_dependencies(self):
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432), ("data", "db", 5432), ("lab", "gone", 80)))
+        self.dep("lab", "app-2")["spec"]["replicas"] = 0
+        self.assertEqual(["app-2", "gone"], START.stopped_dependencies(self.dep("lab", "app-1"), self.deps))
+        self.assertEqual([], START.stopped_dependencies(self.dep("lab", "app-3"), self.deps))
+
+    def test_the_start_plan_carries_waits_for(self):
+        import server
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432)))
+        self.dep("lab", "app-2")["spec"]["replicas"] = 0
+        by_path = {f"/apis/apps/v1/namespaces/lab/deployments/app-1": self.dep("lab", "app-1"),
+                   "/apis/apps/v1/deployments": {"items": self.deps}}
+        overview = server.OVERVIEW_ROUTES
+        settings = mock.patch.object(overview, "get_app_settings", return_value=server.DEFAULT_APP_SETTINGS)
+        settings.start()
+        self.addCleanup(settings.stop)
+        with mock.patch.object(overview.PLACE, "start_plan", return_value={"blocked": False}), \
+                mock.patch.object(overview, "kget", side_effect=lambda path: copy.deepcopy(by_path[path])):
+            self.assertEqual(["app-2"], overview.workload_start_plan("lab", "app-1")["waits_for"])
+        with mock.patch.object(overview.PLACE, "start_plan", return_value={"blocked": False}), \
+                mock.patch.object(overview, "kget", side_effect=RuntimeError("API down")):
+            plan = overview.workload_start_plan("lab", "app-1")
+        self.assertEqual([], plan["waits_for"], "a start never fails on it")
+
+
 if __name__ == "__main__":
     unittest.main()

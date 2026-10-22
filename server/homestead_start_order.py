@@ -490,3 +490,78 @@ ROUTES = {
     ("GET", "/api/workloads/starts-after"): ("viewer", lambda request: form(_arg(request, "ns"), _arg(request, "name"))),
     ("POST", "/api/workloads/starts-after"): ("operator", lambda request: save(request.body)),
 }
+
+
+# ---- ordered starts ----------------------------------------------------------
+# When Homestead starts several apps at once (a schedule's tick), the ones
+# others wait for go first. Nothing waits here: the gate does the waiting.
+
+def order(items, deployments):
+    """items ({"ns", "name", ...}) in layers, dependencies first. Only edges
+    between the items count; independent ones share a layer, in the order
+    given. A loop made outside Homestead (two Flux commits) is one layer."""
+    keys = [(i.get("ns"), i.get("name")) if i.get("kind", "app") == "app" else None for i in items]
+    index = {key: n for n, key in enumerate(keys) if key is not None}
+    by_ref = {_ref(d): d for d in deployments}
+    edges = {n: [index[a] for a in after_of(by_ref[key]) if a in index and index[a] != n]
+             if key in by_ref else [] for key, n in index.items()}
+    # Tarjan: each strongly connected component is one unit.
+    comp, low, num, stack, on, counter = {}, {}, {}, [], set(), [0]
+
+    def visit(v):
+        num[v] = low[v] = counter[0]
+        counter[0] += 1
+        stack.append(v)
+        on.add(v)
+        for w in edges.get(v, ()):
+            if w not in num:
+                visit(w)
+                low[v] = min(low[v], low[w])
+            elif w in on:
+                low[v] = min(low[v], num[w])
+        if low[v] == num[v]:
+            while True:
+                w = stack.pop()
+                on.discard(w)
+                comp[w] = v
+                if w == v:
+                    break
+
+    for v in range(len(items)):
+        if v not in num:
+            visit(v)
+    depth = {}
+
+    def level(c):
+        if c not in depth:
+            depth[c] = 0   # a member's edge back into its own unit adds nothing
+            members = [v for v in range(len(items)) if comp[v] == c]
+            depth[c] = max([level(comp[w]) + 1 for v in members for w in edges.get(v, ()) if comp[w] != c],
+                           default=0)
+        return depth[c]
+
+    layers = {}
+    for v in range(len(items)):
+        layers.setdefault(level(comp[v]), []).append(items[v])
+    return [layers[k] for k in sorted(layers)]
+
+
+def arrange(items):
+    """order(), flattened, read through the bound kget."""
+    import homestead_lifecycle as LC
+    return [i for layer in order(items, LC.kget("/apis/apps/v1/deployments").get("items", []) or []) for i in layer]
+
+
+def stopped_dependencies(dep, deployments):
+    """The apps dep starts after that are stopped (no replicas) or gone."""
+    by_ref = {_ref(d): d for d in deployments}
+    return [app for ref in after_of(dep) for app in [ref[1]]
+            if ref not in by_ref or not ((by_ref[ref].get("spec") or {}).get("replicas") or 0)]
+
+
+def waits_for(ns, name, get):
+    """What a start of ns/name would wait for: its stopped dependencies."""
+    dep = get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if not after_of(dep):
+        return []
+    return stopped_dependencies(dep, get("/apis/apps/v1/deployments").get("items", []) or [])
