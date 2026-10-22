@@ -201,6 +201,11 @@ function stopAuthenticatedWork() {
   clearTimeout(window.__operationTimer);
 }
 
+// The namespace the setup code's Secret is in, once a refused setup has
+// named it ("<namespace>/homestead-setup"): until then the installer's lab.
+let setupNamespace = "";
+const SETUP_SECRET_IN = /\b([a-z0-9](?:[-a-z0-9]*[a-z0-9])?)\/homestead-setup\b/;
+
 function loginForm(err, setup) {
   let remember = true;
   try { remember = localStorage.getItem("homestead.remember") !== "0"; } catch (e) { /* ticked */ }
@@ -220,8 +225,8 @@ function loginForm(err, setup) {
         spellcheck="false" placeholder="ABCD-EFGH-JK" aria-describedby="lg_code_hint">
       <details class="gatehint" id="lg_code_hint"><summary>Where to find it</summary>The installer
         printed it beside the address. Or run
-        <code>kubectl -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d</code>
-        (Helm: use the release's namespace).</details></div>` : ""}
+        <code>kubectl -n ${esc(setupNamespace || "lab")} get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d</code>${
+        setupNamespace ? "." : " (Helm: use the release's namespace)."}</details></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
       ${remember ? "checked" : ""}>Keep me signed in on this device</label>
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
@@ -277,7 +282,10 @@ async function doSetup() {
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
       body: JSON.stringify({ username, password, setup_code, remember: !!$("#lg_remember")?.checked }) });
     const b = await r.json();
-    if (!r.ok) return loginForm(b.error || "Setup failed", true);
+    if (!r.ok) {
+      setupNamespace = (String(b.error || "").match(SETUP_SECRET_IN) || [])[1] || setupNamespace;
+      return loginForm(b.error || "Setup failed", true);
+    }
     ME = b.user; ROLE = "admin"; ungate(); afterAuth();
   } catch (e) { loginForm(e.message, true); }
 }
