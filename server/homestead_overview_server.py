@@ -22,6 +22,7 @@ import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
 import homestead_disks as DISKS
 import homestead_forecast as FORECAST
+import homestead_gitops as GITOPS
 import homestead_history as HISTORY
 import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
@@ -282,6 +283,7 @@ def _alert_sources():
     take("outage", lambda: OUTAGE.alert_facts())
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
+    take("gitops", GITOPS.alert_facts)
     take("recovery", RECOVERY.alert_facts)
     take("previous-volumes", lambda: cached("previous-volumes", 60, RESTORE_SWAP.alert_facts))
     take("agents", MCP.alert_facts)
