@@ -152,6 +152,8 @@ what to do next.
   [Dashboard and nodes](Dashboard-and-nodes).
 - **Plan backups.** [Data protection](Data-protection) sets up snapshots and
   backups in one go.
+- **Know what Homestead changes.** [What Homestead changes](What-Homestead-changes)
+  lists what it makes on the cluster, on its own and when you ask.
 
 > Harvester runs kube-vip for load-balanced addresses. Do not add MetalLB to a
 > Harvester cluster - two load balancers answering for the same addresses fight.

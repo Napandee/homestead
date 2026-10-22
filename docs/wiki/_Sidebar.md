@@ -6,6 +6,7 @@
 - [On Harvester](Installing-on-Harvester)
 - [On an existing cluster](Installing-on-an-existing-cluster)
 - [Installing Homestead](Installing-Homestead)
+- [What Homestead changes](What-Homestead-changes)
 
 **Use**
 - [Dashboard and nodes](Dashboard-and-nodes)
