@@ -17,7 +17,11 @@ async function viewResources() {
   let list;
   try { list = await api(`/api/resources/list?${params}`); } catch (e) { list = { error: e.message, columns: [], rows: [] }; }
   STATE.data.resList = list;
-  if (!STATE.data.namespacesAll) { try { STATE.data.namespacesAll = (await api("/api/resources/list?group=&version=v1&resource=namespaces")).rows.map(r => r.name); } catch (e) { STATE.data.namespacesAll = []; } }
+  // Unread namespaces are said, and read again next time: never kept as none.
+  if (!STATE.data.namespacesAll) {
+    try { STATE.data.namespacesAll = (await api("/api/resources/list?group=&version=v1&resource=namespaces")).rows.map(r => r.name); RES.nsUnread = null; }
+    catch (e) { RES.nsUnread = e.message; }
+  }
   renderResources();
 }
 window.viewResources = viewResources;
@@ -39,15 +43,15 @@ function renderResources() {
       <section class="res-main">
         <div class="between res-head"><div><b>${esc(resLabel(k))}</b> <span class="dim xs mono">${esc(k.group || "core")}/${esc(k.version)}</span>
             <span class="dim xs"> · ${rows.length}${list.more ? "+" : ""} shown</span></div>
-          ${k.namespaced ? `<select aria-label="Namespace" onchange="resNamespace(this.value)"><option value="">All namespaces</option>${(STATE.data.namespacesAll || []).map(n =>
-            `<option ${n === RES.ns ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : '<span class="dim xs">cluster-wide</span>'}</div>
+          ${k.namespaced ? `<select aria-label="Namespace" onchange="resNamespace(this.value)"><option value="">All namespaces</option>${(STATE.data.namespacesAll || (RES.ns ? [RES.ns] : [])).map(n =>
+            `<option ${n === RES.ns ? "selected" : ""}>${esc(n)}</option>`).join("")}${STATE.data.namespacesAll ? "" : '<option disabled>Could not read the namespaces</option>'}</select>` : '<span class="dim xs">cluster-wide</span>'}</div>
         ${list.error ? `<div class="note bad">${esc(list.error)}</div>` : ""}
         <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="res-${esc(k.resource)}"><thead><tr>
           ${k.namespaced && !RES.ns ? "<th>Namespace</th>" : ""}${list.columns.map(c => `<th title="${esc(c.description)}">${esc(c.name)}</th>`).join("")}</tr></thead><tbody>
           ${rows.map(r => `<tr class="clickable" onclick="resOpen(${jsq(r.namespace)},${jsq(r.name)})">
             ${k.namespaced && !RES.ns ? `<td class="mono small dim" data-label="Namespace">${esc(r.namespace)}</td>` : ""}
             ${r.cells.map((c, i) => `<td data-label="${esc(list.columns[i]?.name || "")}" class="${i === 0 ? "mono small" : "small"}">${i === 0 ? `<b>${esc(String(c))}</b>` : esc(typeof c === "object" ? JSON.stringify(c) : String(c ?? ""))}</td>`).join("")}</tr>`).join("")
-            || `<tr><td colspan="${list.columns.length + 1}" class="empty">None${RES.ns ? ` in ${esc(RES.ns)}` : ""}.</td></tr>`}</tbody></table></div></div>
+            || `<tr><td colspan="${list.columns.length + 1}" class="empty">${list.error ? "Could not read them." : `None${RES.ns ? ` in ${esc(RES.ns)}` : ""}.`}</td></tr>`}</tbody></table></div></div>
       </section></div>`);
 }
 
@@ -88,7 +92,7 @@ window.resOpen = async (ns, name, reveal = false) => {
       ${events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
         <td class="small">${esc(e.message)}</td><td class="mono">${e.count}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>`
       : "No recent events.";
-  }).catch(() => {});
+  }, e => { const host = $("#res_events"); if (host) host.innerHTML = UI.callout("warn", "Could not read the events", esc(e.message)); });
 };
 window.resEdit = () => { const t = $("#res_yaml"); t.readOnly = false; t.focus(); $("#res_save_row").hidden = false; $("#res_edit").hidden = true; const foot = $("#res_obj > .stepper-foot"); if (foot) foot.hidden = true; };
 const resPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -114,11 +118,14 @@ window.resDeleteGo = async (ns, name) => {
 window.resLogs = (ns, pod) => { closeModal(); openLogs(pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`); };
 window.resCreate = () => {
   modal("Create from YAML", `<p class="muted small">One object or several, separated by <span class="mono">---</span>, created in order. Objects without a namespace go to the one chosen here.</p>
-    <div class="f"><label>Namespace</label><select id="rc_ns">${(STATE.data.namespacesAll || ["default"]).map(n => `<option ${n === (RES.ns || "lab") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+    ${STATE.data.namespacesAll ? `<div class="f"><label for="rc_ns">Namespace</label><select id="rc_ns">${STATE.data.namespacesAll.map(n => `<option ${n === (RES.ns || "lab") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>`
+      : `${UI.callout("warn", "Could not read the namespaces", `${esc(RES.nsUnread || "")} · type the one to use.`)}<div class="f"><label for="rc_ns">Namespace</label><input id="rc_ns" value="${esc(RES.ns)}" placeholder="default" autocomplete="off"></div>`}
     <textarea id="rc_yaml" aria-label="YAML to create" class="mono helm-values res-yaml" spellcheck="false" placeholder="apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: example\ndata:\n  hello: world"></textarea>
     ${UI.actions(`<button class="btn pri" onclick="resCreateGo()">Create</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };
 window.resCreateGo = async () => {
-  try { const r = await resPost("/api/resources/create", { yaml: $("#rc_yaml").value, ns: $("#rc_ns").value }); toast(r.detail, "ok"); closeModal(); viewResources(); }
+  const ns = $("#rc_ns").value.trim();
+  if (!ns) return toast("Type the namespace to use", "bad");
+  try { const r = await resPost("/api/resources/create", { yaml: $("#rc_yaml").value, ns }); toast(r.detail, "ok"); closeModal(); viewResources(); }
   catch (e) { toast(e.message, "bad"); }
 };

@@ -41,6 +41,7 @@ async function viewVMs() {
       ${moreMenu(items)}${create}`)}
     ${UI.collectionHeader(`<span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}`, `<span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
         ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}`)}
+    ${uptimeUnreadNote()}
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}</div>`);
 }
