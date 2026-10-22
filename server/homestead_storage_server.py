@@ -25,6 +25,7 @@ import homestead_isos as ISOS
 import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn as LH
+import homestead_longhorn_access as LH_ACCESS
 import homestead_manifests as MANIFESTS
 import homestead_names as NAMES
 import homestead_nfs as NFS
@@ -402,6 +403,14 @@ def _host_fix_loop():
                     trimmed = weekly_trim()
                     if trimmed:
                         print(f"storage: {trimmed}", flush=True)
+                    # Homestead's way in to Longhorn's API, where Longhorn's own
+                    # network policies would keep it out (Longhorn 1.13 and later).
+                    try:
+                        access = LH_ACCESS.ensure(LH.kget, LH.ksend, SELF.NS)
+                        if access:
+                            print(f"storage: {LH_ACCESS.LOG[access]}", flush=True)
+                    except Exception as error:
+                        print(f"storage: way in to Longhorn's API not checked: {str(error)[:160]}", flush=True)
                     # Longhorn kept from filling a host's root filesystem.
                     for node, change in ROOT_GUARD.tick():
                         print(f"storage: {node}: {change}", flush=True)
