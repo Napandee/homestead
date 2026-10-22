@@ -49,7 +49,7 @@ function scheduleTag(row) {
 
 function schedRow(kind, ns, name) {
   const list = kind === "vm" ? STATE.data.vms : STATE.data.wl;
-  return (list || []).find(x => x.ns === ns && x.name === name) || { ns, name };
+  return (list || []).find(x => x.ns === ns && x.name === name) || null;
 }
 
 function schedPreview() {
@@ -73,9 +73,34 @@ window.schedDays = which => {
   schedPreview();
 };
 
-function scheduleDialog(kind, ns, name, back = null) {
+const schedLastHtml = last => !last ? "" : last.ok ? `<div class="dim small">Last: ${esc(schedWhen(last.at * 1000))}, ${esc(last.detail)}</div>`
+  : UI.callout("warn", `The ${last.action} at ${schedWhen(last.at * 1000)} did not happen`, esc(last.detail));
+
+/* One not in a list this page read (opened from the schedules, or the list
+   could not be read): its schedule is read from the schedules, never taken as
+   none, so Save cannot put the defaults over one that exists. */
+const schedStillReading = () => !!$("#sc_reading") && !$("#modal").classList.contains("hidden");
+async function scheduleRead(kind, ns, name, back) {
+  modal(`Schedule · ${name}`, '<div class="empty" id="sc_reading"><span class="spin2"></span> Loading…</div>');
+  let d;
+  // Answered after the dialog was closed or replaced: nothing is opened again.
+  try { d = await api("/api/power-schedules"); }
+  catch (e) {
+    if (!schedStillReading()) return;
+    $("#mbody").innerHTML = UI.callout("bad", "Could not read this schedule", esc(e.message))
+      + UI.actions((back ? UI.button("Back", "schedBack()") : UI.cancel("Close")) + UI.button("Try again", "schedRetry()"));
+    return;
+  }
+  if (!schedStillReading()) return;
+  const item = (d.items || []).find(i => i.kind === kind && i.ns === ns && i.name === name);
+  scheduleDialog(kind, ns, name, back, { schedule: item?.schedule || null, last: item?.last || null });
+}
+
+function scheduleDialog(kind, ns, name, back = null, read = null) {
   Object.assign(SCHED, { kind, ns, name, back });
-  const row = schedRow(kind, ns, name), s = row.schedule || null;
+  const row = read ? null : schedRow(kind, ns, name);
+  if (!read && !row) return scheduleRead(kind, ns, name, back);
+  const s = (read || row).schedule || null;
   const days = s ? s.days : [0, 1, 2, 3, 4];
   const zone = schedZone(), elsewhere = s && s.tz && s.tz !== zone;
   const how = kind === "vm" ? `${name} is shut down cleanly, as Stop does, and started through the same room check as Start.`
@@ -93,18 +118,21 @@ function scheduleDialog(kind, ns, name, back = null) {
     ${UI.actions((back ? UI.button("Back", "schedBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Save", "schedSave()", { kind: "pri", id: "sc_go", attrs: 'data-need="operator"' }),
       s ? UI.button("No schedule", "schedSave(true)", { attrs: 'data-need="operator"' }) : "")}</div>`);
   schedPreview();
-  if (s) api("/api/power-schedules").then(d => {
-    const item = (d.items || []).find(i => i.kind === kind && i.ns === ns && i.name === name);
-    const last = item?.last, host = $("#sc_last");
-    if (!last || !host) return;
-    host.innerHTML = last.ok ? `<div class="dim small">Last: ${esc(schedWhen(last.at * 1000))}, ${esc(last.detail)}</div>`
-      : UI.callout("warn", `The ${last.action} at ${schedWhen(last.at * 1000)} did not happen`, esc(last.detail));
-  }).catch(() => {});
+  if (read) $("#sc_last").innerHTML = schedLastHtml(read.last);
+  // How the last stop or start went: one that was refused must not look like none.
+  else if (s) api("/api/power-schedules").then(d => {
+    const item = (d.items || []).find(i => i.kind === kind && i.ns === ns && i.name === name), host = $("#sc_last");
+    if (host) host.innerHTML = schedLastHtml(item?.last);
+  }, e => {
+    const host = $("#sc_last");
+    if (host) host.innerHTML = UI.callout("warn", "Could not read how the last stop or start went", esc(e.message));
+  });
 }
 
 window.wlSchedule = (ns, name, back = null) => scheduleDialog("app", ns, name, back);
 window.vmSchedule = (ns, name, back = null) => scheduleDialog("vm", ns, name, back);
 window.schedBack = () => (SCHED.back || closeModal)();
+window.schedRetry = () => scheduleDialog(SCHED.kind, SCHED.ns, SCHED.name, SCHED.back);
 
 window.schedSave = async (remove = false) => {
   const go = $("#sc_go"), schedule = remove ? null : schedFromForm();

@@ -651,6 +651,162 @@ try {
     assert.match(await body(), /Could not read the containers[\s\S]*timed out/);
     await close();
 
+    // Schedule: an unread last run is said, not left out (it may have been refused).
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(async () => { STATE.data.vms = await api("/api/vms"); });
+    await page.evaluate(failing, "/api/power-schedules");
+    await page.evaluate(() => vmSchedule("lab", "k3s-demo-server-1"));
+    await page.waitForFunction(() => (document.querySelector("#sc_last")?.innerText || "").length, null, {timeout: 5000});
+    assert.match(await page.locator("#sc_last").innerText(), /Could not read how the last stop or start went[\s\S]*timed out/);
+    await close();
+
+    // Schedule opened where the VMs were not read: its schedule is read, never the defaults offered in its place.
+    await page.evaluate(() => { STATE.data.vms = null; });
+    await page.evaluate(() => vmSchedule("lab", "k3s-demo-server-1"));
+    await settled(page);
+    assert.match(await body(), /Could not read this schedule[\s\S]*timed out/);
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Save"}).count(), 0, "nothing is saved over a schedule not read");
+    await close();
+    await page.evaluate(() => { window.api = window.__realApi; STATE.data.vms = null; });
+    await page.evaluate(() => vmSchedule("lab", "k3s-demo-server-1"));
+    await page.waitForSelector("#sc_stop");
+    assert.equal(await page.locator("#sc_stop").inputValue(), "19:00", "its own schedule, read from the schedules");
+    await close();
+    // One the schedules read does not list has none: the defaults and Save are right there.
+    await page.evaluate(() => { STATE.data.wl = null; });
+    await page.evaluate(() => wlSchedule("lab", "home-assistant"));
+    await page.waitForSelector("#sc_stop");
+    assert.equal(await page.locator("#sc_stop").inputValue(), "01:00");
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Save"}).count(), 1);
+    await close();
+    // A schedule read that answers after its dialog was closed does not open it again.
+    const reopened = await page.evaluate(async () => {
+      const real = window.api; let answer;
+      window.api = (asked, ...rest) => String(asked) === "/api/power-schedules" ? new Promise(r => { answer = r; }) : real(asked, ...rest);
+      STATE.data.vms = null;
+      vmSchedule("lab", "k3s-demo-server-1");
+      closeModal();
+      answer({items: []}); await new Promise(r => setTimeout(r, 50));
+      window.api = real;
+      return !$("#modal").classList.contains("hidden");
+    });
+    assert.equal(reopened, false, "a closed schedule dialog stays closed");
+
+    // Resources: an object's unread events are said, not "loading" for ever.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(() => viewResources());
+    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Resources"));
+    await page.evaluate(failing, "/api/resources/events");
+    await page.evaluate(() => { const r = STATE.data.resList.rows[0]; return resOpen(r.namespace, r.name); });
+    await page.waitForFunction(() => document.querySelector("#res_events")?.textContent !== "loading", null, {timeout: 5000});
+    assert.match(await page.evaluate(() => document.querySelector("#res_events").textContent), /Could not read the events[\s\S]*timed out/);
+    await close();
+
+    // Resources: an unread list is not "None."
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/resources/list");
+    await page.evaluate(() => viewResources());
+    await page.waitForFunction(() => /timed out/.test(document.querySelector(".res-main")?.textContent || ""));
+    assert.doesNotMatch(await page.locator(".res-main").innerText(), /None\./);
+    assert.match(await page.locator(".res-main").innerText(), /Could not read them/);
+
+    // Resources: unread namespaces are said, not kept as none, and Create does not offer an empty choice.
+    await page.evaluate(() => { window.api = window.__realApi; STATE.data.namespacesAll = undefined; });
+    await page.evaluate(failingExact, "/api/resources/list?group=&version=v1&resource=namespaces");
+    await page.evaluate(() => viewResources());
+    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Resources"));
+    assert.match(await page.locator(".res-main").textContent(), /Could not read the namespaces/);
+    await page.evaluate(() => resCreate());
+    assert.match(await body(), /Could not read the namespaces[\s\S]*timed out/);
+    assert.equal(await page.locator("#rc_ns").evaluate(e => e.tagName), "INPUT", "the namespace is typed, not picked from an unread list");
+    await close();
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(() => viewResources());
+    assert.ok(await page.evaluate(() => (STATE.data.namespacesAll || []).length > 0), "the failure is not kept: the next visit reads them");
+
+    // Monitoring: unread checks are said, not "First checks under way".
+    await page.evaluate(() => { window.api = window.__realApi; STATE.data.uptime = undefined; });
+    await page.evaluate(failing, "/api/uptime");
+    await page.evaluate(() => viewMonitoring());
+    await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Monitoring"));
+    const monitor = await page.locator("body").innerText();
+    assert.match(monitor, /Could not read the checks[\s\S]*timed out/);
+    assert.doesNotMatch(monitor, /First checks under way/);
+    assert.doesNotMatch(await page.locator(".phead").innerText(), /\b0 up\b/, "no count of checks not read");
+    assert.match(await page.evaluate(() => monitorWidget()), /Could not read the checks/, "the widget does not spin for ever");
+    await page.evaluate(() => wlMonitoring("lab", "paperless"));
+    assert.match(await body(), /Could not read the checks[\s\S]*timed out/);
+    assert.doesNotMatch(await body(), /First checks under way/);
+    await close();
+    // Checks read before are kept, and said to be from before.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(() => loadUptime());
+    await page.evaluate(failing, "/api/uptime");
+    await page.evaluate(() => viewMonitoring());
+    await page.waitForFunction(() => /Could not read the checks just now/.test(document.body.innerText), null, {timeout: 5000});
+    assert.match(await page.locator("body").innerText(), /Could not read the checks just now[\s\S]*timed out/);
+    // The Containers page says so too: its Down and Slow marks are from the last read.
+    await page.evaluate(() => viewWorkloads());
+    await page.waitForFunction(() => /Could not read the checks just now/.test(document.querySelector(".containers-page")?.innerText || ""), null, {timeout: 5000});
+
+    // Monitoring: unread VMs are said, not left out.
+    await page.evaluate(() => { window.api = window.__realApi; STATE.data.vms = undefined; });
+    await page.evaluate(failing, "/api/vms");
+    await page.evaluate(() => viewMonitoring());
+    await page.waitForFunction(() => /Could not read the VMs/.test(document.body.innerText), null, {timeout: 5000});
+    assert.match(await page.locator("body").innerText(), /Could not read the VMs[\s\S]*timed out/);
+    // The dashboard's widget reads them the same way: unread VMs are not stored as none.
+    await page.evaluate(() => { STATE.data.vms = undefined; });
+    // The widget is optional and off in the demo's layout, so its read is checked by its source and run directly.
+    assert.doesNotMatch(await page.evaluate(() => Dashboard.loadMonitoring.toString()), /\.catch\(\(\) => \[\]\)/);
+    await page.evaluate(() => loadMonitorLists());
+    assert.equal(await page.evaluate(() => Array.isArray(STATE.data.vms)), false, "the dashboard keeps no empty list for unread VMs");
+    assert.match(await page.evaluate(() => monitorWidget()), /Could not read the VMs/);
+    await page.evaluate(() => vmMonitoring("lab", "k3s-demo-server-1"));
+    assert.match(await body(), /Could not read k3s-demo-server-1's settings/);
+    await close();
+
+    // Monitoring: the apps' refresh failing marks the list as the one last read.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(async () => { STATE.data.wl = await api("/api/workloads"); });
+    await page.evaluate(failing, "/api/workloads");
+    // The refresh repaints only the Monitoring page, so the app is told it is there.
+    await page.evaluate(() => { window.__view = STATE.view; STATE.view = "monitoring"; return viewMonitoring(); });
+    await page.waitForFunction(() => /Could not read the apps just now/.test(document.body.innerText), null, {timeout: 5000});
+    assert.match(await page.locator("body").innerText(), /Could not read the apps just now[\s\S]*timed out/);
+    await page.evaluate(() => { STATE.view = window.__view; });
+
+    // A monitoring dialog for one not in a read list: nothing is saved over settings not read.
+    await page.evaluate(() => { window.api = window.__realApi; STATE.data.vms = null; });
+    await page.evaluate(() => vmMonitoring("lab", "k3s-demo-server-1"));
+    assert.match(await body(), /Could not read k3s-demo-server-1's settings/);
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Save"}).count(), 0);
+    await close();
+    // In a list that was read but lacks it, it is not found; still no Save.
+    await page.evaluate(() => { STATE.data.vms = []; });
+    await page.evaluate(() => vmMonitoring("lab", "k3s-demo-server-1"));
+    assert.match(await body(), /k3s-demo-server-1 was not found[\s\S]*VMs last read/);
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: "Save"}).count(), 0);
+    await close();
+    await page.evaluate(() => { STATE.data.vms = null; });
+
+    // Settings › Notifications: alerts that could not be refreshed are said, not shown as current.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    const alerts = await page.evaluate(async () => {
+      // The 20-second check is stopped and any read in flight is waited for, so the failing read is this step's own.
+      clearInterval(PWA_ALERTS.timer); await PWA_ALERTS.request;
+      document.body.insertAdjacentHTML("beforeend", '<div id="pwaAlerts"></div>');
+      await refreshPwaAlerts(true);
+      const real = window.api;
+      window.api = (asked, ...rest) => String(asked).split("?")[0] === "/api/alerts" ? Promise.reject(new Error("timed out")) : real(asked, ...rest);
+      await refreshPwaAlerts(true);
+      const text = document.querySelector("#pwaAlerts").innerText;
+      window.api = real; document.querySelector("#pwaAlerts").remove();
+      startAlertChecks(); await PWA_ALERTS.request;
+      return text;
+    });
+    assert.match(alerts, /Could not read the alerts just now[\s\S]*timed out/);
+
     // Platform pages, on a cluster that is not Harvester.
     await page.goto(`${base}/?demo=1&platform=k3s`);
     await page.waitForSelector(".dashboard-widget");

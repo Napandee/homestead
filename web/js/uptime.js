@@ -6,10 +6,27 @@
    it does not; a card shows the last day hour by hour and the last 30 days as
    a share; the Monitoring dialog shows what is asked and lets an operator change
    it: automatic, an HTTP path, a TCP connection, or no check. */
-const ANSWER_WORDS = { up: "Up", slow: "Slow", down: "Down", unknown: "Checking", off: "Not monitored" };
+const ANSWER_WORDS = { up: "Up", slow: "Slow", down: "Down", unknown: "Checking", off: "Not monitored", unread: "Not read" };
 
 // vm: a VM, kept as vm:<namespace>/<name> beside the apps.
 const answerOf = (w, vm = false) => (STATE.data.uptime?.apps || {})[`${vm ? "vm:" : ""}${w.ns}/${w.name}`] || null;
+// One with no answer: checking, unless the checks could not be read (#620).
+const answerBlank = () => ({ state: STATE.data.uptime?.unread ? "unread" : "unknown", strip: [], days: [] });
+
+/* The checks could not be read: said, and what was read before is marked as such. */
+function uptimeUnreadNote() {
+  const u = STATE.data.uptime;
+  if (!u?.unread) return "";
+  return u.apps ? UI.callout("warn", "Could not read the checks just now", `${esc(u.unread)} · the states shown are from the last read.`)
+    : UI.callout("warn", "Could not read the checks", esc(u.unread));
+}
+
+/* A monitoring dialog for one not in a list this page read: its settings are
+   unknown, so nothing is offered that would save over them. */
+const monitorUnreadRow = (name, list, what, back = "") => modal(`Monitoring · ${name}`, (Array.isArray(list)
+  ? UI.callout("warn", `${name} was not found`, `It is not in the list of ${what} last read, so there is nothing here to change.`)
+  : UI.callout("bad", `Could not read ${name}'s settings`, `The ${what} could not be read, so how it is checked now is not known here. Open it again from the ${what === "VMs" ? "Virtual machines" : "Containers"} page.`))
+  + UI.actions(back ? UI.button("Back", back, { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel("Close")));
 const monitorOpen = (w, vm = false) => `${vm ? "vmMonitoring" : "wlMonitoring"}(${jsq(w.ns)},${jsq(w.name)})`;
 
 const answerShare = value => value === null || value === undefined ? "—" : `${value >= 99.995 ? "100" : value.toFixed(value >= 99 ? 2 : 1)}%`;
@@ -21,6 +38,7 @@ function answerDetail(a) {
   if (a.state === "off") return a.why ? a.why[0].toUpperCase() + a.why.slice(1) : "Not checked";
   if (a.state === "down") return `Since ${answerSince(a.since)} · ${last.error || "no answer"}`;
   if (a.state === "unknown") return "First checks under way";
+  if (a.state === "unread") return "The checks could not be read";
   return [last.code ? `HTTP ${last.code}` : "connection accepted", last.ms !== null && last.ms !== undefined ? `${last.ms} ms` : ""].filter(Boolean).join(" · ");
 }
 
@@ -113,8 +131,9 @@ function monitoringFieldValue(prefix) {
 }
 
 window.wlMonitoring = window.wlAnswering = (ns, name) => {
-  const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || { ns, name };
-  const a = answerOf(w) || { state: "unknown", strip: [] };
+  const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name);
+  if (!w) return monitorUnreadRow(name, STATE.data.wl, "containers");
+  const a = answerOf(w) || answerBlank();
   const u = STATE.data.uptime || {};
   const { mode, port, path } = monitorParts(w.answer_check);
   const portSelect = monitorPortSelect("ans_port", w.ports, port);
@@ -124,6 +143,7 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
     ${UI.lead(esc(`Homestead asks ${name} at its address ${(u.every || 60) === 60 ? "every minute" : `every ${Math.round(u.every / 60)} minutes`}, as a browser would. It is down after ${u.down_after || 3} misses in a row, which raises an alert, and up again at its first answer.`))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
+    ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
     ${a.state === "off" ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>
     <div class="answer-figures"><div><span class="dim xs">LAST 24 HOURS</span><b class="mono">${answerShare(a.uptime_24h)}</b></div>
@@ -162,9 +182,11 @@ window.answerSave = async () => {
   } catch (e) { toast(e.message, "bad"); go.disabled = false; }
 };
 
-/* Loaded beside the containers: a failure leaves the page as it was. */
+/* Loaded beside the containers. A failed read keeps what was read before,
+   marked unread, so pages say so rather than show it as current (#620). */
 async function loadUptime() {
-  try { STATE.data.uptime = await api("/api/uptime"); } catch (e) { /* the page works without it */ }
+  try { STATE.data.uptime = await api("/api/uptime"); }
+  catch (e) { STATE.data.uptime = { ...(STATE.data.uptime || {}), unread: e.message }; }
 }
 
 
@@ -181,16 +203,18 @@ function vmMonitorChoice(value) {
 }
 
 window.vmMonitoring = (ns, name, back = null) => {
-  const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || { ns, name };
-  const a = answerOf(v, true) || { state: "unknown", strip: [] };
-  const c = vmMonitorChoice(v.monitoring);
+  const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name);
   window.__vmMonitorBack = back;
+  if (!v) return monitorUnreadRow(name, STATE.data.vms, "VMs", back ? "vmMonitorBack()" : "");
+  const a = answerOf(v, true) || answerBlank();
+  const c = vmMonitorChoice(v.monitoring);
   const option = (value, label, help, extra = "") => `<label class="answer-mode"><input type="radio" name="vm_mon" value="${value}" ${c.mode === value ? "checked" : ""}
     onchange="vmMonitorModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span>${extra}</span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
     ${UI.lead(esc(`Homestead asks ${name} at its address every minute. It is down after 3 misses in a row, which raises an alert, and up again at its first answer. Changing this never restarts the VM.`))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
+    ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
     ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
@@ -296,12 +320,12 @@ window.outageTest = async (kind, ns, name) => {
    Every app Homestead watches, problems first: its state, the last day hour by
    hour or the last 30 days day by day, its share of answered checks, and what
    is asked. Apps not monitored are listed last, with why. */
-const MONITOR = { range: "day" };
+const MONITOR = { range: "day", vmsUnread: "", wlUnread: "" };
 
-const monitorRank = { down: 0, slow: 1, unknown: 2, up: 3, off: 4 };
+const monitorRank = { down: 0, slow: 1, unknown: 2, unread: 2, up: 3, off: 4 };
 
 function monitorRows() {
-  const apps = STATE.data.uptime?.apps || {}, blank = { state: "unknown", strip: [], days: [] };
+  const apps = STATE.data.uptime?.apps || {}, blank = answerBlank();
   return [...(STATE.data.wl || []).filter(w => !w.platform && !w.self && !w.homestead && !w.site)
       .map(w => ({ w, a: apps[`${w.ns}/${w.name}`] || blank })),
     ...(STATE.data.vms || []).filter(v => !v.site).map(v => ({ w: v, vm: true, a: apps[`vm:${v.ns}/${v.name}`] || blank }))]
@@ -313,19 +337,34 @@ function monitorSummary(rows) {
   return { total: rows.length, up: count("up"), slow: count("slow"), down: count("down"), unknown: count("unknown"), off: count("off") };
 }
 
+/* The apps, VMs and checks Monitoring shows, for its page and the dashboard's
+   widget. Unread VMs are said, not stored as none: the next read tries again. */
+async function loadMonitorLists() {
+  const [wl, vms] = await Promise.all([STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"),
+    STATE.data.vms ? Promise.resolve(STATE.data.vms) : api("/api/vms").catch(e => ({ unread: e.message })), loadUptime()]);
+  STATE.data.wl = wl;
+  MONITOR.vmsUnread = vms.unread || "";
+  if (!vms.unread) STATE.data.vms = vms;
+}
+
 async function viewMonitoring() {
-  [STATE.data.wl, STATE.data.vms] = await Promise.all([STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"),
-    STATE.data.vms ? Promise.resolve(STATE.data.vms) : api("/api/vms").catch(() => []), loadUptime()]);
+  await loadMonitorLists();
+  MONITOR.wlUnread = "";
   renderMonitoring();
-  api("/api/workloads").then(wl => { STATE.data.wl = wl; if (STATE.view === "monitoring" && $("#modal").classList.contains("hidden")) renderMonitoring(); }).catch(() => {});
+  const repaint = () => { if (STATE.view === "monitoring" && $("#modal").classList.contains("hidden")) renderMonitoring(); };
+  // The apps again, fresher: a failure marks the list shown as the one last read.
+  api("/api/workloads").then(fresh => { STATE.data.wl = fresh; MONITOR.wlUnread = ""; repaint(); },
+    e => { MONITOR.wlUnread = e.message; repaint(); });
 }
 
 window.monitorRange = range => { MONITOR.range = range; renderMonitoring(); };
 
 function renderMonitoring() {
   const rows = monitorRows(), s = monitorSummary(rows), watched = rows.filter(r => r.a.state !== "off");
+  const unread = STATE.data.uptime?.unread && !STATE.data.uptime.apps;
   const range = MONITOR.range, every = STATE.data.uptime?.every || 60;
-  const said = [s.down && `<span class="crit-text">${s.down} down</span>`, s.slow && `<span class="med-text">${s.slow} slow</span>`,
+  // Checks not read are not counted as none up.
+  const said = unread ? "checks not read" : [s.down && `<span class="crit-text">${s.down} down</span>`, s.slow && `<span class="med-text">${s.slow} slow</span>`,
     `${s.up} up`, s.off && `${s.off} not monitored`].filter(Boolean).join(" · ");
   const head = `<tr><th>App or VM</th><th>State</th><th class="mon-bars">${range === "day" ? "Last 24 hours" : "Last 30 days"}</th>
     <th data-nosort>${range === "day" ? "24 h" : "30 days"}</th><th class="mon-target">Asked</th><th data-nosort></th></tr>`;
@@ -339,6 +378,9 @@ function renderMonitoring() {
       <td data-actions>${actionBar([{ label: "Change", icon: "gear", run: monitorOpen(w, vm), need: "operator", ariaLabel: `Change how ${w.name} is monitored` }], { label: `Actions for ${w.name}` })}</td></tr>`;
   paint(`${UI.pageHeader("Monitoring", `${watched.length} app${watched.length === 1 ? "" : "s"} and VM${watched.length === 1 ? "" : "s"} asked every ${every === 60 ? "minute" : `${Math.round(every / 60)} minutes`} · ${said}`,
       `<div class="seg" role="group" aria-label="Range"><button type="button" class="${range === "day" ? "on" : ""}" aria-pressed="${range === "day"}" onclick="monitorRange('day')">24 hours</button><button type="button" class="${range === "month" ? "on" : ""}" aria-pressed="${range === "month"}" onclick="monitorRange('month')">30 days</button></div>`)}
+    ${uptimeUnreadNote()}
+    ${MONITOR.vmsUnread ? UI.callout("warn", "Could not read the VMs", `${esc(MONITOR.vmsUnread)} · they are left out of this list.`) : ""}
+    ${MONITOR.wlUnread ? UI.callout("warn", "Could not read the apps just now", `${esc(MONITOR.wlUnread)} · this is the list last read.`) : ""}
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact mon-table" data-sort="monitoring"><thead>${head}</thead><tbody>${rows.map(row).join("")}</tbody></table></div></div>`
       : '<div class="empty">No apps yet. Deploy one, and Homestead starts asking it at its address.</div>'}
     ${UI.more("How monitoring works", `<p>Every minute the leading Homestead asks each running app at its address, as a browser would: an HTTP answer below 500 counts, and so does a port that takes the connection but does not speak HTTP. With no main port chosen, each of its ports is tried. Three misses in a row is down, which raises an alert; the first answer clears it. Over 2 seconds is slow. Stopped apps are not asked.</p><p>A VM publishes no port, so Homestead tries the usual ones - SSH, RDP, HTTPS, HTTP, Proxmox, Home Assistant - and keeps the first that answers; a VM none of them answer on is not monitored until you choose its port.</p><p>Choose what is asked for each one here, in an app's Edit dialog under Address, or from a VM's menu. Changing it never restarts anything.</p>`)}`);
@@ -350,7 +392,12 @@ window.viewMonitoring = viewMonitoring;
    One third: the counts and whatever is wrong. Half: every app, a dot and its
    30 days. Two thirds and wider: every app with its last 24 hours. */
 function monitorWidget(item = {}) {
-  if (!STATE.data.uptime) return '<div class="empty small"><span class="spin2"></span> Loading…</div>';
+  const u = STATE.data.uptime;
+  if (!u) return '<div class="empty small"><span class="spin2"></span> Loading…</div>';
+  if (u.unread && !u.apps) return UI.callout("warn", "Could not read the checks", esc(u.unread));
+  return (MONITOR.vmsUnread ? `<div class="dim xs">Could not read the VMs · they are left out</div>` : "") + (u.unread ? `<div class="dim xs">Could not read the checks just now · these are from the last read</div>` : "") + monitorWidgetRows(item);
+}
+function monitorWidgetRows(item) {
   const rows = monitorRows().filter(r => r.a.state !== "off"), s = monitorSummary(rows), width = item.width || 6;
   if (!rows.length) return '<div class="empty small">No apps are monitored yet.</div>';
   const open = r => `onclick="${monitorOpen(r.w, r.vm)}"`;
@@ -375,6 +422,7 @@ function monitoringStepHtml(w) {
   const a = answerOf(w);
   return `<div class="sec" style="margin-top:0">Monitoring</div>
     <p class="dim small">Homestead asks this app at its address every minute and alerts you when it is down. Changing how it is asked never restarts it.</p>
+    ${uptimeUnreadNote()}
     ${a ? `<div class="answer-head"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
       ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>`}` : ""}
