@@ -1,7 +1,7 @@
 import sys, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import server
+import server  # noqa: F401  (wires the server modules, as the other storage tests do)
 import homestead_kube as K
 import homestead_storage as STORAGE
 from fakes.kube import Kube

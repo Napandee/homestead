@@ -55,7 +55,6 @@ ALLOWED = {
     "server/homestead_imports.py: import VMNETWORK": UNUSED,
     "server/homestead_imports.py: import base64": UNUSED,
     "server/homestead_imports.py: import hashlib": UNUSED,
-    "server/homestead_operations.py: import threading": UNUSED,
     "server/homestead_place.py: import json": UNUSED,
     "server/homestead_placement_mode.py: import urllib": UNUSED,
     "server/homestead_push.py: import threading": UNUSED,
