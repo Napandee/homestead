@@ -89,7 +89,7 @@ try {
       window.stallHistory=false;await refresh(true);
       // The deliberate stalled request is reused until it times out. Let it
       // settle, then fetch the recovery response before changing test data.
-      await historyPaint();await historyPaint();
+      await historyPaint({fresh:true});await historyPaint({fresh:true});
     });
     await page.waitForTimeout(750);
     await page.screenshot({path:`${output}/dashboard-${theme}-${width}.png`,fullPage:true});
@@ -101,11 +101,11 @@ try {
       assert.ok(durations.every(duration=>duration==="0s"),"motion preference applies to split storage bars too");
     }
     await page.emulateMedia({reducedMotion:"no-preference"});
-    await page.evaluate(async()=>{SET.motion="on";applySettings();window.historySize=2160;await viewDash();await historyPaint()});
+    await page.evaluate(async()=>{SET.motion="on";applySettings();window.historySize=2160;await viewDash();await historyPaint({fresh:true})});
     assert.equal(await page.evaluate(()=>[...document.querySelectorAll("#historyCard .spark")]
       .every(el=>JSON.parse(el.getAttribute("data-spark-times") || "[]").length===2160)),true,"dense history response is painted before testing its refresh");
     await page.waitForTimeout(750);
-    await page.evaluate(async()=>{window.streamSample++;await viewDash();await historyPaint()});
+    await page.evaluate(async()=>{window.streamSample++;await viewDash();await historyPaint({fresh:true})});
     assert.equal(await page.evaluate(()=>[...document.querySelectorAll("#historyCard .spark path")]
       .some(el=>sparkAnimations.has(el))),false,"dense history refreshes do not schedule animation");
     await page.waitForFunction(()=>![...document.querySelectorAll(".spark path")].some(el=>sparkAnimations.has(el)),null,{timeout:3000});

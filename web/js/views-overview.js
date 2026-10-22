@@ -65,6 +65,7 @@ async function viewDash() {
   const [hist, st, cap] = [histRead, stRead, capRead].map(r => r?.unread ? null : r);
   noteNodeUptime(upRead);
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
+  window.HealthInsights?.seed?.("overview", o);
   // A node near its allocation limit takes no new replicas: said before it bites.
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
   window.refreshPwaAlerts?.();
