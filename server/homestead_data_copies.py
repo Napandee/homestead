@@ -19,6 +19,14 @@ Harvester, whose copies are Harvester's. The count it sets is recorded as
 Homestead's own (homestead_node_parity's own_copies), so on k3s and RKE2 it
 rises again by itself as hosts join.
 
+Once a second host can hold a copy, facts() says so (Cluster Health and
+Redundancy show it) and Keep two copies (ensure_two_copy_class) makes
+longhorn-r2 - Longhorn, two copies on different hosts, not migratable,
+Retain - if the cluster has none; the person then reviews the existing move
+of Homestead's data onto it, which stops Homestead briefly. Nothing moves on
+the click alone. On k3s and RKE2 the copies rise in place instead
+(homestead_node_parity.own_copies), and nothing is offered.
+
 It reads through homestead_node_parity's bound kget and ksend, platform and
 own Deployment, so one bind serves both.
 """
@@ -27,7 +35,9 @@ import re
 import homestead_lhcapacity as LHCAP
 import homestead_names as NAMES
 import homestead_node_parity as NODE_PARITY
+import homestead_routes
 import homestead_shared as SHARED
+import homestead_storage_classes as STORAGE_CLASSES
 
 GiB = 1024 ** 3
 ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
@@ -211,3 +221,40 @@ def facts():
     except Exception as error:
         out.update(state="n/a", error=str(error)[:160])
     return out
+
+
+NOTHING_TO_DO = {
+    "rising": "Nothing to do: Homestead raises its data's copies in place as hosts join",
+    "ok": "Nothing to do: Homestead's data already has two or more copies",
+    "single-host": "Nothing to do yet: fewer than two hosts have room for another copy of Homestead's data",
+    "n/a": "Nothing to do: Homestead's data is not on Longhorn storage it can add copies to",
+}
+
+
+def ensure_two_copy_class():
+    """Keep two copies: longhorn-r2 made when the cluster has none, so the
+    move of Homestead's data can pick it. Only while facts() says the
+    cluster can keep two; an existing longhorn-r2 that would not keep two
+    shareable copies is not used. Never prepares or moves anything."""
+    found = facts()
+    out = {"ok": False, "storage_class": TWO_COPIES, "created": False}
+    if found.get("state") != "can-keep-two":
+        return {**out, "message": NOTHING_TO_DO.get(found.get("state"), NOTHING_TO_DO["n/a"])}
+    r2 = found.get("r2") or {}
+    if r2.get("exists") and not r2.get("usable"):
+        return {**out, "message": f"{r2.get('why')}. Homestead's data was not moved; "
+                                  "pick a class that keeps two copies in Move data"}
+    created = False
+    if not r2.get("exists"):
+        STORAGE_CLASSES.create_storage_class({"name": TWO_COPIES, "replicas": 2, "migratable": False,
+                                              "reclaim_policy": "Retain", "copies": "hosts", "expandable": True})
+        created = True
+        homestead_routes.forget("data-copies")
+    return {**out, "ok": True, "created": created,
+            "message": (f"{TWO_COPIES} created: two copies on different hosts. " if created else "")
+            + f"Review the move of Homestead's data onto {TWO_COPIES}; Homestead stops briefly while it is copied"}
+
+
+ROUTES = {
+    ("POST", "/api/self/data/two-copies"): ("admin", lambda request: ensure_two_copy_class()),
+}

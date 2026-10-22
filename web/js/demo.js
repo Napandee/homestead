@@ -2301,9 +2301,19 @@ ssh_pwauth: true
       ? { ok: true, desired: JSON.parse(init.body || "{}").replicas, detail: "Homestead runs as 2 copies, spread over different nodes" }
       : { desired: 1, max: 3, leader: "homestead-6f9c-a1", spread_nodes: 1, pods: [
         { name: "homestead-6f9c-a1", node: "harvester-node1", ready: true, leader: true, this: true, terminating: false }],
-        data: { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
+        data: window.__demoDataCopies
+          ? { pvc: "homestead-data", storage_class: "longhorn", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: true, reason: "",
+            candidates: ["longhorn"], classes: window.__demoTwoCopiesMade ? [{ name: "longhorn-r2", shareable: true }] : [] }
+          : { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
           reason: "homestead-data is on longhorn-r2, a migratable class: Longhorn gives it a VM-disk volume that only one node can mount, so a copy on a second node would never start",
-          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] } },
+          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] },
+        data_copies: demoDataCopies() },
+    "/api/self/data/two-copies": () => {
+      const created = !window.__demoTwoCopiesMade;
+      window.__demoTwoCopiesMade = true;
+      return { ok: true, storage_class: "longhorn-r2", created,
+        message: (created ? "longhorn-r2 created: two copies on different hosts. " : "") + "Review the move of Homestead's data onto longhorn-r2; Homestead stops briefly while it is copied" };
+    },
     "/api/self/data/prepare": (url, init) => {
       if (init?.method === "POST") {
         window.__demoDataPrepared = true;
@@ -2320,7 +2330,9 @@ ssh_pwauth: true
           window.__demoOps.push(blocker);
         }
       }
-      return { source: "homestead-data", classes: [{ name: "longhorn", shareable: true }], execution_ready: false,
+      return { source: "homestead-data", classes: window.__demoDataCopies
+          ? (window.__demoTwoCopiesMade ? [{ name: "longhorn-r2", shareable: true }] : [])
+          : [{ name: "longhorn", shareable: true }], execution_ready: false,
         blocking_jobs: blocker?.mutation_recovery ? [blocker] : [],
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
         preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,

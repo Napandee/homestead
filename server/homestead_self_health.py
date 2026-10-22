@@ -129,6 +129,12 @@ def data_copies():
         return {"state": "n/a", "error": str(error)[:160]}
 
 
+def replicas_view():
+    """The Redundancy card's read: replicas_now(), with the copies of
+    Homestead's data (data_copies), so the card needs no second call."""
+    return {**replicas_now(), "data_copies": data_copies()}
+
+
 def replicas_now():
     """How many Homesteads run, where, and which one leads."""
     ns, name = SELF.NS, NAMES.BRAND
@@ -199,6 +205,6 @@ def set_replicas(count):
 
 ROUTES = {
     ("GET", "/api/self/health"): ("viewer", lambda request: report()),
-    ("GET", "/api/self/replicas"): ("viewer", lambda request: replicas_now()),
+    ("GET", "/api/self/replicas"): ("viewer", lambda request: replicas_view()),
     ("POST", "/api/self/replicas"): ("admin", lambda request: set_replicas(request.body.get("replicas"))),
 }

@@ -349,5 +349,80 @@ class SelfHealthTests(unittest.TestCase):
             self.assertEqual({"state": "n/a", "error": "Longhorn did not answer"}, SELF_HEALTH.data_copies())
 
 
+class KeepTwoCopiesTests(unittest.TestCase):
+    """POST /api/self/data/two-copies: longhorn-r2 made if missing, refused
+    when an existing one would not keep two shareable copies; never a move."""
+
+    def setUp(self):
+        from unittest import mock
+        self.mock = mock
+        self.created = []
+        self.facts = {"state": "can-keep-two", "copies": 1,
+                      "r2": {"exists": False, "replicas": 0, "migratable": False, "longhorn": False, "usable": True, "why": ""}}
+        self.enterContext(mock.patch.object(COPIES, "facts", lambda: self.facts))
+        self.enterContext(mock.patch.object(COPIES.STORAGE_CLASSES, "create_storage_class",
+                                            lambda cfg: (self.created.append(cfg), {"ok": True, "name": cfg["name"]})[1]))
+        self.sent = []
+        self.enterContext(mock.patch.object(PARITY, "ksend", lambda *a, **k: self.sent.append(a)))
+
+    def test_creates_r2_when_missing(self):
+        result = COPIES.ensure_two_copy_class()
+        self.assertEqual([{"name": "longhorn-r2", "replicas": 2, "migratable": False, "reclaim_policy": "Retain",
+                           "copies": "hosts", "expandable": True}], self.created)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["created"])
+        self.assertEqual("longhorn-r2", result["storage_class"])
+
+    def test_reuses_usable_r2(self):
+        self.facts["r2"] = {"exists": True, "replicas": 2, "migratable": False, "longhorn": True, "usable": True, "why": ""}
+        result = COPIES.ensure_two_copy_class()
+        self.assertEqual([], self.created)
+        self.assertEqual((True, False), (result["ok"], result["created"]))
+
+    def test_refuses_unusable_r2(self):
+        # Review focus 3: never onto a class that would not keep two shareable copies.
+        for why in ("longhorn-r2 is migratable: its volumes can be mounted on only one node at a time",
+                    "longhorn-r2 keeps 1 copy, not two", "longhorn-r2 is not a Longhorn class (rancher.io/local-path)"):
+            with self.subTest(why=why):
+                self.facts["r2"] = {"exists": True, "replicas": 1, "migratable": True, "longhorn": False, "usable": False, "why": why}
+                result = COPIES.ensure_two_copy_class()
+                self.assertFalse(result["ok"])
+                self.assertIn(why, result["message"])
+                self.assertEqual([], self.created)
+                self.assertEqual([], self.sent)
+
+    def test_refuses_unless_can_keep_two(self):
+        for state in ("single-host", "rising", "ok", "n/a"):
+            with self.subTest(state=state):
+                self.facts = {"state": state, "copies": 1, "r2": None}
+                result = COPIES.ensure_two_copy_class()
+                self.assertFalse(result["ok"])
+                self.assertIn("nothing to do", result["message"].lower())
+                self.assertEqual([], self.created)
+
+    def test_never_starts_a_preparation(self):
+        # Review focus 5: the class only; the move keeps its own review.
+        calls = []
+        self.enterContext(self.mock.patch.object(PARITY, "kget", lambda path, **k: calls.append(path) or {}))
+        COPIES.ensure_two_copy_class()
+        self.assertFalse([p for p in calls if "/self/data" in p or "persistentvolumeclaims" in p])
+        self.assertEqual([], self.sent, "no PVC or volume written")
+
+    def test_route_is_admin_and_listed(self):
+        import homestead_routes
+        self.assertIn("homestead_data_copies", homestead_routes.MODULES)
+        role, handler = COPIES.ROUTES[("POST", "/api/self/data/two-copies")]
+        self.assertEqual("admin", role)
+        self.assertTrue(handler(None)["ok"])
+
+    def test_replicas_carry_data_copies(self):
+        # Decision 4: the Redundancy card reads it from its own call.
+        import homestead_self_health as SELF_HEALTH
+        with self.mock.patch.object(SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}):
+            view = SELF_HEALTH.replicas_view()
+        self.assertEqual("can-keep-two", view["data_copies"]["state"])
+        self.assertEqual(1, view["desired"])
+
+
 if __name__ == "__main__":
     unittest.main()

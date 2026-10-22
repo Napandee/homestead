@@ -95,9 +95,8 @@ Homestead lowers its own data volume to the one copy that host can keep, once
 Longhorn says another cannot be placed, so it reads healthy; no other volume
 or Longhorn setting is changed. Once a second
 host can hold a copy, `longhorn-r2` ("Longhorn, two copies") is the class to
-move Homestead's data onto: create it under **Settings > Hardware and
-storage > Storage classes** (two copies, not migratable) and move from
-**Settings > About > Redundancy**.
+move Homestead's data onto: **Settings > About > Redundancy** then offers
+**Keep two copies**, which makes it and opens the move.
 
 Installed earlier from a manifest that said `longhorn-r2`? A claim's class
 cannot change. Check the claim first:

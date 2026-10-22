@@ -365,6 +365,18 @@ shareable (RWX) Longhorn class. On a migratable class (Harvester's default)
 Redundancy says so and offers **Move data**, which copies it to a shareable class
 and restarts Homestead once onto it.
 
+Homestead's data can also have more than one copy itself. On a one-host
+Longhorn cluster it keeps one. Once two hosts Longhorn stores on have room for
+another, Redundancy (and Cluster Health) says "Homestead's data has one copy;
+this cluster can now keep two" and offers **Keep two copies**: it makes
+`longhorn-r2` - two copies on different hosts, not migratable, kept when
+deleted - if the cluster has none, and opens **Move data** with it picked. You
+still prepare and confirm the move; Homestead stops briefly while its data is
+copied. An existing `longhorn-r2` that keeps fewer than two copies, is
+migratable or is not Longhorn's is not used, and Redundancy says why. On k3s
+and RKE2 Homestead raises its data's copies in place as hosts join, so nothing
+is offered there.
+
 On the development branch, after a data move succeeds or recovery verifies
 Homestead back on its original volume, **Jobs → Dismiss** or **Clear finished**
 can hide its completed entry.
