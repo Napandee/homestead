@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
 
 
 class RecurringJobRunTests(unittest.TestCase):
@@ -37,14 +38,14 @@ class RecurringJobRunTests(unittest.TestCase):
         LH.bind(get, lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body, {})
 
     def test_last_runs_say_whether_they_worked(self):
-        runs = LH._cron_runs()
+        runs = JOBS._cron_runs()
         self.assertFalse(runs["daily"]["last_failed"])
         self.assertTrue(runs["broken"]["last_failed"])
         self.assertFalse(runs["busy"]["last_failed"])
         self.assertEqual(1, runs["busy"]["running"])
 
     def test_run_now_starts_a_job_from_the_schedule(self):
-        result = LH.run_job("daily")
+        result = JOBS.run_job("daily")
         method, path, body = self.sent[0]
         self.assertEqual(("POST", "/apis/batch/v1/namespaces/longhorn-system/jobs"), (method, path))
         self.assertEqual(result["job"], body["metadata"]["name"])
@@ -55,9 +56,9 @@ class RecurringJobRunTests(unittest.TestCase):
 
     def test_run_now_refuses_what_it_cannot_run(self):
         with self.assertRaises(ValueError):
-            LH.run_job("Not A Name")
+            JOBS.run_job("Not A Name")
         with self.assertRaisesRegex(ValueError, "not set up"):
-            LH.run_job("missing")
+            JOBS.run_job("missing")
         self.assertEqual([], self.sent)
 
 
@@ -65,17 +66,17 @@ class CronRunStateTests(unittest.TestCase):
     """A CronJob's last run, as Data protection and Architecture show it."""
 
     def test_a_run_after_the_last_success_that_is_no_longer_active_failed(self):
-        state = LH.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z", "lastSuccessfulTime": "2026-09-22T03:01:00Z"})
+        state = JOBS.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z", "lastSuccessfulTime": "2026-09-22T03:01:00Z"})
         self.assertEqual((True, 0), (state["last_failed"], state["running"]))
 
     def test_a_run_still_going_has_not_failed(self):
-        state = LH.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z", "active": [{"name": "job-1"}]})
+        state = JOBS.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z", "active": [{"name": "job-1"}]})
         self.assertEqual((False, 1), (state["last_failed"], state["running"]))
 
     def test_a_run_that_succeeded_and_one_that_never_ran_have_not_failed(self):
-        self.assertFalse(LH.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z",
+        self.assertFalse(JOBS.cron_run_state({"lastScheduleTime": "2026-09-23T03:00:00Z",
                                             "lastSuccessfulTime": "2026-09-23T03:02:00Z"})["last_failed"])
-        self.assertEqual({"last_run": "", "last_success": "", "running": 0, "last_failed": False}, LH.cron_run_state(None))
+        self.assertEqual({"last_run": "", "last_success": "", "running": 0, "last_failed": False}, JOBS.cron_run_state(None))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
+import homestead_longhorn_volumes as VOLUMES
+import homestead_longhorn_target as BACKUP_TARGET
+import homestead_longhorn_backups as BACKUPS
 
 G, J = LH.GROUP_LABEL, LH.JOB_LABEL
 API = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -37,7 +41,7 @@ class FakeLonghorn:
         }
         self.jobs = {"daily": job("daily", "snapshot", ["default"]),
                      "trim": job("trim", "filesystem-trim", ["default", "media"])}
-        self.pvcs = {"frigate": {"metadata": {"labels": {}}}, "plex": {"metadata": {"labels": {LH.SOURCE_LABEL: "enabled"}}},
+        self.pvcs = {"frigate": {"metadata": {"labels": {}}}, "plex": {"metadata": {"labels": {VOLUMES.SOURCE_LABEL: "enabled"}}},
                      "paperless": {"metadata": {"labels": {}}}}
         self.secrets = {}
         self.sent = []
@@ -108,7 +112,7 @@ class GroupTests(unittest.TestCase):
         return self.lh.volumes[name]["metadata"]["labels"]
 
     def test_a_new_group_takes_its_volumes_out_of_default_and_names_its_jobs(self):
-        result = LH.save_group({"name": "cameras", "volumes": ["pvc-a"], "jobs": ["daily"]})
+        result = VOLUMES.save_group({"name": "cameras", "volumes": ["pvc-a"], "jobs": ["daily"]})
 
         self.assertEqual({G + "cameras": "enabled"}, self.labels("pvc-a"))
         self.assertEqual(["pvc-a"], result["left_default"])
@@ -116,46 +120,46 @@ class GroupTests(unittest.TestCase):
         self.assertEqual({G + "default": "enabled"}, self.labels("pvc-b"))
 
     def test_joining_can_keep_default_too(self):
-        LH.save_group({"name": "cameras", "volumes": ["pvc-a"], "leave_default": False})
+        VOLUMES.save_group({"name": "cameras", "volumes": ["pvc-a"], "leave_default": False})
         self.assertEqual({G + "default": "enabled", G + "cameras": "enabled"}, self.labels("pvc-a"))
 
     def test_a_group_with_nothing_in_it_is_refused(self):
         with self.assertRaisesRegex(ValueError, "not kept anywhere"):
-            LH.save_group({"name": "empty"})
+            VOLUMES.save_group({"name": "empty"})
         with self.assertRaisesRegex(ValueError, "lowercase"):
-            LH.save_group({"name": "Bad Name", "volumes": ["pvc-a"]})
+            VOLUMES.save_group({"name": "Bad Name", "volumes": ["pvc-a"]})
 
     def test_renaming_moves_members_and_jobs(self):
-        LH.save_group({"original": "media", "name": "films", "volumes": ["pvc-c"], "jobs": ["trim"]})
+        VOLUMES.save_group({"original": "media", "name": "films", "volumes": ["pvc-c"], "jobs": ["trim"]})
 
         self.assertEqual({G + "films": "enabled"}, self.labels("pvc-c"))
         self.assertEqual(["default", "films"], self.lh.jobs["trim"]["spec"]["groups"])
 
     def test_a_volume_leaving_its_only_group_goes_back_to_default(self):
-        result = LH.save_group({"name": "media", "volumes": [], "jobs": ["trim"]})
+        result = VOLUMES.save_group({"name": "media", "volumes": [], "jobs": ["trim"]})
 
         self.assertEqual(["pvc-c"], result["back_to_default"])
         self.assertEqual({G + "default": "enabled"}, self.labels("pvc-c"))
 
     def test_default_keeps_a_volume_that_has_nowhere_else_to_go(self):
-        result = LH.save_group({"name": "default", "volumes": [], "jobs": ["daily"]})
+        result = VOLUMES.save_group({"name": "default", "volumes": [], "jobs": ["daily"]})
         self.assertEqual(["pvc-a", "pvc-b"], result["kept_in_default"])
 
     def test_the_pvc_is_labelled_when_longhorn_reads_labels_from_it(self):
-        LH.assign("pvc-b", "cameras")
+        VOLUMES.assign("pvc-b", "cameras")
         pvc_patches = [path for method, path, _ in self.lh.sent if method == "PATCH" and "persistentvolumeclaims" in path]
         self.assertEqual(["/api/v1/namespaces/lab/persistentvolumeclaims/plex"], pvc_patches)
-        LH.assign("pvc-a", "cameras")
+        VOLUMES.assign("pvc-a", "cameras")
         self.assertEqual(1, sum("persistentvolumeclaims" in path for method, path, _ in self.lh.sent if method == "PATCH"))
 
     def test_deleting_says_what_it_leaves_behind(self):
-        result = LH.delete_group("media")
+        result = VOLUMES.delete_group("media")
 
         self.assertEqual(["paperless"], result["back_to_default"])
         self.assertEqual([], result["idle_jobs"])
         self.assertEqual(["default"], self.lh.jobs["trim"]["spec"]["groups"])
         with self.assertRaisesRegex(ValueError, "Longhorn's own"):
-            LH.delete_group("default")
+            VOLUMES.delete_group("default")
 
 
 class CoverageTests(unittest.TestCase):
@@ -174,10 +178,10 @@ class CoverageTests(unittest.TestCase):
                          next(g for g in view["group_rows"] if g["name"] == "media"))
 
     def test_cleanups_and_trims_keep_nothing(self):
-        LH.save_job({"name": "weekly-cleanup", "task": "snapshot-cleanup", "cron": "30 4 * * 6", "retain": 0})
+        JOBS.save_job({"name": "weekly-cleanup", "task": "snapshot-cleanup", "cron": "30 4 * * 6", "retain": 0})
         self.assertEqual(0, self.lh.sent[-1][2]["spec"]["retain"])
         with self.assertRaisesRegex(ValueError, "at least 1"):
-            LH.save_job({"name": "snap", "task": "snapshot", "cron": "0 2 * * *", "retain": 0})
+            JOBS.save_job({"name": "snap", "task": "snapshot", "cron": "0 2 * * *", "retain": 0})
 
 
 class BackupTests(unittest.TestCase):
@@ -186,7 +190,7 @@ class BackupTests(unittest.TestCase):
         LH.bind(self.lh.get, self.lh.send, {})
 
     def test_backups_of_a_deleted_volume_are_listed(self):
-        rows = {row["name"]: row for row in LH.backup_volumes()}
+        rows = {row["name"]: row for row in BACKUPS.backup_volumes()}
 
         self.assertFalse(rows["pvc-gone"]["exists"])
         self.assertEqual("old-app", rows["pvc-gone"]["pvc"])
@@ -195,22 +199,22 @@ class BackupTests(unittest.TestCase):
         self.assertEqual("frigate", rows["pvc-a"]["pvc"])
 
     def test_typed_s3_keys_become_the_targets_secret(self):
-        LH.set_backup_target("s3://backups@us-east-1/", "", "5m",
+        BACKUP_TARGET.set_backup_target("s3://backups@us-east-1/", "", "5m",
                              {"access_key": "AK", "secret_key": "SK", "endpoint": "http://192.0.2.20:9000"})
 
-        secret = self.lh.secrets[LH.TARGET_SECRET]
+        secret = self.lh.secrets[BACKUP_TARGET.TARGET_SECRET]
         self.assertEqual({"AWS_ACCESS_KEY_ID": "AK", "AWS_SECRET_ACCESS_KEY": "SK",
                           "AWS_ENDPOINTS": "http://192.0.2.20:9000"}, secret["stringData"])
         target = [body for method, path, body in self.lh.sent if path.endswith("/backuptargets")][0]
-        self.assertEqual(LH.TARGET_SECRET, target["spec"]["credentialSecret"])
+        self.assertEqual(BACKUP_TARGET.TARGET_SECRET, target["spec"]["credentialSecret"])
 
     def test_a_target_that_cannot_work_is_refused(self):
         with self.assertRaisesRegex(ValueError, "keys"):
-            LH.set_backup_target("s3://backups@us-east-1/")
+            BACKUP_TARGET.set_backup_target("s3://backups@us-east-1/")
         with self.assertRaisesRegex(ValueError, "starts with"):
-            LH.set_backup_target("backups@us-east-1/")
+            BACKUP_TARGET.set_backup_target("backups@us-east-1/")
         with self.assertRaisesRegex(ValueError, "both"):
-            LH.set_backup_target("s3://b@r/", keys={"access_key": "AK"})
+            BACKUP_TARGET.set_backup_target("s3://b@r/", keys={"access_key": "AK"})
 
 
 if __name__ == "__main__":

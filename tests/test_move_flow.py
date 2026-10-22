@@ -103,8 +103,8 @@ class FakeLonghorn:
 
     @staticmethod
     def validate_restore_class(*args, **kwargs):
-        import homestead_longhorn
-        return homestead_longhorn.validate_restore_class(*args, **kwargs)
+        import homestead_longhorn_restore
+        return homestead_longhorn_restore.validate_restore_class(*args, **kwargs)
 
     @staticmethod
     def restore_problem(pvc):
@@ -132,8 +132,8 @@ class FakeLonghorn:
 
     @staticmethod
     def transfer_target_state(*args):
-        import homestead_longhorn
-        return homestead_longhorn.transfer_target_state(*args)
+        import homestead_longhorn_target
+        return homestead_longhorn_target.transfer_target_state(*args)
 
     def replace_backup_target_state(self, expected, replacement):
         if self.backup_target_state() != expected:

@@ -9,6 +9,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_csi_restore as CSI
 import homestead_longhorn as LH
+import homestead_longhorn_target as BACKUP_TARGET
+import homestead_longhorn_backups as BACKUPS
 import homestead_move_state as STATE
 import homestead_move_target as TARGET
 import homestead_move_plan as PLAN
@@ -173,12 +175,12 @@ class ArtifactCleanupTests(unittest.TestCase):
 
     def test_ownership_is_stamped_before_longhorn_creates(self):
         with mock.patch.multiple(LH, kget=self.api.get, ksend=self.api.send), \
-                mock.patch.object(LH, "backup_target", return_value={"configured": True}), \
+                mock.patch.object(BACKUP_TARGET, "backup_target", return_value={"configured": True}), \
                 mock.patch.object(LH, "_bust"):
-            LH.ensure_move_backup("disk-a", "snapshot-a", "backup-a", cleanup_id=ID, source_uid=UID)
+            BACKUPS.ensure_move_backup("disk-a", "snapshot-a", "backup-a", cleanup_id=ID, source_uid=UID)
             snap = CLEANUP.LH + "/snapshots/snapshot-a"
             self.api.objects[snap]["status"] = {"readyToUse": True}
-            LH.ensure_move_backup("disk-a", "snapshot-a", "backup-a", cleanup_id=ID, source_uid=UID)
+            BACKUPS.ensure_move_backup("disk-a", "snapshot-a", "backup-a", cleanup_id=ID, source_uid=UID)
         with mock.patch.object(SOURCE, "ksend", self.api.send):
             SOURCE._backup_backing_image("base-image", cleanup_id=ID, source_uid=UID)
         self.assertEqual(3, len(self.api.calls))
@@ -434,11 +436,11 @@ class TransferCleanupFlowTests(unittest.TestCase):
 
         def ensure(volume, snapshot, backup, **kwargs):
             with mock.patch.multiple(LH, kget=self.cluster.get, ksend=self.cluster.send), \
-                    mock.patch.object(LH, "backup_target", return_value={"configured": True}), \
+                    mock.patch.object(BACKUP_TARGET, "backup_target", return_value={"configured": True}), \
                     mock.patch.object(LH, "_bust"):
-                LH.ensure_move_backup(volume, snapshot, backup, **kwargs)
+                BACKUPS.ensure_move_backup(volume, snapshot, backup, **kwargs)
                 self.cluster.objects[CLEANUP.LH + "/snapshots/" + snapshot]["status"] = {"readyToUse": True}
-                LH.ensure_move_backup(volume, snapshot, backup, **kwargs)
+                BACKUPS.ensure_move_backup(volume, snapshot, backup, **kwargs)
             result = real_ensure(volume, snapshot, backup, **kwargs)
             if getattr(self, "pending_backup", False) and self.lh.made[-1].get("state", "Completed") == "Completed":
                 self.lh.made[-1]["state"] = "InProgress"
