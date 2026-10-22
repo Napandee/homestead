@@ -16,6 +16,7 @@ during the request with note(), and taken by the hook.
 import collections
 import collections.abc
 import datetime
+import ipaddress
 import json
 import os
 import re
@@ -50,16 +51,21 @@ EMAIL = re.compile(r"[^\s@]{1,64}@[^\s@]{1,189}")
 DELETE_WORKLOAD = re.compile(r"/api/workload/([a-z0-9.-]+)/([a-z0-9.-]+)")
 PATH_CAP = 200
 # A flood of refused requests must not wash real changes out of the two files
-# on the data volume. stdout carries every line; the file keeps every success
-# (anonymous ones too: first-admin setup) and every 5xx, and of 4xx refusals,
-# each WINDOW_SECONDS, at most BURST per address and per user, then ALL_BURST in
-# all - one ceiling for refusals with no user, another for signed-in people -
-# and always the first refusal from each address or user. What it leaves out is
-# summed up in one line. The table is bounded (least recently used goes first,
-# its summary written), never cleared.
+# on the data volume. stdout carries every line. The file keeps every success
+# and every real server error; it throttles refusals: 4xx, a 503 with no user
+# (a full server shedding load, or a data move), and MCP tool calls refused.
+# Each WINDOW_SECONDS it keeps:
+# - the first refusal from each user (signed-in) or source (no user: the
+#   address, an IPv6 address by its /64), at most FIRST_CAP of those firsts;
+# - then at most BURST more from that user or source;
+# - and at most ALL_BURST in all, one ceiling for refusals with no user and
+#   one for signed-in people's.
+# What it leaves out is summed up in one line. The table is bounded (least
+# recently used goes first, its summary written), never cleared.
 WINDOW_SECONDS = 60
 BURST = 5
 ALL_BURST = 120
+FIRST_CAP = 50
 KEYS_KEPT = 1000
 SWEEP_SECONDS = 5
 # Two rotations closer than this say something is filling the file.
@@ -158,7 +164,19 @@ def line(request, status, ms, notes, now=None):
 
 def _refusal(entry):
     status = entry["status"]
-    return isinstance(status, int) and 400 <= status < 500
+    if entry.get("outcome") in ("refused", "error"):
+        return True             # an MCP tool call refused: the HTTP answer is 200
+    return isinstance(status, int) and (400 <= status < 500 or status == 503 and not entry["user"])
+
+
+def _source(addr):
+    """Where refusals with no user come from: the address, or its /64 for
+    IPv6, where one client holds more addresses than it can use."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return addr
+    return str(ipaddress.ip_network(f"{ip}/64", strict=False)) if ip.version == 6 else str(ip)
 
 
 def _summary(key, window):
@@ -172,6 +190,9 @@ def _summary(key, window):
     elif kind == "addr":
         entry["addr"] = name
         who = f"from {name}"
+    elif name == "firsts":
+        entry["addr"] = "*"
+        who = "that were the first from a new address or user"
     elif name == "signed-in":
         entry["user"] = "*"
         who = "by signed-in people"
@@ -207,24 +228,27 @@ def _keep(entry):
                     summaries.append(_summary(key, window))
         if not _refusal(entry):
             return True, summaries
-        mine = [_window(("addr", entry["addr"]), now, summaries)]
-        if entry["user"]:
-            mine.insert(0, _window(("user", entry["user"]), now, summaries))
-        everyone = _window(("all", "signed-in" if entry["user"] else "anonymous"), now, summaries)
+        user = entry["user"]
+        mine = _window(("user", user) if user else ("addr", _source(entry["addr"])), now, summaries)
+        everyone = _window(("all", "signed-in" if user else "anonymous"), now, summaries)
+        firsts = _window(("all", "firsts"), now, summaries)
         while len(_buckets) > KEYS_KEPT:
             key, window = _buckets.popitem(last=False)
             if window["dropped"]:
                 summaries.append(_summary(key, window))
-        full = next((window for window in mine if window["kept"] >= BURST), None)
-        if full is not None:
-            full["dropped"] += 1
+        if mine["kept"] == 0:
+            if firsts["kept"] >= FIRST_CAP:
+                firsts["dropped"] += 1
+                return False, summaries
+            firsts["kept"] += 1
+        elif mine["kept"] >= BURST:
+            mine["dropped"] += 1
             return False, summaries
-        first = any(window["kept"] == 0 for window in mine)
-        if everyone["kept"] >= ALL_BURST and not first:
+        elif everyone["kept"] >= ALL_BURST:
             everyone["dropped"] += 1
             return False, summaries
-        for window in [everyone, *mine]:
-            window["kept"] += 1
+        mine["kept"] += 1
+        everyone["kept"] += 1
         return True, summaries
 
 

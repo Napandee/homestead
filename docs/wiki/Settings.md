@@ -341,10 +341,14 @@ took. Opening a console or a host shell writes one line when it ends.
   files of 10 MiB at most (about 60,000 lines). **Settings › About › Audit log**
   turns that off (admin); the pod log keeps writing.
 - So that a flood of refused requests cannot push real changes out of those two
-  files, the file keeps every success and every server error, but of refused
-  requests (4xx) at most 5 a minute per address and per user - always the first
-  from each - and 120 a minute in all (one ceiling for requests with no user,
-  another for signed-in people), then one line saying how many it left out.
+  files, the file keeps every success and every real server error, but limits
+  refusals (4xx, a busy server's 503 to someone not signed in, and an AI
+  agent's refused tool call). Each minute it keeps the first refusal from each
+  person, or from each address for requests with no user (an IPv6 address
+  counts by its /64), up to 50 such firsts; then at most 5 more from each, and
+  120 in all (one ceiling for requests with no user, another for signed-in
+  people). One line says how many it left out. Those lines are written when the
+  minute is over, on the next request, so a pod that stops first loses them.
 - Never written: passwords, setup codes, API keys, cookies, request bodies
   (only the target's namespace, kind and name) and query strings.
 - Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents

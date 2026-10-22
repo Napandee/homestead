@@ -215,20 +215,59 @@ class Throttle(unittest.TestCase):
         self.stranger(addr="192.0.2.9")                                       # (d) a second address's first 401
         self.assertEqual([403, 200, 500, 401], [line["status"] for line in self.kept[kept_before:]])
 
-    def test_many_addresses_each_keep_their_first_refusal(self):
-        addresses = [f"198.51.{n // 250}.{n % 250}" for n in range(500)]     # within KEYS_KEPT
-        for addr in addresses:
-            self.stranger(addr=addr)
-        self.assertEqual(500, len(self.kept), "the first refusal from each address is kept")
-        for addr in addresses:
-            self.stranger(addr=addr)
-        self.assertEqual(500, len(self.kept), "past the ceiling, second refusals wait for the summary")
-        self.stranger(addr="192.0.2.8", status=403, user="ada")
-        self.assertEqual(403, self.kept[-1]["status"], "signed-in refusals have their own ceiling")
+    def test_first_refusals_are_capped_overall(self):
+        """Review I2: rotating addresses (more than the table holds) cannot each
+        claim a "first" line; past FIRST_CAP a minute they are summed up."""
+        addresses = [f"198.51.{n // 250}.{n % 250}" for n in range(2000)]
+        for _ in range(2):
+            for addr in addresses:
+                self.stranger(addr=addr)
+        self.assertEqual(4000, len(self.stdout), "stdout carries every line")
+        self.assertGreaterEqual(len(self.kept), AUDIT_LOG.FIRST_CAP)
+        self.assertLessEqual(len(self.kept), AUDIT_LOG.FIRST_CAP + AUDIT_LOG.ALL_BURST)
         self.clock[0] += AUDIT_LOG.WINDOW_SECONDS + AUDIT_LOG.SWEEP_SECONDS + 1
         AUDIT_LOG.record(view(), 200, 1)
-        everyone = [line for line in self.summaries() if line.get("addr") == "*"]
-        self.assertEqual([500], [line["suppressed"] for line in everyone])
+        lines = [line for line in self.kept if "suppressed" not in line and line.get("status") == 401]
+        self.assertEqual(4000, len(lines) + sum(line["suppressed"] for line in self.summaries()),
+                         "the summaries count everything left out")
+
+    def test_an_ipv6_64_is_one_source(self):
+        for n in range(1000):
+            self.stranger(addr=f"2001:db8:1:2::{n:x}")
+        self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
+        self.stranger(addr="2001:db8:1:3::1")
+        self.assertEqual(AUDIT_LOG.BURST + 1, len(self.kept), "another /64 is another source")
+
+    def test_users_behind_one_address_each_keep_their_first_refusal(self):
+        """Review I3: behind a tunnel or ingress everyone has the same address."""
+        for _ in range(6):
+            self.stranger(addr="192.0.2.50", status=403, user="node1")
+        self.stranger(addr="192.0.2.50", status=403, user="ada")
+        self.assertEqual("ada", self.kept[-1]["user"])
+        self.assertEqual(AUDIT_LOG.BURST + 1, len(self.kept))
+
+    def test_anonymous_503s_are_refusals_but_real_server_errors_are_kept(self):
+        """Review I1: a full server's slot refusals are throttled; a 5xx a
+        signed-in person or key got, or any other anonymous 5xx, is kept."""
+        for _ in range(20):
+            self.stranger(status=503)
+        self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
+        for _ in range(20):
+            self.stranger(status=503, user="ada")
+            self.stranger(status=500)
+        self.assertEqual(AUDIT_LOG.BURST + 40, len(self.kept))
+
+    def test_mcp_refusals_are_refusals(self):
+        """M2: a refused tool call answers 200, and is throttled like one."""
+        key = mock.Mock(**{"get.side_effect": {"id": "k1", "owner": "ada"}.get})
+        for outcome in ("refused", "error"):
+            for _ in range(20):
+                AUDIT_LOG.record(view(path="/mcp", user="api-key:ha", key=key), 200, 1,
+                                 notes={"tool": "scale_container", "kind": "change", "outcome": outcome})
+        self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
+        AUDIT_LOG.record(view(path="/mcp", user="api-key:ha", key=key), 200, 1,
+                         notes={"tool": "scale_container", "kind": "change"})
+        self.assertEqual(AUDIT_LOG.BURST + 1, len(self.kept), "a tool call that ran is always kept")
 
     def test_the_table_is_bounded_and_an_evicted_flood_is_still_summed_up(self):
         for _ in range(9):
