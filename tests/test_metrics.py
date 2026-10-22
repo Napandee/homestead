@@ -101,7 +101,7 @@ class Fixture(unittest.TestCase):
                     {"ns": "secret-ns", "name": "secret-app", "ready": 1, "desired": 1},
                     {"ns": "secret-ns", "name": "secret-db", "ready": 0, "desired": 1},
                     {"ns": "secret-ns", "name": "secret-off", "ready": 0, "desired": 0}]),
-                mock.patch.object(METRICS.LH, "backup_volumes", return_value=[
+                mock.patch.object(METRICS.BACKUPS, "backup_volumes", return_value=[
                     {"name": "pvc-secret", "last_backup_at": "2026-10-20T03:00:00Z"},
                     {"name": "pvc-secret-2", "last_backup_at": "2026-10-19T03:00:00Z"},
                     {"name": "pvc-never", "last_backup_at": ""}])):
@@ -241,7 +241,7 @@ class WhatItSays(Fixture):
         self.assertNotIn('homestead_ready_check{check="data_writable"}', s)
 
     def test_no_backups_leaves_the_timestamp_out(self):
-        with mock.patch.object(METRICS.LH, "backup_volumes", return_value=[]):
+        with mock.patch.object(METRICS.BACKUPS, "backup_volumes", return_value=[]):
             body = self.body()
         self.assertNotIn("homestead_backup_last_success_timestamp_seconds ", body)
         self.assertIn('homestead_metrics_source_up{source="backups"} 1', body)
