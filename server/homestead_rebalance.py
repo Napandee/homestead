@@ -377,7 +377,7 @@ def cancel_run(work, chosen):
 def start_reviewed(b):
     """Start the rebalance someone reviewed, as a job; a 409 with the plan as
     it is now when it no longer holds, a 202 with the job when it starts."""
-    running = next((i for i in OPS.list_operations() if i.get("kind") == KIND
+    running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
         return ROUTER.Reply(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})

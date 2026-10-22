@@ -2,7 +2,8 @@ import hashlib, sys, tempfile, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_icons as ICONS
-import homestead_move_engine as ENGINE
+import homestead_move_state as STATE
+import homestead_move_phases as PHASE
 import homestead_names as NAMES
 import server
 
@@ -27,48 +28,48 @@ class CarryIconTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = ENGINE.DATA_DIR, ENGINE.CLIENT, ICONS.persist
-        ENGINE.DATA_DIR = self.tmp.name
+        self.saved = STATE.DATA_DIR, STATE.CLIENT, ICONS.persist
+        STATE.DATA_DIR = self.tmp.name
 
     def tearDown(self):
-        ENGINE.DATA_DIR, ENGINE.CLIENT, ICONS.persist = self.saved
+        STATE.DATA_DIR, STATE.CLIENT, ICONS.persist = self.saved
         self.tmp.cleanup()
 
     def test_the_logo_comes_from_the_source_under_the_same_name(self):
-        ENGINE.CLIENT = Client(PNG)
+        STATE.CLIENT = Client(PNG)
         annotations = {NAMES.key("icon"): REFERENCE}
 
-        found = ENGINE.carry_icon("oldcluster", annotations)
+        found = PHASE.carry_icon("oldcluster", annotations)
 
         self.assertEqual(REFERENCE, found)
         self.assertTrue(ICONS.exists(REFERENCE, self.tmp.name))
-        self.assertEqual([("oldcluster", REFERENCE)], ENGINE.CLIENT.asked)
+        self.assertEqual([("oldcluster", REFERENCE)], STATE.CLIENT.asked)
 
     def test_the_original_url_is_the_fallback(self):
-        ENGINE.CLIENT = Client(error=ConnectionError("gone"))
+        STATE.CLIENT = Client(error=ConnectionError("gone"))
         ICONS.persist = lambda source, data_dir: ICONS.store(PNG, data_dir)
         annotations = {NAMES.key("icon"): "/api/icons/" + "a" * 64 + ".png",
                        NAMES.key("icon-source"): "https://example.com/logo.png"}
 
-        found = ENGINE.carry_icon("oldcluster", annotations)
+        found = PHASE.carry_icon("oldcluster", annotations)
 
         self.assertEqual(REFERENCE, found)
         self.assertEqual(REFERENCE, annotations[NAMES.key("icon")])
 
     def test_a_logo_that_cannot_be_had_does_not_fail_the_move(self):
-        ENGINE.CLIENT = Client(error=ConnectionError("gone"))
+        STATE.CLIENT = Client(error=ConnectionError("gone"))
         annotations = {NAMES.key("icon"): REFERENCE}
 
-        self.assertEqual("", ENGINE.carry_icon("oldcluster", annotations))
+        self.assertEqual("", PHASE.carry_icon("oldcluster", annotations))
         self.assertEqual(REFERENCE, annotations[NAMES.key("icon")])
 
     def test_a_logo_already_cached_here_is_left_alone(self):
         ICONS.store(PNG, self.tmp.name)
-        ENGINE.CLIENT = Client(PNG)
+        STATE.CLIENT = Client(PNG)
 
-        ENGINE.carry_icon("oldcluster", {NAMES.key("icon"): REFERENCE})
+        PHASE.carry_icon("oldcluster", {NAMES.key("icon"): REFERENCE})
 
-        self.assertEqual([], ENGINE.CLIENT.asked)
+        self.assertEqual([], STATE.CLIENT.asked)
 
 
 class HealIconTests(unittest.TestCase):
@@ -76,19 +77,19 @@ class HealIconTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = (server.NAMES_HELPERS.DATA_DIR, ENGINE.DATA_DIR, ENGINE.CLIENT)
-        server.NAMES_HELPERS.DATA_DIR = ENGINE.DATA_DIR = self.tmp.name
+        self.saved = (server.NAMES_HELPERS.DATA_DIR, STATE.DATA_DIR, STATE.CLIENT)
+        server.NAMES_HELPERS.DATA_DIR = STATE.DATA_DIR = self.tmp.name
         server.NAMES_HELPERS._ICON_HEALED.clear()
         server.NAMES_HELPERS._ICON_TRIED.clear()
 
     def tearDown(self):
-        server.NAMES_HELPERS.DATA_DIR, ENGINE.DATA_DIR, ENGINE.CLIENT = self.saved
+        server.NAMES_HELPERS.DATA_DIR, STATE.DATA_DIR, STATE.CLIENT = self.saved
         server.NAMES_HELPERS._ICON_HEALED.clear()
         server.NAMES_HELPERS._ICON_TRIED.clear()
         self.tmp.cleanup()
 
     def test_a_moved_workload_fetches_its_logo_from_where_it_came_from(self):
-        ENGINE.CLIENT = Client(PNG)
+        STATE.CLIENT = Client(PNG)
         annotations = {NAMES.key("icon"): REFERENCE, NAMES.key("moved-from"): "oldcluster/frigate"}
 
         # As if the background attempt had just been started, so this test
@@ -98,7 +99,7 @@ class HealIconTests(unittest.TestCase):
         server.NAMES_HELPERS._heal_icon(REFERENCE, annotations)
 
         self.assertTrue(server.NAMES_HELPERS.display_icon(annotations).startswith("data:image/png;base64,"))
-        self.assertEqual([("oldcluster", REFERENCE)], ENGINE.CLIENT.asked)
+        self.assertEqual([("oldcluster", REFERENCE)], STATE.CLIENT.asked)
 
     def test_a_missing_logo_is_tried_once_then_left_a_while(self):
         started = []

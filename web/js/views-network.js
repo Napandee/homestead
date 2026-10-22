@@ -208,7 +208,7 @@ async function viewNetworking() {
   if (key === "ip") return viewIpam();
   if (key === "firewall") return viewFirewall();
   const [data, baseline] = await Promise.all([api("/api/network"),
-    key === "overview" ? api("/api/platform/baseline").catch(() => null) : null,
+    key === "overview" ? api("/api/platform/baseline").catch(e => ({ unread: e.message })) : null,
     key === "overview" || key === "ports" || !window.PORTS_VIEW?.report ? window.portsAcrossHostsPaint?.(true) : null]);
   STATE.data.network = data;
   const body = {
@@ -332,8 +332,18 @@ async function selfAddressPaint() {
   const host = $("#selfAddress");
   if (!host) return;
   let r;
-  // A failed read keeps what was shown, rather than the card vanishing.
-  try { r = await api("/api/self/address"); } catch (e) { return; }
+  // A failed read keeps what was read before, rather than the card vanishing,
+  // and says it is from before; with nothing read before, it says so (#620).
+  try { r = await api("/api/self/address"); }
+  catch (e) {
+    const kept = STATE.data.selfAddress;
+    const next = document.createElement("div");
+    next.innerHTML = kept ? `${selfAddressHtml(kept, STATE.data.network || {})}${UI.callout("warn", "Could not read where Homestead answers just now", `${esc(e.message)} · this is what was read before`)}`
+      : UI.callout("warn", "Could not read where Homestead answers", esc(e.message));
+    morph(host, next);
+    if (window.applyRole) applyRole();
+    return;
+  }
   STATE.data.selfAddress = r;
   const next = document.createElement("div");
   next.innerHTML = selfAddressHtml(r, STATE.data.network || {});
@@ -791,11 +801,16 @@ window.vipLabel = async ip => {
    it had at once and swaps in the new one when it comes, rather than going
    back to "reading" each time. */
 async function networkVmNetsPaint() {
-  const opts = await api("/api/vm/create-options").catch(() => null);
+  let unread = "";
+  const opts = await api("/api/vm/create-options").catch(e => { unread = e.message; return null; });
   if (opts) window.__vmCreateOptions = opts;
   const host = $("#netVmNets");
   if (!host) return;
-  const html = networkVmNetsHtml(window.__vmCreateOptions || {});
+  // Unread is not "no LAN networks yet": the list read before stays, said to be from before (#620).
+  const kept = window.__vmCreateOptions;
+  const html = !unread ? networkVmNetsHtml(kept || {})
+    : kept ? `${networkVmNetsHtml(kept)}${UI.callout("warn", "Could not read the LAN networks just now", `${esc(unread)} · this is the list last read`)}`
+    : UI.callout("warn", "Could not read the LAN networks", esc(unread));
   if (host.innerHTML !== html) host.innerHTML = html;
   if (window.applyRole) applyRole();
 }

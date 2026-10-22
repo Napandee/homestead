@@ -9,7 +9,7 @@ try{for(const theme of ['dark','light']){
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*security-test*',r=>{requests.push(r.request().url());return r.abort();});
  // Exercise srcdoc with Homestead's production parent policy too.
- await page.route(`${base}/?demo=1`,async route=>{const response=await route.fetch();await route.fulfill({response,headers:{...response.headers(),'content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"}});});
+ await page.route(`${base}/?demo=1`,async route=>{const response=await route.fetch();await route.fulfill({response,headers:{...response.headers(),'content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"}});});
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="compute"]').waitFor();
  await page.evaluate(theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();},theme);
  await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();

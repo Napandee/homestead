@@ -56,6 +56,10 @@ const Dashboard = (() => {
   const legacy = () => { try { const value=JSON.parse(localStorage.getItem(legacyKey()));return value?.version===1 && Array.isArray(value.items)?{version:1,items:normalize(value)}:null; } catch { return null; } };
   const clearLegacy = () => { try {localStorage.removeItem(legacyKey());}catch{} };
   let layout = null, revision = null, loadedUser = null, loadError = "", layoutRequest = null, saving = false;
+  // The saved layout changes only when it is saved: read once, then at most every
+  // five minutes for a change made on another device, not on every refresh (#705).
+  const LAYOUT_FRESH = 300000;
+  let loadedAt = 0;
   const read = () => clone(loadedUser===ME && layout!==null ? layout : legacy()?.items || defaults());
   let draft = null, initial = "", baseline = null, undo = [], redo = [], selected = "", phone = false, panelOpen = false, gesture = null, portalRequest = null, session = 0;
   function clearGesture() {
@@ -85,11 +89,12 @@ const Dashboard = (() => {
     canvas.append(card);preview.append(canvas);document.body.append(preview);
     g.preview=preview;g.previewCard=card;g.el.classList.add("drag-source");
   }
-  async function load() {
+  async function load({fresh=false}={}) {
     if(draft!==null)return true;
     if(layoutRequest)return layoutRequest;
     const requestedSession=session, user=ME;
     if(loadedUser!==user){layout=null;revision=null;loadError="";loadedUser=user;}
+    if(!fresh && layout!==null && !loadError && Date.now()-loadedAt<LAYOUT_FRESH)return true;
     layoutRequest=(async()=>{
       try{
         let answer=await api(endpoint,{keep:true});
@@ -107,7 +112,7 @@ const Dashboard = (() => {
           }
         }
         if(requestedSession!==session || user!==ME)return false;
-        layout=normalize(answer.layout);revision=answer.revision;loadError="";
+        layout=normalize(answer.layout);revision=answer.revision;loadError="";loadedAt=Date.now();
         if(answer.layout!==null)clearLegacy();
         return true;
       }catch(error){if(requestedSession===session && user===ME)loadError=error.message || "Could not load your dashboard layout.";return false;}
@@ -270,7 +275,8 @@ const Dashboard = (() => {
   async function start() {
     if(matchMedia("(max-width:900px)").matches){toast("Use a larger screen to edit the dashboard layout.","warn");return;}
     if(draft!==null)return;
-    if(!(await load())){toast(loadError,"bad");return;}
+    // An edit starts from the latest saved layout: a kept copy may be older than a save made on another device.
+    if(!(await load({fresh:true}))){toast(loadError,"bad");return;}
     if(draft!==null || matchMedia("(max-width:900px)").matches)return;
     baseline=revision;
     draft=read();initial=JSON.stringify(draft);undo=[];redo=[];phone=false;panelOpen=false;selected=draft[0]?.id || "";
@@ -283,8 +289,8 @@ const Dashboard = (() => {
     try {
       const answer=await api(endpoint,{method:"POST",body:JSON.stringify({revision:baseline,layout:{version:1,items:draft}})});
       if(requestedSession!==session || user!==ME)return;
-      layout=normalize(answer.layout);revision=answer.revision;loadedUser=user;clearLegacy();
-    }catch(e){if(requestedSession===session && user===ME){saving=false;editor();toast(e.message || "Your layout could not be saved. Try again.","bad");}return;}
+      layout=normalize(answer.layout);revision=answer.revision;loadedUser=user;loadedAt=Date.now();clearLegacy();
+    }catch(e){loadedAt=0;if(requestedSession===session && user===ME){saving=false;editor();toast(e.message || "Your layout could not be saved. Try again.","bad");}return;}
     if(requestedSession!==session || user!==ME)return;
     saving=false;clearGesture();draft=null;resetPaint();await viewDash();toast("Dashboard layout saved to your account","ok");
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();

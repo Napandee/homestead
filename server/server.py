@@ -108,7 +108,7 @@ POD_NAME = os.environ.get("HOSTNAME", "")
 
 OWN_GROUP = "Homestead"
 
-VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "font/ttf",
+VENDOR_TYPES = {".js": "application/javascript", ".css": "text/css", ".ttf": "font/ttf", ".woff2": "font/woff2",
                 ".json": "application/json", ".svg": "image/svg+xml", ".map": "application/json",
                 ".md": "text/markdown; charset=utf-8"}
 
@@ -141,7 +141,7 @@ OVERVIEW_ROUTES.bind_routes(_late(*OVERVIEW_ROUTES.ROUTE_NEEDS), **{name: global
 import homestead_cluster_server as CLUSTER_ROUTES
 from homestead_cluster_server import (
     _autoupdate_loop, _baseline_loop, _detached_copies_loop, _hardware_loop, _host_console_loop,
-    _housekeeping_loop, _os_updates_loop, _power_jobs_loop, _upgrade_node_probe,
+    _housekeeping_loop, _os_updates_loop, _jobs_loop, _upgrade_node_probe,
     allocation_probe_capacity, cluster_shutdown, pod_container_rows, preview_image_update,
     reviewed_image_update, set_update_mode,
 )
@@ -965,6 +965,7 @@ SIGNINS.bind(DATA_DIR)
 import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
+import homestead_setup_code as SETUP_CODE
 API_KEYS.bind(DATA_DIR)
 API_KEYS.CLIENTADDR.bind(lambda path: KUBE_HELPERS.kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
@@ -1066,8 +1067,8 @@ MAX_BODY = 8 * 1024 * 1024
 CSP = "; ".join([
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
     "img-src 'self' data: blob: https:",
     "connect-src 'self'",
     "worker-src 'self' blob:",
@@ -1197,7 +1198,7 @@ class H(HTTP.LimitedHandler):
     protocol_version = "HTTP/1.1"
     timeout = HTTP.IDLE_SECONDS
     max_body = MAX_BODY
-
+    after_request = MODULE_ROUTES.after_request
 
     def log_message(self, fmt, *a):
         pass
@@ -1346,7 +1347,7 @@ class H(HTTP.LimitedHandler):
         if CFACCESS.enabled() and self._via_cloudflare() and not is_app_identity(path):
             token = self.headers.get("Cf-Access-Jwt-Assertion") or self._cookies().get("CF_Authorization", "")
             try:
-                CFACCESS.verify(token)
+                self._access = CFACCESS.verify(token)
             except ValueError as error:
                 self._send(403, {"error": f"Cloudflare Access did not sign this request: {error}"})
                 return True
@@ -1359,12 +1360,12 @@ class H(HTTP.LimitedHandler):
             try:
                 boot_state = self_data_boot_status()
             except SELF_DATA_FENCE.Held as error:
-                self._send(503, {"error": str(error), "data_handoff": True})
+                self._send(503, WEB_PATHS.handoff_body(path, {"error": str(error), "data_handoff": True}))
                 return True
             # Ready means the real app loaded and can read its copied journal
             # and account key, not that normal writers have been released.
-            if self.command == "GET" and path == "/healthz":
-                self._send(200, {"ok": True, "data_handoff": True, "read_only": True})
+            if self.command == "GET" and path in ("/healthz", "/readyz"):
+                self._send(200, WEB_PATHS.handoff_body(path, {"ok": True, "data_handoff": True, "read_only": True}))
                 return True
             if self.command == "GET" and path == "/api/auth/state":
                 detail = {"recovery": True, "operation": boot_state["operation"]} if boot_state.get("mode") == "recovery" else {}
@@ -1399,19 +1400,19 @@ class H(HTTP.LimitedHandler):
             if not recovery_action and (self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)):
                 self._send(503, {"error": "Homestead is verifying its new data volume. Wait for the move to finish before changing anything.", "data_handoff": True})
                 return True
-        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/api/auth/state", "/api/console", "/api/node/shell", "/api/vm/console")):
+        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/readyz", "/api/auth/state", "/api/console", "/api/node/shell", "/api/vm/console")):
             try:
                 require_self_data_write()
             except SELF_DATA_FENCE.Held as error:
-                if self.command == "GET" and path in ("/healthz", "/api/auth/state") and _self_data_fence is not None:
+                if self.command == "GET" and path in ("/healthz", "/readyz", "/api/auth/state") and _self_data_fence is not None:
                     try:
                         recovery = _self_data_fence.recovery()
-                        self._send(200, {"ok": True, "read_only": True, "data_handoff": True, "setup": False,
-                                         "recovery": True, "operation": recovery["operation"]})
+                        self._send(200, WEB_PATHS.handoff_body(path, {"ok": True, "read_only": True, "data_handoff": True, "setup": False,
+                                         "recovery": True, "operation": recovery["operation"]}))
                         return True
                     except Exception:
                         pass
-                self._send(503, {"error": str(error), "data_handoff": True})
+                self._send(503, WEB_PATHS.handoff_body(path, {"error": str(error), "data_handoff": True}))
                 return True
         if self.command in ("POST", "PUT", "PATCH", "DELETE") and path in ("/api/auth/login", "/api/auth/setup", "/api/fleet/home"):
             if self.headers.get("X-Homestead-Auth") != "1":
@@ -1459,11 +1460,11 @@ class H(HTTP.LimitedHandler):
         return None
 
     def _api_key_guard(self, path, token):
-        """An API key: for /api/v1 alone, checked, and the request let through
-        with the key's scopes - which /api/v1 enforces per endpoint. No cookie
+        """An API key: for /api/v1, /mcp and /metrics (every key reads), checked,
+        and let through with its scopes, which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
-        if not path.startswith("/api/v1/") and path != MCP.PATH:
-            self._send(401, {"error": "API keys work only on /api/v1 and /mcp; GET /api/v1/openapi.json lists what they can do"})
+        if not path.startswith("/api/v1/") and path not in (MCP.PATH, "/metrics"):
+            self._send(401, {"error": "API keys work only on /api/v1, /mcp and /metrics; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
             key = API_KEYS.verify(token, self._client_ip(), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
@@ -1506,21 +1507,11 @@ class H(HTTP.LimitedHandler):
         False when server.py answers it itself. The guard has already
         checked the role the module declared for it."""
         route = MODULE_ROUTES.find(method, path)
-        if route is None:
-            return False
-        answer = route.handler(MODULE_ROUTES.Request(method, path, query, body,
-                                                     getattr(self, "user", None), getattr(self, "role", None),
-                                                     self._client_ip() if getattr(self, "client_address", None) else ""))
-        if isinstance(answer, MODULE_ROUTES.Stream):
-            return self._send_stream(answer) or True
-        if isinstance(answer, MODULE_ROUTES.Raw):
-            self._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
-            self._send(200, answer.body, answer.ctype)
-        elif isinstance(answer, MODULE_ROUTES.Reply):
-            self._send(answer.code, answer.body, answer.ctype)
-        else:
-            self._send(200, answer)
-        return True
+        if route is not None:
+            MODULE_ROUTES.answer(self, route.handler(MODULE_ROUTES.Request(
+                method, path, query, body, getattr(self, "user", None), getattr(self, "role", None),
+                self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))))
+        return route is not None
 
     def _send_stream(self, stream):
         """A download as it is read. Without a size the connection ends it; a
@@ -1549,7 +1540,7 @@ class H(HTTP.LimitedHandler):
         self._extra_headers = []
         self._raw = None
         self._fleet_who = False
-        self._fleet_from = None
+        self._fleet_from = self._access = None    # who the guard finds, this request's alone
         self._diagnostic_authorized = False
         self._diagnostic_started = time.monotonic()
         HOSTACCESS.set_role(None)
@@ -1839,16 +1830,14 @@ class H(HTTP.LimitedHandler):
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
             if p == "/api/auth/setup":
-                # Whoever finishes setup becomes the first administrator, so it is
-                # not offered to the internet, however the hostname is protected.
+                # The first administrator: from the LAN only, and with the setup code (#737).
                 if self._via_cloudflare():
                     return self._send(403, {"error": "finish setting Homestead up from your LAN; "
                                                      "setup is not offered through the tunnel"})
-                AUTH.create_user(b.get("username"), b.get("password"), first_only=True)
-                self._signin("setup", (b.get("username") or "").strip().lower(), detail="the first administrator")
+                first = SETUP_CODE.first_admin(b, addr, self.headers.get("User-Agent", ""))
+                self._signin("setup", first, detail="the first administrator")
                 remember = bool(b.get("remember"))
-                tok = AUTH.issue_token((b.get("username") or "").strip().lower(), remember)
-                self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
+                self._set_cookie(AUTH.issue_token(first, remember), max_age=AUTH.idle_ttl(remember))
                 return self._send(200, {"ok": True, "user": b.get("username")})
             if p == "/api/auth/login":
                 tried = (b.get("username") or "").strip().lower()
@@ -1953,6 +1942,7 @@ def start_background_tasks():
     """Start only after normal boot or the independent move's verified completion."""
     require_self_data_write()
     threading.Thread(target=DIAGNOSTICS.run, name="diagnostics-expiry", daemon=True).start()
+    threading.Thread(target=SETUP_CODE.run, name="setup-code", daemon=True).start()
     threading.Thread(target=_storage_runtime_loop, daemon=True).start()
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
@@ -1964,7 +1954,7 @@ def start_background_tasks():
     # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
-    threading.Thread(target=_power_jobs_loop, daemon=True).start()
+    threading.Thread(target=_jobs_loop, daemon=True).start()
     threading.Thread(target=_detached_copies_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_longhorn_copies_loop, daemon=True).start()

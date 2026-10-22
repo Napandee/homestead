@@ -1351,9 +1351,11 @@ const IMAGE_REASONS = {
   rollback: { tone: "", tip: "kept so Roll back can return to it" },
   stopped: { tone: "", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
   scheduled: { tone: "", tip: "a scheduled job that runs this image" },
+  unreadable: { tone: "warn", tip: "Kept: a record that says which images are in use couldn't be read" },
 };
 async function viewImages() {
-  const [d, vm, auto] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(() => null),
+  // VM images that could not be read are said, not left out of the page (#620).
+  const [d, vm, auto] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(e => ({ unread: e.message })),
     api("/api/images/cleanup-auto").catch(error => ({ error: error.message }))]);
   STATE.data.imageCache = d;
   STATE.data.vmImages = vm;
@@ -1483,6 +1485,7 @@ window.imageCleanupAutoSave = async () => {
    one above, and as easy to lose track of. */
 function vmImagesSection(vm, nodeNames) {
   if (!vm) return "";
+  if (vm.unread) return `<div class="ctitle" style="margin-top:24px">VM images</div>${UI.callout("warn", "Could not read the VM images", esc(vm.unread))}`;
   if (!vm.harvester) return `<div class="ctitle" style="margin-top:24px">VM images</div><div class="note">${esc(vm.note)}</div>`;
   const size = mb => bytesText(mb * 1024 ** 2);
   const q = STATE.q.toLowerCase();
@@ -1666,17 +1669,19 @@ function importProgressCell(job) {
 }
 
 async function viewImport() {
-  const [, nodes] = await Promise.all([loadHardwareFeatures(), api("/api/nodes").catch(() => [])]);
-  if (nodes.length) STATE.data.nodes = nodes;
   // What could not be read is named on the page, and no class or namespace
   // list is invented for the dialogs that use these (#620).
   const missed = [];
   const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
+  // Unread hosts keep the last ones read; the page says they could not be read.
+  const [, nodes] = await Promise.all([loadHardwareFeatures(), part("/api/nodes", "hosts", null)]);
+  if (nodes?.length) STATE.data.nodes = nodes;
   const [srcs, jobs, namespaces, storageClasses] = await Promise.all([
     api("/api/sources"), part("/api/imports", "recent imports", []),
     part("/api/namespaces", "namespaces", null), part("/api/storageclasses", "storage classes", null),
   ]);
-  STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
+  const classFacts = await part("/api/storageclasses?facts=1", "storage class details", null);
+  STATE.data.classFacts = classFacts ? classFacts.facts || {} : STATE.data.classFacts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   paint(`${UI.pageHeader(`Import`, `Bring apps in from an Unraid or Docker server, or a Docker Compose file. VMs are imported under Virtual machines.`, `${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
         { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
@@ -2265,8 +2270,15 @@ window.imStepGuard = step => {
 
 /* Existing volumes live in a namespace: choosing another one offers its own. */
 window.imNamespace = async ns => {
-  const storage = await api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => null);
+  const storage = await api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(e => ({ unread: e.message }));
   if (!storage || $("#im_ns")?.value !== ns) return;
+  // Unread volumes here are not the last namespace's: none is offered, and it says so (#620).
+  if (storage.unread) {
+    STATE.data.importStorage = { ...(STATE.data.importStorage || {}), pvcs: [] };
+    $$("datalist#im_pvc_list").forEach(list => { list.innerHTML = ""; });
+    toast(`Could not read the volumes in ${ns}: ${storage.unread}`, "warn");
+    return;
+  }
   STATE.data.importStorage = storage;
   const options = (storage.pvcs || []).map(claim => `<option value="${esc(claim.name)}">${esc(claim.size || "")} ${esc((claim.access_modes || []).join("/"))}</option>`).join("");
   $$("datalist#im_pvc_list").forEach(list => { list.innerHTML = options; });
@@ -2297,7 +2309,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
   // Live nodes, so hardware plugged in since the page loaded is offered.
   const [storage, liveNodes, importVips] = await Promise.all([
     api(`/api/deploy/options?ns=${encodeURIComponent(defaultNamespace())}`).catch(e => ({ unread: e.message })),
-    api("/api/nodes").catch(() => []),
+    api("/api/nodes").catch(e => ({ unread: e.message })),
     // ServiceLB puts it on every host's own address: there is no address to choose.
     nodeAddressesOnly() ? null : vipChoices().catch(e => ({ unread: e.message }))]);
   // An unread network is not "no addresses": the picker would offer only a new one (#620).
@@ -2310,7 +2322,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     childModal("Import · " + dir, UI.callout("bad", "Could not read the storage options", esc(storage.unread)) + UI.actions(UI.cancel("Close")));
     return;
   }
-  if (liveNodes.length) STATE.data.nodes = liveNodes;
+  if (Array.isArray(liveNodes) && liveNodes.length) STATE.data.nodes = liveNodes;
   STATE.data.importStorage = storage;
   // A container that mounts nothing needs no storage: the folders and volumes
   // stay out of the way, offered only if someone wants to add some anyway.
@@ -2325,6 +2337,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
       <input type="text" id="im_image" value="${esc(cfg.image || "")}" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
     <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>
+    ${liveNodes?.unread ? UI.callout("warn", "Could not read the hosts just now", `${esc(liveNodes.unread)} · the hardware offered is from the hosts last read`) : ""}
     <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to hosts that provide every selected feature.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
     <div class="sec">Privileges ${tip("Read from Docker on the source: privileged mode, added capabilities, and the /dev/net/tun device a VPN needs.")}</div>

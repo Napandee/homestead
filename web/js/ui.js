@@ -22,6 +22,7 @@
      UI.actions     one footer: dismissal left, primary action last on the right
      UI.sectionForm section rail, phone selector, mounted panes and footer
      UI.masterDetail grouped list and a selected detail, stacked on phones
+     UI.reviewFlow  review, then apply: the state behind a review dialog (no HTML)
 
    and for pages:
 
@@ -366,6 +367,76 @@ const UI = (() => {
     // A maximum checked against this reservation is checked again.
     if (kind === "memory" && !box.dataset.reserved) document.querySelectorAll(`.qty[data-reserved="${CSS.escape(box.dataset.target)}"]`).forEach(quantityUpdate);
   };
+  /* Review, then apply (#619): a dialog previews a change, shows it, may ask
+     for an acknowledgement, and sends it once. The flow keeps what each such
+     dialog used to keep for itself; the view keeps its words.
+       preview(input)  fetches the review and checks it; throws when unusable
+       loading(input)  shows the dialog while the preview is fetched
+       live(input)     whether that dialog is still open
+       render(review, input), failed(error, input)  show the outcome
+       blocked(review) true when the review allows nothing to be sent
+       ack, button     ids of the tickbox, there only when something must be
+                       accepted, and of the button that sends
+       check(review)   any further condition, such as a typed name
+       apply(review)   sends it; after() runs once that settles
+       conflict(error, review)  given a 409 from apply() (the server says
+                       the review is out of date), once nothing is being
+                       sent, so it can open a fresh review. A view that
+                       wants this lets 409s out of its apply(); without
+                       conflict() a 409 is an error like any other.
+     A newer open() or back() drops a preview still on its way; a review is
+     used up before it is sent, so an error or a lost reply never resends it;
+     no review opens while one is being sent, and back() then returns false.
+     Unlike the components above it returns no HTML: render() writes the
+     dialog. */
+  const reviewFlow = ({ preview, loading = () => {}, live = () => true, render, failed = () => {},
+    blocked = () => false, ack = "", button = "", check = () => true, apply, after = () => {}, conflict = null }) => {
+    let sequence = 0, current = null, busy = false;
+    const byId = id => (id && document.getElementById(id)) || null;
+    const flow = {
+      get review() { return current; },
+      get busy() { return busy; },
+      async open(input) {
+        if (busy) return;
+        current = null;
+        const mine = ++sequence;
+        loading(input);
+        try {
+          const review = await preview(input);
+          if (mine !== sequence || !live(input)) return;
+          current = review;
+          render(review, input);
+        } catch (error) {
+          if (mine !== sequence || !live(input)) return;
+          current = null;
+          failed(error, input);
+        }
+      },
+      ready() {
+        const box = byId(ack), go = byId(button);
+        const ok = !!(current && !busy && !blocked(current) && (!box || box.checked) && check(current));
+        if (go) go.disabled = !ok;
+        return ok;
+      },
+      async apply() {
+        if (!flow.ready()) return;
+        const review = current;
+        current = null; // one shot, including errors and lost responses
+        busy = true;
+        let outdated = null;
+        try { return await apply(review); }
+        catch (error) { if (!conflict || error?.status !== 409) throw error; outdated = error; }
+        finally { busy = false; after(); }
+        return conflict(outdated, review);
+      },
+      back() {
+        if (busy) return false;
+        current = null; ++sequence;
+        return true;
+      },
+    };
+    return flow;
+  };
   if (typeof document !== "undefined" && document.addEventListener) {
     document.addEventListener("input", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
     document.addEventListener("change", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
@@ -377,7 +448,7 @@ const UI = (() => {
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
-    quantity, parseMemory, parseCpu, who };
+    quantity, parseMemory, parseCpu, who, reviewFlow };
 })();
 window.UI = UI;
 

@@ -6,6 +6,7 @@ rollup the dashboard shows; and creating, growing and re-copying a volume.
 Deleting one is homestead_volumes; storage classes are
 homestead_storage_classes.
 """
+import concurrent.futures
 import re
 import time
 import urllib.error
@@ -140,7 +141,9 @@ def claim_references():
 
     def listed(kind, path, absent_ok=False):
         try:
-            listing = kget(path)
+            listing = fetched[path]
+            if isinstance(listing, Exception):
+                raise listing
         except urllib.error.HTTPError as error:
             if not (absent_ok and error.code == 404):
                 unread.append(kind)
@@ -183,11 +186,15 @@ def claim_references():
                   for v in volumes]
         note(obj["metadata"]["namespace"], claims, f"VM/{obj['metadata']['name']}")
 
-    for kind, path, spec_of in (
+    kinds = (
             ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
             ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
             ("DaemonSet", "/apis/apps/v1/daemonsets", lambda o: o["spec"]["template"]["spec"]),
-            ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
+            ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"]))
+    # The five lists do not depend on each other: read at the same time (#705),
+    # then judged in this order, so what counts as unread is as before.
+    fetched = _read_all([path for _, path, _ in kinds] + ["/apis/kubevirt.io/v1/virtualmachines"])
+    for kind, path, spec_of in kinds:
         each(kind, listed(kind, path), workload(kind, spec_of))
     each("VM", listed("VM", "/apis/kubevirt.io/v1/virtualmachines", absent_ok=True), vm)
     if unread:
@@ -197,6 +204,17 @@ def claim_references():
 
 # claim_references' key for the kinds it could not read.
 UNREAD = ("__unread__",)
+
+
+def _read_all(paths):
+    """Each path's answer, or the exception reading it raised, read at the same time."""
+    def one(path):
+        try:
+            return kget(path)
+        except Exception as error:  # handed back, judged by the caller as before
+            return error
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(paths)) as pool:
+        return dict(zip(paths, pool.map(one, paths)))
 
 
 def _references_for(refs, ns, claim):
@@ -402,9 +420,10 @@ def get_volumes():
     return sorted(out, key=lambda x: x["name"])
 
 
-def get_storage():
-    """Cluster storage rollup for the dashboard: capacity, usage, replica health."""
-    vols = get_volumes()
+def get_storage(vols=None):
+    """Cluster storage rollup for the dashboard: capacity, usage, replica health.
+    vols: get_volumes(), when the caller has it already (the page snapshot)."""
+    vols = get_volumes() if vols is None else vols
     try:
         lhnodes = kget("/apis/longhorn.io/v1beta2/nodes").get("items", [])
     except Exception:
@@ -570,11 +589,11 @@ def _q(request, name, default=""):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.cached("vol", homestead_routes.PAGE_SECONDS, get_volumes)),
+    ("GET", "/api/volumes"): ("viewer", lambda request: homestead_routes.page("vol", get_volumes)),
     ("GET", "/api/volumes/other"): ("viewer", lambda request: homestead_routes.cached("volother", 10, other_volumes)),
     ("GET", "/api/volumes/edit-options"): ("viewer", lambda request: volume_edit_options(
         _q(request, "ns", DEFAULT_NS), _q(request, "name"))),
-    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.cached("stor", homestead_routes.PAGE_SECONDS, get_storage)),
+    ("GET", "/api/storage"): ("viewer", lambda request: homestead_routes.page("stor", get_storage)),
     ("GET", "/api/pvcs"): ("viewer", lambda request: claims(_q(request, "ns", DEFAULT_NS))),
     ("POST", "/api/volumes/create"): ("operator", lambda request: create_volume(request.body)),
     ("POST", "/api/volumes/edit"): ("operator", lambda request: edit_volume(request.body)),

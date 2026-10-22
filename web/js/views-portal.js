@@ -36,8 +36,12 @@ function portalSections(links) {
 async function viewPortal() {
   const data = await api("/api/portal");
   STATE.data.portal = data;
+  // An earlier failure is not said while this check is on its way.
+  STATE.data.portalUnread = "";
   renderPortal();
-  api("/api/portal/status").then(status => { STATE.data.portalStatus = status; portalDots(); }).catch(() => {});
+  // Links not checked are said, not shown with an answer from earlier (#620).
+  api("/api/portal/status").then(status => { STATE.data.portalStatus = status; portalDots(); })
+    .catch(e => { STATE.data.portalStatus = null; STATE.data.portalUnread = e.message; portalDots(); });
 }
 
 function portalTiles(rows, {compact = false, list = false} = {}) {
@@ -65,14 +69,14 @@ function renderPortal() {
 }
 
 function portalDots() {
-  const status = STATE.data.portalStatus || {};
+  const status = STATE.data.portalStatus || {}, unread = !STATE.data.portalStatus && STATE.data.portalUnread;
   $$(".portal-tile").forEach(tile => {
     const s = status[tile.dataset.link], dot = $(".portal-dot", tile);
     if (!dot) return;
     // An app's link carries its Monitoring state (uptime.js); anything else, whether its port takes a connection.
     const state = !s ? "" : s.state || (s.up ? "up" : "down");
     dot.className = "portal-dot" + (state ? ` ${state}` : "");
-    dot.dataset.tip = !s ? "not checked yet"
+    dot.dataset.tip = !s ? (unread ? `could not check the links: ${unread}` : "not checked yet")
       : s.source === "monitoring" ? (state === "down" ? `Down${s.since && typeof answerSince === "function" ? ` since ${answerSince(s.since)}` : ""} · ${s.error || "no answer"}`
         : `${state === "slow" ? "Slow" : "Up"}${s.ms != null ? ` · ${s.ms} ms` : ""} · monitored every minute`)
       : s.up ? `answering · ${s.ms} ms` : "not answering on its port";
@@ -145,11 +149,13 @@ function portalEditPaint() {
 window.portalEdit = async (pick = false) => {
   modal("Portal links", `<div class="empty"><span class="spin2"></span>loading</div>`, true);
   try {
-    const [data, wl] = await Promise.all([api("/api/portal"), STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => [])]);
-    PORTAL_WORKLOADS = wl || [];
+    const [data, wl] = await Promise.all([api("/api/portal"), STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(e => ({ unread: e.message }))]);
+    // Unread containers are said: their logos are not offered, and a logo a link already has stays (#620).
+    PORTAL_WORKLOADS = Array.isArray(wl) ? wl : [];
     PORTAL_EDIT = (data.links || []).map(link => ({ ...link }));
     PORTAL_VERSION = data.version || "";
     $("#mbody").innerHTML = `<p class="muted small">Organize portal links or add links from containers. All signed-in users can see these addresses; do not include passwords.</p>
+      ${wl?.unread ? UI.callout("warn", "Could not read the containers", `${esc(wl.unread)} · their logos are not offered as icons`) : ""}
       <div class="row" style="gap:8px;margin:12px 0"><button class="btn" onclick="portalAdd()">＋ Link</button>
         <button class="btn" onclick="portalPick()">＋ From containers</button></div>
       <div id="pe_rows">${portalEditRows()}</div>

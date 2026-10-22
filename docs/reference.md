@@ -168,10 +168,13 @@ StorageClass used in `deploy/deploy.yaml` exists:
 kubectl get storageclass
 ```
 
-The supplied manifest uses `longhorn-r2`. Change `storageClassName` (and the
-`STORAGE_CLASS` value) to a class the cluster has. Without Longhorn - k3s's
-`local-path`, say - use that class and change the claim to `ReadWriteOnce`,
-as the k3s script does.
+The supplied manifest uses `longhorn-r2`. Longhorn makes `longhorn`, not
+`longhorn-r2`, so on a new Longhorn the data claim stays Pending and Homestead
+never starts; `kubectl describe pvc -n lab` shows why. Change
+`storageClassName` (and the `STORAGE_CLASS` value) to a class the cluster
+has: `longhorn`, or create a `longhorn-r2` class first. Without Longhorn -
+k3s's `local-path`, say - use that class and change the claim to
+`ReadWriteOnce`. The k3s script does both.
 
 ### 2. Configure and install
 
@@ -198,8 +201,10 @@ Service, the ConfigMaps and Secrets it writes, and the `homestead.io/*`
 annotation domain.
 
 Open the Service address on port `8088`. The first visit creates the initial
-administrator. Authentication is stored in a Kubernetes Secret, independently
-of the container and Longhorn volume.
+administrator, with the one-time setup code from the Secret `homestead-setup`
+in Homestead's namespace (the Helm notes give the command; `setupCode` sets it
+ahead). Authentication is stored in a Kubernetes Secret, independently of the
+container and Longhorn volume.
 
 For a private fork/package, add an `imagePullSecrets` entry to the Deployment
 and create a `docker-registry` secret using a classic GitHub token with only
@@ -1105,7 +1110,13 @@ TAG=2.8.332-dev.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 
 Image Cache groups kubelet aliases by digest and labels images retained by a
 running pod, a container scaled to zero or a scheduled job (which start from
-it), or the immediate managed-update rollback. Admins can remove an
+it), a stopped VM or a VM pool or VM replica set scaled to zero (their
+container disks), or the immediate managed-update rollback. A record that says
+which images are in use but cannot be read - a malformed rollback note or
+template, or a VM pool or replica-set list the role may not read - keeps every
+image, labelled *unreadable* with the record it names, until it is fixed. That
+read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`
+and `kubevirt.io` `virtualmachineinstancereplicasets`. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
 starting one short-lived cleanup pod per node; active, stopped, scheduled,

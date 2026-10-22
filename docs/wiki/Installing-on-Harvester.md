@@ -129,7 +129,14 @@ into `homestead`):
 kubectl -n lab rollout status deployment/homestead --timeout=5m
 ```
 
-Then open `http://192.0.2.242:8088` and create the first administrator.
+Then open `http://192.0.2.242:8088` and create the first administrator. It asks
+for the one-time setup code: the installer prints it, and this shows it (use
+`-n homestead` for the Helm chart):
+
+```bash
+kubectl -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d
+```
+
 [Installing Homestead](Installing-Homestead) explains every choice here and
 what to do next.
 
@@ -152,6 +159,8 @@ what to do next.
   [Dashboard and nodes](Dashboard-and-nodes).
 - **Plan backups.** [Data protection](Data-protection) sets up snapshots and
   backups in one go.
+- **Know what Homestead changes.** [What Homestead changes](What-Homestead-changes)
+  lists what it makes on the cluster, on its own and when you ask.
 
 > Harvester runs kube-vip for load-balanced addresses. Do not add MetalLB to a
 > Harvester cluster - two load balancers answering for the same addresses fight.

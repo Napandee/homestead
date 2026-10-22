@@ -132,7 +132,8 @@ rest for Longhorn:
 
 See [Installing on k3s](https://github.com/homestead-lab/homestead/wiki/Installing-on-k3s#disks).
 
-Then open `http://<your machine>:8088` and create the administrator account.
+Then open `http://<your machine>:8088` and create the administrator account,
+with the one-time setup code the installer prints beside the address.
 Already running a cluster? Install with
 [Helm or the manifest](docs/reference.md#install-with-helm). The wiki walks
 through [k3s](https://github.com/homestead-lab/homestead/wiki/Installing-on-k3s),
@@ -334,6 +335,8 @@ checks what the cluster has, and each page works with that.
   building a cluster, installing Homestead, then each page in turn.
 - **[Reference](docs/reference.md)** - every feature in depth, security notes,
   and how releases are made.
+- **[Security](docs/security.md)** - how Homestead protects the cluster it
+  runs, who may change what, and what the audits found and fixed.
 - **[Troubleshooting](https://github.com/homestead-lab/homestead/wiki/Troubleshooting)** -
   the problems people actually hit, and the node doctor.
 

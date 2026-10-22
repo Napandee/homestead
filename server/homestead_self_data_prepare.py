@@ -10,9 +10,9 @@ https://kubernetes.io/docs/concepts/storage/storage-classes/#volume-binding-mode
 import copy
 import re
 import time
-import urllib.error
 
 import homestead_capacity_review as SIGN
+import homestead_kube as KUBE
 import homestead_place as PLACE
 import homestead_self_data_admission as D
 import homestead_self_data_bootstrap as B
@@ -50,10 +50,7 @@ def _class_fact(sc):
 
 def _get(read, path):
     try:
-        return read(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404: return None
-        raise J.Held("Destination preparation inventory is unavailable") from None
+        return KUBE.get_optional(path, read=read)
     except Exception:
         raise J.Held("Destination preparation inventory is unavailable") from None
 

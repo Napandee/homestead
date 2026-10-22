@@ -7,6 +7,7 @@ The control record stores fingerprints and identities, not resource bodies.
 import copy
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_self_data_kube as K
 import homestead_self_data_launch as L
 from homestead_storage_journal import Held, digest, identity, pod_annotations, shape
@@ -103,17 +104,25 @@ def default_priority(read):
     policy to every such pod (#437). Unread classes are checked as no default,
     so such a helper is held, never let through, and the hold says why (#466).
     """
+    def listed(path):
+        # Any answer but a JSON object (dict) is unread, so it is checked
+        # here: a None from get_optional is then a 404 and nothing else.
+        answer = read(path)
+        if not isinstance(answer, dict):
+            raise TypeError("PriorityClasses answer is not an object")
+        return answer
     try:
-        found = [c for c in read("/apis/scheduling.k8s.io/v1/priorityclasses").get("items", []) if c.get("globalDefault") is True]
+        classes = KUBE.get_optional("/apis/scheduling.k8s.io/v1/priorityclasses", read=listed)
+        if classes is None:
+            # No scheduling API at all: there can be no default class.
+            return None
+        found = [c for c in classes.get("items", []) if c.get("globalDefault") is True]
         if not found:
             return None
         # Admission takes the lowest value when two claim to be the default.
         chosen = min(found, key=lambda c: c["value"])
         return {"name": chosen["metadata"]["name"], "value": chosen["value"],
                 "preemptionPolicy": chosen.get("preemptionPolicy", "PreemptLowerPriority")}
-    except urllib.error.HTTPError as error:
-        # No scheduling API at all: there can be no default class.
-        return None if error.code == 404 else dict(UNREAD)
     except Exception:
         return dict(UNREAD)
 
@@ -229,11 +238,7 @@ class Setup:
 
     def _get(self, path):
         try:
-            return self.read(path)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return None
-            raise Held("Helper setup inventory is unavailable") from None
+            return KUBE.get_optional(path, read=self.read)
         except Exception:
             raise Held("Helper setup inventory is unavailable") from None
 

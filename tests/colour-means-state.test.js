@@ -17,6 +17,12 @@ test("Image Cache: only active is green; rollback, stopped and scheduled are neu
   for (const r of ["rollback", "stopped", "scheduled"]) assert.equal(reasons[r].tone, "", r);
 });
 
+test("Image Cache: an image kept because a record could not be read is amber and says why", () => {
+  const unreadable = map("web/js/views-lifecycle.js", "IMAGE_REASONS").unreadable;
+  assert.equal(unreadable?.tone, "warn");
+  assert.equal(unreadable.tip, "Kept: a record that says which images are in use couldn't be read");
+});
+
 test("Schedules and Import show a running or waiting job as neutral, not amber", () => {
   const src = read("web/js/views-lifecycle.js");
   assert.doesNotMatch(src, /<span class="pill med">running<\/span>/);

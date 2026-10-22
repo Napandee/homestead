@@ -61,9 +61,10 @@
       const local = !opts?.headers?.["X-Homestead-Cluster"];
       note("request", { action: "started", path: path.split("?")[0], method: opts?.method || "GET", request: id });
       return { headers: local ? { "X-Homestead-Report": active.id, "X-Homestead-Request": id } : {},
-        done(status, operation) {
+        done(status, operation, cancelled = false) {
           if (active !== recording) return;
-          note("request", { action: "finished", path: path.split("?")[0], method: opts?.method || "GET", status,
+          // A read cancelled because its page was left (#705) is not a failure.
+          note("request", { action: cancelled ? "cancelled" : "finished", path: path.split("?")[0], method: opts?.method || "GET", status,
             duration: Math.round(performance.now() - started), request: id,
             ...(typeof operation === "string" ? { operation: operation.slice(0, 100) } : {}) });
         } };

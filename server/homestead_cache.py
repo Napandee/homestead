@@ -14,6 +14,11 @@ _running = {}
 # Each key's generation. forget_where() moves it on, so a computation that
 # started before a write is not kept as the answer after it.
 _epoch = {}
+# When each key was last forgotten, and who wants to hear of it: the leader's
+# page snapshot (homestead_page_snapshot) serves a part only if it was read
+# after the last forget of its key, and runs again when one is forgotten.
+_forgot = {}
+_listeners = []
 # How long a caller waits on another's computation before giving up on it.
 WAIT_SECONDS = 60
 
@@ -92,12 +97,55 @@ def refresh(key, fn):
     return v
 
 
+def epoch(key):
+    """key's generation now, for a reader that keeps its answer later with
+    keep(): from now on a forget of key is recorded even when nothing is kept."""
+    with _lock:
+        return _epoch.setdefault(key, 0)
+
+
+def keep(key, value, epoch, at=None):
+    """Keep value under key, dated at (default now), unless key was forgotten
+    since epoch was read. True when it was kept."""
+    with _lock:
+        if _epoch.get(key, 0) != epoch:
+            return False
+        _cache[key] = (time.time() if at is None else at, value)
+        return True
+
+
+def kept_at(key):
+    """When key's kept answer was read (its date), or None."""
+    with _lock:
+        e = _cache.get(key)
+        return e[0] if e else None
+
+
+def forgotten_at(key):
+    """When key was last forgotten (time.time()), or 0.0."""
+    with _lock:
+        return _forgot.get(key, 0.0)
+
+
+def on_forget(fn):
+    """Call fn(keys) after each forget_where() that dropped any keys."""
+    _listeners.append(fn)
+
+
 def forget_where(match):
     """Drop every kept or running answer whose key matches, so the next
     caller reads again and nothing computed before now is kept after it."""
     with _lock:
-        for key in {*_cache, *_running}:
-            if match(key):
-                _cache.pop(key, None)
-                _running.pop(key, None)
-                _epoch[key] = _epoch.get(key, 0) + 1
+        now = time.time()
+        dropped = {key for key in {*_cache, *_running, *_epoch} if match(key)}
+        for key in dropped:
+            _cache.pop(key, None)
+            _running.pop(key, None)
+            _epoch[key] = _epoch.get(key, 0) + 1
+            _forgot[key] = now
+    if dropped:
+        for fn in list(_listeners):
+            try:
+                fn(dropped)
+            except Exception as error:   # the write has happened: never fail it here
+                print(f"cache: a forget listener failed: {str(error)[:160]}", flush=True)

@@ -71,6 +71,8 @@ DEFAULTS = {
     "restore_tests": {"enabled": False},
     # The MCP server for AI agents (homestead_mcp): off until an admin turns it on.
     "mcp": {"enabled": False},
+    # /metrics for Prometheus (homestead_metrics): off until an admin turns it on.
+    "metrics": {"enabled": False},
     # Removing container images nothing uses (homestead_image_cleanup): off
     # until an admin turns it on, then images unused this many days go.
     "image_cleanup": {"auto": False, "after_days": 14},
@@ -153,6 +155,10 @@ def validate(value):
     if not isinstance(mcp, bool):
         raise ValueError("the MCP server must be on or off")
     out["mcp"] = {"enabled": mcp}
+    metrics = ((value or {}).get("metrics") or {}).get("enabled", False)
+    if not isinstance(metrics, bool):
+        raise ValueError("metrics must be on or off")
+    out["metrics"] = {"enabled": metrics}
     cleanup = (value or {}).get("image_cleanup") or {}
     auto = cleanup.get("auto", False)
     if not isinstance(auto, bool):

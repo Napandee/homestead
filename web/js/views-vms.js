@@ -319,9 +319,8 @@ window.vmStateInitBody = (plan, prefix) => plan.vm?.state_initialization ? {
   ack_state_initialization: $(`#${prefix}StateAck`)?.checked === true,
   confirm_state_name: ($(`#${prefix}StateName`)?.value || "").trim()
 } : {};
-let VM_POWER_REVIEW = null, VM_POWER_SEQUENCE = 0, VM_POWER_BUSY = false;
 window.vmPower = async (ns, name, action) => {
-  if (VM_POWER_BUSY && ["start", "restart", "unpause"].includes(action)) return toast("A VM power request is being sent; wait for its result", "bad");
+  if (VM_POWER.busy && ["start", "restart", "unpause"].includes(action)) return toast("A VM power request is being sent; wait for its result", "bad");
   if (["start", "restart", "unpause"].includes(action)) return vmPowerReview({ ns, name, action });
   // Stopping is asked first, as starting is reviewed: the guest goes away.
   if (action === "stop" && !(await ask(`Shut down ${name}? The guest is asked to shut down, as pressing its power button does; it stays off until you start it.`, { title: "Shut down", ok: "Shut down" }))) return;
@@ -333,19 +332,22 @@ window.vmPower = async (ns, name, action) => {
 };
 
 const VM_POWER_WHAT = { start: "Starts", restart: "Restarts", unpause: "Resumes" };
-window.vmPowerReview = async config => {
-  if (VM_POWER_BUSY) return;
-  VM_POWER_REVIEW = null;
-  const sequence = ++VM_POWER_SEQUENCE, frozen = { ...config };
-  const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
-  const title = `${VM_ACTIONS[frozen.action]?.[0] || "Power"} · ${frozen.name}`;
-  open(title, '<div id="vmPowerLoading" class="empty"><span class="spin2"></span>Checking VM, storage and host capacity…</div>', true);
-  try {
+window.vmPowerReview = config => VM_POWER.open({ ...config });
+// Start, Restart and Resume are reviewed first; Shut down, Force off and
+// Pause stay available while one is being sent.
+const VM_POWER = UI.reviewFlow({
+  loading: frozen => {
+    const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
+    open(`${VM_ACTIONS[frozen.action]?.[0] || "Power"} · ${frozen.name}`, '<div id="vmPowerLoading" class="empty"><span class="spin2"></span>Checking VM, storage and host capacity…</div>', true);
+  },
+  live: () => !!$("#vmPowerLoading"),
+  preview: async frozen => {
     const review = await api("/api/vm/power/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
-    if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;
     if (!review.capacity || typeof review.capacity.blocked !== "boolean" || !review.capacity_token)
       throw new Error("VM capacity review unavailable. Nothing was sent; refresh before continuing.");
-    VM_POWER_REVIEW = { ...review, config:frozen };
+    return { ...review, config:frozen };
+  },
+  render: (review, frozen) => {
     const plan = review.capacity, facts = plan.vm || {};
     const policy = facts.policy_after && facts.policy_after !== facts.policy_before
       ? ` Its restart policy changes from ${esc(facts.policy_before || "unknown")} to <b>${esc(facts.policy_after)}</b>.` : "";
@@ -361,42 +363,40 @@ window.vmPowerReview = async config => {
       + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>${plan.blocked ? ""
         : `<button class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")}</button>`}`);
     vmPowerReviewReady();
-  } catch (error) {
-    if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;
-    VM_POWER_REVIEW = null;
+  },
+  failed: error => {
     $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`;
-  }
-};
-window.vmPowerReviewReady = () => {
+  },
   // The tickbox is there only when there is a warning to accept.
-  const ready = !!(VM_POWER_REVIEW && !VM_POWER_BUSY && !VM_POWER_REVIEW.capacity.blocked
-    && (!$("#vmPowerApprove") || $("#vmPowerApprove").checked) && vmStateInitReady(VM_POWER_REVIEW.capacity, "vmPower"));
-  if ($("#vmPowerApply")) $("#vmPowerApply").disabled = !ready;
-  return ready;
-};
-window.vmPowerReviewedApply = async () => {
-  if (!vmPowerReviewReady()) return toast(`Tick ${reviewAck(VM_POWER_WHAT[VM_POWER_REVIEW?.config?.action])} to accept the warning`, "bad");
-  const review = VM_POWER_REVIEW, button = $("#vmPowerApply");
-  VM_POWER_REVIEW = null; // one shot, including errors and lost responses
-  VM_POWER_BUSY = true;
-  button.disabled = true;
-  button.textContent = "Sending…";
-  try {
-    const result = await api("/api/vm/power", {method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmPower"), capacity_token:review.capacity_token, confirm_capacity:true})});
-    if (result.operation && window.noteOperation) noteOperation(result.operation);
-    toast(result.detail, "ok");
-    modalBack(); setTimeout(() => refresh(true), 1200);
-  } catch (error) {
-    // No retry button: the server may have accepted power before contact was
-    // lost. Inspect the current VM state before initiating a fresh review.
-    if ($("#vmPowerApply") === button) {
-      button.textContent = "Inspect VM before retrying";
-      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>`);
-      if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+  blocked: review => review.capacity.blocked, ack: "vmPowerApprove", button: "vmPowerApply",
+  check: review => vmStateInitReady(review.capacity, "vmPower"),
+  apply: async review => {
+    const button = $("#vmPowerApply");
+    button.disabled = true;
+    button.textContent = "Sending…";
+    try {
+      const result = await api("/api/vm/power", {method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmPower"), capacity_token:review.capacity_token, confirm_capacity:true})});
+      if (result.operation && window.noteOperation) noteOperation(result.operation);
+      toast(result.detail, "ok");
+      modalBack(); setTimeout(() => refresh(true), 1200);
+    } catch (error) {
+      // No retry button: the server may have accepted power before contact was
+      // lost. Inspect the current VM state before initiating a fresh review.
+      if ($("#vmPowerApply") === button) {
+        button.textContent = "Inspect VM before retrying";
+        $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>`);
+        if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+      }
+      toast(error.message, "bad");
     }
-    toast(error.message, "bad");
-  } finally { VM_POWER_BUSY = false; if (window.startOperationChecks) startOperationChecks(); }
+  },
+  after: () => { if (window.startOperationChecks) startOperationChecks(); },
+});
+window.vmPowerReviewReady = () => VM_POWER.ready();
+window.vmPowerReviewedApply = async () => {
+  if (!VM_POWER.ready()) return toast(`Tick ${reviewAck(VM_POWER_WHAT[VM_POWER.review?.config?.action])} to accept the warning`, "bad");
+  await VM_POWER.apply();
 };
 
 window.vmOpen = async (ns, name) => {

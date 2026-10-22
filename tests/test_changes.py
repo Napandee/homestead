@@ -24,6 +24,7 @@ def dep(image="example/sonarr:4.0", memory="512Mi", env=None, replicas=1, ns="la
 class Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(CH.bind, CH.DATA_DIR)  # leave the history where it was found
         CH.bind(self.dir.name)
         CH._notes.clear()
 
@@ -122,6 +123,12 @@ class UndoTests(Base):
 
 
 class RouteTests(Base):
+    def setUp(self):
+        # Importing server binds the history to /data the first time; bind it
+        # back to the test's own folder after that (a non-root runner can't write /data).
+        import server  # noqa: F401
+        super().setUp()
+
     def test_undo_refuses_settings_whose_volume_is_gone(self):
         import server
         CH.observe([dep()], now=1000)

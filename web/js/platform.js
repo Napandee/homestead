@@ -71,7 +71,9 @@ const ADDONS = {
    for a VM's or container's own LAN address - and one button for whatever is
    missing. A new installation gets them by itself; an older one is asked
    here, on Add-ons and on Networking. Empty when nothing is missing. */
-function baselineHtml(r, where = "addons") {
+function baselineHtml(r, where = "addons", harvester = STATE.platform?.harvester) {
+  // Unread is said, not taken as "nothing missing"; Harvester needs none of them (#620).
+  if (r?.unread) return harvester ? "" : `<div class="baseline-note" style="margin-bottom:12px">${UI.callout("warn", "Could not check the required components", esc(r.unread))}</div>`;
   if (!r?.applies || !(r.missing || []).length) return "";
   const missing = r.parts.filter(p => p.missing);
   return `<div class="note warn baseline-note" style="margin-bottom:12px"><b>Required components not installed</b>
@@ -141,13 +143,20 @@ window.addonsPaint = async () => {
   const card = $("#addonsCard");
   if (!card) return;
   let s, health, nfs, baseline, consoles;
-  try { [s, health, nfs, baseline, consoles] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(() => ({})),
-    api("/api/shares/nfs/server").catch(error => ({ error: error.message })), api("/api/platform/baseline").catch(() => null),
-    can("admin") ? api("/api/host-console").catch(() => null) : null]); }
-  catch (e) { card.hidden = true; return; }
+  try { [s, health, nfs, baseline, consoles] = await Promise.all([api("/api/addons"), api("/api/self/health").catch(e => ({ unread: e.message })),
+    api("/api/shares/nfs/server").catch(error => ({ error: error.message })), api("/api/platform/baseline").catch(e => ({ unread: e.message })),
+    can("admin") ? api("/api/host-console").catch(e => ({ unread: e.message })) : null]); }
+  catch (e) {
+    // Unread add-ons are said, not a card that disappears (#620).
+    card.hidden = false;
+    card.innerHTML = `${UI.moduleHeader("Add-ons", "")}${UI.callout("warn", "Could not read the add-ons", esc(e.message))}
+      <div class="row" style="margin-top:8px"><button class="btn sm" onclick="addonsPaint()">Try again</button></div>`;
+    return;
+  }
   card.hidden = false;
-  const probe = health.probe || {}, smb = health.samba || {};
-  STATE.data.sambaInstalled = !!smb.installed;
+  // An unread health report is said, and nothing is installed or switched on a guess (#620).
+  const probe = health.probe || {}, smb = health.samba || {}, unknown = '<span class="pill crit">status unavailable</span>';
+  if (!health.unread) STATE.data.sambaInstalled = !!smb.installed;
   const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the hosts have hardware virtualisation.</span>'
     : s.kvm_everywhere ? "Every host has hardware virtualisation."
     : s.kvm_nowhere ? '<b>No host has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
@@ -176,25 +185,25 @@ window.addonsPaint = async () => {
         ${diagnostic}</div>
       <div class="row">${button}${emulationButton}</div></div>`;
   };
-  const probePill = !probe.installed ? '<span class="pill">not installed</span>'
+  const probePill = health.unread ? unknown : !probe.installed ? '<span class="pill">not installed</span>'
     : probe.ready < probe.desired || probe.reporting < probe.desired ? `<span class="pill low">${probe.ready || 0}/${probe.desired || 0} ready</span>`
     : '<span class="pill ok">installed</span>';
-  const probeButton = !can("admin") ? "" : !probe.installed
+  const probeButton = !can("admin") || health.unread ? "" : !probe.installed
     ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
     : '<button class="btn sm" onclick="allocationProbeSettings()">VM placement checks</button><button class="btn sm" onclick="probeRemove()">Remove</button>';
   const probeRow = `<div class="addon-row"><div><b>Node probe</b> ${probePill}
       <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
       <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every host; SMART tests use its separate privileged sidecar.</div></div>
     <div class="row">${probeButton}</div></div>`;
-  const smbPill = !smb.installed ? '<span class="pill">not installed</span>'
+  const smbPill = health.unread ? unknown : !smb.installed ? '<span class="pill">not installed</span>'
     : !smb.enabled ? '<span class="pill med">off</span>'
     : smb.ready < smb.desired ? '<span class="pill low">starting</span>'
     : smb.partial ? '<span class="pill med">partial service</span>' : '<span class="pill ok">serving</span>';
   const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
       <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
-      <div class="dim xs" style="margin-top:4px">${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"} · stopping or removing SMB keeps all PVCs and share settings</div></div>
+      <div class="dim xs" style="margin-top:4px">${health.unread ? "shares and address not read" : `${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"}`} · stopping or removing SMB keeps all PVCs and share settings</div></div>
     <div class="row"><button class="btn sm" onclick="go('shares')">Shares</button>
-      ${can("admin") ? actionBar([{ label: smb.enabled ? "Disable" : "Enable", run: `sambaSet(${!smb.enabled})` },
+      ${can("admin") && !health.unread ? actionBar([{ label: smb.enabled ? "Disable" : "Enable", run: `sambaSet(${!smb.enabled})` },
         smb.installed && { label: "Remove server", run: "sambaRemove()", danger: true }].filter(Boolean), { shown: 1, label: "SMB server" }) : ""}</div></div>`;
   STATE.data.nfs = nfs;
   const nfsPill = nfs.error ? '<span class="pill crit">status unavailable</span>' : !nfs.installed ? '<span class="pill">not installed</span>'
@@ -209,7 +218,7 @@ window.addonsPaint = async () => {
   const clusterRows = s.harvester ? "" : `${hostConsoleRow(consoles)}${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
   card.innerHTML = `${UI.moduleHeader(`Add-ons`, `${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
         : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}`, ``)}
-    ${baselineHtml(baseline)}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
+    ${baselineHtml(baseline, "addons", s.harvester)}${health.unread ? UI.callout("warn", "Could not read the node probe and the SMB server", esc(health.unread)) : ""}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
   if (window.applyRole) applyRole();
 };
 
@@ -219,6 +228,9 @@ window.addonsPaint = async () => {
    when turned off, a couple of hosts every ten minutes. */
 function hostConsoleRow(c) {
   if (!c || c.harvester) return "";
+  // Unread is said, not a row left out; nothing is switched on a guess (#620).
+  if (c.unread) return `<div class="addon-row"><div><b>Host console</b> <span class="pill crit">status unavailable</span>
+      ${UI.callout("warn", "Could not read the host console", esc(c.unread))}</div></div>`;
   const hosts = c.nodes.filter(n => !n.native);
   const pill = c.enabled === null ? '<span class="pill">not checked yet</span>'
     : !c.enabled ? (c.installed ? `<span class="pill low">removing · ${c.installed} left</span>` : '<span class="pill">off</span>')
@@ -277,12 +289,15 @@ window.addonInstall = async key => {
   const a = ADDONS[key];
   let body = {};
   if (key === "kubevirt") {
-    const s = await api("/api/addons").catch(() => ({}));
+    // An unread host check is asked about, not taken as "every host has KVM" (#620).
+    const s = await api("/api/addons").catch(e => ({ unread: e.message }));
+    if (s.unread && !(await ask(`Could not check whether the hosts have hardware virtualisation (/dev/kvm): ${s.unread}. Without it KubeVirt emulates: VMs work, but many times slower. Install anyway?`, { title: "Install KubeVirt", ok: "Install anyway" }))) return;
     if (s.kvm_nowhere && !(await ask("No host has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
     body = {};
   } else if (key === "kube-vip") {
-    const s = await api("/api/addons").catch(() => ({}));
-    const where = s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each host's default route uses.`
+    const s = await api("/api/addons").catch(e => ({ unread: e.message }));
+    const where = s.unread ? `Could not read which network interface the hosts use (${s.unread}), so kube-vip finds it itself.`
+      : s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each host's default route uses.`
       : "The hosts did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
     if (!(await ask(`Install kube-vip? ${a.needs} ${where}`, { title: "Install kube-vip", ok: "Install" }))) return;
   } else if (!(await ask(`Install ${a.name}? ${a.needs}`, { title: `Install ${a.name}`, ok: "Install" }))) return;

@@ -106,8 +106,14 @@ const dataUrl = async (name) => `data:image/png;base64,${(await readFile(`${raw}
 const images = Object.fromEntries(await Promise.all(taken.map(async (s) => [s.name, await dataUrl(s.name)])));
 if (desktop) images.desktop = await dataUrl("desktop");
 
+// The frames use the fonts Homestead ships (web/vendor/fonts), embedded: a page made with
+// setContent has no origin, so the browser would refuse to fetch them from the server.
+const faces = await Promise.all([[500, "Medium"], [600, "SemiBold"], [700, "Bold"], [800, "ExtraBold"]].map(async ([weight, file]) => {
+  const font = await readFile(new URL(`../web/vendor/fonts/inter-tight/InterTight-${file}.woff2`, import.meta.url));
+  return `@font-face{font-family:"Inter Tight";font-weight:${weight};src:url(data:font/woff2;base64,${font.toString("base64")}) format("woff2")}`;
+}));
 const STYLE = `
-@import url("https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700;800&display=swap");
+${faces.join("\n")}
 *{box-sizing:border-box;margin:0}
 body{background:#0b0f14}
 #canvas{position:relative;overflow:hidden;font-family:"Inter Tight",-apple-system,"Segoe UI",Roboto,sans-serif;

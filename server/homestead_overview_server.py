@@ -17,7 +17,6 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_alerts as ALERTS
 import homestead_api_v1 as API_V1
 import homestead_auth as AUTH
-import homestead_cache as CACHE
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
@@ -37,6 +36,7 @@ import homestead_networking as NETWORK
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
+import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_portal as PORTAL
 import homestead_ports as PORTS
@@ -74,24 +74,50 @@ def bind_routes(helpers, **values):
     globals().update(values)
 
 
-def _sampler():
-    while True:
-        started = time.monotonic()
-        # Each VM's disk traffic is a count, and a rate needs two readings.
-        # Every replica keeps its own, in memory, for the pages it answers.
+VMUSAGE_EVERY = 30
+
+
+def _sampler_round(state, now=None):
+    """One turn of the sampler: each VM's disk traffic every VMUSAGE_EVERY s
+    on every replica, and on the leader the page snapshot's cycle (#705).
+    Returns how long to wait before the next turn."""
+    now = time.monotonic() if now is None else now
+    # Each VM's disk traffic is a count, and a rate needs two readings.
+    # Every replica keeps its own, in memory, for the pages it answers.
+    if now - state.get("usage", now - VMUSAGE_EVERY) >= VMUSAGE_EVERY:
+        state["usage"] = now
         try:
             VMUSAGE.sample()
         except Exception:
             pass
-        # The dashboard history is the leader's to keep; a standby replica's
-        # full scan of the cluster would be thrown away (#621).
-        if LEADER.is_leader():
-            try:
-                HISTORY.record_live(CACHE.refresh("ov", get_overview))   # the pages read this one too
-                beat("sampler", 30, leader_only=True)
-            except Exception as error:
-                beat("sampler", 30, error, leader_only=True)
-        time.sleep(max(1, 30 - (time.monotonic() - started)))
+    # The pages' reads and the dashboard history are the leader's; a standby
+    # replica's full scan of the cluster would be thrown away (#621).
+    try:
+        done = PAGES.tick(LEADER.is_leader, page_inputs(), page_builders(), now=now)
+    except Exception as error:
+        print(f"page snapshot: {str(error)[:160]}", flush=True)
+        done = None
+    if done is not None:
+        try:
+            if done.get("ov") is False:
+                raise RuntimeError("the overview could not be read")
+            part = PAGES.read("ov")
+            step = int(time.time()) // HISTORY.LIVE_STEP
+            # One live sample per step, not per cycle. None: a write overtook
+            # the overview, and the cycle it woke records it.
+            if part is not None and done.get("ov") and state.get("live") != step:
+                HISTORY.record_live(part[1])
+                state["live"] = step
+            beat("sampler", 30, leader_only=True)
+        except Exception as error:
+            beat("sampler", 30, error, leader_only=True)
+    return PAGES.LEADER_CHECK
+
+
+def _sampler():
+    state = {}
+    while True:
+        PAGES.sleep(_sampler_round(state))
 
 
 def _uptime_loop():
@@ -241,11 +267,11 @@ def _alert_sources():
         except Exception:
             results[name] = None
 
-    take("health", lambda: ALERTS.health_facts(cached("ov", MODULE_ROUTES.PAGE_SECONDS, get_overview)))
-    take("jobs", lambda: ALERTS.job_facts(OPS.list_operations()))
+    take("health", lambda: ALERTS.health_facts(MODULE_ROUTES.page("ov", get_overview)))
+    take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
-    take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
+    take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
@@ -330,7 +356,7 @@ def outage_tick():
     found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
     if not found:
         return []
-    operations = OPS.list_operations()
+    operations = OPS.snapshot()
     working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
                for o in operations if o.get("status") in ("queued", "running")}
 
@@ -417,7 +443,7 @@ def _history_loop():
         # Checked often, recorded every STEP: a new leader starts at once.
         if LEADER.is_leader() and time.time() - last >= HISTORY.STEP:
             try:
-                HISTORY.record(cached("ov", MODULE_ROUTES.PAGE_SECONDS, get_overview))
+                HISTORY.record(MODULE_ROUTES.page("ov", get_overview))
                 last = time.time()
                 beat("history", HISTORY.STEP, leader_only=True)
             except Exception as error:
@@ -598,11 +624,13 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
         raise ValueError(self_stop_warning())
 
 
-def get_overview():
-    nodes = NODES.get_nodes()
-    wl = WORKLOADS.get_workloads()
-    vols = STORAGE.get_volumes()
-    pods = kget("/api/v1/pods").get("items", [])
+def get_overview(nodes=None, wl=None, vols=None, pods=None):
+    """The Dashboard's summary. The leader's page snapshot passes in what its
+    cycle has read already; each one left out is read here."""
+    nodes = NODES.get_nodes() if nodes is None else nodes
+    wl = WORKLOADS.get_workloads() if wl is None else wl
+    vols = STORAGE.get_volumes() if vols is None else vols
+    pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
     deg = [v for v in vols if v["robustness"] == "degraded"]
@@ -634,6 +662,25 @@ def get_overview():
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
         "lb_ip": NETWORK.shared_vip(),
     }
+
+
+def page_inputs():
+    """What one snapshot cycle reads once and shares: the pod list."""
+    return {"pods": lambda: kget("/api/v1/pods")}
+
+
+def page_builders():
+    """The snapshot's parts, in the order a cycle builds them; Longhorn's
+    volumes are read once, for the Volumes page, the hosts' duties, storage
+    and the overview."""
+    return [
+        ("vol", lambda got: STORAGE.get_volumes()),
+        ("nodes", lambda got: NODES.get_nodes(pods=got["pods"], vols=got.get("vol"))),
+        ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
+        ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),
+        ("lhcap", lambda got: LHCAP.status()),
+        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got["vol"], pods=got["pods"])),
+    ]
 
 
 def api_scale(ns, name, n):

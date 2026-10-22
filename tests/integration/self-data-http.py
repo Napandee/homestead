@@ -77,7 +77,8 @@ def until(what, seconds, attempt, retry_refusal=()):
 
 
 until("Homestead answering", 120, lambda: request("/api/auth/state"))
-request("/api/auth/setup", {"username": "release-test", "password": secrets.token_urlsafe(24)})
+request("/api/auth/setup", {"username": "release-test", "password": secrets.token_urlsafe(24),
+                            "setup_code": os.environ["FIXTURE_SETUP_CODE"]})
 for attempt in range(2):
     operation = secrets.token_hex(12)
     cfg = {"operation": operation, "storage_class": "fixture-target" if attempt == 0 else "local-path", "node": "release-test"}

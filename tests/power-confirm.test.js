@@ -9,7 +9,7 @@ function slice(file, start, end) {
 }
 function run(code, answer) {
   const asked = [], sent = [];
-  const ctx = { asked, sent, VM_POWER_BUSY: false, toast() {}, refresh() {}, setTimeout() {}, closeModal() {}, $: () => null,
+  const ctx = { asked, sent, VM_POWER: { busy: false }, toast() {}, refresh() {}, setTimeout() {}, closeModal() {}, $: () => null,
     ask: async (text, options) => { asked.push([text, options.title, options.ok]); return answer; },
     api: async (url, opts) => { sent.push([url, JSON.parse(opts.body)]); return { detail: "ok" }; },
     vmPowerReview: () => sent.push(["review"]) };

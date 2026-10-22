@@ -270,7 +270,7 @@ def plan(node):
     if down:
         blockers.append(f"etcd member{'s' if len(down) != 1 else ''} {', '.join(down)} not Ready: "
                         "the cluster takes no new member while short of a vote")
-    jobs = [o for o in OPS.list_operations() if o.get("status") not in OPS.TERMINAL]
+    jobs = [o for o in OPS.snapshot() if o.get("status") not in OPS.TERMINAL]
     if any(o.get("kind") == KIND for o in jobs):
         blockers.append("A host is being made a server already")
     for kind in sorted({o.get("kind") for o in jobs if o.get("kind") in HOST_JOBS}):

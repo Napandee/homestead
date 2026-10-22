@@ -141,7 +141,7 @@ class SingleNodePowerTests(unittest.TestCase):
         # A second review during the first job's drain started the same
         # drain again; the browser now follows the running job instead.
         running = {"id": "job-1", "kind": "node-power", "status": "running", "resource": {"name": "node1"}}
-        with mock.patch.object(server.OPS, "list_operations", return_value=[running]):
+        with mock.patch.object(server.OPS, "snapshot", return_value=[running]):
             plan = server.POWER_JOBS.power_plan_with_job(power.plan("node1", "poweroff"))
             self.assertFalse(plan["ready"])
             self.assertEqual("job-1", plan["operation"]["id"])
@@ -157,7 +157,7 @@ class SingleNodePowerTests(unittest.TestCase):
         self.assertEqual("job-1", handler._send.call_args.args[1]["operation"]["id"])
         send.assert_not_called()
         finished = {**running, "status": "succeeded"}
-        with mock.patch.object(server.OPS, "list_operations", return_value=[finished]):
+        with mock.patch.object(server.OPS, "snapshot", return_value=[finished]):
             self.assertIsNone(server.POWER_JOBS.active_power_job("node1"))
 
     def test_the_send_returns_its_job_at_once_and_runs_in_the_background(self):

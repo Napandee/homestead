@@ -16,6 +16,13 @@ const ROB = r => r === "healthy" ? "#3ddc91" : r === "degraded" ? "#ffb020" : "#
 // Prefix graph identities, never display names or operational resource names.
 // Even matching VIPs and node names on two clusters must remain separate paths.
 const archId = (id, site) => site ? `${id.slice(0,2)}${encodeURIComponent(site.id)}/${id.slice(2)}` : id;
+// A cluster missing from the view of all of them, in the words the lists use
+// (#705): one whose last graph is still drawn is out of date, not unloaded.
+function archMissingCallout(missing) {
+  if (!missing?.length) return "";
+  const title = missing.some(m => m.age_s == null) ? "Architecture is incomplete" : "Architecture may be out of date";
+  return UI.callout("warn", title, esc(missing.map(m => fleetMissingSentence(m, "graph")).join(" ")));
+}
 function architectureData(data) {
   if(!Array.isArray(data.clusters))return data;
   const graph={workloads:[],volumes:[],nodes:[],vips:[],jobs:[],missing:data.missing || []};
@@ -113,7 +120,7 @@ async function viewFlow() {
           <span><i style="background:repeating-linear-gradient(90deg,var(--arch-copy) 0 3px,transparent 3px 7px)"></i>replica</span>
         </div>
       `, {actionsClass:`arch-head-actions`})}
-    ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
+    ${archMissingCallout(f.missing)}
     ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} apps and VMs · ${graph.nodes.length} hosts</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
   // A live refresh redraws the page; whatever was being traced stays traced.
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);

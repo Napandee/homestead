@@ -11,6 +11,7 @@ stall fails here with that picture rather than hanging the runner.
 """
 import json
 import os
+import secrets
 import signal
 import subprocess
 import tempfile
@@ -21,6 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 K3S = "rancher/k3s@sha256:627fc392e5e7992fb8aa738fb04bc0c9ae9a068999cb4cfbea5858661cd79d04"
 IMAGE = "homestead:self-data-k3s-test"
+# A preset setup code, fresh each run, in the format Homestead checks (#737).
+SETUP_CODE = "".join(secrets.choice("0123456789ABCDEFGHJKMNPQRSTVWXYZ") for _ in range(10))
 
 
 def run(*args, data=None, timeout=300):
@@ -104,6 +107,9 @@ def main():
                     for key in ("loadBalancerIP", "externalTrafficPolicy"): item["spec"].pop(key, None)
                     item["metadata"].pop("annotations", None)
                 items.append(item)
+            # The setup code set ahead, as the installer's HS_SETUP_CODE does (#737).
+            items.append({"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {"name": "homestead-setup", "namespace": "lab"},
+                          "stringData": {"code": SETUP_CODE}})
             items.append({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "fixture-target"},
                           "provisioner": "rancher.io/local-path", "volumeBindingMode": "WaitForFirstConsumer", "reclaimPolicy": "Retain"})
             kube("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
@@ -130,7 +136,7 @@ def main():
             service = json.loads(kube("-n", "lab", "get", "service", "homestead", "-o", "json"))
             url = "http://" + service["spec"]["clusterIP"] + ":8088"
             subprocess.run(["docker", "run", "--rm", "--network", "container:" + cid, "--read-only", "--tmpfs", "/tmp",
-                         "--env", "FIXTURE_URL=" + url, "--env", "FIXTURE_BUDGET=600", "--mount", f"type=bind,source={ROOT},target=/repo,readonly",
+                         "--env", "FIXTURE_URL=" + url, "--env", "FIXTURE_SETUP_CODE=" + SETUP_CODE, "--env", "FIXTURE_BUDGET=600", "--mount", f"type=bind,source={ROOT},target=/repo,readonly",
                          "--entrypoint", "python3", IMAGE, "-u", "/repo/tests/integration/self-data-http.py"], timeout=660, check=True)
             pvcs = json.loads(kube("-n", "lab", "get", "pvc", "-o", "json"))["items"]
             assert len(pvcs) == 3 and all(p["status"]["phase"] == "Bound" for p in pvcs), "Both old data volumes must be retained"

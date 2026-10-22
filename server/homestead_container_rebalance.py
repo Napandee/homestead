@@ -37,6 +37,7 @@ import urllib.parse
 
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_pod_resources as RESOURCES
 import homestead_routes as ROUTER
@@ -92,12 +93,17 @@ def mem(value):
 
 
 def _items(path):
-    try:
-        return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return []
-        raise
+    """The rows, or none when the list is not there (404) or has no "items"
+    key. Tolerant on purpose: making it strict is #620's."""
+    answered = []   # what kget answered: still empty after a 404
+
+    def read(where):
+        answered.append(kget(where))
+        return answered[0]
+    KUBE.get_optional(path, read=read)
+    # A null answer is not a 404: .get fails on it, as before, so nothing
+    # acts on it as an empty list.
+    return answered[0].get("items", []) if answered else []
 
 
 def _deployment_of(pod, sets):
@@ -707,7 +713,7 @@ def start_run(request):
     """The reviewed moves, started as a job: 202 while it runs, 409 when the
     review no longer holds."""
     b = request.body
-    running = next((i for i in OPS.list_operations() if i.get("kind") == KIND
+    running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
         return ROUTER.Reply(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})

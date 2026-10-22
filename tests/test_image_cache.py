@@ -55,7 +55,9 @@ class ImageCacheTests(unittest.TestCase):
             if path == "/apis/apps/v1/deployments":
                 return {"items": deployments}
             if path in ("/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
-                        "/apis/kubevirt.io/v1/virtualmachines"):
+                        "/apis/kubevirt.io/v1/virtualmachines",
+                        "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
+                        "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools"):
                 return {"items": []}
             raise AssertionError(path)
 

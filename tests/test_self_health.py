@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import time
 import unittest
 import urllib.error
@@ -8,6 +9,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_share_servers as SERVERS
+import homestead_shared as SHARED
 
 
 class SambaSwitchTests(unittest.TestCase):
@@ -38,6 +40,10 @@ class SambaSwitchTests(unittest.TestCase):
 
 class HeartbeatTests(unittest.TestCase):
     def setUp(self):
+        # The leader shares its beats through a file under homestead_shared.DIR
+        # (/data, which a non-root runner cannot write): give it a folder of its own.
+        data = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(SHARED, "DIR", data))
         self.saved = dict(server.HEART)
         server.HEART.clear()
 

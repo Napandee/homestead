@@ -1,4 +1,15 @@
 /* Homestead — premium dark control surface */
+/* Fonts ship with Homestead (web/vendor/fonts, SIL OFL 1.1; see THIRD_PARTY_NOTICES.md), so the first
+   screen never waits on another host. swap: text shows in the fallback until a face arrives. */
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:400;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-Regular.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:500;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-Medium.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:600;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-SemiBold.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:700;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-Bold.woff2) format("woff2")}
+@font-face{font-family:"Inter Tight";font-style:normal;font-weight:800;font-display:swap;src:url(vendor/fonts/inter-tight/InterTight-ExtraBold.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:500;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-Medium.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:600;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-SemiBold.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:700;font-display:swap;src:url(vendor/fonts/jetbrains-mono/JetBrainsMono-Bold.woff2) format("woff2")}
 :root{
   --hdr:74px; --blur:26px;
   --bg:#070708; --surf:#111113; --surf2:#161618; --surf3:#1d1d20;
@@ -1305,6 +1316,7 @@ html[data-motion="off"] .modalbox,html[data-motion="off"] .askbox,html[data-moti
 html[data-motion="off"] .tst,html[data-motion="off"] .stagger>*{animation:none}
 @media(prefers-reduced-motion:reduce){.modalbox,.askbox,.gatebox,.tst,.stagger>*{animation:none}}
 .gatebox .mark{width:46px;height:46px;border-radius:14px;font-size:21px;margin:0 auto 16px}
+@media(max-height:700px){.gatebox .mark{display:none}}
 .gatebox h2{margin:0 0 4px;text-align:center;font-size:19px;font-weight:700}
 .gatebox p.sub{margin:0 0 22px;text-align:center;color:var(--mut);font-size:12.5px}
 .gateerr{border-radius:11px;padding:10px 13px;font-size:12.5px;margin-bottom:14px;

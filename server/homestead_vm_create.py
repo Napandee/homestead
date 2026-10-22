@@ -14,6 +14,7 @@ import re
 import time
 import urllib.error
 import urllib.parse
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_hvimage as HVIMAGE
 import homestead_pod_resources as RESOURCES
@@ -34,12 +35,9 @@ def _required_name(value, label="name"):
 
 
 def _get_or_none(path):
-    try:
-        return I.kget(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
+    """The object, or None when it is not there (404); kept by name because
+    homestead_imports re-exports it."""
+    return KUBE.get_optional(path, read=I.kget)
 
 
 def vm_disk_import_plan(namespace, name):

@@ -47,15 +47,20 @@ def _system_image(ref):
         r"suse/sles/)", str(ref or ""), re.I))
 
 
-def _needed_list(path, optional_group=None):
+def _needed_list(path, optional_group=None, forbidden_none=False):
     """Every row of one list the image cache asks "still needed?" of, or an
     error: a list that failed or was cut short must not read as nothing
     needing an image, or clean-up would remove one a workload still runs on.
     optional_group names an API group that may not be installed (KubeVirt):
-    a 404 is then no rows, but only once API discovery says the group is absent."""
+    a 404 is then no rows, but only once API discovery says the group is absent.
+    forbidden_none: a 403 returns None, for a list an older role may not grant;
+    the caller then keeps every image (_unreadable) rather than failing."""
     try:
         listing = I.kget(path)
     except urllib.error.HTTPError as error:
+        if error.code == 403 and forbidden_none:
+            error.close()
+            return None
         if error.code == 404 and optional_group and _group_absent(optional_group):
             error.close()
             return []
@@ -107,11 +112,11 @@ def image_retention_inventory():
             })
     for dep in _needed_list("/apis/apps/v1/deployments"):
         meta = dep.get("metadata", {})
-        try:
-            previous = json.loads(NAMES.annotation_of(meta, "update-previous", "{}"))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            previous = {}
-        for container, ref in (previous.get("images") or {}).items():
+        previous = _rollback_note(meta)
+        if previous is None:
+            retained.append(_unreadable(meta, "update-previous"))
+            continue
+        for container, ref in previous["images"].items():
             retained.append({
                 "ref": _canonical_image(ref), "digest": _image_digest(ref),
                 "reason": "rollback", "namespace": meta.get("namespace", ""),
@@ -132,13 +137,15 @@ def image_retention_inventory():
 def _stopped_references():
     """Images a workload with no pods still starts from: a Deployment or
     StatefulSet scaled to zero, a CronJob between runs, and a stopped VM that
-    boots from a container image (containerDisk or kernel boot). With no pod to
+    boots from a container image (containerDisk or kernel boot), or a VM pool
+    or VM replica set scaled to zero whose template does. With no pod to
     name them they read as unused, and cleaning one up meant the next start
     - often the moment it is needed - waited on a pull.
 
     The digest each container last ran on is used where Homestead recorded
     it; the image may be matched by its name as well, since a tag in the
-    template and the digest the node lists are two names for one image."""
+    template and the digest the node lists are two names for one image.
+    A template that cannot be read keeps every image (_unreadable)."""
     out = []
     for kind, path, spec_of in (
             ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
@@ -146,18 +153,22 @@ def _stopped_references():
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
         for obj in _needed_list(path):
             meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
-            if kind != "CronJob" and int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1) > 0:
+            if kind != "CronJob" and not _scaled_to_zero(spec):
                 continue          # running ones are named by their pods
             try:
                 podspec = spec_of(obj)
             except (KeyError, TypeError):
+                podspec = None
+            containers = _rows(podspec, "initContainers", "containers")
+            if containers is None:
+                out.append(_unreadable(meta, "template"))
                 continue
             try:
                 ran = json.loads(NAMES.annotation_of(meta, "ran-digests", "{}") or "{}")
             except (TypeError, ValueError):
                 ran = {}
             ran = ran if isinstance(ran, dict) else {}
-            for container in (podspec.get("initContainers") or []) + (podspec.get("containers") or []):
+            for container in containers:
                 ref = container.get("image", "")
                 if not ref:
                     continue
@@ -166,14 +177,33 @@ def _stopped_references():
                             "reason": "scheduled" if kind == "CronJob" else "stopped", "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
-    for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io"):
-        meta, status = vm.get("metadata") or {}, vm.get("status") or {}
-        if status.get("ready") is True or status.get("printableStatus") == "Running":
-            continue              # a running VM's pod names its container disks
-        tspec = (((vm.get("spec") or {}).get("template") or {}).get("spec") or {})
+    vms = [(vm, ("spec", "template", "spec"))
+           for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io")
+           if not ((vm.get("status") or {}).get("ready") is True
+                   or (vm.get("status") or {}).get("printableStatus") == "Running")]
+    # A VM pool or VM replica set scaled to zero has no VM or pod left to name
+    # its template's disks; one with replicas has, so it is left to them.
+    for kind, path, group, template in (
+            ("VirtualMachinePools", "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools", "pool.kubevirt.io",
+             ("spec", "virtualMachineTemplate", "spec", "template", "spec")),
+            ("VirtualMachineInstanceReplicaSets", "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
+             "kubevirt.io", ("spec", "template", "spec"))):
+        rows = _needed_list(path, optional_group=group, forbidden_none=True)
+        if rows is None:      # a role from before these were named may not grant them
+            out.append(_unreadable({"name": kind}, "no permission to list"))
+            continue
+        vms += [(row, template) for row in rows if _scaled_to_zero(row.get("spec") or {})]
+    for vm, template in vms:          # a running VM's pod names its container disks
+        meta = vm.get("metadata") or {}
+        tspec = _dig(vm, template)
+        volumes = _rows(tspec, "volumes")
+        domain = (tspec or {}).get("domain") or {}
+        if volumes is None or not isinstance(domain, dict):
+            out.append(_unreadable(meta, "template"))
+            continue
         disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", ""))
-                 for volume in tspec.get("volumes") or [] if isinstance(volume, dict)]
-        kernel = ((((tspec.get("domain") or {}).get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
+                 for volume in volumes]
+        kernel = (((domain.get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
         disks.append(("kernel-boot", kernel.get("image", "")))
         for name, ref in disks:
             if not ref:
@@ -185,8 +215,66 @@ def _stopped_references():
     return out
 
 
+def _rollback_note(meta):
+    """The previous images Homestead keeps for a Deployment's Roll back, as
+    {"images": {container: ref}, "at": ...}, or None when the note is there
+    but cannot be read: it then keeps an image nobody can name."""
+    try:
+        previous = json.loads(NAMES.annotation_of(meta, "update-previous", "{}") or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(previous, dict):
+        return None
+    images = previous.get("images", {})
+    if not isinstance(images, dict) or not all(isinstance(ref, str) for ref in images.values()):
+        return None
+    return {**previous, "images": images}
+
+
+def _unreadable(meta, what):
+    """A retention row for a record that could not be read. It holds every
+    image (see _holds), and names the record so it can be fixed."""
+    return {"ref": "", "digest": "", "reason": "unreadable", "holds_all": True,
+            "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": what}
+
+
+def _scaled_to_zero(spec):
+    """Whether a workload's replicas say none run. Missing means one (the
+    Kubernetes default); a value that is not a number cannot say any run,
+    so its images are kept as a stopped one's."""
+    replicas = spec.get("replicas")
+    if replicas is None:
+        return False
+    return not (isinstance(replicas, int) and not isinstance(replicas, bool) and replicas > 0)
+
+
+def _dig(obj, keys):
+    """obj[k1][k2]... when every step is an object, else None."""
+    for key in keys:
+        obj = obj.get(key) if isinstance(obj, dict) else None
+    return obj if isinstance(obj, dict) else None
+
+
+def _rows(spec, *fields):
+    """The objects in these list fields of a template spec, or None when the
+    spec or a field is not what Kubernetes would hold (so it cannot be read)."""
+    if not isinstance(spec, dict):
+        return None
+    rows = []
+    for field in fields:
+        value = spec.get(field) or []
+        if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
+            return None
+        rows += value
+    return rows
+
+
 def _holds(row, digest, aliases):
-    """Whether a retention row names this cached image."""
+    """Whether a retention row names this cached image. A row for a record
+    Homestead could not read names every image: it cannot tell which one the
+    record keeps, so none is called unused until the record is fixed."""
+    if row.get("holds_all"):
+        return True
     if row["digest"] and row["digest"] == digest:
         return True
     return row["ref"] in aliases and (not row["digest"] or bool(row.get("by_name")))

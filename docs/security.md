@@ -27,6 +27,23 @@ linked cluster, which applies its own rules to them.
 - **Passwords**: PBKDF2-HMAC-SHA256, 600,000 iterations, per-user salt; at
   least 10 characters. Sign-in is limited per address and per account, and
   every attempt is in the sign-in history (Events › Sign-ins).
+- **First administrator**: until an account exists, setup asks for a one-time
+  setup code (#737), so whoever reaches the address first on install day
+  cannot take the cluster. The code is in the Secret `homestead-setup` in
+  Homestead's own namespace, readable only with cluster access; the installer
+  prints it and the Helm notes give the command. Homestead keeps only a
+  salted hash of it on the data volume (PBKDF2-HMAC-SHA256, a fresh random
+  salt, the password iterations) and never logs the code, only where it is.
+  Wrong codes count against the sign-in limits (per address, and 20 per five
+  minutes for all setup attempts together), and the comparison takes constant
+  time. The format is the pairing code's from #602: 10 characters of
+  Crockford base32 (50 bits). A code set ahead (`HS_SETUP_CODE`, Helm
+  `setupCode`) is the same Secret made in advance. Once the first account
+  exists the Secret is deleted and the hash cleared; setup is refused from then
+  on whatever code is sent, and a code that was used once never opens setup
+  again. Setup is still refused through a Cloudflare tunnel. The shared limit
+  is a trade-off: anyone on the LAN can hold setup off for five minutes at a
+  time by sending wrong codes; it never lets them in.
 - **Sessions**: HMAC-signed tokens in an `HttpOnly`, `SameSite=Strict` cookie
   (`Secure` behind TLS), with an idle and an absolute limit; a password
   change or "sign out everywhere" revokes every session at once.
@@ -76,7 +93,8 @@ the current account generation. A login must still refer to the identity whose
 password was verified if the account changes concurrently.
 
 Auth mutations require `X-Homestead-Auth: 1` and `Content-Type: application/json`,
-including login and first-admin setup. Browser origins are checked. Every API
+including login and first-admin setup, which also needs the setup code.
+Browser origins are checked. Every API
 route has an explicit declaration in `homestead_route_policy.py`; undeclared
 routes are denied. Public static assets remain accessible for installation.
 

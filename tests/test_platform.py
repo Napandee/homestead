@@ -197,10 +197,10 @@ class FailedReadTests(unittest.TestCase):
         self.assertEqual(asked, len(calls), "asked again at once after a slow failure")
 
     def test_callers_that_act_on_it_do_not_guess_either(self):
-        import homestead_networking as NETWORKING
+        import homestead_network_inventory as INV
         import homestead_runtime as RUNTIME
         PLATFORM.bind(failing("/apis", fake(*self.LONGHORN_K3S)))
-        for ask in (RUNTIME.binaries, NETWORKING.node_addresses_only, NETWORKING.servicelb_present):
+        for ask in (RUNTIME.binaries, INV.node_addresses_only, INV.servicelb_present):
             with self.subTest(ask=ask.__name__):
                 PLATFORM._cached.update(at=0.0, value=None, failed_at=0.0)
                 with self.assertRaisesRegex(ValueError, "could not read"):

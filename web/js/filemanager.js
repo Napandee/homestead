@@ -8,7 +8,7 @@
    here keeps it, and the next action after a pause starts it again. Closing
    stops every helper this opened and waits until each has gone. */
 
-const FM = { panes: [], active: 0, open: false, volumes: [], lastSeen: 0, editing: null, busy: "" };
+const FM = { panes: [], active: 0, open: false, volumes: [], volumesUnread: "", lastSeen: 0, editing: null, busy: "" };
 const FM_IDLE = 60;
 const FM_CHUNK = 3 * 1024 * 1024;
 
@@ -71,13 +71,19 @@ const fmPane = (namespace, pvc, extra = {}) => ({ namespace, pvc, path: "", list
 
 async function fmStart(panes) {
   // Closing goes to the cluster this opened on, even if the selection changes.
-  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(), headers: fmHeaders(), panes });
+  // The volumes offered are this opening's, read below; none from an earlier one.
+  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(), headers: fmHeaders(), panes, volumes: [], volumesUnread: "" });
   $("#mbody").innerHTML = `<div class="fm" id="fm">${fmShellHtml()}</div>`;
   fmBindActivity();
   api("/api/volumes", { keep: true }).then(rows => {
     FM.volumes = (rows || []).filter(v => v.pvc_name || v.name).map(v => ({ namespace: v.namespace || "lab", pvc: v.pvc_name || v.name, attached: v.state === "attached" }));
+    FM.volumesUnread = "";
     fmPaint();
-  }).catch(() => {});
+  }).catch(e => {
+    // Unread volumes are said in the picker, not an older list (#620).
+    FM.volumes = []; FM.volumesUnread = e.message;
+    fmPaint();
+  });
   await Promise.all([fmLoad(0), fmLoad(1)]);
 }
 
@@ -120,7 +126,8 @@ function fmPaint() {
 function fmVolumeOptions(pane) {
   const known = FM.volumes.some(v => v.namespace === pane.namespace && v.pvc === pane.pvc)
     ? FM.volumes : [{ namespace: pane.namespace, pvc: pane.pvc }, ...FM.volumes];
-  return known.map(v => `<option value="${esc(v.namespace + "/" + v.pvc)}" ${v.namespace === pane.namespace && v.pvc === pane.pvc ? "selected" : ""}>${esc(v.pvc)}${v.namespace !== "lab" ? ` · ${esc(v.namespace)}` : ""}${v.attached ? " · in use" : ""}</option>`).join("");
+  const unread = FM.volumesUnread ? `<option disabled>Could not read the other volumes: ${esc(FM.volumesUnread)}</option>` : "";
+  return unread + known.map(v => `<option value="${esc(v.namespace + "/" + v.pvc)}" ${v.namespace === pane.namespace && v.pvc === pane.pvc ? "selected" : ""}>${esc(v.pvc)}${v.namespace !== "lab" ? ` · ${esc(v.namespace)}` : ""}${v.attached ? " · in use" : ""}</option>`).join("");
 }
 
 function fmPaintPane(index) {

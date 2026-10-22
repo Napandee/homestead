@@ -562,6 +562,7 @@ in the same module shell so controls do not change location as data arrives.
 | `UI.masterDetail(groups, selectedKey, detailHtml, options)` | Grouped navigation and a selected detail, such as Jobs | Form steps |
 | `UI.sectionNavigation(id, sections, options)` | Externally managed setup guides; section forms include this automatically | Hand-written navigation |
 | `UI.actions(buttons, start, { className, attrs })` | A dialog's buttons | Buttons that act on one row |
+| `UI.reviewFlow({ preview, render, apply, ... })` | The state behind a review-then-apply dialog: newest preview only, sent once, busy while sending, its tickbox, a 409 handed to `conflict()`. Writes no HTML; `render()` does | A dialog with no preview step |
 
 Menu and bar items are `{ label, run, icon, need, tip, danger, ariaLabel }`. `run` goes
 into the `onclick` attribute as it is, so values in it go through `jsq()`
