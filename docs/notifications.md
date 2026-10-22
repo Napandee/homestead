@@ -134,6 +134,41 @@ webhook. An operator can still change the rest of the dialog and keeps the
 admin's allowance while the address stays the same; a new LAN address needs an
 admin again. No webhook follows a redirect.
 
+**Webhooks saved before this release** keep working. Before, a webhook could
+reach a LAN address without anyone allowing it, so once, after the upgrade,
+the leading copy of Homestead ticks **Allow a LAN address** for each webhook
+saved the old way whose address resolves to a LAN or cluster address. That
+covers ones saved from the dialog and by an AI agent alike. It grants only
+the LAN: an address a webhook never reaches (loopback, link-local, cloud
+metadata and the rest above) stays refused, and a public one is left as it
+is. It works only from complete lists of apps and VMs: if either cannot be
+read, it waits for the next round.
+
+A name that does not resolve, or an allowance that cannot be saved, is tried
+again every five minutes for a day after the first try. After that Homestead
+stops and raises a warning for each webhook it left: **The outage webhook for
+_app_ needs Allow a LAN address**. One whose address resolves both to the LAN
+and to an address never reached gets **The outage webhook for _app_ needs a
+new address** instead, since the allowance would not make it reachable. The
+warning clears once an admin ticks Allow a LAN address or the webhook is
+saved again. What was done, and when it first tried, is kept in the
+ConfigMap `homestead-outage-carry`, in Homestead's namespace next to its settings, so a restart or
+another copy taking the lead never runs it again.
+
+Known limits of the carry-over:
+
+- It runs once. A webhook in the old shape that arrives after it finished,
+  say on an app moved or imported from a cluster on an older release, or an
+  annotation that GitOps applies again, gets neither the allowance nor a
+  warning. Open its Monitoring dialog and save it (an admin ticks Allow a LAN
+  address if it needs one).
+- GitOps that manages the `homestead.io/outage-actions` annotation can undo
+  the `lan` it set; put `"lan":true` in the annotation kept in git.
+- A webhook whose name does not resolve when it is saved is saved as it is:
+  it is checked again at each call, and a LAN address is then refused
+  without the allowance. Saving it clears the warning above, so tick Allow a
+  LAN address when it points at the LAN.
+
 **Send a test** sends one call now, in the format chosen in the dialog, and
 says how the service answered. Only an admin can send one, because it makes a
 request from inside the cluster to the address typed; it may reach a LAN

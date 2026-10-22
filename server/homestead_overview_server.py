@@ -36,6 +36,7 @@ import homestead_networking as NETWORK
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
+import homestead_outage_carry as OUTAGE_CARRY
 import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_portal as PORTAL
@@ -280,6 +281,7 @@ def _alert_sources():
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
+    take("outage-lan", OUTAGE_CARRY.alert_facts)
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
@@ -354,22 +356,29 @@ def set_schedule(b):
 
 
 def outage_tick():
-    """After a monitoring round, on the leader: any outage action that is due."""
+    """After a monitoring round, on the leader: any outage action that is due,
+    then the carry-over of webhooks saved before #741 - after, and guarded, so
+    nothing in it can hold up or stop an outage action."""
     found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
-    if not found:
-        return []
-    operations = OPS.snapshot()
-    working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
-               for o in operations if o.get("status") in ("queued", "running")}
+    did = []
+    if found:
+        operations = OPS.snapshot()
+        working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
+                   for o in operations if o.get("status") in ("queued", "running")}
 
-    def restart(item):
-        if item["kind"] == "app":
-            restart_workload(item["ns"], item["name"])
-        else:
-            api_vm_power(item["ns"], item["name"], "restart")
-        _cache.pop("wl" if item["kind"] == "app" else "vms", None)
+        def restart(item):
+            if item["kind"] == "app":
+                restart_workload(item["ns"], item["name"])
+            else:
+                api_vm_power(item["ns"], item["name"], "restart")
+            _cache.pop("wl" if item["kind"] == "app" else "vms", None)
 
-    return OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+        did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+    try:
+        OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
+    except Exception as error:
+        print(f"outage actions: carry-over: {type(error).__name__}", flush=True)
+    return did
 
 
 def scheduled_items():

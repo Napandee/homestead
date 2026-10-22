@@ -81,13 +81,13 @@ _tests = []
 
 # What server.py lends to read and write the app or VM, and to check its
 # name: the same functions its own routes use (bind).
-_bound = {"kget": None, "ksend": None, "dns_name": None, "guard": lambda ns, name: None}
+_bound = {"kget": None, "ksend": None, "dns_name": None, "guard": lambda ns, name: None, "ns": "lab"}
 
 
-def bind(data_dir="/data", kget=None, ksend=None, dns_name=None, guard=None):
+def bind(data_dir="/data", kget=None, ksend=None, dns_name=None, guard=None, ns=None):
     global DATA_DIR
     DATA_DIR = data_dir
-    for key, value in (("kget", kget), ("ksend", ksend), ("dns_name", dns_name), ("guard", guard)):
+    for key, value in (("kget", kget), ("ksend", ksend), ("dns_name", dns_name), ("guard", guard), ("ns", ns)):
         if value:
             _bound[key] = value
 
@@ -226,8 +226,7 @@ def clean(value, kind="app", monitored_on_port=True, before=None, role="operator
         raise PermissionError("only an admin can allow a webhook to reach a LAN address")
     if url:
         out["webhook"] = url
-        if fmt != "generic":
-            out["format"] = fmt
+        out["format"] = fmt     # always: a save since #741 is told from one before it (homestead_outage_carry)
         if lan:
             out["lan"] = True
     return out or None
@@ -332,8 +331,8 @@ def _kind(ip):
     return "public" if address.is_global else "lan"
 
 
-def destination(url, allow_lan=False):
-    """(address, port) to connect to: every address the host resolves to checked."""
+def _addresses(url):
+    """(parsed, every address its host resolves to, port); OSError when none."""
     parsed = urllib.parse.urlsplit(url)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
@@ -342,6 +341,12 @@ def destination(url, allow_lan=False):
         found = []
     if not found:
         raise OSError(f"{parsed.hostname} could not be found")
+    return parsed, found, port
+
+
+def destination(url, allow_lan=False):
+    """(address, port) to connect to: every address the host resolves to checked."""
+    parsed, found, port = _addresses(url)
     kinds = {_kind(ip) for ip in found}
     if "never" in kinds:
         raise Refused(f"{parsed.hostname} is this host, a link-local or a cloud metadata address, which a webhook never reaches")

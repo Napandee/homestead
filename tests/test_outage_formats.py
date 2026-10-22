@@ -80,10 +80,9 @@ class FakeCase(unittest.TestCase):
 
 
 class CleanTests(unittest.TestCase):
-    def test_generic_is_the_default_and_is_not_stored(self):
-        self.assertEqual({"webhook": "https://h.example.com/x"}, O.clean({"webhook": "https://h.example.com/x"}))
-        self.assertEqual({"webhook": "https://h.example.com/x"},
-                         O.clean({"webhook": "https://h.example.com/x", "format": "generic"}))
+    def test_generic_is_the_default(self):
+        # Stored even when generic: a save since #741 is told from one before it (test_outage_carry).
+        self.assertEqual({"webhook": "https://h.example.com/x", "format": "generic"}, O.clean({"webhook": "https://h.example.com/x"}))
 
     def test_ntfy_and_gotify_are_kept(self):
         for fmt in ("ntfy", "gotify"):

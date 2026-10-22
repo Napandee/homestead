@@ -73,6 +73,12 @@ leads (it holds a `Lease`, `homestead-leader`, renewed all the time).
   unless the installer was told not to (`node-probe: no` in
   `homestead-install`) or Homestead runs with
   `HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`.
+- **Outage webhooks saved before Allow a LAN address existed** that resolve
+  to a LAN or cluster address get it ticked (`lan` in `homestead.io/outage-actions`, on the
+  `Deployment` or `VirtualMachine`), so they keep working. An address a
+  webhook never reaches stays refused. This happens once per cluster: what
+  was done is kept in the `ConfigMap` `homestead-outage-carry`, in
+  Homestead's namespace next to `homestead-settings`. A webhook it could not carry within a day is a warning in the bell.
 - **What `homestead-install` asked for:** the VIP, and kube-vip and Multus as
   `HelmChart`s. macvtap comes with Multus, once KubeVirt is there.
 
@@ -129,7 +135,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/update-mode` | `Deployment` | you set the app's updates to automatic |
 | `homestead.io/ran-digests` | `Deployment` | update checks, about twice a day |
 | `homestead.io/schedule`, `schedule-copies` | `Deployment`, `VirtualMachine` | you give an app a power schedule; a schedule stops it |
-| `homestead.io/outage-actions` | `Deployment`, `VirtualMachine` | you set what happens when it stays down |
+| `homestead.io/outage-actions` | `Deployment`, `VirtualMachine` | you set what happens when it stays down; once after an upgrade, a webhook saved before Allow a LAN address existed is given it when its address is on the LAN |
 | `homestead.io/restartedAt`, `editedAt`, `movedAt` | the pod template | you restart, edit or move the app, or an outage action restarts it |
 | `homestead.io/uptime` | `Deployment`, `VirtualMachine` | you turn monitoring on |
 | `homestead.io/icon`, `icon-source` | `Deployment`, `VirtualMachine` | an app's or VM's icon |
@@ -157,7 +163,7 @@ agent with the right scope) asks for it, and most go through a review first.
 | `Job`, `CronJob` | copies during imports and storage changes, preparing a disk for Longhorn V2, ISO copies, schedules you save on **Schedules**, running a Longhorn job now |
 | `DaemonSet` | pre-pulling an image onto every host (`homestead-pull-*`, removed once done); the VM placement checks when you switch them on |
 | `Secret` | registry and source passwords, a VM's cloud-init, an app's secret-looking environment values (kept out of its Deployment), backup target keys, linked-cluster and move credentials, MQTT and UniFi settings, user accounts (`homestead-auth`) |
-| `ConfigMap` | Homestead's settings and records: settings, portal links, IP records, hardware mappings, group tiers, linked clusters (`homestead-fleet`), the VM store (`homestead-vm-store`, in `lab`), a VM's GPU ROMs, a configuration restore |
+| `ConfigMap` | Homestead's settings and records: settings, portal links, IP records, hardware mappings, group tiers, linked clusters (`homestead-fleet`), the outage webhook carry-over (`homestead-outage-carry`), the VM store (`homestead-vm-store`, in `lab`), a VM's GPU ROMs, a configuration restore |
 | `Namespace` | **Settings → Namespaces**, and a move from another cluster into a namespace that is not there yet |
 | `StorageClass` | a storage class you create, the class for ISO volumes, the object store's one-copy class, a restore class Homestead repairs, a snapshot's temporary read-only clone |
 | `VolumeSnapshot`, `VolumeSnapshotContent` | importing a Longhorn backup as a snapshot, browsing the files of a snapshot |
@@ -276,7 +282,7 @@ stays too.
 | `StorageClass`es Homestead made (`homestead-single-copy`, the ISO class `homestead-isos`, restore classes) | the cluster | volumes made from them |
 | `PriorityClass`es `homestead-critical`, `homestead-normal`, `homestead-low`, or `homestead-<tier>-<value>` | the cluster | Kubernetes refuses a new pod that names a class that is gone, so an app, VM or Helm release still naming one cannot restart, update or move. Delete one only once nothing names it (below) |
 | What Homestead made for an app: its VIP `Service`, firewall `NetworkPolicy`s, `NetworkAttachmentDefinition`s, its environment `Secret` | the app's namespace | the app |
-| Homestead's records: `ConfigMap`s `homestead-settings`, `homestead-portal`, `homestead-ipam`, `homestead-group-tiers`, `homestead-mqtt` in `default`; `homestead-hardware`, `homestead-sources`, `homestead-vm-store`, `homestead-fleet` in `lab`; `Secret`s `homestead-unifi`, `homestead-mqtt`, `homestead-fleet-key` | `default`, `lab` | nothing known, but they are harmless to keep, and a reinstall picks them up |
+| Homestead's records: `ConfigMap`s `homestead-settings` and `homestead-outage-carry` in Homestead's namespace (`DEFAULT_NS`, `lab` in the plain manifest); `homestead-portal`, `homestead-ipam`, `homestead-group-tiers`, `homestead-mqtt` in `default`; `homestead-hardware`, `homestead-sources`, `homestead-vm-store`, `homestead-fleet` in `lab`; `Secret`s `homestead-unifi`, `homestead-mqtt`, `homestead-fleet-key` | Homestead's namespace, `default`, `lab` | nothing known, but they are harmless to keep, and a reinstall picks them up |
 | The `homestead.io/*` annotations on apps, and the other taints and labels on hosts | apps, hosts | nothing: they are harmless. The annotations are the only record of how many copies a stopped app had |
 | Settings Homestead changed: Longhorn's copies count and offline rebuilding, kube-vip's values, Longhorn disks the root-disk guard turned off, the default flag it took off extra storage classes | Longhorn, kube-vip, storage classes | they are your cluster's settings now; change them only on purpose |
 | On each host: the journal cap (`/etc/systemd/journald.conf.d/90-homestead.conf`), the inotify limits (`/etc/sysctl.d/90-homestead.conf`), the multipath setting | the host | Longhorn needs multipathd kept off its disks, or volumes fail to mount; apps may need the inotify limits |
