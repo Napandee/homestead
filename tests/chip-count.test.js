@@ -12,10 +12,14 @@ const path = require("node:path");
 // Hand-written chips left, over the files design-rules scans. Not counted:
 // a class built in a template (`${row ? "tag" : "pill"}`), a className
 // assignment, and web/index.html; the migrations take those by hand.
-const COUNTS = { pill: 194, tag: 228 };
+const COUNTS = { pill: 190, tag: 217 };
 // A migrated `web/js/…` file → how many non-interactive chips it still writes
 // by hand on purpose (usually 0). Buttons and links styled as chips don't count.
-const MIGRATED = {};
+const MIGRATED = {
+  // A plan's warning: a block with its own margin, kept as a <div class="tag warn">.
+  "web/js/views-network.js": 1,
+  "web/js/views-helm.js": 0,
+};
 
 const ROOT = path.join(__dirname, "..");
 const WEB = path.join(ROOT, "web", "js");

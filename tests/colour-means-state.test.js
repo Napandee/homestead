@@ -27,8 +27,10 @@ test("App Store and Helm labels are neutral: guidance, official, verified, insta
   const store = read("web/js/views-workloads.js");
   assert.doesNotMatch(store, /level === "dependency" \? "warn" : "info"/);
   const helm = read("web/js/views-helm.js");
-  assert.doesNotMatch(helm, /class="tag (ok|info)">(official|verified)</);
-  for (const [, [, tone]] of Object.entries(map("web/js/views-helm.js", "HELM_MANAGED"))) assert.equal(tone, "");
+  assert.match(helm, /UI\.chip\("official", "neutral"\)/);
+  assert.match(helm, /UI\.chip\("verified", "neutral"\)/);
+  assert.doesNotMatch(helm, /UI\.chip\("(official|verified)", "(ok|info)"/);
+  for (const [, [, tone]] of Object.entries(map("web/js/views-helm.js", "HELM_MANAGED"))) assert.equal(tone, "neutral");
 });
 
 test("a VM in progress or paused is neutral; Running is green", () => {

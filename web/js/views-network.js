@@ -1,6 +1,6 @@
 /* Services, VIPs, listeners, endpoints and ingress */
 
-const networkPill = health => health === "healthy" ? "ok" : health === "pending" ? "med" : health === "stopped" ? "neutral" : "crit";
+const networkPill = health => health === "healthy" ? "ok" : health === "pending" ? "warn" : health === "stopped" ? "neutral" : "bad";
 const networkPortText = row => (row.ports || []).map(p => `${p.port}/${p.protocol}`).join(", ");
 
 function networkVipCard(v, data) {
@@ -8,9 +8,9 @@ function networkVipCard(v, data) {
   const blocked = v.blocked || ((data.node_ips || []).includes(v.ip) ? "This is a host address, not a workload VIP." : "");
   const canUse = !blocked && !nodeAddressesOnly();
   return `<article class="vip-card${isDefault ? " is-default" : ""}">
-    <div class="vip-card-heading"><b class="mono">${esc(v.ip)}</b><span class="tag ${blocked ? "bad" : v.free ? "" : "info"}">${blocked ? "Unavailable" : v.free ? "Not assigned" : "In use"}</span></div>
+    <div class="vip-card-heading"><b class="mono">${esc(v.ip)}</b>${UI.chip(blocked ? "Unavailable" : v.free ? "Not assigned" : "In use", blocked ? "bad" : v.free ? "neutral" : "info")}</div>
     <div class="vip-card-label">${esc(v.label || "No label")}</div>
-    ${isDefault ? '<div class="vip-card-default"><span class="tag ok">Default workload VIP</span><span class="dim xs">Suggested for new workloads; existing services stay where they are.</span></div>' : ""}
+    ${isDefault ? `<div class="vip-card-default">${UI.chip("Default workload VIP", "ok")}<span class="dim xs">Suggested for new workloads; existing services stay where they are.</span></div>` : ""}
     ${blocked || (v.used_by || []).length ? `<div class="vip-card-usage small">${blocked ? esc(blocked) : `<span class="dim">Used by</span> ${(v.used_by || []).map(n => `<span class="mono">${esc(n)}</span>`).join("")}`}</div>` : ""}
     <div class="vip-card-actions">${actionBar([
       canUse ? { label: "Use this VIP", run: `networkExpose('','','Deployment',${jsq(v.ip)})`, need: "operator" } : null,
@@ -71,7 +71,7 @@ window.networkShow = async (section, selector) => {
    Services carry it; each state says in words which half is missing. */
 const ADDRESS_STATE = {
   ok: ["ok", "working"], unrouted: ["bad", "not reachable"], unannounced: ["bad", "no host answers"],
-  idle: ["", "nothing running"], pending: ["warn", "port taken"],
+  idle: ["neutral", "nothing running"], pending: ["warn", "port taken"],
 };
 
 function addressListeners(row) {
@@ -93,7 +93,7 @@ function networkOpenUrl(ip, port) {
 }
 
 function addressRow(row, data) {
-  const [tone, words] = ADDRESS_STATE[row.state] || ["", row.state];
+  const [tone, words] = ADDRESS_STATE[row.state] || ["neutral", row.state];
   const label = (data.vip_labels || {})[row.ip];
   const kind = row.kind === "node" ? "Host address" : "VIP";
   const tip = row.kind === "node"
@@ -101,9 +101,9 @@ function addressRow(row, data) {
     : "A virtual address one host answers for at a time; it moves to another host if that one goes down.";
   return `<div class="addr-row ${row.state === "ok" ? "" : "addr-" + esc(row.state)}" data-ip="${esc(row.ip)}">
     <div class="addr-head"><b class="mono">${esc(row.ip)}</b>
-      <span class="tag ${row.kind === "node" ? "" : "info"}" data-tip="${esc(tip)}">${kind}</span>
+      ${UI.chip(kind, row.kind === "node" ? "neutral" : "info", { tip })}
       ${label ? `<span class="dim xs">${esc(label)}</span>` : ""}
-      ${row.listeners.length || row.kind === "vip" ? `<span class="tag ${tone} addr-state">${esc(words)}</span>` : ""}</div>
+      ${row.listeners.length || row.kind === "vip" ? UI.chip(words, tone) : ""}</div>
     ${row.reason ? `<div class="addr-reason small">${esc(row.reason)}</div>` : ""}
     ${addressListeners(row)}</div>`;
 }
@@ -117,7 +117,7 @@ function networkAddressesHtml(data) {
     rows.forEach(row => placed.add(row.ip));
     return `<article class="addr-node" data-node="${esc(n.name)}">
       <div class="addr-node-head"><div><b>${esc(n.name)}</b><span class="dim xs">${n.control_plane ? "control plane" : "worker"}</span></div>
-        <span class="pill ${n.ready ? "low" : "crit"}">${n.ready ? "Ready" : "Not ready"}</span></div>
+        ${UI.chip(n.ready ? "Ready" : "Not ready", n.ready ? "neutral" : "bad")}</div>
       ${rows.map(row => addressRow(row, data)).join("")}
       ${n.vips.length ? "" : '<div class="dim xs addr-none">Answers for no VIP right now</div>'}</article>`;
   });
@@ -290,11 +290,11 @@ function networkServicesHtml(data) {
       ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."
       : `<b>${orphans} Services no longer point at a workload.</b> They still own their VIPs and ports, so those numbers stay taken until the Services are removed.`}</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="services" class="tbl stack dense"><thead><tr><th>Service</th><th>Listeners</th><th>Traffic path</th><th>Health</th><th></th></tr></thead>
-      <tbody>${services.map(row => `<tr data-svc="${esc(row.namespace + "/" + row.name)}"><td class="netsvc"><b>${esc(row.name)}</b>${row.orphaned ? '<span class="tag warn" data-tip="No Deployment matches this Service selector, so nothing answers on it. Its VIP and port stay reserved until it is removed.">no workload</span>' : ""}<div class="dim xs mono">${esc(row.namespace)} · ${esc(row.type)}</div><div class="dim xs mono" title="Address inside the cluster">ClusterIP ${esc(row.cluster_ip || "—")}</div></td>
-        <td>${row.ports.map(p => `<span class="tag">${p.port}/${esc(p.protocol)} → ${esc(p.target_port)}</span>`).join(" ")}</td>
+      <tbody>${services.map(row => `<tr data-svc="${esc(row.namespace + "/" + row.name)}"><td class="netsvc"><b>${esc(row.name)}</b>${row.orphaned ? UI.chip("no workload", "warn", { tip: "No Deployment matches this Service selector, so nothing answers on it. Its VIP and port stay reserved until it is removed." }) : ""}<div class="dim xs mono">${esc(row.namespace)} · ${esc(row.type)}</div><div class="dim xs mono" title="Address inside the cluster">ClusterIP ${esc(row.cluster_ip || "—")}</div></td>
+        <td>${row.ports.map(p => UI.chip(`${p.port}/${p.protocol} → ${p.target_port}`, "neutral")).join(" ")}</td>
         <td class="netpathcell"><div class="netpath"><span title="${esc(row.external_ips.join(", ") || "cluster only")}">${esc(row.external_ips[0] || row.cluster_ip || "pending")}${row.external_ips.length > 1 ? ` +${row.external_ips.length - 1}` : ""}</span><i>→</i><span>${esc(row.name)}</span><i>→</i><span>${row.ready_endpoints} endpoint${row.ready_endpoints === 1 ? "" : "s"}</span></div>
           <div class="dim xs">${row.endpoints.ready.map(e => `${esc(e.target || e.addresses[0] || "endpoint")} @ ${esc(e.node || "unknown host")}`).join(" · ") || "No ready target"}</div></td>
-        <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
+        <td>${UI.chip(row.health, networkPill(row.health))}<div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
         <td data-actions>${row.system ? "" : actionBar([{ label: row.orphaned ? "Release" : "Remove", icon: "trash", run: `networkServiceDelete(${jsq(row.namespace)},${jsq(row.name)})`,
       need: "admin", danger: true, tip: row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN" }], { shown: 0, label: `Actions for ${row.name}` })}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
     ${data.ingresses.length ? UI.section("Ingress routes", `<div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>`) : ""}`;
@@ -470,7 +470,7 @@ function networkVipCards(current, choices) {
   return `<input id="net_lb_ip" type="hidden" value="${esc(current)}"><div class="net-address-list" role="group" aria-label="Available VIPs">${addresses.map(ip => {
     const used = choices.used.find(v => v.ip === ip);
     const label = choices.labels[ip] || choices.own.find(v => v.ip === ip)?.label || "";
-    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${plural(used.services, "service")} · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? '<span class="tag ok">Default</span>' : ""}</label>`;
+    return `<label class="net-address-choice"><input type="radio" name="net_address" value="${esc(ip)}" ${current === ip ? "checked" : ""} onchange="networkAddressPicked(this.value)"><span><b class="mono">${esc(ip)}</b>${label ? `<span>${esc(label)}</span>` : ""}<small>${used ? `In use · ${plural(used.services, "service")} · ports ${esc(used.listeners.map(p => `${p.port}/${p.protocol || "TCP"}`).slice(0, 6).join(", "))}` : "Not assigned to a Service"}</small></span>${ip === choices.shared ? UI.chip("Default", "ok") : ""}</label>`;
   }).join("") || '<p class="small">No saved VIPs yet. Add reserved addresses in Networking → Workload VIPs.</p>'}</div>
   <details class="net-custom-address" ${typed ? "open" : ""}><summary>Use another reserved address</summary><p class="small">Only use an unused LAN address reserved outside DHCP. Host and cluster-management addresses are not VIP choices.</p><label for="net_custom_ip">Reserved IPv4 address</label><input id="net_custom_ip" value="${typed ? esc(current) : ""}" placeholder="e.g. 192.0.2.230" oninput="networkAddressPicked(this.value,true)" data-ipam></details>`;
 }
@@ -856,6 +856,7 @@ function networkVmNetsList(opts) {
   const rows = opts.network_details || [];
   return rows.length ? `<div class="vip-own">${rows.map(n => `<div class="vip-chip ${n.lan ? "free" : "used"}">
       <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
-      <span class="tag ${n.lan ? "ok" : ""}" ${n.type === "macvlan" ? 'data-tip="macvlan: containers only - a VM needs a macvtap network or one on a host bridge"' : n.type === "macvtap" ? 'data-tip="macvtap: VMs only, each with its own address on the LAN; a VM cannot be reached from its own host this way"' : ""}>${n.lan ? (n.type === "macvlan" ? "LAN · containers" : n.type === "macvtap" ? "LAN · VMs" : "LAN") : "not bridged"}</span></div>`).join("")}</div>`
+      ${UI.chip(n.lan ? (n.type === "macvlan" ? "LAN · containers" : n.type === "macvtap" ? "LAN · VMs" : "LAN") : "not bridged", n.lan ? "ok" : "neutral",
+        { tip: n.type === "macvlan" ? "macvlan: containers only - a VM needs a macvtap network or one on a host bridge" : n.type === "macvtap" ? "macvtap: VMs only, each with its own address on the LAN; a VM cannot be reached from its own host this way" : "" })}</div>`).join("")}</div>`
     : `<div class="card flat empty small">No LAN networks yet. <b>＋ LAN network</b> makes one on your LAN, untagged like the hosts or on a VLAN.</div>`;
 }
