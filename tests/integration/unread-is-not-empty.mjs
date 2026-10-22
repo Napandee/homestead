@@ -575,6 +575,183 @@ try {
       null, {timeout: 10000});
     await page.evaluate(() => { window.loadImageUpdates = window.__realLoadUpdates; window.__finishScan(null); window.api = window.__realApi; });
 
+    // Part 10. After removing a host: unread leftovers are not "the cluster is clean".
+    await page.evaluate(failing, "/api/cluster/cleanup");
+    const leftovers = await page.evaluate(async () => {
+      document.body.insertAdjacentHTML("beforeend", '<div id="rm_left"></div>');
+      await removalLeftovers();
+      const text = document.querySelector("#rm_left").innerText;
+      document.querySelector("#rm_left").remove();
+      return text;
+    });
+    assert.match(leftovers, /Could not read what is left over[\s\S]*timed out/);
+    assert.doesNotMatch(leftovers, /Nothing is left over/);
+
+    // The Cluster page's cleanup card: unread is said, and the last card read is not drawn again as current.
+    const cleanup = await page.evaluate(async () => {
+      STATE.data.cleanupHtml = "<b>an old card</b>";
+      document.body.insertAdjacentHTML("beforeend", '<div id="clusterCleanup"></div>');
+      await clusterCleanupPaint();
+      const text = document.querySelector("#clusterCleanup").innerText;
+      document.querySelector("#clusterCleanup").remove();
+      return {text, kept: STATE.data.cleanupHtml || ""};
+    });
+    assert.match(cleanup.text, /Could not read what hosts left behind[\s\S]*timed out/);
+    assert.equal(cleanup.kept, "", "neither the old card nor the error is drawn first next time");
+
+    // Adding a host: unread hosts are not "Waiting for a new host".
+    await page.evaluate(failing, "/api/nodes");
+    const watching = await page.evaluate(async () => {
+      modal("Add a host", '<div id="guideWatch"></div>');
+      ONBOARD.known = new Set();
+      await guideWatch();
+      clearTimeout(ONBOARD.timer);
+      return document.querySelector("#guideWatch").innerText;
+    });
+    assert.match(watching, /Could not read the hosts[\s\S]*timed out/);
+    assert.doesNotMatch(watching, /Waiting for a new host/);
+    await close();
+
+    // Files: unread volumes are said in the volume picker, not an old list.
+    await page.evaluate(() => { window.api = window.__realApi; FM.volumes = [{namespace: "lab", pvc: "an-old-volume"}]; });
+    await page.evaluate(failing, "/api/volumes");
+    await page.evaluate(() => { fileManager("lab", "frigate-config"); });
+    await page.waitForSelector("#fm_pane0 select");
+    await page.waitForFunction(() => /Could not read the other volumes/.test(document.querySelector("#fm_pane0 select")?.innerHTML || ""),
+      null, {timeout: 10000});
+    const picker = await page.locator("#fm_pane0 select").innerHTML();
+    assert.match(picker, /Could not read the other volumes[\s\S]*timed out/);
+    assert.doesNotMatch(picker, /an-old-volume/);
+    await page.evaluate(() => fmClose());
+
+    // Portal: links not checked are not shown with an old answer.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/portal/status");
+    await page.evaluate(async () => {
+      const links = (await api("/api/portal")).links || [];
+      STATE.data.portalStatus = Object.fromEntries(links.map(l => [l.id, {up: true, ms: 1}]));
+      viewPortal();
+    });
+    await page.waitForFunction(() => /could not check/i.test(document.querySelector(".portal-dot")?.dataset.tip || ""), null, {timeout: 10000});
+    assert.equal(await page.locator('.portal-dot[data-tip^="answering"]').count(), 0, "no old answer is shown");
+    // Coming back: the earlier failure is not said while the new check is on its way.
+    const revisit = await page.evaluate(() => {
+      window.api = window.__realApi;
+      const real = window.api; let answer;
+      window.api = (asked, ...rest) => String(asked) === "/api/portal/status" ? new Promise(r => { answer = r; }) : real(asked, ...rest);
+      return viewPortal().then(() => { const tip = document.querySelector(".portal-dot")?.dataset.tip || ""; answer({}); window.api = real; return tip; });
+    });
+    assert.doesNotMatch(revisit, /could not check/i);
+
+    // Portal links editor: unread containers are said (their logos are not offered).
+    await page.evaluate(() => { window.api = window.__realApi; STATE.data.wl = null; });
+    await page.evaluate(failing, "/api/workloads");
+    await page.evaluate(() => portalEdit());
+    await settled(page);
+    assert.match(await body(), /Could not read the containers[\s\S]*timed out/);
+    await close();
+
+    // Platform pages, on a cluster that is not Harvester.
+    await page.goto(`${base}/?demo=1&platform=k3s`);
+    await page.waitForSelector(".dashboard-widget");
+    await page.evaluate(() => clearInterval(window.__loopTimer));
+
+    // Network overview: unread required components are said, not left out.
+    await page.evaluate(failing, "/api/platform/baseline");
+    await page.evaluate(() => { history.replaceState(null, "", "?demo=1&platform=k3s&tab=overview"); viewNetworking(); });
+    await page.waitForFunction(() => /Could not check the required components/.test(document.body.innerText), null, {timeout: 10000});
+    assert.match(await page.locator("body").innerText(), /Could not check the required components[\s\S]*timed out/);
+
+    // LAN networks: unread is not "No LAN networks yet"; a list read before is kept, and said to be from before.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    await page.evaluate(failing, "/api/vm/create-options");
+    const nets = await page.evaluate(async () => {
+      const kept = window.__vmCreateOptions;
+      document.body.insertAdjacentHTML("beforeend", '<div id="netVmNets"></div>');
+      window.__vmCreateOptions = undefined;
+      await networkVmNetsPaint();
+      const none = document.querySelector("#netVmNets").innerText;
+      window.__vmCreateOptions = {network_details: [{name: "lan-old", lan: true, type: "macvlan"}]};
+      await networkVmNetsPaint();
+      const old = document.querySelector("#netVmNets").innerText;
+      document.querySelector("#netVmNets").remove();
+      window.__vmCreateOptions = kept;
+      return {none, old};
+    });
+    assert.match(nets.none, /Could not read the LAN networks[\s\S]*timed out/);
+    assert.doesNotMatch(nets.none, /No LAN networks yet/);
+    assert.match(nets.old, /lan-old[\s\S]*Could not read the LAN networks just now[\s\S]*timed out/);
+
+    // Add-ons (Settings › Cluster): each part that could not be read is said.
+    const addons = async (path, words) => {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, path);
+      const text = await page.evaluate(async () => {
+        document.body.insertAdjacentHTML("beforeend", '<div id="addonsCard" hidden></div>');
+        await addonsPaint();
+        const card = document.querySelector("#addonsCard");
+        const shown = card.hidden ? "" : card.innerText;
+        card.remove();
+        return shown;
+      });
+      assert.match(text, new RegExp(`${words}[\\s\\S]*timed out`), path);
+      return text;
+    };
+    await addons("/api/addons", "Could not read the add-ons");
+    const health = await addons("/api/self/health", "Could not read the node probe and the SMB server");
+    assert.doesNotMatch(health, /Install node probe/, "nothing is installed on a guess");
+    assert.doesNotMatch(health, /0 configured|address not assigned/, "the SMB server's shares and address are not read as none");
+    await addons("/api/platform/baseline", "Could not check the required components");
+    await addons("/api/host-console", "Could not read the host console");
+
+    // On Harvester, known from the add-ons answer, no required components are checked for.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    const harvester = await page.evaluate(async () => {
+      const real = window.api, platform = STATE.platform;
+      window.api = (asked, ...rest) => String(asked) === "/api/addons" ? Promise.resolve({harvester: true})
+        : String(asked) === "/api/platform/baseline" ? Promise.reject(new Error("timed out")) : real(asked, ...rest);
+      STATE.platform = null;
+      document.body.insertAdjacentHTML("beforeend", '<div id="addonsCard" hidden></div>');
+      await addonsPaint();
+      const text = document.querySelector("#addonsCard").innerText;
+      document.querySelector("#addonsCard").remove();
+      window.api = real; STATE.platform = platform;
+      return text;
+    });
+    assert.doesNotMatch(harvester, /Could not check the required components/);
+
+    // Homestead's own address (Network overview): unread is said; what was read before is marked as such.
+    await page.evaluate(() => { window.api = window.__realApi; });
+    const self = await page.evaluate(async () => {
+      document.querySelectorAll("#selfAddress").forEach(el => el.remove());
+      document.body.insertAdjacentHTML("beforeend", '<div id="selfAddress"></div>');
+      const kept = STATE.data.selfAddress; STATE.data.selfAddress = null;
+      const real = window.api;
+      window.api = (asked, ...rest) => String(asked).split("?")[0] === "/api/self/address" ? Promise.reject(new Error("timed out")) : real(asked, ...rest);
+      await selfAddressPaint();
+      const none = document.querySelector("#selfAddress").innerText;
+      window.api = real; await selfAddressPaint();
+      window.api = (asked, ...rest) => String(asked).split("?")[0] === "/api/self/address" ? Promise.reject(new Error("timed out")) : real(asked, ...rest);
+      await selfAddressPaint();
+      const old = document.querySelector("#selfAddress").innerText;
+      document.querySelector("#selfAddress").remove(); window.api = real; STATE.data.selfAddress = kept;
+      return {none, old};
+    });
+    assert.match(self.none, /Could not read where Homestead answers[\s\S]*timed out/);
+    assert.match(self.old, /Could not read where Homestead answers just now[\s\S]*timed out/);
+
+    // Installing KubeVirt or kube-vip: an unread host check is said in the question, not taken as "fine".
+    for (const [key, words] of [["kubevirt", "Could not check whether the hosts have hardware virtualisation"],
+      ["kube-vip", "Could not read which network interface the hosts use"]]) {
+      await page.evaluate(() => { window.api = window.__realApi; });
+      await page.evaluate(failing, "/api/addons");
+      await page.evaluate(k => { addonInstall(k); }, key);
+      await page.waitForSelector(".askdlg");
+      assert.match(await page.locator(".askdlg .askmsg").innerText(), new RegExp(`${words}[\\s\\S]*timed out`));
+      await page.locator('.askdlg [data-a="no"]').click();
+    }
+    await page.evaluate(() => { window.api = window.__realApi; });
+
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);
     await context.close();

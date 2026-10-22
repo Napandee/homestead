@@ -82,11 +82,12 @@ async function guideWatch() {
   clearTimeout(ONBOARD.timer);
   const host = $("#guideWatch");
   if (!host || $("#modal").classList.contains("hidden")) return;
-  let nodes = null;
-  try { nodes = await api("/api/nodes", { keep: true }); } catch (e) { nodes = null; }
+  let nodes = null, unread = "";
+  try { nodes = await api("/api/nodes", { keep: true }); } catch (e) { unread = e.message; }
   if (!$("#guideWatch")) return;
   const fresh = (nodes || []).filter(n => !ONBOARD.known.has(n.name));
-  host.innerHTML = fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
+  // Unread hosts are not "waiting for a new host"; it keeps trying (#620).
+  host.innerHTML = unread ? UI.callout("warn", "Could not read the hosts", `${esc(unread)} · trying again every 10 seconds`) : fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
       <b>${esc(n.name)}</b><span>${n.status === "Ready" ? "joined and Ready" : "registered - finishing setup"}</span>
       <button class="btn sm" onclick="closeModal();go('nodes')">Hosts</button></div>`).join("")
     : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here as soon as Harvester registers it, about a minute after it reboots.</div>';
@@ -98,9 +99,15 @@ async function guideWatch() {
 async function removalLeftovers() {
   const host = $("#rm_left");
   if (!host) return;
-  const report = await api("/api/cluster/cleanup").catch(() => null);
+  const report = await api("/api/cluster/cleanup").catch(e => ({ unread: e.message }));
   if (!$("#rm_left")) return;
-  const rows = report ? cleanupRows(report, false) : [];
+  // Unread is not "the cluster is clean" (#620).
+  if (report.unread) {
+    host.innerHTML = `${UI.callout("warn", "Could not read what is left over", esc(report.unread))}
+      <button class="btn sm" style="margin-top:6px" onclick="removalLeftovers()">Try again</button>`;
+    return;
+  }
+  const rows = cleanupRows(report, false);
   host.innerHTML = rows.length ? `<div class="card flat cleanup-card">${rows.join("")}</div>
       <div class="dim xs" style="margin-top:6px">Replica records can take a few minutes to rebuild elsewhere before Longhorn's record of the host can go.</div>`
     : '<div class="note good">Nothing is left over: the cluster is clean.</div>';
@@ -140,9 +147,16 @@ function cleanupRows(report, withDead = true) {
 window.clusterCleanupPaint = async () => {
   const host = $("#clusterCleanup");
   if (!host) return;
-  const report = await api("/api/cluster/cleanup").catch(() => null);
+  const report = await api("/api/cluster/cleanup").catch(e => ({ unread: e.message }));
   if (!$("#clusterCleanup")) return;
-  if (!report) { host.innerHTML = ""; return; }
+  // Unread is said; nothing is kept to be drawn first next time, neither the
+  // last card read nor this failure (#620).
+  if (report.unread) {
+    STATE.data.cleanupHtml = "";
+    host.innerHTML = `<div class="sec">Hosts coming and going</div>
+      ${UI.callout("warn", "Could not read what hosts left behind", esc(report.unread))}`;
+    return;
+  }
   const rows = cleanupRows(report);
   // Kept, so the next refresh draws it straight away instead of the page
   // shrinking while it is fetched again and growing back when it arrives.
