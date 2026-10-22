@@ -6,6 +6,10 @@ async function viewWorkloads() {
   loadImageUpdates(false, true).then(() => {
     if (STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
   });
+  // Whether Flux is applying each app (#742): the details show it once read.
+  gitopsLoad().then(report => {
+    if (Object.keys(report?.apps || {}).length && STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
+  });
 }
 
 const updateKey = (ns, name) => `${ns}/${name}`;
@@ -949,6 +953,7 @@ function workloadTableRows(rows) {
           <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
+          ${gitopsDetail(w)}
         </div>
         ${workloadHierarchy(w)}
         <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>

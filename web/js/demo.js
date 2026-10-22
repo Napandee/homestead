@@ -2628,6 +2628,20 @@ ssh_pwauth: true
       } };
     },
     "/api/move": { ok: true },
+    // Is Flux applying it (#742): one Kustomization failing, so the Cluster page and paperless's details show it.
+    "/api/gitops": () => {
+      const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+      return { summary: "2 Kustomizations, 1 HelmRelease: 1 not ready",
+        apps: { "lab/paperless": "Kustomization flux-system/apps", "monitoring/loki": "Kustomization flux-system/monitoring" },
+        objects: [
+          { id: "Kustomization flux-system/apps", kind: "Kustomization", namespace: "flux-system", name: "apps", ready: false, suspended: false,
+            revision: "main@4f1c2d9", tried: ago(3), since: ago(95), interval: "10m",
+            message: "Secret/lab/paperless-env not found: kustomize build failed" },
+          { id: "Kustomization flux-system/monitoring", kind: "Kustomization", namespace: "flux-system", name: "monitoring", ready: true, suspended: false,
+            revision: "main@4f1c2d9", tried: ago(6), since: ago(2000), interval: "10m", message: "Applied revision: main@sha1:4f1c2d9" },
+          { id: "HelmRelease dev/actions-runner", kind: "HelmRelease", namespace: "dev", name: "actions-runner", ready: true, suspended: false,
+            revision: "runner-chart 0.15.0", tried: ago(40), since: ago(9000), interval: "30m", message: "Helm upgrade succeeded" }] };
+    },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const rename = body.workload_name && body.workload_name !== body.name;
