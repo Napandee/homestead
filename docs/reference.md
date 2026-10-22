@@ -168,10 +168,13 @@ StorageClass used in `deploy/deploy.yaml` exists:
 kubectl get storageclass
 ```
 
-The supplied manifest uses `longhorn-r2`. Change `storageClassName` (and the
-`STORAGE_CLASS` value) to a class the cluster has. Without Longhorn - k3s's
-`local-path`, say - use that class and change the claim to `ReadWriteOnce`,
-as the k3s script does.
+The supplied manifest uses `longhorn-r2`. Longhorn makes `longhorn`, not
+`longhorn-r2`, so on a new Longhorn the data claim stays Pending and Homestead
+never starts; `kubectl describe pvc -n lab` shows why. Change
+`storageClassName` (and the `STORAGE_CLASS` value) to a class the cluster
+has: `longhorn`, or create a `longhorn-r2` class first. Without Longhorn -
+k3s's `local-path`, say - use that class and change the claim to
+`ReadWriteOnce`. The k3s script does both.
 
 ### 2. Configure and install
 
