@@ -1,5 +1,6 @@
 import json, sys, time, unittest, urllib.error
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_longhorn as LH
 import homestead_longhorn_target as BACKUP_TARGET
@@ -39,8 +40,26 @@ class RevertTests(unittest.TestCase):
                                            "status": {"currentState": "stopped"}}]},
         }
         self.reclass = FakeReclass(self)
-        REVERT.bind(self.get, self.send, self.reclass, lambda ns, name: name == "homestead",
-                    lambda method, path, body=None: self.calls.append((path, body)) or {})
+        self.failing = {}       # Longhorn API action -> the error it raises
+        REVERT.bind(self.get, self.send, self.reclass, lambda ns, name: name == "homestead", self.lh_call)
+        reach = mock.patch.object(REVERT.ACCESS, "reachable", return_value="")
+        self.reachable = reach.start()
+        self.addCleanup(reach.stop)
+
+    def lh_call(self, method, path, body=None):
+        self.calls.append((path, body))
+        action = path.split("action=")[1] if "action=" in path else ""
+        if action in self.failing:
+            raise self.failing[action]
+        return {}
+
+    def _stopped_and_detached(self):
+        item = {"ref": {"volume": "pvc-1", "snapshot": "snap-a", "namespace": "lab", "claim": "paperless-data",
+                        "consumers": REVERT.plan("pvc-1", "snap-a")["consumers"], "phase": "stopping",
+                        "since": time.time()}}
+        REVERT.resolve(item)
+        self.pod_running, self.state = False, "detached"
+        return item
 
     def get(self, path):
         if path == f"{API}/volumes/pvc-1":
@@ -93,6 +112,102 @@ class RevertTests(unittest.TestCase):
         self.assertIn("Nothing was changed", message)
         self.assertEqual([["paperless"]], self.reclass.started)
         self.assertEqual([], self.calls)
+
+    def test_an_unreachable_api_refuses_before_anything_stops(self):
+        self.reachable.return_value = "Connection refused"
+        self.pod_running = False
+        ops = mock.Mock()
+        with self.assertRaisesRegex(ValueError, "Nothing was changed"):
+            REVERT.start("pvc-1", "snap-a", ops)
+        ops.start.assert_not_called()
+        self.assertEqual([], [s for s in self.sent if s[0] != "GET"])
+        self.assertEqual([], self.calls)
+
+    def test_a_refused_attach_puts_the_app_back_without_retrying(self):
+        self.failing["attach"] = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        item = self._stopped_and_detached()
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertIn("Connection refused", message)
+        self.assertIn("Nothing was changed", message)
+        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual(["attach"], [path.split("action=")[1] for path, _ in self.calls])
+
+    def test_a_volume_with_no_attachment_record_is_not_reported_as_held(self):
+        self.failing["attach"] = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        item = self._stopped_and_detached()
+        def send(method, path, body=None, **kw):
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        REVERT.ksend = send
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertNotIn("could not let go", message)
+
+    def test_a_failed_revert_puts_the_app_back_and_names_the_kept_snapshot(self):
+        self.failing["snapshotRevert"] = ValueError("Longhorn refused it: busy")
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach"],
+                         [path.split("action=")[1] for path, _ in self.calls])
+        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertIn(item["ref"]["kept"], message)
+        self.assertNotIn("Nothing was changed", message, "the revert may have gone through before it failed")
+
+    def test_put_back_still_starts_the_app_when_detach_fails(self):
+        self.failing["snapshotCreate"] = ValueError("Longhorn refused it: busy")
+        self.failing["detach"] = urllib.error.URLError("timed out")
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertIn(("PATCH", f"{API}/volumeattachments/pvc-1",
+                       {"spec": {"attachmentTickets": {"homestead-revert": None}}}), self.sent)
+        self.assertIn("Nothing was changed", message)
+
+    def test_put_back_names_the_ticket_when_it_cannot_be_released(self):
+        self.failing["snapshotCreate"] = ValueError("Longhorn refused it: busy")
+        self.failing["detach"] = urllib.error.URLError("timed out")
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        sent = self.send
+        def send(method, path, body=None, **kw):
+            if "volumeattachments" in path:
+                raise urllib.error.HTTPError(path, 403, "forbidden", {}, None)
+            return sent(method, path, body, **kw)
+        REVERT.ksend = send
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertIn("homestead-revert", message)
+
+    def test_a_failed_detach_after_the_revert_does_not_revert_again(self):
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        self.failing["detach"] = urllib.error.URLError("timed out")
+        sent = self.send
+        def send(method, path, body=None, **kw):
+            if "volumeattachments" in path:
+                raise urllib.error.URLError("timed out")
+            return sent(method, path, body, **kw)
+        REVERT.ksend = send
+        status, _, _ = REVERT.resolve(item)
+        self.assertEqual("running", status)
+        self.assertEqual("detaching", item["ref"]["phase"])
+        self.assertTrue(item["ref"]["attached"])
+        del self.failing["detach"]
+        REVERT.ksend = sent
+        REVERT.resolve(item)
+        actions = [path.split("action=")[1] for path, _ in self.calls]
+        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach", "detach"], actions)
+        self.assertFalse(item["ref"]["attached"])
+        self.assertEqual([], self.reclass.started, "nothing starts while the volume is still held for the rollback")
 
     def test_homesteads_own_data_is_refused(self):
         self.reclass.consumers = lambda ns, claim: [{"kind": "Deployment", "name": "homestead", "replicas": 1}]

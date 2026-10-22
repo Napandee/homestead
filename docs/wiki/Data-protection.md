@@ -220,3 +220,12 @@ so Homestead:
 The job tray follows each step. If the volume will not let go, nothing is
 changed and everything starts again. Homestead's own data cannot be rolled
 back from Homestead, as that would stop it part-way.
+
+Rolling back and **Trim now** go through Longhorn's own API
+(`longhorn-backend`, port 9500). Homestead checks that it answers before it
+stops anything, and refuses with the reason if it does not. If Longhorn's API
+fails part-way, before the revert, the job ends there: the volume is let go
+and everything starts again; the message says whether the revert may have
+happened and names the `before-rollback-…` snapshot. Longhorn 1.13's chart
+fences its manager in with network policies; where it does, Homestead keeps a
+narrow policy of its own beside them ([What Homestead changes](What-Homestead-changes)).
