@@ -167,6 +167,59 @@ class OnTheDataVolume(unittest.TestCase):
         self.assertEqual("", Path(target).read_text(encoding="utf-8"))
 
 
+class FillingFastAlert(unittest.TestCase):
+    """Andreas's decision 3: audit.jsonl filling fast is a bell alert too. It is
+    read from the files, so it works on whichever copy leads the alerts: raised
+    while audit.jsonl.1 was filled in under ROTATION_ALARM_SECONDS, and that
+    fill ended within the last ROTATION_ALERT_SECONDS; it clears once a fill is
+    slow again, or a day after the fast one."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.dir = folder.name
+        self.enterContext(mock.patch.object(SHARED, "DIR", self.dir))
+        self.t0 = 1792574043.0
+
+    def old_file(self, first, last, broken_tail=False):
+        lines = [AUDIT_LOG.text({"v": 1, "at": AUDIT_LOG._now_text(first), "path": "/api/x"})]
+        lines += [AUDIT_LOG.text({"v": 1, "at": AUDIT_LOG._now_text(first + 1), "path": "/api/x"})] * 50
+        lines.append(AUDIT_LOG.text({"v": 1, "at": AUDIT_LOG._now_text(last), "path": "/api/x"}))
+        text = "\n".join(lines) + "\n" + ('{"v":1,"at":"20' if broken_tail else "")
+        Path(self.dir, "audit.jsonl.1").write_text(text, encoding="utf-8")
+
+    def facts(self, now):
+        return AUDIT_LOG.alert_facts(now=now)
+
+    def test_a_fast_fill_raises_one_alert(self):
+        self.old_file(self.t0, self.t0 + 600, broken_tail=True)
+        (fact,) = self.facts(self.t0 + 700)
+        self.assertEqual(("audit:filling-fast", "degraded", "degraded"),
+                         (fact["key"], fact["severity"], fact["category"]))
+        self.assertIn("10 minutes", fact["body"])
+        self.assertIn("pod log", fact["body"])
+        self.assertTrue(fact["resolved"])
+        self.assertEqual("/settings?tab=about", fact["href"])
+
+    def test_a_slow_fill_raises_nothing(self):
+        self.old_file(self.t0, self.t0 + AUDIT_LOG.ROTATION_ALARM_SECONDS + 1)
+        self.assertEqual([], self.facts(self.t0 + 2 * AUDIT_LOG.ROTATION_ALARM_SECONDS))
+
+    def test_it_clears_a_day_after_the_fast_fill(self):
+        self.old_file(self.t0, self.t0 + 600)
+        self.assertEqual([], self.facts(self.t0 + 600 + AUDIT_LOG.ROTATION_ALERT_SECONDS + 1))
+
+    def test_no_file_or_an_unreadable_one_raises_nothing(self):
+        self.assertEqual([], self.facts(self.t0))
+        Path(self.dir, "audit.jsonl.1").write_text("not json\n", encoding="utf-8")
+        self.assertEqual([], self.facts(self.t0))
+
+    def test_the_leader_asks_for_it_with_the_other_sources(self):
+        import homestead_overview_server as OVERVIEW
+        source = Path(OVERVIEW.__file__).read_text(encoding="utf-8")
+        self.assertIn('take("audit", AUDIT_LOG.alert_facts)', source)
+
+
 class TheSetting(unittest.TestCase):
     """Settings › About › Audit log: the file can be turned off; stdout cannot."""
 

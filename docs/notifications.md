@@ -54,6 +54,7 @@ readings retain the last warning. Unchanged conditions do not repeat on a timer.
 | Host back | A host takes work again and moving containers back would even the hosts out (Settings → Placement → When a host comes back: Suggest or In the update window) | Clears once nothing is worth moving, or a week after the host came back |
 | Image update | A new eligible image candidate is discovered | Once per candidate identity |
 | Harvester upgrade | New stable release or upgrade start/completion/failure | Once per release or upgrade stage |
+| Audit log | `audit.jsonl` on the data volume filled 10 MiB in under an hour (read from the files, so any copy's writes count); clears once a fill is slow again, or a day after the fast one | Recurrence after confirmed recovery |
 
 SMART findings for the same drive are combined, retaining every reason and the
 highest severity. Drive identity uses its reported serial when available; without
@@ -77,7 +78,8 @@ Recovery notifications are silent and do not request interaction.
 Notifications name the resource, state the observed problem, and point to a
 relevant review screen: hosts/drives → Nodes, volumes/capacity → Volumes,
 backup protection → Data protection, service addresses → Networking, image and
-host updates → Settings / Updates, Harvester upgrade → Cluster. Failed jobs keep
+host updates → Settings / Updates, Harvester upgrade → Cluster, the audit log
+filling fast → Settings / About. Failed jobs keep
 their operation destination. They never claim that replicas guarantee availability
 or that disappearance of a warning proves a repair was performed.
 

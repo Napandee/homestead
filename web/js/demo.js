@@ -3120,7 +3120,8 @@ ssh_pwauth: true
   }
   responses["/api/alerts"] = {devices:[],log:[],agents:{enabled:true,pending:2},active:scenario === "healthy" ? [] : [
     {key:"health:Disk:harvester-node2/sda",version:"demo-drive-24",severity:"degraded",category:"degraded",title:"Drive harvester-node2/sda needs attention",body:"24 reallocated sectors",href:"/nodes",acknowledged:false},
-    {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false}
+    {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false},
+    {key:"audit:filling-fast",version:"demo-audit-fast",severity:"degraded",category:"degraded",title:"The audit log is filling fast",body:"audit.jsonl filled 10 MiB in 12 minutes: something may be flooding Homestead with requests, and older lines on the data volume are being replaced. The pod log keeps every line.",href:"/settings?tab=about",acknowledged:false}
   ]};
   responses["/api/alerts/acknowledge"] = (url,opts) => {const body=JSON.parse(opts.body || "{}");const row=responses["/api/alerts"].active.find(a=>a.key===body.key && a.version===body.version);if(!row)throw new Error("This alert changed. Refresh and review its current state.");row.acknowledged=!body.undo;return {ok:true};};
   // On the live demo, say so on every page.

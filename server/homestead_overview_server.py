@@ -16,6 +16,7 @@ import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_alerts as ALERTS
 import homestead_api_v1 as API_V1
+import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
@@ -286,6 +287,7 @@ def _alert_sources():
     take("previous-volumes", lambda: cached("previous-volumes", 60, RESTORE_SWAP.alert_facts))
     take("agents", MCP.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
+    take("audit", AUDIT_LOG.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     # Twice a day whether or not anyone is looking - the Containers header and

@@ -70,6 +70,8 @@ KEYS_KEPT = 1000
 SWEEP_SECONDS = 5
 # Two rotations closer than this say something is filling the file.
 ROTATION_ALARM_SECONDS = 3600
+# The bell alert for it stays up this long after the fast fill ended.
+ROTATION_ALERT_SECONDS = 86400
 # On the data volume as well, so the record survives a restart without a log
 # collector: two files of at most MAX_BYTES, ~60 000 lines.
 FILE = "audit.jsonl"
@@ -396,6 +398,46 @@ def _append(line_text):
                 os.close(fd)
     except Exception:
         pass                        # held, full or unwritable: stdout has the line
+
+
+def _at(line):
+    try:
+        at = json.loads(line)["at"]
+        return datetime.datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _first_and_last(path):
+    """When audit.jsonl.1's first and last readable lines were written."""
+    with open(path, "rb") as handle:
+        first = next((t for t in (_at(handle.readline()) for _ in range(5)) if t is not None), None)
+        handle.seek(max(0, os.fstat(handle.fileno()).st_size - 65536))
+        tail = handle.read().splitlines()
+    last = next((t for t in (_at(line) for line in reversed(tail[-50:])) if t is not None), None)
+    return first, last
+
+
+def alert_facts(now=None):
+    """The bell alert (homestead_alerts, via homestead_overview_server): raised
+    while audit.jsonl.1 was filled in under an hour, ending within the last
+    day. Read from the files, so whichever copy of Homestead leads the alerts
+    sees what any copy wrote."""
+    now = time.time() if now is None else now
+    try:
+        first, last = _first_and_last(os.path.join(SHARED.DIR, FILE + ".1"))
+    except OSError:
+        return []
+    if first is None or last is None or last - first >= ROTATION_ALARM_SECONDS or now - last > ROTATION_ALERT_SECONDS:
+        return []
+    minutes = max(1, round((last - first) / 60))
+    return [{"key": "audit:filling-fast", "category": "degraded", "severity": "degraded",
+             "title": "The audit log is filling fast",
+             "body": (f"audit.jsonl filled {MAX_BYTES // (1024 * 1024)} MiB in {minutes} minutes: something may be "
+                      "flooding Homestead with requests, and older lines on the data volume are being replaced. "
+                      "The pod log keeps every line."),
+             "resolved": "The audit log fills at its usual pace again",
+             "href": "/settings?tab=about"}]
 
 
 def emit(entry, keep=True):

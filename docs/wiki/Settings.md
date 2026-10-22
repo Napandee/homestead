@@ -352,6 +352,9 @@ took. Opening a console or a host shell writes one line when it ends.
 - With two copies of Homestead on a shared (ReadWriteMany, NFS) data volume,
   lines appended by both at the same moment can overwrite each other in
   `audit.jsonl`; the pod logs keep them all.
+- If `audit.jsonl` fills 10 MiB in under an hour, something may be flooding
+  Homestead with requests: the bell says so ("The audit log is filling fast"),
+  and the pod log has a line about it too.
 - If the volume is full, a line that could not be written is counted and the
   next line that fits says how many were lost; a line cut short is followed by
   an `audit-line-truncated` line, so a reader can skip it. Nothing already
