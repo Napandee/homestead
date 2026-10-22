@@ -165,8 +165,10 @@ def line(request, status, ms, notes, now=None):
 
 def _refusal(entry):
     status = entry["status"]
-    if entry.get("outcome") in ("refused", "error"):
-        return True             # an MCP tool call refused: the HTTP answer is 200
+    if entry.get("outcome") == "refused":
+        return True             # an MCP tool call refused before it ran: the HTTP answer is 200
+    if entry.get("outcome") == "error":
+        return False            # a change tool failed while it acted: kept, as a server error is
     return isinstance(status, int) and (400 <= status < 500 or status == 503 and not entry["user"])
 
 

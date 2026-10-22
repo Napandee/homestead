@@ -261,17 +261,22 @@ class Throttle(unittest.TestCase):
             self.stranger(status=500)
         self.assertEqual(AUDIT_LOG.BURST + 40, len(self.kept))
 
-    def test_mcp_refusals_are_refusals(self):
-        """M2: a refused tool call answers 200, and is throttled like one."""
+    def test_mcp_refusals_are_refusals_but_tool_errors_are_kept(self):
+        """M2: a tool call refused before anything ran answers 200, and is
+        throttled like a refusal. A change tool's error happened while it
+        acted, so it is kept like a server error, even in a flood of refusals."""
         key = mock.Mock(**{"get.side_effect": {"id": "k1", "owner": "ada"}.get})
-        for outcome in ("refused", "error"):
-            for _ in range(20):
-                AUDIT_LOG.record(view(path="/mcp", user="api-key:ha", key=key), 200, 1,
-                                 notes={"tool": "scale_container", "kind": "change", "outcome": outcome})
+
+        def call(**notes):
+            AUDIT_LOG.record(view(path="/mcp", user="api-key:ha", key=key), 200, 1,
+                             notes={"tool": "scale_container", "kind": "change", **notes})
+        for _ in range(30):
+            call(outcome="refused")
         self.assertEqual(AUDIT_LOG.BURST, len(self.kept))
-        AUDIT_LOG.record(view(path="/mcp", user="api-key:ha", key=key), 200, 1,
-                         notes={"tool": "scale_container", "kind": "change"})
-        self.assertEqual(AUDIT_LOG.BURST + 1, len(self.kept), "a tool call that ran is always kept")
+        for _ in range(3):
+            call(outcome="error")
+        call()
+        self.assertEqual(["error", "error", "error", None], [line.get("outcome") for line in self.kept[-4:]])
 
     def test_the_table_is_bounded_and_an_evicted_flood_is_still_summed_up(self):
         for _ in range(9):
