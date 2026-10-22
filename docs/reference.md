@@ -1110,7 +1110,13 @@ TAG=2.8.332-dev.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 
 Image Cache groups kubelet aliases by digest and labels images retained by a
 running pod, a container scaled to zero or a scheduled job (which start from
-it), or the immediate managed-update rollback. Admins can remove an
+it), a stopped VM or a VM pool or VM replica set scaled to zero (their
+container disks), or the immediate managed-update rollback. A record that says
+which images are in use but cannot be read - a malformed rollback note or
+template, or a VM pool or replica-set list the role may not read - keeps every
+image, labelled *unreadable* with the record it names, until it is fixed. That
+read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`
+and `kubevirt.io` `virtualmachineinstancereplicasets`. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
 starting one short-lived cleanup pod per node; active, stopped, scheduled,

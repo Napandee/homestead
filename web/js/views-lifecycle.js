@@ -1351,6 +1351,7 @@ const IMAGE_REASONS = {
   rollback: { tone: "", tip: "kept so Roll back can return to it" },
   stopped: { tone: "", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
   scheduled: { tone: "", tip: "a scheduled job that runs this image" },
+  unreadable: { tone: "warn", tip: "Kept: a record that says which images are in use couldn't be read" },
 };
 async function viewImages() {
   const [d, vm, auto] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(() => null),

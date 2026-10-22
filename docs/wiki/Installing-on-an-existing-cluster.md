@@ -99,6 +99,14 @@ more. That is close to cluster-admin, and is said plainly in
 Container consoles are limited to the namespace your apps go in. If that is more than
 you want in a shared cluster, Homestead is not the right fit there.
 
+Some kinds a feature depends on are also named in a rule of their own, so the
+role says what each is for. Image clean-up, for one, has read-only `get` and
+`list` on KubeVirt's `virtualmachinepools` (`pool.kubevirt.io`) and
+`virtualmachineinstancereplicasets` (`kubevirt.io`): a VM pool or replica set
+scaled to zero still starts from its template's container disks, and only these
+lists name them. Without that read, Homestead keeps every image and says why on
+the Image cache page; it never cleans up an image it cannot account for.
+
 ## Next
 
 [Installing Homestead](Installing-Homestead) covers first sign-in, users,
