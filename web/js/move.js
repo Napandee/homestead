@@ -131,7 +131,7 @@ window.hostMoveReview = async body => {
     if (sequence !== HOST_MOVE_SEQUENCE) return;
     if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
     HOST_MOVE_REVIEW = { config, ...review, submitting: false };
-    childModal("Review move · " + config.name, `<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
+    childModal("Review move · " + config.name, `${gitopsNote(review.managed)}<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
       <div class="note warn">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
