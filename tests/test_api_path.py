@@ -27,7 +27,7 @@ class ApiPathTests(unittest.TestCase):
                 server.KUBE_HELPERS.api_path(path)
 
     def test_nothing_is_asked_of_the_api_server_for_a_refused_path(self):
-        with mock.patch.object(server.urllib.request, "urlopen") as opened:
+        with mock.patch.object(server.KUBE_HELPERS, "_request") as opened:
             with self.assertRaises(ValueError):
                 server.KUBE_HELPERS.kget("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/../../../../api/v1/secrets")
             with self.assertRaises(ValueError):
@@ -39,16 +39,14 @@ class BusyApiServerTests(unittest.TestCase):
     """A read the API server's priority and fairness turns away is asked again."""
 
     def response(self, body):
-        answer = mock.MagicMock()
-        answer.__enter__.return_value.read.return_value = body
-        return answer
+        return body  # what homestead_kube._request hands back: the answer's bytes
 
     def busy(self):
         import urllib.error
         return urllib.error.HTTPError("/api/v1/nodes", 429, "Too Many Requests", {"Retry-After": "1"}, None)
 
     def test_a_read_turned_away_for_a_moment_is_asked_again(self):
-        with mock.patch.object(server.urllib.request, "urlopen",
+        with mock.patch.object(server.KUBE_HELPERS, "_request",
                                side_effect=[self.busy(), self.busy(), self.response(b'{"items": []}')]) as opened,              mock.patch.object(server.time, "sleep") as slept:
             self.assertEqual({"items": []}, server.KUBE_HELPERS.kget("/api/v1/nodes"))
         self.assertEqual(3, opened.call_count)
@@ -56,7 +54,7 @@ class BusyApiServerTests(unittest.TestCase):
 
     def test_a_server_that_stays_busy_is_reported(self):
         import urllib.error
-        with mock.patch.object(server.urllib.request, "urlopen", side_effect=[self.busy() for _ in range(4)]),              mock.patch.object(server.time, "sleep"):
+        with mock.patch.object(server.KUBE_HELPERS, "_request", side_effect=[self.busy() for _ in range(4)]),              mock.patch.object(server.time, "sleep"):
             with self.assertRaises(urllib.error.HTTPError):
                 server.KUBE_HELPERS.kget("/api/v1/nodes")
 
