@@ -31,7 +31,7 @@ class Base(unittest.TestCase):
 
     def tick(self, report, now, item=APP, busy=False, ops=(), restart=None):
         return O.tick([item], report, restart or (lambda i: self.restarts.append(now)), lambda i: busy, ops,
-                      send=lambda url, body: self.sent.append(body["event"]), now=now)
+                      send=lambda url, body, *_: self.sent.append(body["event"]), now=now)
 
 
 class CleanTests(unittest.TestCase):

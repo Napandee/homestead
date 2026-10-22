@@ -98,3 +98,43 @@ A session failure asks the user to sign in. A connectivity failure says details
 are unavailable; neither invents a cluster incident. Recovery wording describes
 what is no longer reported, rather than claiming that a host restarted, a drive
 was repaired, or an update was installed without evidence.
+
+## Outage webhooks
+
+Push notifications reach the browsers and phones that subscribed. An app or VM
+can also call a webhook of your own when it goes down, comes back, is restarted
+or runs out of restarts, and when an automatic update of it finishes or is
+rolled back: **Monitoring → the app or VM → When it is down → Call a webhook**.
+
+**Format** says how the call is written:
+
+| Format | What is sent | Address |
+| --- | --- | --- |
+| Generic JSON (the default) | A POST of JSON: `event`, `kind`, `namespace`, `name`, `state`, `since`, `error`, `detail`, `at`, and the sentence as `text`, `content` and `message`, which Slack, Discord and Home Assistant show as it is | The service's webhook address |
+| ntfy | The sentence as the message, with `Title: Homestead`, `Priority` high when it goes down or runs out of restarts and default otherwise, and a tag | The topic, such as `https://ntfy.example.com/homestead`; an access token as `?auth=` |
+| Gotify | JSON `title` (Homestead), `message` (the sentence) and `priority` (8 when it goes down or runs out of restarts, 5 otherwise) | `https://gotify.example.com/message?token=` and the application's token |
+
+**What stays hidden.** Tokens can sit anywhere after the host: a password
+before it, the path (an ntfy topic, a Slack, Discord, Telegram or Home
+Assistant token), the query (`?token=`, `?auth=`) or the fragment. So once
+saved, the address is only ever shown as its scheme, host and port, with the
+rest as `(hidden)` - in the dialog, the app and VM lists, the Resources page,
+errors and the record of the last call. Save or test the address as shown and
+the kept address is used, but only while the scheme, host and port are
+unchanged: change any of them and type the whole address again. An admin's
+**Reveal** on the Resources page shows it all.
+
+**Where a webhook may go.** Homestead looks up every address the host name
+resolves to and calls the one it checked. It never calls this host
+(loopback), link-local or cloud metadata addresses. An IPv6 address that
+carries an IPv4 one (NAT64, 6to4) is checked as the IPv4 address inside. A LAN or cluster address
+(the RFC 1918 private ranges, 100.64.x, IPv6 unique local) - a self-hosted
+ntfy or Gotify, say - needs an admin to tick **Allow a LAN address** for that
+webhook. An operator can still change the rest of the dialog and keeps the
+admin's allowance while the address stays the same; a new LAN address needs an
+admin again. No webhook follows a redirect.
+
+**Send a test** sends one call now, in the format chosen in the dialog, and
+says how the service answered. Only an admin can send one, because it makes a
+request from inside the cluster to the address typed; it may reach a LAN
+address, and at most five a minute go out.
