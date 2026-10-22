@@ -108,6 +108,21 @@ try {
     assert.equal(await page.locator("#v_steps").count(), 0);
     await close();
 
+    // Edit VM: no hosts, images or networks made up when its options are unread.
+    await page.evaluate(() => vmEdit("default", "home-assistant-os"));
+    await settled(page);
+    assert.match(await body(), /Could not read what this VM can use[\s\S]*timed out/);
+    assert.equal(await page.locator("#ve_strategy, #ve_node").count(), 0);
+    await close();
+
+    // New k3s cluster: the same, and the failed read is not kept as the options.
+    await page.evaluate(() => k3sCluster());
+    await settled(page);
+    assert.match(await body(), /Could not read what a new k3s cluster can use[\s\S]*timed out/);
+    assert.equal(await page.locator("#k_name").count(), 0);
+    assert.equal(await page.evaluate(() => window.__vmCreateOptions), undefined);
+    await close();
+
     // Remove an import: no removal offered without knowing what it created.
     await page.evaluate(failing, "/api/imports/cleanup-plan");
     await page.evaluate(() => importRemove("media-server", "succeeded"));
