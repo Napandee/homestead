@@ -12,7 +12,9 @@ const path = require("node:path");
 // Hand-written chips left, over the files design-rules scans. Not counted:
 // a class built in a template (`${row ? "tag" : "pill"}`), a className
 // assignment, and web/index.html; the migrations take those by hand.
-const COUNTS = { pill: 5, tag: 26 };
+// The floor: buttons and links styled as chips, and the special shapes
+// (cluster-tag, duty, slimtag, more, sched-tag, a plan's warning block).
+const COUNTS = { pill: 5, tag: 23 };
 // A migrated `web/js/…` file → how many non-interactive chips it still writes
 // by hand on purpose (usually 0). Buttons and links styled as chips don't count.
 const MIGRATED = {
