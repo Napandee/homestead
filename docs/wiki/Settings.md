@@ -373,9 +373,13 @@ this cluster can now keep two" and offers **Keep two copies**: it makes
 deleted - if the cluster has none, and opens **Move data** with it picked. You
 still prepare and confirm the move; Homestead stops briefly while its data is
 copied. An existing `longhorn-r2` that keeps fewer than two copies, is
-migratable or is not Longhorn's is not used, and Redundancy says why. On k3s
-and RKE2 Homestead raises its data's copies in place as hosts join, so nothing
-is offered there.
+migratable, lets copies share a host, keeps them only on tagged hosts or is
+not Longhorn's is not used, and Redundancy says why. When its data is already
+on such a two-copy class and only kept one copy on a one-host cluster,
+**Keep two copies** raises it to two in place instead: no move, no outage. On
+k3s and RKE2 Homestead raises its data's copies in place as hosts join, so
+nothing is offered there. If the copies cannot be read, Redundancy and
+Cluster Health say so, with the reason.
 
 On the development branch, after a data move succeeds or recovery verifies
 Homestead back on its original volume, **Jobs → Dismiss** or **Clear finished**

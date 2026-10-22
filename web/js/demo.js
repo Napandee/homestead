@@ -10,8 +10,11 @@
 
   /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
      two copies; window.__demoDataCopies = true shows the one-copy cluster that
-     can now keep two, for the checks and screenshots of that offer. */
-  const demoDataCopies = () => window.__demoDataCopies
+     can now keep two, for the checks and screenshots of that offer, and
+     "unknown" a read that failed (#620). */
+  const demoDataCopies = () => window.__demoDataCopies === "unknown"
+    ? { state: "unknown", error: "Longhorn's nodes could not be read", claim: "homestead-data", storage_class: "longhorn", copies: 1 }
+    : window.__demoDataCopies
     ? { state: "can-keep-two", claim: "homestead-data", storage_class: "longhorn", copies: 1, storage_hosts: 2, room_hosts: 2, size_gb: 2,
       r2: window.__demoTwoCopiesMade
         ? { exists: true, replicas: 2, migratable: false, longhorn: true, usable: true, why: "" }

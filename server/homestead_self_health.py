@@ -122,11 +122,11 @@ def report():
 def data_copies():
     """How many copies of Homestead's data Longhorn keeps, and whether the
     cluster can now keep two (homestead_data_copies.facts), read at most
-    every 15 seconds; "n/a" with the reason when it cannot be read."""
+    every 15 seconds; "unknown" with the reason when it cannot be read."""
     try:
         return homestead_routes.cached("data-copies", 15, lambda: DATA_COPIES.facts())
     except Exception as error:
-        return {"state": "n/a", "error": str(error)[:160]}
+        return {"state": "unknown", "error": str(error)[:160]}
 
 
 def replicas_view():

@@ -72,3 +72,22 @@ test("a refusal is shown and opens nothing", async () => {
   assert.equal(t.toasts.length, 1);
   assert.match(t.toasts[0].message, /already has two or more copies/);
 });
+
+test("#620: copies that could not be read are said on the card, with the error", async () => {
+  const t = setup({ copies: { state: "unknown", error: "Longhorn's nodes could not be read" } }); await t.ctx.replicasPaint();
+  assert.ok(t.ctx.STATE.data.replicaHtml.includes("Could not read Homestead&#39;s data copies: Longhorn&#39;s nodes could not be read")
+    || t.ctx.STATE.data.replicaHtml.includes("Could not read Homestead's data copies: Longhorn's nodes could not be read"));
+  assert.doesNotMatch(t.ctx.STATE.data.replicaHtml, /replicasKeepTwo/);
+});
+
+test("on a class that already keeps two copies, the offer raises in place: no move, no dialog", async () => {
+  const t = setup({ copies: { state: "can-keep-two", action: "raise", storage_class: "longhorn-r2", r2: { exists: true, usable: true, why: "" } },
+    answer: { ok: true, raised: true, created: false, storage_class: "longhorn-r2", message: "Homestead's data now keeps two copies" } });
+  await t.ctx.replicasPaint();
+  assert.match(t.ctx.STATE.data.replicaHtml, /in place/);
+  assert.doesNotMatch(t.ctx.STATE.data.replicaHtml, /opens the move/);
+  await t.ctx.replicasKeepTwo();
+  assert.deepEqual(t.modals, [], "no move dialog");
+  assert.deepEqual(t.toasts.map(x => x.kind), ["ok"]);
+  assert.ok(t.sent.filter(s => s.path === "/api/self/replicas").length >= 2, "the card is read again");
+});

@@ -410,11 +410,15 @@ window.homesteadDataTidy = async () => {
    picked; an existing longhorn-r2 that would not keep two shareable copies
    is named, and nothing is offered. */
 function dataCopiesNote(copies) {
+  // #620: a read that failed is said, with its reason, not left blank.
+  if (copies?.state === "unknown") return `<div class="note" style="margin-top:10px">Could not read Homestead's data copies: ${esc(copies.error || "no reason given")}</div>`;
   if (copies?.state !== "can-keep-two") return "";
-  const r2 = copies.r2 || {}, refused = r2.exists && !r2.usable;
+  const r2 = copies.r2 || {}, refused = r2.exists && !r2.usable, raise = copies.action === "raise";
+  const how = raise ? ` Keep two copies raises it to two copies in place, on ${esc(copies.storage_class || "its class")}: no move and no outage.`
+    : ` Keep two copies ${r2.exists ? "picks" : "makes"} longhorn-r2 (two copies on different hosts) and opens the move; Homestead stops briefly while its data is copied.`;
   return `<div class="note" style="margin-top:10px"><b>Homestead's data has one copy; this cluster can now keep two.</b>
     ${refused ? `${esc(r2.why)}. Pick a class that keeps two copies under Move data.`
-      : `A second copy on another host keeps it if one host fails.${can("admin") ? ` Keep two copies ${r2.exists ? "picks" : "makes"} longhorn-r2 (two copies on different hosts) and opens the move; Homestead stops briefly while its data is copied.` : ""}`}
+      : `A second copy on another host keeps it if one host fails.${can("admin") ? how : ""}`}
     ${!refused && can("admin") ? `<div class="row" style="margin-top:6px"><button class="btn sm pri" id="rep_keep_two" onclick="replicasKeepTwo()">Keep two copies</button></div>` : ""}</div>`;
 }
 window.replicasKeepTwo = async () => {
@@ -423,6 +427,8 @@ window.replicasKeepTwo = async () => {
   try {
     const r = await api("/api/self/data/two-copies", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     if (!r.ok) return toast(r.message, "warn");
+    // Raised in place: nothing to move.
+    if (r.raised) { toast(r.message, "ok"); return replicasPaint(); }
     await replicasMoveData("", r.storage_class);
   } catch (e) { toast(e.message, "bad"); }
   finally { if (go) go.disabled = false; }

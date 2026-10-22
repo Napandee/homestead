@@ -88,3 +88,11 @@ test("#731: Homestead's data on one copy, on a cluster that can now keep two, is
  }
  assert.equal(H.advice(base()).filter(r=>r.id==="self-data-copies").length,0,"no data_copies: no row");
 });
+test("#731/#620: Homestead's data copies that could not be read are said, with the reason",()=>{
+ const s=base();s.self={data_copies:{state:"unknown",error:"Longhorn's nodes could not be read"}};
+ const rows=H.advice(s).filter(r=>r.id==="self-data-copies");
+ assert.equal(rows.length,1);assert.equal(rows[0].severity,"low");
+ assert.equal(rows[0].title,"Could not read Homestead's data copies");
+ assert.match(rows[0].detail,/Longhorn's nodes could not be read/);
+ assert.equal(rows[0].route,"settings:about#replicaCard");
+});

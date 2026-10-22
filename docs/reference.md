@@ -930,13 +930,18 @@ Copies of the data itself are Longhorn's. `data_copies` in
 data volume has and whether the cluster can keep two: `can-keep-two` once it
 has one copy and two hosts Longhorn stores on have room for its size
 (`rising` on k3s and RKE2, which raise it in place within a minute;
-`single-host`, `ok`, or `n/a` on Harvester and other storage). Then Cluster
-Health and Redundancy offer **Keep two copies**: `POST /api/self/data/two-copies`
-(admin) makes `longhorn-r2` - two copies on different hosts, not migratable,
-Retain - when the cluster has none, refuses an existing one that keeps fewer
-than two copies, is migratable or is not Longhorn's, and starts nothing. The
-page then opens **Move data** with `longhorn-r2` picked, and the move is
-prepared and confirmed as above.
+`single-host`, `ok`, `n/a` on Harvester and other storage, or `unknown` with
+an `error` when something could not be read, which Cluster Health and
+Redundancy show). Then Cluster Health and Redundancy offer **Keep two
+copies**: `POST /api/self/data/two-copies` (admin) makes `longhorn-r2` - two
+copies on different hosts (`replicaSoftAntiAffinity: disabled`), not
+migratable, Retain - when the cluster has none, refuses an existing one that
+keeps fewer than two copies, is migratable, lets copies share a host, has a
+`nodeSelector` or is not Longhorn's, and starts nothing. The page then opens
+**Move data** with `longhorn-r2` picked, and the move is prepared and
+confirmed as above. When the data's own class already keeps two copies
+(`action: "raise"`), the call instead raises the volume to two copies in
+place: no move and no outage.
 
 An independent helper stops Homestead, waits for its pods to release the source,
 copies and verifies the files and metadata, releases the copy mounts, then starts

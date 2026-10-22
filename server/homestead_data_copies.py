@@ -158,13 +158,14 @@ def fit_single_host():
     return "; ".join(f"Homestead's data volume {claim} keeps 1 copy: this cluster has one host" for claim in lowered)
 
 
-def two_copy_class():
-    """longhorn-r2 as the cluster has it: whether it exists, and whether
-    Homestead's data may move onto it - a Longhorn class keeping two or more
-    copies, not migratable (a migratable class gives a volume only one node
-    can mount). Raises when the class cannot be read."""
+def class_check(name):
+    """A storage class as the cluster has it, and whether Homestead's data
+    may keep two copies on it: a Longhorn class keeping two or more copies
+    on different hosts, on any host, not migratable (a migratable class
+    gives a volume only one node can mount). Raises when the class cannot
+    be read, other than not existing."""
     try:
-        found = NODE_PARITY.kget(f"/apis/storage.k8s.io/v1/storageclasses/{TWO_COPIES}") or {}
+        found = NODE_PARITY.kget(f"/apis/storage.k8s.io/v1/storageclasses/{name}") or {}
     except Exception as error:
         if getattr(error, "code", None) != 404:
             raise
@@ -176,23 +177,36 @@ def two_copy_class():
     except ValueError:
         replicas = 0
     migratable = str(params.get("migratable") or "").lower() == "true"
-    why = (f"{TWO_COPIES} is not a Longhorn class ({found.get('provisioner') or 'no provisioner'})" if not longhorn else
-           f"{TWO_COPIES} keeps {replicas} {'copy' if replicas == 1 else 'copies'}, not two" if replicas < 2 else
-           f"{TWO_COPIES} is migratable: its volumes can be mounted on only one node at a time" if migratable else "")
+    selector = str(params.get("nodeSelector") or "").strip()
+    why = (f"{name} is not a Longhorn class ({found.get('provisioner') or 'no provisioner'})" if not longhorn else
+           f"{name} keeps {replicas} {'copy' if replicas == 1 else 'copies'}, not two" if replicas < 2 else
+           f"{name} is migratable: its volumes can be mounted on only one node at a time" if migratable else
+           f"{name} lets copies share a host (replicaSoftAntiAffinity enabled)"
+           if str(params.get("replicaSoftAntiAffinity") or "").lower() == "enabled" else
+           f"{name} keeps copies only on hosts tagged {selector}" if selector else "")
     return {"exists": True, "replicas": replicas, "migratable": migratable, "longhorn": longhorn,
             "usable": not why, "why": why}
+
+
+def two_copy_class():
+    """longhorn-r2 as the cluster has it (class_check)."""
+    return class_check(TWO_COPIES)
 
 
 def facts():
     """How many copies of Homestead's data Longhorn keeps, and whether the
     cluster can now keep two. Reads only. state is:
-      n/a           no Longhorn, Harvester, not a Longhorn volume, or unreadable;
+      n/a           no Longhorn, Harvester, or not a Longhorn volume;
+      unknown       something could not be read: error says what (#620);
       ok            two or more copies;
       single-host   one copy, and fewer than two hosts with room for another;
       rising        one copy, and k3s/RKE2 raise it in place within a minute;
-      can-keep-two  one copy, and two hosts Longhorn stores on have room."""
-    out = {"state": "n/a", "claim": "", "storage_class": "", "copies": 0, "storage_hosts": 0, "room_hosts": 0,
-           "size_gb": 0.0, "r2": None}
+      can-keep-two  one copy, and two hosts Longhorn stores on have room.
+    With can-keep-two, action is "raise" when the volume's own class already
+    keeps two copies (Homestead lowered it on one host: raised in place, no
+    move), else "move" onto longhorn-r2."""
+    out = {"state": "n/a", "claim": "", "pv": "", "storage_class": "", "copies": 0, "storage_hosts": 0,
+           "room_hosts": 0, "size_gb": 0.0, "r2": None, "action": ""}
     p = NODE_PARITY.platform() or {}
     if p.get("harvester") or not p.get("longhorn"):
         return out
@@ -200,26 +214,32 @@ def facts():
         own = next((v for v in own_data_volumes() if v["volume"]), None)
         if not own:
             return out
-        out.update(claim=own["claim"], storage_class=own["storage_class"], size_gb=own["size_gb"],
+        out.update(claim=own["claim"], pv=own["pv"], storage_class=own["storage_class"], size_gb=own["size_gb"],
                    copies=int((own["volume"].get("spec") or {}).get("numberOfReplicas") or 0))
         if out["copies"] >= 2:
             out["state"] = "ok"
             return out
         storing = NODE_PARITY._storage_hosts(NODE_PARITY._ready_nodes())
         if storing is None:
-            return out
+            return {**out, "state": "unknown", "error": "Longhorn's nodes could not be read"}
         out["storage_hosts"] = len(storing)
-        rooms = {n["name"]: n["room_gb"] for n in LHCAP.capacity()["nodes"]}
-        out["room_hosts"] = sum(1 for name in storing if rooms.get(name, 0) >= out["size_gb"])
         if len(storing) >= 2 and NODE_PARITY.own_copies_due(storing):
             out["state"] = "rising"
-        elif out["room_hosts"] >= 2:
-            out["state"] = "can-keep-two"
-            out["r2"] = two_copy_class()
+            return out
+        if not out["size_gb"]:
+            # An unknown size is no room on any host, never room on all.
+            return {**out, "state": "unknown", "error": "the size of Homestead's data volume could not be read"}
+        rooms = {n["name"]: n["room_gb"] for n in LHCAP.capacity()["nodes"]}
+        out["room_hosts"] = sum(1 for name in storing if rooms.get(name, 0) >= out["size_gb"])
+        if out["room_hosts"] >= 2:
+            own_class = class_check(out["storage_class"]) if out["storage_class"] else {"exists": False}
+            raise_it = own_class.get("exists") and own_class.get("usable")
+            out.update(state="can-keep-two", action="raise" if raise_it else "move",
+                       r2=own_class if raise_it else two_copy_class())
         else:
             out["state"] = "single-host"
     except Exception as error:
-        out.update(state="n/a", error=str(error)[:160])
+        out.update(state="unknown", error=str(error)[:160] or type(error).__name__)
     return out
 
 
@@ -232,14 +252,27 @@ NOTHING_TO_DO = {
 
 
 def ensure_two_copy_class():
-    """Keep two copies: longhorn-r2 made when the cluster has none, so the
-    move of Homestead's data can pick it. Only while facts() says the
-    cluster can keep two; an existing longhorn-r2 that would not keep two
-    shareable copies is not used. Never prepares or moves anything."""
+    """Keep two copies. On a class that already keeps two (Homestead lowered
+    its volume on one host), the volume is raised to two copies in place: no
+    move, no outage. Otherwise longhorn-r2 is made when the cluster has none,
+    so the move of Homestead's data can pick it; an existing longhorn-r2 that
+    would not keep two copies on different hosts is not used. Only while
+    facts() says the cluster can keep two. Never prepares or moves anything."""
     found = facts()
-    out = {"ok": False, "storage_class": TWO_COPIES, "created": False}
+    out = {"ok": False, "storage_class": TWO_COPIES, "created": False, "raised": False}
+    if found.get("state") == "unknown":
+        return {**out, "message": f"Could not read Homestead's data copies: {found.get('error')}"}
     if found.get("state") != "can-keep-two":
         return {**out, "message": NOTHING_TO_DO.get(found.get("state"), NOTHING_TO_DO["n/a"])}
+    if found.get("action") == "raise":
+        NODE_PARITY.ksend("PATCH", f"{NODE_PARITY.LH_VOLUMES}/{found['pv']}", {"spec": {"numberOfReplicas": 2}},
+                          ctype="application/merge-patch+json")
+        state = NODE_PARITY._load()
+        state["own_copies"] = 2
+        SHARED.write_json(NODE_PARITY._path(), state, indent=1, sort_keys=True)
+        homestead_routes.forget("data-copies")
+        return {**out, "ok": True, "raised": True, "storage_class": found.get("storage_class"),
+                "message": "Homestead's data now keeps two copies, on different hosts; Longhorn is making the second"}
     r2 = found.get("r2") or {}
     if r2.get("exists") and not r2.get("usable"):
         return {**out, "message": f"{r2.get('why')}. Homestead's data was not moved; "
@@ -247,7 +280,8 @@ def ensure_two_copy_class():
     created = False
     if not r2.get("exists"):
         STORAGE_CLASSES.create_storage_class({"name": TWO_COPIES, "replicas": 2, "migratable": False,
-                                              "reclaim_policy": "Retain", "copies": "hosts", "expandable": True})
+                                              "reclaim_policy": "Retain", "copies": "hosts", "hosts_only": True,
+                                              "expandable": True})
         created = True
         homestead_routes.forget("data-copies")
     return {**out, "ok": True, "created": created,

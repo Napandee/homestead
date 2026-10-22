@@ -226,9 +226,9 @@ def lh_store(name, room_gib=20, ready=True):
 R2 = "/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"
 
 
-def r2_class(replicas="2", migratable="false", provisioner="driver.longhorn.io"):
+def r2_class(replicas="2", migratable="false", provisioner="driver.longhorn.io", **extra):
     return {"metadata": {"name": "longhorn-r2"}, "provisioner": provisioner,
-            "parameters": {"numberOfReplicas": replicas, "migratable": migratable}}
+            "parameters": {"numberOfReplicas": replicas, "migratable": migratable, **extra}}
 
 
 class FactsTests(unittest.TestCase):
@@ -312,16 +312,47 @@ class FactsTests(unittest.TestCase):
         del cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]
         self.assertEqual("n/a", COPIES.facts()["state"])
 
-    def test_facts_unreadable_is_na(self):
+    def test_facts_unreadable_is_unknown_and_says_why(self):
+        # #620: a read that failed is said, never shown as nothing to say.
+        cluster = self.cluster()
+        cluster.fail = {"/apis/apps/v1/namespaces/lab/deployments/homestead"}
+        facts = COPIES.facts()
+        self.assertEqual("unknown", facts["state"])
+        self.assertIn("deployments/homestead", facts["error"])
+
+    def test_storage_hosts_unreadable_is_unknown(self):
         cluster = self.cluster()
         cluster.fail = {LH_NODES}
-        self.assertEqual("n/a", COPIES.facts()["state"])
+        facts = COPIES.facts()
+        self.assertEqual("unknown", facts["state"])
+        self.assertIn("Longhorn's nodes could not be read", facts["error"])
+
+    def test_unreadable_size_is_not_room(self):
+        cluster = self.cluster()
+        volume = cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]
+        volume["spec"]["size"] = "0"
+        cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data"]["spec"]["resources"] = {}
+        facts = COPIES.facts()
+        self.assertEqual("unknown", facts["state"])
+        self.assertIn("size", facts["error"])
+        self.assertEqual(0, facts["room_hosts"])
+
+    def test_on_a_two_copy_class_with_one_copy_the_offer_raises_in_place(self):
+        self.cluster(storage_class="longhorn-r2", extra={R2: r2_class()})
+        facts = COPIES.facts()
+        self.assertEqual(("can-keep-two", "raise"), (facts["state"], facts["action"]))
+
+    def test_on_longhorn_the_offer_is_a_move(self):
+        self.cluster()
+        self.assertEqual("move", COPIES.facts()["action"])
 
     def test_facts_r2_description(self):
         cases = ((r2_class(), True, ""),
                  (r2_class(migratable="true"), False, "migratable"),
                  (r2_class(replicas="1"), False, "1 copy"),
-                 (r2_class(provisioner="rancher.io/local-path"), False, "not a Longhorn class"))
+                 (r2_class(provisioner="rancher.io/local-path"), False, "not a Longhorn class"),
+                 (r2_class(replicaSoftAntiAffinity="enabled"), False, "share a host"),
+                 (r2_class(nodeSelector="fast"), False, "only on hosts tagged fast"))
         for found, usable, why in cases:
             with self.subTest(found=found):
                 self.cluster(extra={R2: found})
@@ -357,7 +388,7 @@ class SelfHealthTests(unittest.TestCase):
         def broken():
             raise RuntimeError("Longhorn did not answer")
         with mock.patch.object(COPIES, "facts", broken):
-            self.assertEqual({"state": "n/a", "error": "Longhorn did not answer"}, SELF_HEALTH.data_copies())
+            self.assertEqual({"state": "unknown", "error": "Longhorn did not answer"}, SELF_HEALTH.data_copies())
 
 
 class KeepTwoCopiesTests(unittest.TestCase):
@@ -377,10 +408,19 @@ class KeepTwoCopiesTests(unittest.TestCase):
         self.sent = []
         self.enterContext(mock.patch.object(PARITY, "ksend", lambda *a, **k: self.sent.append(a)))
 
+    def test_raises_in_place_on_a_two_copy_class(self):
+        # Already on longhorn-r2, lowered to one copy: no move, no downtime.
+        self.facts.update(action="raise", pv="pvc-0001")
+        self.facts["r2"] = {"exists": True, "replicas": 2, "migratable": False, "longhorn": True, "usable": True, "why": ""}
+        result = COPIES.ensure_two_copy_class()
+        self.assertEqual((True, True, False), (result["ok"], result["raised"], result["created"]))
+        self.assertEqual([("PATCH", f"{PARITY.LH_VOLUMES}/pvc-0001", {"spec": {"numberOfReplicas": 2}})], self.sent)
+        self.assertEqual([], self.created)
+
     def test_creates_r2_when_missing(self):
         result = COPIES.ensure_two_copy_class()
         self.assertEqual([{"name": "longhorn-r2", "replicas": 2, "migratable": False, "reclaim_policy": "Retain",
-                           "copies": "hosts", "expandable": True}], self.created)
+                           "copies": "hosts", "hosts_only": True, "expandable": True}], self.created)
         self.assertTrue(result["ok"])
         self.assertTrue(result["created"])
         self.assertEqual("longhorn-r2", result["storage_class"])
@@ -434,6 +474,21 @@ class KeepTwoCopiesTests(unittest.TestCase):
             view = SELF_HEALTH.replicas_view()
         self.assertEqual("can-keep-two", view["data_copies"]["state"])
         self.assertEqual(1, view["desired"])
+
+
+class HostsOnlyClassTests(unittest.TestCase):
+    def test_hosts_only_keeps_copies_on_different_hosts_whatever_the_global_setting(self):
+        from unittest import mock
+        import homestead_storage_classes as SC
+        sent = []
+        with mock.patch.object(SC, "storage_classes", lambda: []), \
+                mock.patch.object(SC, "_dns_name", lambda value, what: value), \
+                mock.patch.object(SC, "storage_class_inventory", lambda: []), \
+                mock.patch.object(SC, "ksend", lambda *a, **k: sent.append(a)):
+            SC.create_storage_class({"name": "longhorn-r2", "replicas": 2, "copies": "hosts", "hosts_only": True})
+            SC.create_storage_class({"name": "plain", "replicas": 2, "copies": "hosts"})
+        self.assertEqual("disabled", sent[0][2]["parameters"]["replicaSoftAntiAffinity"])
+        self.assertNotIn("replicaSoftAntiAffinity", sent[1][2]["parameters"], "other classes as before")
 
 
 if __name__ == "__main__":
