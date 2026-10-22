@@ -65,6 +65,10 @@ class TheLine(unittest.TestCase):
         line = self.line(view(user="fleet:loft:ada", role="operator", fleet="m1"))
         self.assertEqual(("linked", "fleet:loft:ada", "m1"), (line["via"], line["user"], line["from"]))
 
+    def test_from_is_checked_like_the_notes(self):
+        self.assertNotIn("from", self.line(view(user="fleet:loft:ada", fleet="a b\nc")))
+        self.assertNotIn("from", self.line(view(user="fleet:loft:ada", fleet="m" * 300)))
+
     def test_a_stranger_is_none(self):
         line = self.line(view(user=None, role=None), status=401)
         self.assertEqual(("none", "", None, 401), (line["via"], line["user"], line["role"], line["status"]))

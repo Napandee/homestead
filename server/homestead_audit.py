@@ -80,6 +80,7 @@ _swept = [0.0]
 _rotated = []
 _throttle = threading.Lock()
 _drops_seen = [0]
+_file_dropped = [0]      # lines that could not be written whole to audit.jsonl
 _lock = threading.Lock()
 
 
@@ -147,7 +148,7 @@ def line(request, status, ms, notes, now=None):
         entry["access"] = email
     if conn is not None and conn.key:
         entry["key"], entry["owner"] = conn.key.get("id"), conn.key.get("owner")
-    if conn is not None and conn.fleet:
+    if conn is not None and isinstance(conn.fleet, str) and NOTE_VALUE.fullmatch(conn.fleet):
         entry["from"] = conn.fleet
     for key in ("to", "tool", "held", "outcome"):
         if isinstance(notes.get(key), str) and NOTE_VALUE.fullmatch(notes[key]):
@@ -341,6 +342,34 @@ def _rotate(path, incoming):
     _rotated[:] = [now]
 
 
+def _write_whole(fd, data):
+    """One os.write of data with O_APPEND. Nothing is ever cut back: another
+    replica may have appended since. A write that fails writes nothing and is
+    counted; the next line that fits says how many were lost. A short write
+    (a full disk) is ended with a newline and a marker line, so a reader can
+    skip the broken line before it."""
+    if _file_dropped[0]:
+        data = (text({"v": 1, "at": _now_text(time.time()), "replica": os.environ.get("HOSTNAME", ""),
+                      "event": "audit-file-lines-dropped", "dropped": _file_dropped[0],
+                      "detail": "lines that could not be written here (the volume was full?); "
+                                "the pod log has them"}) + "\n").encode("ascii") + data
+    try:
+        written = os.write(fd, data)
+    except OSError:
+        _file_dropped[0] += 1
+        return
+    _file_dropped[0] = 0
+    if written < len(data):
+        try:
+            os.write(fd, ("\n" + text({"v": 1, "at": _now_text(time.time()),
+                                        "replica": os.environ.get("HOSTNAME", ""),
+                                        "event": "audit-line-truncated",
+                                        "detail": "the line before this one was cut short (the volume was full?); "
+                                                  "the pod log has it"}) + "\n").encode("ascii"))
+        except OSError:
+            pass
+
+
 def _append(line_text):
     """One line onto the data volume, only through the self-data write fence:
     while a data move holds /data nothing is written here, and nothing raises."""
@@ -360,7 +389,7 @@ def _append(line_text):
                 _rotate(path, len(data))
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
-                os.write(fd, data)
+                _write_whole(fd, data)
             finally:
                 os.close(fd)
     except Exception:

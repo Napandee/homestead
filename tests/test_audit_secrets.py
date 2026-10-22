@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.client import HTTPConnection
 from pathlib import Path
@@ -90,8 +91,15 @@ class NothingSecret(unittest.TestCase):
             self.arrived.wait_for(lambda: len(self.printed) >= 5, timeout=5)
         self.assertEqual(["/api/auth/setup", "/api/auth/password", "/api/auth/users", "/api/auth/keys",
                           "/api/v1/apps/restart"], [json.loads(t)["path"] for t in self.printed])
-        kept = (Path(self.dir) / "audit.jsonl").read_text(encoding="utf-8")
-        self.assertEqual(5, len(kept.splitlines()))
+        audit = Path(self.dir) / "audit.jsonl"
+
+        def kept_lines():           # stdout is written first, then the file, on the hooks' thread
+            return audit.read_text(encoding="utf-8").splitlines() if audit.exists() else []
+        deadline = time.monotonic() + 5
+        while len(kept_lines()) < 5 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        kept = "\n".join(kept_lines())
+        self.assertEqual(5, len(kept_lines()))
         for secret in SECRETS:
             with self.subTest(secret=secret):
                 self.assertNotIn(secret, "\n".join(self.printed))

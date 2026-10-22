@@ -28,6 +28,8 @@ class OnTheDataVolume(unittest.TestCase):
         self.enterContext(mock.patch.object(SHARED, "WRITE_SCOPE", None))
         self.enterContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=True))
         self.stdout = self.enterContext(mock.patch.object(AUDIT_LOG, "_stdout"))
+        AUDIT_LOG._file_dropped[0] = 0
+        self.addCleanup(AUDIT_LOG._file_dropped.__setitem__, 0, 0)
 
     def emit(self, n=1):
         for i in range(n):
@@ -124,6 +126,38 @@ class OnTheDataVolume(unittest.TestCase):
         with mock.patch.object(AUDIT_LOG.os, "write", side_effect=OSError(28, "No space left on device")):
             self.emit()
         self.assertEqual(1, self.stdout.call_count)
+
+    def test_a_short_write_is_finished_with_a_marker_and_nothing_is_cut(self):
+        """Never truncate (another replica may have appended since): a half line
+        is ended, and a marker line says the one before it is broken."""
+        self.emit()
+        real, calls = os.write, []
+
+        def half_once(fd, data):
+            calls.append(data)
+            return real(fd, data[:len(data) // 2] if len(calls) == 1 else data)
+        with mock.patch.object(AUDIT_LOG.os, "write", side_effect=half_once), \
+                mock.patch.object(AUDIT_LOG.os, "ftruncate", side_effect=AssertionError("never truncate")):
+            self.emit()
+        self.emit()
+        lines = self.kept()
+        self.assertEqual("/api/x/0", json.loads(lines[0])["path"], "earlier lines are intact")
+        with self.assertRaises(ValueError):
+            json.loads(lines[1])                                    # the broken one, ended
+        self.assertEqual("audit-line-truncated", json.loads(lines[2])["event"])
+        self.assertEqual("/api/x/0", json.loads(lines[3])["path"])
+        self.assertEqual(4, len(lines))
+
+    def test_a_failed_write_is_counted_and_reported_by_the_next_line(self):
+        self.emit()
+        with mock.patch.object(AUDIT_LOG.os, "write", side_effect=OSError(28, "No space left on device")), \
+                mock.patch.object(AUDIT_LOG.os, "ftruncate", side_effect=AssertionError("never truncate")):
+            self.emit(2)
+        self.assertEqual(1, len(self.kept()))
+        self.emit()
+        lines = [json.loads(line) for line in self.kept()]
+        self.assertEqual(("audit-file-lines-dropped", 2), (lines[1]["event"], lines[1]["dropped"]))
+        self.assertEqual("/api/x/0", lines[2]["path"])
 
     def test_a_link_in_its_place_is_not_followed(self):
         target = os.path.join(self.dir, "elsewhere")

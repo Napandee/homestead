@@ -349,6 +349,15 @@ took. Opening a console or a host shell writes one line when it ends.
   120 in all (one ceiling for requests with no user, another for signed-in
   people). One line says how many it left out. Those lines are written when the
   minute is over, on the next request, so a pod that stops first loses them.
+- With two copies of Homestead on a shared (ReadWriteMany, NFS) data volume,
+  lines appended by both at the same moment can overwrite each other in
+  `audit.jsonl`; the pod logs keep them all.
+- If the volume is full, a line that could not be written is counted and the
+  next line that fits says how many were lost; a line cut short is followed by
+  an `audit-line-truncated` line, so a reader can skip it. Nothing already
+  written is ever cut back.
+- An AI agent's refused call with a bad key, or for a tool that does not
+  exist, has no line here; the agent audit records it.
 - Never written: passwords, setup codes, API keys, cookies, request bodies
   (only the target's namespace, kind and name) and query strings.
 - Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
