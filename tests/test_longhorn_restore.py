@@ -8,6 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_longhorn as longhorn
+import homestead_longhorn_backups as BACKUPS
+import homestead_longhorn_restore as RESTORE
+import homestead_csi_restore as CSI_RESTORE
 
 
 class LonghornRestoreTests(unittest.TestCase):
@@ -29,7 +32,7 @@ class LonghornRestoreTests(unittest.TestCase):
             },
         }
         self.objects["/apis/storage.k8s.io/v1/storageclasses"] = {"items": [self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"]]}
-        self.objects["/apis/snapshot.storage.k8s.io/v1"] = {"resources": [{"name": x} for x in longhorn.CSI_RESTORE.CRDS]}
+        self.objects["/apis/snapshot.storage.k8s.io/v1"] = {"resources": [{"name": x} for x in CSI_RESTORE.CRDS]}
         self.objects["/apis/apps/v1/deployments"] = {"items": [{"metadata": {"generation": 1},
             "spec": {"template": {"spec": {"containers": [{"image": "registry.k8s.io/sig-storage/snapshot-controller:v8.2.0"}]}}},
             "status": {"availableReplicas": 1, "observedGeneration": 1}},
@@ -56,13 +59,13 @@ class LonghornRestoreTests(unittest.TestCase):
         longhorn.bind(get, send, {}, "longhorn-r2")
 
     def test_plan_reports_minimum_size_and_existing_pvc_conflict(self):
-        plan = longhorn.restore_plan("backup-123", "lab", "restored-data")
+        plan = RESTORE.restore_plan("backup-123", "lab", "restored-data")
         self.assertEqual(5, plan["minimum_size_gb"])
         self.assertIsNone(plan["conflict"])
         self.assertNotIn("url", plan)
         self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/restored-data"] = {
             "metadata": {"name": "restored-data"}}
-        conflict = longhorn.restore_plan("backup-123", "lab", "restored-data")
+        conflict = RESTORE.restore_plan("backup-123", "lab", "restored-data")
         self.assertEqual("PersistentVolumeClaim", conflict["conflict"]["kind"])
 
     def test_backup_inventory_marks_restore_readiness_without_exposing_url(self):
@@ -71,17 +74,17 @@ class LonghornRestoreTests(unittest.TestCase):
         self.objects[
             "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups"
         ] = {"items": [backup]}
-        row = longhorn.backups()[0]
+        row = BACKUPS.backups()[0]
         self.assertTrue(row["restorable"])
         self.assertEqual(5, row["volume_size_gb"])
         self.assertNotIn("url", row)
 
     def test_plan_rejects_malformed_kubernetes_names(self):
         with self.assertRaisesRegex(ValueError, "PVC name"):
-            longhorn.restore_plan("backup-123", "lab", "bad..name")
+            RESTORE.restore_plan("backup-123", "lab", "bad..name")
 
     def restore(self, **extra):
-        return longhorn.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "restored-data", **extra})
+        return RESTORE.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "restored-data", **extra})
 
     def test_restore_uses_normal_class_and_retained_backup_snapshot(self):
         original = copy.deepcopy(self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"])
@@ -148,7 +151,7 @@ class LonghornRestoreTests(unittest.TestCase):
     def test_foreign_snapshot_or_changed_handle_is_never_adopted(self):
         result = self.restore()
         self.objects.pop("/api/v1/namespaces/lab/persistentvolumeclaims/restored-data")
-        content = self.objects[longhorn.CSI_RESTORE.API + "/volumesnapshotcontents/" + result["snapshot"]]
+        content = self.objects[CSI_RESTORE.API + "/volumesnapshotcontents/" + result["snapshot"]]
         content["spec"]["source"]["snapshotHandle"] = "bak://other/backup-other"
         with self.assertRaisesRegex(ValueError, "different settings"):
             self.restore()
@@ -159,25 +162,25 @@ class LonghornRestoreTests(unittest.TestCase):
 
     def test_snapshot_error_is_reported_while_pvc_is_pending(self):
         result = self.restore()
-        snapshot = self.objects[longhorn.CSI_RESTORE.API + "/namespaces/lab/volumesnapshots/" + result["snapshot"]]
+        snapshot = self.objects[CSI_RESTORE.API + "/namespaces/lab/volumesnapshots/" + result["snapshot"]]
         snapshot["status"] = {"error": {"message": "backup is unavailable"}}
         pvc = self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/restored-data"]
-        self.assertEqual("backup is unavailable", longhorn.restore_problem(pvc))
+        self.assertEqual("backup is unavailable", RESTORE.restore_problem(pvc))
 
     def test_cleanup_only_removes_bound_owned_retained_metadata_using_identity_preconditions(self):
         result = self.restore()
-        prefix = longhorn.CSI_RESTORE.API
+        prefix = CSI_RESTORE.API
         content = self.objects[prefix + "/volumesnapshotcontents/" + result["snapshot"]]
         self.objects[prefix + "/volumesnapshotcontents?labelSelector=homestead.io/restore-snapshot%3Dtrue"] = {"items": [content]}
-        longhorn.cleanup_restore_snapshots()
+        RESTORE.cleanup_restore_snapshots()
         self.assertFalse(any(method == "DELETE" for method, _, _, _ in self.sent))
         pvc = self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/restored-data"]
         pvc["status"] = {"phase": "Bound"}
         content["spec"]["deletionPolicy"] = "Delete"
-        longhorn.cleanup_restore_snapshots()
+        RESTORE.cleanup_restore_snapshots()
         self.assertFalse(any(method == "DELETE" for method, _, _, _ in self.sent))
         content["spec"]["deletionPolicy"] = "Retain"
-        longhorn.cleanup_restore_snapshots()
+        RESTORE.cleanup_restore_snapshots()
         deletes = [(path, body) for method, path, body, _ in self.sent if method == "DELETE"]
         self.assertEqual(2, len(deletes))
         self.assertTrue(all("preconditions" in body for _, body in deletes))
@@ -207,7 +210,7 @@ class LonghornRestoreTests(unittest.TestCase):
         self.assertNotIn("backingImage", klass["parameters"])
 
     def test_dependency_installation_waits_without_creating_snapshot_or_pvc(self):
-        with patch.object(longhorn.CSI_RESTORE, "ensure_support", return_value={"ready": False, "message": "Installing CSI snapshots"}):
+        with patch.object(CSI_RESTORE, "ensure_support", return_value={"ready": False, "message": "Installing CSI snapshots"}):
             result = self.restore()
         self.assertFalse(result["created"])
         self.assertEqual([], self.sent)

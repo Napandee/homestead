@@ -13,6 +13,9 @@ sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
+import homestead_longhorn_volumes as VOLUMES
+import homestead_longhorn_target as BACKUP_TARGET
 from fakes.kube import Kube
 
 NS = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -63,7 +66,7 @@ class LonghornWriteTests(unittest.TestCase):
         stored["metadata"]["labels"]["team"] = "media"
         stored["metadata"]["annotations"] = {"note": "set by hand"}
         with Kube(stored) as kube:
-            LH.save_job(form())
+            JOBS.save_job(form())
             saved = kube.object(f"{NS}/recurringjobs/daily")
         self.assertEqual("0 3 * * *", saved["spec"]["cron"])
         self.assertEqual(5, saved["spec"]["retain"])
@@ -77,14 +80,14 @@ class LonghornWriteTests(unittest.TestCase):
             path = f"{NS}/recurringjobs/daily"
             self.bind(self.meanwhile(kube, path, lambda other: other["metadata"].setdefault(
                 "annotations", {}).update({"note": "added meanwhile"})))
-            LH.save_job(form())
+            JOBS.save_job(form())
             saved = kube.object(path)
         self.assertEqual("0 3 * * *", saved["spec"]["cron"])
         self.assertEqual("added meanwhile", saved["metadata"]["annotations"]["note"])
 
     def opened(self):
         """The generation of daily as the editor gets it from the list."""
-        return next(row["generation"] for row in LH.list_jobs() if row["name"] == "daily")
+        return next(row["generation"] for row in JOBS.list_jobs() if row["name"] == "daily")
 
     def test_the_editor_does_not_save_over_a_job_changed_since_it_opened(self):
         with Kube(job()) as kube:
@@ -93,7 +96,7 @@ class LonghornWriteTests(unittest.TestCase):
             other = kube.object(path)
             other["spec"]["groups"] = ["default", "media"]
             K.send("PUT", path, other)
-            reply = LH.save_job(form(generation=opened))
+            reply = JOBS.save_job(form(generation=opened))
             saved = kube.object(path)
         self.assertEqual(409, reply.code)
         self.assertIn("changed or deleted", reply.body["error"])
@@ -109,7 +112,7 @@ class LonghornWriteTests(unittest.TestCase):
             ran = kube.object(path)
             ran["status"] = {"executionCount": 3}
             K.send("PUT", path + "/status", ran)
-            reply = LH.save_job(form(generation=opened))
+            reply = JOBS.save_job(form(generation=opened))
             saved = kube.object(path)
         self.assertEqual({"ok": True, "name": "daily"}, reply)
         self.assertEqual("0 3 * * *", saved["spec"]["cron"])
@@ -119,7 +122,7 @@ class LonghornWriteTests(unittest.TestCase):
             path = f"{NS}/recurringjobs/daily"
             opened = self.opened()
             K.send("DELETE", path)
-            reply = LH.save_job(form(generation=opened))
+            reply = JOBS.save_job(form(generation=opened))
             saved = kube.object(path)
         self.assertEqual(409, reply.code)
         self.assertIn("changed or deleted", reply.body["error"])
@@ -127,13 +130,13 @@ class LonghornWriteTests(unittest.TestCase):
 
     def test_the_editor_saves_a_job_unchanged_since_it_opened(self):
         with Kube(job()) as kube:
-            LH.save_job(form(generation=self.opened()))
+            JOBS.save_job(form(generation=self.opened()))
             saved = kube.object(f"{NS}/recurringjobs/daily")
         self.assertEqual("0 3 * * *", saved["spec"]["cron"])
 
     def test_saving_or_deleting_a_job_refreshes_the_overview_the_editor_reads(self):
         with Kube(job()):
-            for act in (lambda: LH.save_job(form()), lambda: LH.delete_job("daily")):
+            for act in (lambda: JOBS.save_job(form()), lambda: JOBS.delete_job("daily")):
                 cache = {"lhov": {"jobs": []}, "lhjobs": [], "other": 1}
                 LH.bind(K.kget, K.send, cache, "longhorn-r2", "lab")
                 act()
@@ -141,7 +144,7 @@ class LonghornWriteTests(unittest.TestCase):
 
     def test_a_new_job_from_the_editor_does_not_replace_one_of_the_same_name(self):
         with Kube(job()) as kube:
-            reply = LH.save_job(form(generation=""))
+            reply = JOBS.save_job(form(generation=""))
             saved = kube.object(f"{NS}/recurringjobs/daily")
         self.assertEqual(409, reply.code)
         self.assertIn("already", reply.body["error"])
@@ -149,7 +152,7 @@ class LonghornWriteTests(unittest.TestCase):
 
     def test_a_new_job_is_made(self):
         with Kube() as kube:
-            LH.save_job(form(name="weekly", generation=""))
+            JOBS.save_job(form(name="weekly", generation=""))
             saved = kube.object(f"{NS}/recurringjobs/weekly")
         self.assertEqual("weekly", saved["spec"]["name"])
         self.assertEqual("true", saved["metadata"]["labels"]["homestead.io/managed"])
@@ -158,7 +161,7 @@ class LonghornWriteTests(unittest.TestCase):
         with Kube(job()) as kube:
             path = f"{NS}/recurringjobs/daily"
             self.bind(self.meanwhile(kube, path, lambda other: other["spec"]["groups"].append("media")))
-            LH.save_group({"name": "photos", "jobs": ["daily"], "volumes": []})
+            VOLUMES.save_group({"name": "photos", "jobs": ["daily"], "volumes": []})
             saved = kube.object(path)
         self.assertEqual(["default", "media", "photos"], saved["spec"]["groups"])
 
@@ -171,7 +174,7 @@ class LonghornWriteTests(unittest.TestCase):
                   "data": {"AWS_ACCESS_KEY_ID": base64.b64encode(b"old").decode(),
                            "AWS_CERT": base64.b64encode(b"-----BEGIN CERTIFICATE-----").decode()}}
         with Kube(secret) as kube:
-            LH.set_backup_target("s3://bucket@eu-west-1/", keys={"access_key": "new", "secret_key": "s3cret"})
+            BACKUP_TARGET.set_backup_target("s3://bucket@eu-west-1/", keys={"access_key": "new", "secret_key": "s3cret"})
             saved = kube.object(SECRET)
         data = {key: base64.b64decode(value).decode() for key, value in (saved.get("data") or {}).items()}
         data.update(saved.get("stringData") or {})
@@ -188,7 +191,7 @@ class LonghornWriteTests(unittest.TestCase):
         with Kube(target) as kube:
             self.bind(self.meanwhile(kube, TARGET, lambda other: other["metadata"].setdefault(
                 "annotations", {}).update({"note": "added meanwhile"})))
-            LH.set_backup_target("nfs://192.0.2.20:/backups", poll="10m")
+            BACKUP_TARGET.set_backup_target("nfs://192.0.2.20:/backups", poll="10m")
             saved = kube.object(TARGET)
         self.assertEqual("nfs://192.0.2.20:/backups", saved["spec"]["backupTargetURL"])
         self.assertEqual("10m", saved["spec"]["pollInterval"])

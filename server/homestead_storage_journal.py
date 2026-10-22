@@ -10,6 +10,8 @@ import json
 import re
 import urllib.error
 
+import homestead_kube as KUBE
+
 
 class Held(ValueError):
     """Public, credential-free reason to inspect the retained storage operation."""
@@ -152,11 +154,7 @@ class Journal:
 
     def _get(self, path):
         try:
-            return self.read(path)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return None
-            raise Held("Storage resource state could not be read") from None
+            return KUBE.get_optional(path, read=self.read)
         except Exception:
             raise Held("Storage resource state could not be read") from None
 

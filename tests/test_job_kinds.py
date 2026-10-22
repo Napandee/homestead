@@ -159,13 +159,16 @@ STARTS = ("OPS.start", "ops.start", "operations.start")
 def start_calls(source, module):
     """The kinds the starts in one module's source pass, and how many starts
     pass a kind that cannot be read. A start is OPS.start(...) under the
-    names modules give the job store, or a module-level alias of it
+    names modules give the job store, the same reached through another module
+    (homestead_move_plan's STATE.OPS.start), or a module-level alias of it
     (homestead_promote's OPS_START = OPS.start)."""
     tree = SS.tree(source)
     aliases = {target.id for node in tree.body if isinstance(node, ast.Assign) and SS.dotted(node.value) in STARTS
                for target in node.targets if isinstance(target, ast.Name)}
+    through = {name for name in (SS.dotted(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call))
+               if name and name.endswith(tuple("." + start for start in STARTS))}
     found, dynamic = set(), 0
-    for node in SS.calls(tree, *STARTS, *aliases):
+    for node in SS.calls(tree, *STARTS, *aliases, *through):
         if node.args:
             kinds = _start_kind(module, node.args[0])
             if kinds is None:
@@ -210,6 +213,11 @@ class ScanTests(unittest.TestCase):
     def test_a_start_through_a_module_alias_is_read(self):
         source = "OPS_START = OPS.start\n\ndef go():\n    OPS_START('host-promote', 'Promote', {}, '/', {})\n"
         self.assertEqual(({"host-promote"}, 0), start_calls(SS.code(source), types.SimpleNamespace()))
+
+    def test_a_start_through_another_module_s_job_store_is_read(self):
+        # homestead_move_plan starts a move through STATE.OPS (#623).
+        source = "def go():\n    STATE.OPS.start('move', 'Move', {}, '/', {})\n"
+        self.assertEqual(({"move"}, 0), start_calls(SS.code(source), types.SimpleNamespace()))
 
     def test_a_start_with_a_variable_kind_is_counted_not_guessed(self):
         source = "def go(kind):\n    ops.start(kind, 'x', {}, '/', {})\n    OPS.start(KIND, 'y', {}, '/', {})\n"
@@ -274,6 +282,7 @@ class GuardTests(unittest.TestCase):
     def test_every_kind_started_has_a_resolver(self):
         found, dynamic = started_kinds()
         self.assertGreater(len(found), 30, "the start scan found too little to trust")
+        self.assertIn(("move", "homestead_move_plan.py"), found, "the start scan missed the move start")
         self.assertEqual([], sorted(f"{kind} ({where})" for kind, where in found if kind not in self.kinds))
         self.assertEqual(set(DYNAMIC_STARTS), dynamic,
                          "a start whose kind is a variable: check what it passes, then list it in DYNAMIC_STARTS")

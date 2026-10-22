@@ -1,8 +1,8 @@
 """Cleanup of transfer-owned artifacts, without deleting shared or live data."""
 import re
-import urllib.error
 
 import homestead_csi_restore as CSI
+import homestead_kube as KUBE
 import homestead_names as NAMES
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -16,29 +16,26 @@ def ownership(transfer_id, source_uid):
 
 
 def optional(read, path):
-    try:
+    def checked(path):
         obj = read(path)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-    if not isinstance(obj, dict) or not isinstance(obj.get("metadata"), dict):
-        raise ValueError("Cleanup could not verify the resource inventory")
-    return obj
+        if not isinstance(obj, dict) or not isinstance(obj.get("metadata"), dict):
+            raise ValueError("Cleanup could not verify the resource inventory")
+        return obj
+    return KUBE.get_optional(path, read=checked)
 
 
 def items(read, path, missing=False):
-    try:
+    def complete(path):
         result = read(path)
-    except urllib.error.HTTPError as error:
-        if missing and error.code == 404:
-            return []
-        raise
-    if (not isinstance(result, dict) or not isinstance(result.get("items"), list)
-            or (result.get("metadata") or {}).get("continue")
-            or any(not isinstance(row, dict) or not isinstance(row.get("metadata"), dict) for row in result["items"])):
-        raise ValueError("Cleanup needs a complete resource inventory")
-    return result["items"]
+        if (not isinstance(result, dict) or not isinstance(result.get("items"), list)
+                or (result.get("metadata") or {}).get("continue")
+                or any(not isinstance(row, dict) or not isinstance(row.get("metadata"), dict) for row in result["items"])):
+            raise ValueError("Cleanup needs a complete resource inventory")
+        return result["items"]
+    if not missing:
+        return complete(path)
+    found = KUBE.get_optional(path, read=complete)
+    return [] if found is None else found
 
 
 def owned(obj, transfer_id, source_uid=None):
@@ -53,13 +50,9 @@ def delete(read, send, path, obj):
     if not meta.get("uid") or not meta.get("resourceVersion"):
         raise ValueError("Cleanup cannot verify the resource identity and version")
     if not meta.get("deletionTimestamp"):
-        try:
-            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions",
-                "propagationPolicy": "Background",
-                "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}})
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
+        KUBE.delete_if_present(path, {"apiVersion": "v1", "kind": "DeleteOptions",
+            "propagationPolicy": "Background",
+            "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}}, send=send)
     return optional(read, path) is None
 
 

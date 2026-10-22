@@ -19,7 +19,9 @@ import homestead_components as COMPONENTS
 import homestead_container_rebalance as CREBALANCE
 import homestead_lhv2_setup as LHV2_SETUP
 import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
 import homestead_move_engine as MOVE_ENGINE
+import homestead_move_plan as PLAN
 import homestead_rebalance as REBALANCE
 import homestead_shares as SHARES
 import homestead_unraid_vms as UNRAID_VMS
@@ -53,8 +55,8 @@ STORAGE_APPS = [
     (CREBALANCE, {CREBALANCE.KIND: CREBALANCE.status}, {CREBALANCE.KIND}),
     (COMPONENTS, {"platform-upgrade": COMPONENTS.status}, {"platform-upgrade"}),
     (VM_MUTATION_JOB, {"vm-create": VM_MUTATION_JOB.status, "vm-edit": VM_MUTATION_JOB.status}, {"vm-create", "vm-edit"}),
-    (LH, {"protect-run": LH.run_status}, {}),
-    (MOVE_ENGINE, {"move": MOVE_ENGINE.op_state}, {}),
+    (LH, {"protect-run": JOBS.run_status}, {}),
+    (MOVE_ENGINE, {"move": PLAN.op_state}, {}),
     (LHV2_SETUP, {"longhorn-v2-prepare": LHV2_SETUP.progress}, {}),
     (SHARES, {"share-remove": SHARES.removal_progress}, {}),
     (UNRAID_VMS, {UNRAID_VMS.KIND: UNRAID_VMS.status}, {UNRAID_VMS.KIND}),

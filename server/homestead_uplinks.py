@@ -23,8 +23,8 @@ import hashlib
 import json
 import re
 import time
-import urllib.error
 import urllib.parse
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_routes
 
@@ -49,12 +49,9 @@ def bind(_kget, _ksend, _node_probes=None):
 
 
 def _items(path):
-    try:
-        return (kget(path) or {}).get("items", []) or []
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return []
-        raise
+    """The rows, or none when the list is not there (404), the answer is empty
+    or its items are missing or null. Tolerant on purpose: making it strict is #620's."""
+    return (KUBE.get_optional(path, read=kget) or {}).get("items", []) or []
 
 
 def applies():

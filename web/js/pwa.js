@@ -223,7 +223,7 @@ function pwaCard() {
     <div id="pwaAlerts"></div>
   `, {tab:`device`, id:`pwaCard`})}`;
 }
-const PWA_ALERTS={report:null,at:0,request:null,user:null,timer:null,epoch:0};
+const PWA_ALERTS={report:null,at:0,request:null,user:null,timer:null,epoch:0,unread:""};
 function pwaAlertsHtml(report) {
   const active=report?.active || [], pending=active.filter(a=>!a.acknowledged), acknowledged=active.filter(a=>a.acknowledged);
   const rows=items=>UI.insightList(items.map(a=>({title:a.title,detail:a.body,
@@ -237,21 +237,30 @@ function pwaAlertsHtml(report) {
 function paintPwaAlerts(report) {
       pwaBadge((report.active || []).filter(a=>!a.acknowledged).length);
       window.paintBell?.();
-      const settings=$("#pwaAlerts");if(settings)settings.innerHTML=UI.moduleHeader("Active alerts","",UI.button("Review alerts","pwaAlertsDialog()"))+`<div class="ui-help">${(report.active || []).filter(a=>!a.acknowledged).length} need attention · ${(report.active || []).filter(a=>a.acknowledged).length} acknowledged</div>`;
+      pwaAlertsLine(report);
       const dialog=$("#pwaAlertsDialog");if(dialog){const expanded=!!dialog.querySelector("details[open]");dialog.innerHTML=pwaAlertsHtml(report);if(expanded && dialog.querySelector("details"))dialog.querySelector("details").open=true;}
+}
+/* Settings' line: the counts, or that the alerts could not be read; counts
+   from an earlier read are said to be from before (#620). */
+function pwaAlertsLine(report) {
+  const settings=$("#pwaAlerts");if(!settings)return;
+  const active=report?.active || [], counts=report?`<div class="ui-help">${active.filter(a=>!a.acknowledged).length} need attention · ${active.filter(a=>a.acknowledged).length} acknowledged</div>`:"";
+  const unread=PWA_ALERTS.unread?UI.callout("warn",report?"Could not read the alerts just now":"Could not read the alerts",`${esc(PWA_ALERTS.unread)}${report?" · these counts are from the last read.":""}`):"";
+  settings.innerHTML=UI.moduleHeader("Active alerts","",UI.button("Review alerts","pwaAlertsDialog()"))+unread+counts;
 }
 async function refreshPwaAlerts(force=false) {
   if(typeof ME==="undefined" || !ME)return;
-  if(PWA_ALERTS.user!==ME){PWA_ALERTS.report=null;PWA_ALERTS.at=0;PWA_ALERTS.user=ME;}
+  if(PWA_ALERTS.user!==ME){PWA_ALERTS.report=null;PWA_ALERTS.at=0;PWA_ALERTS.user=ME;PWA_ALERTS.unread="";}
   if(PWA_ALERTS.request)return PWA_ALERTS.request;
   if(!force && Date.now()-PWA_ALERTS.at<15000){paintPwaAlerts(PWA_ALERTS.report);return;}
   const user=ME, epoch=PWA_ALERTS.epoch;
   PWA_ALERTS.request=(async()=>{
     try{
       const report=await api("/api/alerts",{keep:true});if(user!==ME || epoch!==PWA_ALERTS.epoch)return;
-      PWA_ALERTS.report=report;PWA_ALERTS.at=Date.now();
+      PWA_ALERTS.report=report;PWA_ALERTS.at=Date.now();PWA_ALERTS.unread="";
       paintPwaAlerts(report);
-    }catch(error){if(user===ME && epoch===PWA_ALERTS.epoch && $("#pwaAlertsDialog"))$("#pwaAlertsDialog").innerHTML=UI.callout("warn","Alerts could not be refreshed",esc(error.message))+UI.button("Retry","refreshPwaAlerts(true)");}
+    }catch(error){if(user!==ME || epoch!==PWA_ALERTS.epoch)return;PWA_ALERTS.unread=error.message;pwaAlertsLine(PWA_ALERTS.report);
+      if($("#pwaAlertsDialog"))$("#pwaAlertsDialog").innerHTML=UI.callout("warn","Alerts could not be refreshed",esc(error.message))+UI.button("Retry","refreshPwaAlerts(true)");}
     finally{if(epoch===PWA_ALERTS.epoch)PWA_ALERTS.request=null;}
   })();return PWA_ALERTS.request;
 }
@@ -264,7 +273,7 @@ window.pwaAcknowledge=async(key,version,undo=false)=>{
   catch(error){toast(error.message,"bad");}
   await refreshPwaAlerts(true);
 };
-window.stopAlertChecks=()=>{clearInterval(PWA_ALERTS.timer);PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;};
+window.stopAlertChecks=()=>{clearInterval(PWA_ALERTS.timer);PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;PWA_ALERTS.unread="";};
 window.startAlertChecks=()=>{
   clearInterval(PWA_ALERTS.timer);refreshPwaAlerts(true);
   PWA_ALERTS.timer=setInterval(()=>{if(!document.hidden)refreshPwaAlerts();},20000);

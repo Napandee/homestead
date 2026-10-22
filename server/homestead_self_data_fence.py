@@ -19,6 +19,7 @@ try:
 except ImportError:
     fcntl = None
 
+import homestead_kube as KUBE
 import homestead_self_data_anchor as A
 from homestead_storage_journal import Held, identity, shape
 
@@ -282,10 +283,7 @@ class Fence:
             aborted = saved.state.get("setup_aborted") is True or saved.state.get("recovery", {}).get("action") == "return-original"
             pointer = A.pointer(self.namespace, saved.state, saved.handle()["uid"]) if "plan" in saved.state else None
             if marker is None or marker == pointer:
-                live = None
-                try: live = self.read(saved.path)
-                except urllib.error.HTTPError as error:
-                    if error.code != 404: raise
+                live = KUBE.get_optional(saved.path, read=self.read)
                 if live is None or identity(live)["uid"] == saved.handle()["uid"]:
                     dep = self.read(f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}")
                     if identity(dep)["uid"] != saved.state["deployment"]["uid"] or dep["metadata"].get("deletionTimestamp"):

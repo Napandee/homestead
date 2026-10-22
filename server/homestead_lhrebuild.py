@@ -11,6 +11,7 @@ and steps aside the moment anything else wants the volume.
 """
 import time
 import urllib.error
+import homestead_kube as KUBE
 import homestead_routes
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -37,12 +38,17 @@ def bind(_kget, _ksend, enabled=None, settings=None, save_settings=None):
 
 
 def _items(path):
-    try:
-        return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return []
-        raise
+    """The rows, or none when the list is not there (404) or has no "items"
+    key. Tolerant on purpose: making it strict is #620's."""
+    answered = []   # what kget answered: still empty after a 404
+
+    def read(where):
+        answered.append(kget(where))
+        return answered[0]
+    KUBE.get_optional(path, read=read)
+    # A null answer is not a 404: .get fails on it, as before, so nothing
+    # acts on it as an empty list.
+    return answered[0].get("items", []) if answered else []
 
 
 def whole(replica):

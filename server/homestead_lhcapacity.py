@@ -245,6 +245,6 @@ def save_checked(cfg):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/longhorn/capacity"): ("viewer", lambda request: homestead_routes.cached("lhcap", 15, status)),
+    ("GET", "/api/longhorn/capacity"): ("viewer", lambda request: homestead_routes.page("lhcap", status, 15)),
     ("POST", "/api/longhorn/settings"): ("admin", lambda request: save_checked(request.body)),
 }

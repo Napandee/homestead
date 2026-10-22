@@ -217,7 +217,7 @@ def smart_disk_health(report, settings=None):
             "spare_pct": None if spare is None else int(spare)}
 
 
-def node_duties(pods):
+def node_duties(pods, vols=None):
     """What falls to one node rather than another: the load-balancer addresses
     it announces, and the shared volumes it serves.
 
@@ -227,7 +227,8 @@ def node_duties(pods):
     kubevip-<service> where each is elected on its own, plndr-cp-lock for the
     control-plane address. Longhorn serves each shared (RWX) volume through a
     share-manager pod on one node; that node going down pauses the volume
-    until the pod starts elsewhere.
+    until the pod starts elsewhere. vols: get_volumes(), when the caller has
+    read it already.
     """
     duties = {}
 
@@ -255,7 +256,8 @@ def node_duties(pods):
     for node in duties.values():
         node["management_vip"] = [ip for ip in node["vips"] if ip in platform]
     try:
-        claims = {row["name"]: row.get("pvc_name") or row["name"] for row in cached("volmap", 30, get_volumes)}
+        rows = cached("volmap", 30, get_volumes) if vols is None else vols
+        claims = {row["name"]: row.get("pvc_name") or row["name"] for row in rows}
     except Exception:
         claims = {}
     for pod in pods.get("items", []) if isinstance(pods, dict) else pods:
@@ -304,20 +306,23 @@ def harvester_maintenance(node):
                for c in ((node or {}).get("status") or {}).get("conditions") or [])
 
 
-def get_nodes():
+def get_nodes(pods=None, vols=None):
+    """Every host for the Hosts page. pods (the pod list) and vols
+    (get_volumes()): when the caller has read them already (the leader's
+    page snapshot)."""
     nodes = kget("/api/v1/nodes")
     try:
         metrics = {m["metadata"]["name"]: m for m in kget("/apis/metrics.k8s.io/v1beta1/nodes").get("items", [])}
     except Exception:
         metrics = {}
-    pods = kget("/api/v1/pods")
+    pods = kget("/api/v1/pods") if pods is None else pods
     try:
         vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
     except Exception:
         vmis = []
 
     try:
-        duties = node_duties(pods)
+        duties = node_duties(pods, vols)
     except Exception:
         duties = {}
     # Never waits on a probe: a host not read yet shows its probe as waiting,
@@ -619,7 +624,7 @@ def _drain(request):
 
 
 ROUTES = {
-    ("GET", "/api/nodes"): ("viewer", lambda request: cached("nodes", ROUTER.PAGE_SECONDS, get_nodes)),
+    ("GET", "/api/nodes"): ("viewer", lambda request: ROUTER.page("nodes", get_nodes)),
     ("GET", "/api/node"): ("viewer", _node),
     ("GET", "/api/nodes/ports"): ("viewer", _ports),
     ("GET", "/api/node/smart"): ("viewer", _smart),

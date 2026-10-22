@@ -6,6 +6,7 @@ from unittest import mock
 
 import test_deploy_capacity  # server import path
 import homestead_operations as ops
+import homestead_longhorn_restore as RESTORE
 from fakes.job_store import put
 import homestead_storage_conflicts as conflicts
 import server
@@ -96,8 +97,8 @@ class StorageConflictsTests(unittest.TestCase):
         handler._send = mock.Mock()
         try:
             with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
-                    mock.patch.object(server.LH, "restore_plan", return_value={}), \
-                    mock.patch.object(server.LH, "restore_backup", side_effect=restore):
+                    mock.patch.object(RESTORE, "restore_plan", return_value={}), \
+                    mock.patch.object(RESTORE, "restore_backup", side_effect=restore):
                 handler.do_POST()
         finally:
             for thread in workers: thread.join(3)

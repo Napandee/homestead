@@ -5,7 +5,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_move as move
-import homestead_move_engine as engine
+import homestead_move_state as STATE
+import homestead_move_plan as PLAN
 
 
 class MoveReadinessTests(unittest.TestCase):
@@ -141,10 +142,10 @@ class MoveReadinessTests(unittest.TestCase):
                 return {"claims": []}
             raise ValueError("oldcluster: this cluster has no Longhorn backup target; set up backup storage first")
         # server.py binds the engine's client to homestead_move; do the same here.
-        with mock.patch.object(engine, "CLIENT", move), \
-                mock.patch.object(engine.CLIENT, "check_cluster", lambda name: {"compatible": True, "state": "same"}), \
-                mock.patch.object(engine.CLIENT, "remote", remote):
-            plan = engine.plan("oldcluster", "container", "ha-screenshot")
+        with mock.patch.object(STATE, "CLIENT", move), \
+                mock.patch.object(STATE.CLIENT, "check_cluster", lambda name: {"compatible": True, "state": "same"}), \
+                mock.patch.object(STATE.CLIENT, "remote", remote):
+            plan = PLAN.plan("oldcluster", "container", "ha-screenshot")
         self.assertFalse(plan["ok"])
         self.assertEqual([{"kind": "source-storage", "cluster": "oldcluster"}], plan["fixes"])
 

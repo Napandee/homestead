@@ -139,6 +139,15 @@ class FallbackTests(unittest.TestCase):
             self.assertIn(("PATCH", f"{LH}/volumeattachments/v1", {"spec": {"attachmentTickets": {R.TICKET: None}}}),
                           self.cluster.sent)
 
+    def test_a_null_volume_list_lets_go_of_nothing(self):
+        """A held volume missing from the list is let go: an answer of null
+        is not an empty list."""
+        self.held("v1")
+        self.cluster.objects[f"{LH}/volumes"] = None
+        with self.assertRaises(AttributeError):
+            R.tick()
+        self.assertEqual([], self.cluster.sent)
+
     def test_a_volume_still_rebuilding_is_kept_and_no_second_one_taken(self):
         self.held("v1")
         self.cluster.objects[f"{LH}/volumes"]["items"][0]["status"].update(state="attached", robustness="degraded")

@@ -14,8 +14,16 @@ class StopLoop(BaseException):
     pass
 
 
+def overview_only():
+    """The page snapshot's cycle with only its overview part (#705), built by
+    the module's get_overview so a test can stand in for it."""
+    return [("ov", lambda got: server.OVERVIEW_ROUTES.get_overview())]
+
+
 class DashboardHistoryApiTests(unittest.TestCase):
     def setUp(self):
+        server.OVERVIEW_ROUTES.PAGES.reset()
+        self.addCleanup(server.OVERVIEW_ROUTES.PAGES.reset)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.previous_dir = server.HISTORY.DATA_DIR
@@ -47,7 +55,10 @@ class DashboardHistoryApiTests(unittest.TestCase):
                     mock.patch.object(server.HISTORY, "record_live", wraps=server.HISTORY.record_live) as record, \
                     mock.patch.object(server.VMUSAGE, "sample") as vm_sample, \
                     mock.patch.object(server, "beat"), \
-                    mock.patch.object(server.time, "sleep", side_effect=StopLoop) as sleep:
+                    mock.patch.object(server.OVERVIEW_ROUTES, "page_builders", overview_only), \
+                    mock.patch.object(server.OVERVIEW_ROUTES, "page_inputs", dict), \
+                    mock.patch.object(server.OVERVIEW_ROUTES.PAGES, "sleep", side_effect=StopLoop) as sleep:
+                server.OVERVIEW_ROUTES.PAGES.reset()
                 with self.assertRaises(StopLoop):
                     server.OVERVIEW_ROUTES._sampler()
                 self.assertEqual(int(leading), record.call_count)
@@ -68,7 +79,10 @@ class DashboardHistoryApiTests(unittest.TestCase):
                     mock.patch.object(server.HISTORY, "record_live"), \
                     mock.patch.object(server.VMUSAGE, "sample") as vm_sample, \
                     mock.patch.object(server.OVERVIEW_ROUTES, "beat") as beat, \
-                    mock.patch.object(server.time, "sleep", side_effect=StopLoop):
+                    mock.patch.object(server.OVERVIEW_ROUTES, "page_builders", overview_only), \
+                    mock.patch.object(server.OVERVIEW_ROUTES, "page_inputs", dict), \
+                    mock.patch.object(server.OVERVIEW_ROUTES.PAGES, "sleep", side_effect=StopLoop):
+                server.OVERVIEW_ROUTES.PAGES.reset()
                 with self.assertRaises(StopLoop):
                     server.OVERVIEW_ROUTES._sampler()
                 self.assertEqual(int(leading), scan.call_count)

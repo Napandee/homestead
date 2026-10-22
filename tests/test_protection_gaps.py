@@ -2,6 +2,7 @@ import json, sys, time, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_longhorn as LH
+import homestead_longhorn_target as BACKUP_TARGET
 import homestead_revert as REVERT
 
 API = REVERT.API
@@ -125,18 +126,18 @@ class HarvesterTargetTests(unittest.TestCase):
         self.setting = {"metadata": {"name": "backup-target"}, "value": ""}
 
         def get(path):
-            if path == LH.HARVESTER_TARGET:
+            if path == BACKUP_TARGET.HARVESTER_TARGET:
                 return self.setting
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         LH.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {})
 
     def test_nfs_and_s3_are_written_to_harvesters_setting(self):
-        LH.set_backup_target("nfs://192.0.2.177:/mnt/user/backups", poll="5m")
+        BACKUP_TARGET.set_backup_target("nfs://192.0.2.177:/mnt/user/backups", poll="5m")
         method, path, body = self.sent[-1]
-        self.assertEqual(("PUT", LH.HARVESTER_TARGET), (method, path))
+        self.assertEqual(("PUT", BACKUP_TARGET.HARVESTER_TARGET), (method, path))
         self.assertEqual({"type": "nfs", "endpoint": "nfs://192.0.2.177:/mnt/user/backups",
                           "refreshIntervalInSeconds": 300}, json.loads(body["value"]))
-        LH.set_backup_target("s3://homelab@us-east-1", keys={"access_key": "AK", "secret_key": "SK",
+        BACKUP_TARGET.set_backup_target("s3://homelab@us-east-1", keys={"access_key": "AK", "secret_key": "SK",
                                                              "endpoint": "http://192.0.2.20:9000"})
         value = json.loads(self.sent[-1][2]["value"])
         self.assertEqual(("s3", "homelab", "us-east-1", "http://192.0.2.20:9000", "AK"),
@@ -145,11 +146,11 @@ class HarvesterTargetTests(unittest.TestCase):
 
     def test_keys_are_kept_when_none_are_typed_and_a_path_is_refused(self):
         self.setting["value"] = json.dumps({"type": "s3", "accessKeyId": "AK", "secretAccessKey": "SK", "endpoint": "http://x:9000"})
-        LH.set_backup_target("s3://homelab@us-east-1", secret="whatever")
+        BACKUP_TARGET.set_backup_target("s3://homelab@us-east-1", secret="whatever")
         value = json.loads(self.sent[-1][2]["value"])
         self.assertEqual(("AK", "SK", "http://x:9000"), (value["accessKeyId"], value["secretAccessKey"], value["endpoint"]))
         with self.assertRaisesRegex(ValueError, "leave any path off"):
-            LH.set_backup_target("s3://homelab@us-east-1/longhorn", keys={"access_key": "A", "secret_key": "S"})
+            BACKUP_TARGET.set_backup_target("s3://homelab@us-east-1/longhorn", keys={"access_key": "A", "secret_key": "S"})
 
     def test_harvester_validation_explains_the_failure_without_disclosing_keys(self):
         import io
@@ -161,7 +162,7 @@ class HarvesterTargetTests(unittest.TestCase):
                                            io.BytesIO(json.dumps(payload).encode()))
             with mock.patch.object(LH, "ksend", side_effect=error):
                 with self.assertRaises(ValueError) as caught:
-                    LH.set_backup_target("s3://homelab@us-east-1", keys={
+                    BACKUP_TARGET.set_backup_target("s3://homelab@us-east-1", keys={
                         "access_key": "AKID", "secret_key": 'secret"key', "endpoint": "http://store:9070"})
             message = str(caught.exception)
             self.assertIn("Harvester refused the backup target (HTTP 422)", message)
@@ -178,7 +179,7 @@ class HarvesterTargetTests(unittest.TestCase):
         error = urllib.error.HTTPError("target", 503, "Service Unavailable", {}, io.BytesIO(b"<html>unavailable</html>"))
         with mock.patch.object(LH, "ksend", side_effect=error):
             with self.assertRaisesRegex(ValueError, "Harvester refused.*HTTP 503.*Service Unavailable"):
-                LH.set_backup_target("nfs://nas:/backups")
+                BACKUP_TARGET.set_backup_target("nfs://nas:/backups")
 
 
     def test_a_secret_named_alone_gives_its_keys_to_harvesters_setting(self):
@@ -190,13 +191,13 @@ class HarvesterTargetTests(unittest.TestCase):
                            "AWS_ENDPOINTS": enc("http://192.0.2.20:9010")}}
 
         def get(path):
-            if path == LH.HARVESTER_TARGET:
+            if path == BACKUP_TARGET.HARVESTER_TARGET:
                 return self.setting
             if path.endswith("/secrets/homestead-backup-credentials"):
                 return secret
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         LH.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {})
-        LH.set_backup_target("s3://homestead-backups@us-east-1/", secret="homestead-backup-credentials")
+        BACKUP_TARGET.set_backup_target("s3://homestead-backups@us-east-1/", secret="homestead-backup-credentials")
         value = json.loads(self.sent[-1][2]["value"])
         self.assertEqual(("homestead", "s3cret", "http://192.0.2.20:9010", "homestead-backups"),
                          (value["accessKeyId"], value["secretAccessKey"], value["endpoint"], value["bucketName"]))
