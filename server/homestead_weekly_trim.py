@@ -341,6 +341,30 @@ ROUTES = {
 }
 
 
+def last_state():
+    """The saved state, for the Dashboard's health; {} when it cannot be read."""
+    try:
+        return SHARED.read_json(_path(), {})
+    except Exception:
+        return {}
+
+
+def issues(state):
+    """A health issue for each attached volume the last run failed to trim
+    (#749). Skipped and unconfirmed volumes raise nothing, and nothing is
+    raised while the weekly trim is off. The next run that trims the volume
+    clears it."""
+    if state.get("enabled") is False:
+        return []
+    out = []
+    for failed in (state.get("last") or {}).get("failed") or []:
+        name = failed.get("pvc") or failed.get("volume") or "a volume"
+        out.append({"severity": "degraded", "kind": "Trim", "name": name,
+                    "reason": f"The weekly trim of {name} failed: {failed.get('message') or 'no reason given'}. "
+                              "It is tried again next Saturday; Trim now on its snapshot panel tries it now."})
+    return out
+
+
 def register(ops):
     """The job store's entry for the weekly trim (#622)."""
     ops.RESOLVERS[KIND] = lambda item: resolve(item, ops.checkpoint)
