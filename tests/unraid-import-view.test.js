@@ -19,6 +19,7 @@ test("finished imports offer dismissal while active and recovery records keep th
     dismissOperation: id => dismissed.push(id) };
   ctx.window = ctx;
   vm.createContext(ctx);
+  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   ctx.uvmCopiesPaint();
   assert.match(host.innerHTML, /Recent imports/);
@@ -47,6 +48,7 @@ test("the shared dismissal refreshes the import list only after the server accep
     actionBar: () => "", toast: message => errors.push(message),
     api: async (path, init) => { requests.push({ path, body: JSON.parse(init.body) }); } };
   ctx.window = ctx;
+  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.createContext(ctx);
   for (const file of ["operations", "views-vms"]) vm.runInContext(fs.readFileSync(`web/js/${file}.js`, "utf8"), ctx);
   vm.runInContext("renderOperations = () => uvmCopiesPaint()", ctx);
@@ -74,6 +76,7 @@ function importPage(kind) {
     api: async (path, init) => { posted.push([path, JSON.parse(init.body)]); return { source: "pve", kind, virsh: true, vms: [pve, running] }; } };
   ctx.window = ctx;
   vm.createContext(ctx);
+  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   return { ctx, hosts, actions, posted };
 }
@@ -112,6 +115,7 @@ test("a Proxmox host added as Unraid says so, with Remove and Add as Proxmox", a
     api: async () => ({ source: "pve", kind: "unraid", virsh: false, proxmox: true, vms: [] }) };
   ctx.window = ctx;
   vm.createContext(ctx);
+  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   await ctx.uvmLoad("pve");
   assert.match(hosts["uvm-pve"].innerHTML, /This is a Proxmox host/);
