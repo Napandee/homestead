@@ -331,7 +331,7 @@ metadata:
     app: homestead
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: longhorn-r2
+  storageClassName: longhorn
   resources:
     requests:
       storage: 2Gi
@@ -414,7 +414,7 @@ spec:
             - name: SAMBA_GID
               value: "101"
             - name: STORAGE_CLASS
-              value: "longhorn-r2"
+              value: "longhorn"
             - name: LB_IP
               value: "192.0.2.242"
             # Published through a Cloudflare Tunnel behind Cloudflare Access?

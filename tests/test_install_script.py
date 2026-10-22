@@ -149,7 +149,10 @@ class InstallerTests(unittest.TestCase):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "harvester", "HS_VIP": "192.0.2.250",
                                                           "HS_CLASS": "harvester-longhorn", "HS_YES": "1"})
         self.assertIn("s/192\\.0\\.2\\.242/192.0.2.250/g", out)
-        self.assertIn("s/longhorn-r2/harvester-longhorn/g", out)
+        # #731: anchored on the two class lines, for this manifest (longhorn) and older ones (longhorn-r2).
+        self.assertIn("s/storageClassName: longhorn\\(-r2\\)\\{0,1\\}$/storageClassName: harvester-longhorn/", out)
+        self.assertIn('s/value: "longhorn\\(-r2\\)\\{0,1\\}"$/value: "harvester-longhorn"/', out)
+        self.assertNotIn("s/longhorn-r2/", out)
         self.assertIn("apply -f /tmp/homestead-private/deploy.yaml", out)
 
     def test_a_setup_code_set_ahead_must_have_the_codes_format(self):
