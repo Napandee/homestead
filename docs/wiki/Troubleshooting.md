@@ -91,6 +91,78 @@ gate can take through the sign-in and back. If that keeps failing, it asks you
 to sign in rather than reloading in a loop. The installed app (PWA) does the
 same.
 
+## Monitoring Homestead itself
+
+Homestead answers these addresses for monitors. None of them needs the page.
+
+| Address | Who may ask | Says |
+|---|---|---|
+| `/healthz` | anyone | `{"ok": true}` while the process answers. The pod's probes use it. |
+| `/readyz` | anyone | `{"ready": true}` (200) or `{"ready": false}` (503) |
+| `/metrics` | an API key, or anyone signed in; off until turned on | Homestead's own health in the Prometheus text format |
+
+**`/readyz`** is ready when the Kubernetes API answered within the last 30
+seconds and Homestead could write to its data volume. It says nothing else, so
+it is safe to leave open. Which check failed is in `/metrics`
+(`homestead_ready_check`); Settings → Homestead shows the API check too.
+It checks the API at most every 10 seconds and the volume at most every 30, so
+an uptime checker can ask as often as it likes. During a move of Homestead's own
+data it answers as `/healthz` does, and its write to the volume goes through
+the same fence as every other write, so it never writes while the move holds
+the volume. Point an uptime checker at it:
+
+```text
+https://homestead.example.com/readyz    expect: HTTP 200
+```
+
+The pod's own probes still use `/healthz`.
+
+**`/metrics`** is off until an admin turns it on in Settings → Homestead
+(*Metrics for Prometheus*). It always needs an
+[API key](API#making-a-key) sent as a bearer token, or a signed-in browser;
+without either it answers 401. With one, it answers 404 while off. Any key will
+do: it needs the `read` scope, and every key includes it. It gives:
+
+- the version (`homestead_build_info`), whether this copy is ready and each
+  `/readyz` check (`homestead_ready`, `homestead_ready_check`), and how long the
+  Kubernetes API took to answer the last time it did
+  (`homestead_kube_api_seconds`). `/metrics` checks the API itself but never
+  writes to the data volume: the volume check is the last one `/readyz` made,
+  and until something has asked `/readyz`, `homestead_ready` and that check are
+  left out;
+- whether this copy leads, and how many copies are wanted and ready;
+- when each background task last finished well
+  (`homestead_loop_last_ok_timestamp_seconds`) and its state
+  (`homestead_loop_state`);
+- jobs by state, open alerts by severity, hosts and apps by state, and when the
+  newest backup finished (`homestead_backup_last_success_timestamp_seconds`);
+- `homestead_metrics_source_up`: 0 for any of these that could not be read
+  this time, which are then left out.
+
+Times are Unix timestamps: in a query, `time() - x` is the age. No app, host,
+namespace or volume names appear, only counts. The answer is rebuilt at most
+every 10 seconds.
+
+Each copy of Homestead answers for itself: whether it leads, its own background
+tasks and its own readiness. The cluster's figures are the same from any copy.
+Scrape through the Service for one view of the cluster, or each pod for each
+copy. A Prometheus scrape config, with the key in a file:
+
+```yaml
+scrape_configs:
+  - job_name: homestead
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/homestead-key
+    static_configs:
+      - targets: ["homestead.example.com"]
+```
+
+Behind Cloudflare Access, give the scraper an Access service token as well, or
+scrape from inside the network.
+
 ## Containers
 
 **A VPN container logs `RTNETLINK answers: Operation not permitted`.** It needs

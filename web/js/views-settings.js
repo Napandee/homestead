@@ -1067,6 +1067,7 @@ async function selfHealthPaint() {
   try { h = await api("/api/self/health"); }
   catch (e) { host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message)); return; }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
+  const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   STATE.data.sambaInstalled = !!samba.installed;
   const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
@@ -1105,11 +1106,27 @@ async function selfHealthPaint() {
         h.backups?.ready ? "ready" : h.backups?.deployed ? "starting" : "none", h.backups?.endpoint ? `<span class="mono">${esc(h.backups.endpoint)}</span>` : "Set up under Data protection.")}
       ${h.mqtt?.state && h.mqtt.state !== "off" ? row("MQTT", h.mqtt.state === "publishing" ? "ok" : "warn", h.mqtt.state,
         h.mqtt.error ? `<span class="badtext">${esc(h.mqtt.error)}</span>` : esc(h.mqtt.detail || "")) : ""}
+      ${row("Metrics for Prometheus", metricsOn ? "ok" : "neutral", metricsOn ? "on" : "off",
+        metricsOn ? `<span class="mono">${esc(location.origin)}/metrics</span>, read with an API key as a bearer token.`
+          : "When on, Prometheus or an uptime checker reads Homestead's own health from /metrics with an API key.",
+        admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}
     </div>`;
   clearTimeout(window.__selfHealthTimer);
   window.__selfHealthTimer = setTimeout(() => { if (STATE.view === "settings" && settingsTab() === "about") selfHealthPaint(); }, 15000);
 }
 window.selfHealthPaint = selfHealthPaint;
+
+/* /metrics (#736): takes effect at once, like the MCP switch, rather than
+   waiting for Save. Only this setting changes (#601). */
+window.metricsSet = async enabled => {
+  try {
+    await settingsWrite({ metrics: { enabled } });
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    toast(enabled ? "Metrics are on at /metrics" : "Metrics are off", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  selfHealthPaint();
+};
 
 /* The SMB and NFS servers are actions, not settings: Enable or Disable acts
    at once, so they are buttons, not switches beside fields (#511). */
