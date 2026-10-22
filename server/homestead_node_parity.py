@@ -21,7 +21,9 @@ machine do not:
   since it can hold no more. Once more nodes are Ready, the default for new
   volumes rises with them, up to three - 1, then 2, then 3 as nodes join -
   only while it is still the installer's one copy or the count Homestead
-  itself set, so a count someone chose is kept, and it is never lowered. A
+  itself set, so a count someone chose is kept, and it is never lowered
+  (except Homestead's own data volume on a one-host cluster, which
+  homestead_data_copies lowers to the one copy that host can keep). A
   change in Ready nodes is noticed within a minute (copies_tick), so apps
   made just after the nodes join get the copies too. Existing volumes keep
   their count; the Volumes page raises those - except Homestead's own data

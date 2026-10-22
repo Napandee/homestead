@@ -16,6 +16,7 @@ import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_cancel as CANCEL
 import homestead_copy_job as COPY_JOB
+import homestead_data_copies as DATA_COPIES
 import homestead_disks as DISKS
 import homestead_files as FILES
 import homestead_fleet as FLEET
@@ -368,10 +369,18 @@ def _files_loop():
 def _longhorn_copies_loop():
     """On the leader, every minute: Longhorn's default copies follow the
     number of Ready nodes as they join (homestead_node_parity.copies_tick),
-    before apps made right after are given one copy."""
+    before apps made right after are given one copy. First, on a one-host
+    cluster, Homestead's own data volume asks for the one copy that host can
+    keep (homestead_data_copies.fit_single_host)."""
     time.sleep(30)
     while True:
         if LEADER.is_leader():
+            try:
+                note = DATA_COPIES.fit_single_host()
+                if note:
+                    print(f"platform: {note}", flush=True)
+            except Exception as error:
+                print(f"platform: Homestead's data copies not fitted: {str(error)[:160]}", flush=True)
             try:
                 note = NODE_PARITY.copies_tick()
                 if note:
