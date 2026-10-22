@@ -2939,6 +2939,8 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .stepper-chip span{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surf3);font-size:11px}
 .stepper-chip.on{color:var(--tx);border-color:var(--tx)}.stepper-chip.on span{background:var(--tx);color:var(--bg)}
 .stepper-chip.done span{background:color-mix(in srgb,var(--ok) 30%,transparent);color:var(--tx)}
+/* A section the form cannot set yet (#544): muted, and says when on its own line. */
+.stepper-chip.later{opacity:.6}.stepper-chip.later small{display:block;font-size:10.5px;font-weight:500}
 .stepper-pane{display:flex;flex-direction:column;gap:10px}
 .stepper-pane[hidden]{display:none}
 /* Basics' container list (app-form.js): its parts keep the pane's spacing. */

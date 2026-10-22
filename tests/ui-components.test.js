@@ -101,6 +101,52 @@ test("section forms share keyed desktop/mobile navigation and one footer", () =>
   assert.throws(() => UI.sectionForm("empty", [], ""), /at least one section/);
 });
 
+/* A section the form cannot set yet (#544): Deploy's Placement. */
+const LATER_SECTIONS = [{key:"a",title:"A",lead:"Lead",html:"x"},{key:"p",title:"Placement",html:"y",later:"Set after deploying"},{key:"s",title:"Summary",html:"z"}];
+test("a section set later is greyed and says when", () => {
+  const html = UI.sectionForm("f", LATER_SECTIONS, "<b>Go</b>");
+  const tab = html.match(/<button[^>]*id="f-tab-p"[^>]*>[^]*?<\/button>/)[0];
+  assert.match(tab, /class="stepper-chip later"/);
+  assert.doesNotMatch(tab, /aria-disabled/, "it still opens, to say why, so it is not announced as disabled");
+  assert.match(tab, /data-later/);
+  assert.match(tab, /aria-label="Placement, set after deploying"/);
+  assert.match(tab, />Placement<small>Set after deploying<\/small><\/button>/);
+  assert.match(html, /<option value="p">Placement · set after deploying<\/option>/);
+  assert.match(html, /id="f-pane-p" data-i="1" data-key="p" data-later hidden>/);
+  assert.doesNotMatch(html.match(/<button[^>]*id="f-tab-s"[^>]*>/)[0], /later|aria-disabled/);
+  assert.match(UI.sectionForm("g", [{key:"q",title:"Q",html:"",later:"<i>soon</i>"}], ""), /<small>&lt;i&gt;soon&lt;\/i&gt;<\/small>/, "escaped");
+});
+
+test("a section without later is unchanged", () => {
+  const today = "<div class=\"stepper dialog-rail\" id=\"f\" data-step=\"0\">\n    <label class=\"dialog-section-picker\">Step<select id=\"f_section\" aria-label=\"Step\" onchange=\"UI.selectSection(&quot;f&quot;,this.value)\"><option value=\"a\" selected>A · 1 of 3</option><option value=\"p\">Placement · 2 of 3</option><option value=\"s\">Summary · 3 of 3</option></select></label>\n    <div class=\"stepper-head\" role=\"tablist\" aria-label=\"Steps\" aria-orientation=\"vertical\"><button type=\"button\" role=\"tab\" id=\"f-tab-a\" aria-controls=\"f-pane-a\" aria-selected=\"true\" tabindex=\"0\" class=\"stepper-chip on\" data-i=\"0\" data-key=\"a\" onclick=\"UI.selectSection(&quot;f&quot;,&quot;a&quot;)\">A</button><button type=\"button\" role=\"tab\" id=\"f-tab-p\" aria-controls=\"f-pane-p\" aria-selected=\"false\" tabindex=\"-1\" class=\"stepper-chip\" data-i=\"1\" data-key=\"p\" onclick=\"UI.selectSection(&quot;f&quot;,&quot;p&quot;)\">Placement</button><button type=\"button\" role=\"tab\" id=\"f-tab-s\" aria-controls=\"f-pane-s\" aria-selected=\"false\" tabindex=\"-1\" class=\"stepper-chip\" data-i=\"2\" data-key=\"s\" onclick=\"UI.selectSection(&quot;f&quot;,&quot;s&quot;)\">Summary</button></div>\n    <div class=\"stepper-pane\" role=\"tabpanel\" aria-labelledby=\"f-tab-a\" id=\"f-pane-a\" data-i=\"0\" data-key=\"a\"><p class=\"ui-lead\">Lead</p>x</div><div class=\"stepper-pane\" role=\"tabpanel\" aria-labelledby=\"f-tab-p\" id=\"f-pane-p\" data-i=\"1\" data-key=\"p\" hidden>y</div><div class=\"stepper-pane\" role=\"tabpanel\" aria-labelledby=\"f-tab-s\" id=\"f-pane-s\" data-i=\"2\" data-key=\"s\" hidden>z</div>\n    \n    <div class=\"ui-actions stepper-foot\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button><button type=\"button\" class=\"btn\" onclick=\"stepGo(&quot;f&quot;,-1,true)\" data-dialog-dismiss=\"true\" data-back hidden>Back</button></div><div class=\"ui-actions-end\"><span data-finish hidden><b>Go</b></span><button type=\"button\" class=\"btn pri\" onclick=\"stepGo(&quot;f&quot;,1,true)\" data-next>Next</button></div></div>\n  </div>";
+  assert.equal(UI.sectionForm("f", LATER_SECTIONS.map(({ later, ...section }) => section), "<b>Go</b>"), today);
+});
+
+/* stepGo against a stand-in for the form: three panes, the middle one later. */
+function laterForm() {
+  const attrs = (dataset = {}) => ({ dataset, hidden: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
+    classList: { toggle() {} }, tabIndex: 0 });
+  const panes = [attrs({ key: "a" }), attrs({ key: "p", later: "" }), attrs({ key: "s" })];
+  const chips = panes.map(() => attrs());
+  const root = { dataset: { step: "0" }, closest: () => null,
+    querySelectorAll: sel => sel.includes("stepper-pane") ? panes : chips,
+    querySelector: () => null };
+  context.document.getElementById = () => root;
+  return root;
+}
+test("Next and Back step over a section set later; choosing it still opens it", () => {
+  const root = laterForm();
+  context.stepGo("f", 1, true);
+  assert.equal(+root.dataset.step, 2, "Next from A lands on Summary");
+  context.stepGo("f", -1, true);
+  assert.equal(+root.dataset.step, 0, "Back from Summary lands on A");
+  context.stepGo("f", 1);
+  assert.equal(+root.dataset.step, 1, "a tab or the picker still opens it");
+  // A relative step of 0 from a later section stays put rather than looping.
+  vm.runInContext('stepGo("f", 0, true)', context, { timeout: 500 });
+  assert.equal(+root.dataset.step, 1);
+});
+
 test("dismissal precedes the main action without losing a custom handler or gate", () => {
   const html = UI.actions(UI.button("Delete", "remove()", {kind:"danger",disabled:true,attrs:'data-need="admin"'}) +
     '<button data-dialog-dismiss="true" onclick="modalBack()">Back</button>');
