@@ -197,21 +197,33 @@ def claim_references(pods=None):
     # Made on their own, these use a claim with nothing above them: a finished
     # bare Job or a bare Pod left its volume looking orphaned (gap 12). Made by
     # something that was read, they are already named by it.
+    # A missing template is no claims here, not an unreadable kind.
+    def made_template(obj):
+        return ((obj.get("spec") or {}).get("template") or {}).get("spec")
     made = (
-            ("Job", "/apis/batch/v1/jobs", template),
-            ("ReplicaSet", "/apis/apps/v1/replicasets", template),
-            ("ReplicationController", "/api/v1/replicationcontrollers", template),
-            ("Pod", "/api/v1/pods", lambda o: o["spec"]))
+            ("Job", "/apis/batch/v1/jobs", made_template),
+            ("ReplicaSet", "/apis/apps/v1/replicasets", made_template),
+            ("ReplicationController", "/api/v1/replicationcontrollers", made_template),
+            ("Pod", "/api/v1/pods", lambda o: o.get("spec")))
     vms = "/apis/kubevirt.io/v1/virtualmachines"
+    claims_path = "/api/v1/persistentvolumeclaims"
     # The lists do not depend on each other: read at the same time (#705),
     # then judged in this order, so what counts as unread is as before.
-    fetched = _read_all([path for _, path, _ in kinds] + [vms]
+    fetched = _read_all([path for _, path, _ in kinds] + [vms, claims_path]
                         + [path for _, path, _ in made if pods is None or path != "/api/v1/pods"])
     if pods is not None:
         fetched["/api/v1/pods"] = pods
     for kind, path, spec_of in kinds:
         each(kind, listed(kind, path), workload(kind, spec_of))
     each("VM", listed("VM", vms, absent_ok=True), vm)
+
+    def owned_claim(obj):
+        # A claim something owns is that owner's, mounted or not: a CDI
+        # DataVolume's golden image waits for clones with nothing using it.
+        meta = obj["metadata"]
+        for owner in meta.get("ownerReferences") or []:
+            note(meta["namespace"], [meta["name"]], f"{owner['kind']}/{owner['name']}")
+    each("PersistentVolumeClaim", listed("PersistentVolumeClaim", claims_path), owned_claim)
     # A made row names only a claim that nothing above has named, and that its
     # own owner (a Job for its Pod, say) has not: so a Deployment's Pods or a
     # VM's launcher pod add nothing, while a claim the owner's template no

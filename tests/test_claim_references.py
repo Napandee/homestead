@@ -13,6 +13,7 @@ JOBS = "/apis/batch/v1/jobs"
 PODS = "/api/v1/pods"
 REPLICASETS = "/apis/apps/v1/replicasets"
 CONTROLLERS = "/api/v1/replicationcontrollers"
+CLAIMS = "/api/v1/persistentvolumeclaims"
 
 
 def deployment(name, claim, ns="lab"):
@@ -220,6 +221,31 @@ class BareWorkloadTests(unittest.TestCase):
             refs = STORAGE.claim_references(pods={"items": [pod("debug", "scratch")], "metadata": {}})
         self.assertNotIn(PODS, read)
         self.assertEqual(["Pod/debug"], STORAGE._references_for(refs, "lab", "scratch"))
+
+    def test_a_claim_owned_by_something_is_in_use(self):
+        """A CDI golden image: a DataVolume owns its claim, nothing mounts it,
+        and later clones need it. Any owner keeps a claim from reading unused."""
+        claims = {"items": [
+            {"metadata": {"namespace": "lab", "name": "fedora-golden", "uid": "uid-c1",
+                          "ownerReferences": owned("DataVolume", "uid-dv", "fedora-golden")}},
+            {"metadata": {"namespace": "lab", "name": "old-data", "uid": "uid-c2"}}], "metadata": {}}
+        self.assertEqual(["DataVolume/fedora-golden"], self.users("fedora-golden", **{CLAIMS: claims}))
+        self.assertEqual([], self.users("old-data", **{CLAIMS: claims}))
+
+    def test_claims_that_could_not_be_read_leave_unused_claims_unknown(self):
+        for answer in (forbidden(CLAIMS), {"metadata": {"continue": "t"}, "items": []}, {"items": [{"spec": {}}]}):
+            with self.subTest(answer=answer):
+                self.assertIsNone(self.users("old-data", **{CLAIMS: answer}))
+
+    def test_a_replica_set_or_job_without_a_pod_template_names_nothing_and_hides_nothing(self):
+        """A missing template is no claims, not an unreadable kind: otherwise
+        every claim nothing names reads unknown and installs over a leftover
+        claim are refused."""
+        for path in (REPLICASETS, CONTROLLERS, JOBS):
+            with self.subTest(path=path):
+                answers = {path: {"items": [{"metadata": {"namespace": "lab", "name": "x", "uid": "u"}, "spec": {}}]}}
+                self.assertEqual([], self.users("old-data", **answers))
+                self.assertEqual(["Deployment/plex"], self.users("plex-config", **answers))
 
     def test_with_everything_read_a_claim_nothing_uses_is_still_unused(self):
         self.assertEqual([], self.users("old-data", **{PODS: {"items": [pod("debug", "scratch")]}}))
