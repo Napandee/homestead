@@ -20,8 +20,11 @@ sign-in, and looking after Homestead afterwards.
 | ServiceAccount, ClusterRole `homestead` | what Homestead may do in the cluster |
 | DaemonSet `homestead-nodeprobe` | installed automatically, one per host: temperatures, host devices, every disk, drive health |
 
-Everything Homestead creates is named `homestead-*` or carries `homestead.io/*`
-labels and annotations, so it is easy to find with kubectl. There is one
+Most of what Homestead creates for itself is named `homestead-*` or carries
+`homestead.io/*` labels and annotations, so it is easy to find with kubectl.
+Apps you deploy through Homestead carry some of those labels too.
+[What Homestead changes](What-Homestead-changes) lists what it makes after the
+install, and when. There is one
 Homestead per cluster. The plain manifest installs it into `lab`; the Helm
 chart into its own namespace, with your apps in `lab`.
 
@@ -242,30 +245,43 @@ helm uninstall homestead -n homestead
 ```
 
 Your apps keep running, and so do the `lab` namespace and Homestead's data
-volume. Delete the `homestead-auth` Secret yourself if you want the accounts
-gone too.
+volume. Delete the `homestead-auth` Secret (in `lab`) yourself if you want the
+accounts gone too. What Homestead made after the install stays as well:
+[What Homestead changes](What-Homestead-changes#what-removing-homestead-leaves-behind)
+says what to look for.
 
 **Do not `kubectl delete -f deploy.yaml`** to remove a manifest install: the
 manifest also declares the `lab` namespace, and deleting a namespace deletes
 every app and volume in it. Delete Homestead's own objects instead:
 
 ```bash
-kubectl -n lab delete deployment/homestead service/homestead serviceaccount/homestead
+kubectl -n lab delete deployment/homestead service/homestead serviceaccount/homestead \
+  role/homestead-console rolebinding/homestead-console
 kubectl delete clusterrolebinding/homestead clusterrole/homestead
 ```
 
 The `homestead-data` claim is kept until you delete it from Volumes.
 
-Cluster-wide things Homestead may have made stay too: the PriorityClasses of
-the priority tiers, and the hot-spare taint on standby hosts. Set every
-critical and low app back to **Normal** first (or remove `priorityClassName`
-from them yourself): pods running now carry on, but Kubernetes refuses every
-new pod that names a class that is gone, so an app still naming one cannot
-restart, update or move to another host. Then remove both; the second command
-takes the taint off every host that has it, and says `not found` for each one
-that does not, which is expected:
+Cluster-wide things Homestead may have made stay too, among them the
+PriorityClasses of the priority tiers and the hot-spare taint on standby
+hosts.
 
-```bash
-kubectl delete priorityclass homestead-critical homestead-low --ignore-not-found
-kubectl taint nodes --all homestead.io/standby-
-```
+- **The hot-spare taint** is safe to remove: with Homestead gone nothing moves
+  work onto a spare, so it would only keep the host empty. The command says
+  `not found` for each host without it, which is expected:
+
+  ```bash
+  kubectl taint nodes --all homestead.io/standby-
+  ```
+
+- **Keep the PriorityClasses** (`homestead-critical`, `homestead-normal`,
+  `homestead-low`, or `homestead-<tier>-<value>`) while anything names one.
+  Pods running now carry on, but Kubernetes refuses every new pod that names
+  a class that is gone, so an app, VM or Helm release still naming one cannot
+  restart, update or move to another host. Set every app and VM back to
+  **Normal** before uninstalling, or delete a class only once
+  [nothing names it](What-Homestead-changes#still-used-by-your-apps-or-data-do-not-delete).
+
+[What Homestead changes](What-Homestead-changes#what-removing-homestead-leaves-behind)
+lists everything else that stays, what is safe to delete, and what your apps
+still need.

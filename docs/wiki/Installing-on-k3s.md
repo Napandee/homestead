@@ -449,8 +449,12 @@ follows. To move an existing app to a VIP, remove its Service under
 
 ## 5. Without the script
 
-The script only runs k3s's own installer and drops two files into
-`/var/lib/rancher/k3s/server/manifests`, which k3s applies itself. To do it by
+The script runs k3s's own installer, sets up the host for Longhorn (packages,
+inotify limits, the journal cap, multipath), then writes its manifests to
+`/var/lib/homestead/install` and applies them once: Longhorn's and
+Homestead's, and KubeVirt's and CDI's when you chose VMs.
+[What Homestead changes](What-Homestead-changes) lists what they make and what
+Homestead makes once it runs. To do it by
 hand, install k3s your way, install Longhorn (or use `local-path`), and follow
 [Installing on an existing cluster](Installing-on-an-existing-cluster).
 

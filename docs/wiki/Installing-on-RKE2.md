@@ -120,8 +120,9 @@ press Enter for the usual login; see
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client);
 2. writes `/etc/rancher/rke2/config.yaml` (this machine's address, and
    `enable-servicelb: true`), installs RKE2 and starts `rke2-server`;
-3. asks RKE2 to install Longhorn (one copy of each volume, while there is one
-   machine) and Homestead's own manifest, from RKE2's manifests folder;
+3. installs Longhorn (one copy of each volume, while there is one machine)
+   and Homestead's own manifest, applied once from `/var/lib/homestead/install`
+   ([what they make, and what the script changes on the host](What-Homestead-changes#what-the-install-creates));
 4. waits for Homestead and prints its address - `http://<this machine>:8088`.
 
 Open that address and create the first administrator. It asks for the one-time
