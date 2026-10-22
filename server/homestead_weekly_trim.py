@@ -12,9 +12,14 @@ ones with a filesystem are trimmed, one per step of the job; the others are
 skipped and named. The result is kept in DATA_DIR/weekly-trim.json under
 "last".
 """
+import os
 import socket
 import time
-import urllib.error
+
+import homestead_longhorn as LH
+import homestead_longhorn_jobs as LH_JOBS
+import homestead_operations as OPS
+import homestead_shared as SHARED
 
 KIND = "weekly-trim"
 STATE = "weekly-trim.json"
@@ -25,6 +30,7 @@ WEEK = 7 * 86400
 VM_DISK = "no filesystem (VM disk)"
 DETACHED_ANSWER = "Action [trimFilesystem] not available"
 BLOCK_ANSWER = "with Block VolumeMode"
+DATA_DIR = None
 
 
 def last_slot(now):
@@ -86,3 +92,124 @@ def classify(error):
     if _timed_out(error):
         return "unconfirmed", "Longhorn did not answer within 60 s"
     return "failed", message[:300]
+
+
+def bind(data_dir):
+    global DATA_DIR
+    DATA_DIR = data_dir
+
+
+def _path():
+    return os.path.join(DATA_DIR, STATE)
+
+
+def _update(change):
+    """Change the saved state in place and write it back; the rest of it
+    (created, groups, enabled, retired) is kept. An unreadable file raises,
+    and nothing is written over it."""
+    state = SHARED.read_json(_path(), {})
+    change(state)
+    SHARED.write_json(_path(), state, durable=True)
+    return state
+
+
+def start(why="weekly"):
+    """Start one weekly trim as a job; one runs at a time."""
+    slot = last_slot(time.time())
+    operation = OPS.start(KIND, "Weekly trim", {"kind": "Longhorn", "name": "weekly trim"},
+                          "/data-protection#housekeeping", {"phase": "plan", "why": why, "slot": slot},
+                          "Finding attached volumes", unless=(KIND,))
+    _update(lambda state: state.update(tried=slot))
+    return operation
+
+
+def _name(ref, volume):
+    return (ref.get("pvcs") or {}).get(volume) or volume
+
+
+def _volumes_and_modes():
+    """Longhorn's volumes, read directly so that an error is one (LH's own
+    volume list answers [] when it cannot read them), and each PV's
+    volumeMode. Without the PVs a VM disk still reaches Longhorn, whose
+    answer classify() reads as a skip."""
+    volumes = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/volumes").get("items", [])
+    try:
+        pvs = LH.kget("/api/v1/persistentvolumes").get("items", [])
+    except Exception:
+        pvs = []
+    return volumes, {p["metadata"]["name"]: (p.get("spec") or {}).get("volumeMode") or "Filesystem" for p in pvs}
+
+
+def resolve(item, checkpoint):
+    """Move the weekly trim on one step: (status, progress, message). The
+    plan step reads the volumes; each later step trims one, records what
+    Longhorn said and checkpoints, so a run that a restart or a new leader
+    picks up carries on from the next volume (a trim done twice is harmless)."""
+    ref = item["ref"]
+    if ref.get("phase", "plan") == "plan":
+        try:
+            volumes, modes = _volumes_and_modes()
+        except Exception as error:
+            return "failed", 0, f"Longhorn's volumes could not be read: {str(error)[:200]}"
+        chosen = plan(volumes, modes)
+        pvcs = {v["metadata"]["name"]: ((v.get("status") or {}).get("kubernetesStatus") or {}).get("pvcName") or ""
+                for v in volumes}
+        ref.update(phase="trim", todo=chosen["trim"], done=[], skipped=chosen["skipped"],
+                   pvcs={name: pvc for name, pvc in pvcs.items() if pvc})
+        checkpoint(item)
+        return "running", 1, f"Trimming {len(chosen['trim'])} attached volumes, one at a time"
+    todo, done = ref.get("todo") or [], ref.setdefault("done", [])
+    if todo:
+        volume = todo[0]
+        try:
+            LH_JOBS._backend("POST", f"/volumes/{volume}?action=trimFilesystem", {})
+            error = None
+        except Exception as caught:
+            error = caught
+        outcome, why = classify(error)
+        done.append({"volume": volume, "outcome": outcome, "why": why})
+        ref["todo"] = todo[1:]
+        checkpoint(item)
+        total = len(done) + len(ref["todo"])
+        if ref["todo"]:
+            return "running", max(1, min(99, round(100 * len(done) / total))), \
+                f"Trimmed {_name(ref, volume)} ({len(done)} of {total})" if outcome == "trimmed" else \
+                f"{_name(ref, volume)}: {outcome} ({len(done)} of {total})"
+    return _finish(ref)
+
+
+def _count(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _finish(ref):
+    """The run's result: saved as state["last"], and said in one message."""
+    row = lambda d: {"volume": d["volume"], "pvc": (ref.get("pvcs") or {}).get(d["volume"], "")}
+    done = ref.get("done") or []
+    last = {"slot": ref.get("slot"), "at": round(time.time()), "why": ref.get("why", ""),
+            "trimmed": [d["volume"] for d in done if d["outcome"] == "trimmed"],
+            "skipped": list(ref.get("skipped") or []) + [{**row(d), "why": d["why"]} for d in done
+                                                          if d["outcome"] == "skipped"],
+            "unconfirmed": [{**row(d), "why": d["why"]} for d in done if d["outcome"] == "unconfirmed"],
+            "failed": [{**row(d), "message": d["why"]} for d in done if d["outcome"] == "failed"]}
+    _update(lambda state: state.update(last=last))
+    name = lambda r: r["pvc"] or r["volume"]
+    whys = {}
+    for s in last["skipped"]:
+        whys[s["why"]] = whys.get(s["why"], 0) + 1
+    said = ", ".join(_count(n, "VM disk") if why == VM_DISK else f"{n} {why}" for why, n in whys.items())
+    message = (f"Trimmed {_count(len(last['trimmed']), 'volume')}, skipped {len(last['skipped'])}"
+               + (f" ({said})" if said else ""))
+    # Failures first: the job's message is cut at 500 characters, the saved result is not.
+    if last["failed"]:
+        message += ". Failed: " + "; ".join(f"{name(f)}: {f['message']}" for f in last["failed"])
+    if last["unconfirmed"]:
+        message += ". Not confirmed: " + ", ".join(f"{name(u)} ({u['why']})" for u in last["unconfirmed"])
+    if last["skipped"]:
+        message += ". Skipped: " + ", ".join(name(s) for s in last["skipped"])
+    return ("failed" if last["failed"] else "succeeded"), 100, message
+
+
+def register(ops):
+    """The job store's entry for the weekly trim (#622)."""
+    ops.RESOLVERS[KIND] = lambda item: resolve(item, ops.checkpoint)

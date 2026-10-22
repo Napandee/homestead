@@ -52,6 +52,7 @@ import homestead_storage_guard as STORAGE_GUARD
 import homestead_storage_pending as STORAGE_PENDING
 import homestead_storage_runtime as STORAGE_RUNTIME
 import homestead_storage_workflow as STORAGE_WORKFLOW
+import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_workloads as WORKLOADS
 
 ROUTE_NEEDS = ("beat", "cached", "copy_admission", "create_pvc", "get_app_settings",
@@ -69,6 +70,9 @@ def bind_routes(helpers, **values):
         raise TypeError("homestead_storage_server is bound with " + ", ".join(sorted(set(values) ^ set(VALUES))))
     globals().update({name: helpers[name] for name in ROUTE_NEEDS})
     globals().update(values)
+    # The weekly trim (#591): its state file, and its kind in the job store.
+    WEEKLY_TRIM.bind(DATA_DIR)
+    WEEKLY_TRIM.register(OPS)
 
 
 def is_managed_smb(ns, name):
