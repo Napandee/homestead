@@ -59,10 +59,13 @@ class RevertTests(unittest.TestCase):
             raise self.failing[action]
         return {}
 
-    def head_after(self, parent):
-        """Longhorn's engine shows the volume head on top of this snapshot."""
+    def head_after(self, parent, known=()):
+        """Longhorn's engine shows the volume head on top of this snapshot,
+        in a chain that lists these snapshots too."""
+        chain = {name: {"parent": ""} for name in known}
+        chain["volume-head"] = {"parent": parent}
         self.objects[f"{API}/engines?labelSelector=longhornvolume%3Dpvc-1"] = {"items": [
-            {"status": {"snapshots": {"volume-head": {"parent": parent}}}}]}
+            {"status": {"snapshots": chain}}]}
 
     def actions(self):
         return [path.split("action=")[1] for path, _ in self.calls]
@@ -205,7 +208,7 @@ class RevertTests(unittest.TestCase):
         self.assertNotIn("detach", self.actions(), "never let go while Longhorn may still be reverting")
         self.assertEqual([], self.reclass.started)
         self.assertEqual("running", REVERT.resolve(item)[0])
-        self.head_after("snap-a")
+        self.head_after("snap-a", known=[item["ref"]["kept"], "snap-a"])
         status, _, _ = REVERT.resolve(item)
         self.assertEqual("running", status)
         self.assertTrue(item["ref"]["reverted"])
@@ -227,13 +230,30 @@ class RevertTests(unittest.TestCase):
         for words in ("maintenance mode", "homestead-revert", "paperless", item["ref"]["kept"]):
             self.assertIn(words, message)
 
+    def test_a_chain_that_has_not_caught_up_is_not_taken_as_reverted(self):
+        """The engine's snapshot list lags: just after the kept snapshot is
+        made it can still show the head on the chosen (newest) snapshot."""
+        self.failing["snapshotRevert"] = urllib.error.URLError(TimeoutError("timed out"))
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        REVERT.resolve(item)
+        self.head_after("snap-a", known=["snap-a"])     # no kept snapshot in it yet
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        self.assertFalse(item["ref"].get("reverted"))
+        item["ref"]["since"] = time.time() - 3600
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual([], self.reclass.started)
+        self.assertIn("maintenance mode", message)
+
     def test_a_revert_whose_answer_is_lost_and_did_not_happen_puts_the_app_back(self):
         self.failing["snapshotRevert"] = urllib.error.URLError(TimeoutError("timed out"))
         item = self._stopped_and_detached()
         REVERT.resolve(item)
         self.state = "attached"
         REVERT.resolve(item)
-        self.head_after(item["ref"]["kept"])
+        self.head_after(item["ref"]["kept"], known=[item["ref"]["kept"], "snap-a"])
         item["ref"]["since"] = time.time() - 3600
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)

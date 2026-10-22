@@ -270,17 +270,20 @@ def _snapshot_made(volume, name):
     return bool(snap) and (snap.get("spec") or {}).get("volume") == volume
 
 
-def _head_parent(volume):
+def _head_parent(volume, kept):
     """The snapshot the volume's live data sits on, from Longhorn's engine:
-    the rolled-back-to snapshot once a revert is done. "" when unknown."""
+    the rolled-back-to snapshot once a revert is done. Trusted only once the
+    engine's chain lists the kept snapshot - the list lags, and before that
+    it can still show the head on the newest snapshot. "" when unknown."""
     try:
         engines = kget(f"{API}/engines?labelSelector=longhornvolume%3D{volume}").get("items") or []
     except Exception:
         return ""
     for engine in engines:
-        head = (((engine.get("status") or {}).get("snapshots") or {}).get("volume-head") or {})
-        if head.get("parent"):
-            return head["parent"]
+        chain = (engine.get("status") or {}).get("snapshots") or {}
+        parent = (chain.get("volume-head") or {}).get("parent")
+        if parent and kept in chain:
+            return parent
     return ""
 
 
@@ -364,7 +367,7 @@ def resolve(item):
             return "running", 60, f"Longhorn's API did not answer the rollback ({_why(error)}); checking whether it happened"
         return _reverted(ref)
     if phase == "confirming":
-        parent = _head_parent(volume)
+        parent = _head_parent(volume, ref.get("kept", ""))
         if parent == ref["snapshot"]:
             return _reverted(ref)
         if not _late(ref):
