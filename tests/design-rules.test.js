@@ -63,7 +63,7 @@ test("Helm releases have row actions and say their state in words (#506)", () =>
   assert.match(render, /<td data-actions>\$\{(?:actionBar|helmActions)\(/, "each release row ends in an actionBar");
   if (!/actionBar\(/.test(render)) assert.match(helm, /function helmActions\([^)]*\) \{[\s\S]*?return actionBar\(/, "helmActions returns an actionBar");
   const source = helm.match(/const HELM_WORDS = [\s\S]*?\n\};?\n|function helmStatus\([\s\S]*?\n\}\n/g).join("\n");
-  const helmStatus = new Function("esc", `${source}; return helmStatus;`)(s => String(s));
+  const helmStatus = new Function("esc", "UI", `${source}; return helmStatus;`)(s => String(s), { chip: (label, tone) => `<span class="ui-chip ${tone}">${label}</span>` });
   for (const [status, words] of [["deployed", "Deployed"], ["pending-install", "Installing…"], ["pending-upgrade", "Upgrading…"], ["failed", "Failed"]]) {
     assert.match(helmStatus(status), new RegExp(`>${words}<`), `${status} reads "${words}"`);
   }

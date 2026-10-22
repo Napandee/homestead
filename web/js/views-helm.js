@@ -2,15 +2,15 @@
    cluster's Helm controller (k3s's or RKE2's). Releases made some other way
    are shown, not changed. */
 
-const HELM_MANAGED = { homestead: ["installed here", "", "Installed from Homestead as a HelmChart: it can be upgraded and uninstalled here"],
-  helmchart: ["HelmChart", "", "Managed by a HelmChart object, which Homestead can change"] };
+const HELM_MANAGED = { homestead: ["installed here", "neutral", "Installed from Homestead as a HelmChart: it can be upgraded and uninstalled here"],
+  helmchart: ["HelmChart", "neutral", "Managed by a HelmChart object, which Homestead can change"] };
 
 // Helm's states in words; the raw state stays in the tooltip.
 const HELM_WORDS = { deployed: "Deployed", "pending-install": "Installing…", "pending-upgrade": "Upgrading…", "pending-rollback": "Rolling back…",
   uninstalling: "Uninstalling…", superseded: "Superseded", failed: "Failed", uninstalled: "Uninstalled", unknown: "Unknown" };
 function helmStatus(status) {
-  const tone = status === "deployed" ? "ok" : /pending/.test(status) ? "med" : status === "superseded" ? "neutral" : "crit";
-  return `<span class="pill slim ${tone}" title="${esc(status || "unknown")}">${esc(HELM_WORDS[status || "unknown"] || status)}</span>`;
+  const tone = status === "deployed" ? "ok" : /pending/.test(status) ? "warn" : status === "superseded" ? "neutral" : "bad";
+  return UI.chip(HELM_WORDS[status || "unknown"] || status, tone, { size: "slim", tip: status || "unknown" });
 }
 
 async function viewHelm() {
@@ -54,7 +54,7 @@ function renderHelm() {
       <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th><th data-nosort></th></tr></thead><tbody>
       ${rows.map(r => `<tr>
         <td><div class="row nowrap" style="gap:9px">${appAvatar(r.name, r.icon && /^https:/.test(r.icon) ? r.icon : "")}<div><b>${esc(r.name)}</b>
-          ${HELM_MANAGED[r.managed] ? `<span class="tag ${HELM_MANAGED[r.managed][1]}" data-tip="${esc(HELM_MANAGED[r.managed][2])}">${esc(HELM_MANAGED[r.managed][0])}</span>` : ""}
+          ${HELM_MANAGED[r.managed] ? UI.chip(HELM_MANAGED[r.managed][0], HELM_MANAGED[r.managed][1], { tip: HELM_MANAGED[r.managed][2] }) : ""}
           <div class="dim xs mono">${esc(r.namespace)}</div></div></div></td>
         <td data-label="Chart" class="mono small">${esc(r.chart)}${r.chart_version ? `-${esc(r.chart_version)}` : ""}</td>
         <td data-label="App" class="mono small">${esc(r.app_version || "—")}</td>
@@ -94,7 +94,7 @@ window.helmRelease = async (ns, name) => {
     const objects = `<table class="tbl dense stack"><thead><tr><th>Kind</th><th>Name</th><th>Namespace</th></tr></thead><tbody>
         ${r.objects.map(o => `<tr><td>${esc(o.kind)}</td><td class="mono small">${esc(o.name)}</td><td class="mono small dim">${esc(o.namespace || r.namespace)}</td></tr>`).join("")}</tbody></table>`;
     $("#mbody").innerHTML = `<div class="between"><div><b>${esc(r.chart)} ${esc(r.chart_version)}</b> <span class="dim small">app ${esc(r.app_version || "—")}</span>
-        <div class="dim xs">${esc(r.description || "")}</div></div><div class="row">${helmStatus(r.status)} <span class="pill slim neutral">revision ${r.revision}</span>
+        <div class="dim xs">${esc(r.description || "")}</div></div><div class="row">${helmStatus(r.status)} ${UI.chip(`revision ${r.revision}`, "neutral", { size: "slim" })}
         ${editable ? `<span data-need="admin">${actionBar([{ label: "Uninstall", icon: "trash", run: `helmUninstall(${jsq(ns)},${jsq(name)})`, need: "admin", danger: true }], { shown: 0, label: `More actions for ${name}` })}</span>` : ""}</div></div>
       ${editable ? `<div class="note" style="margin-top:10px">From <span class="mono">${esc(r.source.repo || r.source.chart)}</span> through a HelmChart: change the version or values and the Helm controller upgrades it.</div>`
         : `<div class="note" style="margin-top:10px">Installed some other way${r.system ? " - it is part of the platform" : ""}. Homestead shows it but does not change it, since whatever installed it would change it back.</div>`}
@@ -151,7 +151,7 @@ async function helmSearch() {
     const rows = STATE.data.helmResults = await api(`/api/helm/search?q=${encodeURIComponent(q)}`);
     host.innerHTML = rows.map((r, i) => `<button type="button" class="helm-hit card flat" onclick="helmPick(${i})">
         ${r.logo ? `<img src="${esc(r.logo)}" alt="" loading="lazy">` : `<span class="helm-hit-blank">${esc(r.name.slice(0, 2).toUpperCase())}</span>`}
-        <span><b>${esc(r.name)}</b> <span class="dim xs">${esc(r.version)}</span> ${r.official ? '<span class="tag">official</span>' : r.verified ? '<span class="tag">verified</span>' : ""}
+        <span><b>${esc(r.name)}</b> <span class="dim xs">${esc(r.version)}</span> ${r.official ? UI.chip("official", "neutral") : r.verified ? UI.chip("verified", "neutral") : ""}
           <span class="dim xs"> · ${esc(r.publisher || r.repo_name)}</span><div class="dim xs">${esc(r.description)}</div></span></button>`).join("")
       || '<div class="dim small">No charts found.</div>';
   } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
