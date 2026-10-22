@@ -455,8 +455,21 @@ def get_workloads(pods=None):
             "homestead": homestead_part(ns, name),
             "failover": FAILOVER.mode_of(pspec),
             "lan": (LAN.read(d) or {}).get("address", ""),
+            # Starts after (#746): its setting, its gate, and whether a pod waits.
+            **_start_fields(d, mine, deps),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
+
+
+def _start_fields(dep, pods, deps):
+    """Starts after's row fields; a setting that breaks them marks that app
+    and never the whole list."""
+    try:
+        return START_ORDER.row_fields(dep, pods, deps)
+    except Exception as error:
+        print(f"workloads: starts-after of {dep['metadata'].get('namespace')}/{dep['metadata'].get('name')} "
+              f"not read: {str(error)[:160]}", flush=True)
+        return START_ORDER.row_unread()
 
 
 def set_workload_logos(b):

@@ -16,6 +16,7 @@ Nothing here is bound by server.py: it reads through the helpers
 homestead_workloads and homestead_lifecycle already have.
 """
 import json
+import re
 
 import homestead_names as NAMES
 import homestead_namespaces as NAMESPACES
@@ -26,6 +27,7 @@ TIMEOUT = (30, 300, 3600)        # seconds: least, default, most
 MAX_AFTER = 10
 ON_TIMEOUT = ("start", "wait")   # the first is the default
 NO_SERVICE = "{app} has no Service with a TCP port, so nothing can tell when it is ready"
+DNS_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 
 
 def _workloads():
@@ -60,6 +62,23 @@ def never_gated(ns, name):
             or NAMESPACES.is_system({"metadata": {"name": ns}}))
 
 
+def _int(value, low, high):
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _well_formed(value):
+    """The shape clean() writes, and nothing else: an annotation edited by
+    hand that is anything other than that is never acted on."""
+    if not isinstance(value, dict) or not isinstance(value.get("after"), list):
+        return False
+    for item in value["after"]:
+        if not isinstance(item, dict) or not _int(item.get("port"), 1, 65535):
+            return False
+        if not all(isinstance(item.get(k), str) and DNS_LABEL.fullmatch(item[k]) for k in ("ns", "app", "service")):
+            return False
+    return _int(value.get("timeout"), TIMEOUT[0], TIMEOUT[2]) and value.get("on_timeout") in ON_TIMEOUT
+
+
 def read(dep):
     """The stored setting; None when there is none, {"unreadable": True}
     when it isn't what Homestead writes, so a row shows it and never fails."""
@@ -70,9 +89,7 @@ def read(dep):
         value = json.loads(raw)
     except (TypeError, ValueError):
         return {"unreadable": True}
-    if not isinstance(value, dict) or not isinstance(value.get("after"), list):
-        return {"unreadable": True}
-    return value
+    return value if _well_formed(value) else {"unreadable": True}
 
 
 def after_of(dep):
@@ -505,7 +522,26 @@ def order(items, deployments):
     by_ref = {_ref(d): d for d in deployments}
     edges = {n: [index[a] for a in after_of(by_ref[key]) if a in index and index[a] != n]
              if key in by_ref else [] for key, n in index.items()}
-    # Tarjan: each strongly connected component is one unit.
+    comp = _components(len(items), edges)
+    depth = {}
+
+    def level(c):
+        if c not in depth:
+            depth[c] = 0   # a member's edge back into its own unit adds nothing
+            members = [v for v in range(len(items)) if comp[v] == c]
+            depth[c] = max([level(comp[w]) + 1 for v in members for w in edges.get(v, ()) if comp[w] != c],
+                           default=0)
+        return depth[c]
+
+    layers = {}
+    for v in range(len(items)):
+        layers.setdefault(level(comp[v]), []).append(items[v])
+    return [layers[k] for k in sorted(layers)]
+
+
+def _components(count, edges):
+    """Tarjan: node -> the root of its strongly connected component, for
+    nodes 0..count-1 and edges {node: [node, ...]}."""
     comp, low, num, stack, on, counter = {}, {}, {}, [], set(), [0]
 
     def visit(v):
@@ -527,23 +563,10 @@ def order(items, deployments):
                 if w == v:
                     break
 
-    for v in range(len(items)):
+    for v in range(count):
         if v not in num:
             visit(v)
-    depth = {}
-
-    def level(c):
-        if c not in depth:
-            depth[c] = 0   # a member's edge back into its own unit adds nothing
-            members = [v for v in range(len(items)) if comp[v] == c]
-            depth[c] = max([level(comp[w]) + 1 for v in members for w in edges.get(v, ()) if comp[w] != c],
-                           default=0)
-        return depth[c]
-
-    layers = {}
-    for v in range(len(items)):
-        layers.setdefault(level(comp[v]), []).append(items[v])
-    return [layers[k] for k in sorted(layers)]
+    return comp
 
 
 def arrange(items):
@@ -565,3 +588,153 @@ def waits_for(ns, name, get):
     if not after_of(dep):
         return []
     return stopped_dependencies(dep, get("/apis/apps/v1/deployments").get("items", []) or [])
+
+
+# ---- what the person is told: rows, alerts, flow ------------------------------
+
+def _epoch(stamp):
+    import calendar
+    import time
+    try:
+        return calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return 0
+
+
+def _gate_status(pod):
+    return next((s for s in (pod.get("status") or {}).get("initContainerStatuses") or []
+                 if s.get("name") == GATE), None)
+
+
+def pod_wait(dep, pods, deployments):
+    """From the pods the Apps list has already read: {"waiting_for", "since"}
+    while a gate waits, {"started_without", "at"} when the newest pod's gate
+    gave up waiting, else None."""
+    setting = _setting_of(dep)
+    if not setting:
+        return None
+    by_ref = {_ref(d): d for d in deployments}
+    running = [_epoch(((_gate_status(p) or {}).get("state") or {}).get("running", {}).get("startedAt"))
+               for p in pods if ((_gate_status(p) or {}).get("state") or {}).get("running")]
+    if running:
+        down = [a["app"] for a in setting["after"] if (a["ns"], a["app"]) not in by_ref
+                or not ((by_ref[(a["ns"], a["app"])].get("status") or {}).get("readyReplicas") or 0)]
+        return {"waiting_for": down or [a["app"] for a in setting["after"]], "since": min(running)}
+    # Every pod of the template the newest one runs: with several copies,
+    # any one that gave up started without its apps.
+    newest = max(pods, key=lambda p: _epoch(_meta(p).get("creationTimestamp")), default=None)
+    template = (_meta(newest).get("labels") or {}).get("pod-template-hash") if newest else None
+    apps = {target(a): a["app"] for a in setting["after"]}
+    without, at = [], 0
+    for pod in pods:
+        if (_meta(pod).get("labels") or {}).get("pod-template-hash") != template:
+            continue
+        ended = ((_gate_status(pod) or {}).get("state") or {}).get("terminated") or {}
+        message = str(ended.get("message") or "").split()
+        if message[:1] == ["timeout"]:
+            without += [apps.get(t, t.split(".", 1)[0]) for t in message[1:]]
+            at = max(at, _epoch(ended.get("finishedAt")))
+    if without:
+        return {"started_without": list(dict.fromkeys(without)), "at": at}
+    return None
+
+
+def row_fields(dep, pods, deployments):
+    """What the Apps list shows of it: the apps it starts after, its gate,
+    whether a pod is waiting, and the setting the alerts read."""
+    setting = _setting_of(dep)
+    existing = {_ref(d) for d in deployments}
+    return {"starts_after": [a["app"] for a in (setting or {}).get("after", [])],
+            "start_unreadable": bool((read(dep) or {}).get("unreadable")),
+            "start_gate": gate_state(dep),
+            "start_wait": pod_wait(dep, pods, deployments),
+            "start_setting": None if not setting else {
+                "after": [{"ns": a["ns"], "app": a["app"], "gone": (a["ns"], a["app"]) not in existing}
+                          for a in setting["after"]],
+                "timeout": setting["timeout"], "on_timeout": setting["on_timeout"], "managed": bool(_managed(dep))}}
+
+
+def _words(names):
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _span(seconds):
+    return f"{seconds} s" if seconds < 60 else f"{seconds / 60:g} min"
+
+
+def alert_facts(workloads, now=None):
+    """Facts for the alert collector, from the Apps list's rows."""
+    import time
+    now = now or time.time()
+    facts, rows = [], [r for r in workloads or [] if isinstance(r, dict) and r.get("ns") and r.get("name")]
+    for row in rows:
+        ns, name = row["ns"], row["name"]
+        href = f"/containers?ns={ns}&workload={name}"
+        setting = row.get("start_setting") if isinstance(row.get("start_setting"), dict) else None
+        wait = row.get("start_wait") if isinstance(row.get("start_wait"), dict) else {}
+        if setting and wait.get("started_without"):
+            facts.append({"key": f"starts-after:started-without:{ns}/{name}", "category": "degraded", "severity": "degraded",
+                          "title": f"{name} started without {_words(wait['started_without'])}",
+                          "body": f"{_words(wait['started_without'])} was not ready after {_span(setting['timeout'])}, "
+                                  f"so {name} started anyway and may not work until it is restarted.",
+                          "resolved": f"{name} started with what it needs", "href": href,
+                          "signals": {"at": wait.get("at")}})
+        if (setting and wait.get("waiting_for") and setting.get("on_timeout") == "wait"
+                and now - (wait.get("since") or now) >= setting["timeout"]):
+            facts.append({"key": f"starts-after:waiting:{ns}/{name}", "category": "degraded", "severity": "degraded",
+                          "title": f"{name} is waiting for {_words(wait['waiting_for'])}",
+                          "body": f"{name} is set to keep waiting, and {_words(wait['waiting_for'])} has not been ready "
+                                  f"for {_span(setting['timeout'])}. Start it, or set {name} to Start anyway.",
+                          "resolved": f"{name} started", "href": href, "signals": {}})
+        gone = [a["app"] for a in (setting or {}).get("after", []) if a.get("gone")]
+        if gone:
+            facts.append({"key": f"starts-after:gone:{ns}/{name}", "category": "degraded", "severity": "degraded",
+                          "title": f"{name} waits for {_words(gone)}, which no longer exists",
+                          "body": f"Remove it from Starts after in {name}'s Edit; until then each start of {name} "
+                                  "waits for it.", "resolved": f"{name} waits only for apps that exist", "href": href,
+                          "signals": {}})
+        gate = row.get("start_gate")
+        if gate == "differs" or (gate == "missing" and (setting or {}).get("managed")):
+            fix = ("commit the lines in Edit" if (setting or {}).get("managed")
+                   else "save Starts after in Edit to put it back; that restarts it once")
+            facts.append({"key": f"starts-after:differs:{ns}/{name}", "category": "degraded", "severity": "info",
+                          "title": f"{name}'s start gate does not match its setting",
+                          "body": f"Its pods don't wait as Starts after says: {fix}.",
+                          "resolved": f"{name}'s start gate matches its setting", "href": href, "signals": {}})
+    # A loop made outside Homestead: with Keep waiting it never starts.
+    refs = [(r["ns"], r["name"]) for r in rows]
+    index = {ref: n for n, ref in enumerate(refs)}
+    edges = {index[(r["ns"], r["name"])]: [index[(a["ns"], a["app"])] for a in r["start_setting"]["after"]
+                                          if (a.get("ns"), a.get("app")) in index]
+             for r in rows if isinstance(r.get("start_setting"), dict)}
+    comp = _components(len(refs), edges)
+    loops = {}
+    for v, root in comp.items():
+        loops.setdefault(root, []).append(refs[v])
+    for members in loops.values():
+        if len(members) < 2:
+            continue
+        members.sort()
+        facts.append({"key": "starts-after:cycle:" + ",".join(f"{ns}/{n}" for ns, n in members),
+                      "category": "degraded", "severity": "degraded",
+                      "title": f"{_words(n for _, n in members)} wait for each other",
+                      "body": "Each starts only after the other: with Keep waiting neither starts; "
+                              "set one of them to Start anyway, or remove one of the links.",
+                      "resolved": "no apps wait for each other", "href": "/containers", "signals": {}})
+    return facts
+
+
+def row_unread():
+    """The row's fields when they could not be worked out: empty, and said."""
+    return {"starts_after": [], "start_unreadable": True, "start_gate": "differs", "start_wait": None,
+            "start_setting": None, "start_note": "its Starts after setting could not be read"}
+
+
+def flow_after(dep):
+    """The Architecture page's arrows: the apps dep starts after, dashed
+    while its gate is not in the template (a Flux app not committed yet)."""
+    if not dep:
+        return []
+    committed = gate_state(dep) == "rendered"
+    return [{"id": f"w:{ns}/{app}", "committed": committed} for ns, app in after_of(dep)]

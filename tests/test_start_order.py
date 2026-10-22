@@ -617,5 +617,202 @@ class OrderTests(Fixture):
         self.assertEqual([], plan["waits_for"], "a start never fails on it")
 
 
+T0 = 1_792_000_000   # 2026-10-15 (UTC), whole seconds
+
+
+def stamp(epoch):
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def gated_pod(name, gate, created=T0, app="app-1", ns="lab", template="t1"):
+    """A pod of app with its gate's status: ("running", started) or
+    ("terminated", finished, message)."""
+    state = ({"running": {"startedAt": stamp(gate[1])}} if gate[0] == "running" else
+             {"terminated": {"exitCode": 0, "reason": "Completed", "finishedAt": stamp(gate[1]), "message": gate[2]}})
+    return {"metadata": {"name": name, "namespace": ns, "labels": {"app": app, "pod-template-hash": template},
+                         "creationTimestamp": stamp(created)},
+            "spec": {}, "status": {"initContainerStatuses": [{"name": "homestead-start-gate", "state": state}]}}
+
+
+class StateTests(Fixture):
+    """What the person is told: rows, alerts, flow."""
+
+    def setUp(self):
+        super().setUp()
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432), ("data", "db", 5432)))
+        START.apply_to(self.dep("lab", "app-1"), START.read(self.dep("lab", "app-1")))
+        self.dep("lab", "app-2")["status"]["readyReplicas"] = 0
+
+    def rows(self, pods, now=T0 + 120):
+        rows = []
+        for dep in self.deps:
+            ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
+            mine = [p for p in pods if (p["metadata"]["namespace"], p["metadata"]["labels"].get("app")) == (ns, name)]
+            rows.append({"ns": ns, "name": name, **START.row_fields(dep, mine, self.deps)})
+        return rows
+
+    def row(self, pods, name="app-1"):
+        return next(r for r in self.rows(pods) if r["name"] == name)
+
+    def test_running_gate_is_waiting(self):
+        got = START.pod_wait(self.dep("lab", "app-1"), [gated_pod("p1", ("running", T0 + 5))], self.deps)
+        self.assertEqual({"waiting_for": ["app-2"], "since": T0 + 5}, got)
+        row = self.row([gated_pod("p1", ("running", T0 + 5))])
+        self.assertEqual((["app-2", "db"], "rendered"), (row["starts_after"], row["start_gate"]))
+
+    def test_timeout_message_is_started_without(self):
+        pods = [gated_pod("old", ("terminated", T0 - 900, ""), created=T0 - 1000),
+                gated_pod("new", ("terminated", T0 + 300, "timeout app-2.lab.svc:5432"), created=T0)]
+        self.assertEqual({"started_without": ["app-2"], "at": T0 + 300},
+                         START.pod_wait(self.dep("lab", "app-1"), pods, self.deps))
+
+    def test_any_current_replica_that_gave_up_is_started_without(self):
+        pods = [gated_pod("a", ("terminated", T0 + 300, "timeout app-2.lab.svc:5432"), created=T0),
+                gated_pod("b", ("terminated", T0 + 20, ""), created=T0 + 10)]
+        self.assertEqual({"started_without": ["app-2"], "at": T0 + 300},
+                         START.pod_wait(self.dep("lab", "app-1"), pods, self.deps))
+        replaced = [dict(pods[0]), gated_pod("b", ("terminated", T0 + 20, ""), created=T0 + 10, template="t2")]
+        self.assertIsNone(START.pod_wait(self.dep("lab", "app-1"), replaced, self.deps),
+                          "a pod of the template before is not the app as it runs now")
+
+    def test_clean_exit_is_none(self):
+        self.assertIsNone(START.pod_wait(self.dep("lab", "app-1"), [gated_pod("p1", ("terminated", T0, ""))], self.deps))
+        self.assertIsNone(START.pod_wait(self.dep("lab", "app-1"), [], self.deps))
+        self.assertIsNone(START.pod_wait(self.dep("lab", "app-3"), [gated_pod("p1", ("running", T0))], self.deps),
+                          "no setting, no wait")
+
+    def test_no_alert_within_timeout(self):
+        pods = [gated_pod("p1", ("running", T0))]
+        self.assertEqual([], START.alert_facts(self.rows(pods), now=T0 + 120))
+        self.assertEqual([], START.alert_facts(self.rows(pods), now=T0 + 400), "start anyway: the gate goes on by itself")
+        self.put("lab", "app-1", stored(("lab", "app-2", 5432), ("data", "db", 5432), on_timeout="wait"))
+        START.apply_to(self.dep("lab", "app-1"), START.read(self.dep("lab", "app-1")))
+        self.assertEqual([], START.alert_facts(self.rows(pods), now=T0 + 120))
+        facts = START.alert_facts(self.rows(pods), now=T0 + 300)
+        self.assertEqual(["starts-after:waiting:lab/app-1"], [f["key"] for f in facts])
+        self.assertEqual("app-1 is waiting for app-2", facts[0]["title"])
+        self.assertEqual("degraded", facts[0]["severity"])
+
+    def test_started_without_resolves_on_next_clean_start(self):
+        late = [gated_pod("p1", ("terminated", T0 + 300, "timeout app-2.lab.svc:5432"))]
+        facts = START.alert_facts(self.rows(late), now=T0 + 400)
+        self.assertEqual(["starts-after:started-without:lab/app-1"], [f["key"] for f in facts])
+        self.assertEqual("app-1 started without app-2", facts[0]["title"])
+        self.assertIn("app-2 was not ready after 5 min", facts[0]["body"])
+        clean = late + [gated_pod("p2", ("terminated", T0 + 900, ""), created=T0 + 800, template="t2")]
+        self.assertEqual([], START.alert_facts(self.rows(clean), now=T0 + 1000))
+
+    def test_a_gone_dependency_is_named_not_fatal(self):
+        self.deps = [d for d in self.deps if d["metadata"]["name"] != "app-2"]
+        row = self.row([gated_pod("p1", ("running", T0))])
+        self.assertEqual(["app-2"], row["start_wait"]["waiting_for"])
+        facts = START.alert_facts(self.rows([gated_pod("p1", ("running", T0))]), now=T0 + 10)
+        gone = next(f for f in facts if f["key"] == "starts-after:gone:lab/app-1")
+        self.assertEqual("app-1 waits for app-2, which no longer exists", gone["title"])
+        self.assertIn("Remove it from Starts after", gone["body"])
+        # And through the Apps list itself, with nothing else bound.
+        import server
+        items = {"/apis/apps/v1/deployments": {"items": self.deps},
+                 "/api/v1/pods": {"items": [gated_pod("p1", ("running", T0))]}}
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: copy.deepcopy(items.get(path, {"items": []}))):
+            rows = {(w["ns"], w["name"]): w for w in server.WORKLOADS.get_workloads()}
+        self.assertEqual(["app-2"], rows[("lab", "app-1")]["start_wait"]["waiting_for"])
+        self.assertEqual(["app-2", "db"], rows[("lab", "app-1")]["starts_after"])
+        self.assertIsNone(rows[("lab", "app-3")]["start_wait"])
+
+    def test_outside_cycle_alert(self):
+        self.put("lab", "app-2", stored(("lab", "app-1", 80), on_timeout="wait"))
+        facts = START.alert_facts(self.rows([]), now=T0)
+        cycle = next(f for f in facts if f["key"].startswith("starts-after:cycle:"))
+        self.assertEqual("starts-after:cycle:lab/app-1,lab/app-2", cycle["key"])
+        self.assertEqual("app-1 and app-2 wait for each other", cycle["title"])
+        self.assertIn("with Keep waiting neither starts; set one of them to Start anyway", cycle["body"])
+
+    def test_a_gate_that_differs_or_is_not_committed_is_info(self):
+        self.dep("lab", "app-1")["spec"]["template"]["spec"]["initContainers"][0]["env"][0]["value"] = "x.lab.svc:1"
+        self.dep("lab", "app-3")["metadata"]["labels"] = dict(FLUX)
+        self.put("lab", "app-3", stored(("data", "db", 5432)))
+        facts = {f["key"]: f for f in START.alert_facts(self.rows([]), now=T0)}
+        differs = facts["starts-after:differs:lab/app-1"]
+        self.assertEqual(("info", "app-1's start gate does not match its setting"), (differs["severity"], differs["title"]))
+        self.assertIn("save Starts after in Edit to put it back; that restarts it once", differs["body"])
+        flux = facts["starts-after:differs:lab/app-3"]
+        self.assertIn("commit the lines in Edit", flux["body"])
+
+    def test_bad_rows_never_break_the_alerts(self):
+        self.assertEqual([], START.alert_facts([{"ns": "lab", "name": "x"}, {}], now=T0))
+        self.assertEqual([], START.alert_facts(None, now=T0))
+
+
+GOOD = {"ns": "lab", "app": "app-2", "service": "app-2", "port": 5432}
+MALFORMED = [
+    {"after": [1]},
+    {"after": [{"ns": "lab", "app": "app-2"}], "timeout": 300, "on_timeout": "start"},          # no service, no port
+    {"after": [dict(GOOD, port="5432")], "timeout": 300, "on_timeout": "start"},
+    {"after": [dict(GOOD, port=True)], "timeout": 300, "on_timeout": "start"},
+    {"after": [dict(GOOD, port=70000)], "timeout": 300, "on_timeout": "start"},
+    {"after": [dict(GOOD, ns=7)], "timeout": 300, "on_timeout": "start"},
+    {"after": [dict(GOOD, app="app 2 reboot")], "timeout": 300, "on_timeout": "start"},
+    {"after": [GOOD], "timeout": "300", "on_timeout": "start"},
+    {"after": [GOOD], "timeout": 5, "on_timeout": "start"},
+    {"after": [GOOD], "on_timeout": "start"},
+    {"after": [GOOD], "timeout": 300, "on_timeout": "later"},
+    {"after": "app-2", "timeout": 300, "on_timeout": "start"},
+]
+
+
+class MalformedTests(Fixture):
+    """A setting edited by hand, or broken, is shown on its app and never
+    breaks the Apps list (security review, 2026-10-22)."""
+
+    def test_every_malformed_setting_reads_as_unreadable(self):
+        for bad in MALFORMED:
+            with self.subTest(bad=bad):
+                dep = deployment("lab", "app-1", after=bad)
+                self.assertEqual({"unreadable": True}, START.read(dep))
+                pods = [gated_pod("p1", ("terminated", T0, "timeout app-2.lab.svc:5432"))]
+                fields = START.row_fields(dep, pods, self.deps)
+                self.assertEqual(([], "differs", None, None, True),
+                                 (fields["starts_after"], fields["start_gate"], fields["start_wait"],
+                                  fields["start_setting"], fields["start_unreadable"]))
+                self.assertEqual([], START.after_of(dep))
+                facts = START.alert_facts([{"ns": "lab", "name": "app-1", **fields}], now=T0)
+                self.assertEqual(["starts-after:differs:lab/app-1"], [f["key"] for f in facts])
+        self.assertEqual(stored(("lab", "app-2", 5432)), START.read(deployment("lab", "app-1", after=stored(("lab", "app-2", 5432)))))
+
+    def test_the_apps_list_still_loads_with_that_app_marked(self):
+        import server
+        self.deps[0] = deployment("lab", "app-1", after=MALFORMED[1])
+        self.deps[2] = deployment("lab", "app-3", after=MALFORMED[7])
+        items = {"/apis/apps/v1/deployments": {"items": self.deps},
+                 "/api/v1/pods": {"items": [gated_pod("p1", ("running", T0))]}}
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: copy.deepcopy(items.get(path, {"items": []}))):
+            rows = {(w["ns"], w["name"]): w for w in server.WORKLOADS.get_workloads()}
+            facts = START.alert_facts(list(rows.values()), now=T0 + 4000)
+        self.assertTrue(rows[("lab", "app-1")]["start_unreadable"])
+        self.assertTrue(rows[("lab", "app-3")]["start_unreadable"])
+        self.assertFalse(rows[("lab", "app-2")]["start_unreadable"])
+        self.assertEqual({"starts-after:differs:lab/app-1", "starts-after:differs:lab/app-3"}, {f["key"] for f in facts})
+
+    def test_a_row_that_fails_falls_back_and_the_rest_load(self):
+        import server
+        items = {"/apis/apps/v1/deployments": {"items": self.deps}, "/api/v1/pods": {"items": []}}
+        real = START.row_fields
+
+        def fails_for_app_1(dep, pods, deployments):
+            if dep["metadata"]["name"] == "app-1":
+                raise KeyError("after")
+            return real(dep, pods, deployments)
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: copy.deepcopy(items.get(path, {"items": []}))), \
+                mock.patch.object(START, "row_fields", fails_for_app_1):
+            rows = {(w["ns"], w["name"]): w for w in server.WORKLOADS.get_workloads()}
+        bad = rows[("lab", "app-1")]
+        self.assertEqual(([], None, None, True), (bad["starts_after"], bad["start_wait"], bad["start_setting"], bad["start_unreadable"]))
+        self.assertEqual("its Starts after setting could not be read", bad["start_note"])
+        self.assertIn(("lab", "app-2"), rows)
+        self.assertFalse(rows[("lab", "app-2")]["start_unreadable"])
+
+
 if __name__ == "__main__":
     unittest.main()

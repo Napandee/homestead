@@ -287,6 +287,7 @@ def _alert_sources():
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
     take("outage-lan", OUTAGE_CARRY.alert_facts)
+    take("starts-after", lambda: START_ORDER.alert_facts(cached("wl", 5, WORKLOADS.get_workloads)))
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("gitops", GITOPS.alert_facts)
