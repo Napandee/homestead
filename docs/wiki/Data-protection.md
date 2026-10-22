@@ -226,6 +226,11 @@ Rolling back and **Trim now** go through Longhorn's own API
 stops anything, and refuses with the reason if it does not. If Longhorn's API
 fails part-way, before the revert, the job ends there: the volume is let go
 and everything starts again; the message says whether the revert may have
-happened and names the `before-rollback-…` snapshot. Longhorn 1.13's chart
-fences its manager in with network policies; where it does, Homestead keeps a
+happened and names the `before-rollback-…` snapshot. A brief connection failure
+is tried again, up to three times, a few seconds apart. If the revert itself
+gets no answer, Homestead waits until Longhorn's engine shows whether it
+happened. If that cannot be told, the volume stays in maintenance mode and the
+app stays stopped, so it never starts on a half-reverted volume; the job says
+what to check and how to let go of the volume. Longhorn 1.13's chart fences
+its manager in with network policies; where any policy does, Homestead keeps a
 narrow policy of its own beside them ([What Homestead changes](What-Homestead-changes)).

@@ -399,18 +399,19 @@ def _host_fix_loop():
                             print(f"linked clusters: told this Homestead is at {moved}", flush=True)
                     except Exception as error:
                         print(f"linked clusters: address not checked: {str(error)[:160]}", flush=True)
-                    # A weekly trim for every Longhorn volume, unless someone removed it.
-                    trimmed = weekly_trim()
-                    if trimmed:
-                        print(f"storage: {trimmed}", flush=True)
-                    # Homestead's way in to Longhorn's API, where Longhorn's own
-                    # network policies would keep it out (Longhorn 1.13 and later).
+                    # Homestead's way in to Longhorn's API, where network policies
+                    # fence Longhorn's manager in (Longhorn 1.13's default). First,
+                    # so nothing after it can keep it from running.
                     try:
                         access = LH_ACCESS.ensure(LH.kget, LH.ksend, SELF.NS)
                         if access:
                             print(f"storage: {LH_ACCESS.LOG[access]}", flush=True)
                     except Exception as error:
                         print(f"storage: way in to Longhorn's API not checked: {str(error)[:160]}", flush=True)
+                    # A weekly trim for every Longhorn volume, unless someone removed it.
+                    trimmed = weekly_trim()
+                    if trimmed:
+                        print(f"storage: {trimmed}", flush=True)
                     # Longhorn kept from filling a host's root filesystem.
                     for node, change in ROOT_GUARD.tick():
                         print(f"storage: {node}: {change}", flush=True)

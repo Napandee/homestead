@@ -5,13 +5,21 @@ Longhorn 1.13's chart turns networkPolicies.restrictInternalTraffic on by
 default: NetworkPolicies in longhorn-system then let only Longhorn's own pods
 reach longhorn-manager, and Homestead's calls are refused.
 
-Where - and only where - Longhorn's own policies already fence the manager
-pods in, Homestead keeps one narrow policy of its own beside them: its own
-pods, TCP 9500, nothing else. NetworkPolicies add up, so Longhorn's stay as
-they are. Where nothing fences the manager in, Homestead keeps none: a policy
-of its own, alone, would fence the manager in itself and cut off Longhorn's
-CSI plugin, UI and webhooks. Longhorn's policies own it, so when Longhorn
-drops them Kubernetes removes it too; the leader's next check does as well.
+Where - and only where - some other policy already fences the manager pods
+in (Longhorn's own, or one someone made), Homestead keeps one narrow policy
+of its own beside them: its own pods, TCP 9500, nothing else. NetworkPolicies
+add up, so the others stay as they are. Where nothing fences the manager in,
+Homestead keeps none: a policy of its own, alone, would fence the manager in
+itself and cut off Longhorn's CSI plugin, UI and webhooks. The policies that
+fence it own it, so when they all go Kubernetes removes it too, within
+seconds (until then it alone fences the manager in); the leader's next check
+does as well.
+
+The leader keeps it every ten minutes (ensure). require() also runs ensure,
+once, from a request on whichever replica serves it, when Longhorn's API
+does not answer: so two replicas may write it at once, and the second's
+create (409) is taken as done. That adds at most the 5 s reachability check,
+two reads and one write to the refused request.
 """
 import urllib.error
 import urllib.request

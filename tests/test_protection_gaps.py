@@ -45,13 +45,27 @@ class RevertTests(unittest.TestCase):
         reach = mock.patch.object(REVERT.ACCESS, "reachable", return_value="")
         self.reachable = reach.start()
         self.addCleanup(reach.stop)
+        pause = mock.patch.object(REVERT, "RETRY_AFTER", 0)
+        pause.start()
+        self.addCleanup(pause.stop)
+        self.made_anyway = False    # a snapshotCreate that fails after Longhorn made it
 
     def lh_call(self, method, path, body=None):
         self.calls.append((path, body))
         action = path.split("action=")[1] if "action=" in path else ""
+        if action == "snapshotCreate" and (action not in self.failing or self.made_anyway):
+            self.objects[f"{API}/snapshots/{body['name']}"] = {"spec": {"volume": "pvc-1"}}
         if action in self.failing:
             raise self.failing[action]
         return {}
+
+    def head_after(self, parent):
+        """Longhorn's engine shows the volume head on top of this snapshot."""
+        self.objects[f"{API}/engines?labelSelector=longhornvolume%3Dpvc-1"] = {"items": [
+            {"status": {"snapshots": {"volume-head": {"parent": parent}}}}]}
+
+    def actions(self):
+        return [path.split("action=")[1] for path, _ in self.calls]
 
     def _stopped_and_detached(self):
         item = {"ref": {"volume": "pvc-1", "snapshot": "snap-a", "namespace": "lab", "claim": "paperless-data",
@@ -123,18 +137,42 @@ class RevertTests(unittest.TestCase):
         self.assertEqual([], [s for s in self.sent if s[0] != "GET"])
         self.assertEqual([], self.calls)
 
-    def test_a_refused_attach_puts_the_app_back_without_retrying(self):
+    def test_a_connection_failure_on_attach_is_tried_three_times_then_puts_the_app_back(self):
         self.failing["attach"] = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
         item = self._stopped_and_detached()
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        self.assertEqual([], self.reclass.started)
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
         self.assertIn("Connection refused", message)
         self.assertIn("Nothing was changed", message)
         self.assertEqual([["paperless"]], self.reclass.started)
-        self.assertEqual(["attach"], [path.split("action=")[1] for path, _ in self.calls])
+        self.assertEqual(3, self.actions().count("attach"))
+        self.assertNotIn("snapshotCreate", self.actions())
+
+    def test_a_brief_blip_on_attach_is_ridden_out(self):
+        self.failing["attach"] = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
+        item = self._stopped_and_detached()
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        del self.failing["attach"]
+        REVERT.resolve(item)
+        self.state = "attached"
+        REVERT.resolve(item)
+        self.assertEqual(["attach", "attach", "snapshotCreate", "snapshotRevert", "detach"], self.actions())
+        self.assertTrue(item["ref"]["reverted"])
+
+    def test_a_longhorn_refusal_on_attach_is_not_tried_again(self):
+        self.failing["attach"] = REVERT.Refused("Longhorn refused it: no")
+        item = self._stopped_and_detached()
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual(["attach"], self.actions())
+        self.assertIn("Nothing was changed", message)
+        self.assertEqual([["paperless"]], self.reclass.started)
 
     def test_a_volume_with_no_attachment_record_is_not_reported_as_held(self):
-        self.failing["attach"] = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        self.failing["attach"] = REVERT.Refused("Longhorn refused it: no")
         item = self._stopped_and_detached()
         def send(method, path, body=None, **kw):
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
@@ -143,21 +181,93 @@ class RevertTests(unittest.TestCase):
         self.assertEqual("failed", status)
         self.assertNotIn("could not let go", message)
 
-    def test_a_failed_revert_puts_the_app_back_and_names_the_kept_snapshot(self):
-        self.failing["snapshotRevert"] = ValueError("Longhorn refused it: busy")
+    def test_a_refused_revert_puts_the_app_back_and_names_the_kept_snapshot(self):
+        self.failing["snapshotRevert"] = REVERT.Refused("Longhorn refused it: busy")
         item = self._stopped_and_detached()
         REVERT.resolve(item)
         self.state = "attached"
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
-        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach"],
-                         [path.split("action=")[1] for path, _ in self.calls])
+        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach"], self.actions())
         self.assertEqual([["paperless"]], self.reclass.started)
         self.assertIn(item["ref"]["kept"], message)
-        self.assertNotIn("Nothing was changed", message, "the revert may have gone through before it failed")
+        self.assertIn("Nothing was rolled back", message)
+
+    def test_a_revert_whose_answer_is_lost_but_went_through_carries_on(self):
+        self.failing["snapshotRevert"] = urllib.error.URLError(TimeoutError("timed out"))
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        self.head_after("before-rollback-0")          # not yet
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("running", status)
+        self.assertEqual("confirming", item["ref"]["phase"])
+        self.assertNotIn("detach", self.actions(), "never let go while Longhorn may still be reverting")
+        self.assertEqual([], self.reclass.started)
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        self.head_after("snap-a")
+        status, _, _ = REVERT.resolve(item)
+        self.assertEqual("running", status)
+        self.assertTrue(item["ref"]["reverted"])
+        self.assertEqual("detaching", item["ref"]["phase"])
+        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach"], self.actions())
+
+    def test_a_revert_whose_outcome_stays_unknown_keeps_the_app_stopped(self):
+        self.failing["snapshotRevert"] = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        REVERT.resolve(item)
+        item["ref"]["since"] = time.time() - 3600       # Longhorn's engine never said
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual([], self.reclass.started, "starting the app could meet a half-reverted volume")
+        self.assertNotIn("detach", self.actions())
+        self.assertFalse([s for s in self.sent if "volumeattachments" in s[1]])
+        for words in ("maintenance mode", "homestead-revert", "paperless", item["ref"]["kept"]):
+            self.assertIn(words, message)
+
+    def test_a_revert_whose_answer_is_lost_and_did_not_happen_puts_the_app_back(self):
+        self.failing["snapshotRevert"] = urllib.error.URLError(TimeoutError("timed out"))
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        REVERT.resolve(item)
+        self.head_after(item["ref"]["kept"])
+        item["ref"]["since"] = time.time() - 3600
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertIn("Nothing was rolled back", message)
+
+    def test_a_snapshot_made_before_its_answer_was_lost_is_kept(self):
+        self.failing["snapshotCreate"] = urllib.error.URLError(TimeoutError("timed out"))
+        self.made_anyway = True
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        REVERT.resolve(item)
+        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach"], self.actions())
+        self.assertTrue(item["ref"]["kept"].startswith("before-rollback-"))
+
+    def test_a_snapshot_that_cannot_be_made_is_tried_three_times(self):
+        self.failing["snapshotCreate"] = urllib.error.URLError(TimeoutError("timed out"))
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertEqual(3, self.actions().count("snapshotCreate"))
+        self.assertEqual(1, len({body["name"] for path, body in self.calls if "snapshotCreate" in path}),
+                         "one name, so a retry can't leave two")
+        self.assertNotIn("snapshotRevert", self.actions())
+        self.assertIn("Nothing was changed", message)
+        self.assertEqual([["paperless"]], self.reclass.started)
 
     def test_put_back_still_starts_the_app_when_detach_fails(self):
-        self.failing["snapshotCreate"] = ValueError("Longhorn refused it: busy")
+        self.failing["snapshotCreate"] = REVERT.Refused("Longhorn refused it: busy")
         self.failing["detach"] = urllib.error.URLError("timed out")
         item = self._stopped_and_detached()
         REVERT.resolve(item)
@@ -170,7 +280,7 @@ class RevertTests(unittest.TestCase):
         self.assertIn("Nothing was changed", message)
 
     def test_put_back_names_the_ticket_when_it_cannot_be_released(self):
-        self.failing["snapshotCreate"] = ValueError("Longhorn refused it: busy")
+        self.failing["snapshotCreate"] = REVERT.Refused("Longhorn refused it: busy")
         self.failing["detach"] = urllib.error.URLError("timed out")
         item = self._stopped_and_detached()
         REVERT.resolve(item)
@@ -185,6 +295,20 @@ class RevertTests(unittest.TestCase):
         self.assertEqual("failed", status)
         self.assertEqual([["paperless"]], self.reclass.started)
         self.assertIn("homestead-revert", message)
+
+    def test_put_back_finishes_and_says_so_when_the_app_cannot_be_started(self):
+        self.failing["snapshotCreate"] = REVERT.Refused("Longhorn refused it: busy")
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        def start(ns, ref):
+            raise urllib.error.HTTPError("/apis/apps", 409, "conflict", {}, None)
+        self.reclass._start = start
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status)
+        self.assertIn("detach", self.actions())
+        self.assertIn("could not start", message)
+        self.assertIn("paperless", message)
 
     def test_a_failed_detach_after_the_revert_does_not_revert_again(self):
         item = self._stopped_and_detached()
@@ -204,10 +328,27 @@ class RevertTests(unittest.TestCase):
         del self.failing["detach"]
         REVERT.ksend = sent
         REVERT.resolve(item)
-        actions = [path.split("action=")[1] for path, _ in self.calls]
-        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach", "detach"], actions)
+        self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach", "detach"], self.actions())
         self.assertFalse(item["ref"]["attached"])
         self.assertEqual([], self.reclass.started, "nothing starts while the volume is still held for the rollback")
+
+    def test_a_detach_that_keeps_failing_is_tried_three_times_then_starts_things_and_says_so(self):
+        item = self._stopped_and_detached()
+        REVERT.resolve(item)
+        self.state = "attached"
+        self.failing["detach"] = urllib.error.URLError("timed out")
+        def send(method, path, body=None, **kw):
+            raise urllib.error.URLError("timed out")
+        REVERT.ksend = send
+        REVERT.resolve(item)                            # reverted; the first detach fails
+        self.assertEqual("running", REVERT.resolve(item)[0])
+        self.state = "detached"
+        REVERT.resolve(item)
+        self.assertEqual(3, self.actions().count("detach"))
+        self.assertEqual([["paperless"]], self.reclass.started)
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("succeeded", status)
+        self.assertIn("homestead-revert", message)
 
     def test_homesteads_own_data_is_refused(self):
         self.reclass.consumers = lambda ns, claim: [{"kind": "Deployment", "name": "homestead", "replicas": 1}]
