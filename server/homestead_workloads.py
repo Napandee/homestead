@@ -185,8 +185,7 @@ def preview_edit(request):
     change, secret = {}, {}
     if context.get("action") != RENAME.KIND:
         proposed = copy.deepcopy(prepared["deployment"])
-        held = [value for rows in ENVSEC.values(b["ns"], current, kget).values() for value in rows.values()]
-        secret = ENVSEC.as_saved(proposed, current, b.get("masked_env"), held)
+        secret = ENVSEC.as_saved(proposed, current, b.get("masked_env"), ENVSEC.held(b["ns"], current, kget))
         change = GITOPS.patch(current, proposed)
     return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
             "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else "",

@@ -77,21 +77,65 @@ def secret_value(value):
     return bool(CREDENTIAL.search(str(value or "")))
 
 
-def as_saved(dep, current, masked=(), held=()):
-    """dep with its secret values as references to the workload's Secret,
-    with nothing written. For showing a change (the YAML for git, #735):
-    what the save moves (masked fields, secret-looking names), every
-    variable the Secret holds now (editing shows those as plain values) -
-    also under a new name, matched by value (held) - and any value with a
-    credential in it. Changes dep in place; returns {"name", "keys"} of
-    the Secret the result refers to, or {} when it refers to none."""
-    held = {str(value) for value in held or () if value}
-    names = set(masked or ()) | kept(current)
+def _read(path, read):
+    try:
+        return read(path)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        return None
+
+
+def _ours(secret, dep):
+    """The data of the workload's own Secret; {} for none, or another's."""
+    if not secret or ((secret.get("metadata") or {}).get("labels") or {}).get(LABEL) is None:
+        return {}
+    return dict(secret.get("data") or {})
+
+
+def held(ns, dep, read):
+    """The data its own Secret holds now ({} when none or unreadable): for the
+    YAML for git, which must decide as a save would."""
+    if not own(dep):
+        return {}
+    try:
+        return _ours(_read(f"/api/v1/namespaces/{ns}/secrets/{own(dep)}", read), dep)
+    except Exception:
+        return {}
+
+
+def to_move(dep, masked=(), data=None):
+    """Names of the variables a save moves into the Secret, beyond names that
+    look secret (secretish): fields masked in the form, values with a
+    credential in them, and values - or keys - the Secret holds already.
+    data is the Secret's data as Kubernetes keeps it (base64)."""
+    data = data or {}
+    values = set()
+    for encoded in data.values():
+        try:
+            values.add(base64.b64decode(encoded).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+    names = set(masked or ())
     for container in _containers(dep):
         for item in container.get("env") or []:
             value = item.get("value")
-            if "valueFrom" not in item and value and (str(value) in held or secret_value(value)):
+            if "valueFrom" in item or not value:
+                continue
+            if (str(value) in values or secret_value(value)
+                    or KEY.sub("_", f"{container.get('name')}.{item.get('name')}") in data):
                 names.add(item.get("name"))
+    return names
+
+
+def as_saved(dep, current, masked=(), data=None):
+    """dep as a save would write it, with nothing written (the YAML for git,
+    #735): to_move decides for both, so the save moves exactly what this
+    shows as a reference. current is the Deployment before the edit; data
+    the Secret's data now (held()). Its kept variables count even when
+    the Secret could not be read. Changes dep in place; returns {"name",
+    "keys"} of the Secret the result refers to, or {} when none."""
+    names = to_move(dep, set(masked or ()) | kept(current), data)
     name = secret_name(current)
     _move(dep, name, names)
     keys = _refs(dep, name) - {None}
@@ -107,16 +151,16 @@ def externalize(ns, dep, read, send, masked=()):
     the Secret first. Changes dep in place and returns it; a Deployment with
     nothing secret-looking, and no Secret yet, is left exactly as it was."""
     name = secret_name(dep)
-    moved = _move(dep, name, masked)
+    path = f"/api/v1/namespaces/{ns}/secrets/{name}"
+    # What the Secret holds now is read first when there is one: a variable
+    # renamed in the form keeps its value there (to_move, shared with the
+    # YAML for git so the save moves exactly what that shows).
+    current = _read(path, read) if own(dep) else None
+    moved = _move(dep, name, to_move(dep, masked, _ours(current, dep)))
     if not moved and not own(dep):
         return dep  # nothing secret here, and no Secret of its own to tidy
-    path = f"/api/v1/namespaces/{ns}/secrets/{name}"
-    try:
-        current = read(path)
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        current = None
+    if not own(dep):
+        current = _read(path, read)
     if current is None and not moved:
         return dep
     owner = dep["metadata"]["name"]
