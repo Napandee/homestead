@@ -319,9 +319,14 @@ class CopyJobTests(unittest.TestCase):
     def test_failed_copy_recovery_removes_hold_only_after_explicit_inspection(self):
         result = self.start(); self.poll(); self.complete(failed=True); self.poll()
         ident = result["operation"]["id"]
-        with self.assertRaisesRegex(ValueError, "Acknowledge"):
-            ops.cancel(ident, {}, "app")
+        # Cancels of copy jobs are applied by the jobs loop (#622): a refusal
+        # shows on the job, which is left as it was.
+        self.assertTrue(ops.cancel(ident, {}, "app")["accepted"])
+        self.poll()
+        self.assertIn("Acknowledge", ops.stored()[0]["message"])
+        self.assertIn(flow.MARKER, self.dep["metadata"]["annotations"])
         ops.cancel(ident, {"ack": True}, "app")
+        self.poll()
         self.assertNotIn(flow.MARKER, self.dep["metadata"]["annotations"])
         self.assertEqual(0, self.dep["spec"]["replicas"])
         self.assertEqual({"old", "new"}, set(self.pvcs))

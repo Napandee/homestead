@@ -13,6 +13,7 @@ import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_cdi_cleanup as CDI_CLEANUP
 import homestead_storage_journal as STORAGE_JOURNAL
 import json
+import re
 import contextlib
 import copy
 import os
@@ -22,6 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+import zlib
 
 
 kget = None
@@ -360,13 +362,22 @@ def checkpoint(item):
         index = next(i for i, row in enumerate(items) if row["id"] == item["id"])
         if items[index]["status"] in TERMINAL or items[index]["status"] == CANCELLING:
             raise ValueError("Job has ended; refusing further actions")
-        items[index] = json.loads(json.dumps(item))
+        # A resolver outside the store lock (list_operations): refuse, before its
+        # upstream write, if someone else changed the job since its step began;
+        # its own earlier checkpoints are its own change, not someone else's.
+        bases = getattr(_resolving, "bases", {})
+        if item["id"] in bases and not _same(items[index], bases[item["id"]]):
+            raise Superseded("This job changed while its step ran; the step runs again next round")
+        saved = _keep_request(json.loads(json.dumps(item)), items[index])
+        items[index] = saved
         _write(items)
+    if item["id"] in bases:
+        bases[item["id"]] = json.loads(json.dumps(saved))
 
 
 def _public(item):
     out = {key: value for key, value in item.items()
-           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store")}
+           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request")}
     # Every job still going can be cancelled unless its kind refuses (the same
     # refusals _plan_for gives; they read only the job). What cancelling does
     # is asked for separately, as it reads Kubernetes and the tray is polled often.
@@ -377,6 +388,8 @@ def _public(item):
     block = CANCEL_BLOCKS.get(item.get("kind"))
     if block and block(item):
         out["cancellable"] = False
+    if item.get("cancel_request"):
+        out.update(cancellable=False, message="Cancel requested; it takes effect when the current step ends")
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = _dismissible(item)
     check = RESUMABLE.get(item.get("kind"))
@@ -964,19 +977,93 @@ def run_jobs(is_leader, stop=None):
         _wake.clear()
 
 
+# Kinds whose resolvers run outside the job store's lock (#622 step 5): a slow
+# host or copy step no longer holds up every start, cancel and save. A resolver
+# works on a copy while holding only its own job's lock, and its result is kept
+# only if nobody changed the job meanwhile. Every other kind is resolved under
+# the store's lock, as before; more kinds move here once their requests that
+# change a running job are checked.
+OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy"}
+_resolving = threading.local()
+
+
+def _job_lock(operation_id):
+    """The lock one job's resolver and its cancel share, on every replica. One
+    per job (ids are 24 hex digits), so a slow step holds up only its own job."""
+    name = str(operation_id) if re.fullmatch(r"[0-9a-f]{8,64}", str(operation_id)) else \
+        f"crc{zlib.crc32(str(operation_id).encode()):08x}"
+    # Only the loop takes it, and only tries: a job busy elsewhere (an old
+    # leader's step still running) is left for the next round, not waited on.
+    return SHARED.SharedLock(f"operations-job-{name}", strict=True, directory=lambda: DATA_DIR, timeout=0)
+
+
+def _same(a, b):
+    """The same job, apart from a cancel recorded meanwhile: a cancel waits for
+    the step in flight rather than dropping its result."""
+    a, b = ({k: v for k, v in row.items() if k != "cancel_request"} for row in (a, b))
+    return json.dumps(a, sort_keys=True, default=str) == json.dumps(b, sort_keys=True, default=str)
+
+
+def _keep_request(new, stored):
+    """new, carrying the cancel recorded on the stored job (if any)."""
+    new.pop("cancel_request", None)
+    if stored.get("cancel_request"):
+        new["cancel_request"] = stored["cancel_request"]
+    return new
+
+
+def _resolve_outside(operation_id):
+    """With only this job's lock held: apply a cancel recorded for it, or run
+    its resolver on a copy and save the result before letting go of the lock.
+    The result is kept only if nobody changed the job meanwhile (a cancel
+    recorded meanwhile is kept with it and applied next round). A job whose
+    lock is busy is left for the next round."""
+    try:
+        with _job_lock(operation_id):
+            stored = next((row for row in _read() if row.get("id") == operation_id), None)
+            if stored and stored.get("cancel_request"):
+                return _apply_cancel(operation_id)
+            if not stored or stored.get("status") in TERMINAL or stored.get("status") == CANCELLING:
+                return False
+            work = copy.deepcopy(stored)
+            bases = _resolving.__dict__.setdefault("bases", {})
+            bases[operation_id] = copy.deepcopy(stored)
+            try:
+                changed = _refresh(work)
+            finally:
+                base = bases.pop(operation_id)
+            if not changed:
+                return False
+            with _lock:
+                items = _read()
+                index = next((i for i, row in enumerate(items) if row.get("id") == operation_id), None)
+                if index is None or not _same(items[index], base):
+                    return False
+                items[index] = _keep_request(work, items[index])
+                _write(items)
+                return True
+    except TimeoutError:
+        print(f"job {operation_id} is busy elsewhere; left for the next round", flush=True)
+        return False
+
+
 def list_operations():
-    """Advance every active job by running its resolver, under the job store's
-    lock, and save. Only the leader's jobs loop calls this (tick); requests read
-    snapshot()."""
+    """Advance every active job by running its resolver, and save. Only the
+    leader's jobs loop calls this (tick); requests read snapshot()."""
     try:
         require_write()
     except STORAGE_JOURNAL.Held:
         return snapshot()  # inspection stays available without advancing old jobs
+    for item in _read():
+        if item.get("kind") in OUTSIDE_LOCK and (item.get("cancel_request") or (
+                item.get("status") not in TERMINAL and item.get("status") != CANCELLING)):
+            _resolve_outside(item["id"])
     with _lock:
         items = _read()
         changed = False
         for item in items:
-            changed = _refresh(item) or changed
+            if item.get("kind") not in OUTSIDE_LOCK:
+                changed = _refresh(item) or changed
         if changed:
             _write(items)
         items.sort(key=lambda item: item.get("started_at", ""), reverse=True)
@@ -1185,32 +1272,96 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
     so no step of it runs while it is put back. The work itself runs outside
     the lock - some of it waits for pods to go - and the job is left
     cancelled, or, if putting it back failed, running again as it was, with
-    the reason, so nothing is left pretending to be finished."""
+    the reason, so nothing is left pretending to be finished.
+
+    A kind resolved outside the store lock (OUTSIDE_LOCK) is only checked and
+    recorded here: the jobs loop applies the cancel within a tick, once the
+    job's step in flight has ended (_apply_cancel), so the canceller sees what
+    that step created, never runs beside it, and the request never waits for a
+    slow host."""
     with _lock:
         items = _read()
         match = next((item for item in items if item.get("id") == operation_id), None)
         if not match:
             raise ValueError("operation not found")
-        status = match.get("status")
-        if status in TERMINAL and not _cleanable(match):
-            raise ValueError(f"it has {status} already, so there is nothing left to cancel")
-        if status == CANCELLING and not _cancel_stale(match):
-            raise ValueError("it is being cancelled already")
-        plan = _plan_for(match)
-        if not plan["can"]:
-            raise ValueError(plan["why_not"] or "it cannot be cancelled at this step")
-        if allowed and not allowed(plan["needs"]):
-            raise PermissionError(f"cancelling this job needs the {plan['needs']} role")
-        if plan["confirm"] and str(confirm or "").strip() != plan["confirm"]:
-            raise ValueError(f"type {plan['confirm']} to confirm")
-        chosen = {row["id"]: bool((options or {}).get(row["id"], row.get("default", False)))
-                  for row in plan["options"]}
-        before = match.get("previous_status") or status
-        match.update(status=CANCELLING, previous_status=before, cancel_started=time.time(),
-                     updated_at=_now(), message=f"Cancelling: {plan['action'].lower()}")
-        _note(match, CANCELLING, match.get("progress", 0), match["message"])
+        deferred = match.get("kind") in OUTSIDE_LOCK
+        if deferred and match.get("cancel_request"):
+            raise ValueError("a cancel is waiting for this job's current step already")
+        plan, chosen = _cancel_checks(match, options, confirm, allowed)
+        if deferred:
+            match["cancel_request"] = {"options": chosen, "confirm": str(confirm or "").strip()[:253],
+                                       "mode": plan["mode"], "needs": plan["needs"], "by": str(by or "")[:120]}
+        else:
+            before = _mark_cancelling(match, plan)
         _write(items)
         work = json.loads(json.dumps(match))
+    if deferred:
+        advance_soon()
+        return {"ok": True, "accepted": True, "id": operation_id, "operation": _public(work),
+                "detail": "Cancel requested: it takes effect when the job's current step ends"}
+    return _run_cancel(operation_id, work, plan, chosen, before, by)
+
+
+def _cancel_checks(match, options, confirm, allowed):
+    """Whether this job can be cancelled now, by whom, and with which options."""
+    status = match.get("status")
+    if status in TERMINAL and not _cleanable(match):
+        raise ValueError(f"it has {status} already, so there is nothing left to cancel")
+    if status == CANCELLING and not _cancel_stale(match):
+        raise ValueError("it is being cancelled already")
+    plan = _plan_for(match)
+    if not plan["can"]:
+        raise ValueError(plan["why_not"] or "it cannot be cancelled at this step")
+    if allowed and not allowed(plan["needs"]):
+        raise PermissionError(f"cancelling this job needs the {plan['needs']} role")
+    if plan["confirm"] and str(confirm or "").strip() != plan["confirm"]:
+        raise ValueError(f"type {plan['confirm']} to confirm")
+    chosen = {row["id"]: bool((options or {}).get(row["id"], row.get("default", False)))
+              for row in plan["options"]}
+    return plan, chosen
+
+
+def _mark_cancelling(match, plan):
+    before = match.get("previous_status") or match.get("status")
+    match.update(status=CANCELLING, previous_status=before, cancel_started=time.time(),
+                 updated_at=_now(), message=f"Cancelling: {plan['action'].lower()}")
+    _note(match, CANCELLING, match.get("progress", 0), match["message"])
+    return before
+
+
+def _apply_cancel(operation_id):
+    """The jobs loop applying a recorded cancel, with the job's own lock held.
+    The job is checked again first: if its step has moved it somewhere the
+    cancel would now be refused, or do something other than what was reviewed,
+    it is not applied and the job says why."""
+    with _lock:
+        items = _read()
+        match = next((item for item in items if item.get("id") == operation_id), None)
+        request = match.pop("cancel_request", None) if match else None
+        if not request:
+            return False
+        try:
+            plan, chosen = _cancel_checks(match, request.get("options"), request.get("confirm"),
+                                          lambda need: need == request.get("needs"))
+            if plan["mode"] != request.get("mode"):
+                raise ValueError("what cancelling does changed with its last step; review the cancel again")
+        except (ValueError, PermissionError) as error:
+            match.update(updated_at=_now(), message=f"Cancel not applied: {error}"[:500])
+            _write(items)
+            return True
+        before = _mark_cancelling(match, plan)
+        _write(items)
+        work = json.loads(json.dumps(match))
+    try:
+        _run_cancel(operation_id, work, plan, chosen, before, request.get("by", ""))
+    except ValueError as error:   # the job is running again and says why
+        print(f"job {operation_id} not cancelled: {str(error)[:160]}", flush=True)
+    return True
+
+
+def _run_cancel(operation_id, work, plan, chosen, before, by):
+    """Run a marked job's canceller and leave it cancelled, or running again
+    with the reason when putting it back failed."""
     entry = CANCELLERS.get(work.get("kind"))
     try:
         message = entry[1](work, chosen) if entry else ""
@@ -1319,7 +1470,7 @@ def _cancel_route(request):
     except PermissionError as error:
         return ROUTER.Reply(403, {"error": str(error), "role": request.role})
     ROUTER.forget("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2")
-    return result
+    return ROUTER.Reply(202, result) if result.get("accepted") else result
 
 
 ROUTES = {
