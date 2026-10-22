@@ -2941,6 +2941,8 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .stepper-chip.done span{background:color-mix(in srgb,var(--ok) 30%,transparent);color:var(--tx)}
 .stepper-pane{display:flex;flex-direction:column;gap:10px}
 .stepper-pane[hidden]{display:none}
+/* Basics' container list (app-form.js): its parts keep the pane's spacing. */
+.app-form-containers{display:contents}.app-form-containers[hidden]{display:none}
 @media(max-width:640px){.stepper-chip{padding:4px 10px 4px 4px;font-size:12px}.stepper-head{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}}
 /* The node page: its sections as Settings lays them out. */
 .node-pane{display:flex;flex-direction:column;gap:12px;min-width:0}

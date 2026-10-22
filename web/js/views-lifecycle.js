@@ -365,11 +365,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the app running: Kubernetes restarts it after a crash, a host reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
-      <div class="between"><div class="sec">Containers in each pod</div>
-        <button class="btn" type="button" onclick="containerAdd('edit')">＋ Add container</button></div>
-      ${UI.more("How containers share a pod", "<p>These containers share networking and volumes. Set pod copies under Placement.</p>")}
-      ${panels("basics")}
-      <div id="e_removed_containers" class="dim small"></div>`;
+      ${appFormContainerBlock("e", "edit", containers.map((container, index) => editContainerPanel(container, index, "basics")).join(""))}`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
     const access = `
       ${panels("hardware")}`;
@@ -393,10 +389,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
           ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
       ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or placement. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either app.</p>")}`;
-    $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
-      { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
-      { title: "Environment values", html: environment }, { title: "Storage", html: storage },
-      { title: "Placement", html: running }, { title: "Address", html: address }, { title: "Monitoring", html: monitoringStepHtml({ ...w, ns, name, answer_check: w.answer_check ?? listed?.answer_check ?? "", ports: listed?.ports || [] }) }],
+    $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", appFormSections("edit", {
+      basics, hardware: access, environment, storage, placement: running, address,
+      monitoring: monitoringStepHtml({ ...w, ns, name, answer_check: w.answer_check ?? listed?.answer_check ?? "", ports: listed?.ports || [] }) }),
       `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
@@ -502,8 +497,7 @@ window.containerAdd = mode => {
   if (mode === "deploy") return deployAddContainer();
   const index = EDIT_CONTAINER_NEXT++;
   const container = { name: `container-${index + 1}`, image: "", new: true, env: {}, ports: [], volumes: [] };
-  for (const section of ["basics", "hardware", "environment", "storage", "address"])
-    $("#e_" + section + "_containers").insertAdjacentHTML("beforeend", editContainerPanel(container, index, section));
+  appFormAddPanels("e", container, index, "edit");
   renderVolumeRows(editVolumePicker(index), []);
   containerRemoveButtons();
   $(`#e_basics_containers .edit-container[data-index="${index}"]`).open = true;
