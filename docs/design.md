@@ -616,8 +616,10 @@ file and line, when it finds:
   review that does not use `capacityHostTable`, or the older placement blocks
   used outside `views-workloads.js`;
 - more uses than today of older markup - `.note`, `.sec`, `deployCapacityHtml`,
-  hand-written acknowledgement checkboxes and "I accept" wording. That count
-  only shrinks: lower it in the same change that removes some;
+  hand-written acknowledgement checkboxes and "I accept" wording, and
+  hand-written `.pill`/`.tag` chips (`tests/chip-count.test.js`; use
+  `UI.chip(label, tone)`). That count only shrinks: lower it in the same
+  change that removes some;
 - more reads than today that turn a failure into an empty answer
   (`.catch(() => [])` and the like) or an invented one (a made-up namespace
   or storage class). A read that failed is not "nothing there": say it could
