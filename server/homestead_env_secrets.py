@@ -65,13 +65,41 @@ def kept(dep):
             if name and ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == name}
 
 
-def as_saved(dep, current, masked=()):
-    """dep as a save would write it, with nothing written: every variable
-    the save would keep in the Secret - and every one the Secret holds now,
-    which editing shows as a plain value - becomes its secretKeyRef. For
-    showing a change (the YAML for git, #735) without its secret values."""
-    _move(dep, secret_name(current), set(masked or ()) | kept(current))
-    return dep
+# A credential in the value itself, whatever the variable is called: a URL
+# with a password in it (postgres://user:pass@host), or a token, key or
+# signature in a query string (https://hooks.example.com/x?token=...).
+CREDENTIAL = re.compile(r"[a-z][a-z0-9+.-]*://[^/\s:@]*:[^/\s@]+@"
+                        r"|[?&;](?:access_?token|refresh_?token|token|api_?key|apikey|key|secret|password|passwd|pwd"
+                        r"|sig|signature|auth|code)=[^&\s]+", re.I)
+
+
+def secret_value(value):
+    return bool(CREDENTIAL.search(str(value or "")))
+
+
+def as_saved(dep, current, masked=(), held=()):
+    """dep with its secret values as references to the workload's Secret,
+    with nothing written. For showing a change (the YAML for git, #735):
+    what the save moves (masked fields, secret-looking names), every
+    variable the Secret holds now (editing shows those as plain values) -
+    also under a new name, matched by value (held) - and any value with a
+    credential in it. Changes dep in place; returns {"name", "keys"} of
+    the Secret the result refers to, or {} when it refers to none."""
+    held = {str(value) for value in held or () if value}
+    names = set(masked or ()) | kept(current)
+    for container in _containers(dep):
+        for item in container.get("env") or []:
+            value = item.get("value")
+            if "valueFrom" not in item and value and (str(value) in held or secret_value(value)):
+                names.add(item.get("name"))
+    name = secret_name(current)
+    _move(dep, name, names)
+    keys = _refs(dep, name) - {None}
+    if not keys:
+        return {}
+    # A save records which Secret is the app's own; the YAML does the same.
+    dep.setdefault("metadata", {}).setdefault("annotations", {})[ANNOTATION] = name
+    return {"name": name, "keys": sorted(keys)}
 
 
 def externalize(ns, dep, read, send, masked=()):

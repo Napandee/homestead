@@ -73,6 +73,11 @@ class Patch(unittest.TestCase):
         proposed["spec"]["template"]["metadata"]["annotations"]["kubectl.kubernetes.io/restartedAt"] = "now"
         self.assertEqual({}, GITOPS.patch(current, proposed))
 
+    def test_the_edit_stamp_is_bookkeeping(self):
+        current, proposed = deployment(), deployment()
+        proposed["spec"]["template"]["metadata"]["annotations"]["homestead.io/editedAt"] = "2026-10-22T10:00:00Z"
+        self.assertEqual({}, GITOPS.patch(current, proposed))
+
     def test_a_setting_annotation_is_kept(self):
         current, proposed = deployment(), deployment()
         proposed["metadata"]["annotations"]["homestead.io/group"] = "Media"

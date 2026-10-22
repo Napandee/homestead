@@ -158,9 +158,18 @@ marked `$patch: delete`. Homestead's own bookkeeping - update history, the
 digests it last ran, restart stamps - is left out; settings you chose, such as
 the group or logo, stay in. Services and volumes are not in it.
 
-A variable Homestead keeps in the app's own Secret - a masked field, a name
-that looks like a password or token, or one already there - is in the YAML
-as its `secretKeyRef`, never as its value; the Secret itself stays out of git.
+Secret values are moved out of the YAML, as well as Homestead can tell them:
+a variable it keeps in the app's own Secret (a masked field, a name that looks
+like a password or token, or one the Secret already holds, even under a new
+name) and any value with a password or token in it (`postgres://user:pass@db`,
+`https://hooks.example.com/x?token=...`) appear as a `secretKeyRef` to that
+Secret, with the `homestead.io/env-secret` annotation a save adds. It is a
+heuristic: check the YAML before committing it to a public repository.
+
+That Secret (`<app>-env`) exists only once Homestead has saved the app, and
+never in git. If Flux applies the app, create the Secret in git first - for
+example encrypted with SOPS - with the keys the review lists, or save the app
+here first. Otherwise the pod cannot start.
 
 On **Image updates**, an app Flux or Argo CD updates has the same button: the
 new `image:` line for each container, pinned to the new digest when only what

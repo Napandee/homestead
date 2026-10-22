@@ -27,9 +27,15 @@ window.gitopsCopy = async index => {
   toast(done ? "Copied. Paste it where git keeps this app: a kustomize patch, or the same fields in its manifest"
     : "Copying did not work here: select the YAML and copy it", done ? "ok" : "bad");
 };
-function gitopsYamlBlock(yaml) {
+function gitopsYamlBlock(yaml, secret = {}) {
   if (!yaml) return "";
-  return UI.more("YAML for git", `<p class="ui-help">Only the fields this change sets. Services and volumes are not in it.</p>
+  // The app's own Secret exists only once Homestead has saved the app, never in git.
+  const needs = secret?.name ? `<p class="ui-help">It refers to Secret <span class="mono">${esc(secret.name)}</span> (keys ${
+    (secret.keys || []).map(key => `<span class="mono">${esc(key)}</span>`).join(", ")}), not to the values. That Secret exists only once
+    Homestead has saved the app: in git, create it yourself first (for example with SOPS), or save here first.</p>` : "";
+  return UI.more("YAML for git", `<p class="ui-help">Only the fields this change sets. Services and volumes are not in it.
+    Values Homestead keeps in the app's Secret, and values with a password or token in them, are left out; still check it
+    before committing it to a public repository.</p>${needs}
     <pre class="mono small agent-raw">${esc(yaml)}</pre>${gitopsCopyButton(yaml)}`);
 }
 window.gitopsCopyButton = gitopsCopyButton;

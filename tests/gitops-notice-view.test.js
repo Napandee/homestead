@@ -114,3 +114,15 @@ test("Image updates: an app Flux updates offers its image line to copy", async (
   assert.match(rows.find(r => r.includes("loki")), /Copy as YAML for git/);
   assert.doesNotMatch(rows.find(r => r.includes("<b>web</b>")), /Copy as YAML for git/);
 });
+
+test("YAML that refers to the app's Secret says that Secret must exist in git first", async () => {
+  const t = setup({ capacity_token: "t", capacity, managed: {}, yaml: YAML, secret: { name: "web-env", keys: ["main.API_TOKEN"] } });
+  await t.c.window.editReview({ ns: "lab", name: "web" });
+  assert.match(t.html(), /Secret <span class="mono">web-env<\/span>/);
+  assert.match(t.html(), /main\.API_TOKEN/);
+  assert.match(t.html(), /SOPS/);
+  const plain = setup({ capacity_token: "t", capacity, managed: {}, yaml: YAML, secret: {} });
+  await plain.c.window.editReview({ ns: "lab", name: "web" });
+  assert.doesNotMatch(plain.html(), /SOPS/);
+  assert.match(plain.html(), /public repository/);
+});

@@ -10,6 +10,7 @@ import copy
 import json
 import re
 
+import homestead_names as NAMES
 import homestead_updates as UPDATES
 
 # Every review that writes a Deployment's spec. Each answers with "managed",
@@ -39,7 +40,7 @@ def require_rename_ack(dep, body):
 # last ran, restart stamps - is not a setting a person commits; the settings
 # they chose (group, logo, monitoring) are, and stay in.
 BOOKKEEPING = frozenset((UPDATES.TRACKED, UPDATES.PREVIOUS, UPDATES.LAST_ACTION, UPDATES.RAN, UPDATES.ROLLOUT_AT,
-                         "kubectl.kubernetes.io/restartedAt", "deployment.kubernetes.io/revision"))
+                         NAMES.key("editedAt"), "kubectl.kubernetes.io/restartedAt", "deployment.kubernetes.io/revision"))
 _UNCHANGED = object()
 # Anything a YAML 1.1 reader (Kubernetes, Flux) or a 1.2 one could take for
 # something other than a string: numbers in any base, sexagesimal, bools and
