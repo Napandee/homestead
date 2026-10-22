@@ -41,10 +41,10 @@ class StorageReplies(unittest.TestCase):
             self.assertEqual(503, call("POST", "/api/objectstore/transfers", {"allow": True}).code)
 
     def test_a_restore_onto_an_existing_claim_is_a_409_and_starts_nothing(self):
-        import homestead_longhorn as LH
+        import homestead_longhorn_restore as RESTORE
         plan = {"conflict": {"message": "media already exists"}}
-        with mock.patch.object(LH, "restore_plan", return_value=plan), \
-                mock.patch.object(LH, "restore_backup") as restore:
+        with mock.patch.object(RESTORE, "restore_plan", return_value=plan), \
+                mock.patch.object(RESTORE, "restore_backup") as restore:
             answer = call("POST", "/api/lh/restore", {"backup": "b1", "name": "media"})
         self.assertEqual((409, "media already exists"), (answer.code, answer.body["error"]))
         restore.assert_not_called()

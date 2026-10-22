@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_longhorn as LH
+import homestead_longhorn_target as BACKUP_TARGET
 import homestead_move as client
 import homestead_move_engine as engine
 import homestead_move_state as STATE
@@ -188,8 +189,8 @@ class TargetStateTests(unittest.TestCase):
             "unrelatedField": "keep"}})
 
     def test_resource_version_conflict_preserves_concurrent_update(self):
-        previous = LH.backup_target_state()
-        desired = LH.transfer_target_state(previous, "nfs://source:/backups", "", {})
+        previous = BACKUP_TARGET.backup_target_state()
+        desired = BACKUP_TARGET.transfer_target_state(previous, "nfs://source:/backups", "", {})
         send = self.cluster.send
         def change_before_patch(method, path, body, **kwargs):
             self.cluster.objects[path]["metadata"]["resourceVersion"] = "2"
@@ -197,40 +198,40 @@ class TargetStateTests(unittest.TestCase):
             return send(method, path, body, **kwargs)
         with mock.patch.object(LH, "ksend", side_effect=change_before_patch):
             with self.assertRaises(Exception) as caught:
-                LH.replace_backup_target_state(previous, desired)
+                BACKUP_TARGET.replace_backup_target_state(previous, desired)
         self.assertEqual(409, caught.exception.code)
         self.assertEqual("nfs://admin:/backups", self.cluster.objects[self.path]["spec"]["backupTargetURL"])
 
     def test_longhorn_round_trip_preserves_extra_fields(self):
-        previous = LH.backup_target_state()
-        desired = LH.transfer_target_state(previous, "nfs://source:/backups", "", {})
-        self.assertTrue(LH.replace_backup_target_state(previous, desired))
-        self.assertTrue(LH.replace_backup_target_state(desired, previous))
-        self.assertEqual(previous, LH.backup_target_state())
+        previous = BACKUP_TARGET.backup_target_state()
+        desired = BACKUP_TARGET.transfer_target_state(previous, "nfs://source:/backups", "", {})
+        self.assertTrue(BACKUP_TARGET.replace_backup_target_state(previous, desired))
+        self.assertTrue(BACKUP_TARGET.replace_backup_target_state(desired, previous))
+        self.assertEqual(previous, BACKUP_TARGET.backup_target_state())
         self.assertEqual("keep", self.cluster.objects[self.path]["spec"]["unrelatedField"])
 
     def test_missing_longhorn_target_returns_to_unconfigured(self):
         del self.cluster.objects[self.path]
-        previous = LH.backup_target_state()
-        desired = LH.transfer_target_state(previous, "nfs://source:/backups", "", {})
-        self.assertTrue(LH.replace_backup_target_state(previous, desired))
-        self.assertTrue(LH.replace_backup_target_state(desired, previous))
+        previous = BACKUP_TARGET.backup_target_state()
+        desired = BACKUP_TARGET.transfer_target_state(previous, "nfs://source:/backups", "", {})
+        self.assertTrue(BACKUP_TARGET.replace_backup_target_state(previous, desired))
+        self.assertTrue(BACKUP_TARGET.replace_backup_target_state(desired, previous))
         self.assertEqual("", self.cluster.objects[self.path]["spec"]["backupTargetURL"])
-        self.assertEqual(previous, LH.backup_target_state())
+        self.assertEqual(previous, BACKUP_TARGET.backup_target_state())
 
     def test_target_card_selects_the_default_target_when_several_exist(self):
         self.cluster.objects[self.path]["metadata"]["name"] = "default"
         self.cluster.put(self.path.rsplit("/", 1)[0], {"items": [
             {"metadata": {"name": "other"}, "spec": {"backupTargetURL": "nfs://other:/backups"}},
             self.cluster.objects[self.path]]})
-        self.assertEqual("nfs://old:/backups", LH.backup_target()["url"])
+        self.assertEqual("nfs://old:/backups", BACKUP_TARGET.backup_target()["url"])
 
     def test_harvester_round_trip_restores_keys_and_empty_setting(self):
         for value in ("", json.dumps({"type": "s3", "endpoint": "http://old:9000", "accessKeyId": "ak",
                                       "secretAccessKey": "sk", "virtualHostedStyle": True})):
-            self.cluster.put(LH.HARVESTER_TARGET, {"metadata": {"resourceVersion": "1"}, "value": value})
-            previous = LH.backup_target_state()
-            desired = LH.transfer_target_state(previous, "nfs://source:/backups", "", {})
-            self.assertTrue(LH.replace_backup_target_state(previous, desired))
-            self.assertTrue(LH.replace_backup_target_state(desired, previous))
-            self.assertEqual(previous, LH.backup_target_state())
+            self.cluster.put(BACKUP_TARGET.HARVESTER_TARGET, {"metadata": {"resourceVersion": "1"}, "value": value})
+            previous = BACKUP_TARGET.backup_target_state()
+            desired = BACKUP_TARGET.transfer_target_state(previous, "nfs://source:/backups", "", {})
+            self.assertTrue(BACKUP_TARGET.replace_backup_target_state(previous, desired))
+            self.assertTrue(BACKUP_TARGET.replace_backup_target_state(desired, previous))
+            self.assertEqual(previous, BACKUP_TARGET.backup_target_state())
