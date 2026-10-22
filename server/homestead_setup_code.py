@@ -185,12 +185,19 @@ def _say(text):
     print(text, flush=True)
 
 
+def _no_accounts():
+    """No account exists, read from the cluster now. Never the last good read
+    kept for a slow API: another replica may have made the first admin since,
+    and a Secret made on that word would outlive it (gap 44)."""
+    return not AUTH._load(force=True, allow_stale=False).get("users")
+
+
 def ensure():
     """While no account exists, make sure the Secret holds a valid code and
     the data volume its hash; True when setup can be finished. With accounts,
     tidy up instead and answer False. Accounts that cannot be read raise
     AUTH.StoreUnavailable: nothing is made or removed then."""
-    if not AUTH.needs_setup():
+    if not _no_accounts():
         finish()
         return False
     _, code = _read_secret()
@@ -217,7 +224,7 @@ def ensure():
         _say(f"Setup code: in the Secret {where()}. Show it with: {show_command()}")
         _said["code"] = stored
     # The first admin may have been made elsewhere while this one created.
-    if not AUTH.needs_setup():
+    if not _no_accounts():
         finish()
         return False
     return True
