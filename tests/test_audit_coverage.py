@@ -163,7 +163,11 @@ class EndToEnd(unittest.TestCase):
                          (line["method"], line["path"], line["status"], line["role"]))
 
     def test_delete_takes_its_target_from_the_path(self):
-        self.enterContext(mock.patch.object(self.server, "delete_workload", return_value=[]))
+        # The same stand-in wherever the route finds it: server.py today, its
+        # module once #764 moves DELETE there.
+        import homestead_deploy_server as DEPLOY_SERVER
+        for module in (self.server, DEPLOY_SERVER):
+            self.enterContext(mock.patch.object(module, "delete_workload", return_value=[]))
         self.assertEqual(200, self.send("DELETE", "/api/workload/lab/app-1"))
         (line,) = self.wait_for(1)
         self.assertEqual({"ns": "lab", "name": "app-1"}, line["target"])
