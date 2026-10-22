@@ -216,6 +216,22 @@ def _until(at, days):
     return "until " + datetime.datetime.fromtimestamp(at + days * DAY, datetime.timezone.utc).strftime("%-d %b")
 
 
+def _gib(quantity):
+    """A claim's requested size in whole GiB (rounded up), 0 when unreadable."""
+    text = str(quantity or "").strip()
+    units = {"Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4, "K": 1000, "M": 1000 ** 2, "G": 1000 ** 3, "T": 1000 ** 4}
+    for unit, factor in sorted(units.items(), key=lambda u: -len(u[0])):
+        if text.endswith(unit):
+            text, scale = text[:-len(unit)], factor
+            break
+    else:
+        scale = 1
+    try:
+        return -(-int(float(text) * scale) // 1024 ** 3)
+    except ValueError:
+        return 0
+
+
 def _volumes(dep):
     return ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []
 
@@ -256,10 +272,22 @@ def _users(ns, claim):
                     found.append({"kind": kind, "name": obj["metadata"]["name"], "obj": obj})
             except (KeyError, TypeError):
                 raise ValueError("The workload list is incomplete; what uses the volume cannot be checked") from None
-    names = [u["name"] for u in found]
-    loose = [p["metadata"]["name"] for p in _pods_using(ns, claim)
-             if not any(p["metadata"]["name"].startswith(n + "-") for n in names)]
+    loose = [p["metadata"]["name"] for p in _pods_using(ns, claim) if not _owned(p, found)]
     return found, loose
+
+
+def _owned(pod, users):
+    """Whether a pod belongs to one of the workloads, by its owner references
+    (a Deployment's through its ReplicaSet <name>-<hash>, a CronJob's through
+    its Job <name>-<n>): a pod merely named like the app is not the app's."""
+    for owner in (pod.get("metadata") or {}).get("ownerReferences") or []:
+        kind, name = owner.get("kind"), str(owner.get("name") or "")
+        for user in users:
+            if (kind == "ReplicaSet" and user["kind"] == "Deployment" and name.rsplit("-", 1)[0] == user["name"]
+                    or kind == user["kind"] and kind in ("StatefulSet", "DaemonSet") and name == user["name"]
+                    or kind == "Job" and user["kind"] == "CronJob" and name.rsplit("-", 1)[0] == user["name"]):
+                return True
+    return False
 
 
 def _pods_using(ns, claim):
@@ -380,7 +408,18 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     classes = found.get("storage_classes") or []
     current_class = (pvc.get("spec") or {}).get("storageClassName", "")
     chosen_class = storage_class or (current_class if current_class in classes else found.get("storage_class", ""))
-    size = int(size_gb or found.get("minimum_size_gb") or 1)
+    spec = pvc.get("spec") or {}
+    access = (spec.get("accessModes") or ["ReadWriteOnce"])[0]
+    if access not in ("ReadWriteOnce", "ReadWriteMany"):
+        blockers.append(f"{claim} is {access}; a restore makes ReadWriteOnce or ReadWriteMany volumes only")
+    current_gb = _gib(((spec.get("resources") or {}).get("requests") or {}).get("storage"))
+    minimum = int(found.get("minimum_size_gb") or 1)
+    size = int(size_gb or max(minimum, current_gb))
+    if size > minimum and chosen_class:
+        sc = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{chosen_class}", read=kget) or {}
+        if sc.get("allowVolumeExpansion") is not True:
+            blockers.append(f"{claim} is {size} GiB, larger than this backup's {minimum} GiB, and {chosen_class} "
+                            "cannot grow a restored volume; choose a class that allows expansion")
     days = keep_days()
     answers = uptime_report().get(f"{ns}/{app}") or {}
     meta = dep.get("metadata") or {}
@@ -399,7 +438,9 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     out["digest"] = _digest(ns, app, claim, (pvc.get("metadata") or {}).get("uid"), meta.get("generation"),
                             out["backup"], name, chosen_class, size)
     out["ready"] = not blockers
-    out["_internal"] = {"pvc": pvc, "dep": dep, "indexes": indexes}
+    out["_internal"] = {"pvc": pvc, "dep": dep, "indexes": indexes, "access_mode": access,
+                        "volume_mode": spec.get("volumeMode") or "Filesystem",
+                        "source_size_bytes": found.get("volume_size_bytes")}
     return out
 
 
@@ -408,38 +449,50 @@ def public(p):
 
 
 def start(body):
-    """Restore and swap, as reviewed: a 409 with a fresh plan when the review is stale."""
+    """Restore and swap, as reviewed: a 409 with a fresh plan when the review
+    is stale. The review reads a lot, so it runs outside the jobs' lock; under
+    it only what could have changed is checked again, and the job is
+    recorded. The job itself makes the new claim, so a start the job store
+    refuses leaves nothing behind."""
     b = body or {}
+    p = plan(b.get("backup"), b.get("namespace") or "", b.get("app") or "", b.get("claim") or "",
+             b.get("new_name") or "", b.get("storage_class") or "", b.get("size_gb"))
+    stale = MODULE_ROUTES.Reply(409, {"error": "The app, its volume or the backup changed since this review; "
+                                               "check the plan again", "plan": public(p)})
+    if str(b.get("digest") or "") != p["digest"]:
+        return stale
+    if p["blockers"]:
+        raise ValueError(p["blockers"][0])
+    if p["managed"] and b.get("accept_gitops") is not True:
+        raise ValueError(f"{p['app']['name']} is applied by {p['managed']['by']}, whose next sync puts the old "
+                         "volume back; confirm you have read that to go on")
+    ns, app, old, new = p["app"]["namespace"], p["app"]["name"], p["claim"], p["new_claim"]
+    pvc, dep, inner = p["_internal"]["pvc"], p["_internal"]["dep"], p["_internal"]
+    restore_id = secrets.token_hex(12)
+    cfg = {"backup": p["backup"], "namespace": ns, "name": new, "storage_class": p["storage_class"],
+           "size_gb": p["size_gb"], "access_mode": inner["access_mode"], "volume_mode": inner["volume_mode"],
+           "restore_id": restore_id, "source_size_bytes": inner["source_size_bytes"],
+           "annotations": {"homestead.io/restore-id": restore_id, RESTORED_INTO: f"{ns}/{app}"}}
+    ref = {"namespace": ns, "app": app, "kind": "Deployment", "volume": p["mount"]["volume"],
+           "indexes": inner["indexes"], "old_claim": old, "new_claim": new,
+           "old_uid": (pvc.get("metadata") or {}).get("uid", ""), "old_volume": _handle(pvc),
+           "backup": p["backup"], "generation": (dep.get("metadata") or {}).get("generation"), "new_uid": "",
+           "direction": "restore", "phase": "restoring", "since": time.time(),
+           "restore": {"namespace": ns, "name": new, "backup": p["backup"], "restore_config": cfg,
+                       "restore_started": False}}
     with OPS.transaction():
-        p = plan(b.get("backup"), b.get("namespace") or "", b.get("app") or "", b.get("claim") or "",
-                 b.get("new_name") or "", b.get("storage_class") or "", b.get("size_gb"))
-        if str(b.get("digest") or "") != p["digest"]:
-            return MODULE_ROUTES.Reply(409, {"error": "The app, its volume or the backup changed since this review; "
-                                                      "check the plan again", "plan": public(p)})
-        if p["blockers"]:
-            raise ValueError(p["blockers"][0])
-        if p["managed"] and b.get("accept_gitops") is not True:
-            raise ValueError(f"{p['app']['name']} is applied by {p['managed']['by']}, whose next sync puts the old "
-                             "volume back; confirm you have read that to go on")
-        ns, app, old, new = p["app"]["namespace"], p["app"]["name"], p["claim"], p["new_claim"]
-        pvc, dep = p["_internal"]["pvc"], p["_internal"]["dep"]
-        restore_id = secrets.token_hex(12)
-        cfg = {"backup": p["backup"], "namespace": ns, "name": new, "storage_class": p["storage_class"],
-               "size_gb": p["size_gb"], "access_mode": ((pvc.get("spec") or {}).get("accessModes") or ["ReadWriteOnce"])[0],
-               "restore_id": restore_id,
-               "annotations": {"homestead.io/restore-id": restore_id, RESTORED_INTO: f"{ns}/{app}"}}
-        result = restore_backup(cfg)
-        cfg["source_size_bytes"] = result.get("source_size_bytes")
-        ref = {"namespace": ns, "app": app, "kind": "Deployment", "volume": p["mount"]["volume"],
-               "indexes": p["_internal"]["indexes"], "old_claim": old, "new_claim": new,
-               "old_uid": (pvc.get("metadata") or {}).get("uid", ""), "old_volume": _handle(pvc),
-               "backup": p["backup"], "generation": (dep.get("metadata") or {}).get("generation"),
-               "new_uid": result.get("uid", "") if result.get("created") else "",
-               "direction": "restore", "phase": "restoring", "since": time.time(),
-               "restore": {"namespace": ns, "name": new, "backup": p["backup"], "restore_config": cfg,
-                           "restore_started": bool(result.get("created"))}}
+        now_dep = KUBE.get_optional(_dep_path(ns, app), read=kget) or {}
+        now_pvc = KUBE.get_optional(_pvc_path(ns, old), read=kget) or {}
+        if ((now_dep.get("metadata") or {}).get("generation") != (dep.get("metadata") or {}).get("generation")
+                or (now_pvc.get("metadata") or {}).get("uid") != ref["old_uid"]):
+            return stale
+        if KUBE.get_optional(_pvc_path(ns, new), read=kget) is not None:
+            raise ValueError(f"{ns}/{new} exists now; check the plan again for a free name")
+        busy = _busy(OPS.snapshot(), ns, app, (old, new))
+        if busy:
+            raise ValueError(f"{app} already has a job running ({busy.get('title') or busy.get('kind')}); let it finish first")
         operation = OPS.start(KIND, f"Restore {app} from a backup", {"kind": "Deployment", "name": app, "namespace": ns},
-                              "/data-protection", ref, result.get("message") or "Restoring")
+                              "/data-protection", ref, f"Restoring into {new}")
     return {"ok": True, "operation": operation, "name": new,
             "detail": f"Restoring into {new}; {app} keeps running until the data is ready"}
 
@@ -483,11 +536,16 @@ def _mark(item, claim, expected_uid, replaced_by, reason, now, kept=False):
         return False
     key = f"{ns}/{claim}"
     known = read_records().get(key) or {}
-    if known.get("job") == item.get("id") and known.get("reason") == reason and known.get("uid") == uid:
+    labelled = ((pvc.get("metadata") or {}).get("labels") or {}).get(PREVIOUS) == "true"
+    if known.get("job") == item.get("id") and known.get("reason") == reason and known.get("uid") == uid and labelled:
         return True     # marked by this job already: a restart keeps its date
+
+    if known.get("job") == item.get("id") and known.get("reason") == reason and known.get("uid") == uid:
+        now = known.get("replaced_at") or now     # the record was written; only the marks failed
 
     def put(records):
         records[key] = {"uid": uid, "app": ref["app"], "replaced_by": replaced_by, "replaced_at": int(now),
+                        "replaced_by_uid": ref.get("old_uid") if replaced_by == ref.get("old_claim") else ref.get("new_uid"),
                         "job": item.get("id", ""), "reason": reason, "reminded_at": None, "kept": bool(kept)}
     update_records(put)
     ksend("PATCH", _pvc_path(ns, claim), {"metadata": {
@@ -520,21 +578,32 @@ def _days():
         return DEFAULT_KEEP_DAYS
 
 
+def _ours(pvc, ref):
+    """Whether a claim is the one this job's restore made: its restore-id."""
+    restore_id = ref.get("restore", {}).get("restore_config", {}).get("restore_id")
+    notes = ((pvc or {}).get("metadata") or {}).get("annotations") or {}
+    return bool(restore_id) and notes.get("homestead.io/restore-id") == restore_id
+
+
 def _put_back(item, why, now):
     """Before the swap: the app runs again as it was; a restored claim that
     was made is kept as a previous volume, so it expires."""
     ref = item["ref"]
+    # Decided: from here the job only puts back, even if a write below fails
+    # and the next poll has to carry it on (the "put-back" step).
+    if ref.get("phase") != "put-back":
+        ref.update(phase="put-back", why=why, since=now)
     with fence(ref.get("old_volume")):
         if ref.get("stopped"):
             _scale(ref, ref.get("replicas_before", 1))
         made = ""
         if ref["direction"] == "restore":
             pvc = KUBE.get_optional(_pvc_path(ref["namespace"], ref["new_claim"]), read=kget)
-            restore_id = ref.get("restore", {}).get("restore_config", {}).get("restore_id")
-            if pvc and ((pvc.get("metadata") or {}).get("annotations") or {}).get("homestead.io/restore-id") == restore_id \
-                    and _mark(item, ref["new_claim"], ref.get("new_uid"), ref["old_claim"], "not-used", now):
-                made = ref["new_claim"]
-    ref.update(phase="put-back", since=now)
+            if pvc and _ours(pvc, ref):
+                # Its uid as this restore made it (the restore-id proves it), when not known yet.
+                uid = ref.get("new_uid") or (pvc.get("metadata") or {}).get("uid", "")
+                if _mark(item, ref["new_claim"], uid, ref["old_claim"], "not-used", now):
+                    made = ref["new_claim"]
     tail = f" The restored volume {made} is kept {_until(now, _days())}." if made else ""
     return "failed", 100, f"{why}. Nothing was changed; {ref['app']} runs on {ref['old_claim']} as before.{tail}"
 
@@ -595,14 +664,17 @@ def resolve(item, checkpoint, now=None):
 
     if phase == "restoring":
         sub = {"id": item.get("id"), "status": item.get("status"), "ref": ref["restore"]}
-        status, progress, message = restore_resolver(sub)
+        try:
+            status, progress, message = restore_resolver(sub)
+        except ValueError as error:          # refused, not a passing error: the name is taken, CSI never ready
+            return _put_back(item, f"The restore could not go on ({str(error)[:160]})", now)
         if status == "running":
             return "running", min(40, int(progress * 0.4)), f"Restoring into {new}: {message}"
         if status != "succeeded":
             return _put_back(item, f"The restore did not finish ({message})", now)
         pvc = kget(_pvc_path(ns, new))
         uid = (pvc.get("metadata") or {}).get("uid", "")
-        if ref.get("new_uid") and uid != ref["new_uid"]:
+        if not _ours(pvc, ref) or (ref.get("new_uid") and uid != ref["new_uid"]):
             return _put_back(item, f"{new} was replaced by another claim of the same name", now)
         to("stopping", new_uid=uid)
         phase = "stopping"
@@ -684,6 +756,8 @@ def resolve(item, checkpoint, now=None):
         return "running", 88, f"Waiting for {app} to answer"
     if phase == "swapping-back":
         return _swap_back(item, to, ref.get("why") or "did not come up", now)
+    if phase == "put-back":
+        return _put_back(item, ref.get("why") or "It was stopped", now)
     if phase == "back-starting":
         dep = kget(_dep_path(ns, app))
         said = (f"Swapped back: on the {'restored' if ref['direction'] == 'restore' else 'other'} volume {app} "
@@ -735,7 +809,8 @@ def cancel_run(item, _options):
         ref.update(phase="cancelled", since=now)
         return (f"Swapped back: {ref['app']} runs on {ref['old_claim']} again. "
                 f"{ref['new_claim']} is kept {_until(now, _days())}.")
-    if ref["direction"] == "restore":
+    made = KUBE.get_optional(_pvc_path(ref["namespace"], ref["new_claim"]), read=kget) if ref["direction"] == "restore" else None
+    if made and _ours(made, ref) and (not ref.get("new_uid") or (made.get("metadata") or {}).get("uid") == ref["new_uid"]):
         restore_cancel({"ref": {"namespace": ref["namespace"], "name": ref["new_claim"], "backup": ref["backup"]}})
     if ref.get("stopped"):
         with fence(ref.get("old_volume")):
@@ -835,7 +910,10 @@ def keep(body, role):
     ns, name, record, _ = _previous_claim(body)
 
     def change(records):
-        records[f"{ns}/{name}"].update(kept=want, reminded_at=None)
+        now_record = records.get(f"{ns}/{name}")
+        if not now_record or now_record.get("uid") != record.get("uid"):
+            raise ValueError(f"{ns}/{name} is not a previous volume")    # dropped or replaced meanwhile
+        now_record.update(kept=want, reminded_at=None, held=None)
     update_records(change)
     ksend("PATCH", _pvc_path(ns, name), {"metadata": {"annotations": {KEEP: "true" if want else None, REMINDED: None}}},
           ctype="application/merge-patch+json")
@@ -908,7 +986,7 @@ def swap_back(body):
 
 
 def set_keep_days(value):
-    if isinstance(value, bool):
+    if isinstance(value, bool) or isinstance(value, float) and not value.is_integer():
         raise ValueError("keep days must be a whole number")
     try:
         days = int(value)
@@ -935,18 +1013,20 @@ def _expire_one(ns, name, record, pvc, days, active, now):
         return ("forgotten", ns, name)
     app = _label(record.get("app"))
     who = f"{app}'s" if app else "an app's"
-    if record.get("kept"):
-        return None
     review = deletion_plan(ns, name)
     users = [c for c in review.get("consumers") or [] if c.get("active") or c.get("kind") not in ("Job", "Pod")]
     if users:
-        # Swapped back by hand, or put back by Flux: no longer a copy nobody uses.
+        # Swapped back by hand, or put back by Flux - kept or not: no longer a copy nobody uses.
         _unmark(ns, name)
+        other = _keep_the_other(ns, name, record, now)
         note({"key": f"previous-volume:{ns}/{name}:in-use:{int(now)}", "category": "degraded", "severity": "info",
               "event": True, "title": f"{app or 'An app'} uses {name} again; it is no longer kept for deletion",
-              "body": f"{users[0]['kind']} {users[0]['name']} mounts it, so it is not a previous volume any more.",
+              "body": f"{users[0]['kind']} {users[0]['name']} mounts it, so it is not a previous volume any more."
+                      + (f" {other}, which it ran on, is kept as its previous volume instead." if other else ""),
               "href": "/data-protection"})
         return ("in-use", ns, name)
+    if record.get("kept"):
+        return None
     expires, reminded = float(record.get("replaced_at") or 0) + days * DAY, float(record.get("reminded_at") or 0)
     if not record.get("replaced_at"):
         return None
@@ -963,8 +1043,17 @@ def _expire_one(ns, name, record, pvc, days, active, now):
         return None
     if any(_held(item, ns, name) for item in active):
         return None
-    if ns in system_namespaces() or review.get("blocking_reasons") or review.get("uid") != record.get("uid"):
-        return None
+    if review.get("uid") != record.get("uid"):
+        return None                       # made again under the name: dropped at the next tick
+    # Due, but not to be deleted: say why, once, in the reminder's place.
+    held = ("system namespaces are changed with Kubernetes administration tools" if ns in system_namespaces()
+            else "its volume is set to Retain, so Homestead leaves it and its data alone"
+            if (review.get("pv") or {}).get("reclaim_policy") == "Retain"
+            else (review.get("blocking_reasons") or [""])[0])
+    if held:
+        if record.get("held") != held:
+            update_records(lambda records: records.get(f"{ns}/{name}", {}).update(held=held))
+        return ("held", ns, name)
     # delete_data, the choice a person's Delete offers that frees the space:
     # the point of the expiry. The claim is proven Homestead's previous volume
     # by its own record and uid, so nothing else is taken with it.
@@ -984,6 +1073,21 @@ def _expire_one(ns, name, record, pvc, days, active, now):
           "body": f"It ran on {record.get('replaced_by') or 'its restored volume'} instead. "
                   "Backups of either volume are not touched.", "href": "/data-protection"})
     return ("deleted", ns, name)
+
+
+def _keep_the_other(ns, name, record, now):
+    """The app went back to a previous volume without a swap back (Flux, or
+    Edit): the claim it left is kept as its previous volume instead, if it is
+    still the one recorded and nothing else uses it. Its name, or ""."""
+    other, uid = str(record.get("replaced_by") or ""), record.get("replaced_by_uid")
+    if not NAME.fullmatch(other) or not uid or f"{ns}/{other}" in read_records():
+        return ""
+    users, loose = _users(ns, other)
+    if users or loose:
+        return ""
+    item = {"id": record.get("job", ""), "ref": {"namespace": ns, "app": record.get("app", ""), "old_claim": name,
+                                                  "new_claim": other, "old_uid": record.get("uid"), "new_uid": uid}}
+    return other if _mark(item, other, uid, name, "not-used", now) else ""
 
 
 def expire_tick(now=None):
@@ -1025,6 +1129,14 @@ def alert_facts(now=None):
             continue
         app, due = _label(record.get("app")), _due(record, days)
         who = f"{app}'s" if app else "An app's"
+        if record.get("held"):
+            facts.append({"key": f"previous-volume:{ns}/{name}", "category": "degraded", "severity": "info",
+                          "title": f"{who} previous volume {name} could not be deleted",
+                          "resolved": f"{who} previous volume {name} is no longer due for deletion",
+                          "body": f"It is past its time, but {record['held']}. Delete it yourself under Data protection, "
+                                  "Previous volumes, or Keep it.",
+                          "href": "/data-protection?" + urllib.parse.urlencode({"previous": f"{ns}/{name}"})})
+            continue
         when = ("soon" if due <= now else "tomorrow" if due - now <= 1.5 * DAY else
                 "on " + datetime.datetime.fromtimestamp(due, datetime.timezone.utc).strftime("%-d %b"))
         facts.append({"key": f"previous-volume:{ns}/{name}", "category": "degraded", "severity": "info",

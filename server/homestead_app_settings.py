@@ -174,9 +174,12 @@ def validate(value):
     if after < 1 or after > 365:
         raise ValueError("unused images are cleaned up after 1 to 365 days")
     out["image_cleanup"] = {"auto": auto, "after_days": after}
-    keep = ((value or {}).get("restore_swap") or {}).get("keep_days", out["restore_swap"]["keep_days"])
+    section = (value or {}).get("restore_swap") or {}
+    if not isinstance(section, dict):
+        raise ValueError("restore_swap must be a section of settings")
+    keep = section.get("keep_days", out["restore_swap"]["keep_days"])
     try:
-        if isinstance(keep, bool):
+        if isinstance(keep, bool) or isinstance(keep, float) and not keep.is_integer() or isinstance(keep, str):
             raise ValueError
         keep = int(keep)
     except (TypeError, ValueError):

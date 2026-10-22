@@ -204,7 +204,8 @@ the steps, and how long the old volume will be kept. If the app mounts other
 volumes too, it says so: only the chosen one is restored, so a database and
 its files may no longer match. Homestead then:
 
-1. restores the backup into a new volume, while the app keeps running;
+1. restores the backup into a new volume, while the app keeps running - Block
+   or Filesystem as the old one is, at its size if it grew after the backup;
 2. stops the app;
 3. points only the mount that used the old volume at the new one - and only
    if nothing else changed the app while it was stopped;
@@ -262,7 +263,11 @@ tries again the next.
 Homestead keeps its own record of which volumes these are, by name and uid; a
 label on a claim alone never makes one expire, and a claim made again under
 the same name is never taken. An expired volume is deleted the way **Delete**
-does it, data included. Backups of either volume are never touched.
+does it, data included - except one whose volume is set to **Retain**, which
+Homestead leaves alone; its alert says it could not be deleted, and why (as it
+does for one still attached). If Flux or an **Edit** puts the app back on its
+previous volume, the volume it left is kept as the previous one instead.
+Backups of either volume are never touched.
 
 ### Rolling back to a snapshot
 

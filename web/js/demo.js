@@ -2529,6 +2529,7 @@ ssh_pwauth: true
     // its backup; window.__demoRestoreGitops shows the Flux-managed review.
     "/api/restore-swap/plan": () => {
       const flux = !!window.__demoRestoreGitops;
+      window.__demoRestoreGitops = false;    // the audit's Flux review is shown once
       return { app: { namespace: "lab", name: "frigate", kind: "Deployment", replicas: 1 }, claim: "frigate-config",
         mount: { volume: "config", containers: [{ name: "frigate", path: "/config" }] },
         backup: lhBackups[0].name, created: lhBackups[0].created, new_claim: "frigate-config-restore",

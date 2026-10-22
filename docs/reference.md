@@ -1221,7 +1221,10 @@ annotations on the claim only mirror it. The leader checks them hourly: it
 stamps a reminder (an info alert) a day before the expiry and deletes no
 sooner than 24 hours after it, through the same reviewed delete a person
 uses (`delete_data`), re-checking the record, Keep and running jobs under the
-jobs' lock right before. Settings never saved mean the 7-day default; settings
+jobs' lock right before. A PV set to `Retain` is never deleted: the alert says
+so instead. The new claim keeps the old claim's `volumeMode` and, if it grew
+after the backup, its size; the review refuses access modes a restore cannot
+make. Settings never saved mean the 7-day default; settings
 that cannot be read right now mean nothing is deleted that hour.
 
 ## Moving workloads between clusters

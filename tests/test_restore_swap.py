@@ -64,7 +64,8 @@ class Kube:
         pods = []
         for path, dep in self.objs.items():
             if f"/namespaces/{ns}/deployments/" in path and self.ready and dep["spec"].get("replicas", 1):
-                pods.append({"metadata": {"name": dep["metadata"]["name"] + "-5d8f-x1"},
+                pods.append({"metadata": {"name": dep["metadata"]["name"] + "-5d8f-x1", "ownerReferences": [
+                                 {"kind": "ReplicaSet", "name": dep["metadata"]["name"] + "-5d8f"}]},
                              "spec": copy.deepcopy(dep["spec"]["template"]["spec"]), "status": {"phase": "Running"}})
         return pods + copy.deepcopy(self.loose)
 
@@ -137,12 +138,19 @@ class FakeOps:
     TERMINAL = {"succeeded", "failed", "cancelled"}
 
     def __init__(self):
-        self.started, self.items = [], []
+        self.started, self.items, self.depth, self.refuse = [], [], 0, None
 
+    @contextlib.contextmanager
     def transaction(self):
-        return contextlib.nullcontext()
+        self.depth += 1
+        try:
+            yield
+        finally:
+            self.depth -= 1
 
     def start(self, kind, title, resource, href, ref, message="", unless=()):
+        if self.refuse:
+            raise ValueError(self.refuse)
         self.started.append({"kind": kind, "title": title, "resource": resource, "ref": copy.deepcopy(ref)})
         return {"id": "op1", "kind": kind}
 
@@ -159,6 +167,7 @@ class Base(unittest.TestCase):
         kube.add(DEP, deployment())
         kube.settle(kube.objs[DEP])
         kube.add(OLD, claim("app-1-data", "u-old"))
+        kube.add("/apis/storage.k8s.io/v1/storageclasses/longhorn", {"metadata": {"name": "longhorn"}, "allowVolumeExpansion": True})
         self.ops = FakeOps()
         self.backup = {"metadata": {"name": "backup-0123abcd"},
                        "status": {"state": "Completed", "url": "s3://example.com/b", "volumeSize": str(10 * 1024 ** 3),
@@ -167,6 +176,7 @@ class Base(unittest.TestCase):
         self.restored, self.restore_result, self.cancelled = [], ("succeeded", 100, "Restored"), []
         self.uptime, self.settings, self.notes, self.deleted = {}, {"restore_swap": {"keep_days": 7}}, [], []
         self.leader, self.self_app = True, False
+        self.blocking, self.reclaim = [], "Delete"
         saved = {name: getattr(RS, name) for name in RS.HOOKS}
         self.addCleanup(lambda: [setattr(RS, name, value) for name, value in saved.items()])
         RS.kget, RS.ksend = kube.get, kube.send
@@ -175,7 +185,7 @@ class Base(unittest.TestCase):
         RS.backup_object = lambda name: copy.deepcopy(self.backup)
         RS.restore_plan = self.fake_restore_plan
         RS.restore_backup = self.fake_restore
-        RS.restore_resolver = lambda item: self.restore_result
+        RS.restore_resolver = self.fake_restore_resolver
         RS.restore_cancel = lambda item: self.cancelled.append(copy.deepcopy(item["ref"])) or "Restore stopped"
         RS.uptime_report = lambda: self.uptime
         RS.settings = lambda: self.settings
@@ -195,6 +205,13 @@ class Base(unittest.TestCase):
         return {"minimum_size_gb": 10, "storage_class": "longhorn", "storage_classes": ["longhorn"],
                 "conflict": {"message": f"PVC {ns}/{name} already exists; choose a new name"} if taken else None}
 
+    def fake_restore_resolver(self, item):
+        ref = item["ref"]
+        if not ref.get("restore_started"):
+            RS.restore_backup(ref["restore_config"])
+            ref["restore_started"] = True
+        return self.restore_result
+
     def fake_restore(self, cfg):
         self.restored.append(copy.deepcopy(cfg))
         made = claim(cfg["name"], "u-new", annotations=cfg["annotations"])
@@ -206,7 +223,7 @@ class Base(unittest.TestCase):
                                                       for v in p["spec"].get("volumes") or [])]
         return {"uid": self.kube.objs[f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}"]["metadata"]["uid"],
                 "consumers": [{"kind": "Pod", "name": p["metadata"]["name"], "active": True} for p in pods],
-                "blocking_reasons": []}
+                "blocking_reasons": list(self.blocking), "pv": {"name": "pv-x", "reclaim_policy": self.reclaim}}
 
     def plan(self, **extra):
         return RS.plan("backup-0123abcd", **extra)
@@ -319,11 +336,14 @@ class StartTests(Base):
 
     def test_start_restores_with_the_restore_id_and_records_the_job(self):
         result, item = self.started()
+        self.assertEqual([], self.restored)           # the job makes the claim, not the request
+        recorded = copy.deepcopy(item["ref"])
+        self.step(item, NOW)
         cfg = self.restored[0]
         self.assertEqual(("app-1-data-restore", NS), (cfg["name"], cfg["namespace"]))
         self.assertEqual(cfg["restore_id"], cfg["annotations"]["homestead.io/restore-id"])
         self.assertEqual("lab/app-1", cfg["annotations"]["homestead.io/restored-into"])
-        ref = item["ref"]
+        ref = recorded
         self.assertEqual(("restoring", "restore", "app-1-data", "app-1-data-restore", "u-old"),
                          (ref["phase"], ref["direction"], ref["old_claim"], ref["new_claim"], ref["old_uid"]))
         self.assertEqual("app-1-data-restore", result["name"])
@@ -1029,6 +1049,176 @@ class SettingsFallbackTests(Base):
         self.read({"data": {"settings.json": json.dumps({"restore_swap": {"keep_days": 0}})}})
         self.assertEqual([], RS.expire_tick(NOW))
         self.assertEqual([], self.deleted)
+
+
+class WrapUpTests(Base):
+    """Wrap-up rows 48-55 (#773 fix pass), each red first."""
+
+    # 48
+    def test_the_review_and_the_restore_run_outside_the_jobs_lock(self):
+        depths, plan = [], RS.restore_plan
+        RS.restore_plan = lambda *a: depths.append(self.ops.depth) or plan(*a)
+        self.started()
+        self.assertTrue(depths)
+        self.assertEqual([0], sorted(set(depths)))
+        self.assertEqual([], self.restored)
+
+    def test_a_start_the_job_store_refuses_leaves_no_claim(self):
+        self.ops.refuse = "Another job holds this volume"
+        with self.assertRaisesRegex(ValueError, "Another job"):
+            self.started()
+        self.assertEqual([], self.restored)
+        self.assertNotIn(NEW, self.kube.objs)
+
+    # 49
+    def test_a_block_claim_is_restored_as_block(self):
+        self.kube.objs[OLD]["spec"]["volumeMode"] = "Block"
+        _, item = self.started()
+        self.step(item, NOW)
+        self.assertEqual("Block", self.restored[0]["volume_mode"])
+
+    def test_a_claim_grown_since_the_backup_comes_back_at_its_size(self):
+        self.kube.objs[OLD]["spec"]["resources"]["requests"]["storage"] = "30Gi"
+        self.assertEqual(30, self.plan()["size_gb"])
+        self.kube.objs["/apis/storage.k8s.io/v1/storageclasses/longhorn"]["allowVolumeExpansion"] = False
+        p = self.plan()
+        self.assertFalse(p["ready"])
+        self.assertTrue(any("30 GiB" in b for b in p["blockers"]), p["blockers"])
+
+    def test_an_access_mode_a_restore_cannot_make_is_refused_in_the_review(self):
+        self.kube.objs[OLD]["spec"]["accessModes"] = ["ReadWriteOncePod"]
+        p = self.plan()
+        self.assertFalse(p["ready"])
+        self.assertTrue(any("ReadWriteOncePod" in b for b in p["blockers"]), p["blockers"])
+
+    # 50
+    def test_a_claim_under_the_new_name_that_is_not_this_restores_is_not_taken(self):
+        _, item = self.started()
+        self.restore_result = ("running", 10, "Restoring")
+        self.step(item, NOW)
+        self.kube.objs[NEW]["metadata"]["annotations"]["homestead.io/restore-id"] = "someone-elses"
+        self.restore_result = ("succeeded", 100, "Restored")
+        status, _, message = self.step(item, NOW)
+        self.assertEqual("failed", status)
+        self.assertNotIn("lab/app-1-data-restore", self.records)
+        self.assertEqual([], self.kube.writes(DEP))
+
+    def test_a_restore_that_fails_after_making_its_claim_keeps_it_recorded(self):
+        _, item = self.started()
+        self.restore_result = ("failed", 20, "faulted")
+        self.step(item, NOW)
+        self.assertEqual("u-new", self.records["lab/app-1-data-restore"]["uid"])
+
+    def test_cancel_deletes_only_the_claim_this_restore_made(self):
+        _, item = self.started()
+        self.restore_result = ("running", 10, "Restoring")
+        self.step(item, NOW)
+        self.kube.objs[NEW]["metadata"]["annotations"]["homestead.io/restore-id"] = "someone-elses"
+        RS.cancel_run(item, {})
+        self.assertEqual([], self.cancelled)
+        self.kube.objs[NEW]["metadata"]["annotations"]["homestead.io/restore-id"] = item["ref"]["restore"]["restore_config"]["restore_id"]
+        RS.cancel_run(item, {})
+        self.assertEqual(["app-1-data-restore"], [c["name"] for c in self.cancelled])
+
+    # 51
+    def test_a_kept_volume_mounted_again_is_no_longer_recorded(self):
+        put_previous(self, kept=True)
+        self.kube.objs[DEP]["spec"]["template"]["spec"]["volumes"][1]["persistentVolumeClaim"]["claimName"] = "app-1-data-old"
+        RS.expire_tick(NOW)
+        self.assertEqual({}, self.records)
+        self.assertIn("uses app-1-data-old again", self.notes[0]["title"])
+
+    def test_keep_on_a_record_dropped_meanwhile_is_refused_not_a_500(self):
+        put_previous(self, at=NOW - 86400)
+        listed = copy.deepcopy(self.records)
+        self.records.clear()                                   # the hourly tick dropped it meanwhile
+        RS.read_records = lambda: copy.deepcopy(listed)
+        with self.assertRaisesRegex(ValueError, "not a previous volume"):
+            RS.keep({"namespace": NS, "name": "app-1-data-old", "keep": True}, "operator")
+
+    def test_marks_that_failed_to_reach_the_claim_are_sent_again(self):
+        _, item = self.started()
+        send, failed = self.kube.send, []
+
+        def once(method, path, body=None, ctype="application/json", **options):
+            if path == OLD and not failed:
+                failed.append(1)
+                raise urllib.error.HTTPError(path, 500, "error", {}, None)
+            return send(method, path, body, ctype)
+        RS.ksend = once
+        with self.assertRaises(urllib.error.HTTPError):
+            self.run_until(item, "watching")
+        self.run_until(item, "watching")
+        self.assertEqual("true", self.marks(OLD)[0].get("homestead.io/previous-volume"))
+
+    # 52
+    def test_a_put_back_whose_start_fails_is_finished_not_swapped(self):
+        _, item = self.started()
+        self.kube.loose.append({"metadata": {"name": "stuck"}, "status": {"phase": "Running"},
+                                "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "app-1-data"}}]}})
+        self.step(item, NOW)
+        send = self.kube.send
+
+        def scale_fails(method, path, body=None, ctype="application/json", **options):
+            if path == DEP and (body or {}).get("spec", {}).get("replicas") == 1:
+                raise urllib.error.HTTPError(path, 500, "error", {}, None)
+            return send(method, path, body, ctype)
+        RS.ksend = scale_fails
+        with self.assertRaises(urllib.error.HTTPError):
+            self.step(item, NOW + RS.STOP_WAIT + 1)
+        self.assertEqual("put-back", item["ref"]["phase"])
+        self.kube.loose.clear()                                  # the pod lets go later
+        RS.ksend = send
+        status, _, message = self.step(item, NOW + RS.STOP_WAIT + 2)
+        self.assertEqual("failed", status)
+        self.assertEqual(("app-1-data", 1), (self.template_claim(), self.kube.objs[DEP]["spec"]["replicas"]))
+
+    def test_a_pod_named_like_the_app_but_not_its_own_is_loose(self):
+        self.kube.loose.append({"metadata": {"name": "app-1-debug"}, "status": {"phase": "Running"},
+                                "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "app-1-data"}}]}})
+        p = self.plan()
+        self.assertTrue(any("app-1-debug" in b for b in p["blockers"]), p["blockers"])
+
+    # 53
+    def test_a_volume_that_cannot_be_deleted_says_why(self):
+        put_previous(self, reminded=NOW - 3 * 86400)
+        self.blocking = ["Longhorn still reports the volume attached to node-1"]
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+        facts = RS.alert_facts(NOW)
+        self.assertEqual(1, len(facts))
+        self.assertIn("could not be deleted", facts[0]["title"])
+        self.assertIn("attached", facts[0]["body"])
+
+    def test_keep_days_is_a_whole_number_and_its_section_an_object(self):
+        import homestead_app_settings as APP_SETTINGS
+        with self.assertRaises(ValueError):
+            RS.set_keep_days(7.9)
+        for bad in ({"keep_days": 7.5}, [7], "7"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                APP_SETTINGS.validate({"restore_swap": bad})
+
+    # 54
+    def test_a_volume_set_to_retain_is_never_deleted_and_the_alert_says_so(self):
+        put_previous(self, reminded=NOW - 3 * 86400)
+        self.reclaim = "Retain"
+        RS.expire_tick(NOW)
+        self.assertEqual([], self.deleted)
+        facts = RS.alert_facts(NOW)
+        self.assertIn("Retain", facts[0]["body"])
+
+    def test_after_flux_puts_the_old_claim_back_the_restored_one_is_kept_as_previous(self):
+        _, item = self.started()
+        self.run_until(item, "watching")
+        self.step(item, NOW)
+        self.assertEqual("succeeded", self.step(item, NOW + RS.AUTOUPDATE.STEADY + 1)[0])
+        # Flux applies the old manifest again.
+        self.kube.objs[DEP]["spec"]["template"]["spec"]["volumes"][1]["persistentVolumeClaim"]["claimName"] = "app-1-data"
+        RS.expire_tick(NOW + 3600)
+        self.assertNotIn("lab/app-1-data", self.records)
+        self.assertEqual(("u-new", "not-used"), (self.records["lab/app-1-data-restore"]["uid"],
+                                                 self.records["lab/app-1-data-restore"]["reason"]))
+        self.assertIn("app-1-data-restore", self.notes[-1]["body"])
 
 
 class SettingsTests(unittest.TestCase):
