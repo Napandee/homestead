@@ -124,7 +124,9 @@ press Enter for the usual login; see
    machine) and Homestead's own manifest, from RKE2's manifests folder;
 4. waits for Homestead and prints its address - `http://<this machine>:8088`.
 
-Open that address and create the first administrator.
+Open that address and create the first administrator. It asks for the one-time
+setup code, which the installer prints beside the address
+([First sign-in](Installing-Homestead#first-sign-in) says where else to find it).
 
 The installer runs [`bootstrap-k3s.sh`](https://github.com/homestead-lab/homestead/blob/main/scripts/bootstrap-k3s.sh)
 with `--rke2` to do this. You can run it yourself instead, with no questions:

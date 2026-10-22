@@ -201,8 +201,10 @@ Service, the ConfigMaps and Secrets it writes, and the `homestead.io/*`
 annotation domain.
 
 Open the Service address on port `8088`. The first visit creates the initial
-administrator. Authentication is stored in a Kubernetes Secret, independently
-of the container and Longhorn volume.
+administrator, with the one-time setup code from the Secret `homestead-setup`
+in Homestead's namespace (the Helm notes give the command; `setupCode` sets it
+ahead). Authentication is stored in a Kubernetes Secret, independently of the
+container and Longhorn volume.
 
 For a private fork/package, add an `imagePullSecrets` entry to the Deployment
 and create a `docker-registry` secret using a classic GitHub token with only

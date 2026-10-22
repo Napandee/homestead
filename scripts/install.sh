@@ -42,6 +42,7 @@
 #   HS_VERSION=2.8.184                          Homestead version
 #   HS_VIP=192.0.2.242                        the VIP for Homestead and apps (k3s/RKE2: optional)
 #   HS_CLASS=harvester-longhorn                 Harvester: storage class
+#   HS_SETUP_CODE=ABCD-EFGH-JK                  the one-time code for the first admin (default: Homestead makes one)
 #   HS_YES=1                                    install without the summary
 # Versions not set are the current recommended releases.
 #
@@ -1026,11 +1027,15 @@ add_to_cluster() {
 
 finish_new() {
   ip="${NODE_IP:-$(default_ip)}"
+  # shellcheck disable=SC2046
+  apply_setup_code $(kube_cmd)
+  # shellcheck disable=SC2046
   msg "Installation Complete" "Homestead is available at:
 
   http://$ip:8088$([ -n "${VIP:-}" ] && printf '\n  http://%s:8088 - once kube-vip is up, a minute or two after Homestead' "$VIP")
 
-Open this address to create the administrator account.
+Open this address to create the administrator account. It asks for the one-time setup code.
+$(setup_code_line $(kube_cmd))
 
 To add a node, run the installer on the new machine and select Join an existing cluster. Give it this server's own address ($ip)$([ -n "${VIP:-}" ] && printf ', not the apps VIP (%s): the VIP carries apps, not the cluster' "$VIP") - and the cluster token, which this command displays:
 
@@ -1083,11 +1088,15 @@ flow_harvester() {
   # shellcheck disable=SC2086
   progress "Installing" 1 sh -c "echo '==> Waiting for Homestead to start'; $KC -n lab rollout status deployment/homestead --timeout=10m" \
     || fail "Homestead did not start. Run: $KC -n lab get pods"
+  # shellcheck disable=SC2086
+  apply_setup_code $KC
+  # shellcheck disable=SC2086
   msg "Installation Complete" "Homestead is available at:
 
   http://$vip:8088
 
-Open this address to create the administrator account.
+Open this address to create the administrator account. It asks for the one-time setup code.
+$(setup_code_line $KC)
 
 Next steps: reserve addresses for applications under Networking > Your VIPs, and install the node probe from Settings > Cluster > Add-ons. See $WIKI/Installing-on-Harvester"
 }
@@ -1623,8 +1632,39 @@ EOF
   done
 }
 
+# ------------------------------------------------------------------ setup code
+# The first admin's one-time setup code (#737) is in the Secret
+# lab/homestead-setup until that account exists. HS_SETUP_CODE sets it ahead.
+SETUP_ALPHABET=0123456789ABCDEFGHJKMNPQRSTVWXYZ
+check_setup_code() {
+  [ -n "${HS_SETUP_CODE:-}" ] || return 0
+  plain=$(printf '%s' "$HS_SETUP_CODE" | tr -d ' -' | tr 'a-z' 'A-Z')
+  case "$plain" in *[!$SETUP_ALPHABET]*) plain="" ;; esac
+  [ "${#plain}" = 10 ] || fail "HS_SETUP_CODE must be 10 characters from 0-9 and A-Z without I, L, O and U, such as ABCD-EFGH-JK."
+}
+apply_setup_code() { # kubectl... : the code set ahead, from stdin, never on a command line or on disk
+  [ -n "${HS_SETUP_CODE:-}" ] || return 0
+  if [ "$DRY" = 1 ]; then printf '+ %s apply -f - (apply the Secret lab/homestead-setup with HS_SETUP_CODE)\n' "$*"; return 0; fi
+  printf 'apiVersion: v1\nkind: Secret\ntype: Opaque\nmetadata:\n  name: homestead-setup\n  namespace: lab\nstringData:\n  code: "%s"\n' \
+    "$(printf '%s' "$HS_SETUP_CODE" | tr 'a-z' 'A-Z')" | "$@" apply -f - >/dev/null \
+    || fail "kubectl could not save HS_SETUP_CODE as the Secret lab/homestead-setup."
+}
+setup_code_line() { # kubectl... -> where the first admin's setup code is, or the code itself
+  code=""
+  if [ "$DRY" = 0 ]; then
+    i=0; while [ $i -lt 30 ]; do
+      code=$("$@" -n lab get secret homestead-setup -o jsonpath='{.data.code}' 2>/dev/null | base64 -d 2>/dev/null)
+      [ -n "$code" ] && break; i=$((i+1)); sleep 2
+    done
+  fi
+  if [ -n "$code" ]; then printf 'Setup code: %s' "$code"
+  else printf "Setup code: this command shows it\n  %s -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d" "$*"; fi
+}
+kube_cmd() { if [ "$DIST" = rke2 ]; then echo "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"; else echo "k3s kubectl"; fi; }
+
 # ------------------------------------------------------------------ installing
 do_install() {
+  check_setup_code
   if [ "$(given HS_ROLE)" = harvester ] || { [ -z "$(given HS_ROLE)" ] && is_harvester; }; then
     ROLE=harvester
     flow_harvester

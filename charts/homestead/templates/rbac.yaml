@@ -277,4 +277,36 @@ subjects:
   - kind: ServiceAccount
     name: homestead
     namespace: {{ .Release.Namespace }}
+---
+# The one-time setup code for the first administrator (#737) lives in a Secret
+# in Homestead's own namespace. Homestead makes it, reads it back when another
+# copy made it first, and deletes it once the first account exists. Kubernetes
+# cannot limit create to one name, so create stands apart.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homestead-setup
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [homestead-setup]
+    verbs: [get, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homestead-setup
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homestead-setup
+subjects:
+  - kind: ServiceAccount
+    name: homestead
+    namespace: {{ .Release.Namespace }}
 {{- end }}

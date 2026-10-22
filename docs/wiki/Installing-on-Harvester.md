@@ -129,7 +129,14 @@ into `homestead`):
 kubectl -n lab rollout status deployment/homestead --timeout=5m
 ```
 
-Then open `http://192.0.2.242:8088` and create the first administrator.
+Then open `http://192.0.2.242:8088` and create the first administrator. It asks
+for the one-time setup code: the installer prints it, and this shows it (use
+`-n homestead` for the Helm chart):
+
+```bash
+kubectl -n lab get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d
+```
+
 [Installing Homestead](Installing-Homestead) explains every choice here and
 what to do next.
 

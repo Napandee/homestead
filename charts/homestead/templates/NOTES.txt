@@ -9,8 +9,11 @@ Its address, once the load balancer has given one:
 {{- end }}
 {{- end }}
 
-The first visit sets up the admin account. Apps are deployed to the
-{{ .Values.workloadNamespace.name }} namespace.
+The first visit sets up the admin account. It asks for the one-time setup
+code{{ if .Values.setupCode }} you set in setupCode{{ end }}, which this command shows:
+  kubectl -n {{ .Release.Namespace }} get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d
+
+Apps are deployed to the {{ .Values.workloadNamespace.name }} namespace.
 {{- if .Values.nodeprobe.enabled }}
 The node probe reports temperatures, devices and drive health from every node.
 {{- end }}
