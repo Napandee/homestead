@@ -119,7 +119,10 @@ class FluxStatus(unittest.TestCase):
         fact = facts[0]
         self.assertEqual(("degraded", "degraded", 600), (fact["category"], fact["severity"], fact["hold"]))
         self.assertEqual("Flux has not applied Kustomization flux-system/infra", fact["title"])
-        self.assertIn("missing secret", fact["body"])
+        # Flux's message can name repositories, paths and Secrets: it stays on
+        # the Cluster page, out of alerts that go to every device.
+        self.assertNotIn("missing secret", fact["body"] + fact["title"])
+        self.assertIn("Cluster", fact["body"])
         self.assertEqual("/system/cluster", fact["href"])
 
     def test_read_through_one_shared_minute(self):
@@ -132,6 +135,20 @@ class FluxStatus(unittest.TestCase):
         self.assertEqual("viewer", GITOPS.ROUTES[("GET", "/api/gitops")][0])
         self.assertIn("homestead_gitops", ROUTER.MODULES)
 
+
+    def test_reading_writes_nothing(self):
+        """Read only (pinning: it passed before this test was added)."""
+        with mock.patch.object(KUBE, "ksend") as send:
+            GITOPS.status()
+            GITOPS.alert_facts()
+            GITOPS.ROUTES[("GET", "/api/gitops")][1](None)
+        send.assert_not_called()
+
+    def test_each_deployment_is_asked_once_who_applies_it(self):
+        import homestead_updates as UPDATES
+        with mock.patch.object(UPDATES, "managed_by", wraps=UPDATES.managed_by) as asked:
+            GITOPS.status()
+        self.assertEqual(len(DEPLOYMENTS), asked.call_count)
 
     def test_the_alerts_loop_reads_it(self):
         source = (Path(__file__).resolve().parents[1] / "server" / "homestead_overview_server.py").read_text()

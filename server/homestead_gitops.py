@@ -240,7 +240,8 @@ def _read():
     ids = {row["id"] for row in objects}
     apps = {}
     for dep in KUBE.items("/apis/apps/v1/deployments"):
-        source = notice(dep).get("source", "") if notice(dep).get("by") == "Flux" else ""
+        managed = notice(dep)
+        source = managed.get("source", "") if managed.get("by") == "Flux" else ""
         if source in ids:
             meta = dep.get("metadata") or {}
             apps[f"{meta.get('namespace', '')}/{meta.get('name', '')}"] = source
@@ -264,7 +265,9 @@ def alert_facts():
     return [{"key": f"gitops:{row['kind']}:{row['namespace']}/{row['name']}", "category": "degraded",
              "severity": "degraded", "hold": ALERT_AFTER,
              "title": f"Flux has not applied {row['id']}",
-             "body": row["message"] or "Flux says it is not ready.",
+             # Flux's own message can name repositories, paths and Secrets: it
+             # stays on the Cluster page, not in alerts sent to every device.
+             "body": "Changes made in git are not reaching the cluster. System › Cluster shows Flux's message.",
              "resolved": f"Flux applies {row['id']} again", "href": "/system/cluster"}
             for row in status()["objects"] if row["ready"] is False and not row["suspended"]]
 

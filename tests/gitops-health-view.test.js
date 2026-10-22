@@ -68,3 +68,11 @@ test("No Flux, no line; a failed read says what could not be read", async () => 
   await broken.c.window.clusterGitopsPaint();
   assert.match(broken.elements["#clusterGitops"].innerHTML, /could not be read.*Kubernetes said 500/s);
 });
+
+test("When Flux could not be read, a Flux app's details say so", async () => {
+  const t = setup(new Error("Kubernetes said 500"));
+  await t.c.window.gitopsLoad();
+  t.c.STATE.data.imageUpdateMap = { "lab/web": { managed: { by: "Flux", source: "Kustomization flux-system/apps", detected: true } } };
+  assert.match(t.c.window.gitopsDetail({ ns: "lab", name: "web" }), /could not be read.*Kubernetes said 500/s);
+  assert.equal(t.c.window.gitopsDetail({ ns: "lab", name: "plain" }), "");
+});

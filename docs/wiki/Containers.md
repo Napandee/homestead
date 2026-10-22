@@ -164,8 +164,9 @@ once a minute:
 - **System › Cluster** has one GitOps line, for example "2 Kustomizations,
   6 HelmReleases: all ready", and lists any that are not Ready.
 - **An alert** (Degraded) is raised when one has not been Ready for 10 minutes,
-  and cleared when it is again. A suspended one is shown as suspended and never
-  alerts: someone paused it on purpose.
+  and cleared when it is again. Flux's message is on the Cluster page, not in
+  the alert, since it can name repositories and Secrets. A suspended one is shown
+  as suspended and never alerts: someone paused it on purpose.
 
 This only reads; Homestead does not reconcile, suspend or change Flux objects.
 Argo CD's Applications are not read.

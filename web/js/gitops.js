@@ -56,6 +56,12 @@ function gitopsState(row) {
    Flux does not apply, or before the read has come back. */
 function gitopsDetail(w) {
   const report = STATE.data.gitops;
+  if (report?.error) {
+    // Unread is not fine: an app the update check says Flux applies says so.
+    const owner = (STATE.data.imageUpdateMap || {})[`${w.ns}/${w.name}`]?.managed;
+    return owner?.by === "Flux" && !window.remoteRow?.(w) ? `<div class="wl-detail-gitops"><span>Flux</span><b>${esc(owner.source || "Flux")}</b>
+      <div class="updateerror">Whether Flux is applying it could not be read: ${esc(report.error)}</div></div>` : "";
+  }
   const id = report?.apps?.[`${w.ns}/${w.name}`];
   const row = id && (report.objects || []).find(r => r.id === id);
   if (!row || window.remoteRow?.(w)) return "";
