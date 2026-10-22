@@ -1117,8 +1117,14 @@ async function selfHealthPaint() {
 window.selfHealthPaint = selfHealthPaint;
 
 /* /metrics (#736): takes effect at once, like the MCP switch, rather than
-   waiting for Save. Only this setting changes (#601). */
+   waiting for Save. Only this setting changes (#601). Turning it on asks
+   first, as the MCP switch does: every API key there is can then read it.
+   Turning it off only narrows who can read, so it acts at once. */
 window.metricsSet = async enabled => {
+  if (enabled && !(await ask("Every API key there is, whatever it was made for, can then read Homestead's own health from /metrics: "
+    + "counts of hosts, apps, jobs and alerts, the last backup's time and Homestead's version, never names. "
+    + "Turn it on for Prometheus or an uptime checker.",
+    { title: "Turn on metrics", ok: "Turn on metrics" }))) return;
   try {
     await settingsWrite({ metrics: { enabled } });
     STATE.data.appSettings = null;
