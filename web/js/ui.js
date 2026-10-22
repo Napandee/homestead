@@ -577,13 +577,17 @@ if (typeof window !== "undefined") { window.settingRow = settingRow; window.serv
 
 /* Shared navigation for section forms and externally managed setup guides.
    Handlers are JavaScript, escaped here once; keys and titles are plain text. */
+/* A section the form cannot set yet says when, in a tab and the phone picker. */
+const laterWords = later => later.charAt(0).toLowerCase() + later.slice(1);
 function dialogSectionNavigation(id, sections, { current = 0, always = false, onSelect = key => `UI.selectSection(${jsArg(id)},${jsArg(key)})`, onChange = `UI.selectSection(${jsArg(id)},this.value)`, guide = false } = {}) {
   const label = always ? "Section" : "Step";
   const keyOf = (section, i) => String(section.key ?? i);
-  return `<label class="dialog-section-picker">${label}<select id="${esc(id)}_section" aria-label="${label}" onchange="${esc(onChange)}">${sections.map((section, i) => `<option value="${esc(keyOf(section, i))}"${i === current ? " selected" : ""}>${esc(section.title)}${always ? "" : ` · ${i + 1} of ${sections.length}`}</option>`).join("")}</select></label>
+  return `<label class="dialog-section-picker">${label}<select id="${esc(id)}_section" aria-label="${label}" onchange="${esc(onChange)}">${sections.map((section, i) => `<option value="${esc(keyOf(section, i))}"${i === current ? " selected" : ""}>${esc(section.title)}${section.later ? ` · ${esc(laterWords(section.later))}` : always ? "" : ` · ${i + 1} of ${sections.length}`}</option>`).join("")}</select></label>
     <div class="stepper-head" ${guide ? 'aria-label="Setup steps"' : `role="tablist" aria-label="${always ? "Sections" : "Steps"}" aria-orientation="vertical"`}>${sections.map((section, i) => {
       const key = keyOf(section, i), selected = i === current;
-      return `<button type="button" ${guide ? (selected ? 'aria-current="step"' : '') : `role="tab" id="${esc(id)}-tab-${esc(key)}" aria-controls="${esc(id)}-pane-${esc(key)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}"`} class="stepper-chip${selected ? " on" : ""}" data-i="${i}" data-key="${esc(key)}" onclick="${esc(onSelect(key))}">${esc(section.title)}</button>`;
+      // Greyed, but it still opens (its pane says why), so it is named, not disabled.
+      const later = section.later ? ` data-later aria-label="${esc(`${section.title}, ${laterWords(section.later)}`)}"` : "";
+      return `<button type="button" ${guide ? (selected ? 'aria-current="step"' : '') : `role="tab" id="${esc(id)}-tab-${esc(key)}" aria-controls="${esc(id)}-pane-${esc(key)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}"`} class="stepper-chip${selected ? " on" : ""}${section.later ? " later" : ""}"${later} data-i="${i}" data-key="${esc(key)}" onclick="${esc(onSelect(key))}">${esc(section.title)}${section.later ? `<small>${esc(section.later)}</small>` : ""}</button>`;
     }).join("")}</div>`;
 }
 
@@ -596,7 +600,7 @@ function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtm
     ${dialogSectionNavigation(id, list, { always })}
     ${list.map((section, i) => {
       const key = String(section.key ?? i);
-      return `<div class="stepper-pane" role="tabpanel" aria-labelledby="${esc(id)}-tab-${esc(key)}" id="${esc(id)}-pane-${esc(key)}" data-i="${i}" data-key="${esc(key)}"${i ? " hidden" : ""}>${section.lead ? UI.lead(esc(section.lead)) : ""}${section.html}</div>`;
+      return `<div class="stepper-pane" role="tabpanel" aria-labelledby="${esc(id)}-tab-${esc(key)}" id="${esc(id)}-pane-${esc(key)}" data-i="${i}" data-key="${esc(key)}"${section.later ? " data-later" : ""}${i ? " hidden" : ""}>${section.lead ? UI.lead(esc(section.lead)) : ""}${section.html}</div>`;
     }).join("")}
     ${noticeHtml ? `<div class="dialog-rail-notice">${noticeHtml}</div>` : ""}
     ${UI.actions((always ? finishHtml : `<span data-finish${list.length > 1 ? " hidden" : ""}>${finishHtml}</span>`) +
@@ -627,7 +631,9 @@ function stepGo(id, to, relative) {
   const root = document.getElementById(id);
   if (!root) return;
   const panes = [...root.querySelectorAll(":scope > .stepper-pane")], chips = [...root.querySelectorAll(".stepper-chip")];
-  const next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
+  let next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
+  // Next and Back step over a section that can only be set later; a tab still opens it.
+  if (relative && to) while (panes[next]?.dataset.later !== undefined && next + Math.sign(to) >= 0 && next + Math.sign(to) < panes.length) next += Math.sign(to);
   // A step can hold the form until it is answered: data-guard names a
   // function given the step being left, which returns false to stay.
   const guard = root.dataset.guard && window[root.dataset.guard];

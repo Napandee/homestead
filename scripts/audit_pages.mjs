@@ -26,6 +26,8 @@ const PAGES = [
   ["nodes-cards", "nodes", "setViewLayout('nodes','viewNodes','cards')"],
   ["portal", "portal"],
   ["deploy", "deploy"],
+  // Deploy's Placement: greyed until the app runs (#544).
+  ["deploy-placement", "deploy", "UI.selectSection('containerDeploy','placement')"],
   ["containers", "workloads"],
   ["containers-rows", "workloads", "setViewLayout('containers','renderWorkloads','rows')"],
   ["containers-cards", "workloads", "setViewLayout('containers','renderWorkloads','cards')"],
