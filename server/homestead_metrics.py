@@ -23,7 +23,7 @@ import homestead_alerts as ALERTS
 import homestead_cache as CACHE
 import homestead_heartbeats as HEARTBEATS
 import homestead_leader as LEADER
-import homestead_longhorn as LH
+import homestead_longhorn_backups as BACKUPS
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_readyz as READYZ
@@ -143,7 +143,7 @@ def _when(text):
 
 
 def _backups():
-    times = [_when(row["last_backup_at"]) for row in LH.backup_volumes() if row.get("last_backup_at")]
+    times = [_when(row["last_backup_at"]) for row in BACKUPS.backup_volumes() if row.get("last_backup_at")]
     return [("homestead_backup_last_success_timestamp_seconds", {}, int(max(times)))] if times else []
 
 
