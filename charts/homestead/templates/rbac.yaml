@@ -150,6 +150,17 @@ rules:
   - apiGroups: ["pool.kubevirt.io"]
     resources: [virtualmachinepools]
     verbs: [get, list]
+  # Read only, the same: the container disks a Harvester VM template or a VM
+  # snapshot boots from, and the images CDI imports through the node.
+  - apiGroups: ["harvesterhci.io"]
+    resources: [virtualmachinetemplateversions]
+    verbs: [get, list]
+  - apiGroups: ["snapshot.kubevirt.io"]
+    resources: [virtualmachinesnapshotcontents]
+    verbs: [get, list]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: [dataimportcrons]
+    verbs: [get, list]
   # KubeVirt's one operator-owned configuration object. Homestead reads its
   # software-emulation fallback and can enable it on an explicitly requested
   # k3s/RKE2 installation whose hosts do not expose /dev/kvm.

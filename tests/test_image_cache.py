@@ -64,6 +64,11 @@ class ImageCacheTests(unittest.TestCase):
                         "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
                         "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools"):
                 return {"items": []}
+            # No KubeVirt add-ons, Harvester or CDI here: discovery says so.
+            if path == "/apis":
+                return {"groups": [{"name": "apps"}, {"name": "batch"}, {"name": "kubevirt.io"}]}
+            if path.count("/") == 2 and path.startswith("/apis/"):
+                raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
             raise AssertionError(path)
 
         # Scans saved to disk belong to the tests that ask for it.

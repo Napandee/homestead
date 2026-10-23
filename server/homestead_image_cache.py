@@ -64,11 +64,9 @@ def _needed_list(path, optional_group=None, forbidden_none=False):
         if error.code == 404 and optional_group and _group_absent(optional_group):
             error.close()
             return []
-        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
-                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+        raise ValueError(_unread_message(path, error)) from error
     except Exception as error:
-        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
-                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+        raise ValueError(_unread_message(path, error)) from error
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or (listing.get("metadata") or {}).get("continue")):
         raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
@@ -192,36 +190,141 @@ def _stopped_references():
                    or (vm.get("status") or {}).get("printableStatus") == "Running")]
     # A VM pool or VM replica set scaled to zero has no VM or pod left to name
     # its template's disks; one with replicas has, so it is left to them.
-    for kind, path, group, template in (
-            ("VirtualMachinePools", "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools", "pool.kubevirt.io",
-             ("spec", "virtualMachineTemplate", "spec", "template", "spec")),
-            ("VirtualMachineInstanceReplicaSets", "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
-             "kubevirt.io", ("spec", "template", "spec"))):
-        rows = _needed_list(path, optional_group=group, forbidden_none=True)
-        if rows is None:      # a role from before these were named may not grant them
-            out.append(_unreadable({"name": kind}, "no permission to list"))
-            continue
-        vms += [(row, template) for row in rows if _scaled_to_zero(row.get("spec") or {})]
+    pools, unread = _optional_list("VirtualMachinePools", "pool.kubevirt.io", "virtualmachinepools")
+    out += unread
+    vms += [(row, ("spec", "virtualMachineTemplate", "spec", "template", "spec"))
+            for row in pools if _scaled_to_zero(row.get("spec") or {})]
+    sets = _needed_list("/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
+                        optional_group="kubevirt.io", forbidden_none=True)
+    if sets is None:      # a role from before these were named may not grant them
+        out.append(_unreadable({"name": "VirtualMachineInstanceReplicaSets"}, "no permission to list"))
+    vms += [(row, ("spec", "template", "spec")) for row in sets or [] if _scaled_to_zero(row.get("spec") or {})]
+    # A Harvester VM template's versions start new VMs, and a VM snapshot
+    # restores one: both boot from the container disks they name.
+    versions, unread = _optional_list("VirtualMachineTemplateVersions", "harvesterhci.io", "virtualmachinetemplateversions")
+    out += unread
+    vms += [(row, ("spec", "vm", "spec", "template", "spec")) for row in versions]
+    contents, unread = _optional_list("VirtualMachineSnapshotContents", "snapshot.kubevirt.io", "virtualmachinesnapshotcontents")
+    out += unread
+    vms += [(row, ("spec", "source", "virtualMachine", "spec", "template", "spec")) for row in contents]
     for vm, template in vms:          # a running VM's pod names its container disks
         meta = vm.get("metadata") or {}
-        tspec = _dig(vm, template)
-        volumes = _rows(tspec, "volumes")
-        domain = (tspec or {}).get("domain") or {}
-        if volumes is None or not isinstance(domain, dict):
+        disks = _disk_images(_dig(vm, template))
+        if disks is None:
             out.append(_unreadable(meta, "template"))
             continue
-        disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", ""))
-                 for volume in volumes]
-        kernel = (((domain.get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
-        disks.append(("kernel-boot", kernel.get("image", "")))
-        for name, ref in disks:
-            if not ref:
-                continue
-            out.append({"ref": _canonical_image(ref), "digest": _image_digest(ref),
-                        "reason": "stopped", "by_name": True,
-                        "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
-                        "container": name})
+        out += [_kept(meta, ref, "stopped", name) for name, ref in disks]
+    for row in versions:              # ...and the disks its VMs import from a registry
+        templates = _rows(_dig(row, ("spec", "vm", "spec")), "dataVolumeTemplates")
+        if templates is None:
+            out.append(_unreadable(row.get("metadata") or {}, "template"))
+            continue
+        out += _cdi_rows(row, [(_dig(t, ("metadata",)) or {}).get("name", "") or "registry"
+                               for t in templates], [_dig(t, ("spec",)) for t in templates], "stopped")
+    # CDI imports that pull a registry image through the node's runtime
+    # (pullMethod: node) leave it in containerd, and need it again to import.
+    for kind, resource, spec_path, reason in (
+            ("DataVolumes", "datavolumes", ("spec",), "stopped"),
+            ("DataImportCrons", "dataimportcrons", ("spec", "template", "spec"), "scheduled")):
+        rows, unread = _optional_list(kind, "cdi.kubevirt.io", resource)
+        out += unread
+        for row in rows:
+            out += _cdi_rows(row, ["registry"], [_dig(row, spec_path)], reason)
     return out
+
+
+def _kept(meta, ref, reason, container):
+    """A retention row for an image a record names, matched by name too."""
+    return {"ref": _canonical_image(ref), "digest": _image_digest(ref), "reason": reason, "by_name": True,
+            "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": container}
+
+
+def _disk_images(tspec):
+    """(volume, image) for each container image a VM's template spec boots
+    from (containerDisk volumes, kernel boot), or None when it cannot be read."""
+    volumes = _rows(tspec, "volumes")
+    domain = (tspec or {}).get("domain") or {}
+    if volumes is None or not isinstance(domain, dict):
+        return None
+    disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", "")) for volume in volumes]
+    kernel = (((domain.get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
+    disks.append(("kernel-boot", kernel.get("image", "")))
+    return [(name, ref) for name, ref in disks if ref]
+
+
+def _cdi_rows(obj, names, specs, reason):
+    """Retention rows for the CDI import specs of one record (a DataVolume
+    spec, or a DataImportCron's or VM template's DataVolume template spec):
+    the image each pulls through the node, or an unreadable row."""
+    meta, out = obj.get("metadata") or {}, []
+    for name, spec in zip(names, specs):
+        ref = _node_pull(spec)
+        if ref is None:
+            return [_unreadable(meta, "source")]
+        if ref:
+            out.append(_kept(meta, ref, reason, name))
+    return out
+
+
+def _node_pull(spec):
+    """The image a CDI DataVolume spec imports through the node's container
+    runtime (a registry source with pullMethod node), "" when it pulls none
+    that way (the importer pod's own pull, or another source), or None when
+    the spec cannot be read."""
+    if not isinstance(spec, dict):
+        return None
+    source = spec.get("source")
+    if source is None:
+        return ""             # sourceRef, or a blank disk
+    registry = source.get("registry") if isinstance(source, dict) else None
+    if not isinstance(source, dict) or not isinstance(registry, (dict, type(None))):
+        return None
+    if registry is None or registry.get("pullMethod") != "node":
+        return ""
+    url = registry.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _optional_list(kind, group, resource):
+    """The rows of a resource in a group that may not be installed, read at
+    the version API discovery prefers (a fixed version 404s once the group
+    drops it), and any retention row to add: none when discovery says the
+    group is absent; an unreadable row when the role may not list it."""
+    path = _served_path(group, resource)
+    if path is None:
+        return [], []
+    rows = _needed_list(path, optional_group=group, forbidden_none=True)
+    if rows is None:          # a role from before these were named may not grant them
+        return [], [_unreadable({"name": kind}, "no permission to list")]
+    return rows, []
+
+
+def _served_path(group, resource):
+    """/apis/<group>/<preferred version>/<resource>, or None when discovery
+    says the group is not served. Anything else unclear is an error, so no
+    image is called unused on a guess."""
+    where = f"/apis/{group}"
+    try:
+        answer = I.kget(where)
+    except urllib.error.HTTPError as error:
+        error.close()
+        if error.code == 404 and _group_absent(group):
+            return None
+        raise ValueError(_unread_message(where, error)) from error
+    except Exception as error:
+        raise ValueError(_unread_message(where, error)) from error
+    preferred = answer.get("preferredVersion") if isinstance(answer, dict) else None
+    version = preferred.get("groupVersion") if isinstance(preferred, dict) else None
+    if not (isinstance(version, str) and version.startswith(group + "/") and version.count("/") == 1
+            and version != group + "/"):
+        raise ValueError(f"Kubernetes did not say which version of {group} it serves, so Homestead cannot tell "
+                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.")
+    return f"/apis/{version}/{resource}"
+
+
+def _unread_message(path, error):
+    return (f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
+            "which images are still needed, and no image is cleaned up until it can. Try again in a moment.")
 
 
 def _rollback_note(meta):
