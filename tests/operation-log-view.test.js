@@ -14,7 +14,7 @@ function setup(status='running') {
     $:s=>s==='#oplogBody .oplog-steps'?steps:fields[s], $$:()=>pres,
     modal:()=>{fields['#oplogFollow']={checked:true};fields['#oplogState']={}},
     setInterval:fn=>{tick=fn;return 1},clearInterval:()=>{},api:async()=>frame};ctx.window=ctx;
-  vm.createContext(ctx);vm.runInContext(fs.readFileSync('web/js/operations.js','utf8'),ctx);ctx.renderOperations=()=>{};
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('web/js/ui.js','utf8'),ctx);vm.runInContext(fs.readFileSync('web/js/operations.js','utf8'),ctx);ctx.renderOperations=()=>{};
   return {ctx,fields,steps:()=>steps,pres:()=>pres,tick:()=>tick,frame:value=>{frame=value},getFrame:()=>frame};
 }
 test('Follow latest moves both steps and source output to the bottom after every repaint',async()=>{
