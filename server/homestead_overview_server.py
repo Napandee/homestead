@@ -30,6 +30,7 @@ import homestead_leader as LEADER
 import homestead_longhorn as LH
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
+import homestead_logalerts as LOGALERTS
 import homestead_mcp as MCP
 import homestead_names as NAMES
 import homestead_networking as NETWORK
@@ -283,6 +284,8 @@ def _alert_sources():
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
+    # Log alerts read on their own thread; this only takes their last count.
+    take("logs", LOGALERTS.alert_facts)
     take("previous-volumes", lambda: cached("previous-volumes", 60, RESTORE_SWAP.alert_facts))
     take("agents", MCP.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
@@ -314,6 +317,7 @@ def push_alerts(fresh):
 
 
 def _alerts_loop():
+    LOGALERTS.start()
     while True:
         # One replica raises alerts, or every notification arrives twice.
         if LEADER.is_leader():

@@ -42,6 +42,7 @@ CATEGORIES = {
     "joins": "Hosts joining: registration and readiness",
     "updates": "Updates: container images, host updates and platform upgrade results",
     "agents": "AI agents: requests waiting for someone to approve them",
+    "logs": "Log alerts: a saved log search crossed its threshold (counts only, never the lines)",
 }
 DEFAULT_CATEGORIES = ["outage", "degraded", "jobs", "joins", "agents"]
 
