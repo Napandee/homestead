@@ -142,19 +142,28 @@ def _stopped_references():
     name them they read as unused, and cleaning one up meant the next start
     - often the moment it is needed - waited on a pull.
 
+    The same holds for a workload that wants pods but has not got them: a
+    suspended Job or one between retries, a DaemonSet that matches no node,
+    a Deployment that cannot make its pods (quota, a webhook). Only a status
+    that shows every pod it wants is there leaves the image to its pods.
+
     The digest each container last ran on is used where Homestead recorded
     it; the image may be matched by its name as well, since a tag in the
     template and the digest the node lists are two names for one image.
     A template that cannot be read keeps every image (_unreadable)."""
     out = []
+    template = lambda o: o["spec"]["template"]["spec"]
     for kind, path, spec_of in (
-            ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
-            ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
+            ("Deployment", "/apis/apps/v1/deployments", template),
+            ("StatefulSet", "/apis/apps/v1/statefulsets", template),
+            ("DaemonSet", "/apis/apps/v1/daemonsets", template),
+            ("Job", "/apis/batch/v1/jobs", template),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
         for obj in _needed_list(path):
-            meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
-            if kind != "CronJob" and not _scaled_to_zero(spec):
-                continue          # running ones are named by their pods
+            meta = obj.get("metadata") or {}
+            reason = _waiting(kind, obj)
+            if reason is None:
+                continue          # its pods name its images, or it will not run again
             try:
                 podspec = spec_of(obj)
             except (KeyError, TypeError):
@@ -174,7 +183,7 @@ def _stopped_references():
                     continue
                 out.append({"ref": _canonical_image(ref),
                             "digest": _image_digest(ref) or _image_digest(ran.get(container.get("name"), "")),
-                            "reason": "scheduled" if kind == "CronJob" else "stopped", "by_name": True,
+                            "reason": reason, "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
     vms = [(vm, ("spec", "template", "spec"))
@@ -246,6 +255,46 @@ def _scaled_to_zero(spec):
     if replicas is None:
         return False
     return not (isinstance(replicas, int) and not isinstance(replicas, bool) and replicas > 0)
+
+
+def _count(value):
+    """A count from a status, or None when it is not a whole number."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _waiting(kind, obj):
+    """Why a workload's template images are kept when no pod may name them:
+    "stopped" or "scheduled", or None when its pods name them (its status
+    shows every pod it wants is there) or a Job has finished for good.
+    A status that is missing, old or unclear proves nothing, so it keeps."""
+    meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
+    status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+    if kind == "CronJob":
+        return "scheduled"
+    if kind == "Job":
+        conditions = status.get("conditions")
+        if isinstance(conditions, list) and any(
+                isinstance(c, dict) and c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
+                for c in conditions):
+            return None       # finished: it makes no more pods
+        if spec.get("suspend") is True:
+            return "stopped"
+        active = _count(status.get("active"))
+        return None if active and active > 0 else "scheduled"     # between retries, or not started
+    generation, observed = _count(meta.get("generation")), _count(status.get("observedGeneration"))
+    if generation is not None and (observed is None or observed < generation):
+        return "stopped"      # the status is from before the last change
+    if kind == "DaemonSet":
+        wanted, updated = _count(status.get("desiredNumberScheduled")), _count(status.get("updatedNumberScheduled"))
+    else:
+        if _scaled_to_zero(spec):
+            return "stopped"
+        wanted = _count(spec.get("replicas"))
+        wanted = 1 if spec.get("replicas") is None else wanted
+        updated = _count(status.get("updatedReplicas"))
+    if wanted and wanted > 0 and updated is not None and updated >= wanted:
+        return None
+    return "stopped"
 
 
 def _dig(obj, keys):

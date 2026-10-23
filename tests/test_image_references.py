@@ -48,8 +48,12 @@ class Fixture(unittest.TestCase):
                      {"name": "esphome", "image": "ghcr.io/esphome/esphome:2025.9.0"}]}}}},
                 {"metadata": {"name": "web", "namespace": "lab"},
                  "spec": {"replicas": 1, "template": {"spec": {"containers": [
-                     {"name": "web", "image": "docker.io/library/unused:1"}]}}}}]},
+                     {"name": "web", "image": "docker.io/library/unused:1"}]}}},
+                 # Its pod is running: the status says every replica it wants is there.
+                 "status": {"replicas": 1, "updatedReplicas": 1}}]},
             "/apis/apps/v1/statefulsets": {"items": []},
+            "/apis/apps/v1/daemonsets": {"items": []},
+            "/apis/batch/v1/jobs": {"items": []},
             "/apis/batch/v1/cronjobs": {"items": [
                 {"metadata": {"name": "backup", "namespace": "lab"},
                  "spec": {"jobTemplate": {"spec": {"template": {"spec": {"containers": [
@@ -170,7 +174,8 @@ class ScanTests(Fixture):
     def test_a_cleaned_image_leaves_the_saved_scan(self):
         self.scanned(time.time())
         dep = self.objects["/apis/apps/v1/deployments"]["items"][0]
-        dep["spec"]["replicas"] = 1           # running, and with no pod here: nothing holds it
+        # Running, with its pod on another node: nothing here holds it.
+        dep["spec"]["replicas"], dep["status"] = 1, {"replicas": 1, "updatedReplicas": 1}
         with mock.patch.object(imports.RUNTIME, "pod", lambda *a, **k: {"spec": {}}):
             imports.cleanup_image(ESPHOME, ["node1"])
         imports._SCANS.clear()
@@ -178,11 +183,9 @@ class ScanTests(Fixture):
         self.assertEqual([["docker.io/library/small:1"]], [i["repoTags"] for i in imports._SCANS["node1"]["images"]])
 
 
-class UnreadInventoryTests(Fixture):
-    """Every source of "still needed" is read in full, or nothing is removed (#620)."""
+class RemovalFixture(Fixture):
+    """The fixture, with the unused image removable by its digest."""
     UNUSED = "sha256:" + "a" * 64
-    LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
-             VMS, POOLS, VMIRS)
 
     def setUp(self):
         super().setUp()
@@ -197,6 +200,12 @@ class UnreadInventoryTests(Fixture):
         """Removal pods started (a scan pod may start too; it removes nothing)."""
         return [body["metadata"]["name"] for method, path, body in self.sent if method == "POST"
                 and body["metadata"]["name"].startswith("homestead-image-clean-")]
+
+
+class UnreadInventoryTests(RemovalFixture):
+    """Every source of "still needed" is read in full, or nothing is removed (#620)."""
+    LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
+             "/apis/apps/v1/daemonsets", "/apis/batch/v1/jobs", VMS, POOLS, VMIRS)
 
     def test_an_image_nothing_needs_is_cleaned_up(self):
         imports.cleanup_image(self.UNUSED, ["node1"])
@@ -412,6 +421,110 @@ class UnreadInventoryTests(Fixture):
             with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
                 imports.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
+
+
+class WaitingWorkloadTests(RemovalFixture):
+    """Wrap-up rows 76 and 77: a workload whose pods are not there - a
+    suspended Job, one between retries, a DaemonSet that matches no node, a
+    Deployment that cannot make its pods - has no pod to name its image. Its
+    image is kept unless its status shows every pod it wants is there."""
+    JOBS, DAEMONSETS = "/apis/batch/v1/jobs", "/apis/apps/v1/daemonsets"
+
+    def kept(self, path=None, item=None):
+        if path:
+            self.objects[path]["items"].append(item)
+        rows = self.image(imports.image_cache(), "unused")["retained_by"]
+        return [(r["reason"], r["workload"], r["container"]) for r in rows]
+
+    @staticmethod
+    def job(spec=None, status=None):
+        return {"metadata": {"name": "migrate", "namespace": "lab"},
+                "spec": {**(spec or {}), "template": {"spec": {"containers": [
+                    {"name": "migrate", "image": "docker.io/library/unused:1"}]}}},
+                "status": status or {}}
+
+    @staticmethod
+    def daemonset(status=None, generation=None):
+        meta = {"name": "agent", "namespace": "lab", **({"generation": generation} if generation else {})}
+        return {"metadata": meta, "spec": {"template": {"spec": {"containers": [
+                    {"name": "agent", "image": "docker.io/library/unused:1"}]}}},
+                "status": status or {}}
+
+    def test_a_suspended_job_keeps_its_image(self):
+        self.assertEqual([("stopped", "migrate", "migrate")], self.kept(self.JOBS, self.job({"suspend": True})))
+        with self.assertRaisesRegex(PermissionError, "stopped:lab/migrate"):
+            imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
+
+    def test_a_job_between_retries_keeps_its_image(self):
+        self.assertEqual([("scheduled", "migrate", "migrate")],
+                         self.kept(self.JOBS, self.job(status={"failed": 1, "active": 0})))
+
+    def test_a_job_whose_conditions_cannot_be_read_keeps_its_image(self):
+        self.assertEqual([("scheduled", "migrate", "migrate")],
+                         self.kept(self.JOBS, self.job(status={"conditions": "Complete"})))
+
+    def test_a_finished_job_keeps_nothing(self):
+        for kind in ("Complete", "Failed"):
+            with self.subTest(kind=kind):
+                self.objects[self.JOBS]["items"] = []
+                self.assertEqual([], self.kept(self.JOBS, self.job(status={"conditions": [
+                    {"type": "Suspended", "status": "False"}, {"type": kind, "status": "True"}]})))
+        self.objects[self.JOBS]["items"] = [self.job(status={"conditions": [{"type": "Complete", "status": "False"}]})]
+        self.assertEqual([("scheduled", "migrate", "migrate")], self.kept())
+
+    def test_a_running_job_is_named_by_its_pods(self):
+        self.assertEqual([], self.kept(self.JOBS, self.job(status={"active": 1})))
+        # ...but a suspended one is waiting, whatever its count says.
+        self.objects[self.JOBS]["items"] = [self.job({"suspend": True}, {"active": 1})]
+        self.assertEqual([("stopped", "migrate", "migrate")], self.kept())
+
+    def test_a_job_with_an_unreadable_template_keeps_every_image(self):
+        item = self.job({"suspend": True})
+        item["spec"]["template"] = "x"
+        self.assertEqual([("unreadable", "migrate", "template")], self.kept(self.JOBS, item))
+
+    def test_a_daemonset_on_no_node_keeps_its_image(self):
+        for status in ({}, {"desiredNumberScheduled": 0}, {"desiredNumberScheduled": "2", "updatedNumberScheduled": 2}):
+            with self.subTest(status=status):
+                self.objects[self.DAEMONSETS]["items"] = []
+                self.assertEqual([("stopped", "agent", "agent")], self.kept(self.DAEMONSETS, self.daemonset(status)))
+
+    def test_a_daemonset_with_every_pod_it_wants_is_named_by_them(self):
+        self.assertEqual([], self.kept(self.DAEMONSETS, self.daemonset(
+            {"desiredNumberScheduled": 2, "updatedNumberScheduled": 2, "observedGeneration": 3}, generation=3)))
+
+    def test_a_daemonset_part_way_or_with_an_old_status_keeps_its_image(self):
+        for status, generation in (({"desiredNumberScheduled": 2, "updatedNumberScheduled": 1}, None),
+                                   ({"desiredNumberScheduled": 2, "updatedNumberScheduled": 2, "observedGeneration": 3}, 4),
+                                   ({"desiredNumberScheduled": 2, "updatedNumberScheduled": 2}, 4)):
+            with self.subTest(status=status, generation=generation):
+                self.objects[self.DAEMONSETS]["items"] = []
+                self.assertEqual([("stopped", "agent", "agent")],
+                                 self.kept(self.DAEMONSETS, self.daemonset(status, generation)))
+
+    def test_a_deployment_or_statefulset_that_cannot_make_its_pods_keeps_its_image(self):
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        for status in ({}, {"replicas": 0, "updatedReplicas": 0}, {"replicas": 1}, {"updatedReplicas": "1"}):
+            with self.subTest(status=status):
+                web["status"] = status
+                self.assertEqual([("stopped", "web", "web")], self.kept())
+        web["spec"]["replicas"], web["status"] = 2, {"replicas": 2, "updatedReplicas": 1}   # part way through an update
+        self.assertEqual([("stopped", "web", "web")], self.kept())
+        web["spec"]["replicas"] = 1
+        web["status"] = {"replicas": 1, "updatedReplicas": 1, "observedGeneration": 1}
+        web["metadata"]["generation"] = 2      # the status is from before the last change
+        self.assertEqual([("stopped", "web", "web")], self.kept())
+        web["metadata"]["generation"] = 1
+        self.assertEqual([], self.kept())
+        sts = json.loads(json.dumps(web))
+        sts["status"] = {"replicas": 1}
+        self.assertEqual([("stopped", "web", "web")], self.kept("/apis/apps/v1/statefulsets", sts))
+
+    def test_a_stuck_deployment_with_an_unreadable_template_keeps_every_image(self):
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        web["status"], web["spec"]["template"] = {}, None
+        self.assertEqual([("unreadable", "web", "template")], self.kept())
 
 
 if __name__ == "__main__":
