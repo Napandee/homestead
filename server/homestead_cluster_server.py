@@ -197,7 +197,7 @@ def _jobs_loop():
     and starts a round as soon as this replica becomes leader."""
     LEADER.when_leading(OPS.advance_soon)
     OPS.run_jobs(LEADER.is_leader,
-                 beat=lambda error=None: beat("jobs", OPS.IDLE_SECONDS, error, leader_only=True))
+                 beat=lambda error=None: beat("jobs", OPS.JOBS_BEAT_EVERY, error, leader_only=True))
 
 
 def _detached_copies_loop():

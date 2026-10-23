@@ -52,7 +52,7 @@ class LeaderTests(unittest.TestCase):
 
     def test_becoming_leader_tells_who_asked_once_per_term(self):
         called = []
-        self.addCleanup(LEADER._listeners.clear)
+        self.addCleanup(LEADER._listeners.__setitem__, slice(None), list(LEADER._listeners))
         LEADER.when_leading(lambda: called.append(1))
         with mock.patch.object(LEADER.time, "monotonic", return_value=100.0):
             LEADER._set(True, LEADER.IDENTITY)
@@ -64,7 +64,7 @@ class LeaderTests(unittest.TestCase):
         self.assertEqual([1, 1], called)
 
     def test_a_listener_that_fails_does_not_stop_the_lease(self):
-        self.addCleanup(LEADER._listeners.clear)
+        self.addCleanup(LEADER._listeners.__setitem__, slice(None), list(LEADER._listeners))
         LEADER.when_leading(mock.Mock(side_effect=RuntimeError("boom")))
         with mock.patch("builtins.print"):
             self.assertTrue(LEADER._set(True, LEADER.IDENTITY))

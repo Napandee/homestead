@@ -947,6 +947,9 @@ def snapshot():
 # Only the leader advances jobs, in one loop (#622): every ACTIVE_SECONDS while a
 # job is active, every IDLE_SECONDS otherwise, or at once when something asks.
 ACTIVE_SECONDS, IDLE_SECONDS = 3, 20
+# Its heartbeat's interval: health calls the loop late after three of these.
+# Longer than IDLE_SECONDS because one host OS step can take 60-90 s.
+JOBS_BEAT_EVERY = 60
 _wake = threading.Event()
 
 
@@ -963,12 +966,6 @@ def tick(is_leader, beat=None):
     Returns how long to wait before the next round."""
     if not is_leader():
         return IDLE_SECONDS
-    if time.time() - _tidied["at"] >= LOCK_TIDY_EVERY:
-        _tidied["at"] = time.time()
-        try:
-            tidy_job_locks()
-        except Exception as error:
-            print(f"job locks not tidied: {str(error)[:160]}", flush=True)
     try:
         jobs = list_operations()
     except Exception as error:
@@ -978,6 +975,16 @@ def tick(is_leader, beat=None):
         return IDLE_SECONDS
     if beat:
         beat()
+    if time.time() - _tidied["at"] >= LOCK_TIDY_EVERY:
+        # After the jobs, so a new leader's first round moves them on first.
+        try:
+            done = tidy_job_locks() is not None
+        except Exception as error:
+            print(f"job locks not tidied: {str(error)[:160]}", flush=True)
+            done = False
+        # One that could not run (the volume held, the store busy) is tried
+        # again within the hour rather than the next day.
+        _tidied["at"] = time.time() - (0 if done else LOCK_TIDY_EVERY - LOCK_TIDY_RETRY)
     return ACTIVE_SECONDS if any(job.get("status") not in TERMINAL for job in jobs) else IDLE_SECONDS
 
 
@@ -993,7 +1000,9 @@ def run_jobs(is_leader, stop=None, beat=None):
         wait = tick(is_leader, beat)
         _wake.wait(wait)
         rest = MIN_ROUND_SECONDS - (time.monotonic() - began)
-        if rest > 0:
+        if rest > 0 and stop:
+            stop.wait(rest)
+        elif rest > 0:
             time.sleep(rest)
         # Cleared after the pause: asks that came during it are answered by
         # the round about to start, not by another one straight after it.
@@ -1002,8 +1011,13 @@ def run_jobs(is_leader, stop=None, beat=None):
 
 # A lock file per job that ran outside the store's lock (_job_lock) stays on the
 # data volume after its job has gone; once a day the leader removes those over a
-# day old whose job is in neither store.
+# day old whose job is in neither store. This is safe only because nothing but
+# the loop's _resolve_outside opens a job's lock, and it gives up on a job that
+# is not in the store: a later caller must never take _job_lock for a job that
+# is gone, or it could hold a lock file this has removed while another replica
+# makes a new one.
 LOCK_KEEP_SECONDS = LOCK_TIDY_EVERY = 86400
+LOCK_TIDY_RETRY = 3600
 _tidied = {"at": 0}
 
 
@@ -1011,12 +1025,19 @@ def tidy_job_locks(now=None):
     """Remove the lock files of jobs no longer kept, over LOCK_KEEP_SECONDS old.
     Holds the store's lock, so no job is added or removed meanwhile, and takes
     each file's own lock first (only tries), so a lock in use is never removed.
-    Nothing is removed while the data volume is held. Returns how many went."""
+    Returns how many went, or None if the data volume is held (nothing more is
+    removed then; try again later)."""
     try:
         require_write()
     except STORAGE_JOURNAL.Held:
-        return 0
-    now = time.time() if now is None else now
+        return None
+    try:
+        return _tidy_job_locks(time.time() if now is None else now)
+    except STORAGE_JOURNAL.Held:
+        return None  # the volume became held part-way
+
+
+def _tidy_job_locks(now):
     folder = os.path.join(DATA_DIR, ".locks")
     removed = 0
     with _lock:
@@ -1100,8 +1121,8 @@ def _resolve_outside(operation_id):
             # earlier saves from someone else's change. Per thread: a checkpoint
             # made from a helper thread the resolver started finds no base, so
             # the step's own save then looks like someone else's change and its
-            # result is dropped (safe; the step runs again next round).
-            # Checkpoint from the resolver's own thread.
+            # result is dropped (safe; the step runs again next round), so
+            # checkpoint only from the resolver's own thread.
             bases = _resolving.__dict__.setdefault("bases", {})
             bases[operation_id] = copy.deepcopy(stored)
             try:
