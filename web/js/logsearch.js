@@ -76,7 +76,8 @@ window.logSearch = (ns = "", name = "") => {
     <div class="ls-opts"><label class="switch"><input type="checkbox" id="ls_case"${LOGSEARCH.case ? " checked" : ""}> Match case</label>
       <label class="switch"><input type="checkbox" id="ls_regex"${LOGSEARCH.regex ? " checked" : ""}> Regular expression</label></div>
     <div id="ls_out"></div>
-    ${UI.actions(UI.cancel("Close"))}</div>`, true);
+    ${UI.actions(UI.cancel("Close") + (can("operator") ? UI.button("Alert on this search", "logAlertFromSearch()", { icon: "bell", id: "ls_alert" }) : ""),
+      UI.button("Log alerts", "logAlerts()", { icon: "list" }))}</div>`, true);
   setTimeout(() => $("#ls_q")?.focus(), 30);
 };
 

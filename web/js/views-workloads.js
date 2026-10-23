@@ -730,6 +730,7 @@ function renderWorkloads() {
     { label: "Logos for apps without one", icon: "logo", run: "logoFixup()", need: "operator", tip: "Match apps with no logo to the app store's" },
     { label: "Change history", icon: "clock", run: "wlHistory()", tip: "Every app's changes: who, when and what" },
     { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" },
+    { label: "Log alerts", icon: "bell", run: "logAlerts()", tip: "Saved log searches that raise an alert when they match too many lines" },
     { label: "Power schedules", icon: "clock", run: "schedulesOverview()", tip: "Apps and VMs that stop and start on their own" }];
   const logoless = all.filter(logoCanHave).length;
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
