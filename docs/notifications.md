@@ -49,6 +49,7 @@ readings retain the last warning. Unchanged conditions do not repeat on a timer.
 | Host updates | Security updates, required restart, or automatic restarts without drain reported | Security-update count increases; other conditions recur after recovery |
 | Service address | Address has no route | Recurrence after confirmed recovery |
 | Failed job | A background operation fails | Once per operation |
+| Previous volume | A volume an app was moved off by Restore into app will be deleted within a day (info, under Warnings); a note when it is deleted, or kept because something mounts it again | Clears when it is kept, mounted again or deleted |
 | Joining host | New Kubernetes registration; subsequently Ready | Once per host identity and stage |
 | Host back | A host takes work again and moving containers back would even the hosts out (Settings → Placement → When a host comes back: Suggest or In the update window) | Clears once nothing is worth moving, or a week after the host came back |
 | Image update | A new eligible image candidate is discovered | Once per candidate identity |

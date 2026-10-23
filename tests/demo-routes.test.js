@@ -16,3 +16,11 @@ test("the demo answers each API path once", () => {
   assert.ok(paths.length > 50, "the route table was found");
   assert.deepEqual(twice, []);
 });
+
+/* audit_dialogs opens the Flux-managed restore review by setting a flag; the
+   demo's plan answer clears it, so later dialogs on the page see the plain plan. */
+test("the demo's Flux restore review is shown once", () => {
+  const source = fs.readFileSync("web/js/demo.js", "utf8");
+  const answer = require("./helpers/between")(source, '"/api/restore-swap/plan"', '"/api/restore-swap":');
+  assert.match(answer, /window\.__demoRestoreGitops = false/);
+});
