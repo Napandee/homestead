@@ -163,6 +163,51 @@ class JournalTests(unittest.TestCase):
         with self.assertRaises(journal.Held): store.writer(restored=True).write("delete", "DELETE", store.path, expected=before)
         self.assertEqual(1, len(store.sent))
 
+    def created_helper(self):
+        """A helper this journal made itself, then given a new status by the cluster."""
+        store = self.store; body = copy.deepcopy(store.obj); store.obj = None
+        for key in ("uid", "resourceVersion"): body["metadata"].pop(key)
+        writer = store.writer()
+        writer.write("create", "POST", store.path.rsplit("/", 1)[0], body)
+        reviewed = journal.identity(store.obj)
+        store.obj["metadata"]["resourceVersion"] = "7"  # kubelet/controller status update
+        store.obj["status"] = {"phase": "Running"}
+        store.response = {"kind": "Status", "status": "Success", "details": {"uid": "created"}}
+        return writer, reviewed
+
+    def test_own_helper_delete_survives_a_status_update_with_a_uid_only_precondition(self):
+        store = self.store; writer, reviewed = self.created_helper()
+        writer.write("release", "DELETE", store.path, expected=reviewed, own=True)
+        method, path, body, _ = store.sent[-1]
+        self.assertEqual(("DELETE", store.path), (method, path))
+        self.assertEqual({"uid": "created"}, body["preconditions"])
+        self.assertEqual("accepted", store.durable["ref"]["storage_writes"][-1]["state"])
+
+    def test_own_helper_delete_still_refuses_a_replaced_object(self):
+        store = self.store; writer, reviewed = self.created_helper()
+        store.obj["metadata"]["uid"] = "replacement"
+        with self.assertRaises(journal.Held):
+            writer.write("release", "DELETE", store.path, expected=reviewed, own=True)
+        with self.assertRaises(journal.Held):
+            writer.write("release2", "DELETE", store.path, expected=journal.identity(store.obj), own=True)
+        self.assertEqual(["POST"], [m for m, *_ in store.sent])
+
+    def test_own_is_refused_for_an_object_this_journal_did_not_create(self):
+        store = self.store; before = journal.identity(store.obj)
+        with self.assertRaises(journal.Held):
+            store.writer().write("delete", "DELETE", store.path, expected=before, own=True)
+        with self.assertRaises(journal.Held):
+            store.writer().write("retain", "PATCH", store.path, {"spec": {}}, expected=before,
+                                 ctype="application/merge-patch+json", own=True)
+        self.assertEqual([], store.sent)
+
+    def test_a_user_resource_whose_version_moved_is_still_refused(self):
+        store = self.store; before = journal.identity(store.obj)
+        store.obj["metadata"]["resourceVersion"] = "2"
+        with self.assertRaisesRegex(journal.Held, "changed after review"):
+            store.writer().write("delete", "DELETE", store.path, expected=before)
+        self.assertEqual([], store.sent)
+
     def test_post_requires_absence_and_verifies_created_identity(self):
         store = self.store; body = copy.deepcopy(store.obj)
         for key in ("uid", "resourceVersion"): body["metadata"].pop(key)

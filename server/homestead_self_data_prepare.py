@@ -212,7 +212,7 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
         pod = read(binder["target"]["path"])
         if J.identity(pod)["uid"] != binder["after"]["uid"]: raise J.Held("The binding pod was replaced")
         B.admitted(pod_body, pod, binder["target"], default=B.default_priority(read))
-        writer.write("release-binding", "DELETE", binder["target"]["path"], {"propagationPolicy": "Foreground"}, expected=J.identity(pod))
+        writer.write("release-binding", "DELETE", binder["target"]["path"], {"propagationPolicy": "Foreground"}, expected=J.identity(pod), own=True)
         return "running", 85, "Destination bound; waiting for the temporary binding pod to release its mount"
     if removed and writer.observe(removed) is not None:
         return "running", 90, "Waiting for the binding pod to finish terminating; no force deletion"

@@ -198,12 +198,17 @@ class Journal:
             raise Held("Storage API receipt does not match the requested object")
         identity(obj)
 
-    def write(self, step, method, path, body=None, *, expected=None, ctype=None):
+    def write(self, step, method, path, body=None, *, expected=None, ctype=None, own=False):
         """Send once, with optimistic concurrency and a durable receipt.
 
         Calling an accepted step again only observes it. Later steps may start
         only after every previous request has a verified acceptance receipt.
         expected is the reviewed UID/resourceVersion (and optionally shape).
+
+        own=True is only for deleting a helper this same journal created (an
+        accepted POST receipt for the same path and UID): its controller or
+        kubelet keeps updating its status, so the UID alone is compared and
+        sent as the precondition. Every other write pins the resourceVersion.
         """
         self.check()
         if not isinstance(step, str) or not re.fullmatch(r"[a-zA-Z0-9_.:/-]{1,500}", step):
@@ -211,12 +216,15 @@ class Journal:
         dest = target(method, path, body, self.ref["namespace"])
         if ctype not in (None, "application/merge-patch+json") or (method == "PATCH" and ctype != "application/merge-patch+json"):
             raise Held("Unsupported storage patch type")
+        if own and method != "DELETE":
+            raise Held("Only the release of Homestead's own helper may skip the version check")
+        pinned = ("uid",) if own else ("uid", "resourceVersion")
         fingerprint = _payload(body)
         existing = next((e for e in self.entries if e["step"] == step), None)
         if existing:
             if (existing["method"], existing["target"], existing["payload"]) != (method, dest, fingerprint):
                 raise Held("A completed storage step cannot be reused for a different request")
-            if method != "POST" and any((expected or {}).get(key) != existing["before"][key] for key in ("uid", "resourceVersion")):
+            if method != "POST" and any((expected or {}).get(key) != existing["before"][key] for key in pinned):
                 raise Held("A completed storage step cannot be reused with a different reviewed identity")
             return self.observe(existing)
         current = self._get(dest["path"])
@@ -227,8 +235,11 @@ class Journal:
         else:
             self._check_target(current, dest)
             before = identity(current)
-            if not isinstance(expected, dict) or any(before[key] != expected.get(key) for key in before):
+            if not isinstance(expected, dict) or any(before[key] != expected.get(key) for key in pinned):
                 raise Held("Storage resource changed after review; no request was sent")
+            if own and not any(e["method"] == "POST" and e.get("state") == "accepted" and e["target"] == dest
+                               and (e.get("after") or {}).get("uid") == before["uid"] for e in self.entries):
+                raise Held("This job did not create that resource; it will not be released as its helper")
             if expected.get("shape") and shape(current) != expected["shape"]:
                 raise Held("Storage resource configuration changed after review")
             if current["metadata"].get("deletionTimestamp"):
@@ -241,9 +252,10 @@ class Journal:
             meta.update(before)
         elif method == "DELETE":
             request = {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background", **(request or {})}
-            if request.get("preconditions") not in (None, before):
+            precondition = {key: before[key] for key in pinned}
+            if request.get("preconditions") not in (None, precondition):
                 raise Held("Storage delete preconditions do not match the reviewed object")
-            request["preconditions"] = before
+            request["preconditions"] = precondition
         if self.before_write is not None:
             self.before_write()
         event = {"step": step, "method": method, "target": dest, "payload": fingerprint,
