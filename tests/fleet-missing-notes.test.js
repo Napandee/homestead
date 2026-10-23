@@ -75,3 +75,28 @@ test("the Architecture page uses the same states and does not call a drawn graph
   assert.match(gone, /Office is not answering, so it is missing here/);
   assert.equal(ctx.archMissingCallout([]), "");
 });
+
+/* The age of kept rows is said once in a toast, then grows unseen: each
+   such row's cluster tag carries it (wrap-up row 33). */
+function tags() {
+  const ctx = {console, document: {addEventListener() {}}, STATE: {data: {}}, FLEET_LISTS: {}, toast() {}, $: () => null,
+    location: {href: ""}, localStorage: {getItem: () => "all", setItem() {}},
+    esc: x => String(x).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;")};
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/fleet.js", "utf8"), ctx);
+  ctx.FLEET.view = {self: "home", linked: true, members: []};
+  return ctx;
+}
+
+test("a row kept from a slow cluster's last answer says how old it is on its tag", () => {
+  const tag = tags().clusterTag({name: "app", site: {id: "office", name: "Office", self: false, age_s: 95}});
+  assert.match(tag, />Office · 1 min ago</);
+  assert.match(tag, /title="On Office; its last answer, from 1 min ago: it has not answered since"/);
+  assert.match(tag, /class="tag cluster-tag"/);
+});
+
+test("a row from a cluster that answered just now keeps its plain tag", () => {
+  const tag = tags().clusterTag({name: "app", site: {id: "office", name: "Office", self: false}});
+  assert.equal(tag, '<span class="tag cluster-tag" title="On Office">Office</span>');
+});
