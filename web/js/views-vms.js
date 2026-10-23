@@ -540,7 +540,8 @@ window.vmEdit = async (ns, name) => {
   let v, o, res;
   try {
     [v, o, res] = await Promise.all([api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
-      api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] })),
+      // Hosts, images, classes and networks are not guessed (#620).
+      mustRead("/api/vm/create-options", "what this VM can use"),
       api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message }))]);
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `vmEdit(${jsArg(ns)},${jsArg(name)})`, dialog: true }); return; }
   window.__vmEdit = { ns, name, v, o };
@@ -679,18 +680,18 @@ window.vmEditSave = async () => {
   return vmEditReview(body, !!$("#ve_restart")?.checked);
 };
 
-let VM_EDIT_REVIEW = null, VM_EDIT_SEQUENCE = 0, VM_EDIT_BUSY = false;
-window.vmEditReview = async (config, restartAfter = false) => {
-  if (VM_EDIT_BUSY) return;
-  VM_EDIT_REVIEW = null;
-  const sequence = ++VM_EDIT_SEQUENCE, frozen = JSON.parse(JSON.stringify(config));
-  childModal(`Save changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true);
-  try {
+window.vmEditReview = (config, restartAfter = false) => VM_EDIT.open({ frozen: JSON.parse(JSON.stringify(config)), restartAfter });
+// A save may be followed by a restart, which is a review of its own.
+const VM_EDIT = UI.reviewFlow({
+  loading: ({ frozen }) => childModal(`Save changes · ${frozen.name}`, '<div id="vmEditLoading" class="empty"><span class="spin2"></span>Checking proposed VM, disks and capacity…</div>', true),
+  live: () => !!$("#vmEditLoading"),
+  preview: async ({ frozen, restartAfter }) => {
     const review = await api("/api/vm/edit/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(frozen)});
-    if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
     if (!review.capacity || typeof review.capacity.blocked !== "boolean" || !review.capacity_token)
       throw new Error("VM edit review unavailable. Nothing was saved; go back and review again.");
-    VM_EDIT_REVIEW = {...review, config:frozen, restartAfter};
+    return {...review, config:frozen, restartAfter};
+  },
+  render: (review, { frozen, restartAfter }) => {
     const plan = review.capacity, facts = plan.vm || {};
     const changes = UI.facts([
       frozen.cores != null || frozen.memory ? ["Size", `${esc(frozen.cores ?? "unchanged")} vCPUs · ${esc(frozen.memory || "unchanged memory")}`] : null,
@@ -710,39 +711,53 @@ window.vmEditReview = async (config, restartAfter = false) => {
         !plan.blocked && warnings.length ? UI.ack("vmEditApprove", reviewAck("Saves"), { onchange: "vmEditReviewReady()" }) : ""].join(""))
       + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save changes</button>`);
     vmEditReviewReady();
-  } catch (error) {
-    if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
-    VM_EDIT_REVIEW = null;
+  },
+  failed: error => {
     $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
-  }
-};
-window.vmEditReviewBack = () => { VM_EDIT_REVIEW = null; ++VM_EDIT_SEQUENCE; modalBack(); };
-window.vmEditReviewReady = () => {
+  },
   // The tickbox is there only when there is something to accept.
-  const ready = !!(VM_EDIT_REVIEW && !VM_EDIT_BUSY && !VM_EDIT_REVIEW.capacity.blocked && (!$("#vmEditApprove") || $("#vmEditApprove").checked) && vmStateInitReady(VM_EDIT_REVIEW.capacity, "vmEdit"));
-  if ($("#vmEditApply")) $("#vmEditApply").disabled = !ready;
-  return ready;
-};
-window.vmEditReviewedApply = async () => {
-  if (!vmEditReviewReady()) return toast(`Tick ${reviewAck("Saves")} to accept the warnings first`, "bad");
-  const review = VM_EDIT_REVIEW, button = $("#vmEditApply");
-  VM_EDIT_REVIEW = null;
-  VM_EDIT_BUSY = true;
-  button.disabled = true; button.textContent = "Saving changes…";
-  let saved = false;
-  try {
-    const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmEdit"), capacity_token:review.capacity_token, confirm_capacity:true})});
-    if (result.operation && window.noteOperation) noteOperation(result.operation);
-    saved = true;
-    toast(result.detail, "ok"); closeModal(); refresh(true);
-  } catch (error) {
-    if ($("#vmEditApply") === button) {
-      button.textContent = "Inspect VM before retrying";
-      $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>`);
+  blocked: review => review.capacity.blocked, ack: "vmEditApprove", button: "vmEditApply",
+  check: review => vmStateInitReady(review.capacity, "vmEdit"),
+  apply: async review => {
+    const button = $("#vmEditApply");
+    button.disabled = true; button.textContent = "Saving changes…";
+    try {
+      const result = await api("/api/vm/edit", {method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmEdit"), capacity_token:review.capacity_token, confirm_capacity:true})});
+      if (result.operation && window.noteOperation) noteOperation(result.operation);
+      toast(result.detail, "ok"); closeModal(); refresh(true);
+      return true;
+    } catch (error) {
+      if (error?.status === 409) throw error; // conflict() below
+      if ($("#vmEditApply") === button) {
+        button.textContent = "Inspect VM before retrying";
+        $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>`);
+      }
+      toast(error.message, "bad");
+      return false;
     }
+  },
+  after: () => { if (window.refreshOperations) refreshOperations(true); },
+  // The server says the review is out of date: offer a fresh one of the same change.
+  conflict: (error, review) => {
+    VM_EDIT_AGAIN = review;
     toast(error.message, "bad");
-  } finally { VM_EDIT_BUSY = false; if (window.refreshOperations) refreshOperations(true); }
+    if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Not saved as reviewed", `${esc(error.message)}. The review was out of date. Some VM, disk or Secret changes may already be saved; no request was repeated and no Restart was sent. Review again to see the VM as it is now.`)
+      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" onclick="vmEditReviewAgain()">Review again</button>`);
+    $("#mbody")?.querySelector(".ui-actions-end .btn.pri")?.focus();
+    return false;
+  },
+});
+let VM_EDIT_AGAIN = null;
+window.vmEditReviewAgain = () => VM_EDIT_AGAIN && vmEditReview(VM_EDIT_AGAIN.config, VM_EDIT_AGAIN.restartAfter);
+window.vmEditReviewBack = () => { VM_EDIT.back(); modalBack(); };
+window.vmEditReviewReady = () => VM_EDIT.ready();
+window.vmEditReviewedApply = async () => {
+  if (!VM_EDIT.ready()) return toast(`Tick ${reviewAck("Saves")} to accept the warnings first`, "bad");
+  const review = VM_EDIT.review;
+  let saved = false;
+  // A 409 for a review no longer on screen comes back here: said, nothing drawn.
+  try { saved = await VM_EDIT.apply(); } catch (error) { toast(error.message, "bad"); }
   if (saved && review.restartAfter) await vmPowerReview({ns:review.config.ns, name:review.config.name, action:"restart"});
 };
 
@@ -777,7 +792,10 @@ const K3S_UBUNTU = "https://cloud-images.ubuntu.com/minimal/releases/resolute/re
 window.k3sCluster = async () => {
   modal("New k3s cluster", '<div class="empty"><span class="spin2"></span></div>', true);
   window.__vmNetworkReopen = "k3s";
-  const opts = await api("/api/vm/create-options").catch(() => ({}));
+  let opts;
+  // Not guessed, and a failed read is not kept as the options (#620).
+  try { opts = await mustRead("/api/vm/create-options", "what a new k3s cluster can use"); }
+  catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: "k3sCluster()", dialog: true }); return; }
   window.__vmCreateOptions = opts;
   const lan = vmLanNetworks(opts, true);
   const images = (opts.images || []).filter(i => i.storage_class);
@@ -833,25 +851,25 @@ function k3sBody() {
     image_id: image.startsWith("image:") ? image.slice(6) : "", image_url: image === "url" ? K3S_UBUNTU : "",
     addresses: $("#k_ip").value.split(",").map(x => x.trim()).filter(Boolean) });
 }
-let K3S_REVIEW = null, K3S_REVIEW_SEQUENCE = 0, K3S_CREATE_BUSY = false;
-window.k3sInvalidateReview = () => { K3S_REVIEW = null; ++K3S_REVIEW_SEQUENCE; };
-window.k3sReviewReady = () => {
-  // The tickbox is there only when there is a warning to accept.
-  const ready = !!(K3S_REVIEW && K3S_REVIEW.ok !== false && !K3S_CREATE_BUSY && !K3S_REVIEW.capacity.blocked
-    && (!$("#k_capacity_confirm") || $("#k_capacity_confirm").checked));
-  if ($("#k_go")) $("#k_go").disabled = !ready;
-  return ready;
+// The review is of the form as it was sent: any change to the form drops it.
+window.k3sInvalidateReview = () => { K3S.back(); };
+window.k3sReviewReady = () => K3S.ready();
+window.k3sReview = () => { if (!K3S.busy) return K3S.open(JSON.stringify(k3sBody())); };
+let K3S_AGAIN = null;
+window.k3sReviewAgain = () => {
+  if (!K3S_AGAIN || K3S.busy) return;
+  // From the conflict screen nothing else shows the plan is being read.
+  if ($("#mbody")) $("#mbody").innerHTML = '<div id="k3sAgainLoading" class="empty"><span class="spin2"></span>Checking the VMs, hosts and capacity again…</div>';
+  return K3S.open(K3S_AGAIN.input);
 };
-window.k3sReview = async () => {
-  if (K3S_CREATE_BUSY) return;
-  k3sInvalidateReview();
-  const sequence = K3S_REVIEW_SEQUENCE, input = JSON.stringify(k3sBody());
-  try {
+const K3S = UI.reviewFlow({
+  preview: async input => {
     const plan = await api("/api/vm/k3s-cluster/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: input });
-    if (sequence !== K3S_REVIEW_SEQUENCE) return;
     if (!plan.config || !plan.capacity_token || typeof plan.capacity?.blocked !== "boolean" || !Array.isArray(plan.nodes))
       throw new Error("Complete VM batch review unavailable; nothing can be created yet.");
-    K3S_REVIEW = {...plan, input};
+    return {...plan, input};
+  },
+  render: (plan, input) => {
     const cap = plan.capacity, name = JSON.parse(input).name || "k3s";
     const blockers = [...(cap.blockers || []), ...(cap.reasons || []), ...plan.nodes.filter(n => n.problem).map(n => `${n.name}: ${n.problem}`)];
     const warnings = cap.warnings || [];
@@ -874,31 +892,42 @@ window.k3sReview = async () => {
       UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="k3sReviewBack()">Back to configuration</button><button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>`),
     ].join(""), true);
     k3sReviewReady();
-  } catch (e) {
-    if (sequence !== K3S_REVIEW_SEQUENCE) return;
-    K3S_REVIEW = null;
-    toast(e.message, "bad");
-  }
-};
-window.k3sReviewBack = () => { if (!K3S_CREATE_BUSY) { k3sInvalidateReview(); modalBack(); } };
-window.k3sCreate = async () => {
-  const button = $("#k_go");
-  if (K3S_CREATE_BUSY || !button || !k3sReviewReady()) return;
-  const review = K3S_REVIEW;
-  K3S_REVIEW = null;
-  K3S_CREATE_BUSY = true;
-  button.disabled = true; button.textContent = "Creating VMs…";
-  try {
-    await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
-    toast("Cluster VMs created - follow them coming up under Jobs", "ok");
-    closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
-  } catch (e) {
-    toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-    $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>`);
-    if (window.refreshOperations) refreshOperations(true);
-  } finally { K3S_CREATE_BUSY = false; }
-};
+  },
+  failed: error => {
+    toast(error.message, "bad");
+    // From Review again the form is not behind it: say so where it was loading.
+    if ($("#k3sAgainLoading")) $("#mbody").innerHTML = UI.error(error, { retry: "k3sReviewAgain()", dialog: true });
+  },
+  // The tickbox is there only when there is a warning to accept.
+  blocked: plan => plan.ok === false || plan.capacity.blocked, ack: "k_capacity_confirm", button: "k_go",
+  apply: async review => {
+    const button = $("#k_go");
+    button.disabled = true; button.textContent = "Creating VMs…";
+    try {
+      await api("/api/vm/k3s-cluster", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true}) });
+      toast("Cluster VMs created - follow them coming up under Jobs", "ok");
+      closeModal(); if (window.refreshOperations) refreshOperations(true); go("vms");
+    } catch (e) {
+      if (window.refreshOperations) refreshOperations(true);
+      if (e?.status === 409) throw e; // conflict() below
+      toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
+      $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>`);
+    }
+  },
+  // The server says the review is out of date: offer a fresh one of the same batch.
+  conflict: (error, review) => {
+    K3S_AGAIN = review;
+    toast(error.message, "bad");
+    if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Not created as reviewed", `${esc(error.message)}. The review was out of date. Some VMs or their disks and Secrets may already exist; no request was repeated. Review again to see the batch as it is now.`)
+      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="k3sReviewBack()">Back to configuration</button><button class="btn pri" onclick="k3sReviewAgain()">Review again</button>`);
+    $("#mbody")?.querySelector(".ui-actions-end .btn.pri")?.focus();
+  },
+});
+window.k3sReviewBack = () => { if (K3S.back()) modalBack(); };
+// Without its button there is no review to send.
+// A 409 for a review no longer on screen comes back here: said, nothing drawn.
+window.k3sCreate = async () => { if ($("#k_go")) await K3S.apply().catch(error => toast(error.message, "bad")); };
 
 /* ---------------- importing from Unraid or Proxmox ----------------
    Virtual machines › Import: each Unraid server's or Proxmox host's VMs as it runs them,
@@ -1073,31 +1102,32 @@ window.uvmImport = async (source, id) => {
 
 /* Whether the chosen storage class can still place the disks, checked as the
    class and disks change: too little blocks the import, tight asks first. */
-let UVM_ROOM = null, UVM_ROOM_SEQUENCE = 0;
+/* The flow keeps the newest check for an open dialog. The import itself is
+   not sent through it: the server checks the room again, so a check is not
+   used up, and Import stays open while none has answered. */
+const UVM_ROOM = UI.reviewFlow({
+  loading: ({ host }) => { host.innerHTML = '<p class="ui-help"><span class="spin2"></span>Checking the storage class has room for the disks…</p>'; },
+  live: () => !!$("#uvm_room"),
+  preview: ({ state, kept }) => uvmPost("/api/vms/import-unraid/room", { storage_class: $("#uvm_sc")?.value || "",
+      disks: state.vm.disks.filter(d => kept.has(d.index)).map(d => ({ virtual: d.virtual, size_gb: d.size_gb })) })
+    .catch(e => ({ level: "unknown", blockers: [], warnings: [`The room on the storage class could not be checked: ${e.message}`] })),
+  render: (room, { host }) => {
+    const blockers = room.blockers || [], warnings = room.warnings || [];
+    host.innerHTML = blockers.length || warnings.length
+      ? UI.notices([...blockers.map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], blockers.length ? "Can't import" : "Check first")
+        + (!blockers.length ? UI.ack("uvm_room_ok", reviewAck("Imports"), { onchange: "uvmRoomReady()" }) : "")
+      : `<p class="ui-help">${esc(room.storage_class)} has room: these disks take ${esc(room.needed_gb)} of the ${esc(room.free_gb)} GiB it can still place.</p>`;
+    uvmRoomReady();
+  },
+});
 window.uvmRoom = async () => {
   const state = window.__uvm, host = $("#uvm_room");
   if (!state || !host) return;
-  const sequence = ++UVM_ROOM_SEQUENCE, kept = new Set([0, ...$$(".uvm-disk").filter(c => c.checked).map(c => +c.dataset.i)]);
-  UVM_ROOM = null;
-  host.innerHTML = '<p class="ui-help"><span class="spin2"></span>Checking the storage class has room for the disks…</p>';
-  let room;
-  try {
-    room = await uvmPost("/api/vms/import-unraid/room", { storage_class: $("#uvm_sc")?.value || "",
-      disks: state.vm.disks.filter(d => kept.has(d.index)).map(d => ({ virtual: d.virtual, size_gb: d.size_gb })) });
-  } catch (e) {
-    room = { level: "unknown", blockers: [], warnings: [`The room on the storage class could not be checked: ${e.message}`] };
-  }
-  if (sequence !== UVM_ROOM_SEQUENCE || !$("#uvm_room")) return;
-  UVM_ROOM = room;
-  const blockers = room.blockers || [], warnings = room.warnings || [];
-  host.innerHTML = blockers.length || warnings.length
-    ? UI.notices([...blockers.map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], blockers.length ? "Can't import" : "Check first")
-      + (!blockers.length ? UI.ack("uvm_room_ok", reviewAck("Imports"), { onchange: "uvmRoomReady()" }) : "")
-    : `<p class="ui-help">${esc(room.storage_class)} has room: these disks take ${esc(room.needed_gb)} of the ${esc(room.free_gb)} GiB it can still place.</p>`;
-  uvmRoomReady();
+  const kept = new Set([0, ...$$(".uvm-disk").filter(c => c.checked).map(c => +c.dataset.i)]);
+  await UVM_ROOM.open({ state, host, kept });
 };
 window.uvmRoomReady = () => {
-  const go = $("#uvm_go"), room = UVM_ROOM;
+  const go = $("#uvm_go"), room = UVM_ROOM.review;
   // Until the check answers, starting is left to the server's own check.
   const ready = !room || (!(room.blockers || []).length && (!$("#uvm_room_ok") || $("#uvm_room_ok").checked));
   if (go && go.textContent === "Import") go.disabled = !ready;
@@ -1131,7 +1161,7 @@ window.uvmPicture = () => {
 window.uvmStart = async () => {
   const state = window.__uvm, go = $("#uvm_go");
   if (!state || !go || go.disabled) return;
-  if (!uvmRoomReady()) return toast(UVM_ROOM?.blockers?.[0] || `Tick ${reviewAck("Imports")} to accept the warning first`, "bad");
+  if (!uvmRoomReady()) return toast(UVM_ROOM.review?.blockers?.[0] || `Tick ${reviewAck("Imports")} to accept the warning first`, "bad");
   const body = { source: state.source, vm: state.vm.id, name: $("#uvm_name").value.trim(), namespace: $("#uvm_ns").value,
     cores: +$("#uvm_cores").value, memory: $("#uvm_mem").value.trim(), storage_class: $("#uvm_sc").value,
     network: $("#uvm_net").value, keep_mac: $("#uvm_mac") ? $("#uvm_mac").checked : false, nic_model: $("#uvm_nic").value,
