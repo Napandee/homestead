@@ -239,7 +239,7 @@ class Journal:
                 raise Held("Storage resource changed after review; no request was sent")
             if own and not any(e["method"] == "POST" and e.get("state") == "accepted" and e["target"] == dest
                                and (e.get("after") or {}).get("uid") == before["uid"] for e in self.entries):
-                raise Held("This job did not create that resource; it will not be released as its helper")
+                raise Held("Homestead did not create this resource for this operation; it will not be released as a helper")
             if expected.get("shape") and shape(current) != expected["shape"]:
                 raise Held("Storage resource configuration changed after review")
             if current["metadata"].get("deletionTimestamp"):
