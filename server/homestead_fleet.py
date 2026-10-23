@@ -1022,7 +1022,9 @@ def gather(what, local, user, role):
     for m, entry, done in asked:
         done.wait(max(0.0, deadline - time.monotonic()))
         with _answers_lock:
-            pending, misses, error = entry["pending"], entry["misses"], entry["error"]
+            # Whether the question this gather asked has come back: a later
+            # gather may already have asked again and set "pending" anew.
+            pending, misses, error = not done.is_set(), entry["misses"], entry["error"]
             result, at = entry["result"], entry["at"]
         if not pending and not misses:
             results[m["id"]] = result

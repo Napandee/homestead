@@ -167,13 +167,32 @@ class FillInTests(unittest.TestCase):
         self.assertTrue(own.is_set())
         self.assertFalse(entry["done"].is_set())
 
+    def test_an_answer_is_shown_even_if_the_next_question_has_already_started(self):
+        # Office answers; before this gather looks, another gather has
+        # already asked Office again. This gather's question came back: its
+        # answer is shown, not called "waiting".
+        class AnswerThenAskAgain:
+            def __init__(self, target, args, daemon):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+                entry = self.args[0]
+                with FLEET._answers_lock:
+                    entry["pending"], entry["done"] = True, threading.Event()
+
+        with mock.patch.object(FLEET.threading, "Thread", AnswerThenAskAgain):
+            rows, missing = self.gather()
+        self.assertEqual(["home", "loft", "office"], self.sites(rows))
+        self.assertEqual([], missing)
+
     def test_the_age_of_kept_rows_counts_the_wait(self):
         self.gather()
         self.slow["office"] = threading.Event()
-        with mock.patch.object(FLEET, "ANSWER_BUDGET", 1.2):
+        with mock.patch.object(FLEET, "ANSWER_BUDGET", 1.0):
             for key, entry in FLEET._answers.items():
                 if key[1] == "office":
-                    entry["at"] = time.time() - 0.1
+                    entry["at"] = time.time() - 0.5
             _, missing = self.gather()
         self.assertGreaterEqual(missing[0]["age_s"], 1)
 
