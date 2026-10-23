@@ -133,5 +133,77 @@ class Calls(unittest.TestCase):
         self.assertTrue(SS.calls(SS.SERVER_PY, "threading.Thread"))
 
 
+JS = SS.code("""\
+async function api(path, opts) {
+  return fetch(path, opts);
+}
+const views = { api(path) { return path; }, other: 1 };
+// api("/api/commented")
+const said = "api('/api/in-a-string')";
+const re = /api\\("x"\\)/;
+api("/api/one");
+window.api("/api/not-bare");
+myapi("/api/not-bare-either");
+api(`/api/two/${encodeURIComponent(ns + "/" + name)}?x=${y}`, { method: "POST", body: f(a, b) });
+await api(
+  "/api/three",
+  opts
+);
+""")
+
+
+class JsCode(unittest.TestCase):
+    def test_comments_strings_and_regular_expressions_are_blanked_where_they_stood(self):
+        found = SS.js_code(SS.code('a("x y"); // c\nb(/r+/g, \'q\', `t${ c("z") }u`) /* d */'))
+        self.assertEqual('a("   ");     \nb(/  /g, \' \', ` ${ c(" ") } `)        ', found)
+
+    def test_the_text_keeps_its_length_and_its_lines(self):
+        source = SS.text("web/js/core.js")
+        found = SS.js_code("web/js/core.js")
+        self.assertEqual(len(source), len(found))
+        self.assertEqual(source.count("\n"), found.count("\n"))
+
+    def test_a_division_is_not_a_regular_expression(self):
+        self.assertEqual("x = a / b; f(\" \")", SS.js_code(SS.code('x = a / b; f("/")')))
+
+
+class JsCalls(unittest.TestCase):
+    def test_every_bare_call_with_its_line_and_its_arguments(self):
+        found = SS.js_calls(JS, "api")
+        self.assertEqual([8, 11, 12], [call.line for call in found])
+        self.assertEqual(['"/api/one"'], found[0].args)
+        self.assertEqual(['`/api/two/${encodeURIComponent(ns + "/" + name)}?x=${y}`',
+                          '{ method: "POST", body: f(a, b) }'], found[1].args)
+        self.assertEqual(['"/api/three"', "opts"], found[2].args)
+
+    def test_a_declaration_is_not_a_call(self):
+        lines = [call.line for call in SS.js_calls(JS, "api")]
+        self.assertNotIn(1, lines)
+        self.assertNotIn(4, lines)
+
+    def test_a_call_in_a_comment_a_string_or_a_regular_expression_is_not_a_call(self):
+        lines = [call.line for call in SS.js_calls(JS, "api")]
+        self.assertFalse({5, 6, 7} & set(lines))
+
+    def test_a_method_or_a_longer_name_is_not_the_bare_name(self):
+        lines = [call.line for call in SS.js_calls(JS, "api")]
+        self.assertFalse({9, 10} & set(lines))
+
+    def test_the_real_declaration_in_core_js_is_not_counted(self):
+        source = SS.text("web/js/core.js")
+        declared = source[:source.index("async function api(")].count("\n") + 1
+        lines = [call.line for call in SS.js_calls("web/js/core.js", "api")]
+        self.assertTrue(lines)
+        self.assertNotIn(declared, lines)
+
+    def test_an_unclosed_call_is_an_error_with_its_line(self):
+        with self.assertRaisesRegex(ValueError, "line 2"):
+            SS.js_calls(SS.code('x();\napi("/api/x",\n'), "api")
+
+    def test_source_text_not_marked_as_code_is_refused(self):
+        with self.assertRaisesRegex(TypeError, r"source_scan\.code"):
+            SS.js_calls('api("/api/x");\n', "api")
+
+
 if __name__ == "__main__":
     unittest.main()
