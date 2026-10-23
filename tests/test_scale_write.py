@@ -7,6 +7,7 @@ takes. The write tests pin how it is sent: one merge patch on the Deployment
 itself, carrying who made it, and never a second try through /scale."""
 import contextlib
 import json
+import re
 import sys
 import tempfile
 import time
@@ -244,6 +245,27 @@ class ScaleTests(unittest.TestCase):
                 mark = json.loads(kube.object(f"{DEPLOYMENTS}/web")["metadata"]["annotations"][CH.AUTHOR])
                 self.assertEqual(CH._signed(b"test-key", "lab", "web", mark["at"], user), mark["by"])
                 self.assertLessEqual(abs(mark["at"] - time.time()), 5)
+
+
+class ScalePermissionTests(unittest.TestCase):
+    """Nothing scales through /scale any more, so Homestead stops asking for it."""
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_no_code_writes_a_deployments_scale(self):
+        # The change history and the storage guard still recognise the path.
+        found = [f"{source.name}:{number}" for source in sorted((self.ROOT / "server").glob("*.py"))
+                 for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1)
+                 if re.search(r"deployments/\S*/scale\b|[\"'}]/scale\b", line) and not line.lstrip().startswith("#")
+                 and "re.compile" not in line and '"/scale" in path' not in line]
+        self.assertEqual([], found, "a write to deployments/.../scale needs the permission back")
+
+    def test_homestead_does_not_ask_for_the_scale_permission(self):
+        grants = {(group, resource) for rule in SELF.desired_rules(str(self.ROOT / "deploy" / "deploy.yaml"))
+                  for group in rule.get("apiGroups") or [""] for resource in rule.get("resources") or []}
+        self.assertIn(("apps", "deployments"), grants)
+        self.assertNotIn(("apps", "deployments/scale"), grants)
+        for generated in ("deploy/rbac.yaml", "charts/homestead/templates/rbac.yaml"):
+            self.assertNotIn("deployments/scale", (self.ROOT / generated).read_text(encoding="utf-8"), generated)
 
 
 if __name__ == "__main__":
