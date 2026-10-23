@@ -91,10 +91,11 @@ def DOC_PAGES():
     return sorted([*ROOT.glob("docs/**/*.md"), ROOT / "README.md"])
 
 
-# Saying to delete, remove, prune, purge, clean up or uninstall.
-DELETE = re.compile(r"\b(delete|remove|rm|prune|purge|clean[ -]?up|uninstall|get rid of)\b", re.I)
-# Homestead's labels that also mark apps and their data, plain or URL-encoded.
-LABEL = re.compile(r"homestead\.io(/|%2F)managed|managed(=|%3D)true|managed-by(=|%3D)homestead", re.I)
+# Saying to delete, remove, prune, purge, clean up or uninstall, or that it can go.
+DELETE = re.compile(r"\b(delete|remove|rm|prune|purge|clean[ -]?up|uninstall|get rid of|(can|may) go)\b", re.I)
+# Homestead's labels that also mark apps, their parts and their data, plain or
+# URL-encoded: managed, and the app and task labels (on apps' parts too).
+LABEL = re.compile(r"homestead\.io(/|%2F)(managed|app|task)\b|managed(=|%3D)true|managed-by(=|%3D)homestead", re.I)
 # A warning: the negation comes right before the verb ("do not delete").
 WARNING = re.compile(r"\b(not|never|don't)\s+(\w+\s+){0,2}?" + DELETE.pattern[2:], re.I)
 
@@ -225,10 +226,21 @@ class WhatHomesteadChanges(unittest.TestCase):
                      # The other label Homestead puts on app Secrets and restored volumes.
                      "```\nkubectl delete secrets,pvc -A -l app.kubernetes.io/managed-by=homestead\n```",
                      "Remove everything with `app.kubernetes.io/managed-by=homestead`.",
-                     "```\ncurl -X DELETE \"$API/api/v1/secrets?labelSelector=homestead.io%2Fmanaged%3Dtrue\"\n```"):
+                     "```\ncurl -X DELETE \"$API/api/v1/secrets?labelSelector=homestead.io%2Fmanaged%3Dtrue\"\n```",
+                     # The labels that name an app or a task, on apps and their parts too.
+                     "```\nkubectl delete all -A -l homestead.io/app=web\n```",
+                     "```\nkubectl delete pods,jobs -A -l homestead.io/task\n```",
+                     "```\ncurl -X DELETE \"$API/api/v1/pods?labelSelector=homestead.io%2Fapp%3Dweb\"\n```",
+                     "Remove whatever carries `homestead.io/task=copy`.",
+                     # Saying it may go, without a delete verb.
+                     "Everything labelled `homestead.io/managed=true` can go.",
+                     "Objects with `homestead.io/app` may go once the app is gone."):
             with self.subTest(text=text[:50]):
                 self.assertTrue(deletes_by_managed_label(text), text)
         for text in ("> **Do not delete by the `homestead.io/managed=true` label.** Apps carry it too.",
+                     "Never remove by `homestead.io/app` or `homestead.io/task` either.",
+                     "> Do not delete by any Homestead label (`homestead.io/managed=true`). Only the objects "
+                     "named under \"Safe to delete\" below can go.",
                      "Never delete by that label.",
                      "```bash\nkubectl -n lab delete deployment/homestead\n```",
                      "Do not delete by any Homestead label (`homestead.io/*` or `app.kubernetes.io/managed-by=homestead`).",
