@@ -25,6 +25,7 @@ import homestead_isos as ISOS
 import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn as LH
+import homestead_longhorn_access as LH_ACCESS
 import homestead_manifests as MANIFESTS
 import homestead_names as NAMES
 import homestead_nfs as NFS
@@ -398,6 +399,15 @@ def _host_fix_loop():
                             print(f"linked clusters: told this Homestead is at {moved}", flush=True)
                     except Exception as error:
                         print(f"linked clusters: address not checked: {str(error)[:160]}", flush=True)
+                    # Homestead's way in to Longhorn's API, where network policies
+                    # fence Longhorn's manager in (Longhorn 1.13's default). First,
+                    # so nothing after it can keep it from running.
+                    try:
+                        access = LH_ACCESS.ensure(LH.kget, LH.ksend, SELF.NS)
+                        if access:
+                            print(f"storage: {LH_ACCESS.LOG[access]}", flush=True)
+                    except Exception as error:
+                        print(f"storage: way in to Longhorn's API not checked: {str(error)[:160]}", flush=True)
                     # A weekly trim for every Longhorn volume, unless someone removed it.
                     trimmed = weekly_trim()
                     if trimmed:
