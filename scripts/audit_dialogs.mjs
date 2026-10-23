@@ -244,6 +244,7 @@ const DIALOGS = [
   ["set-restart-blocked", "nodes", "STATE.platform.harvester=false;window.__demoSetRestartBlocked=true", "setRestartReview('data','postgres','harvester-node3')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
+  ["workload-start-waits", "workloads", "wlScale('lab','paperless',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
   ["failover", "workloads", "wlFailover()"],
   ["workload-delete", "workloads", "wlDelete('lab','frigate')"],

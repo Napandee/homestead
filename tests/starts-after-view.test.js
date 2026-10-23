@@ -116,3 +116,59 @@ test("which picked apps are stopped, so a start would wait", () => {
   assert.deepEqual([...c.startsAfterStopped([{ ns: "lab", app: "postgres" }, { ns: "lab", app: "frigate" }, { ns: "lab", app: "gone" }], others)],
     ["postgres", "gone"]);
 });
+
+const NOW = Date.parse("2026-10-23T07:10:00Z") / 1000;
+test("a row waiting for an app gets the Waiting chip and how long", () => {
+  const w = { name: "app-1", start_wait: { waiting_for: ["app-2"], since: NOW - 180 }, start_setting: { timeout: 300, after: [] }, start_gate: "rendered" };
+  const r = load().startWaitText(w, NOW);
+  assert.equal(r.chip, "Waiting");
+  assert.equal(r.tone, "warn");
+  assert.equal(r.line, "Waiting for app-2 (3 min of 5 min)");
+});
+
+test("a row that started without an app says when and why", () => {
+  const w = { name: "app-1", start_wait: { started_without: ["app-2"], at: Date.parse("2026-10-23T07:05:00Z") / 1000 },
+    start_setting: { timeout: 300, after: [] }, start_gate: "rendered" };
+  const r = load().startWaitText(w, NOW);
+  assert.equal(r.chip, "");
+  assert.equal(r.line, "Started without app-2 at 07:05: app-2 was not ready after 5 min");
+});
+
+test("a gate that doesn't match, one not committed, and a setting that can't be read", () => {
+  const c = load();
+  assert.equal(c.startWaitText({ start_gate: "differs", start_setting: { after: [], timeout: 300 } }, NOW).line,
+    "Its start gate doesn't match its setting: save Starts after in Edit");
+  assert.equal(c.startWaitText({ start_gate: "missing", start_setting: { managed: true, after: [], timeout: 300 } }, NOW).line,
+    "Its start gate isn't committed yet: commit the lines Edit shows");
+  assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs", start_note: "its Starts after setting could not be read" }, NOW).line,
+    "Could not read its Starts after setting");
+  assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs" }, NOW).line,
+    "Its Starts after setting can't be read: set it again in Edit");
+  assert.equal(c.startWaitText({ start_gate: "none" }, NOW), null);
+  assert.equal(c.startWaitText({}, NOW), null);
+});
+
+test("the apps it starts after, with the gone ones marked", () => {
+  const c = load();
+  assert.equal(c.startsAfterNames({ start_setting: { after: [{ ns: "lab", app: "postgres", gone: false }, { ns: "lab", app: "old", gone: true }] } }),
+    "postgres, old (gone)");
+  assert.equal(c.startsAfterNames({ starts_after: ["postgres"] }), "postgres");
+  assert.equal(c.startsAfterNames({}), "");
+});
+
+test("Start says which stopped apps it will wait for", () => {
+  const c = load();
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300), " app-2 is stopped: app-1 will wait for it up to 5 min.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 90), " app-2 and app-3 are stopped: app-1 will wait for them up to 1.5 min.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], null), " app-2 is stopped: app-1 will wait for it before it starts.");
+  assert.equal(c.startWaitsLine("app-1", [], 300), "");
+});
+
+test("the Architecture page links an app to the apps it starts after, and keeps them per cluster", () => {
+  const c = load();
+  const graph = c.architectureData({ clusters: [{ site: { id: "a" }, workloads: [{ id: "w:lab/x", claims: [], after: [{ id: "w:lab/y", committed: false }] }],
+    volumes: [], nodes: [], vips: [], jobs: [] }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(graph.workloads[0].after)), [{ id: "w:a/lab/y", committed: false }]);
+  const links = c.archStartLinks([{ id: "w:lab/x", after: [{ id: "w:lab/y", committed: true }, { id: "w:lab/z", committed: false }] }, { id: "w:lab/y" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(links)), [["w:lab/x", "w:lab/y", "starts-after"], ["w:lab/x", "w:lab/z", "starts-after pending"]]);
+});
