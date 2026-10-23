@@ -1716,7 +1716,7 @@ window.checkImageUpdates = async () => {
           bar.insertAdjacentHTML("beforeend", ` <span class="scan-unread">· could not read the progress just now: ${esc(at.unread)}</span>`);
         continue;
       }
-      if (!at || !at.total) continue;
+      if (!at.total) continue;
       const done = Math.min(at.done, at.total);
       if (button && at.running) button.textContent = `Checking ${done}/${at.total}…`;
       const bar = $("#scanprogress");
