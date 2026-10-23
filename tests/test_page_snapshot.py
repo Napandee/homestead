@@ -190,6 +190,14 @@ class LeaderCycleTests(unittest.TestCase):
         self.assertEqual([], self.cluster.calls)
 
     def test_each_part_equals_what_the_route_computed_before(self):
+        # Ages (a workload's transition_age, from K.age_secs) are whole seconds
+        # since a 2020 timestamp: one clock for both reads, or a second
+        # boundary between them makes them differ by 1.
+        now = time.time()
+        with mock.patch.object(K.time, "time", lambda: now):
+            self._each_part_equals_what_the_route_computed_before()
+
+    def _each_part_equals_what_the_route_computed_before(self):
         self.cycle()
         from_cycle = {key: self.PAGES.read(key)[1] for key in ROUTES}
         self.PAGES.reset()
