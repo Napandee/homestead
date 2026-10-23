@@ -198,7 +198,6 @@ def _volume_problem(claim):
 def status():
     """What exists, whether it is serving, and whether Longhorn is pointed at it."""
     deployment = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
-    service = _get(f"/api/v1/namespaces/{NS}/services/{NAME}")
     claim = _get(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{NAME}")
     ready = int(((deployment or {}).get("status", {}) or {}).get("readyReplicas", 0) or 0)
     where = endpoint()

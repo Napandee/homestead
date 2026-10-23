@@ -2,7 +2,6 @@
 import base64
 import io
 import json
-import re
 import sys
 import tempfile
 import unittest
