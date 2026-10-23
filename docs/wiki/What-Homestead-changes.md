@@ -35,6 +35,8 @@ The Helm chart and the plain manifest make the same objects
 | `ServiceAccount` | `homestead` | who Homestead is to the cluster |
 | `ClusterRole`, `ClusterRoleBinding` | `homestead` | what Homestead may do: read every kind and change most of them ([why](Installing-on-an-existing-cluster#what-homestead-is-allowed-to-do)) |
 | `Role`, `RoleBinding` | `homestead-console` | container consoles, only in the apps' namespace |
+| `Role`, `RoleBinding` | `homestead-setup` | lets Homestead make, read and delete its one-time setup code, only in its own namespace. Read and delete are for that one Secret; create is for any Secret there, as Kubernetes cannot limit create to one name |
+| `Secret` | `homestead-setup` | the one-time setup code for the first administrator, only when you chose it ahead (the chart's `setupCode`, the installer's `HS_SETUP_CODE`); otherwise Homestead makes it when it starts (below) |
 | `PersistentVolumeClaim` | `homestead-data` | settings, job history, stats and the audit log |
 | `Deployment`, `Service` | `homestead` | Homestead itself and its address |
 | `DaemonSet`, `ConfigMap` | `homestead-nodeprobe` and its scripts | the node probe: one privileged pod per host, for temperatures, devices and drive health. The Helm chart installs it (`nodeprobe.enabled`, on by default); with the plain manifest Homestead installs it itself once it starts (below) |
@@ -65,6 +67,7 @@ leads (it holds a `Lease`, `homestead-leader`, renewed all the time).
 | Renames old `harvui.io/*` labels and annotations to `homestead.io/*`, once | nodes, services, claims, ConfigMaps, Secrets, Deployments, StatefulSets, DaemonSets, VMs | runs once only |
 | Brings the node probe's scripts up to this release, and the VM placement checks if you switched them on | `ConfigMap`, `DaemonSet` | removing the probe |
 | Fits its own Deployment's rollout strategy, without a restart | `Deployment` `homestead` | always |
+| Makes the one-time setup code until the first account exists, and deletes it once one does (and again at each start, should an upgrade put it back) | `Secret` `homestead-setup` | always |
 | Removes join tokens and network-boot pods left by 2.8.68-2.8.71 | `Secret`, `Pod` | always |
 
 **Once, soon after it starts**
@@ -148,6 +151,10 @@ label. Hosts get the taints and labels in the table above.
 
 Each of these happens only after someone signed in (or an API key, or an AI
 agent with the right scope) asks for it, and most go through a review first.
+A job someone starts (copying or renaming an app, an import, a host network
+change) carries on in the background without a page open: the copy of
+Homestead that leads moves every job on, in one loop, and a new leader picks
+them up where the last one left off.
 
 | Kind | When |
 |---|---|
@@ -234,8 +241,11 @@ Only Homestead uses these.
 | The Longhorn attachment tickets `homestead-rebuild` and `homestead-revert` | `longhorn-system` | Homestead holds a volume attached with these while it rebuilds copies or reverts a volume, and lets go itself. One left behind keeps the volume attached where it is, so its app cannot start on another host. Remove it (below) |
 | `/etc/apt/apt.conf.d/99-homestead-hold` on each host | the host | only there if Homestead managed OS updates. Removing it gives Ubuntu its own automatic updates back, with the host's own settings: if those reboot automatically, hosts reboot without being drained first |
 | `Role` and `RoleBinding` `homestead-console` | `lab` | they give only Homestead's own account the container consoles |
+| `Secret`, `Role` and `RoleBinding` `homestead-setup` | Homestead's namespace (`lab` with the plain manifest) | the one-time setup code and the permission to use it; only Homestead reads them. The Secret is only still there if no account was ever made |
 
 ```bash
+# Homestead's own namespace: lab with the plain manifest, the release's with Helm
+kubectl -n lab delete secret/homestead-setup role/homestead-setup rolebinding/homestead-setup
 kubectl -n lab delete daemonset/homestead-nodeprobe configmap/homestead-nodeprobe \
   secret/homestead-smart-key secret/homestead-allocation-auth configmap/homestead-install \
   role/homestead-console rolebinding/homestead-console
