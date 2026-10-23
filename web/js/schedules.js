@@ -165,7 +165,7 @@ window.schedulesOverview = async () => {
       <div class="sched-name"><b>${esc(i.name)}</b><span class="dim xs">${i.kind === "vm" ? "VM" : "app"} · ${esc(i.ns)}</span></div>
       <div class="sched-what"><span>${esc(i.words)}</span>
         ${i.next?.length ? `<span class="dim small">Next: ${esc(i.next[0].action === "stop" ? "stops" : "starts")} ${esc(schedWhen(i.next[0].at * 1000))}</span>` : ""}
-        ${i.last && !i.last.ok ? `<span class="tag bad" data-tip="${esc(i.last.detail)}">last ${esc(i.last.action)} failed</span>` : ""}</div>
+        ${i.last && !i.last.ok ? UI.chip(`last ${i.last.action} failed`, "bad", { tip: i.last.detail }) : ""}</div>
       <span class="sched-acts">${UI.button("Change", open(i), { attrs: 'data-need="operator"' })}</span></div>`).join("")}</div>`
       : '<div class="empty small">Nothing is on a schedule yet.</div>'}
     ${UI.actions(UI.cancel("Close"))}</div>`;

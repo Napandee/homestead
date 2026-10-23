@@ -7,6 +7,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const ctx = { console, esc, window: {}, appAvatar: (name, icon) => `<span class="av">${esc(name)}|${esc(icon)}</span>` };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
+vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
 vm.runInContext(fs.readFileSync("web/js/logos.js", "utf8"), ctx);
 
 test("tiles escape names from the catalogue and mark the image match", () => {
@@ -16,6 +17,18 @@ test("tiles escape names from the catalogue and mark the image match", () => {
   assert.match(html, /&lt;img src=x/);
   assert.match(html, /aria-selected="true"[^]*image match/);
   assert.match(html, /logoPick\(1\)/);
+});
+
+test("a logo tile is one Tab stop: its match chip is not focusable inside the button", () => {
+  const html = vm.runInContext(`logoTilesHtml([{ name: 'A', icon: 'https://example.com/a.png', match: 'chart' },
+    { name: 'B', icon: 'https://example.com/b.png', match: 'image' }, { name: 'C', os: 'ubuntu', icon: '/x.svg', match: 'its-os' }], 0, 'logoPick')`, ctx);
+  const tiles = html.split("<button").slice(1);
+  assert.equal(tiles.length, 3);
+  for (const tile of tiles) {
+    assert.doesNotMatch(tile, /tabindex=/, "nothing inside the tile takes focus");
+    assert.match(tile, /class="ui-chip ok slim"/, "the match chip is still there");
+  }
+  assert.match(tiles[0], /title="The logo its own Helm chart names"/, "the tile carries the tip");
 });
 
 test("nothing found says what to do next", () => {

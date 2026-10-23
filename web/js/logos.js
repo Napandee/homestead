@@ -22,13 +22,19 @@ const osLogoUrl = key => `/assets/os-${key}.svg`;
 const logoQuery = (ns, name, q) =>
   `/api/logos?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}${LOGO.kind === "vm" ? "&kind=vm" : ""}${q === null ? "" : `&q=${encodeURIComponent(q)}`}`;
 
-const logoMatchTag = match => match === "chart"
-  ? '<span class="pill slim ok" data-tip="The logo its own Helm chart names">its chart</span>'
-  : match === "image"
-  ? '<span class="pill slim ok" data-tip="This app store entry uses the same image as the app">image match</span>'
-  : match === "its-os" ? '<span class="pill slim ok" data-tip="What the VM reports it runs">its OS</span>'
-  : match === "os" ? '<span class="pill slim neutral">OS</span>'
-  : '<span class="pill slim neutral">name</span>';
+// How a logo was found: label, tone, tip.
+const LOGO_MATCH = {
+  chart: ["its chart", "ok", "The logo its own Helm chart names"],
+  image: ["image match", "ok", "This app store entry uses the same image as the app"],
+  "its-os": ["its OS", "ok", "What the VM reports it runs"],
+  os: ["OS", "neutral", ""],
+};
+const logoMatchOf = match => Object.hasOwn(LOGO_MATCH, match) ? LOGO_MATCH[match] : ["name", "neutral", ""];
+// Inside a picker tile (a button) the chip takes no tip, so the tile stays one Tab stop; the tile carries it.
+const logoMatchTag = (match, { tipped = true } = {}) => {
+  const [label, tone, tip] = logoMatchOf(match);
+  return UI.chip(label, tone, { size: "slim", tip: tipped ? tip : "" });
+};
 
 /* The OS tiles for a VM's picker: its own first, then those the search names. */
 function logoOsTiles(q) {
@@ -42,8 +48,8 @@ function logoOsTiles(q) {
 function logoTilesHtml(tiles, chosen, onpick) {
   if (!tiles.length) return '<div class="empty">Nothing in the app store matches. Try another name, or paste a URL.</div>';
   return `<div class="logo-tiles" role="listbox" aria-label="Logos">${tiles.map((t, i) => `<button type="button" role="option"
-    class="logo-tile${i === chosen ? " on" : ""}" aria-selected="${i === chosen}" onclick="${onpick}(${i})">
-    ${appAvatar(t.name, t.icon, t.os ? "av-logo os-logo" : "av-logo")}<span class="logo-name">${esc(t.name)}</span>${logoMatchTag(t.match)}</button>`).join("")}</div>`;
+    class="logo-tile${i === chosen ? " on" : ""}" aria-selected="${i === chosen}"${logoMatchOf(t.match)[2] ? ` title="${esc(logoMatchOf(t.match)[2])}"` : ""} onclick="${onpick}(${i})">
+    ${appAvatar(t.name, t.icon, t.os ? "av-logo os-logo" : "av-logo")}<span class="logo-name">${esc(t.name)}</span>${logoMatchTag(t.match, { tipped: false })}</button>`).join("")}</div>`;
 }
 
 async function logoLoad(q, paintTo, onpick) {

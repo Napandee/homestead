@@ -3,6 +3,7 @@ let operationTimer = null;
 let operationPanelOpen = false;
 
 const operationActive = operation => !["succeeded", "failed", "cancelled"].includes(operation.status);
+// #543 M3: answer "bad"/"neutral" here once views-vms.js draws its job pills with UI.chip; it still builds `pill ${…}` classes from this.
 const operationTone = status => status === "succeeded" ? "ok" : status === "failed" ? "crit" :
   status === "cancelled" ? "low" : "warn";
 
@@ -58,7 +59,7 @@ function renderOperations() {
 function operationCard(operation) { return `<article class="jobitem" data-operation="${esc(operation.id)}">
     <div class="jobitemtop"><div><b>${UI.statusDot(({succeeded:"ok",failed:"bad",cancelled:"neutral"})[operation.status] || "warn")}${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
-      <span class="pill ${operationTone(operation.status)}">${esc(operation.status)}</span></div>
+      ${UI.chip(operation.status, operationTone(operation.status))}</div>
     ${operation.progress != null && Number.isFinite(Number(operation.progress)) ? `<div class="jobmeter" role="progressbar" aria-label="Reported progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(operation.progress)))}"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(0, Math.min(100, Number(operation.progress)))}%"></span></div>` : ""}
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
@@ -561,7 +562,7 @@ window.operationLog = async id => {
     const box = $(".modalbox"), outerScroll = box?.scrollTop || 0;
     const stepScroll = $("#oplogBody .oplog-steps")?.scrollTop || 0;
     const kept = new Map([...$$("#oplogBody pre")].map(pre => [pre.dataset.source, pre.scrollTop]));
-    $("#oplogBody").innerHTML = `<div class="between oplog-head"><span class="pill ${operationTone(d.status)}">${esc(d.status)}</span>
+    $("#oplogBody").innerHTML = `<div class="between oplog-head">${UI.chip(d.status, operationTone(d.status))}
         <span class="small">${esc(d.message || "")}</span><b class="mono">${Math.round(d.progress || 0)}%</b></div>
       <div class="jobmeter"><span class="${d.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, d.progress || 0))}%"></span></div>
       <div class="ctitle" style="margin-top:14px">Steps</div>

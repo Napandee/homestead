@@ -220,9 +220,9 @@ function composeServiceCard(s) {
         ${s.line ? `<button class="linkish xs" onclick="composeGoto(${+s.line})">line ${+s.line}</button>` : ""}
         <button class="btn sm" ${s.config ? "" : "disabled"} onclick="composeToForm(${jsq(s.name)})" data-tip="Open this service in the Deploy form to change anything before creating it">Edit in form</button></div></div>
     <div class="compose-facts">
-      <span class="tag ${sum.lan ? "info" : ""}">${sum.network === "host" ? "host network" : sum.lan ? "LAN" : sum.network === "internal" ? "cluster only" : "no ports"}</span>
-      ${(sum.ports || []).map(p => `<span class="tag">${esc(p)}</span>`).join("")}
-      ${sum.env ? `<span class="tag">${sum.env} variable${sum.env === 1 ? "" : "s"}</span>` : ""}
+      ${UI.chip(sum.network === "host" ? "host network" : sum.lan ? "LAN" : sum.network === "internal" ? "cluster only" : "no ports", sum.lan ? "info" : "neutral")}
+      ${(sum.ports || []).map(p => UI.chip(p, "neutral")).join("")}
+      ${sum.env ? UI.chip(`${sum.env} variable${sum.env === 1 ? "" : "s"}`, "neutral") : ""}
       ${(sum.hardware || []).length ? hardwareTags(sum.hardware) : ""}
     </div>
     ${sum.command ? `<div class="dim xs mono compose-cmd" title="${esc(sum.command)}">runs ${esc(sum.command)}</div>` : ""}
