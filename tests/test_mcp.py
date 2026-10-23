@@ -473,7 +473,8 @@ class CatalogueTests(unittest.TestCase):
     # Operator routes deliberately not tools, and why (#424).
     NOT_TOOLS = {
         "/api/agents/requests/approve": "approving is a person's", "/api/agents/requests/deny": "deciding is a person's",
-        "/api/alerts/pending": "the app's own bell", "/api/push/status": "a browser's push subscription",
+        "/api/alerts/pending": "the app's own bell",
+        "/api/volumes/previous/keep": "keeping or letting a previous volume expire is a person's call (#743)", "/api/push/status": "a browser's push subscription",
         "/api/push/subscribe": "a browser's push subscription", "/api/push/unsubscribe": "a browser's push subscription",
         "/api/setup/complete": "the setup guide is a person's", "/api/setup/hide": "the setup guide is a person's",
         "/api/setup/skip": "the setup guide is a person's", "/api/compose/parse": "preview_compose reads the file",

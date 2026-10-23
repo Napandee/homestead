@@ -87,9 +87,14 @@ def review(plan, ops, read):
     with ops.transaction():
         jobs = reasons(ops.stored(), namespace=plan.get("namespace"), claim=plan.get("name"),
                        pv=plan.get("pv", {}).get("name"), handle=plan.get("longhorn", {}).get("name"), read=read)
-    if jobs:
+        claim = ("claim", plan.get("namespace"), plan.get("name"))
+        swaps = [item for item in ops.stored() if item.get("kind") == "restore-swap" and CONFLICTS.unresolved(item)
+                 and claim in CONFLICTS.targets(item["kind"], item.get("ref") or {}, item.get("resource"))]
+    why = (["This data is protected by an active or interrupted storage move. Finish its recovery before deleting it."]
+                if jobs else []) + (["A restore into an app is using this volume. Let it finish first."] if swaps else [])
+    if why:
         plan["blocked"] = True
-        plan.setdefault("blocking_reasons", []).append("This data is protected by an active or interrupted storage move. Finish its recovery before deleting it.")
+        plan.setdefault("blocking_reasons", []).extend(why)
         for action in ("delete_claim", "delete_data"):
             plan.setdefault("actions", {}).setdefault(action, {})["enabled"] = False
     return plan
