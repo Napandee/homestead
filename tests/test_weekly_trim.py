@@ -100,7 +100,8 @@ class WeeklyTrimTests(unittest.TestCase):
     def test_a_volume_is_trimmed_now_only_while_attached(self):
         self.bind(Longhorn([], [volume("pvc-11111111-2222-4333-8444-555555555555"),
                                 volume("pvc-66666666-7777-4888-8999-aaaaaaaaaaaa", state="detached")]))
-        with mock.patch.object(LH_JOBS, "_backend") as backend:
+        with mock.patch.object(LH_JOBS, "_backend") as backend, \
+                mock.patch.object(LH_JOBS.ACCESS, "reachable", return_value=""):
             result = LH_JOBS.trim_volume("pvc-11111111-2222-4333-8444-555555555555")
             backend.assert_called_once_with("POST", "/volumes/pvc-11111111-2222-4333-8444-555555555555?action=trimFilesystem", {})
             self.assertIn("being trimmed", result["detail"])
@@ -110,6 +111,14 @@ class WeeklyTrimTests(unittest.TestCase):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     LH_JOBS.trim_volume(bad)
             self.assertEqual(1, backend.call_count)
+
+    def test_trim_now_is_refused_while_longhorns_api_cannot_be_reached(self):
+        self.bind(Longhorn([], [volume("pvc-11111111-2222-4333-8444-555555555555")]))
+        with mock.patch.object(LH_JOBS, "_backend") as backend, \
+                mock.patch.object(LH_JOBS.ACCESS, "reachable", return_value="Connection refused"):
+            with self.assertRaisesRegex(ValueError, "cannot reach Longhorn's API.*Connection refused"):
+                LH_JOBS.trim_volume("pvc-11111111-2222-4333-8444-555555555555")
+        backend.assert_not_called()
 
 
 if __name__ == "__main__":
