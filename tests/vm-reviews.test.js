@@ -9,7 +9,7 @@ const between = require("./helpers/between");
 const core = fs.readFileSync("web/js/core.js", "utf8");
 
 function context() {
-  const c = { document: { addEventListener() {}, querySelector() { return null; } }, FLEET: { view: {} }, icon: () => "",
+  const c = { document: { addEventListener() {}, querySelector() { return null; }, getElementById(id) { return this.querySelector("#" + id); } }, FLEET: { view: {} }, icon: () => "",
     appAvatar: () => "", clusterAttr: () => "", clusterTag: () => "", remoteRow: () => false, platformTag: () => "", hardwareTags: () => "",
     fmtUp: String, svcUrl: () => "", fmtAgo: String, ratePair: () => ["0", "Mb/s"], sizePair: () => "", sizeText: () => "", meter: () => "", sev: () => "" };
   c.window = c; vm.createContext(c);

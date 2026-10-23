@@ -214,8 +214,8 @@ class LastKindTests(unittest.TestCase):
         copy = self.server.COPY_JOB.KIND
         prepare, execute = self.server.SELF_DATA_PREPARE.KIND, self.server.SELF_DATA_EXECUTE.KIND
         for name, resolves, cancels, resumable in [
-                ("storage", {"volume-restore", "restructure", copy, "reclass", "snapshot-revert", "snapshot-delete"},
-                 {copy, "reclass", "snapshot-revert"}, {"volume-restore", "reclass", "snapshot-delete"}),
+                ("storage", {"volume-restore", "restructure", copy, "reclass", "snapshot-revert", "snapshot-delete", "restore-swap"},
+                 {copy, "reclass", "snapshot-revert", "restore-swap"}, {"volume-restore", "reclass", "snapshot-delete"}),
                 ("cluster", {"cluster-shutdown", "harvester-upgrade", "onboard", "cluster-cleanup"}, set(), set()),
                 ("self-data", {prepare, execute, "self-data-move"}, {prepare}, set())]:
             with self.subTest(module=name):

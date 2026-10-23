@@ -3,7 +3,7 @@ const test=require("node:test"), assert=require("node:assert/strict"), fs=requir
 function setup(send) {
   const fields={"#k_go":{disabled:false},"#k_capacity_confirm":{checked:true},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   let calls=0,refreshes=0;
-  const ctx={console,Date,Map,Promise,URLSearchParams,encodeURIComponent,STATE:{data:{}},document:{addEventListener(){}},
+  const ctx={console,Date,Map,Promise,URLSearchParams,encodeURIComponent,STATE:{data:{}},document:{addEventListener(){},getElementById:id=>fields["#"+id]||null},
     $:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),toast(){},go(){},closeModal(){},modalBack(){},childModal:(_title,html)=>{fields["#mbody"].innerHTML=html;},
     refreshOperations(){refreshes++;},api:async(path)=>{
       if(path.endsWith("/plan"))return {config:{name:"test",review_id:"frozen"},capacity_token:"signed",ok:true,nodes:[],
