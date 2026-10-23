@@ -1061,11 +1061,14 @@ const HEALTH_TONE = { ok: "ok", standby: "neutral", starting: "neutral", late: "
 const agoText = t => !t ? "not yet" : Date.now() / 1000 - t < 60 ? "just now" : fmtAgo(Math.round(Date.now() / 1000 - t));
 
 /* The card is read again every 15 seconds while Settings shows its section,
-   a failed read included: the next one may answer. */
+   a failed read included: the next one may answer. On another section it
+   only waits, since coming back does not load the section again; leaving
+   Settings stops it, and Settings starts it again when it paints. */
 function selfHealthLater() {
   clearTimeout(window.__selfHealthTimer);
   window.__selfHealthTimer = setTimeout(() => {
-    if (STATE.view === "settings" && settingsTab() === settingsSection("about")) selfHealthPaint();
+    if (STATE.view !== "settings") return;
+    if (settingsTab() === settingsSection("about")) selfHealthPaint(); else selfHealthLater();
   }, 15000);
 }
 

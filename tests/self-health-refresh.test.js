@@ -53,14 +53,22 @@ test("one failed read does not stop the refresh", async () => {
   assert.doesNotMatch(s.card.innerHTML, /Status unavailable/);
 });
 
-test("the refresh stops once Settings is left or another section is shown", async () => {
+test("the refresh stops once Settings is left", async () => {
   const s = settings();
   await s.ctx.selfHealthPaint();
   s.ctx.STATE.view = "apps";
   await s.fire();
   assert.equal(s.reads.length, 1);
-  const t = settings({ section: "updates" });
-  await t.ctx.selfHealthPaint();
-  await t.fire();
-  assert.equal(t.reads.length, 1);
+  assert.equal(s.timers.length, 0, "nothing more is scheduled once Settings is left");
+});
+
+test("on another section it waits, and reads again once the section is back", async () => {
+  const s = settings();
+  await s.ctx.selfHealthPaint();
+  s.ctx.__section = "updates";
+  await s.fire();
+  assert.equal(s.reads.length, 1);
+  s.ctx.__section = "homestead";
+  await s.fire();
+  assert.equal(s.reads.length, 2);
 });
