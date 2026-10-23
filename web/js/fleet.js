@@ -114,9 +114,9 @@ window.clusterAttr = row => { const c = clusterOf(row); return c ? ` data-cluste
 window.clusterTag = row => {
   const c = clusterOf(row);
   if (!c) return "";
-  if (c.age_s == null) return `<span class="tag cluster-tag" title="On ${esc(c.name)}">${esc(c.name)}</span>`;
-  const age = fleetAge(c.age_s);
-  return `<span class="tag cluster-tag" title="On ${esc(c.name)}; its last answer, from ${age} ago: it has not answered since">${esc(c.name)}<span class="cluster-age">· ${age} ago</span></span>`;
+  const age = c.age_s == null ? "" : fleetAge(c.age_s);
+  const title = `On ${esc(c.name)}${age ? `; its last answer, from ${age} ago: it has not answered since` : ""}`;
+  return `<span class="tag cluster-tag" title="${title}">${esc(c.name)}${age ? `<span class="cluster-age">· ${age} ago</span>` : ""}</span>`;
 };
 /* A row that lives on another cluster: this one's own records - image
    updates, say - do not describe it. */

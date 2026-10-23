@@ -23,7 +23,8 @@ function settings({ view = "settings", section = "homestead", answers = [] } = {
     $: sel => (sel === "#selfHealthCard" ? card : null),
     api: path => { reads.push(path); const next = answers.length ? answers.shift() : HEALTH; return next instanceof Error ? Promise.reject(next) : Promise.resolve(next); },
     esc: s => String(s ?? ""), can: () => true, fmtAgo: s => `${s} s`,
-    UI: { moduleHeader: title => `<h3>${title}</h3>`, callout: (tone, title, text) => `<p>${title}: ${text}</p>` },
+    UI: { moduleHeader: title => `<h3>${title}</h3>`, callout: (tone, title, text) => `<p>${title}: ${text}</p>`,
+      chip: (label, tone) => `<span class="tag ${tone}">${label}</span>` },
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: () => { },
   };
