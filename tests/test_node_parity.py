@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import textwrap
@@ -320,6 +321,41 @@ class NodeParityTests(unittest.TestCase):
         cluster.objects["/api/v1/nodes"]["items"].pop()
         self.assertIsNone(PARITY.copies_tick(), "a node leaving lowers nothing")
         self.assertIn("defaultReplicaCount: 3", chart["spec"]["valuesContent"])
+
+    def test_longhorn_18_keeps_the_setting_per_data_engine_and_it_rises_too(self):
+        # Longhorn 1.8 and later keep default-replica-count as JSON, one count per data engine.
+        setting = {"value": '{"v1":"1","v2":"1"}'}
+        chart = {"spec": {"valuesContent": INSTALLER_LONGHORN}}
+        cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": chart, PARITY.LONGHORN_SETTING: setting})
+        cluster.ksend = lambda method, path, body=None, ctype="": (
+            cluster.sent.append((method, path, body)),
+            (chart if path.endswith("/longhorn") else setting).update(body))
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIn("keep 2 copies", PARITY.copies_tick())
+        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": '{"v1":"2","v2":"2"}'}), cluster.sent)
+        cluster.objects["/api/v1/nodes"]["items"].append(node("c"))
+        self.assertIn("keep 3 copies", PARITY.copies_tick())
+        self.assertEqual({"v1": "3", "v2": "3"}, json.loads(setting["value"]), "Homestead's own 2 rises again")
+
+    def test_a_data_engine_count_someone_chose_is_kept_while_the_others_rise(self):
+        setting = {"value": '{"v1":"1","v2":"3"}'}
+        cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                                                  PARITY.LONGHORN_SETTING: setting})
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        PARITY.copies_tick()
+        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": '{"v1":"2","v2":"3"}'}), cluster.sent)
+
+    def test_a_setting_homestead_cannot_read_is_left_alone(self):
+        for value in ('{"v1":"1"', '["1"]', '{"v1":"3","v2":"2"}', '{}', "3"):
+            with self.subTest(value=value):
+                cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                                                          PARITY.LONGHORN_SETTING: {"value": value}})
+                self.bind(cluster)
+                PARITY._seen_ready = None
+                self.assertIn("keep 2 copies", PARITY.copies_tick(), "the chart still rises")
+                self.assertEqual([], [s for s in cluster.sent if s[1] == PARITY.LONGHORN_SETTING])
 
     def test_copies_rise_on_an_install_that_gave_longhorn_its_priority_and_it_is_kept(self):
         chart = {"spec": {"valuesContent": PARITY.addons.longhorn_values(1)}}
