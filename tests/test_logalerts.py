@@ -1,6 +1,7 @@
 """Log alerts: a saved log search that raises an alert when it matches too
 many lines (spike 12, built). The alert carries counts, never a line and
 never the query: alert text reaches lock screens and config backups."""
+import calendar
 import json
 import os
 import sys
@@ -23,6 +24,8 @@ def workload(name, *pods, ns="lab"):
 
 WL = [workload("app-x"), workload("app-y"), workload("app-z")]
 STAMP = "2026-10-23T10:{:02d}:{:02d}.{:09d}Z"
+T0 = calendar.timegm((2026, 10, 23, 10, 1, 2, 0, 0, 0))   # a round at 10:01:02, after the lines of 10:00
+M0 = (T0 - 62) // 60                                       # the minute 10:00
 
 
 def lines(n, minute=0, text="ERROR {} {}".format(SECRET, "{}")):
@@ -115,9 +118,9 @@ class Rules(Base):
     def test_edit_that_changes_what_is_counted_resets_counts(self):
         rule = self.rule()
         self.logs["app-x-1"] = lines(3)
-        LA.evaluate(now=60_000)
+        LA.evaluate(now=T0)
         self.rule(id=rule["id"], threshold=5)
-        self.assertEqual([[1000, 3]], LA.listing()["rules"][0]["counts"], "a threshold change keeps them")
+        self.assertEqual([[M0, 3], [M0 + 1, 0]], LA.listing()["rules"][0]["counts"], "a threshold change keeps them")
         self.rule(id=rule["id"], query="WARN")
         self.assertEqual([], LA.listing()["rules"][0]["counts"], "a new query starts again")
 
@@ -126,7 +129,7 @@ class Rounds(Base):
     def test_over_threshold_raises_a_fact_without_lines_or_query(self):
         rule = self.rule(query="ERROR")
         self.logs["app-x-1"] = lines(12)
-        facts = LA.evaluate(now=60_000)
+        facts = LA.evaluate(now=T0)
         self.assertEqual(1, len(facts))
         fact = facts[0]
         self.assertEqual((f"logs:{rule['id']}", "logs"), (fact["key"], fact["category"]))
@@ -139,21 +142,21 @@ class Rounds(Base):
     def test_under_threshold_raises_nothing(self):
         self.rule()
         self.logs["app-x-1"] = lines(10)
-        self.assertEqual([], LA.evaluate(now=60_000))
+        self.assertEqual([], LA.evaluate(now=T0))
 
     def test_window_sums_recent_minutes(self):
         self.rule(threshold=10, window=5)
         for minute in range(3):
             self.logs["app-x-1"] = lines(4, minute=minute)
-            facts = LA.evaluate(now=60_000 + 60 * minute)
+            facts = LA.evaluate(now=T0 + 60 * minute)
         self.assertIn("12 matching lines in 5 minutes", facts[0]["title"])
 
     def test_unreadable_app_is_unknown_not_zero(self):
         rule = self.rule()
         self.logs["app-x-1"] = OSError("pod is being replaced")
-        self.assertEqual([{"unknown_key": f"logs:{rule['id']}"}], LA.evaluate(now=60_000))
+        self.assertEqual([{"unknown_key": f"logs:{rule['id']}"}], LA.evaluate(now=T0))
         row = LA.listing()["rules"][0]
-        self.assertEqual([[1000, None]], row["counts"])
+        self.assertEqual([[M0 + 1, None]], row["counts"])
         self.assertEqual("unread", row["status"]["state"])
         self.assertIn("could not read app-x", row["status"]["detail"])
 
@@ -162,10 +165,12 @@ class Rounds(Base):
         second = self.rule(name="App Y trouble", apps=["lab/app-y"])
         self.logs["app-x-1"] = self.logs["app-y-1"] = lines(12)
         with mock.patch.object(LA, "MAX_CONTAINERS", 1):
-            facts = LA.evaluate(now=60_000)
-        self.assertIn({"unknown_key": f"logs:{second['id']}"}, facts)
-        self.assertTrue(any(f.get("key") == f"logs:{first['id']}" for f in facts))
-        status = {r["id"]: r["status"] for r in LA.listing()["rules"]}[second["id"]]
+            facts = LA.evaluate(now=T0)
+        unknown = [f["unknown_key"][5:] for f in facts if "unknown_key" in f]
+        raised = [f["key"][5:] for f in facts if "key" in f]
+        self.assertEqual(1, len(unknown))
+        self.assertEqual({first["id"], second["id"]}, set(unknown + raised))
+        status = {r["id"]: r["status"] for r in LA.listing()["rules"]}[unknown[0]]
         self.assertEqual("skipped", status["state"])
         self.assertIn("containers a minute", status["detail"])
 
@@ -180,7 +185,7 @@ class Rounds(Base):
                 raise LA.TooSlow("the expression took more than 2 seconds")
             return real(found, query, regex, case, limit)
         with mock.patch.object(LA, "matching", matching):
-            facts = LA.evaluate(now=60_000)
+            facts = LA.evaluate(now=T0)
         self.assertIn({"unknown_key": f"logs:{slow['id']}"}, facts)
         self.assertTrue(any(f.get("key") == f"logs:{plain['id']}" for f in facts))
         status = {r["id"]: r["status"] for r in LA.listing()["rules"]}[slow["id"]]
@@ -189,17 +194,17 @@ class Rounds(Base):
     def test_cursor_drops_repeats_and_forgets_gone_pods(self):
         self.rule()
         self.logs["app-x-1"] = lines(12)
-        self.assertEqual(1, len(LA.evaluate(now=60_000)))
-        self.assertEqual([], LA.evaluate(now=60_060), "the same lines again are not counted twice")
+        self.assertEqual(1, len(LA.evaluate(now=T0)))
+        self.assertEqual([], LA.evaluate(now=T0 + 60), "the same lines again are not counted twice")
         self.workloads = [workload("app-x", "app-x-2")]
         self.logs["app-x-2"] = lines(12, minute=2)
-        self.assertEqual(1, len(LA.evaluate(now=60_120)), "the replacement pod is read")
+        self.assertEqual(1, len(LA.evaluate(now=T0 + 120)), "the replacement pod is read")
         self.assertNotIn(("lab", "app-x-1", "app-x"), LA._cursors)
 
     def test_late_round_reads_since_the_cursor(self):
         self.rule()
         self.logs["app-x-1"] = lines(1)
-        LA.evaluate(now=60_000)
+        LA.evaluate(now=T0)
         cursor_at = LA._cursors[("lab", "app-x-1", "app-x")][1]
         LA.evaluate(now=cursor_at + 180)
         self.assertEqual(185, self.calls[-1][1])
@@ -216,42 +221,182 @@ class Rounds(Base):
             self.made = other["id"]
             return lines(3)
         LA.bind(self.dir, workloads=lambda: self.workloads, read=read, is_leader=lambda: True)
-        LA.evaluate(now=60_000)
+        LA.evaluate(now=T0)
         rows = LA.listing()["rules"]
         self.assertEqual([self.made], [r["id"] for r in rows])
 
     def test_standby_reads_nothing(self):
         self.rule()
         self.logs["app-x-1"] = lines(12)
-        LA.evaluate(now=60_000)
+        LA.evaluate(now=T0)
         self.leader[0] = False
         calls = len(self.calls)
-        LA.step(now=60_060)
+        LA.step(now=T0 + 60)
         self.assertEqual(calls, len(self.calls))
         self.assertEqual({}, LA._cursors, "a new term starts from a fresh read")
 
     def test_stale_facts_are_none(self):
         self.rule()
         self.logs["app-x-1"] = lines(12)
-        LA.step(now=60_000)
-        self.assertEqual(1, len(LA.alert_facts(now=60_100)))
-        self.assertIsNone(LA.alert_facts(now=60_000 + LA.STALE + 1))
+        LA.step(now=T0)
+        self.assertEqual(1, len(LA.alert_facts(now=T0 + 100)))
+        self.assertIsNone(LA.alert_facts(now=T0 + LA.STALE + 1))
         LA.reset()
-        self.assertIsNone(LA.alert_facts(now=60_000), "nothing evaluated yet: could not look")
+        self.assertIsNone(LA.alert_facts(now=T0), "nothing evaluated yet: could not look")
 
     def test_alert_loop_does_not_read(self):
         self.rule()
-        LA.step(now=60_000)
+        LA.step(now=T0)
         calls = len(self.calls)
         for _ in range(5):
-            LA.alert_facts(now=60_010)
+            LA.alert_facts(now=T0 + 10)
         self.assertEqual(calls, len(self.calls))
 
     def test_reads_are_bounded(self):
         self.rule(apps=["lab/app-x"])
-        LA.evaluate(now=60_000)
+        LA.evaluate(now=T0)
         self.assertEqual([("app-x-1", LA.EVERY)], self.calls)
         self.assertEqual(256 * 1024, LA.MAX_BYTES)
+
+
+class ReviewFixes(Base):
+    """The first review's findings, each pinned."""
+
+    def stamped(self, minute, second, n, start=0):
+        return "\n".join(f"2026-10-23T10:{minute:02d}:{second:02d}.{start + i:09d}Z ERROR {i}" for i in range(n))
+
+    def test_a_one_minute_burst_is_raised_on_the_alert_loop_s_first_look(self):
+        import homestead_alerts as ALERTS
+        ALERTS.bind(self.dir)
+        self.rule()
+        self.logs["app-x-1"] = lines(12)
+        facts = LA.evaluate(now=T0)
+        raised = ALERTS.observe({"logs": facts}, now=T0 + 5)
+        self.assertEqual(["raised"], [e["phase"] for e in raised],
+                         "the counting window is the debounce: no further 60 s hold the next round would cut short")
+
+    def test_lines_count_in_the_minute_they_were_written(self):
+        self.rule(threshold=10, window=1)
+        self.logs["app-x-1"] = lines(1)
+        LA.evaluate(now=T0)                       # cursor at 10:00
+        self.logs["app-x-1"] = "\n".join(self.stamped(m, 5, 6, start=m * 100) for m in (1, 2, 3))
+        facts = LA.evaluate(now=T0 + 180)         # a late round: three minutes at once
+        self.assertEqual([], facts, "6 a minute for three minutes is not 18 in a minute")
+        counts = dict(map(tuple, LA.listing()["rules"][0]["counts"]))
+        self.assertEqual([6, 6, 6], [counts[M0 + m] for m in (1, 2, 3)])
+
+    def test_the_minute_just_finished_is_checked_in_full(self):
+        self.rule(threshold=10, window=1)
+        self.logs["app-x-1"] = self.stamped(0, 30, 6)
+        self.assertEqual([], LA.evaluate(now=T0 - 30))     # 10:00:32: six so far
+        self.logs["app-x-1"] = self.stamped(0, 30, 6) + "\n" + self.stamped(0, 50, 6, start=100)
+        facts = LA.evaluate(now=T0)                        # 10:01:02: 12 in 10:00
+        self.assertIn("12 matching lines in a minute", facts[0]["title"])
+
+    def test_reading_the_same_lines_twice_counts_them_once(self):
+        self.rule()
+        self.logs["app-x-1"] = lines(12)
+        LA.evaluate(now=T0)
+        LA.evaluate(now=T0 + 5)
+        self.assertEqual(12, dict(map(tuple, LA.listing()["rules"][0]["counts"]))[M0])
+
+    def test_an_app_with_nothing_running_is_not_zero(self):
+        rule = self.rule()
+        self.workloads = [workload("app-x", ns="lab")]
+        self.workloads[0]["pods"] = []
+        self.assertEqual([{"unknown_key": f"logs:{rule['id']}"}], LA.evaluate(now=T0))
+        status = LA.listing()["rules"][0]["status"]
+        self.assertEqual("absent", status["state"])
+        self.assertIn("nothing of app-x is running", status["detail"])
+
+    def test_an_edit_during_a_round_is_not_overwritten_by_old_counts(self):
+        rule = self.rule()
+
+        def read(*args):
+            self.rule(id=rule["id"], query="WARN")
+            return lines(12)
+        LA.bind(self.dir, workloads=lambda: self.workloads, read=read, is_leader=lambda: True)
+        self.assertEqual([], [f for f in LA.evaluate(now=T0) if "key" in f])
+        self.assertEqual([], LA.listing()["rules"][0]["counts"])
+
+    def test_a_rule_keeps_an_app_that_is_not_running_now(self):
+        rule = self.rule()
+        self.workloads = [workload("app-y")]
+        self.assertEqual(20, self.rule(id=rule["id"], threshold=20)["threshold"])
+        with self.assertRaisesRegex(ValueError, "not running here"):
+            self.rule(name="New", apps=["lab/app-x"])
+
+    def test_delete_with_a_body_that_is_not_an_object(self):
+        route = LA.ROUTES[("POST", "/api/logalerts/delete")][1]
+        for body in (None, [], "x", 3):
+            with self.subTest(body=body), self.assertRaisesRegex(ValueError, "no longer exists"):
+                route(mock.Mock(body=body))
+
+    def test_ids_with_a_trailing_newline_are_refused(self):
+        rule = self.rule()
+        with self.assertRaisesRegex(ValueError, "no longer exists"):
+            LA.delete(rule["id"] + "\n")
+
+    def test_the_list_says_when_counting_stopped(self):
+        self.rule()
+        self.logs["app-x-1"] = lines(3)
+        LA.evaluate(now=T0)
+        self.assertEqual(int(T0), LA.listing()["counted_at"])
+
+    def test_skipped_rules_take_turns(self):
+        first = self.rule()
+        second = self.rule(name="App Y trouble", apps=["lab/app-y"])
+        skipped = []
+        with mock.patch.object(LA, "MAX_CONTAINERS", 1):
+            for i in range(2):
+                LA.evaluate(now=T0 + 60 * i)
+                skipped += [r["id"] for r in LA.listing()["rules"] if r["status"]["state"] == "skipped"]
+        self.assertEqual({first["id"], second["id"]}, set(skipped))
+
+    def test_rounds_start_two_seconds_into_each_minute(self):
+        waits = []
+
+        def sleep(seconds):
+            waits.append(seconds)
+            raise StopIteration
+        for at in (T0, T0 + 28):
+            with mock.patch.object(LA, "step"), self.assertRaises(StopIteration):
+                LA.run(sleep=sleep, clock=lambda: at)
+        self.assertEqual([60, 32], waits)
+
+
+class PreviewBounds(Base):
+    BODY = {"name": "", "apps": ["lab/app-x"], "query": "ERROR", "threshold": 3, "window": 1}
+
+    def test_preview_reads_less_than_a_search_does(self):
+        seen = []
+        LA.bind(self.dir, workloads=lambda: self.workloads,
+                read=lambda ns, pod, c, since, limit: seen.append(limit) or "", is_leader=lambda: True)
+        LA.preview(dict(self.BODY))
+        self.assertEqual([LA.PREVIEW_BYTES], seen)
+        self.assertLess(LA.PREVIEW_BYTES, LOGSEARCH.MAX_BYTES)
+
+    def test_preview_reads_containers_side_by_side(self):
+        import threading
+        self.workloads = [workload("app-x", "app-x-1", "app-x-2")]
+        both, barrier = [], threading.Barrier(2, timeout=3)
+
+        def read(*args):
+            barrier.wait()
+            both.append(1)
+            return ""
+        LA.bind(self.dir, workloads=lambda: self.workloads, read=read, is_leader=lambda: True)
+        LA.preview(dict(self.BODY))
+        self.assertEqual(2, len(both))
+
+    def test_preview_needs_no_name(self):
+        self.assertEqual(60, len(LA.preview(dict(self.BODY, name=""))["counts"]))
+        self.assertEqual(60, len(LA.preview(dict(self.BODY, name="ERROR here"))["counts"]))
+
+    def test_a_preview_out_of_time_says_why(self):
+        with mock.patch.object(LA, "matching", side_effect=LA.TooSlow("x")):
+            with self.assertRaisesRegex(ValueError, "too many lines, or too slow an expression"):
+                LA.preview(dict(self.BODY, regex=True))
 
 
 class Matching(unittest.TestCase):

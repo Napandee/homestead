@@ -48,6 +48,9 @@ MAX_BYTES = 256 * 1024          # per read
 READ_WORKERS = 4
 READ_BUDGET = 40                # seconds a round's reads may take
 REGEX_SECONDS = 2               # per rule and round
+PREVIEW_BYTES = 512 * 1024      # per container, for the hour a preview reads
+PREVIEW_WORKERS = 8
+PREVIEW_SECONDS = 10            # the preview matches an hour at once, on request
 MAX_BACK = 300                  # seconds a late round reads back at most
 KEEP = 60                       # minutes of counts kept per rule
 STALE = 180                     # facts older than this: could not look
@@ -127,16 +130,16 @@ def _apps(workloads):
     return {f"{w.get('ns')}/{w.get('name')}" for w in workloads or []}
 
 
-def validate(body, known_apps=None, existing_ids=()):
-    """A rule from a form, or ValueError."""
+def validate(body, known_apps=None, existing_ids=(), named=True):
+    """A rule from a form, or ValueError. A preview needs no name (named=False)."""
     body = body if isinstance(body, dict) else {}
     rule_id = body.get("id")
     if rule_id is None:
         rule_id = "la-" + secrets.token_hex(6)
-    elif not (isinstance(rule_id, str) and _ID.match(rule_id) and rule_id in existing_ids):
+    elif not (isinstance(rule_id, str) and _ID.fullmatch(rule_id) and rule_id in existing_ids):
         raise ValueError("that log alert no longer exists; refresh and try again")
     name = str(body.get("name") or "").strip()
-    if not name or len(name) > 60:
+    if named and (not name or len(name) > 60):
         raise ValueError("give the alert a name of at most 60 characters")
     apps = body.get("apps") if isinstance(body.get("apps"), list) else []
     apps = [a for a in apps if isinstance(a, str) and "/" in a]
@@ -148,7 +151,7 @@ def validate(body, known_apps=None, existing_ids=()):
         raise ValueError("one of those apps is not running here")
     query, regex, case = str(body.get("query") or ""), bool(body.get("regex")), bool(body.get("case"))
     LOGSEARCH.matcher(query, regex, case)
-    if len(query.strip()) >= 3 and query.strip().lower() in name.lower():
+    if named and len(query.strip()) >= 3 and query.strip().lower() in name.lower():
         raise ValueError("the name may not repeat the search text: alert names reach lock screens and config backups")
     try:
         threshold, window = int(body.get("threshold")), int(body.get("window") or 1)
@@ -168,7 +171,9 @@ def save(body, known_apps=None):
     with _lock:
         state = _load()
         old = {r["id"]: r for r in state["rules"]}
-        rule = validate(body, known, old)
+        # An app the rule already watches stays allowed while nothing of it runs.
+        same = old.get(body.get("id")) if isinstance(body, dict) and isinstance(body.get("id"), str) else None
+        rule = validate(body, set(known) | set((same or {}).get("apps", [])), old)
         if rule["id"] not in old and len(old) >= MAX_RULES:
             raise ValueError(f"at most {MAX_RULES} log alerts")
         before = old.get(rule["id"])
@@ -183,7 +188,7 @@ def save(body, known_apps=None):
 def delete(rule_id):
     with _lock:
         state = _load()
-        if not (isinstance(rule_id, str) and _ID.match(rule_id) and any(r["id"] == rule_id for r in state["rules"])):
+        if not (isinstance(rule_id, str) and _ID.fullmatch(rule_id) and any(r["id"] == rule_id for r in state["rules"])):
             raise ValueError("that log alert no longer exists; refresh and try again")
         state["rules"] = [r for r in state["rules"] if r["id"] != rule_id]
         state["counts"].pop(rule_id, None)
@@ -198,7 +203,9 @@ def listing():
     return {"rules": [{**r, "counts": state["counts"].get(r["id"], []),
                        "status": state["status"].get(r["id"], {"state": "waiting", "detail": ""})}
                       for r in state["rules"]],
-            "every": EVERY, "max_rules": MAX_RULES, "max_apps": MAX_APPS}
+            "every": EVERY, "max_rules": MAX_RULES, "max_apps": MAX_APPS,
+            # When the leader last counted: a list that stopped moving says so.
+            "counted_at": max((s.get("at", 0) for s in state["status"].values()), default=None)}
 
 
 # The child that matches an expression: the query and lines on stdin, the
@@ -233,27 +240,37 @@ def _since(key, now):
     return max(EVERY, min(MAX_BACK, math.ceil(now - cursor[1]) + 5))
 
 
+def _minute(stamp):
+    """The minute (since the epoch) a kubelet timestamp falls in."""
+    return calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")) // 60
+
+
 def _read_new(target, now):
-    """The lines a container wrote since its cursor, and whether the read was cut."""
+    """What a container wrote since its cursor, as (minute written, line)
+    pairs (an unstamped line counts in this round's minute), and whether the
+    read was cut."""
     ns, _app, pod, container = target
     key = (ns, pod, container)
-    text = _read(ns, pod, container, _since(key, now), MAX_BYTES)
+    since = _since(key, now)
+    text = _read(ns, pod, container, since, MAX_BYTES)
     last = (_cursors.get(key) or ("", 0))[0]
-    out, newest = [], last
+    out, newest, here = [], last, int(now // 60)
     for raw in text.splitlines():
         stamp = LOGSEARCH._STAMP.match(raw)
         at, line = (stamp.group(1), stamp.group(2)) if stamp else ("", raw)
         if at and at <= last:
             continue
         newest = max(newest, at)
-        out.append(line[:LOGSEARCH.MAX_LINE])
-    return key, newest, out, len(text) >= MAX_BYTES
+        out.append((_minute(at) if at else here, line[:LOGSEARCH.MAX_LINE]))
+    return key, newest, out, len(text) >= MAX_BYTES, since
 
 
-def _plan(rules, workloads):
-    """Containers to read this round, rule by rule until MAX_CONTAINERS; the
-    apps left out are named."""
+def _plan(rules, workloads, turn=0):
+    """Containers to read this round, rule by rule until MAX_CONTAINERS,
+    starting at a different rule each round so that no rule is always the
+    one left out; the apps left out are named."""
     chosen, skipped = [], set()
+    rules = rules[turn % len(rules):] + rules[:turn % len(rules)] if rules else []
     for rule in rules:
         for target in LOGSEARCH.targets(workloads, rule["apps"]):
             if target in chosen:
@@ -265,17 +282,55 @@ def _plan(rules, workloads):
     return chosen, skipped
 
 
+def _names(apps):
+    return ", ".join(a.split("/", 1)[1] for a in apps)
+
+
+def _count(rule, read, unread, skipped, running):
+    """(state, detail, {minute: matches} or None, covered from) for one rule."""
+    absent = sorted(a for a in rule["apps"] if a not in running)
+    missing = sorted(a for a in rule["apps"] if a in unread)
+    later = sorted(a for a in rule["apps"] if a in skipped)
+    if absent:
+        return "absent", f"nothing of {_names(absent)} is running, so there is nothing to read", None, None
+    if missing:
+        return "unread", f"could not read {_names(missing)}", None, None
+    if later:
+        return "skipped", (f"not read this minute: over the {MAX_CONTAINERS} containers a minute "
+                           f"Homestead reads for log alerts ({_names(later)})"), None, None
+    pairs = [pair for app in rule["apps"] for pair in read[app]["lines"]]
+    try:
+        hits = matching([line for _, line in pairs], rule["query"], rule["regex"], rule["case"])
+    except ValueError as error:
+        return ("slow" if isinstance(error, TooSlow) else "failed"), str(error), None, None
+    per = {}
+    for i in hits:
+        per[pairs[i][0]] = per.get(pairs[i][0], 0) + 1
+    return "ok", "", per, max(read[app]["from"] for app in rule["apps"])
+
+
+def _over(history, rule, minute):
+    """The most matching lines in any window of the rule's length ending this
+    minute or the one just finished (whose last seconds this round read)."""
+    return max(sum(c for m, c in history.items() if end - rule["window"] < m <= end and c is not None)
+               for end in (minute - 1, minute))
+
+
 def evaluate(now=None):
     """One round: read what the rules' apps wrote since the last read, count
-    each rule's matches, keep the counts and return the alert facts. The
-    caller checks leadership."""
+    each rule's matches in the minute each line was written, keep the counts
+    and return the alert facts. The caller checks leadership."""
     now = time.time() if now is None else now
+    minute = int(now // 60)
     with _round:
         with _lock:
             rules = _load()["rules"]
+        sig = {r["id"]: [r.get(k) for k in _COUNTED] for r in rules}
         workloads = _workloads()
-        targets, skipped = _plan(rules, workloads)
-        lines, unread, capped, cursors = {}, set(), set(), {}
+        targets, skipped = _plan(rules, workloads, minute)
+        running = {f"{t[0]}/{t[1]}" for t in LOGSEARCH.targets(workloads, sorted({a for r in rules for a in r["apps"]}))} \
+            if rules else set()
+        read, unread, capped, cursors = {}, set(), set(), {}
         pool = ThreadPoolExecutor(max_workers=READ_WORKERS)
         futures = {pool.submit(_read_new, t, now): t for t in targets}
         finished, _ = wait(futures, timeout=READ_BUDGET)
@@ -285,71 +340,64 @@ def evaluate(now=None):
             try:
                 if future not in finished:
                     raise TimeoutError("read took too long")
-                key, newest, got, full = future.result()
+                key, newest, got, full, since = future.result()
             except Exception:
                 unread.add(app)
                 continue
             cursors[key] = (newest, now)
-            lines.setdefault(app, []).extend(got)
+            row = read.setdefault(app, {"lines": [], "from": 0})
+            row["lines"].extend(got)
+            row["from"] = max(row["from"], int((now - since) // 60) + 1)
             if full:
                 capped.add(app)
         # A container that is gone, or was not read, starts again from a fresh read.
         _cursors.clear()
         _cursors.update(cursors)
-        minute, facts, counts, status = int(now // 60), [], {}, {}
-        for rule in rules:
-            key = f"logs:{rule['id']}"
-            missing = sorted(a for a in rule["apps"] if a in unread)
-            later = sorted(a for a in rule["apps"] if a in skipped)
-            state, detail, count = "ok", "", None
-            if missing:
-                state, detail = "unread", "could not read " + ", ".join(a.split("/", 1)[1] for a in missing)
-            elif later:
-                state, detail = "skipped", (f"not read this minute: over the {MAX_CONTAINERS} containers a minute "
-                                            f"Homestead reads for log alerts ({', '.join(a.split('/', 1)[1] for a in later)})")
-            else:
-                found = [line for app in rule["apps"] for line in lines.get(app, ())]
-                try:
-                    count = len(matching(found, rule["query"], rule["regex"], rule["case"]))
-                except ValueError as error:
-                    state, detail = "slow" if isinstance(error, TooSlow) else "failed", str(error)
-            counts[rule["id"]] = [minute, count]
-            status[rule["id"]] = {"state": state, "detail": detail, "at": int(now)}
-            if count is None:
-                facts.append({"unknown_key": key})
+        counted = {r["id"]: _count(r, read, unread, skipped, running) for r in rules}
+        facts = []
         with _lock:
             fresh = _load()
             for rule in fresh["rules"]:
                 rid = rule["id"]
-                if rid not in counts:
-                    continue
-                history = [c for c in fresh["counts"].get(rid, []) if c[0] > minute - KEEP and c[0] != minute]
-                fresh["counts"][rid] = history + [counts[rid]]
-                fresh["status"][rid] = status[rid]
-                if counts[rid][1] is None:
-                    continue
-                total = sum(c for m, c in fresh["counts"][rid] if m > minute - rule["window"] and c is not None)
-                if total > rule["threshold"]:
-                    facts.append(fact(rule, total, capped & set(rule["apps"])))
+                if rid not in counted or sig[rid] != [rule.get(k) for k in _COUNTED]:
+                    continue   # new, or edited during the round: counted from the next one
+                state, detail, per, start = counted[rid]
+                history = {m: c for m, c in fresh["counts"].get(rid, []) if m > minute - KEEP}
+                if per is None:
+                    history.setdefault(minute, None)
+                    facts.append({"unknown_key": f"logs:{rid}"})
+                else:
+                    for m in range(start, minute + 1):
+                        history[m] = history.get(m) or 0
+                    for m, n in per.items():
+                        if m > minute - KEEP:
+                            history[m] = (history.get(m) or 0) + n
+                fresh["counts"][rid] = sorted([m, c] for m, c in history.items())
+                fresh["status"][rid] = {"state": state, "detail": detail, "at": int(now)}
+                if per is not None:
+                    total = _over(history, rule, minute)
+                    if total > rule["threshold"]:
+                        facts.append(fact(rule, total, capped & set(rule["apps"])))
             ids = {r["id"] for r in fresh["rules"]}
             fresh["counts"] = {k: v for k, v in fresh["counts"].items() if k in ids}
             fresh["status"] = {k: v for k, v in fresh["status"].items() if k in ids}
             _save(fresh)
-        facts = [f for f in facts if "unknown_key" not in f or f["unknown_key"][5:] in ids]
         _last.update(at=now, facts=facts)
         return facts
 
 
 def fact(rule, total, capped=()):
     """What the bell, push and alerts.json see: the rule's name, its apps and
-    a count. No line, and no query: a search for a token is the token."""
-    apps = ", ".join(a.split("/", 1)[1] for a in rule["apps"])
+    a count. No line, and no query: a search for a token is the token.
+    Raised on the alert loop's first look: the counting window is the
+    debounce, and the next round replaces the fact before a further hold
+    would end."""
     span = "a minute" if rule["window"] == 1 else f"{rule['window']} minutes"
     level = max(0, (total // max(1, rule["threshold"])).bit_length() - 1)   # 1x, 2x, 4x... over
-    return {"key": f"logs:{rule['id']}", "category": "logs", "severity": rule["severity"],
+    return {"key": f"logs:{rule['id']}", "category": "logs", "severity": rule["severity"], "urgent": True,
             "title": f"{rule['name']}: {total} matching lines in {span}",
             "resolved": f"{rule['name']}: back under {rule['threshold']} in {span}",
-            "body": f"{apps} wrote more than {rule['threshold']} lines matching this log alert in {span}"
+            "body": f"{_names(rule['apps'])} wrote more than {rule['threshold']} lines matching this log alert in {span}"
                     + (" (at least: more than Homestead reads at once)" if capped else "")
                     + ". Open Log alerts to search them.",
             "signals": {"level": level}, "href": "/containers?panel=logalerts"}
@@ -379,10 +427,12 @@ def step(now=None):
         return None
 
 
-def run(sleep=time.sleep):
+def run(sleep=time.sleep, clock=time.time):
+    """A round two seconds into every minute, so the minute just finished is
+    read whole."""
     while True:
         step()
-        sleep(EVERY)
+        sleep(EVERY - clock() % EVERY + 2)
 
 
 def start():
@@ -397,40 +447,55 @@ def start():
 def preview(body, now=None):
     """What a rule would have done over the last hour: counts per minute and
     the minutes over its threshold. No lines. Takes log search's one-at-a-time
-    limit."""
+    limit; reads PREVIEW_BYTES per container, several at once."""
     body = {k: v for k, v in (body if isinstance(body, dict) else {}).items() if k != "id"}
     workloads = _workloads()
-    rule = validate(body, _apps(workloads))
+    rule = validate(body, _apps(workloads), named=False)
     now = time.time() if now is None else now
+
+    def one(target):
+        ns, _app, pod, container = target
+        return _read(ns, pod, container, 3600, PREVIEW_BYTES)
+
     with LOGSEARCH.exclusive():
         stamps, found, unread, capped = [], [], set(), set()
-        for ns, app, pod, container in LOGSEARCH.targets(workloads, rule["apps"])[:MAX_CONTAINERS]:
+        targets = LOGSEARCH.targets(workloads, rule["apps"])[:MAX_CONTAINERS]
+        with ThreadPoolExecutor(max_workers=PREVIEW_WORKERS) as pool:
+            futures = [(t, pool.submit(one, t)) for t in targets]
+        for (ns, app, _pod, _container), future in futures:
             try:
-                text = _read(ns, pod, container, 3600, LOGSEARCH.MAX_BYTES)
+                text = future.result()
             except Exception:
                 unread.add(app)
                 continue
-            if len(text) >= LOGSEARCH.MAX_BYTES:
+            if len(text) >= PREVIEW_BYTES:
                 capped.add(app)
             for raw in text.splitlines():
                 stamp = LOGSEARCH._STAMP.match(raw)
                 if stamp:
                     stamps.append(stamp.group(1))
                     found.append(stamp.group(2)[:LOGSEARCH.MAX_LINE])
-        hits = matching(found, rule["query"], rule["regex"], rule["case"])
+        try:
+            hits = matching(found, rule["query"], rule["regex"], rule["case"], PREVIEW_SECONDS)
+        except TooSlow:
+            raise ValueError(f"trying it on the last hour took more than {PREVIEW_SECONDS} seconds: too many lines, "
+                             "or too slow an expression. Try plain text, or a simpler expression") from None
     per = {}
     for i in hits:
-        at = calendar.timegm(time.strptime(stamps[i][:19], "%Y-%m-%dT%H:%M:%S"))
-        per[int(at // 60)] = per.get(int(at // 60), 0) + 1
+        per[_minute(stamps[i])] = per.get(_minute(stamps[i]), 0) + 1
     minute = int(now // 60)
     counts = [[m, per.get(m, 0)] for m in range(minute - 59, minute + 1)]
     over = [m for m, _ in counts if sum(c for mm, c in counts if m - rule["window"] < mm <= m) > rule["threshold"]]
     return {"counts": counts, "over_minutes": len(over), "unread": sorted(unread), "capped": sorted(capped)}
 
 
+def _body(request):
+    return request.body if isinstance(request.body, dict) else {}
+
+
 ROUTES = {
     ("GET", "/api/logalerts"): ("viewer", lambda request: listing()),
-    ("POST", "/api/logalerts"): ("operator", lambda request: save(request.body)),
-    ("POST", "/api/logalerts/delete"): ("operator", lambda request: delete((request.body or {}).get("id"))),
-    ("POST", "/api/logalerts/preview"): ("viewer", lambda request: preview(request.body)),
+    ("POST", "/api/logalerts"): ("operator", lambda request: save(_body(request))),
+    ("POST", "/api/logalerts/delete"): ("operator", lambda request: delete(_body(request).get("id"))),
+    ("POST", "/api/logalerts/preview"): ("viewer", lambda request: preview(_body(request))),
 }
