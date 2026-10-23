@@ -761,6 +761,9 @@ whether it then starts anyway or keeps waiting.
   apps it needs are stopped, and how long it will wait for them.
 - A wait longer than 10 minutes can show an update as "not progressing" in
   Kubernetes; it carries on once the app it waits for is up.
+- **A start gate changed outside Homestead** (kubectl, say) is named on the
+  app's details and in an alert; **Put the start gate back** in Placement
+  renders it from the setting again, restarting the app once.
 
 The setting, the routes and the gate are described in the
 [reference](https://github.com/homestead-lab/homestead/blob/main/docs/reference.md#start-order).
@@ -1098,7 +1101,8 @@ Each node lists its own address and the VIPs it answers for; hovering a node
 highlights its addresses, and hovering an address highlights its node.
 
 An app that [starts after](#starts-after) others has an arrow to each of them,
-dashed while its start gate is not committed yet, and says "after app-2" on its
+pointing to the app it waits for, dashed while its start gate is not committed
+yet, and says "after app-2" on its
 card (on a phone, where the lines are not drawn, that is all there is).
 
 A volume no container, VM or scheduled job references is **disconnected**. Those

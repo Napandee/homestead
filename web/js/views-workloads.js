@@ -857,7 +857,7 @@ function startWaitText(w, now = Date.now() / 1000) {
     return said(`Started without ${names} at ${fmtClock(wait.at)}: ${names} ${wait.started_without.length > 1 ? "were" : "was"} not ready${timeout ? ` after ${startsSpan(timeout)}` : ""}`);
   }
   if (w.start_gate === "missing" && setting.managed) return said("Its start gate isn't committed yet: commit the lines Edit shows");
-  if (w.start_gate === "differs" || w.start_gate === "missing") return said("Its start gate doesn't match its setting: save Starts after in Edit");
+  if (w.start_gate === "differs" || w.start_gate === "missing") return said("Its start gate doesn't match its setting: put it back in Edit → Placement");
   return null;
 }
 /* The apps it starts after, the ones that no longer exist marked. */
@@ -865,11 +865,14 @@ function startsAfterNames(w) {
   const after = w.start_setting?.after;
   return after ? after.map(a => `${a.app}${a.gone ? " (gone)" : ""}`).join(", ") : (w.starts_after || []).join(", ");
 }
-/* Start's lead: the stopped apps a start of this one would wait for. */
-function startWaitsLine(name, waits, timeout) {
+/* Start's lead: the stopped apps a start of this one would wait for, or
+   that it could not check (#620). */
+function startWaitsLine(name, waits, timeout, onTimeout = "start", error = "") {
+  if (error) return ` ${error[0].toUpperCase()}${error.slice(1)}.`;
   if (!waits?.length) return "";
   const many = waits.length > 1;
-  return ` ${startsWords(waits)} ${many ? "are" : "is"} stopped: ${name} will wait for ${many ? "them" : "it"} ${timeout ? `up to ${startsSpan(timeout)}` : "before it starts"}.`;
+  const until = onTimeout === "wait" ? `until ${many ? "they are" : "it is"} up` : timeout ? `up to ${startsSpan(timeout)}` : "before it starts";
+  return ` ${startsWords(waits)} ${many ? "are" : "is"} stopped: ${name} will wait for ${many ? "them" : "it"} ${until}.`;
 }
 /* The app's details: Starts after, and what its start is waiting on. */
 function startsAfterFact(w) {
@@ -1160,11 +1163,11 @@ window.wlScale = async (ns, name, n) => {
       const plan = await api(`/api/workloads/start-plan?${new URLSearchParams({ ns, name, replicas: n })}`);
       // Starts after (#746): the apps it starts after that are stopped, which it would wait for.
       const waits = plan.waits_for || [];
-      if (plan.requires_confirmation || plan.blocked || waits.length) {
+      if (plan.requires_confirmation || plan.blocked || waits.length || plan.waits_for_error) {
         const pods = plan.additional > 1 ? `${plan.additional} pods of` : "";
-        const row = waits.length ? (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) : null;
+        const row = waits.length ? (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) : null, setting = row?.start_setting;
         modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok",
-          extra: esc(startWaitsLine(name, waits, row?.start_setting?.timeout)) })
+          extra: esc(startWaitsLine(name, waits, setting?.timeout, setting?.on_timeout, plan.waits_for_error)) })
           + UI.actions(plan.blocked ? UI.cancel("Close")
             : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},${!!plan.requires_confirmation},true)`, { kind: "pri" })));
         return;

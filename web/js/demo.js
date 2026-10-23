@@ -634,16 +634,23 @@
   // which these fixtures have stopped, so paperless's new pod waits for it.
   // The healthy scenario starts postgres and paperless (below). Added after
   // the network fixtures, which give every other app an address of its own.
-  const demoStartsAfter = { "lab/home-assistant": ["postgres"], "lab/paperless": ["postgres"] };
+  const demoStartsAfter = { "lab/home-assistant": ["postgres"], "lab/paperless": ["postgres"], "lab/doublecommander": ["postgres"] };
+  // Flux applies doublecommander: Edit shows the lines to commit, and they aren't committed yet.
+  const demoManaged = { "lab/doublecommander": "Flux" };
+  const demoGitLines = after => `metadata:\n  annotations:\n    homestead.io/starts-after: ${JSON.stringify(JSON.stringify({ after, on_timeout: "start", timeout: 300 }))}\n`
+    + "spec:\n  template:\n    spec:\n      initContainers:   # first, before any others\n        - name: homestead-start-gate\n"
+    + "          image: \"docker.io/library/alpine:3.24@sha256:…\"\n"
+    + `          env: [{"name": "HS_AFTER", "value": "${after.map(a => `${a.service}.${a.ns}.svc:${a.port}`).join(" ")}"}, …]\n`;
   workloads.push({ name: "postgres", ns: "lab", kind: "Deployment", failover: "move", desired: 0, ready: 0, uptime: 0,
     cpu: 0, mem_mb: 0, nodes: [], hardware: [], images: ["docker.io/library/postgres:17"], ports: [], claims: ["postgres-data"],
     pod_count: 0, container_count: 1, pods: [] });
   for (const w of workloads) {
     const after = demoStartsAfter[`${w.ns}/${w.name}`] || [];
-    Object.assign(w, { starts_after: after, start_unreadable: false, start_gate: after.length ? "rendered" : "none", start_wait: null,
-      start_setting: after.length ? { after: after.map(app => ({ ns: "lab", app, gone: false })), timeout: 300, on_timeout: "start", managed: false } : null });
+    const managed = !!demoManaged[`${w.ns}/${w.name}`];
+    Object.assign(w, { starts_after: after, start_unreadable: false, start_gate: !after.length ? "none" : managed ? "missing" : "rendered", start_wait: null,
+      start_setting: after.length ? { after: after.map(app => ({ ns: "lab", app, gone: false })), timeout: 300, on_timeout: "start", managed } : null });
   }
-  Object.assign(workloads.find(w => w.name === "paperless"), { ready: 0, uptime: 0,
+  Object.assign(workloads.find(w => w.name === "paperless"), { ready: 0, uptime: 0, cpu: 0, mem_mb: 0,
     start_wait: { waiting_for: ["postgres"], since: Math.floor(Date.now() / 1000) - 140 },
     pods: [{ name: "paperless-5d9c7b6f4-x2k8q", node: "harvester-node3", phase: "Pending", ready: false, restarts: 0, container_count: 1,
       containers: [{ name: "paperless", image: "ghcr.io/paperless-ngx/paperless-ngx:latest", kind: "app", state: "PodInitializing", ready: false, restarts: 0 }] }] });
@@ -2782,11 +2789,16 @@ ssh_pwauth: true
     } }; },
     // Starts after (#746): Edit's block, and its own save.
     "/api/workloads/starts-after": (url, init) => {
-      if (init?.method === "POST") return { ok: true, restarts: true };
-      const ns = url.searchParams.get("ns"), name = url.searchParams.get("name");
       const ports = { postgres: [5432], frigate: [5000, 8554] };
+      if (init?.method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        const picked = (body.after || []).map(a => ({ ns: a.ns || "lab", app: a.app, service: a.service || a.app, port: a.port || ports[a.app]?.[0] || 80 }));
+        return body.lines ? { git: demoGitLines(picked) } : { ok: true, restarts: true };
+      }
+      const ns = url.searchParams.get("ns"), name = url.searchParams.get("name"), by = demoManaged[`${ns}/${name}`] || null;
       const after = (demoStartsAfter[`${ns}/${name}`] || []).map(app => ({ ns: "lab", app, service: app, port: ports[app]?.[0] || 80 }));
-      return { after, timeout: 300, on_timeout: "start", unreadable: false, managed_by: null, gate: after.length ? "rendered" : "none", git: "",
+      return { after, timeout: 300, on_timeout: "start", unreadable: false, managed_by: by,
+        gate: !after.length ? "none" : by ? "not-committed" : "rendered", git: by && after.length ? demoGitLines(after) : "",
         candidates: workloads.filter(w => !(w.ns === ns && w.name === name) && (w.self || !w.homestead)).map(w => ({ ns: w.ns, app: w.name,
           services: [{ name: w.name, ports: ports[w.name] || (w.ports || []).map(p => p.port) }] })) };
     },
@@ -2890,7 +2902,8 @@ ssh_pwauth: true
           after: [{ id: "w:lab/postgres", committed: true }] },
         { id: "w:lab/paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }],
           after: [{ id: "w:lab/postgres", committed: true }] },
-        { id: "w:lab/postgres", name: "postgres", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 3600, cpu: .05, mem_mb: 96, claims: [], ports: [] },
+        // Stopped in these fixtures, as the Apps list has it; the healthy scenario starts it.
+        { id: "w:lab/postgres", name: "postgres", ns: "lab", kind: "container", node: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [], ports: [] },
         { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.0.2.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.0.2.217" }] },
         { id: "w:vm-router", name: "router", ns: "lab", kind: "vm", node: "", running: false, state: "Stopped", ip: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [{ pvc: "router-disk", vid: "v:router" }], ports: [] }],
       // A nightly backup per app, as a cluster with ReadWriteOnce volumes has:
@@ -3200,6 +3213,8 @@ ssh_pwauth: true
     // Starts after (#746): postgres runs, so nothing waits for it.
     Object.assign(workloads.find(row => row.name === "postgres"), { desired: 1, cpu: 0.05, mem_mb: 96, nodes: ["harvester-node1"] });
     for (const workload of workloads) workload.start_wait = null;
+    Object.assign(workloads.find(row => row.name === "paperless"), { cpu: 0.18, mem_mb: 512 });
+    Object.assign(responses["/api/flow"].workloads.find(row => row.id === "w:lab/postgres"), { node: "harvester-node1", uptime: 3600, cpu: .05, mem_mb: 96 });
     for (const workload of workloads.filter(row => row.desired > 0 && row.ready < row.desired)) {
       workload.ready = workload.desired;
       workload.uptime = 3600;

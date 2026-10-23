@@ -121,7 +121,7 @@ async function viewFlow() {
           <span><i style="background:var(--arch-access)"></i>port</span>
           <span><i style="background:var(--arch-mount)"></i>mount</span>
           <span><i style="background:repeating-linear-gradient(90deg,var(--arch-copy) 0 3px,transparent 3px 7px)"></i>replica</span>
-          ${f.workloads.some(w => (w.after || []).length) ? `<span><i style="background:var(--arch-after)"></i>starts after</span>` : ""}
+          ${f.workloads.some(w => (w.after || []).length) ? `<span><i style="background:var(--arch-after)"></i>starts after (→ the app it waits for)</span>` : ""}
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${archMissingCallout(f.missing)}

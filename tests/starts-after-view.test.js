@@ -137,7 +137,7 @@ test("a row that started without an app says when and why", () => {
 test("a gate that doesn't match, one not committed, and a setting that can't be read", () => {
   const c = load();
   assert.equal(c.startWaitText({ start_gate: "differs", start_setting: { after: [], timeout: 300 } }, NOW).line,
-    "Its start gate doesn't match its setting: save Starts after in Edit");
+    "Its start gate doesn't match its setting: put it back in Edit → Placement");
   assert.equal(c.startWaitText({ start_gate: "missing", start_setting: { managed: true, after: [], timeout: 300 } }, NOW).line,
     "Its start gate isn't committed yet: commit the lines Edit shows");
   assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs", start_note: "its Starts after setting could not be read" }, NOW).line,
@@ -171,4 +171,82 @@ test("the Architecture page links an app to the apps it starts after, and keeps 
   assert.deepEqual(JSON.parse(JSON.stringify(graph.workloads[0].after)), [{ id: "w:a/lab/y", committed: false }]);
   const links = c.archStartLinks([{ id: "w:lab/x", after: [{ id: "w:lab/y", committed: true }, { id: "w:lab/z", committed: false }] }, { id: "w:lab/y" }]);
   assert.deepEqual(JSON.parse(JSON.stringify(links)), [["w:lab/x", "w:lab/y", "starts-after"], ["w:lab/x", "w:lab/z", "starts-after pending"]]);
+});
+
+// Review fixes.
+test("picking an app rebuilds only its port choice, so the app list keeps focus", () => {
+  const c = load();
+  EDIT(c);
+  const port = { innerHTML: "", hidden: true }, row = { removed: false, remove() { this.removed = true; }, q: s => s === ".sa-port" ? port : null };
+  const select = { value: "lab/frigate", closest: () => row };
+  c.$ = (sel, root) => root?.q ? root.q(sel) : null;
+  c.startsAfterChanged = () => {};
+  c.window.startsAfterAppPicked(select);
+  assert.equal(row.removed, false);
+  assert.match(port.innerHTML, /<option value="frigate:5000">5000<\/option><option value="frigate:8554">8554<\/option>/);
+  assert.equal(port.hidden, false);
+  select.value = "lab/postgres";
+  c.window.startsAfterAppPicked(select);
+  assert.equal(port.hidden, true, "one port: nothing to choose");
+});
+
+function EDIT(c, over = {}) {
+  vm.runInContext(`EDIT_STARTS = ${JSON.stringify({ form: form(over), ctx, dirty: false })}`, c);
+}
+
+test("rows are labelled for screen readers", () => {
+  const html = load().startsAfterBlock(form({ after: [{ ns: "lab", app: "postgres", service: "postgres", port: 5432 }] }), ctx);
+  assert.match(html, /aria-label="Remove this app"/);
+  assert.match(html, /role="group" aria-labelledby="e_starts_apps"/);
+  assert.match(html, /id="e_starts_apps"/);
+});
+
+test("a changed Starts after on an app Flux applies is said in the review, not dropped silently", () => {
+  const c = load();
+  assert.equal(c.startsAfterManagedNote(form({ managed_by: "Flux" }), true),
+    "Starts after is not saved here: Flux applies this app, so commit the lines shown under Placement.");
+  assert.equal(c.startsAfterManagedNote(form({ managed_by: "Flux" }), false), "");
+  assert.equal(c.startsAfterManagedNote(form(), true), "");
+});
+
+test("Show the lines to commit asks for the lines only, and never saves", async () => {
+  const c = load();
+  EDIT(c, { managed_by: "Flux" });
+  const pre = { textContent: "", hidden: true }, sent = [];
+  c.$ = sel => sel === "#e_starts_git" ? pre : null;
+  c.$$ = () => [];
+  c.api = async (path, opts) => { sent.push([path, JSON.parse(opts.body)]); return { git: "metadata: x\n" }; };
+  c.toast = () => { throw new Error("no toast: nothing was saved"); };
+  await c.window.startsAfterLines();
+  assert.equal(sent[0][0], "/api/workloads/starts-after");
+  assert.equal(sent[0][1].lines, true);
+  assert.equal(pre.textContent, "metadata: x\n");
+  assert.equal(pre.hidden, false);
+});
+
+test("the time is checked only when there are apps to wait for", () => {
+  const c = load();
+  assert.equal(c.startsAfterProblem({ after: [], timeout: NaN, on_timeout: "start" }), "");
+  assert.equal(c.startsAfterProblem({ after: [{ app: "x" }], timeout: 10, on_timeout: "start" }), "Wait up to: between 0.5 and 60 minutes");
+  assert.equal(c.startsAfterProblem({ after: [{ app: "x" }], timeout: 300, on_timeout: "start" }), "");
+  assert.equal(c.startsAfterProblem(undefined), "");
+});
+
+test("a gate changed outside Homestead can be put back, which sends the setting again", () => {
+  const c = load();
+  const stored = [{ ns: "lab", app: "postgres", service: "postgres", port: 5432 }];
+  const base = form({ after: stored, gate: "differs" });
+  assert.match(c.startsAfterBlock(base, ctx), /Put the start gate back/);
+  assert.doesNotMatch(c.startsAfterBlock(form({ after: stored, gate: "rendered" }), ctx), /Put the start gate back/);
+  assert.doesNotMatch(c.startsAfterBlock(form({ after: stored, gate: "not-committed", managed_by: "Flux" }), ctx), /Put the start gate back/);
+  assert.deepEqual(JSON.parse(JSON.stringify(c.startsAfterValue(base, { dirty: true, restore: true, rows: stored, minutes: 5, on_timeout: "start" }))),
+    { after: stored, timeout: 300, on_timeout: "start", restore_gate: true });
+});
+
+test("Start: several apps it keeps waiting for, and a read that failed", () => {
+  const c = load();
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300, "wait"), " app-2 is stopped: app-1 will wait for it until it is up.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 300, "wait"), " app-2 and app-3 are stopped: app-1 will wait for them until they are up.");
+  assert.equal(c.startWaitsLine("app-1", [], 300, "start", "could not check which apps it starts after: API down"),
+    " Could not check which apps it starts after: API down.");
 });

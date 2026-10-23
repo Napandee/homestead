@@ -260,16 +260,22 @@ function startsAfterRow(row = {}, form = EDIT_STARTS.form, ctx = EDIT_STARTS.ctx
     return `<option value="${esc(value)}"${value === key ? " selected" : ""}${none && value !== key ? " disabled" : ""}>${esc(`${c.app}${c.ns !== ctx.ns ? ` · ${c.ns}` : ""}${none ? " · no Service with a TCP port" : ""}`)}</option>`;
   });
   if (key && !found) apps.unshift(`<option value="${esc(key)}" selected>${esc(`${row.app}${row.ns !== ctx.ns ? ` · ${row.ns}` : ""} (gone)`)}</option>`);
-  const services = found?.services || [];
+  const ports = startsAfterPorts(row, form);
+  return `<div class="aff-row starts-row"><select class="sa-app" aria-label="App it starts after" onchange="startsAfterAppPicked(this)"><option value="">choose an app…</option>${apps.join("")}</select>
+    <select class="sa-port" aria-label="Port to wait for"${ports.length > 1 ? "" : " hidden"}>${ports.join("")}</select>
+    <button class="iconbtn row-remove" type="button" title="Remove this app" aria-label="Remove this app" onclick="this.closest('.starts-row').remove();startsAfterChanged()">×</button></div>`;
+}
+/* A row's port choices: each TCP port of each Service that can show the app
+   is ready, and a stored one no longer there. */
+function startsAfterPorts(row, form = EDIT_STARTS.form) {
+  const services = (form?.candidates || []).find(c => startsKey(c) === startsKey(row))?.services || [];
   const ports = services.flatMap(s => s.ports.map(port => {
     const value = `${s.name}:${port}`;
     return `<option value="${esc(value)}"${s.name === row.service && port === row.port ? " selected" : ""}>${esc(services.length > 1 ? value : port)}</option>`;
   }));
   if (row.service && !services.some(s => s.name === row.service && s.ports.includes(row.port)))
     ports.unshift(`<option value="${esc(`${row.service}:${row.port}`)}" selected>${esc(`${row.service}:${row.port}`)}</option>`);
-  return `<div class="aff-row starts-row"><select class="sa-app" aria-label="App it starts after" onchange="startsAfterAppPicked(this)"><option value="">choose an app…</option>${apps.join("")}</select>
-    <select class="sa-port" aria-label="Port to wait for"${ports.length > 1 ? "" : " hidden"}>${ports.join("")}</select>
-    <button class="iconbtn row-remove" type="button" title="Remove this app" onclick="this.closest('.starts-row').remove();startsAfterChanged()">×</button></div>`;
+  return ports;
 }
 function startsAfterBlock(form, ctx = {}) {
   const wrap = body => `<div class="place-level" id="e_starts"><div class="place-title">Starts after ${tip(STARTS_HELP)}</div>${body}</div>`;
@@ -278,25 +284,29 @@ function startsAfterBlock(form, ctx = {}) {
     ${UI.button("Retry", "startsAfterRetry()", { kind: "sm" })}`);
   if (ctx.fixed) return wrap(`<div class="dim small">Homestead and its helpers can't wait for other apps. Other apps can start after Homestead.</div>`);
   const by = form.managed_by;
-  return wrap(`${by ? `<div class="dim small">${esc(by)} applies this app, so Homestead doesn't change it: commit the lines below where ${esc(by)} applies it. To change it, choose the apps here, then show the lines for that.</div>` : ""}
+  return wrap(`${by ? `<div class="dim small">${esc(by)} applies this app, so Homestead doesn't change it: commit the lines below where ${esc(by)} applies it.</div>` : ""}
     ${form.unreadable ? `<div class="dim small" id="e_starts_unread">Its Starts after setting can't be read: it was changed outside Homestead. Set it again below, or ${UI.button("Clear it", "startsAfterClear()", { kind: "sm" })}</div>` : ""}
     <div class="place-grid two">
-      <div class="f"><label>Apps it waits for</label><div id="e_starts_rows">${(form.after || []).map(row => startsAfterRow(row, form, ctx)).join("")}</div>
+      <div class="f"><label id="e_starts_apps">Apps it waits for</label><div id="e_starts_rows" role="group" aria-labelledby="e_starts_apps">${(form.after || []).map(row => startsAfterRow(row, form, ctx)).join("")}</div>
         <button class="btn sm" type="button" onclick="startsAfterAdd()">＋ Add</button></div>
-      <div class="f"><label for="e_starts_min">Wait up to (minutes)</label><input type="number" id="e_starts_min" min="0.5" max="60" step="0.5" value="${esc((form.timeout || 300) / 60)}"></div>
+      <div class="starts-when"><div class="f"><label for="e_starts_min">Wait up to (minutes)</label><input type="number" id="e_starts_min" min="0.5" max="60" step="0.5" value="${esc((form.timeout || 300) / 60)}"></div>
       <div class="f"><label for="e_starts_on">If it never comes up</label><select id="e_starts_on">${[["start", "Start anyway"], ["wait", "Keep waiting"]].map(([value, label]) =>
-        `<option value="${value}"${(form.on_timeout || "start") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div></div>
+        `<option value="${value}"${(form.on_timeout || "start") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div></div></div>
     ${by ? `<pre class="mono small starts-git" id="e_starts_git"${form.git && (form.after || []).length ? "" : " hidden"}>${esc(form.git || "")}</pre>
       ${UI.button("Show the lines to commit", "startsAfterLines()", { kind: "sm", attrs: 'data-need="operator"' })}` : ""}
     <div class="dim small" id="e_starts_note" aria-live="polite"></div>
+    ${!by && !form.unreadable && (form.after || []).length && ["differs", "missing"].includes(form.gate)
+      ? UI.button("Put the start gate back", "startsAfterRestore()", { kind: "sm", attrs: 'id="e_starts_restore"' }) : ""}
     <div class="small badtext" id="e_starts_err" role="alert" hidden></div>`);
 }
 /* What Edit sends: undefined when nothing changed (or the form could not be
-   read, or Flux applies the app), else {after, timeout, on_timeout}. */
-function startsAfterValue(form, { dirty, rows, minutes, on_timeout }) {
+   read, or Flux applies the app), else {after, timeout, on_timeout}, with
+   restore_gate when its gate, changed outside Homestead, is to be put back. */
+function startsAfterValue(form, { dirty, rows, minutes, on_timeout, restore = false }) {
   if (!form || form.error || form.managed_by || !dirty) return undefined;
   const shape = list => (list || []).map(a => ({ ns: a.ns, app: a.app, service: a.service, port: a.port }));
   const value = { after: shape(rows), timeout: Math.round(minutes * 60), on_timeout };
+  if (restore) return { ...value, restore_gate: true };
   if (form.unreadable) return value;
   const same = JSON.stringify(value.after) === JSON.stringify(shape(form.after))
     && (!value.after.length || (value.timeout === form.timeout && value.on_timeout === form.on_timeout));
@@ -311,8 +321,16 @@ function startsAfterRows() {
 }
 function readStartsAfter() {
   if (!$("#e_starts_rows")) return undefined;
-  return startsAfterValue(EDIT_STARTS.form, { dirty: EDIT_STARTS.dirty, rows: startsAfterRows(),
+  return startsAfterValue(EDIT_STARTS.form, { dirty: EDIT_STARTS.dirty, restore: !!EDIT_STARTS.restore, rows: startsAfterRows(),
     minutes: +$("#e_starts_min")?.value, on_timeout: $("#e_starts_on")?.value || "start" });
+}
+/* Why Save can't send it, or "". The time matters only with apps to wait for. */
+function startsAfterProblem(value) {
+  return value?.after?.length && !(value.timeout >= 30 && value.timeout <= 3600) ? "Wait up to: between 0.5 and 60 minutes" : "";
+}
+/* Edit never sends a change for an app Flux applies: the review says so. */
+function startsAfterManagedNote(form, dirty) {
+  return form?.managed_by && dirty ? `Starts after is not saved here: ${form.managed_by} applies this app, so commit the lines shown under Placement.` : "";
 }
 /* The picked apps that are stopped or gone: a start would wait for them. */
 function startsAfterStopped(after, others) {
@@ -339,20 +357,31 @@ function startsAfterNote() {
   if (!note || !form || form.error) return;
   const rows = startsAfterRows(), name = EDIT_STARTS.ctx.name, seconds = Math.round((+$("#e_starts_min")?.value || 0) * 60), lines = [];
   const stopped = startsAfterStopped(rows, EDIT_PLACEMENT.others);
-  if (stopped.length) lines.push(`${startsWords(stopped)} ${stopped.length > 1 ? "are" : "is"} stopped: ${name}'s pods will wait for ${stopped.length > 1 ? "them" : "it"} ${$("#e_starts_on")?.value === "wait" ? "until it is up" : `up to ${startsSpan(seconds)}`} each time they start.`);
+  if (stopped.length) lines.push(`${startsWords(stopped)} ${stopped.length > 1 ? "are" : "is"} stopped: ${name}'s pods will wait for ${stopped.length > 1 ? "them" : "it"} ${$("#e_starts_on")?.value === "wait" ? `until ${stopped.length > 1 ? "they are" : "it is"} up` : `up to ${startsSpan(seconds)}`} each time they start.`);
   if (new Set(rows.map(startsKey)).size !== rows.length) lines.push("An app is named twice; it is waited for once.");
   if (rows.length && seconds > 600) lines.push("A wait over 10 min can show an update as not progressing in Kubernetes; it carries on once the app is up.");
   if (form.gate === "not-committed") lines.push("Its start gate isn't committed yet.");
-  else if (["differs", "missing"].includes(form.gate)) lines.push("Its start gate doesn't match this setting.");
+  else if (["differs", "missing"].includes(form.gate) && !EDIT_STARTS.restore) lines.push("Its start gate doesn't match this setting.");
+  if (EDIT_STARTS.restore) lines.push("Saving puts its start gate back, restarting it once.");
   note.textContent = lines.join(" ");
 }
 window.startsAfterChanged = () => { EDIT_STARTS.dirty = true; $("#e_starts_err") && ($("#e_starts_err").hidden = true); startsAfterNote(); };
 window.startsAfterAdd = () => { $("#e_starts_rows").insertAdjacentHTML("beforeend", startsAfterRow()); startsAfterChanged(); };
+/* Only the port choice is rebuilt: the app list keeps keyboard focus (arrow
+   keys on a closed select fire change at each step). */
 window.startsAfterAppPicked = select => {
   const [ns, app] = (select.value || "/").split("/");
-  const row = select.closest(".starts-row");
-  row.insertAdjacentHTML("afterend", startsAfterRow({ ns, app }));
-  row.remove();
+  const port = $(".sa-port", select.closest(".starts-row"));
+  if (port) {
+    const ports = startsAfterPorts({ ns, app });
+    port.innerHTML = ports.join("");
+    port.hidden = ports.length <= 1;
+  }
+  startsAfterChanged();
+};
+window.startsAfterRestore = () => {
+  EDIT_STARTS.restore = true;
+  $("#e_starts_restore")?.remove();
   startsAfterChanged();
 };
 window.startsAfterClear = () => {
@@ -363,23 +392,20 @@ window.startsAfterClear = () => {
 window.startsAfterRetry = async () => {
   const { ns, name } = EDIT_STARTS.ctx;
   const form = await api(`/api/workloads/starts-after?${new URLSearchParams({ ns, name })}`).catch(e => ({ error: e.message }));
-  EDIT_STARTS = { ...EDIT_STARTS, form, dirty: false };
+  EDIT_STARTS = { ...EDIT_STARTS, form, dirty: false, restore: false };
   const block = $("#e_starts");
   if (block) block.outerHTML = startsAfterBlock(form, EDIT_STARTS.ctx);
   startsAfterNote();
 };
-/* An app Flux or Argo CD applies: the server answers 409 with the lines to
-   commit for the apps chosen here, and writes nothing. */
+/* An app Flux or Argo CD applies: the lines to commit for the apps chosen
+   here. "lines" asks for them only; the server never saves on it. */
 window.startsAfterLines = async () => {
   const { ns, name } = EDIT_STARTS.ctx, pre = $("#e_starts_git");
-  const body = { ns, name, after: startsAfterRows(), timeout: Math.round((+$("#e_starts_min")?.value || 0) * 60), on_timeout: $("#e_starts_on")?.value || "start" };
+  const body = { ns, name, lines: true, after: startsAfterRows(), timeout: Math.round((+$("#e_starts_min")?.value || 0) * 60), on_timeout: $("#e_starts_on")?.value || "start" };
   try {
-    await api("/api/workloads/starts-after", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    toast(`${name}'s Starts after is saved: it is no longer applied from git`, "ok");
-  } catch (e) {
-    if (e.status === 409 && e.body?.git && pre) { pre.textContent = e.body.git; pre.hidden = false; }
-    else startsAfterShowError(e.message);
-  }
+    const answer = await api("/api/workloads/starts-after", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (pre) { pre.textContent = answer?.git || ""; pre.hidden = !answer?.git; }
+  } catch (e) { startsAfterShowError(e.message); }
 };
 document.addEventListener("input", event => { if (event.target.closest?.("#e_starts")) startsAfterChanged(); });
 document.addEventListener("change", event => { if (event.target.closest?.("#e_starts")) startsAfterChanged(); });
@@ -690,10 +716,8 @@ window.editSave = async (ns, name) => {
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   const startsAfter = readStartsAfter();
-  if (startsAfter) {
-    if (!(startsAfter.timeout >= 30 && startsAfter.timeout <= 3600)) return toast("Wait up to: between 0.5 and 60 minutes", "bad");
-    body.starts_after = startsAfter;
-  }
+  if (startsAfterProblem(startsAfter)) return toast(startsAfterProblem(startsAfter), "bad");
+  if (startsAfter) body.starts_after = startsAfter;
   // The app's own answer says whether it is Homestead; the list of apps may not have been read.
   if ((window.__editIsSelf || (STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name)) && !body.autostart) {
     if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`, { title: "Turn autostart off", ok: "Stop Homestead", danger: true }))) return;
@@ -738,6 +762,7 @@ window.editReview = async body => {
     childModal(rename ? "Rename app" : "Review app changes", `
       ${gitopsNote(review.managed, { rename: !!rename, yaml: review.yaml })}
       ${!rename && config.starts_after ? `<p>${esc(startsAfterReviewLine(config.name, config.starts_after))}</p>` : ""}
+      ${!rename && startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty) ? `<p>${esc(startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty))}</p>` : ""}
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
