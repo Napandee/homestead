@@ -5,6 +5,7 @@ no resolver, no write. The leader's jobs loop runs the resolvers every 3 s
 while a job is active and every 20 s otherwise; a standby replica's loop does
 nothing. Code that needs a job moved on sooner wakes the loop."""
 import ast
+import os
 import sys
 import tempfile
 import threading
@@ -203,6 +204,77 @@ class JobsLoopHealthTests(unittest.TestCase):
         self.assertGreaterEqual(len(starts), 3)
         gaps = [b - a for a, b in zip(starts, starts[1:])]
         self.assertTrue(all(gap >= 0.9 for gap in gaps), gaps)
+
+
+class JobLockTidyTests(unittest.TestCase):
+    """Lock files of jobs that are gone are removed once they are a day old
+    (wrap-up row 25), never one in use or one whose job is still kept."""
+
+    def setUp(self):
+        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.tmp))
+        self.saved = dict(OPS.RESOLVERS)
+        self.addCleanup(lambda: (OPS.RESOLVERS.clear(), OPS.RESOLVERS.update(self.saved)))
+        OPS.RESOLVERS["loop-test"] = lambda item: ("running", 50, "Halfway")
+        self.kept = OPS.start("loop-test", "A job", {"kind": "Thing", "name": "t", "namespace": "lab"}, "/", {})["id"]
+        self.locks = os.path.join(self.tmp, ".locks")
+        os.makedirs(self.locks, exist_ok=True)
+
+    def lock(self, operation_id, age):
+        path = os.path.join(self.locks, f"operations-job-{OPS._job_lock_name(operation_id)}.lock")
+        Path(path).touch()
+        moment = time.time() - age
+        os.utime(path, (moment, moment))
+        return path
+
+    def test_an_old_lock_of_a_job_gone_from_the_store_is_removed(self):
+        gone = self.lock("ab" * 12, 2 * 86400)
+        self.assertEqual(1, OPS.tidy_job_locks())
+        self.assertFalse(os.path.exists(gone))
+
+    def test_a_lock_under_a_day_old_is_kept(self):
+        fresh = self.lock("cd" * 12, 3600)
+        self.assertEqual(0, OPS.tidy_job_locks())
+        self.assertTrue(os.path.exists(fresh))
+
+    def test_the_lock_of_a_job_still_kept_stays_however_old(self):
+        mine = self.lock(self.kept, 30 * 86400)
+        crc_named = self.lock("not a hex id", 30 * 86400)
+        OPS.tidy_job_locks()
+        self.assertTrue(os.path.exists(mine))
+        self.assertFalse(os.path.exists(crc_named), "its job is not in the store")
+
+    def test_the_store_lock_and_other_files_are_left_alone(self):
+        other = [os.path.join(self.locks, name) for name in ("operations.lock", "something-else.lock")]
+        for path in other:
+            Path(path).touch()
+            os.utime(path, (0, 0))
+        OPS.tidy_job_locks()
+        self.assertTrue(all(os.path.exists(path) for path in other))
+
+    def test_a_lock_someone_holds_is_kept(self):
+        held = self.lock("ef" * 12, 2 * 86400)
+        result = []
+        with OPS._job_lock("ef" * 12):
+            tidy = threading.Thread(target=lambda: result.append(OPS.tidy_job_locks()))
+            tidy.start()
+            tidy.join(5)
+        self.assertEqual([0], result)
+        self.assertTrue(os.path.exists(held))
+
+    def test_nothing_is_removed_while_the_volume_is_held(self):
+        gone = self.lock("ab" * 12, 2 * 86400)
+        with mock.patch.object(OPS, "WRITE_GUARD", mock.Mock(side_effect=OPS.STORAGE_JOURNAL.Held("moving"))):
+            self.assertEqual(0, OPS.tidy_job_locks())
+        self.assertTrue(os.path.exists(gone))
+
+    def test_the_leaders_rounds_tidy_at_most_once_a_day(self):
+        self.enterContext(mock.patch.dict(OPS._tidied, {"at": 0}))
+        with mock.patch.object(OPS, "tidy_job_locks", return_value=0) as tidy:
+            OPS.tick(lambda: True)
+            OPS.tick(lambda: True)
+            OPS.tick(lambda: False)
+        self.assertEqual(1, tidy.call_count)
 
 
 class NoRequestAdvancesJobsTests(unittest.TestCase):

@@ -958,10 +958,17 @@ def advance_soon():
 
 def tick(is_leader, beat=None):
     """One round of the jobs loop: on the leader, run every active job's
-    resolver. beat(error=None) is told how the round went, so health shows a
-    stalled or failing loop. Returns how long to wait before the next round."""
+    resolver, and once a day tidy the locks of jobs that are gone. beat(error=None)
+    is told how the round went, so health shows a stalled or failing loop.
+    Returns how long to wait before the next round."""
     if not is_leader():
         return IDLE_SECONDS
+    if time.time() - _tidied["at"] >= LOCK_TIDY_EVERY:
+        _tidied["at"] = time.time()
+        try:
+            tidy_job_locks()
+        except Exception as error:
+            print(f"job locks not tidied: {str(error)[:160]}", flush=True)
     try:
         jobs = list_operations()
     except Exception as error:
@@ -993,6 +1000,47 @@ def run_jobs(is_leader, stop=None, beat=None):
         _wake.clear()
 
 
+# A lock file per job that ran outside the store's lock (_job_lock) stays on the
+# data volume after its job has gone; once a day the leader removes those over a
+# day old whose job is in neither store.
+LOCK_KEEP_SECONDS = LOCK_TIDY_EVERY = 86400
+_tidied = {"at": 0}
+
+
+def tidy_job_locks(now=None):
+    """Remove the lock files of jobs no longer kept, over LOCK_KEEP_SECONDS old.
+    Holds the store's lock, so no job is added or removed meanwhile, and takes
+    each file's own lock first (only tries), so a lock in use is never removed.
+    Nothing is removed while the data volume is held. Returns how many went."""
+    try:
+        require_write()
+    except STORAGE_JOURNAL.Held:
+        return 0
+    now = time.time() if now is None else now
+    folder = os.path.join(DATA_DIR, ".locks")
+    removed = 0
+    with _lock:
+        kept = {f"operations-job-{_job_lock_name(item.get('id'))}" for item in _read()}
+        try:
+            names = os.listdir(folder)
+        except FileNotFoundError:
+            return 0
+        for file in names:
+            name = file[:-len(".lock")]
+            if not (name.startswith("operations-job-") and file.endswith(".lock")) or name in kept:
+                continue
+            path = os.path.join(folder, file)
+            try:
+                if now - os.path.getmtime(path) < LOCK_KEEP_SECONDS:
+                    continue
+                with SHARED.SharedLock(name, strict=True, directory=lambda: DATA_DIR, timeout=0):
+                    os.remove(path)
+                removed += 1
+            except (TimeoutError, FileNotFoundError):
+                continue
+    return removed
+
+
 # Kinds whose resolvers run outside the job store's lock (#622 step 5): a slow
 # host or copy step no longer holds up every start, cancel and save. A resolver
 # works on a copy while holding only its own job's lock, and its result is kept
@@ -1003,14 +1051,20 @@ OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy"}
 _resolving = threading.local()
 
 
+def _job_lock_name(operation_id):
+    """The part of a job's lock file name that names the job (ids are 24 hex
+    digits; anything else is hashed)."""
+    return str(operation_id) if re.fullmatch(r"[0-9a-f]{8,64}", str(operation_id)) else \
+        f"crc{zlib.crc32(str(operation_id).encode()):08x}"
+
+
 def _job_lock(operation_id):
     """The lock one job's resolver and its cancel share, on every replica. One
-    per job (ids are 24 hex digits), so a slow step holds up only its own job."""
-    name = str(operation_id) if re.fullmatch(r"[0-9a-f]{8,64}", str(operation_id)) else \
-        f"crc{zlib.crc32(str(operation_id).encode()):08x}"
+    per job, so a slow step holds up only its own job."""
     # Only the loop takes it, and only tries: a job busy elsewhere (an old
     # leader's step still running) is left for the next round, not waited on.
-    return SHARED.SharedLock(f"operations-job-{name}", strict=True, directory=lambda: DATA_DIR, timeout=0)
+    return SHARED.SharedLock(f"operations-job-{_job_lock_name(operation_id)}", strict=True,
+                             directory=lambda: DATA_DIR, timeout=0)
 
 
 def _same(a, b):
@@ -1042,6 +1096,12 @@ def _resolve_outside(operation_id):
             if not stored or stored.get("status") in TERMINAL or stored.get("status") == CANCELLING:
                 return False
             work = copy.deepcopy(stored)
+            # The job this step started from, so its checkpoints can tell its own
+            # earlier saves from someone else's change. Per thread: a checkpoint
+            # made from a helper thread the resolver started finds no base, so
+            # the step's own save then looks like someone else's change and its
+            # result is dropped (safe; the step runs again next round).
+            # Checkpoint from the resolver's own thread.
             bases = _resolving.__dict__.setdefault("bases", {})
             bases[operation_id] = copy.deepcopy(stored)
             try:
