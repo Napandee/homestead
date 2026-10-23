@@ -74,7 +74,9 @@ function lhV2UpgradePaint() {
 // What Homestead's table knows about this target (views-cluster.js,
 // homestead_upgrade_check), from the Platform versions report the dialog was opened from.
 function lhV2UpgradeCheck(target) {
-  const row = (window.STATE?.data?.components?.components || []).find(c => c.id === 'longhorn' && c.next === target);
+  // STATE is core.js's const: a global name, not a property of window.
+  const parts = typeof STATE === 'undefined' ? [] : STATE.data?.components?.components || [];
+  const row = parts.find(c => c.id === 'longhorn' && c.next === target);
   return row?.check && typeof componentCheckSection === 'function' ? componentCheckSection(row.check) : '';
 }
 window.lhV2UpgradeMode = mode => {

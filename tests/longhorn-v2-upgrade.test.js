@@ -47,7 +47,8 @@ test('Harvester shows upgrade status without independent upgrade controls',async
 });
 test('the upgrade check shows in the review, and a blocked one needs its tick',async()=>{
   const t=setup();t.fields['#cmp_check_ack']={checked:false};
-  t.c.STATE={data:{components:{components:[{id:'longhorn',next:'v1.13.0',check:{verdict:'blocked',findings:[]}}]}}};
+  // core.js declares STATE with const: a global name, not a window property.
+  vm.runInContext("const STATE={data:{components:{components:[{id:'longhorn',next:'v1.13.0',check:{verdict:'blocked',findings:[]}}]}}};",t.c);
   t.c.componentCheckSection=r=>r?.verdict==='blocked'?'<section>Before you upgrade</section>':'';
   await t.c.lhV2Upgrade('v1.13.0');t.fields['#lhV2UpgradeBackup'].checked=true;
   assert.match(t.fields['#lhV2UpgradeBody'].innerHTML,/Before you upgrade/);
