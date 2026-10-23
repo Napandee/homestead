@@ -156,7 +156,7 @@ class Rounds(Base):
         self.logs["app-x-1"] = OSError("pod is being replaced")
         self.assertEqual([{"unknown_key": f"logs:{rule['id']}"}], LA.evaluate(now=T0))
         row = LA.listing()["rules"][0]
-        self.assertEqual([[M0 + 1, None]], row["counts"])
+        self.assertEqual([[M0, None], [M0 + 1, None]], row["counts"], "this minute and the one just finished")
         self.assertEqual("unread", row["status"]["state"])
         self.assertIn("could not read app-x", row["status"]["detail"])
 
@@ -363,6 +363,72 @@ class ReviewFixes(Base):
             with mock.patch.object(LA, "step"), self.assertRaises(StopIteration):
                 LA.run(sleep=sleep, clock=lambda: at)
         self.assertEqual([60, 32], waits)
+
+
+class SecondReview(Base):
+    """The second review's findings, each pinned."""
+
+    def stamped(self, minute, second, n, start=0):
+        return "\n".join(f"2026-10-23T10:{minute:02d}:{second:02d}.{start + i:09d}Z ERROR {i}" for i in range(n))
+
+    def counts(self):
+        return dict(map(tuple, LA.listing()["rules"][0]["counts"]))
+
+    def test_a_minute_not_read_stays_null_and_so_does_the_one_before(self):
+        self.rule()
+        self.logs["app-x-1"] = self.stamped(0, 10, 3)
+        LA.evaluate(now=T0)                                   # 10:01:02
+        self.logs["app-x-1"] = OSError("gone")
+        LA.evaluate(now=T0 + 60)                              # 10:02:02: 10:01 was read for 2 s only
+        self.logs["app-x-1"] = self.stamped(1, 30, 5) + "\n" + self.stamped(2, 30, 5, start=50)
+        LA.evaluate(now=T0 + 120)                             # 10:03:02
+        counts = self.counts()
+        self.assertEqual(3, counts[M0])
+        self.assertIsNone(counts[M0 + 1], "never a part count, never zero")
+        self.assertIsNone(counts[M0 + 2])
+
+    def test_a_cut_read_leaves_the_minutes_after_its_last_line_unread(self):
+        self.rule()
+        self.logs["app-x-1"] = self.stamped(0, 10, 3)
+        LA.evaluate(now=T0 - 60)                             # 10:00:02, cursor set
+        self.logs["app-x-1"] = self.stamped(0, 40, 30)
+        with mock.patch.object(LA, "MAX_BYTES", 100):
+            LA.evaluate(now=T0 + 60)                          # 10:02:02, cut inside 10:00
+        counts = self.counts()
+        self.assertIsNone(counts[M0 + 1])
+        self.assertIsNone(counts[M0 + 2])
+
+    def test_an_edit_mid_round_keeps_a_raised_alert_held(self):
+        rule = self.rule()
+
+        def read(*args):
+            self.rule(id=rule["id"], case=True)
+            return lines(12)
+        LA.bind(self.dir, workloads=lambda: self.workloads, read=read, is_leader=lambda: True)
+        self.assertEqual([{"unknown_key": f"logs:{rule['id']}"}], LA.evaluate(now=T0))
+
+    def test_a_late_round_checks_the_minute_it_missed(self):
+        self.rule()
+        self.logs["app-x-1"] = self.stamped(0, 10, 1)
+        LA.evaluate(now=T0)                                   # 10:01:02
+        self.logs["app-x-1"] = self.stamped(0, 10, 1) + "\n" + self.stamped(1, 20, 12, start=100)
+        facts = LA.evaluate(now=T0 + 125)                     # 10:03:07: 10:02's round never ran
+        self.assertIn("12 matching lines in a minute", facts[0]["title"])
+
+    def test_preview_gives_up_on_slow_reads(self):
+        import threading
+        release = threading.Event()
+
+        def read(*args):
+            release.wait(5)
+            return ""
+        LA.bind(self.dir, workloads=lambda: self.workloads, read=read, is_leader=lambda: True)
+        started = time.monotonic()
+        with mock.patch.object(LA, "PREVIEW_BUDGET", 0.3):
+            out = LA.preview({"apps": ["lab/app-x"], "query": "ERROR", "threshold": 3, "window": 1})
+        release.set()
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(["app-x"], out["unread"])
 
 
 class PreviewBounds(Base):

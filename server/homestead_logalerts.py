@@ -51,6 +51,7 @@ REGEX_SECONDS = 2               # per rule and round
 PREVIEW_BYTES = 512 * 1024      # per container, for the hour a preview reads
 PREVIEW_WORKERS = 8
 PREVIEW_SECONDS = 10            # the preview matches an hour at once, on request
+PREVIEW_BUDGET = 30             # seconds a preview's reads may take, holding log search's lock
 MAX_BACK = 300                  # seconds a late round reads back at most
 KEEP = 60                       # minutes of counts kept per rule
 STALE = 180                     # facts older than this: could not look
@@ -287,33 +288,38 @@ def _names(apps):
 
 
 def _count(rule, read, unread, skipped, running):
-    """(state, detail, {minute: matches} or None, covered from) for one rule."""
+    """(state, detail, {minute: matches} or None, covered from, read up to)
+    for one rule. "Read up to" is the last minute a cut read reached (None
+    when nothing was cut): the minutes after it were not read."""
     absent = sorted(a for a in rule["apps"] if a not in running)
     missing = sorted(a for a in rule["apps"] if a in unread)
     later = sorted(a for a in rule["apps"] if a in skipped)
     if absent:
-        return "absent", f"nothing of {_names(absent)} is running, so there is nothing to read", None, None
+        return "absent", f"nothing of {_names(absent)} is running, so there is nothing to read", None, None, None
     if missing:
-        return "unread", f"could not read {_names(missing)}", None, None
+        return "unread", f"could not read {_names(missing)}", None, None, None
     if later:
         return "skipped", (f"not read this minute: over the {MAX_CONTAINERS} containers a minute "
-                           f"Homestead reads for log alerts ({_names(later)})"), None, None
+                           f"Homestead reads for log alerts ({_names(later)})"), None, None, None
     pairs = [pair for app in rule["apps"] for pair in read[app]["lines"]]
     try:
         hits = matching([line for _, line in pairs], rule["query"], rule["regex"], rule["case"])
     except ValueError as error:
-        return ("slow" if isinstance(error, TooSlow) else "failed"), str(error), None, None
+        return ("slow" if isinstance(error, TooSlow) else "failed"), str(error), None, None, None
     per = {}
     for i in hits:
         per[pairs[i][0]] = per.get(pairs[i][0], 0) + 1
-    return "ok", "", per, max(read[app]["from"] for app in rule["apps"])
+    cut = [read[app]["upto"] for app in rule["apps"] if read[app]["upto"] is not None]
+    return "ok", "", per, max(read[app]["from"] for app in rule["apps"]), min(cut) if cut else None
 
 
-def _over(history, rule, minute):
+def _over(history, rule, minute, late=False):
     """The most matching lines in any window of the rule's length ending this
-    minute or the one just finished (whose last seconds this round read)."""
+    minute or the one just finished (whose last seconds this round read), and
+    the one before when the last round ran late, so no minute goes unchecked."""
+    ends = (minute - 2, minute - 1, minute) if late else (minute - 1, minute)
     return max(sum(c for m, c in history.items() if end - rule["window"] < m <= end and c is not None)
-               for end in (minute - 1, minute))
+               for end in ends)
 
 
 def evaluate(now=None):
@@ -323,6 +329,7 @@ def evaluate(now=None):
     now = time.time() if now is None else now
     minute = int(now // 60)
     with _round:
+        late = bool(_last["at"]) and now - _last["at"] > 90
         with _lock:
             rules = _load()["rules"]
         sig = {r["id"]: [r.get(k) for k in _COUNTED] for r in rules}
@@ -345,11 +352,14 @@ def evaluate(now=None):
                 unread.add(app)
                 continue
             cursors[key] = (newest, now)
-            row = read.setdefault(app, {"lines": [], "from": 0})
+            row = read.setdefault(app, {"lines": [], "from": 0, "upto": None})
             row["lines"].extend(got)
             row["from"] = max(row["from"], int((now - since) // 60) + 1)
             if full:
                 capped.add(app)
+                # limitBytes keeps the oldest lines: what came after the last one read was not.
+                reached = _minute(newest) if newest else int((now - since) // 60)
+                row["upto"] = reached if row["upto"] is None else min(row["upto"], reached)
         # A container that is gone, or was not read, starts again from a fresh read.
         _cursors.clear()
         _cursors.update(cursors)
@@ -359,23 +369,34 @@ def evaluate(now=None):
             fresh = _load()
             for rule in fresh["rules"]:
                 rid = rule["id"]
-                if rid not in counted or sig[rid] != [rule.get(k) for k in _COUNTED]:
-                    continue   # new, or edited during the round: counted from the next one
-                state, detail, per, start = counted[rid]
+                if rid not in counted:
+                    continue   # new during the round: counted from the next one
+                if sig[rid] != [rule.get(k) for k in _COUNTED]:
+                    # Edited during the round: counted from the next one, and
+                    # an alert it raised is held meanwhile, neither raised nor cleared.
+                    facts.append({"unknown_key": f"logs:{rid}"})
+                    continue
+                state, detail, per, start, upto = counted[rid]
                 history = {m: c for m, c in fresh["counts"].get(rid, []) if m > minute - KEEP}
                 if per is None:
-                    history.setdefault(minute, None)
+                    # Not counted: this minute, and the one just finished (of which
+                    # only its first seconds were counted), are not read; never 0.
+                    history[minute - 1] = history[minute] = None
                     facts.append({"unknown_key": f"logs:{rid}"})
                 else:
+                    # A minute once not read stays so: a later part count is not its count.
                     for m in range(start, minute + 1):
-                        history[m] = history.get(m) or 0
+                        if upto is not None and m > upto:
+                            history[m] = None
+                        elif m not in history:
+                            history[m] = 0
                     for m, n in per.items():
-                        if m > minute - KEEP:
+                        if m > minute - KEEP and history.get(m, 0) is not None:
                             history[m] = (history.get(m) or 0) + n
                 fresh["counts"][rid] = sorted([m, c] for m, c in history.items())
                 fresh["status"][rid] = {"state": state, "detail": detail, "at": int(now)}
                 if per is not None:
-                    total = _over(history, rule, minute)
+                    total = _over(history, rule, minute, late)
                     if total > rule["threshold"]:
                         facts.append(fact(rule, total, capped & set(rule["apps"])))
             ids = {r["id"] for r in fresh["rules"]}
@@ -460,10 +481,14 @@ def preview(body, now=None):
     with LOGSEARCH.exclusive():
         stamps, found, unread, capped = [], [], set(), set()
         targets = LOGSEARCH.targets(workloads, rule["apps"])[:MAX_CONTAINERS]
-        with ThreadPoolExecutor(max_workers=PREVIEW_WORKERS) as pool:
-            futures = [(t, pool.submit(one, t)) for t in targets]
+        pool = ThreadPoolExecutor(max_workers=PREVIEW_WORKERS)
+        futures = [(t, pool.submit(one, t)) for t in targets]
+        finished, _ = wait([f for _, f in futures], timeout=PREVIEW_BUDGET)
+        pool.shutdown(wait=False, cancel_futures=True)
         for (ns, app, _pod, _container), future in futures:
             try:
+                if future not in finished:
+                    raise TimeoutError("read took too long")
                 text = future.result()
             except Exception:
                 unread.add(app)

@@ -54,7 +54,8 @@ function logAlertStatus(status) {
 
 function logAlertRow(r, raised) {
   const now = Math.floor(Date.now() / 60000);
-  const known = (r.counts || []).filter(c => c[1] !== null), recent = known.filter(c => c[0] > now - r.window).reduce((a, c) => a + c[1], 0);
+  const known = (r.counts || []).filter(c => c[1] !== null), recent = Math.max(...[now - 1, now].map(end =>
+    known.filter(c => c[0] > end - r.window && c[0] <= end).reduce((a, c) => a + c[1], 0)));
   const app = r.apps[0] || "/", [ns, name] = app.split("/");
   const change = can("operator")
     ? UI.button("Edit", `logAlertEdit(${jsArg(r.id)})`, { icon: "edit" }) + UI.button("Delete", `logAlertDelete(${jsArg(r.id)})`, { icon: "trash" })
@@ -62,7 +63,7 @@ function logAlertRow(r, raised) {
   const chip = raised ? UI.chip("Raised", "bad") : LOGALERT_NOT_COUNTED.includes(r.status?.state) ? "" : UI.chip("Watching", "ok");
   return `<div class="la-rule${raised ? " la-raised" : ""}">
     <div class="la-rule-head"><b>${esc(r.name)}</b>${chip}</div>
-    <div class="dim small">${esc(r.apps.map(a => a.split("/")[1]).join(", "))} · more than ${Number(r.threshold)} lines matching <code>${esc(r.query)}</code>${r.regex ? " (expression)" : ""} in ${esc(logAlertSpan(r.window))}${known.length ? ` · last ${esc(logAlertSpan(r.window))}: ${recent}` : ""}</div>
+    <div class="dim small">${esc(r.apps.map(a => a.split("/")[1]).join(", "))} · more than ${Number(r.threshold)} lines matching <code>${esc(r.query)}</code>${r.regex ? " (expression)" : ""} in ${esc(logAlertSpan(r.window))}${known.length ? ` · ${r.window === 1 ? "last minute" : `last ${Number(r.window)} minutes`}: ${recent}` : ""}</div>
     ${logAlertStatus(r.status)}
     ${logAlertBars(r.counts, r.threshold, r.window, { h: 44, now })}
     <div class="la-rule-actions">${UI.button("Search these lines", `closeModal();logSearch(${jsArg(ns)},${jsArg(name)})`, { icon: "search" })}${change}</div></div>`;
@@ -73,6 +74,14 @@ function logAlertRow(r, raised) {
 function logAlertStale(countedAt, nowSeconds = Date.now() / 1000) {
   if (!countedAt || nowSeconds - countedAt <= 180) return "";
   return UI.callout("warn", "Log alerts are not being counted", `Homestead has not counted for ${Math.round((nowSeconds - countedAt) / 60)} minutes: the log alert check on the leader has stopped or cannot run, so nothing here is current.`);
+}
+
+/* The app choices: every app listed, and the rule's own app even when it is
+   not (a platform app, or one not running now), so saving keeps it. */
+function logAlertAppOptions(apps, chosen = "") {
+  const all = chosen && !apps.includes(chosen) ? [...apps, chosen] : apps;
+  return [`<option value="">Choose an app…</option>`, ...all.map(a =>
+    `<option value="${esc(a)}"${a === chosen ? " selected" : ""}>${esc(a.split("/")[1])} · ${esc(a.split("/")[0])}</option>`)].join("");
 }
 
 /* From a search's form: the same query and options, the app chosen there. */
@@ -91,8 +100,7 @@ window.logAlertEdit = (id = "") => {
   const several = rule.apps.length > 1;
   const appField = several
     ? UI.field("Apps", `<div class="small">${esc(rule.apps.map(a => a.split("/")[1]).join(", "))}</div>`)
-    : UI.field("App", `<select id="la_app" onchange="logAlertAppChanged()">${[`<option value="">Choose an app…</option>`, ...apps.map(a =>
-        `<option value="${esc(a)}"${rule.apps[0] === a ? " selected" : ""}>${esc(a.split("/")[1])} · ${esc(a.split("/")[0])}</option>`)].join("")}</select>`,
+    : UI.field("App", `<select id="la_app" onchange="logAlertAppChanged()">${logAlertAppOptions(apps, rule.apps[0])}</select>`,
         { help: "A log alert watches one app; never every app." });
   modal(id ? `Edit log alert · ${rule.name}` : "Alert on this search", `<div class="ui-stack">
     ${UI.lead("Homestead counts the lines that match once a minute and raises an alert when there are too many. The alert says how many, never what the lines say or what you searched for: both can hold passwords and tokens, and alerts reach lock screens.")}
@@ -189,4 +197,4 @@ window.logAlerts = async () => {
     ${UI.actions(UI.cancel("Close"), UI.button("Search logs", "logSearch()", { icon: "search" }))}</div>`;
 };
 
-if (typeof module !== "undefined") module.exports = { logAlertBars, logAlertDefaultName, logAlertStatus, logAlertRow };
+if (typeof module !== "undefined") module.exports = { logAlertBars, logAlertDefaultName, logAlertStatus, logAlertRow, logAlertStale, logAlertAppOptions };

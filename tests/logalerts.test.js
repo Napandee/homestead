@@ -114,3 +114,18 @@ test("the list says when counting stopped", () => {
   assert.equal(run(`logAlertStale(null, 1100)`), "");
   assert.match(run(`logAlertStale(1000, 1300)`), /<callout warn>.*not counted for 5 minutes/s);
 });
+
+test("the row's count is the fuller of the minute just finished and this one", () => {
+  const run = load();
+  const now = Math.floor(Date.now() / 60000);
+  run(`globalThis.R = ${JSON.stringify({ ...RULE, counts: [[now - 1, 15], [now, 1]] })}`);
+  assert.match(run(`logAlertRow(R, true)`), /last minute: 15/);
+});
+
+test("the editor keeps an app it cannot list, so saving keeps it", () => {
+  const run = load();
+  const html = run(`logAlertAppOptions(["lab/frigate"], "kube-system/coredns")`);
+  assert.match(html, /<option value="kube-system\/coredns" selected>coredns · kube-system<\/option>/);
+  assert.match(run(`logAlertAppOptions(["lab/frigate"], "lab/frigate")`), /value="lab\/frigate" selected/);
+  assert.equal((run(`logAlertAppOptions(["lab/frigate"], "lab/frigate")`).match(/lab\/frigate"/g) || []).length, 1);
+});
