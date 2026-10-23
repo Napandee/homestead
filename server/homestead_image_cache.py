@@ -71,6 +71,13 @@ def _needed_list(path, optional_group=None, forbidden_none=False):
             or (listing.get("metadata") or {}).get("continue")):
         raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
                          "are still needed, and no image is cleaned up until it can. Try again in a moment.")
+    # A row that is not an object, or whose metadata, spec or status is not
+    # one, cannot say what it needs: the list as a whole is unread.
+    if not all(isinstance(row, dict) and all(isinstance(row.get(key), (dict, type(None)))
+                                             for key in ("metadata", "spec", "status"))
+               for row in listing["items"]):
+        raise ValueError(f"Kubernetes returned a list for {path} that Homestead cannot read, so it cannot tell which "
+                         "images are still needed, and no image is cleaned up until it can. Try again in a moment.")
     return listing["items"]
 
 
@@ -184,10 +191,10 @@ def _stopped_references():
                             "reason": reason, "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
-    vms = [(vm, ("spec", "template", "spec"))
-           for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io")
-           if not ((vm.get("status") or {}).get("ready") is True
-                   or (vm.get("status") or {}).get("printableStatus") == "Running")]
+    stopped = [vm for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io")
+               if not ((vm.get("status") or {}).get("ready") is True
+                       or (vm.get("status") or {}).get("printableStatus") == "Running")]
+    vms = [(vm, ("spec", "template", "spec")) for vm in stopped]
     # A VM pool or VM replica set scaled to zero has no VM or pod left to name
     # its template's disks; one with replicas has, so it is left to them.
     pools, unread = _optional_list("VirtualMachinePools", "pool.kubevirt.io", "virtualmachinepools")
@@ -214,8 +221,10 @@ def _stopped_references():
             out.append(_unreadable(meta, "template"))
             continue
         out += [_kept(meta, ref, "stopped", name) for name, ref in disks]
-    for row in versions:              # ...and the disks its VMs import from a registry
-        templates = _rows(_dig(row, ("spec", "vm", "spec")), "dataVolumeTemplates")
+    # ...and the disks a stopped VM or a template's VMs import from a registry
+    # (a running VM's disks are imported already).
+    for row, vmspec in [(vm, ("spec",)) for vm in stopped] + [(row, ("spec", "vm", "spec")) for row in versions]:
+        templates = _rows(_dig(row, vmspec), "dataVolumeTemplates")
         if templates is None:
             out.append(_unreadable(row.get("metadata") or {}, "template"))
             continue
@@ -230,7 +239,23 @@ def _stopped_references():
         out += unread
         for row in rows:
             out += _cdi_rows(row, ["registry"], [_dig(row, spec_path)], reason)
+            if kind == "DataImportCrons" and _node_pull(_dig(row, spec_path)):
+                out += _imported_digests(row)
     return out
+
+
+def _imported_digests(cron):
+    """A DataImportCron imports its tag by digest, and a node that pulled by
+    digest lists no tag to match by name: keep each digest it imported."""
+    meta = cron.get("metadata") or {}
+    imports = (cron.get("status") or {}).get("currentImports")
+    if imports is None:
+        return []
+    if not isinstance(imports, list) or not all(isinstance(row, dict) for row in imports):
+        return [_unreadable(meta, "source")]
+    return [{"ref": "", "digest": _image_digest(row.get("digest")), "reason": "scheduled",
+             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": "registry"}
+            for row in imports if _image_digest(row.get("digest"))]
 
 
 def _kept(meta, ref, reason, container):
@@ -287,39 +312,66 @@ def _node_pull(spec):
 
 def _optional_list(kind, group, resource):
     """The rows of a resource in a group that may not be installed, read at
-    the version API discovery prefers (a fixed version 404s once the group
-    drops it), and any retention row to add: none when discovery says the
-    group is absent; an unreadable row when the role may not list it."""
-    path = _served_path(group, resource)
+    the version API discovery prefers that serves it (a fixed version 404s
+    once the group drops it), and any retention row to add: none when
+    discovery says the group or the resource is absent; an unreadable row
+    when the role may not read discovery or the list."""
+    try:
+        path = _served_path(group, resource)
+    except PermissionError:
+        path = False
     if path is None:
         return [], []
-    rows = _needed_list(path, optional_group=group, forbidden_none=True)
+    rows = None if path is False else _needed_list(path, optional_group=group, forbidden_none=True)
     if rows is None:          # a role from before these were named may not grant them
         return [], [_unreadable({"name": kind}, "no permission to list")]
     return rows, []
 
 
-def _served_path(group, resource):
-    """/apis/<group>/<preferred version>/<resource>, or None when discovery
-    says the group is not served. Anything else unclear is an error, so no
-    image is called unused on a guess."""
-    where = f"/apis/{group}"
+def _discovery(where, group=None):
+    """GET one discovery document. A 404 for a group discovery says is absent
+    is None; a 403 raises PermissionError; anything else that fails is a
+    ValueError, so no image is called unused on a guess."""
     try:
-        answer = I.kget(where)
+        return I.kget(where)
     except urllib.error.HTTPError as error:
         error.close()
-        if error.code == 404 and _group_absent(group):
+        if error.code == 403:
+            raise PermissionError(where) from error
+        if error.code == 404 and group and _group_absent(group):
             return None
         raise ValueError(_unread_message(where, error)) from error
     except Exception as error:
         raise ValueError(_unread_message(where, error)) from error
-    preferred = answer.get("preferredVersion") if isinstance(answer, dict) else None
-    version = preferred.get("groupVersion") if isinstance(preferred, dict) else None
-    if not (isinstance(version, str) and version.startswith(group + "/") and version.count("/") == 1
-            and version != group + "/"):
-        raise ValueError(f"Kubernetes did not say which version of {group} it serves, so Homestead cannot tell "
+
+
+def _served_path(group, resource):
+    """/apis/<group>/<version>/<resource> at the first version that serves the
+    resource, the preferred one first; None when discovery says the group is
+    not served or serves the resource at no version. Anything unclear is an
+    error, so no image is called unused on a guess."""
+    unclear = ValueError(f"Kubernetes did not say which version of {group} it serves, so Homestead cannot tell "
                          "which images are still needed, and no image is cleaned up until it can. Try again in a moment.")
-    return f"/apis/{version}/{resource}"
+    answer = _discovery(f"/apis/{group}", group)
+    if answer is None:
+        return None
+    preferred = answer.get("preferredVersion") if isinstance(answer, dict) else None
+    listed = answer.get("versions") if isinstance(answer, dict) else None
+    if not isinstance(preferred, dict) or not isinstance(listed, (list, type(None))):
+        raise unclear
+    order = [preferred] + [row for row in listed or [] if row != preferred]
+    for row in order:
+        version = row.get("groupVersion") if isinstance(row, dict) else None
+        if not (isinstance(version, str) and version.startswith(group + "/") and version.count("/") == 1
+                and version != group + "/"):
+            raise unclear
+        served = _discovery(f"/apis/{version}")
+        names = served.get("resources") if isinstance(served, dict) else None
+        if not isinstance(names, list) or not all(isinstance(r, dict) for r in names):
+            raise unclear
+        if any(r.get("name") == resource for r in names):
+            return f"/apis/{version}/{resource}"
+    return None
 
 
 def _unread_message(path, error):

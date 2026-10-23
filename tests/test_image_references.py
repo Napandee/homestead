@@ -22,6 +22,10 @@ CRONS = "/apis/cdi.kubevirt.io/v1beta1/dataimportcrons"
 # Groups that may not be installed; each is read at the version discovery prefers.
 OPTIONAL = {"pool.kubevirt.io": "v1alpha1", "snapshot.kubevirt.io": "v1beta1",
             "harvesterhci.io": "v1beta1", "cdi.kubevirt.io": "v1beta1"}
+SERVED = {"pool.kubevirt.io": ["virtualmachinepools", "virtualmachinepools/status"],
+          "snapshot.kubevirt.io": ["virtualmachinesnapshots", "virtualmachinesnapshotcontents"],
+          "harvesterhci.io": ["virtualmachinetemplateversions"],
+          "cdi.kubevirt.io": ["datavolumes", "dataimportcrons"]}
 ESPHOME = "sha256:" + "e" * 64
 BACKUP = "sha256:" + "f" * 64
 
@@ -54,6 +58,8 @@ class Fixture(unittest.TestCase):
         self.objects = {
             "/api/v1/pods": {"items": []},
             **{f"/apis/{group}": api_group(group, version) for group, version in OPTIONAL.items()},
+            **{f"/apis/{group}/{version}": {"resources": [{"name": name} for name in SERVED[group]]}
+               for group, version in OPTIONAL.items()},
             TEMPLATES: {"items": []}, CONTENTS: {"items": []}, DVS: {"items": []}, CRONS: {"items": []},
             POOLS: {"items": []},
             VMIRS: {"items": []},
@@ -216,12 +222,21 @@ class RemovalFixture(Fixture):
         return [body["metadata"]["name"] for method, path, body in self.sent if method == "POST"
                 and body["metadata"]["name"].startswith("homestead-image-clean-")]
 
+    def kept(self, path=None, item=None):
+        """(reason, workload, container) of each row keeping the unused image,
+        after adding `item` to the list at `path`."""
+        if path:
+            self.objects[path]["items"].append(item)
+        rows = self.image(imports.image_cache(), "unused")["retained_by"]
+        return [(r["reason"], r["workload"], r["container"]) for r in rows]
+
 
 class UnreadInventoryTests(RemovalFixture):
     """Every source of "still needed" is read in full, or nothing is removed (#620)."""
     LISTS = ("/api/v1/pods", "/apis/apps/v1/deployments", "/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
              "/apis/apps/v1/daemonsets", "/apis/batch/v1/jobs", VMS, POOLS, VMIRS,
-             TEMPLATES, CONTENTS, DVS, CRONS, *(f"/apis/{group}" for group in OPTIONAL))
+             TEMPLATES, CONTENTS, DVS, CRONS, *(f"/apis/{group}" for group in OPTIONAL),
+             *(f"/apis/{group}/{version}" for group, version in OPTIONAL.items()))
 
     def test_an_image_nothing_needs_is_cleaned_up(self):
         imports.cleanup_image(self.UNUSED, ["node1"])
@@ -446,11 +461,27 @@ class WaitingWorkloadTests(RemovalFixture):
     image is kept unless its status shows every pod it wants is there."""
     JOBS, DAEMONSETS = "/apis/batch/v1/jobs", "/apis/apps/v1/daemonsets"
 
-    def kept(self, path=None, item=None):
-        if path:
-            self.objects[path]["items"].append(item)
-        rows = self.image(imports.image_cache(), "unused")["retained_by"]
-        return [(r["reason"], r["workload"], r["container"]) for r in rows]
+    def test_a_job_on_its_way_to_finishing_keeps_its_image_until_it_has(self):
+        # SuccessCriteriaMet / FailureTarget come before Complete / Failed: no
+        # more pods start, but until the end the image is kept, as a waiting one.
+        for kind in ("SuccessCriteriaMet", "FailureTarget"):
+            with self.subTest(kind=kind):
+                self.objects[self.JOBS]["items"] = []
+                self.assertEqual([("scheduled", "migrate", "migrate")], self.kept(self.JOBS, self.job(
+                    status={"active": 0, "conditions": [{"type": kind, "status": "True"}]})))
+
+    def test_a_record_that_is_not_an_object_removes_nothing(self):
+        for path, item in ((self.JOBS, "x"), (self.JOBS, {"metadata": "x", "spec": {}}),
+                           (self.JOBS, {**self.job(), "status": "x"}), (self.DAEMONSETS, {**self.daemonset(), "spec": []}),
+                           (DVS, {"metadata": {"name": "d"}, "spec": {}, "status": 7})):
+            with self.subTest(path=path, item=item):
+                self.objects[path]["items"] = [item]
+                try:
+                    with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                        imports.cleanup_image(self.UNUSED, ["node1"])
+                finally:
+                    self.objects[path]["items"] = []
+        self.assertEqual([], self.posted())
 
     @staticmethod
     def job(spec=None, status=None):
@@ -550,12 +581,6 @@ class OtherRecordsTests(RemovalFixture):
     DISK = {"name": "rootdisk", "containerDisk": {"image": "docker.io/library/unused:1"}}
     NODE_PULL = {"registry": {"url": "docker://docker.io/library/unused:1", "pullMethod": "node"}}
 
-    def kept(self, path=None, item=None):
-        if path:
-            self.objects[path]["items"].append(item)
-        rows = self.image(imports.image_cache(), "unused")["retained_by"]
-        return [(r["reason"], r["workload"], r["container"]) for r in rows]
-
     def answers(self, path, error=None, groups=None):
         """kget with one path raising HTTP error `error`, and /apis listing `groups`."""
         read = imports.kget
@@ -572,10 +597,55 @@ class OtherRecordsTests(RemovalFixture):
         beta = "/apis/pool.kubevirt.io/v1beta1/virtualmachinepools"
         self.objects["/apis/pool.kubevirt.io"] = api_group("pool.kubevirt.io", "v1beta1")
         del self.objects[POOLS]          # v1alpha1 no longer served
+        self.objects["/apis/pool.kubevirt.io/v1beta1"] = {"resources": [{"name": "virtualmachinepools"}]}
         self.objects[beta] = {"items": [{"metadata": {"name": "workers", "namespace": "lab"}, "spec": {
             "replicas": 0, "virtualMachineTemplate": {"spec": {"template": {"spec": {"volumes": [self.DISK]}}}}}}]}
         self.assertEqual([("stopped", "workers", "rootdisk")], self.kept())
         self.assertNotIn(POOLS, self.asked)
+
+    def test_a_resource_the_preferred_version_does_not_serve_is_read_at_one_that_does(self):
+        # Review: a group can move some kinds to a new version before others.
+        self.objects["/apis/snapshot.kubevirt.io"] = api_group("snapshot.kubevirt.io", "v1")
+        self.objects["/apis/snapshot.kubevirt.io"]["versions"].append(
+            {"groupVersion": "snapshot.kubevirt.io/v1beta1", "version": "v1beta1"})
+        self.objects["/apis/snapshot.kubevirt.io/v1"] = {"resources": [{"name": "virtualmachinesnapshots"}]}
+        item = {"metadata": {"name": "vmsnapshot-content-1", "namespace": "lab"}, "spec": {"source": {
+            "virtualMachine": {"spec": {"template": {"spec": {"volumes": [self.DISK]}}}}}}}
+        self.assertEqual([("stopped", "vmsnapshot-content-1", "rootdisk")], self.kept(CONTENTS, item))
+        # A group that serves the kind at no version has none of it.
+        self.objects["/apis/snapshot.kubevirt.io/v1beta1"] = {"resources": [{"name": "virtualmachinerestores"}]}
+        self.assertEqual([], self.kept())
+        # A version's resource list that cannot be read keeps everything.
+        self.objects["/apis/snapshot.kubevirt.io/v1"] = {"resources": "x"}
+        with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+            imports.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
+
+    def test_no_permission_to_read_a_groups_discovery_keeps_every_image(self):
+        for where in ("/apis/cdi.kubevirt.io", "/apis/cdi.kubevirt.io/v1beta1"):
+            with self.subTest(where=where), self.answers(where, 403):
+                self.assertIn(("unreadable", "DataVolumes", "no permission to list"), self.kept())
+        self.assertEqual([], self.posted())
+
+    def test_a_scheduled_import_keeps_the_digests_it_imported(self):
+        # CDI imports a DataImportCron's tag by digest; a node pull by digest
+        # has no tag to match by name.
+        cron = {"metadata": {"name": "fedora-daily", "namespace": "lab"},
+                "spec": {"template": {"spec": {"source": {"registry": {
+                    "url": "docker://quay.io/containerdisks/other:latest", "pullMethod": "node"}}}}},
+                "status": {"currentImports": [{"dataVolumeName": "fedora-abc", "digest": self.UNUSED}]}}
+        self.assertEqual([("scheduled", "fedora-daily", "registry")], self.kept(CRONS, cron))
+        cron["status"]["currentImports"] = "x"
+        self.assertEqual([("unreadable", "fedora-daily", "source")], self.kept())
+
+    def test_a_stopped_vms_disk_templates_keep_what_they_import_through_the_node(self):
+        vm = self.objects[VMS]["items"][0]
+        vm["spec"]["dataVolumeTemplates"] = [{"metadata": {"name": "root"}, "spec": {"source": self.NODE_PULL}}]
+        self.assertEqual([("stopped", "lab-vm", "root")], self.kept())
+        running = self.objects[VMS]["items"][1]          # a running VM's disk is imported already
+        vm["spec"].pop("dataVolumeTemplates")
+        running["spec"]["dataVolumeTemplates"] = [{"metadata": {"name": "root"}, "spec": {"source": self.NODE_PULL}}]
+        self.assertEqual([], self.kept())
 
     def test_a_group_that_discovery_says_is_absent_is_not_read(self):
         for group in OPTIONAL:
@@ -645,7 +715,6 @@ class OtherRecordsTests(RemovalFixture):
                 (TEMPLATES, {"spec": {"vm": {"spec": {"template": {"spec": {}}, "dataVolumeTemplates": [
                     {"spec": {"source": {"registry": "x"}}}]}}}}, "source"),
                 (CONTENTS, {"spec": {"source": {}}}, "template"),
-                (DVS, {"spec": "x"}, "source"),
                 (DVS, {"spec": {"source": "x"}}, "source"),
                 (DVS, {"spec": {"source": {"registry": "x"}}}, "source"),
                 (DVS, {"spec": {"source": {"registry": {"pullMethod": "node", "url": 7}}}}, "source"),
