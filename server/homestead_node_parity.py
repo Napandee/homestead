@@ -386,17 +386,21 @@ def _raised_setting(value, ours, want):
     Before Longhorn 1.8 it is one count ("1"); from 1.8 it is JSON with a
     count per data engine ('{"v1":"1","v2":"1"}'). Each count rises only
     while it is the installer's one or the count Homestead set, so one
-    someone chose is kept; a value Homestead cannot read is left alone."""
-    if not value.startswith("{"):
-        return str(want) if value in ours else None
+    someone chose is kept, and it is never lowered; a value Homestead cannot
+    read is left alone."""
+    def rises(count):
+        count = str(count)
+        return count in ours and count.isdigit() and int(count) < want
+
+    if not value.lstrip().startswith("{"):
+        return str(want) if rises(value) else None
     try:
         engines = json.loads(value)
     except ValueError:
         return None
     if not isinstance(engines, dict):
         return None
-    raised = {engine: str(want) if str(count) in ours and str(count).isdigit() and int(count) < want else count
-              for engine, count in engines.items()}
+    raised = {engine: str(want) if rises(count) else count for engine, count in engines.items()}
     return json.dumps(raised, separators=(",", ":")) if raised != engines else None
 
 

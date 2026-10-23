@@ -347,15 +347,38 @@ class NodeParityTests(unittest.TestCase):
         PARITY.copies_tick()
         self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": '{"v1":"2","v2":"3"}'}), cluster.sent)
 
+    def setting_sent(self, value, state=None):
+        """The PATCHes to the setting when two hosts store and it holds value."""
+        cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                                                  PARITY.LONGHORN_SETTING: {"value": value}})
+        self.bind(cluster)
+        if state:
+            Path(PARITY._path()).write_text(json.dumps(state), encoding="utf-8")
+        PARITY._seen_ready = None
+        self.assertIn("keep 2 copies", PARITY.copies_tick(), "the chart still rises")
+        return [body for _, path, body in cluster.sent if path == PARITY.LONGHORN_SETTING]
+
     def test_a_setting_homestead_cannot_read_is_left_alone(self):
-        for value in ('{"v1":"1"', '["1"]', '{"v1":"3","v2":"2"}', '{}', "3"):
+        for value in ('{"v1":"1"', '["1"]', '{}', "", '"1"'):
             with self.subTest(value=value):
-                cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
-                                                          PARITY.LONGHORN_SETTING: {"value": value}})
-                self.bind(cluster)
-                PARITY._seen_ready = None
-                self.assertIn("keep 2 copies", PARITY.copies_tick(), "the chart still rises")
-                self.assertEqual([], [s for s in cluster.sent if s[1] == PARITY.LONGHORN_SETTING])
+                self.assertEqual([], self.setting_sent(value))
+
+    def test_counts_someone_chose_or_already_raised_are_kept(self):
+        for value in ('{"v1":"3","v2":"2"}', "3", '{"v1":"2","v2":"2"}', "2"):
+            with self.subTest(value=value):
+                self.assertEqual([], self.setting_sent(value))
+
+    def test_a_count_homestead_set_before_is_never_lowered(self):
+        # Homestead raised it to 3 on a larger cluster; Longhorn was installed
+        # again since (the chart is back at 1), and two hosts store now.
+        for value in ("3", '{"v1":"3","v2":"3"}'):
+            with self.subTest(value=value):
+                self.assertEqual([], self.setting_sent(value, state={"longhorn_copies": 3}))
+
+    def test_other_ways_longhorn_may_write_the_json_still_rise(self):
+        for value in ('{"v1":1,"v2":1}', ' {"v1": "1", "v2": "1"}\n'):
+            with self.subTest(value=value):
+                self.assertEqual([{"value": '{"v1":"2","v2":"2"}'}], self.setting_sent(value))
 
     def test_copies_rise_on_an_install_that_gave_longhorn_its_priority_and_it_is_kept(self):
         chart = {"spec": {"valuesContent": PARITY.addons.longhorn_values(1)}}
