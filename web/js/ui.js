@@ -383,7 +383,10 @@ const UI = (() => {
                        the review is out of date), once nothing is being
                        sent, so it can open a fresh review. A view that
                        wants this lets 409s out of its apply(); without
-                       conflict() a 409 is an error like any other.
+                       conflict() a 409 is an error like any other, and so
+                       is one that comes back after the review left the
+                       screen (its send button is gone or replaced), so
+                       conflict() never draws over another dialog.
      A newer open() or back() drops a preview still on its way; a review is
      used up before it is sent, so an error or a lost reply never resends it;
      no review opens while one is being sent, and back() then returns false.
@@ -420,12 +423,12 @@ const UI = (() => {
       },
       async apply() {
         if (!flow.ready()) return;
-        const review = current;
+        const review = current, shown = byId(button);
         current = null; // one shot, including errors and lost responses
         busy = true;
         let outdated = null;
         try { return await apply(review); }
-        catch (error) { if (!conflict || error?.status !== 409) throw error; outdated = error; }
+        catch (error) { if (!conflict || error?.status !== 409 || byId(button) !== shown) throw error; outdated = error; }
         finally { busy = false; after(); }
         return conflict(outdated, review);
       },

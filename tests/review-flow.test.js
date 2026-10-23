@@ -248,3 +248,22 @@ test("UI.reviewFlow hands a 409 from apply to conflict(), once it is no longer b
   await plain.open();
   await assert.rejects(plain.apply(), /changed since/, "without conflict() a 409 is an error like any other");
 });
+
+test("UI.reviewFlow leaves a 409 to the caller once its review is no longer on screen", async () => {
+  const { UI, fields } = flowContext(), seen = [];
+  let reply;
+  const flow = UI.reviewFlow({ preview: async () => ({}), render() {}, button: "go",
+    apply: () => (reply = later()).promise, conflict: () => seen.push("conflict") });
+  await flow.open();
+  const sending = flow.apply();
+  fields["#go"] = null; // Back, or the dialog closed
+  reply.reject(Object.assign(new Error("changed since the review"), { status: 409 }));
+  await assert.rejects(sending, /changed since/);
+  assert.deepEqual(seen, [], "conflict() does not draw over another dialog");
+  await flow.open();
+  const replaced = flow.apply();
+  fields["#go"] = { disabled: false }; // another review's button
+  reply.reject(Object.assign(new Error("changed since the review"), { status: 409 }));
+  await assert.rejects(replaced, /changed since/);
+  assert.deepEqual(seen, []);
+});

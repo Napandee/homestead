@@ -76,6 +76,10 @@ DEFAULTS = {
     # Removing container images nothing uses (homestead_image_cleanup): off
     # until an admin turns it on, then images unused this many days go.
     "image_cleanup": {"auto": False, "after_days": 14},
+    # How long a volume an app was moved off by Restore into this app is kept
+    # before it is deleted (homestead_restore_swap): 0 keeps it until a
+    # person deletes it.
+    "restore_swap": {"keep_days": 7},
 }
 
 
@@ -170,6 +174,19 @@ def validate(value):
     if after < 1 or after > 365:
         raise ValueError("unused images are cleaned up after 1 to 365 days")
     out["image_cleanup"] = {"auto": auto, "after_days": after}
+    section = (value or {}).get("restore_swap") or {}
+    if not isinstance(section, dict):
+        raise ValueError("restore_swap must be a section of settings")
+    keep = section.get("keep_days", out["restore_swap"]["keep_days"])
+    try:
+        if isinstance(keep, bool) or isinstance(keep, float) and not keep.is_integer() or isinstance(keep, str):
+            raise ValueError
+        keep = int(keep)
+    except (TypeError, ValueError):
+        raise ValueError("previous volumes are kept a whole number of days") from None
+    if keep < 0 or keep > 90:
+        raise ValueError("previous volumes are kept 1 to 90 days, or 0 to keep them until deleted")
+    out["restore_swap"] = {"keep_days": keep}
     site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")

@@ -135,6 +135,7 @@ MODULES = (
     "homestead_reclass",
     "homestead_requests",
     "homestead_resources",
+    "homestead_restore_swap",
     "homestead_restore_test",
     "homestead_revert",
     "homestead_schedules",

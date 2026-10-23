@@ -43,6 +43,7 @@ import homestead_ports as PORTS
 import homestead_push as PUSH
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
+import homestead_restore_swap as RESTORE_SWAP
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
 import homestead_routes as MODULE_ROUTES
@@ -282,6 +283,7 @@ def _alert_sources():
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("recovery", RECOVERY.alert_facts)
+    take("previous-volumes", lambda: cached("previous-volumes", 60, RESTORE_SWAP.alert_facts))
     take("agents", MCP.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
