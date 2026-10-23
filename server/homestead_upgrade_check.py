@@ -59,7 +59,7 @@ def kubevirt_pair(kubevirt, kube_minors):
     eol = {_key(v) for v in row["eol"]}
     low, high = (_key(v) for v in table["columns"])
     says = (f"KubeVirt {_text(here)} supports Kubernetes {_listing(supported)}" if supported
-            else f"KubeVirt {_text(here)} supports no Kubernetes that is still maintained")
+            else f"KubeVirt {_text(here)} supports no Kubernetes version that is still maintained")
     says += f" (its support matrix, as of {KNOWN.CHECKED})."
     outside = [m for m in kube if m > high or (low <= m and m not in supported and m not in eol)]
     if outside:
@@ -72,8 +72,10 @@ def kubevirt_pair(kubevirt, kube_minors):
         return pair("unchecked", f"KubeVirt's matrix starts at Kubernetes {_text(low)}, so this pair is not checked.")
     ended = [m for m in kube if m in eol]
     if ended:
-        return pair("eol", f"KubeVirt {_text(here)} supported Kubernetes {_listing(ended)}, which Kubernetes no longer "
-                           f"maintains. {says}")
+        now = (f" Of what it supports, Kubernetes still maintains {_listing(supported)}." if supported
+               else " None of the Kubernetes versions it supports is still maintained.")
+        return pair("eol", f"KubeVirt {_text(here)} supports Kubernetes {_listing(ended)}, but Kubernetes no longer "
+                           f"maintains {_listing(ended)} (KubeVirt's support matrix, as of {KNOWN.CHECKED}).{now}")
     return pair("supported", f"{says}")
 
 
@@ -84,7 +86,7 @@ def _kubevirt_findings(kubevirt, kube_minors, add):
     if pair["status"] == "outside":
         add("block", f"{name} is not tested on Kubernetes {kube}", pair["detail"], pair["source"])
     elif pair["status"] == "eol":
-        add("warn", f"Kubernetes {kube} has ended", pair["detail"], pair["source"])
+        add("warn", f"Kubernetes {kube} is past its end of life", pair["detail"], pair["source"])
     elif pair["status"] == "supported":
         add("info", f"{name} supports Kubernetes {kube}", pair["detail"], pair["source"])
     else:
