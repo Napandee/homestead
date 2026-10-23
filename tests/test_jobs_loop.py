@@ -121,6 +121,7 @@ class NoRequestAdvancesJobsTests(unittest.TestCase):
         for source in ("OPS.list_operations()\n", "fn = OPS.list_operations\n",
                        "threading.Thread(target=OPS.list_operations).start()\n",
                        "from homestead_operations import list_operations\nlist_operations()\n",
+                       "from homestead_operations import list_operations as step\n",
                        "run = list_operations\n", "step = getattr(OPS, \"list_operations\")\n"):
             with self.subTest(source=source):
                 self.assertTrue(list_operations_references(SS.code(source)), source)
