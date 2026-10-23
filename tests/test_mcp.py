@@ -542,6 +542,7 @@ class CatalogueTests(unittest.TestCase):
         "/api/fleet/switch": "a browser's choice of cluster",
         "/api/v1/*": "the public API is its own door",
         "/api/workloads/starts-after": "edit_container saves starts_after, with Edit's review",
+        "/api/timeline/seen": "a person's own 'last here' marker",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):
