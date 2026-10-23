@@ -60,7 +60,7 @@ class CheckTests(unittest.TestCase):
         self.assertEqual("clear", U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 35)}, {})["verdict"])
 
     def test_kubevirt_onto_an_untested_kubernetes_is_blocked(self):
-        self.assertEqual("blocked", U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 37)}, {})["verdict"])
+        self.assertEqual("blocked", U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 33)}, {})["verdict"])
 
     def test_longhorn_1_12_1_turns_on_its_network_policies(self):
         result = U.check("longhorn", "v1.12.0", "v1.12.1", {(1, 35)}, {})
@@ -116,3 +116,39 @@ class AnnotateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewFixTests(unittest.TestCase):
+    """Review of 2026-10-23: titles name only the minors at fault; a pair
+    already outside isn't blamed on an upgrade that doesn't change it."""
+    def titles(self, result):
+        return [f["title"] for f in result["findings"]]
+
+    def test_titles_name_only_the_minors_at_fault(self):
+        self.assertEqual(["KubeVirt 1.9 on Kubernetes 1.37 is already outside its support matrix; this upgrade does not change that"],
+                         self.titles(U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 36), (1, 37)}, {})))
+        self.assertEqual(["Kubernetes 1.33 is past its end of life"],
+                         self.titles(U.check("kubevirt", "v1.8.1", "v1.8.2", {(1, 33), (1, 35)}, {})))
+        self.assertEqual(["1.37"], U.kubevirt_pair("v1.9.1", {(1, 36), (1, 37)})["fault"])
+        self.assertEqual(["KubeVirt 1.9 is not tested on Kubernetes 1.33"],
+                         self.titles(U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 33), (1, 35)}, {})))
+
+    def test_a_patch_upgrade_inside_an_already_outside_pair_is_not_blocked(self):
+        result = U.check("cluster", "v1.37.1+k3s1", "v1.37.2+k3s1", {(1, 37)}, {"kubevirt": "v1.9.1"})
+        self.assertEqual("check", result["verdict"])
+        self.assertIn("already outside", result["findings"][0]["title"])
+
+    def test_a_kubevirt_patch_that_stays_outside_is_not_blocked(self):
+        self.assertEqual("check", U.check("kubevirt", "v1.9.0", "v1.9.1", {(1, 37)}, {})["verdict"])
+
+    def test_moving_a_pair_outside_is_still_blocked(self):
+        self.assertEqual("blocked", U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 33)}, {})["verdict"])
+
+    def test_kubernetes_below_a_row_that_starts_unsupported_is_outside(self):
+        # The 1.9 row has "-" in its oldest column: support ranges are contiguous.
+        self.assertEqual("outside", U.kubevirt_pair("v1.9.1", {(1, 30), (1, 35)})["status"])
+        self.assertEqual("unchecked", U.kubevirt_pair("v1.4.0", {(1, 30)})["status"])
+
+    def test_longhorn_warning_for_an_installed_version_the_table_lacks_says_it_is_on(self):
+        warn = next(f for f in U.check("longhorn", "v1.11.3", "v1.12.1", {(1, 35)}, {})["findings"] if f["level"] == "warn")
+        self.assertIn("is on by default in Longhorn v1.12.1", warn["detail"])

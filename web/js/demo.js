@@ -1849,7 +1849,7 @@ ssh_pwauth: true
     // shows a newer k3s cluster whose next step leaves KubeVirt's support matrix.
     "/api/cluster/components": () => {
       const matrix = "https://github.com/kubevirt/sig-release/blob/f3d8a41eb14bc3f7ee8b29e8fcf5b940523af7a4/releases/k8s-support-matrix.md";
-      const lh = "https://github.com/longhorn/longhorn/blob/v1.12.1/chart/values.yaml", checked = "2026-10-23";
+      const lh = "https://github.com/longhorn/longhorn/tree/v1.12.1/chart", checked = "2026-10-23";
       const eol = v => ({ id: "kubevirt-kubernetes", status: "eol", title: `KubeVirt ${v} on Kubernetes 1.31`, source: matrix, checked,
         detail: `KubeVirt ${v} supports Kubernetes 1.31, but Kubernetes no longer maintains 1.31 (KubeVirt's support matrix, as of 2026-10-23). None of the Kubernetes versions it supports is still maintained.` });
       const now = Math.floor(Date.now() / 1000), suc = "Upgraded by Rancher's system-upgrade-controller: servers one at a time, then agents.";
@@ -1884,9 +1884,10 @@ ssh_pwauth: true
           ...(kubevirt ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
             how: "helmchart", phase: "Deployed", note: "" }] : [])] };
     },
-    "/api/longhorn/v2/upgrade": () => {
+    "/api/longhorn/v2/upgrade": url => {
       const state=window.__demoV2UpgradeState || 'ready', running=['running','failed'].includes(state), blocked=state==='blocked';
-      return {installed:running?'v1.13.0':'v1.12.2',target:'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
+      // The upgrade check's demo (window.__demoUpgradeCheck) goes from v1.12.0 to v1.12.1.
+      return {installed:running?'v1.13.0':window.__demoUpgradeCheck?'v1.12.0':'v1.12.2',target:url?.searchParams?.get('to') || 'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
         offline_ready:false,live_blockers:blocked?['disk-data: needs healthy RW replicas on at least two eligible hosts.','Upgrade Kubernetes to 1.34 or newer on every host first.']:[],
         offline_blockers:[...(blocked?['Upgrade Kubernetes to 1.34 or newer on every host first.']:[]),'Stop workloads, detach V2 volumes and wait for replicas to stop.'],
         upgrade:{enabled:running,timeout:60,current_node:state==='running'?'node-2':'',active:state==='running',pending:running,nodes:running?[

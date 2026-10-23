@@ -39,15 +39,16 @@ def _listing(minors):
 def kubevirt_pair(kubevirt, kube_minors):
     """Where KubeVirt `kubevirt` on the Kubernetes minors `kube_minors` (every
     host's) stands in KubeVirt's support matrix: supported, eol, outside, or
-    unchecked when the table or the versions don't say."""
+    unchecked when the table or the versions don't say. "fault" lists the
+    minors that make it outside or eol."""
     table, source = KNOWN.KUBEVIRT_KUBERNETES, KNOWN.KUBEVIRT_KUBERNETES["source"]
     here = _minor(kubevirt)
     kube = sorted(kube_minors)
     title = f"KubeVirt {_text(here) if here else kubevirt or '?'} on Kubernetes {_listing(kube) if kube else '?'}"
 
-    def pair(status, detail):
+    def pair(status, detail, fault=()):
         return {"id": "kubevirt-kubernetes", "status": status, "title": title, "detail": detail,
-                "source": source, "checked": KNOWN.CHECKED}
+                "fault": [_text(m) for m in fault], "source": source, "checked": KNOWN.CHECKED}
 
     if not here or not kube:
         return pair("unchecked", "Homestead could not read both versions, so this pair is not checked.")
@@ -58,16 +59,20 @@ def kubevirt_pair(kubevirt, kube_minors):
     supported = {_key(v) for v in row["supported"]}
     eol = {_key(v) for v in row["eol"]}
     low, high = (_key(v) for v in table["columns"])
+    # Support is a run of consecutive minors: a row whose oldest column is
+    # neither supported nor EOL supports nothing older than that column.
+    below_known = low not in supported and low not in eol
     says = (f"KubeVirt {_text(here)} supports Kubernetes {_listing(supported)}" if supported
             else f"KubeVirt {_text(here)} supports no Kubernetes version that is still maintained")
     says += f" (its support matrix, as of {KNOWN.CHECKED})."
-    outside = [m for m in kube if m > high or (low <= m and m not in supported and m not in eol)]
+    outside = [m for m in kube if m > high or (m < low and below_known)
+               or (low <= m and m not in supported and m not in eol)]
     if outside:
         newer = sorted(_key(k) for k, r in table["rows"].items()
                        if all(_text(m) in r["supported"] for m in outside))
         hint = (f" KubeVirt {_text(newer[0])} supports {_listing(outside)}." if newer
                 else f" No KubeVirt release in Homestead's table supports {_listing(outside)} yet.")
-        return pair("outside", f"{says} It may run, but it is not tested on {_listing(outside)}.{hint}")
+        return pair("outside", f"{says} It may run, but it is not tested on {_listing(outside)}.{hint}", outside)
     if any(m < low for m in kube):
         return pair("unchecked", f"KubeVirt's matrix starts at Kubernetes {_text(low)}, so this pair is not checked.")
     ended = [m for m in kube if m in eol]
@@ -75,22 +80,31 @@ def kubevirt_pair(kubevirt, kube_minors):
         now = (f" Of what it supports, Kubernetes still maintains {_listing(supported)}." if supported
                else " None of the Kubernetes versions it supports is still maintained.")
         return pair("eol", f"KubeVirt {_text(here)} supports Kubernetes {_listing(ended)}, but Kubernetes no longer "
-                           f"maintains {_listing(ended)} (KubeVirt's support matrix, as of {KNOWN.CHECKED}).{now}")
+                           f"maintains {_listing(ended)} (KubeVirt's support matrix, as of {KNOWN.CHECKED}).{now}", ended)
     return pair("supported", f"{says}")
 
 
-def _kubevirt_findings(kubevirt, kube_minors, add):
+def _kubevirt_findings(kubevirt, kube_minors, add, before):
+    """`before`: the pair as it is now. An upgrade that leaves a pair outside
+    no more than it already was is worth a look, not a block."""
     pair = kubevirt_pair(kubevirt, kube_minors)
-    here, kube = _minor(kubevirt), _listing(sorted(kube_minors)) if kube_minors else "?"
+    here = _minor(kubevirt)
     name = f"KubeVirt {_text(here)}" if here else "KubeVirt"
+    fault = _listing([_key(m) for m in pair["fault"]]) if pair["fault"] else ""
+    every = _listing(sorted(kube_minors)) if kube_minors else "?"
     if pair["status"] == "outside":
-        add("block", f"{name} is not tested on Kubernetes {kube}", pair["detail"], pair["source"])
+        if before["status"] == "outside" and set(pair["fault"]) <= set(before["fault"]):
+            add("warn", f"{name} on Kubernetes {fault} is already outside its support matrix; this upgrade does not change that",
+                pair["detail"], pair["source"])
+        else:
+            add("block", f"{name} is not tested on Kubernetes {fault}", pair["detail"], pair["source"])
     elif pair["status"] == "eol":
-        add("warn", f"Kubernetes {kube} is past its end of life", pair["detail"], pair["source"])
+        add("warn", f"Kubernetes {fault} {'is' if len(pair['fault']) == 1 else 'are'} past {'its' if len(pair['fault']) == 1 else 'their'} end of life",
+            pair["detail"], pair["source"])
     elif pair["status"] == "supported":
-        add("info", f"{name} supports Kubernetes {kube}", pair["detail"], pair["source"])
+        add("info", f"{name} supports Kubernetes {every}", pair["detail"], pair["source"])
     else:
-        add("unknown", f"{name} on Kubernetes {kube}: not checked", pair["detail"], pair["source"])
+        add("unknown", f"{name} on Kubernetes {every}: not checked", pair["detail"], pair["source"])
 
 
 # ------------------------------------------------------------------ Longhorn
@@ -114,7 +128,8 @@ def _longhorn_findings(installed, target, kube_minors, add):
             "Longhorn publishes a minimum Kubernetes version only.", row["source"])
     if row["restrict_internal_traffic"] and not (before and before["restrict_internal_traffic"]):
         add("warn", "Longhorn fences its manager in with NetworkPolicies",
-            f"Longhorn {target}'s chart turns networkPolicies.restrictInternalTraffic on by default: only Longhorn's own "
+            (f"Longhorn {target}'s chart turns networkPolicies.restrictInternalTraffic on by default" if before else
+             f"networkPolicies.restrictInternalTraffic is on by default in Longhorn {target}'s chart") + ": only Longhorn's own "
             "pods may reach longhorn-backend:9500. Homestead keeps its own narrow policy beside Longhorn's (#794), so "
             "Trim now and snapshot rollback keep working. Anything else that calls that port, such as a metrics "
             "scraper, is cut off unless the chart values set it to false or allow it.", row["source"])
@@ -133,9 +148,10 @@ def check(component, installed, target, kube_minors, others):
     if component == "cluster":
         to = _minor(target)
         if others.get("kubevirt"):
-            _kubevirt_findings(others["kubevirt"], {to} if to else set(), add)
+            _kubevirt_findings(others["kubevirt"], {to} if to else set(), add,
+                               kubevirt_pair(others["kubevirt"], kube_minors))
     elif component == "kubevirt":
-        _kubevirt_findings(target, kube_minors, add)
+        _kubevirt_findings(target, kube_minors, add, kubevirt_pair(installed, kube_minors))
     elif component == "longhorn":
         _longhorn_findings(installed, target, kube_minors, add)
     levels = {f["level"] for f in findings}

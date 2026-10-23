@@ -9,7 +9,9 @@ change. A version this table does not list is "not checked", never
 tests/test_upgrade_known.py keeps the table well-formed.
 """
 
-# When the rows below were last read against their sources.
+# When the rows below were last read against their sources. Whoever adds or
+# changes a row updates this; a new k3s, Longhorn or KubeVirt minor shows as
+# "not checked" (or outside the matrix) until someone reads its source here.
 CHECKED = "2026-10-23"
 
 # KubeVirt's Kubernetes support matrix: for each KubeVirt minor, the
@@ -38,7 +40,8 @@ KUBEVIRT_KUBERNETES = {
 #   the chart's templates gate them on this key alone.
 # Longhorn 1.12.2 is not listed: it was not released when this was checked
 # (its rc1 turns the setting on).
-_LONGHORN = "https://github.com/longhorn/longhorn/blob/{}/chart/values.yaml"
+# The chart folder at that tag: kubeVersion in Chart.yaml, defaults in values.yaml.
+_LONGHORN = "https://github.com/longhorn/longhorn/tree/{}/chart"
 LONGHORN_CHARTS = {
     "v1.12.0": {"kubernetes_min": "1.25", "restrict_internal_traffic": False, "source": _LONGHORN.format("v1.12.0")},
     "v1.12.1": {"kubernetes_min": "1.25", "restrict_internal_traffic": True, "source": _LONGHORN.format("v1.12.1")},
