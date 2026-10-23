@@ -193,7 +193,81 @@ A larger destination restores at the original size first, then expands after
 the data is healthy. Its class must allow expansion. If filesystem resizing
 needs a mount, the job says that it will finish when the volume is next used.
 Point the app at the restored volume (**Edit** on its container), or
-restore under the original name once the old volume is deleted.
+restore under the original name once the old volume is deleted - or let
+**Restore into app** do it.
+
+### Restore into app
+
+When the backed-up volume is used by one Deployment, its backups also have
+**Restore into app**. The review shows the app, where the volume is mounted,
+the steps, and how long the old volume will be kept. If the app mounts other
+volumes too, it says so: only the chosen one is restored, so a database and
+its files may no longer match. Homestead then:
+
+1. restores the backup into a new volume, while the app keeps running - Block
+   or Filesystem as the old one is, at its size if it grew after the backup;
+2. stops the app;
+3. points only the mount that used the old volume at the new one - and only
+   if nothing else changed the app while it was stopped;
+4. starts the app;
+5. waits until it is ready and answers its uptime check (or stays ready for
+   two minutes when it has no check).
+
+**Swapping back on its own.** If the app does not come up on the restored data
+- not ready within 10 minutes, or no answer within 5 minutes of being ready -
+Homestead **swaps it back** to the volume it ran on, and the job fails saying
+why. Once it was ready, a failed check must last **60 seconds** before it
+counts: one pod restarting, or a scale by hand, does not move the app's data.
+If swapping back itself meets an error, it is tried again for up to 10
+minutes; after that the app is started again, and the job says which volume it
+points at (or, if even that fails, that it is stopped and how to start it).
+The restored volume is then kept for you to look at. A failure before the swap
+starts the app again unchanged, and cancelling after the swap is a swap back.
+
+A StatefulSet, a DaemonSet, a volume more than one app uses, a pod that
+belongs to nothing Homestead can stop, and Homestead's own data cannot be
+restored this way yet: restore into a new volume instead. An app Flux or
+Argo CD applies needs the notice accepted, because its next sync puts the old
+volume back.
+
+While a restore into an app runs, the volumes it uses are held: changing the
+storage class of either, rolling either back to a snapshot, restoring another
+backup under either name, and deleting either are refused until it finishes.
+
+### Previous volumes
+
+The volume an app was moved off is its **previous volume**, listed under
+**Previous volumes** on this page with **Swap back**, **Keep** and **Delete**.
+**Swap back** is the same job the other way round, with its own review.
+
+**Keep for**, beside the list (admin), sets how long they are kept: **7 days**
+by default, 1 to 90 days, or **until deleted** (0). Choosing a shorter time
+asks first and says how many become due. Then:
+
+- a day before a previous volume goes, an alert (Warnings) says it will be
+  deleted tomorrow;
+- nothing is deleted less than **24 hours** after that alert - even after
+  Keep for was shortened, or the cluster was off past the date;
+- **Keep** (operator) stops the expiry until someone deletes it; **Let it
+  expire** (admin) starts it again, with a new day's notice;
+- a previous volume something mounts again is no longer kept for deletion,
+  and an alert says so;
+- one a job is using, or a Keep or Swap back made a moment before, is never
+  deleted.
+
+If Homestead's settings have **never been saved**, the 7-day default applies.
+If they **cannot be read** when the hourly check runs (the cluster does not
+answer, or the saved value is not valid), nothing is deleted that hour; it
+tries again the next.
+
+Homestead keeps its own record of which volumes these are, by name and uid; a
+label on a claim alone never makes one expire, and a claim made again under
+the same name is never taken. An expired volume is deleted the way **Delete**
+does it, data included - except one whose volume is set to **Retain**, which
+Homestead leaves alone; its alert says it could not be deleted, and why (as it
+does for one still attached). If Flux or an **Edit** puts the app back on its
+previous volume, the volume it left is kept as the previous one instead.
+Backups of either volume are never touched.
 
 ### Rolling back to a snapshot
 

@@ -34,6 +34,7 @@ import homestead_objectstore as OBJECTS
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_reclass as RECLASS
+import homestead_restore_swap as RESTORE_SWAP
 import homestead_restore_test as RESTORE_TEST
 import homestead_revert as REVERT
 import homestead_root_guard as ROOT_GUARD
@@ -266,11 +267,25 @@ def restore_tests_tick():
     return chosen
 
 
+def data_protection_tick():
+    """On the leader, hourly: a restore test when one is due, and the expiry
+    of previous volumes (#743). Each runs even when the other failed; the
+    first failure is raised for the heartbeat."""
+    errors = []
+    for tick in (lambda: restore_tests_tick(), lambda: RESTORE_SWAP.expire_tick()):
+        try:
+            tick()
+        except Exception as error:
+            errors.append(error)
+    if errors:
+        raise errors[0]
+
+
 def _restore_tests_loop():
     while True:
         if LEADER.is_leader():
             try:
-                restore_tests_tick()
+                data_protection_tick()
                 beat("restore-tests", 3600, leader_only=True)
             except Exception as error:
                 beat("restore-tests", 3600, error, leader_only=True)
@@ -657,3 +672,5 @@ def register(ops):
         lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
     ops.RESOLVERS["snapshot-delete"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: SNAPSHOT_DELETE.resume_resolve(item))
     ops.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
+    # Restore into this app (#743) registers here, so server.py gets no line.
+    RESTORE_SWAP.register(ops)

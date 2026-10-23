@@ -3,7 +3,7 @@ const test=require("node:test"), assert=require("node:assert/strict"), fs=requir
 function setup({blocked=false,missing=false}={}) {
   const fields={"#k_go":{disabled:true},"#k_capacity_confirm":{checked:false},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[], cfg={name:"cluster",memory:"4Gi",password:"private-data"};
-  const ctx={console,Date,Map,Promise,URLSearchParams,encodeURIComponent,STATE:{data:{}},document:{addEventListener(){}},
+  const ctx={console,Date,Map,Promise,URLSearchParams,encodeURIComponent,STATE:{data:{}},document:{addEventListener(){},getElementById:id=>fields["#"+id]||null},
     $:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),toast(){},go(){},closeModal(){},modalBack(){},childModal:(_title,html)=>{fields["#mbody"].innerHTML=html;},
     api:async(path,options)=>{
       const body=JSON.parse(options.body);sent.push({path,body});
