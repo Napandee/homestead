@@ -32,6 +32,15 @@ RENEW_EVERY = 2
 RENEW_DEADLINE = 10
 _state = {"leader": False, "holder": "", "since": 0.0, "error": "", "renewed": 0.0}
 _lock = threading.Lock()
+# Called each time this replica starts a term as leader, so work that waits
+# between rounds (the jobs loop) starts at once rather than after its wait.
+_listeners = []
+
+
+def when_leading(fn):
+    """Call fn (no arguments, quick) each time this replica becomes leader."""
+    if fn not in _listeners:
+        _listeners.append(fn)
 
 
 def bind(_kget, _ksend, namespace):
@@ -110,11 +119,17 @@ def attempt(now=None):
 
 def _set(leading, holder, started=None):
     with _lock:
-        if leading and not _state["leader"]:
+        began = leading and not _state["leader"]
+        if began:
             _state["since"] = time.time()
         if leading:
             _state["renewed"] = time.monotonic() if started is None else started
         _state.update(leader=leading, holder=holder, error="")
+    for fn in list(_listeners) if began else ():
+        try:
+            fn()
+        except Exception as error:
+            print(f"leader: {str(error)[:160]}", flush=True)
     return leading
 
 

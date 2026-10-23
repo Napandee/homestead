@@ -956,23 +956,28 @@ def advance_soon():
     _wake.set()
 
 
-def tick(is_leader):
+def tick(is_leader, beat=None):
     """One round of the jobs loop: on the leader, run every active job's
-    resolver. Returns how long to wait before the next round."""
+    resolver. beat(error=None) is told how the round went, so health shows a
+    stalled or failing loop. Returns how long to wait before the next round."""
     if not is_leader():
         return IDLE_SECONDS
     try:
         jobs = list_operations()
     except Exception as error:
         print(f"jobs not advanced: {str(error)[:160]}", flush=True)
+        if beat:
+            beat(error)
         return IDLE_SECONDS
+    if beat:
+        beat()
     return ACTIVE_SECONDS if any(job.get("status") not in TERMINAL for job in jobs) else IDLE_SECONDS
 
 
-def run_jobs(is_leader, stop=None):
+def run_jobs(is_leader, stop=None, beat=None):
     """The jobs loop: one thread per process; only the leader's does anything."""
     while not (stop and stop.is_set()):
-        wait = tick(is_leader)
+        wait = tick(is_leader, beat)
         _wake.wait(wait)
         _wake.clear()
 

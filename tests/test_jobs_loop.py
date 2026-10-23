@@ -72,7 +72,7 @@ class JobsLoopTests(unittest.TestCase):
     def test_advance_soon_wakes_the_loop(self):
         woke = threading.Event()
         stop = threading.Event()
-        with mock.patch.object(OPS, "tick", side_effect=lambda is_leader: woke.set() or 3600):
+        with mock.patch.object(OPS, "tick", side_effect=lambda is_leader, beat=None: woke.set() or 3600):
             thread = threading.Thread(target=OPS.run_jobs, args=(lambda: True, stop), daemon=True)
             thread.start()
             self.assertTrue(woke.wait(2))
@@ -110,6 +110,70 @@ class JobsLoopTests(unittest.TestCase):
             third = OPS.start("loop-test", "Newest", {"kind": "Thing", "name": "v", "namespace": "lab"}, "/", {})["id"]
         self.assertEqual(third, self.get_operations()[0]["id"])
         self.assertIn(second, [job["id"] for job in self.get_operations()])
+
+
+class JobsLoopHealthTests(unittest.TestCase):
+    """The loop says it is alive (a heartbeat) and wakes when its replica
+    becomes leader."""
+
+    def setUp(self):
+        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.tmp))
+        self.beats = []
+
+    def beat(self, error=None):
+        self.beats.append(error)
+
+    def test_each_round_on_the_leader_beats(self):
+        OPS.tick(lambda: True, self.beat)
+        self.assertEqual([None], self.beats)
+
+    def test_a_round_that_fails_beats_with_its_error(self):
+        with mock.patch.object(OPS, "list_operations", side_effect=RuntimeError("store unreadable")), \
+                mock.patch("builtins.print"):
+            OPS.tick(lambda: True, self.beat)
+        self.assertEqual(["store unreadable"], [str(e) for e in self.beats])
+
+    def test_a_standby_replica_does_not_beat(self):
+        OPS.tick(lambda: False, self.beat)
+        self.assertEqual([], self.beats)
+
+    def bound_jobs_loop(self):
+        import homestead_cluster_server as CLUSTER
+        import homestead_leader as LEADER
+        calls, run = [], mock.Mock()
+        self.addCleanup(LEADER._listeners.clear)
+        with mock.patch.object(CLUSTER, "beat", lambda *a, **k: calls.append((a, k)), create=True), \
+                mock.patch.object(CLUSTER.OPS, "run_jobs", run):
+            CLUSTER._jobs_loop()
+            beat = run.call_args.kwargs["beat"]
+            beat()
+            beat(RuntimeError("x"))
+        return LEADER, calls
+
+    def test_the_jobs_loop_beats_as_jobs_on_the_leader_only(self):
+        _, calls = self.bound_jobs_loop()
+        self.assertEqual((("jobs", OPS.IDLE_SECONDS, None), {"leader_only": True}), calls[0])
+        self.assertEqual("x", str(calls[1][0][2]))
+        self.assertEqual({"leader_only": True}, calls[1][1])
+
+    def test_settings_names_the_jobs_loop(self):
+        import homestead_self_health as SELF_HEALTH
+        now = 100000.0
+        row = {"every": OPS.IDLE_SECONDS, "leader_only": True, "last_ok": now, "error": "", "error_at": 0}
+        states = {s["name"]: s for s in SELF_HEALTH.loop_states({"jobs": row}, {}, True, now)}
+        self.assertEqual("ok", states["jobs"]["state"])
+        stale = SELF_HEALTH.loop_states({"jobs": {**row, "last_ok": now - 121}}, {}, True, now)
+        self.assertEqual("late", next(s for s in stale if s["name"] == "jobs")["state"],
+                         "a hung resolver shows as late within two minutes")
+
+    def test_becoming_leader_wakes_the_loop(self):
+        LEADER, _ = self.bound_jobs_loop()
+        LEADER._state.update(leader=False, holder="")
+        self.addCleanup(LEADER._state.update, leader=False, holder="")
+        OPS._wake.clear()
+        LEADER._set(True, LEADER.IDENTITY)
+        self.assertTrue(OPS._wake.is_set(), "a new leader would sit out its idle wait first")
 
 
 class NoRequestAdvancesJobsTests(unittest.TestCase):
