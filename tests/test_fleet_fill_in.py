@@ -157,6 +157,36 @@ class FillInTests(unittest.TestCase):
         rows, _ = self.gather("alice", "viewer")
         self.assertNotIn("office", self.sites(rows))
 
+    def test_a_question_that_comes_back_wakes_only_its_own_gather(self):
+        # A later gather may already have asked again and swapped in a fresh
+        # Event: the old question setting that one would let the new gather
+        # stop waiting early and say "waiting".
+        entry = {"result": None, "at": 0, "misses": 0, "error": "", "pending": True, "done": threading.Event()}
+        own = threading.Event()
+        FLEET._ask(entry, own, self.members[1], "workloads", "alice", "viewer")
+        self.assertTrue(own.is_set())
+        self.assertFalse(entry["done"].is_set())
+
+    def test_the_age_of_kept_rows_counts_the_wait(self):
+        self.gather()
+        self.slow["office"] = threading.Event()
+        with mock.patch.object(FLEET, "ANSWER_BUDGET", 1.2):
+            for key, entry in FLEET._answers.items():
+                if key[1] == "office":
+                    entry["at"] = time.time() - 0.1
+            _, missing = self.gather()
+        self.assertGreaterEqual(missing[0]["age_s"], 1)
+
+    def test_the_age_of_kept_rows_is_never_negative(self):
+        self.gather()
+        self.slow["office"] = threading.Event()
+        for key, entry in FLEET._answers.items():
+            if key[1] == "office":
+                entry["at"] = time.time() + 30   # a clock that stepped back
+        rows, missing = self.gather()
+        self.assertIn("office", self.sites(rows))
+        self.assertEqual(0, missing[0]["age_s"])
+
 
 class ForgetOnUnlinkTests(unittest.TestCase):
     def setUp(self):
