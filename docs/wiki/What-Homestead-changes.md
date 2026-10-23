@@ -84,6 +84,7 @@ Each is done once. One you remove later is not put back.
 |---|---|---|
 | Keeps Homestead ranked at least as high as any app, every minute: moves Homestead to the lowest class that preempts and is at or above the highest app's, creating `homestead-critical` only when there is none, or back to the default when no app ranks above it. Each move restarts Homestead once and is marked with `homestead.io/priority-protect` | `PriorityClass`, `Deployment` `homestead` | always |
 | Weekly trim for every Longhorn volume, made once and kept covering every group ([details](Data-protection#weekly-trim-by-default)) | Longhorn `RecurringJob` `homestead-weekly-trim` | delete it: it is not made again |
+| Lets Homestead's own pods reach Longhorn's API (`longhorn-manager`, TCP 9500), only while another network policy fences the manager in (Longhorn 1.13's own, by default, or one you made). Those policies own it, so it goes when they do; Homestead removes it too | `NetworkPolicy` `homestead-backend-access` in `longhorn-system` | always; without it, rolling back and **Trim now** cannot reach Longhorn |
 | More copies of each volume as storage hosts are added (up to 3), while the value is still the installer's or Homestead's own | Longhorn `HelmChart` values and `Setting`, Homestead's own Longhorn `Volume` | change the value yourself; k3s and RKE2 only |
 | Longhorn rebuilds copies of detached volumes: Homestead turns Longhorn's `offline-replica-rebuilding` on, once. On older Longhorn without that setting, Homestead attaches a detached volume that is a copy short itself (no frontend, nothing can mount it), for up to 6 hours, until its copies are whole | Longhorn `Setting`; Longhorn `VolumeAttachment` ticket `homestead-rebuild` | the offline rebuilding switch on **Volumes** (on by default) |
 | Stops Longhorn using a host's root disk when it has less than 15 % or 10 GB free, and allows it again above 20 % or 15 GB, only for disks it turned off itself ([details](Storage#room-for-the-system)) | Longhorn `Node` | always |
@@ -228,6 +229,7 @@ Only Homestead uses these.
 | `ConfigMap` `homestead-install` | `lab` | the installer's request to Homestead; only Homestead reads it |
 | The node probe: `DaemonSet` and `ConfigMap` `homestead-nodeprobe`, `Secret`s `homestead-smart-key` and `homestead-allocation-auth` | `lab` | the probe only reports to Homestead, and only the probe uses the two Secrets. Delete all four together |
 | Longhorn `RecurringJob` `homestead-weekly-trim` | `longhorn-system` | nothing refers to it; without it your volumes are no longer trimmed each week. Keep it if you changed it and want the trim |
+| `NetworkPolicy` `homestead-backend-access` | `longhorn-system` | it only lets Homestead's pods reach Longhorn's API; Longhorn's own policies are separate and stay |
 | The `homestead.io/standby` taint on hot spare hosts | the hosts | with Homestead gone nothing moves work onto a spare, so the taint only keeps the host empty |
 | The Longhorn attachment tickets `homestead-rebuild` and `homestead-revert` | `longhorn-system` | Homestead holds a volume attached with these while it rebuilds copies or reverts a volume, and lets go itself. One left behind keeps the volume attached where it is, so its app cannot start on another host. Remove it (below) |
 | `/etc/apt/apt.conf.d/99-homestead-hold` on each host | the host | only there if Homestead managed OS updates. Removing it gives Ubuntu its own automatic updates back, with the host's own settings: if those reboot automatically, hosts reboot without being drained first |
@@ -237,7 +239,8 @@ Only Homestead uses these.
 kubectl -n lab delete daemonset/homestead-nodeprobe configmap/homestead-nodeprobe \
   secret/homestead-smart-key secret/homestead-allocation-auth configmap/homestead-install \
   role/homestead-console rolebinding/homestead-console
-kubectl -n longhorn-system delete recurringjobs.longhorn.io/homestead-weekly-trim
+kubectl -n longhorn-system delete recurringjobs.longhorn.io/homestead-weekly-trim \
+  networkpolicies.networking.k8s.io/homestead-backend-access
 kubectl taint nodes --all homestead.io/standby-
 ```
 

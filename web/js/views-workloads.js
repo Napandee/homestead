@@ -2303,14 +2303,14 @@ let DEPLOY_CONTAINER_NEXT = 10000;
 function deployContainerStorage() {
   EDIT_STORAGE = { ...DOPT, pod_volumes: [], node: "" };
 }
+/* The other containers: a panel in each section that holds containers, as in Edit (#544). */
 function renderDeployContainers() {
-  const host = $("#d_extra_containers");
-  if (!host) return;
-  host.innerHTML = "";
+  if (!$("#d_basics_containers")) return;
+  APP_FORM_CONTAINER_SECTIONS.forEach(section => { $(`#d_${section}_containers`).innerHTML = ""; });
   deployContainerStorage();
   for (const container of DCFG.additional_containers || []) {
     const index = DEPLOY_CONTAINER_NEXT++;
-    host.insertAdjacentHTML("beforeend", editContainerPanel({ ...container, new: true }, index, "all", "deploy"));
+    appFormAddPanels("d", { ...container, new: true }, index, "deploy");
     renderVolumeRows(editVolumePicker(index), container.volumes || []);
   }
 }
@@ -2319,8 +2319,8 @@ window.deployAddContainer = () => {
   DCFG.additional_containers ||= [];
   DCFG.additional_containers.push({ name: `container-${DCFG.additional_containers.length + 2}`, image: "", cpu: "50m", memory: "128Mi", env: {}, ports: [], volumes: [] });
   renderDeployContainers(); syncSummary();
-  UI.selectSection("containerDeploy", "containers");
-  const cards = $$("#d_extra_containers .edit-container");
+  UI.selectSection("containerDeploy", "basics");
+  const cards = $$("#d_basics_containers .edit-container");
   cards.at(-1).open = true;
   $("input", cards.at(-1)).focus();
 };
@@ -2334,7 +2334,7 @@ window.deployRemovePrimary = async () => {
     .catch(e => toast(e.message, "bad"));
 };
 window.deployRemoveContainer = index => {
-  $(`#d_extra_containers .edit-container[data-index="${index}"]`).remove(); syncSummary();
+  $$(`#containerDeploy .edit-container[data-index="${index}"]`).forEach(panel => panel.remove()); syncSummary();
 };
 const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: typeof defaultNamespace === "function" ? defaultNamespace() : "lab", replicas: 1,
   cpu: "50m", memory: "128Mi", memory_limit: "", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
@@ -2385,8 +2385,8 @@ async function viewDeploy(pre) {
   const vips = await vipChoices(network);
   const sharedVip = vips.shared || "";
   resetPaint();
-  const sections = [
-    {key:"basics", title:"Basics", lead:"Name the app and its first container.", html:`
+  const sections = appFormSections("deploy", {
+    basics: `
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
         ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "low"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
         ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
@@ -2402,17 +2402,17 @@ async function viewDeploy(pre) {
       <div class="f" id="d_workload_name_wrap"><label>App name ${tip("The stable name for this app. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
       <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the app name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
       <div class="f"><label>Image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
-      <div class="row" id="d_add_container"><button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button>
-        <button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button>
-        <span class="dim small">Containers share each pod’s network and lifecycle.</span></div>
+      <div class="row" id="d_primary_actions"><button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button></div>
       ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>`)}
       <div class="f2 compact-fields">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this app run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
       <div id="d_priority_wrap">${UI.more("Optional settings", deployTierField(DCFG.priority))}</div>
-    `},
-    {key:"hardware", title:"Hardware and access", lead:"Set resources and host access for the first container.", html:`
+      ${appFormContainerBlock("d", "deploy", "")}
+      <div id="d_containers_join" class="empty small" hidden>Add one container to the existing app at a time.</div>
+    `,
+    hardware: `
       <div class="f2 compact-fields">
         <div class="f"><label>CPU reserved ${tip('The share of a CPU core the scheduler keeps for this container: 100% is one core. It is not a limit; the container can use more when the host has it spare.')}</label>${UI.quantity("cpu", "d_cpu", DCFG.cpu, { placeholder: "5", label: "CPU reserved" })}</div>
         <div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "d_mem", DCFG.memory, { placeholder: "128", label: "Memory reserved" })}</div>
@@ -2426,29 +2426,38 @@ async function viewDeploy(pre) {
       ${DCFG.tun || DCFG.privileged || (DCFG.cap_add || []).length ? '<div class="note">Imported privileges: review host access before deploying.</div>' : ""}
       ${privilegeFields("d_pv", DCFG)}
       ${(DCFG.template_devices || []).length ? `<div class="note import-device-note"><b>Imported device mappings:</b> ${(DCFG.template_devices || []).map(d => `<span class="mono">${esc(d.host_path || "?")} → ${esc(d.container_path || "?")}</span>`).join(", ")}. Matching hardware features were selected; review them before deploying.</div>` : ""}
-    `},
-    {key:"environment", title:"Environment values", lead:"Set the values the first container needs.", html:`
+      <div id="d_hardware_containers"></div>
+    `,
+    environment: `
       <div class="sec">Environment ${tip("Environment variables are passed directly to the container. App Store defaults are imported and remain editable.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
-    `},
-    {key:"storage", title:"Storage", lead:"Choose where the first container stores its data.", html:`
+      <div id="d_environment_containers"></div>
+    `,
+    storage: `
       <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
       ${UI.more("Choose a storage type", "RWO suits a single app. RWX allows sharing across hosts. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
-    `},
-    {key:"address", title:"Address", lead:"Choose how clients reach the app.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
+      <div id="d_storage_containers"></div>
+    `,
+    // Phase 1 of #544: placement is chosen in Edit once the app runs.
+    placement: `<div class="ui-stack"></div>`,
+    address: `${addressStepHtml("d", DCFG, vips, sharedVip, {
         lanHtml: '<div id="d_lan_box" hidden></div>',
-        portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>${monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : "")}`})}
-    `},
-    {key:"containers", title:"Additional containers", lead:"Add other containers that share each pod.", html:`
-      <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
-        <div id="d_extra_containers"></div>
-        <button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button></div>
-      <div id="d_extra_join" class="empty small" hidden>Add one container to the existing app at a time.</div>
-    `},
-    {key:"summary", title:"Summary", lead:"Check the configuration, then review capacity and rollout impact.", html:`
+        portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button><div id="d_address_containers"></div>`})}
+    `,
+    monitoring: monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : ""),
+    summary: `
       <div id="d_summary" class="deploy-summary"></div>
-    `}
-  ];
+    `,
+  }, { leads: {
+    basics: "Name the app and its first container.",
+    hardware: "Set resources and host access for the first container.",
+    environment: "Set the values the first container needs.",
+    storage: "Choose where the first container stores its data.",
+    placement: "Set after deploying: once the app runs, Edit chooses its hosts, how its copies spread and which apps it runs beside.",
+    address: "Choose how clients reach the app.",
+    monitoring: "Choose how Homestead checks the app is up.",
+    summary: "Check the configuration, then review capacity and rollout impact.",
+  }, later: { placement: "Set after deploying" } });
   paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
       UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
@@ -2460,8 +2469,9 @@ async function viewDeploy(pre) {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
-  $("#d_extra_containers").addEventListener("input", syncSummary);
-  $("#d_extra_containers").addEventListener("change", syncSummary);
+  // The other containers' fields, in whichever section they sit.
+  for (const type of ["input", "change"])
+    $("#containerDeploy").addEventListener(type, event => { if (event.target.closest(".edit-container")) syncSummary(); });
   $("#d_target_mode").addEventListener("change", () => { applyDeployMode(); syncSummary(); });
   $("#d_target_workload").addEventListener("change", () => { collect(); updateJoinNote(); renderVols(); syncSummary(); });
   $("#d_ns").addEventListener("change", refreshDeployOptions);
@@ -2496,10 +2506,12 @@ function applyDeployMode() {
   $("#d_join_wrap").style.display = joining ? "block" : "none";
   $("#d_workload_name_wrap").style.display = joining ? "none" : "block";
   $("#d_rep_wrap").style.display = joining ? "none" : "block";
-  $("#d_add_container").hidden = joining;
+  $("#d_primary_actions").hidden = joining;
   $("#d_priority_wrap").hidden = joining;   // the app it joins keeps its own tier
-  $("#d_extra_wrap").hidden = joining;
-  $("#d_extra_join").hidden = !joining;
+  // Joining adds one container: no list of others, in any section.
+  $("#d_containers_block").hidden = joining;
+  APP_FORM_CONTAINER_SECTIONS.forEach(section => { $(`#d_${section}_containers`).hidden = joining; });
+  $("#d_containers_join").hidden = !joining;
   const host = [...$("#d_net").options].find(o => o.value === "host");
   if (host) host.disabled = joining;
   if (joining && $("#d_net").value === "host") $("#d_net").value = "internal";
@@ -2524,7 +2536,7 @@ function collect() {
   DCFG.ports = $$("#d_ports .port-row").map(r => ({ container: +$(".pc", r).value,
     host: +$(".ph", r).value || +$(".pc", r).value, protocol: $(".pp", r).value, expose: $(".pe", r).checked }));
   DCFG.volumes = readVolumeRows($("#d_vols"));
-  if (DCFG.target_mode === "new") DCFG.additional_containers = $$("#d_extra_containers .edit-container[data-original-name]").map(readEditedContainer);
+  if (DCFG.target_mode === "new") DCFG.additional_containers = $$("#d_basics_containers .edit-container[data-original-name]").map(readEditedContainer);
   DCFG.env = {}; $$("#d_env .env-row").forEach(r => { const k = $(".ek", r).value.trim(); if (k) DCFG.env[k] = $(".ev", r).value; });
   const removePrimary = $("#d_remove_primary");
   if (removePrimary) removePrimary.disabled = DCFG.target_mode !== "new" || !DCFG.additional_containers?.length;
@@ -2684,7 +2696,7 @@ window.deployReviewReady = () => {
   return !!ready;
 };
 function deployInvalid(message, selector) {
-  const field=document.querySelector(selector), pane=field?.closest('.stepper-pane');
+  const field=selector?document.querySelector(selector):null, pane=field?.closest('.stepper-pane');
   if(pane)UI.selectSection("containerDeploy",pane.dataset.key);
   for(let parent=field?.parentElement;parent && parent!==pane;parent=parent.parentElement)if(parent.tagName==="DETAILS")parent.open=true;
   field?.focus();toast(message,"bad");
@@ -2701,10 +2713,19 @@ window.doDeploy = async () => {
   if (c.target_mode === "new" && !c.workload_name) return deployInvalid("App name is required.", "#d_workload_name");
   if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing app.", "#d_target_workload");
   const extra = c.additional_containers || [];
-  if (extra.some(container => !container.name || !container.image)) return deployInvalid("Every container needs a name and image.", "#d_extra_containers input");
+  // Another container's field, by its place in the order collect() read them.
+  const extraField = (at, field) => {
+    const index = $$("#d_basics_containers .edit-container[data-original-name]")[at]?.dataset.index;
+    return index === undefined ? null : `#e_${field}_${index}`;
+  };
+  const unnamed = extra.findIndex(container => !container.name || !container.image);
+  if (unnamed >= 0) return deployInvalid("Every container needs a name and image.", extraField(unnamed, extra[unnamed].name ? "image" : "container_name"));
   if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return deployInvalid("Container names must be unique in this pod.", "#d_container_name");
   const storageIssue = [volumeListIssue(c.volumes), ...extra.map(container => volumeListIssue(container.volumes))].find(Boolean);
-  if (storageIssue) return deployInvalid(storageIssue, volumeListIssue(c.volumes)?"#d_vols input":"#d_extra_containers input");
+  if (storageIssue) {
+    const vols = volumeListIssue(c.volumes) ? "#d_vols" : extraField(extra.findIndex(container => volumeListIssue(container.volumes)), "vols");
+    return deployInvalid(storageIssue, vols && `${vols} input`);
+  }
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
