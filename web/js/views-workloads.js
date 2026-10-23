@@ -836,6 +836,10 @@ function workloadActions(w, update, off, compact = false) {
   ]);
 }
 
+/* Starts after (#746): names in words, and a time in seconds or minutes. */
+const startsWords = names => { const list = [...names]; return list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`; };
+const startsSpan = seconds => seconds < 60 ? `${Math.max(0, Math.round(seconds))} s` : `${Math.round(seconds / 6) / 10} min`;
+
 /* A workload's state tags, the same in a row and a card so the two can't
    drift: its schedule, how it updates, who updates it, and an update waiting.
    A row whose own Update button is shown says the update there, not twice. */

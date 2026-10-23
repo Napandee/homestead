@@ -110,6 +110,9 @@ const DIALOGS = [
   ["workload-priority", "workloads", "priorityReview()"],
   ["workload-group-tier", "workloads", "groupTier(groupKeyIndex('Home'))"],
   ["workload-edit-placement", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',4)"],
+  // Starts after (#746): a second app picked, one with two ports; and a loop refused.
+  ["workload-edit-starts-after", "workloads", "wlEdit('lab','paperless')", "(()=>{stepGo('e_steps',4);startsAfterAdd();const s=[...document.querySelectorAll('#e_starts_rows .sa-app')].pop();s.value='lab/frigate';startsAfterAppPicked(s)})()"],
+  ["workload-edit-starts-after-cycle", "workloads", "wlEdit('lab','postgres')", "(async()=>{startsAfterAdd();const s=document.querySelector('#e_starts_rows .sa-app');s.value='lab/home-assistant';startsAfterAppPicked(s);await editSave('lab','postgres')})()"],
   ["workload-edit-add-container", "workloads", "wlEdit('lab','frigate')", "containerAdd('edit')"],
   ["workload-edit-hardware", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',1)"],
   ["workload-edit-environment", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',2)"],

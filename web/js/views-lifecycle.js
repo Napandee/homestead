@@ -245,7 +245,146 @@ function priorityFixed(w) {
   return "";
 }
 
-function placementSection(p, w, nodes, containers) {
+/* ---------------- Starts after (#746) ----------------
+   The apps this one waits for each time a pod of it starts. The form comes
+   from GET /api/workloads/starts-after; Edit sends `starts_after` only when it
+   changed, so a save that doesn't touch it never checks or rewrites it. */
+const STARTS_HELP = "Each time a pod of this app starts (after a power cut, a host restart, an update or a move), it first waits until these apps answer on their Service. If one never does, it starts anyway after the time below, or keeps waiting. It does not stop the app if one of them goes away later.";
+let EDIT_STARTS = { form: null, ctx: {}, dirty: false };
+const startsKey = a => `${a.ns}/${a.app}`;
+function startsAfterRow(row = {}, form = EDIT_STARTS.form, ctx = EDIT_STARTS.ctx) {
+  const candidates = form?.candidates || [], key = row.app ? startsKey(row) : "";
+  const found = candidates.find(c => startsKey(c) === key);
+  const apps = candidates.map(c => {
+    const value = startsKey(c), none = !(c.services || []).length;
+    return `<option value="${esc(value)}"${value === key ? " selected" : ""}${none && value !== key ? " disabled" : ""}>${esc(`${c.app}${c.ns !== ctx.ns ? ` · ${c.ns}` : ""}${none ? " · no Service with a TCP port" : ""}`)}</option>`;
+  });
+  if (key && !found) apps.unshift(`<option value="${esc(key)}" selected>${esc(`${row.app}${row.ns !== ctx.ns ? ` · ${row.ns}` : ""} (gone)`)}</option>`);
+  const services = found?.services || [];
+  const ports = services.flatMap(s => s.ports.map(port => {
+    const value = `${s.name}:${port}`;
+    return `<option value="${esc(value)}"${s.name === row.service && port === row.port ? " selected" : ""}>${esc(services.length > 1 ? value : port)}</option>`;
+  }));
+  if (row.service && !services.some(s => s.name === row.service && s.ports.includes(row.port)))
+    ports.unshift(`<option value="${esc(`${row.service}:${row.port}`)}" selected>${esc(`${row.service}:${row.port}`)}</option>`);
+  return `<div class="aff-row starts-row"><select class="sa-app" aria-label="App it starts after" onchange="startsAfterAppPicked(this)"><option value="">choose an app…</option>${apps.join("")}</select>
+    <select class="sa-port" aria-label="Port to wait for"${ports.length > 1 ? "" : " hidden"}>${ports.join("")}</select>
+    <button class="iconbtn row-remove" type="button" title="Remove this app" onclick="this.closest('.starts-row').remove();startsAfterChanged()">×</button></div>`;
+}
+function startsAfterBlock(form, ctx = {}) {
+  const wrap = body => `<div class="place-level" id="e_starts"><div class="place-title">Starts after ${tip(STARTS_HELP)}</div>${body}</div>`;
+  // #620: a read that failed says so, and nothing here acts on a guess.
+  if (!form || form.error) return wrap(`<div class="dim small" role="status">Could not read Starts after: ${esc(form?.error || "no answer")}. Saving leaves it as it is.</div>
+    ${UI.button("Retry", "startsAfterRetry()", { kind: "sm" })}`);
+  if (ctx.fixed) return wrap(`<div class="dim small">Homestead and its helpers can't wait for other apps. Other apps can start after Homestead.</div>`);
+  const by = form.managed_by;
+  return wrap(`${by ? `<div class="dim small">${esc(by)} applies this app, so Homestead doesn't change it: commit the lines below where ${esc(by)} applies it. To change it, choose the apps here, then show the lines for that.</div>` : ""}
+    ${form.unreadable ? `<div class="dim small" id="e_starts_unread">Its Starts after setting can't be read: it was changed outside Homestead. Set it again below, or ${UI.button("Clear it", "startsAfterClear()", { kind: "sm" })}</div>` : ""}
+    <div class="place-grid two">
+      <div class="f"><label>Apps it waits for</label><div id="e_starts_rows">${(form.after || []).map(row => startsAfterRow(row, form, ctx)).join("")}</div>
+        <button class="btn sm" type="button" onclick="startsAfterAdd()">＋ Add</button></div>
+      <div class="f"><label for="e_starts_min">Wait up to (minutes)</label><input type="number" id="e_starts_min" min="0.5" max="60" step="0.5" value="${esc((form.timeout || 300) / 60)}"></div>
+      <div class="f"><label for="e_starts_on">If it never comes up</label><select id="e_starts_on">${[["start", "Start anyway"], ["wait", "Keep waiting"]].map(([value, label]) =>
+        `<option value="${value}"${(form.on_timeout || "start") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div></div>
+    ${by ? `<pre class="mono small starts-git" id="e_starts_git"${form.git && (form.after || []).length ? "" : " hidden"}>${esc(form.git || "")}</pre>
+      ${UI.button("Show the lines to commit", "startsAfterLines()", { kind: "sm", attrs: 'data-need="operator"' })}` : ""}
+    <div class="dim small" id="e_starts_note" aria-live="polite"></div>
+    <div class="small badtext" id="e_starts_err" role="alert" hidden></div>`);
+}
+/* What Edit sends: undefined when nothing changed (or the form could not be
+   read, or Flux applies the app), else {after, timeout, on_timeout}. */
+function startsAfterValue(form, { dirty, rows, minutes, on_timeout }) {
+  if (!form || form.error || form.managed_by || !dirty) return undefined;
+  const shape = list => (list || []).map(a => ({ ns: a.ns, app: a.app, service: a.service, port: a.port }));
+  const value = { after: shape(rows), timeout: Math.round(minutes * 60), on_timeout };
+  if (form.unreadable) return value;
+  const same = JSON.stringify(value.after) === JSON.stringify(shape(form.after))
+    && (!value.after.length || (value.timeout === form.timeout && value.on_timeout === form.on_timeout));
+  return same ? undefined : value;
+}
+function startsAfterRows() {
+  return $$("#e_starts_rows .starts-row").map(row => {
+    const [ns, app] = ($(".sa-app", row).value || "/").split("/");
+    const [service, port] = ($(".sa-port", row).value || "").split(":");
+    return { ns, app, ...(service ? { service, port: +port } : {}) };
+  }).filter(row => row.app);
+}
+function readStartsAfter() {
+  if (!$("#e_starts_rows")) return undefined;
+  return startsAfterValue(EDIT_STARTS.form, { dirty: EDIT_STARTS.dirty, rows: startsAfterRows(),
+    minutes: +$("#e_starts_min")?.value, on_timeout: $("#e_starts_on")?.value || "start" });
+}
+/* The picked apps that are stopped or gone: a start would wait for them. */
+function startsAfterStopped(after, others) {
+  return (after || []).filter(a => !(others || []).some(o => o.ns === a.ns && o.name === a.app && o.desired)).map(a => a.app);
+}
+function startsAfterReviewLine(name, value) {
+  if (!value) return "";
+  return value.after.length ? `Saving restarts ${name} once: its pods wait for ${startsWords(value.after.map(a => a.app))} before starting.`
+    : `Saving restarts ${name} once: its pods no longer wait for other apps.`;
+}
+/* A refusal from the server that is about Starts after, shown beside it. */
+function startsAfterRefusal(text) { return /^a cycle:|can't start after itself|no Service with a TCP port|Service has no port|cluster DNS|^wait up to|never comes up|Starts after|can't wait for other apps|start order is set where/.test(String(text || "")); }
+window.startsAfterShowError = text => {
+  const box = $("#e_starts_err");
+  if (!box) return;
+  box.textContent = `Saving was refused: ${text}`;
+  box.hidden = false;
+  // Edit's Placement step, where the block is.
+  document.getElementById("e_steps-tab-placement")?.click();
+  box.scrollIntoView?.({ block: "nearest" });
+};
+function startsAfterNote() {
+  const note = $("#e_starts_note"), form = EDIT_STARTS.form;
+  if (!note || !form || form.error) return;
+  const rows = startsAfterRows(), name = EDIT_STARTS.ctx.name, seconds = Math.round((+$("#e_starts_min")?.value || 0) * 60), lines = [];
+  const stopped = startsAfterStopped(rows, EDIT_PLACEMENT.others);
+  if (stopped.length) lines.push(`${startsWords(stopped)} ${stopped.length > 1 ? "are" : "is"} stopped: ${name}'s pods will wait for ${stopped.length > 1 ? "them" : "it"} ${$("#e_starts_on")?.value === "wait" ? "until it is up" : `up to ${startsSpan(seconds)}`} each time they start.`);
+  if (new Set(rows.map(startsKey)).size !== rows.length) lines.push("An app is named twice; it is waited for once.");
+  if (rows.length && seconds > 600) lines.push("A wait over 10 min can show an update as not progressing in Kubernetes; it carries on once the app is up.");
+  if (form.gate === "not-committed") lines.push("Its start gate isn't committed yet.");
+  else if (["differs", "missing"].includes(form.gate)) lines.push("Its start gate doesn't match this setting.");
+  note.textContent = lines.join(" ");
+}
+window.startsAfterChanged = () => { EDIT_STARTS.dirty = true; $("#e_starts_err") && ($("#e_starts_err").hidden = true); startsAfterNote(); };
+window.startsAfterAdd = () => { $("#e_starts_rows").insertAdjacentHTML("beforeend", startsAfterRow()); startsAfterChanged(); };
+window.startsAfterAppPicked = select => {
+  const [ns, app] = (select.value || "/").split("/");
+  const row = select.closest(".starts-row");
+  row.insertAdjacentHTML("afterend", startsAfterRow({ ns, app }));
+  row.remove();
+  startsAfterChanged();
+};
+window.startsAfterClear = () => {
+  $("#e_starts_rows").innerHTML = "";
+  $("#e_starts_unread")?.remove();
+  startsAfterChanged();
+};
+window.startsAfterRetry = async () => {
+  const { ns, name } = EDIT_STARTS.ctx;
+  const form = await api(`/api/workloads/starts-after?${new URLSearchParams({ ns, name })}`).catch(e => ({ error: e.message }));
+  EDIT_STARTS = { ...EDIT_STARTS, form, dirty: false };
+  const block = $("#e_starts");
+  if (block) block.outerHTML = startsAfterBlock(form, EDIT_STARTS.ctx);
+  startsAfterNote();
+};
+/* An app Flux or Argo CD applies: the server answers 409 with the lines to
+   commit for the apps chosen here, and writes nothing. */
+window.startsAfterLines = async () => {
+  const { ns, name } = EDIT_STARTS.ctx, pre = $("#e_starts_git");
+  const body = { ns, name, after: startsAfterRows(), timeout: Math.round((+$("#e_starts_min")?.value || 0) * 60), on_timeout: $("#e_starts_on")?.value || "start" };
+  try {
+    await api("/api/workloads/starts-after", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast(`${name}'s Starts after is saved: it is no longer applied from git`, "ok");
+  } catch (e) {
+    if (e.status === 409 && e.body?.git && pre) { pre.textContent = e.body.git; pre.hidden = false; }
+    else startsAfterShowError(e.message);
+  }
+};
+document.addEventListener("input", event => { if (event.target.closest?.("#e_starts")) startsAfterChanged(); });
+document.addEventListener("change", event => { if (event.target.closest?.("#e_starts")) startsAfterChanged(); });
+
+function placementSection(p, w, nodes, containers, startsHtml = "") {
   const names = (containers || []).map(c => c.name);
   return `<section class="placement card flat" id="e_placement">
     <div class="sec" style="margin-top:0">Placement</div>
@@ -273,6 +412,7 @@ function placementSection(p, w, nodes, containers) {
         <div class="f"><label>Keep off the host of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
+    ${startsHtml}
     <div class="place-level"><div class="place-title">If its host fails</div>
       <div class="place-grid failover"><div class="f">${failoverSelect("e_failover", w.failover || "default",
           `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
@@ -326,13 +466,16 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
   // Placement, storage, its neighbours and its address are built from these
   // reads; a form built without one would save a change nobody made (#620).
   try {
-    const [w, liveNodes, options, others, network] = await Promise.all([
+    const [w, liveNodes, options, others, network, starts] = await Promise.all([
       api(`/api/workload?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       loadHardwareFeatures().catch(e => { throw new Error(`Could not read the hardware features: ${e.message}`); })
         .then(() => mustRead("/api/nodes", "the hosts")),
       mustRead(`/api/deploy/options?ns=${encodeURIComponent(ns)}`, "the storage options"),
       STATE.data.wl ? Promise.resolve(STATE.data.wl) : mustRead("/api/workloads", "the other apps"),
       mustRead("/api/network", "the network"),
+      // Starts after (#746): its block says when it could not be read, and the
+      // rest of Edit still works; the save then leaves the setting as it is.
+      api(`/api/workloads/starts-after?${new URLSearchParams({ ns, name })}`).catch(e => ({ error: e.message })),
     ]);
     const vips = await vipChoices(network);
     STATE.data.network = network;
@@ -366,7 +509,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         Autostart ${tip("On keeps the app running: Kubernetes restarts it after a crash, a host reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       ${appFormContainerBlock("e", "edit", containers.map((container, index) => editContainerPanel(container, index, "basics")).join(""))}`;
-    const running = placementSection(w.placement || {}, w, nodes, containers);
+    EDIT_STARTS = { form: starts, dirty: false,
+      ctx: { ns, name, fixed: w.priority === "self" || !!(listed?.self || listed?.homestead || listed?.managed_smb || listed?.managed_nfs) } };
+    const running = placementSection(w.placement || {}, w, nodes, containers, startsAfterBlock(starts, EDIT_STARTS.ctx));
     const access = `
       ${panels("hardware")}`;
     const environment = `
@@ -401,6 +546,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     window.__editPortBaseline = editPortSignature();
     containerRemoveButtons();
     placementChanged();
+    startsAfterNote();
     editAddressChanged();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `wlEdit(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
 };
@@ -543,6 +689,11 @@ window.editSave = async (ns, name) => {
   if ($("#e_lan_on")) body.lan = (access === "lan" || $("#e_lan_on").checked) && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
+  const startsAfter = readStartsAfter();
+  if (startsAfter) {
+    if (!(startsAfter.timeout >= 30 && startsAfter.timeout <= 3600)) return toast("Wait up to: between 0.5 and 60 minutes", "bad");
+    body.starts_after = startsAfter;
+  }
   // The app's own answer says whether it is Homestead; the list of apps may not have been read.
   if ((window.__editIsSelf || (STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name)) && !body.autostart) {
     if (!(await ask(`Turning autostart off stops Homestead, and this page with it. Nothing here can start it again - it stays down until someone runs\n\n  kubectl -n ${ns} scale deployment/${name} --replicas=1\n\non the cluster. Stop it anyway?`, { title: "Turn autostart off", ok: "Stop Homestead", danger: true }))) return;
@@ -586,6 +737,7 @@ window.editReview = async body => {
     }
     childModal(rename ? "Rename app" : "Review app changes", `
       ${gitopsNote(review.managed, { rename: !!rename, yaml: review.yaml })}
+      ${!rename && config.starts_after ? `<p>${esc(startsAfterReviewLine(config.name, config.starts_after))}</p>` : ""}
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
@@ -593,7 +745,11 @@ window.editReview = async body => {
       ${gitopsYamlBlock(review.yaml, review.secret)}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename app" : "Save changes"}</button>`)}`, true, "operation-review");
-  } catch (e) { toast(e.message, "bad"); }
+  } catch (e) {
+    // A refusal about Starts after (a loop, say) is shown beside it too.
+    if (config.starts_after && e.status === 400 && startsAfterRefusal(e.message)) startsAfterShowError(e.message);
+    toast(e.message, "bad");
+  }
 };
 window.confirmEdit = async () => {
   const review = EDIT_REVIEW;

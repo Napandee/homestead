@@ -630,6 +630,13 @@
         "Choose existing storage for retained recordings or create a suitably sized Longhorn claim.",
       ], dependencies: [] },
     } };
+  // Starts after (#746): home-assistant and paperless start after postgres,
+  // which these fixtures have stopped; the healthy scenario starts it. Added after
+  // the network fixtures, which give every other app an address of its own.
+  const demoStartsAfter = { "lab/home-assistant": ["postgres"], "lab/paperless": ["postgres"] };
+  workloads.push({ name: "postgres", ns: "lab", kind: "Deployment", failover: "move", desired: 0, ready: 0, uptime: 0,
+    cpu: 0, mem_mb: 0, nodes: [], hardware: [], images: ["docker.io/library/postgres:17"], ports: [], claims: ["postgres-data"],
+    pod_count: 0, container_count: 1, pods: [] });
   const responses = {
     "/api/auth/state": { setup: false, user: "demo", role: "admin", remember: true,
       session_started: Math.floor(Date.now() / 1000) - 86400 * 3,
@@ -2735,6 +2742,10 @@ ssh_pwauth: true
     },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
+      // Starts after (#746): a loop is refused, as the server refuses it.
+      const back = (body.starts_after?.after || []).find(a => (demoStartsAfter[`${a.ns}/${a.app}`] || []).includes(body.name));
+      if (back) return new Response(JSON.stringify({ error: `a cycle: ${body.name} → ${back.app} → ${body.name}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } });
       const rename = body.workload_name && body.workload_name !== body.name;
       return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
@@ -2756,6 +2767,16 @@ ssh_pwauth: true
       warnings: [rename ? "Old pods stop before the replacement starts. A failed or uncertain step keeps resources for inspection, without automatic rollback." : "Editing restarts all containers in the pod. This is a demo capacity snapshot."],
       rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: [], release_request_gb: 0.5, max_surge: 0, max_unavailable: 1 }
     } }; },
+    // Starts after (#746): Edit's block, and its own save.
+    "/api/workloads/starts-after": (url, init) => {
+      if (init?.method === "POST") return { ok: true, restarts: true };
+      const ns = url.searchParams.get("ns"), name = url.searchParams.get("name");
+      const ports = { postgres: [5432], frigate: [5000, 8554] };
+      const after = (demoStartsAfter[`${ns}/${name}`] || []).map(app => ({ ns: "lab", app, service: app, port: ports[app]?.[0] || 80 }));
+      return { after, timeout: 300, on_timeout: "start", unreadable: false, managed_by: null, gate: after.length ? "rendered" : "none", git: "",
+        candidates: workloads.filter(w => !(w.ns === ns && w.name === name) && (w.self || !w.homestead)).map(w => ({ ns: w.ns, app: w.name,
+          services: [{ name: w.name, ports: ports[w.name] || (w.ports || []).map(p => p.port) }] })) };
+    },
     "/api/edit": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, name: body.workload_name || body.name, renamed: body.workload_name && body.workload_name !== body.name,
@@ -3160,6 +3181,8 @@ ssh_pwauth: true
         uncorrectable: nvme ? null : 0, media_errors: nvme ? 0 : null });
       withHealth(disk);
     }
+    // Starts after (#746): postgres runs.
+    Object.assign(workloads.find(row => row.name === "postgres"), { desired: 1, cpu: 0.05, mem_mb: 96, nodes: ["harvester-node1"] });
     for (const workload of workloads.filter(row => row.desired > 0 && row.ready < row.desired)) {
       workload.ready = workload.desired;
       workload.uptime = 3600;
@@ -3358,6 +3381,8 @@ ssh_pwauth: true
     }
     const configured = responses[key];
     let value = typeof configured === "function" ? configured(url, init) : configured;
+    // An answer that is not 200 (a refusal), as the server would send it.
+    if (value instanceof Response) return value;
     // The live demo: a change the demo has no answer for is taken, and kept nowhere.
     if (value === undefined && live && (init?.method || "GET") !== "GET") value = { ok: true, detail: "Demo: nothing is saved" };
     if (value === undefined) return new Response(JSON.stringify({ error: `Demo endpoint not available: ${url.pathname}` }), { status: 404, headers: { "Content-Type": "application/json" } });
