@@ -1957,8 +1957,9 @@ several apps by hand) is left to the gate, which does the waiting.
   [{ns, app, service, port}], timeout, on_timeout}`, with Edit's checks;
   with `"lines": true` it saves nothing and answers `{git}`, the lines to
   commit for that setting. Edit's save (`POST /api/edit`) takes the same
-  object as `starts_after`, plus `"restore_gate": true` to render a gate
-  changed outside Homestead from the setting again. The Apps list's rows carry
+  object as `starts_after`. Both take `"restore_gate": true` to render a gate
+  changed outside Homestead from the setting again: the same setting saved
+  again without it is no change. The Apps list's rows carry
   `starts_after`, `start_gate` and `start_wait`; a start plan carries
   `waits_for`, and `waits_for_error` when that could not be read.
 

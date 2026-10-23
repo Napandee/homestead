@@ -331,6 +331,23 @@ class SaveTests(Fixture):
     def deployment_writes(self):
         return [w for w in self.kube.writes if "/deployments/" in w[1]]
 
+    def test_restore_gate_puts_the_gate_back(self):
+        """A gate changed outside Homestead: the same setting saved again is
+        no change; with "restore_gate" the gate is rendered again, once."""
+        START.save({"ns": "lab", "name": "app-1", "after": [{"ns": "lab", "app": "app-2"}]})
+        live = self.live("lab", "app-1")
+        live["spec"]["template"]["spec"]["initContainers"][0]["image"] = "example/other:1"
+        self.kube.add(live)
+        self.assertEqual("differs", START.gate_state(self.live("lab", "app-1")))
+        stored = START.read(self.live("lab", "app-1"))
+        same = START.save({"ns": "lab", "name": "app-1", **stored})
+        self.assertFalse(same["restarts"])
+        self.assertEqual("differs", START.gate_state(self.live("lab", "app-1")))
+        back = START.save({"ns": "lab", "name": "app-1", **stored, "restore_gate": True})
+        self.assertTrue(back["restarts"])
+        self.assertEqual("rendered", START.gate_state(self.live("lab", "app-1")))
+        self.assertEqual(stored, START.read(self.live("lab", "app-1")), "the flag is not stored")
+
     def test_save_writes_the_setting_and_says_it_restarts(self):
         got = START.save({"ns": "lab", "name": "app-1", "after": [{"ns": "lab", "app": "app-2"}]})
         self.assertEqual(True, got["ok"])
@@ -752,9 +769,13 @@ class StateTests(Fixture):
         facts = {f["key"]: f for f in START.alert_facts(self.rows([]), now=T0)}
         differs = facts["starts-after:differs:lab/app-1"]
         self.assertEqual(("info", "app-1's start gate does not match its setting"), (differs["severity"], differs["title"]))
-        self.assertIn("save Starts after in Edit to put it back; that restarts it once", differs["body"])
+        # Advice that works: the same setting saved again is no change, so it
+        # names restore_gate (SaveTests.test_restore_gate_puts_the_gate_back).
+        self.assertIn('save its Starts after again with "restore_gate": true to put the gate back; that restarts it once',
+                      differs["body"])
+        self.assertNotIn("save Starts after in Edit", differs["body"])
         flux = facts["starts-after:differs:lab/app-3"]
-        self.assertIn("commit the lines in Edit", flux["body"])
+        self.assertIn("commit the lines /api/workloads/starts-after gives for it", flux["body"])
 
     def test_bad_rows_never_break_the_alerts(self):
         self.assertEqual([], START.alert_facts([{"ns": "lab", "name": "x"}, {}], now=T0))

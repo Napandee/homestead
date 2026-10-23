@@ -486,6 +486,10 @@ def save(body):
     dep = LC.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     deployments, services = lists(LC.kget)
     value = {key: body[key] for key in ("after", "timeout", "on_timeout") if key in body}
+    if body.get("restore_gate") is True:
+        # As Edit takes it: the setting is not "unchanged", so a gate changed
+        # outside Homestead is rendered again (the flag itself is not stored).
+        value["restore_gate"] = True
     setting = clean(dep, value, deployments, services)
     if body.get("lines") is True:
         # Only the lines to commit, for Edit's "Show the lines to commit":
@@ -718,8 +722,9 @@ def alert_facts(workloads, now=None):
                           "signals": {}})
         gate = row.get("start_gate")
         if gate == "differs" or (gate == "missing" and (setting or {}).get("managed")):
-            fix = ("commit the lines in Edit" if (setting or {}).get("managed")
-                   else "save Starts after in Edit to put it back; that restarts it once")
+            # The same setting saved again is no change: restore_gate is what puts it back.
+            fix = ("commit the lines /api/workloads/starts-after gives for it" if (setting or {}).get("managed")
+                   else 'save its Starts after again with "restore_gate": true to put the gate back; that restarts it once')
             facts.append({"key": f"starts-after:differs:{ns}/{name}", "category": "degraded", "severity": "info",
                           "title": f"{name}'s start gate does not match its setting",
                           "body": f"Its pods don't wait as Starts after says: {fix}.",
