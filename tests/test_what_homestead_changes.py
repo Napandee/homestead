@@ -25,6 +25,8 @@ import re
 import unittest
 from pathlib import Path
 
+import source_scan as SS
+
 ROOT = Path(__file__).resolve().parents[1]
 WIKI = ROOT / "docs" / "wiki"
 PAGE = WIKI / "What-Homestead-changes.md"
@@ -71,8 +73,7 @@ def code_kinds(root=ROOT):
     """{kind: [where]} from the object bodies server code builds."""
     found = {}
     for path in sorted((root / "server").rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
-        for node in ast.walk(tree):
+        for node in ast.walk(SS.tree(path)):
             if not isinstance(node, ast.Dict):
                 continue
             keys = {key.value: value for key, value in zip(node.keys, node.values)
