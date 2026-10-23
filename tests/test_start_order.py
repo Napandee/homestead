@@ -363,6 +363,20 @@ class SaveTests(Fixture):
         self.assertEqual([], self.kube.writes)
         self.prepull.assert_not_called()
 
+    def test_lines_only_never_writes(self):
+        # Edit's "Show the lines to commit" (#746 PR 2): the lines for the
+        # apps chosen, and nothing written, whoever applies the app now.
+        for name in ("flux-app", "app-1"):
+            with self.subTest(name=name):
+                got = START.save({"ns": "lab", "name": name, "after": [{"ns": "lab", "app": "app-2"}], "lines": True})
+                self.assertIsInstance(got, dict)
+                self.assertIn("name: homestead-start-gate", got["git"])
+                self.assertNotIn("ok", got)
+        self.assertEqual([], self.kube.writes)
+        self.prepull.assert_not_called()
+        with self.assertRaises(ValueError):
+            START.save({"ns": "lab", "name": "app-1", "after": [{"ns": "lab", "app": "app-1"}], "lines": True})
+
     def test_git_lines_are_yaml_the_manifest_takes(self):
         lines = START.git_lines(self.dep("lab", "flux-app"), SETTING)
         self.assertRegex(lines, r"spec:\n  template:\n    spec:\n      initContainers:[^\n]*\n        - name: homestead-start-gate\n")
@@ -615,6 +629,8 @@ class OrderTests(Fixture):
                 mock.patch.object(overview, "kget", side_effect=RuntimeError("API down")):
             plan = overview.workload_start_plan("lab", "app-1")
         self.assertEqual([], plan["waits_for"], "a start never fails on it")
+        # #620: Start says it could not check, rather than that nothing waits.
+        self.assertIn("API down", plan["waits_for_error"])
 
 
 T0 = 1_792_000_000   # 2026-10-15 (UTC), whole seconds

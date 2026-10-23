@@ -88,6 +88,23 @@ class EditRestartTests(unittest.TestCase):
         self.assertEqual(setting, START.read(saved))
         self.assertEqual("rendered", START.gate_state(saved))
 
+    def test_restore_gate_puts_a_changed_gate_back(self):
+        """A gate changed outside Homestead: the setting sent back as it is
+        changes nothing, and with restore_gate (Edit's "Put the start gate
+        back") the gate is rendered from the setting again."""
+        import homestead_start_order as START
+        self.objects["/apis/apps/v1/deployments"] = {"items": [copy.deepcopy(self.current)]}
+        self.objects["/api/v1/services"] = {"items": []}
+        setting = {"after": [{"ns": "lab", "app": "gone", "service": "gone", "port": 5432}], "timeout": 300, "on_timeout": "start"}
+        START.apply_to(self.current, setting)
+        self.current["spec"]["template"]["spec"]["initContainers"][0]["image"] = "example/other:1"
+        self.assertEqual("differs", START.gate_state(self.current))
+        kept = self.edit(starts_after=copy.deepcopy(setting))
+        self.assertEqual("differs", START.gate_state(kept))
+        restored = self.edit(starts_after={**copy.deepcopy(setting), "restore_gate": True})
+        self.assertEqual("rendered", START.gate_state(restored))
+        self.assertEqual(setting, START.read(restored), "the flag is not stored")
+
     def test_every_fixture_edit_keeps_gate_and_annotation_in_step(self):
         import homestead_start_order as START
         self.objects["/apis/apps/v1/deployments"] = {"items": [copy.deepcopy(self.current)]}

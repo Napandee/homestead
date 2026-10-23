@@ -590,6 +590,8 @@ def workload_start_plan(ns, name, replicas=1):
         plan["waits_for"] = START_ORDER.waits_for(ns, name, kget)
     except Exception as error:
         plan["waits_for"] = []
+        # #620: Start says it could not check, rather than that nothing waits.
+        plan["waits_for_error"] = f"could not check which apps it starts after: {str(error)[:160]}"
         print(f"start plan: starts-after not read for {ns}/{name}: {str(error)[:160]}", flush=True)
     return plan
 

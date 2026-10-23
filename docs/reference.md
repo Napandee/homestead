@@ -1955,8 +1955,12 @@ several apps by hand) is left to the gate, which does the waiting.
   setting, the gate's state, who applies the app and the apps to choose from.
   `POST /api/workloads/starts-after` (operator) saves `{ns, name, after:
   [{ns, app, service, port}], timeout, on_timeout}`, with Edit's checks;
-  Edit's save (`POST /api/edit`) takes the same object as `starts_after`.
-  The Apps list's rows carry `starts_after`, `start_gate` and `start_wait`.
+  with `"lines": true` it saves nothing and answers `{git}`, the lines to
+  commit for that setting. Edit's save (`POST /api/edit`) takes the same
+  object as `starts_after`, plus `"restore_gate": true` to render a gate
+  changed outside Homestead from the setting again. The Apps list's rows carry
+  `starts_after`, `start_gate` and `start_wait`; a start plan carries
+  `waits_for`, and `waits_for_error` when that could not be read.
 
 ## Workload logos
 

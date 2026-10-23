@@ -473,7 +473,8 @@ def _is_self(ns, name):
 def save(body):
     """Starts after saved on its own: {"ok", "restarts"}, and a note when
     the gate's image could not be pre-pulled. A managed app gets 409 with
-    the lines to commit, and nothing is written."""
+    the lines to commit, and nothing is written. With "lines": true it only
+    answers {"git"}, the lines for that setting, and never writes."""
     import homestead_lifecycle as LC
     import homestead_routes as ROUTER
     ns, name = LC.dns_label(body.get("ns"), "namespace"), LC.dns_label(body.get("name"), "app name")
@@ -486,6 +487,10 @@ def save(body):
     deployments, services = lists(LC.kget)
     value = {key: body[key] for key in ("after", "timeout", "on_timeout") if key in body}
     setting = clean(dep, value, deployments, services)
+    if body.get("lines") is True:
+        # Only the lines to commit, for Edit's "Show the lines to commit":
+        # never a write, even if the app is no longer applied from git.
+        return {"git": git_lines(dep, setting)}
     owner = _managed(dep)
     if owner:
         return ROUTER.Reply(409, {"error": managed_message(name, owner), "git": git_lines(dep, setting)})
