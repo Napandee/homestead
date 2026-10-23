@@ -431,6 +431,54 @@ class SecondReview(Base):
         self.assertEqual(["app-x"], out["unread"])
 
 
+class LeftoverReads(Base):
+    """Security review: reads still running when a budget runs out are not
+    abandoned to pile up; nothing new starts until they end."""
+    BODY = {"apps": ["lab/app-x"], "query": "ERROR", "threshold": 3, "window": 1}
+
+    def blocking(self):
+        import threading
+        release, calls = threading.Event(), []
+
+        def read(*args):
+            calls.append(args)
+            release.wait(5)
+            return ""
+        self.addCleanup(release.set)
+        LA.bind(self.dir, workloads=lambda: self.workloads, read=read, is_leader=lambda: True)
+        return release, calls
+
+    def settle(self):
+        deadline = time.monotonic() + 3
+        while LA.leftover_reads() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(0, LA.leftover_reads())
+
+    def test_a_preview_waits_for_the_last_one_s_reads_to_end(self):
+        release, calls = self.blocking()
+        with mock.patch.object(LA, "PREVIEW_BUDGET", 0.2):
+            self.assertEqual(["app-x"], LA.preview(dict(self.BODY))["unread"])
+            with self.assertRaisesRegex(ValueError, "still reading logs"):
+                LA.preview(dict(self.BODY))
+            self.assertEqual(1, len(calls), "no second read was started")
+            release.set()
+            self.settle()
+            self.assertEqual([], LA.preview(dict(self.BODY))["unread"])
+
+    def test_a_round_does_not_start_reads_beside_the_last_round_s(self):
+        self.rule()
+        release, calls = self.blocking()
+        with mock.patch.object(LA, "READ_BUDGET", 0.2):
+            self.assertEqual("unread", LA.evaluate(now=T0) and LA.listing()["rules"][0]["status"]["state"])
+            LA.evaluate(now=T0 + 60)
+            self.assertEqual(1, len(calls), "the first round's read still runs: no second one")
+            self.assertIn("still reading", LA.listing()["rules"][0]["status"]["detail"])
+            release.set()
+            self.settle()
+            LA.evaluate(now=T0 + 120)
+            self.assertEqual(2, len(calls))
+
+
 class PreviewBounds(Base):
     BODY = {"name": "", "apps": ["lab/app-x"], "query": "ERROR", "threshold": 3, "window": 1}
 

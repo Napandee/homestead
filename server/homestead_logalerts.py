@@ -65,6 +65,8 @@ _starting = threading.Lock()
 _cursors = {}                   # (ns, pod, container) -> (last stamp read, when); leader memory only
 _last = {"at": 0.0, "facts": None}
 _started = []
+_inflight = {"round": 0, "preview": 0}   # reads still running, by who started them
+_inflight_lock = threading.Lock()
 _bound = {"dir": None, "workloads": None, "read": None, "is_leader": None, "beat": None}
 
 
@@ -234,6 +236,27 @@ def matching(lines, query, regex, case, limit=REGEX_SECONDS):
     return json.loads(done.stdout or "[]")
 
 
+def leftover_reads():
+    """Reads still running, left by a round or a preview whose time ran out."""
+    with _inflight_lock:
+        return _inflight["round"] + _inflight["preview"]
+
+
+def _submit(pool, kind, fn, *args):
+    """Start a read and count it until it ends, or is cancelled before it began:
+    a budget that runs out leaves running reads behind, and nothing new of that
+    kind starts beside them."""
+    with _inflight_lock:
+        _inflight[kind] += 1
+    future = pool.submit(fn, *args)
+
+    def done(_future):
+        with _inflight_lock:
+            _inflight[kind] -= 1
+    future.add_done_callback(done)
+    return future
+
+
 def _since(key, now):
     cursor = _cursors.get(key)
     if not cursor:
@@ -287,7 +310,7 @@ def _names(apps):
     return ", ".join(a.split("/", 1)[1] for a in apps)
 
 
-def _count(rule, read, unread, skipped, running):
+def _count(rule, read, unread, skipped, running, busy=False):
     """(state, detail, {minute: matches} or None, covered from, read up to)
     for one rule. "Read up to" is the last minute a cut read reached (None
     when nothing was cut): the minutes after it were not read."""
@@ -297,7 +320,8 @@ def _count(rule, read, unread, skipped, running):
     if absent:
         return "absent", f"nothing of {_names(absent)} is running, so there is nothing to read", None, None, None
     if missing:
-        return "unread", f"could not read {_names(missing)}", None, None, None
+        return "unread", f"could not read {_names(missing)}" + (
+            ": the last round is still reading its logs" if busy else ""), None, None, None
     if later:
         return "skipped", (f"not read this minute: over the {MAX_CONTAINERS} containers a minute "
                            f"Homestead reads for log alerts ({_names(later)})"), None, None, None
@@ -338,14 +362,20 @@ def evaluate(now=None):
         running = {f"{t[0]}/{t[1]}" for t in LOGSEARCH.targets(workloads, sorted({a for r in rules for a in r["apps"]}))} \
             if rules else set()
         read, unread, capped, cursors = {}, set(), set(), {}
-        pool = ThreadPoolExecutor(max_workers=READ_WORKERS)
-        futures = {pool.submit(_read_new, t, now): t for t in targets}
-        finished, _ = wait(futures, timeout=READ_BUDGET)
-        pool.shutdown(wait=False, cancel_futures=True)
-        for future, target in futures.items():
+        busy = bool(_inflight["round"])
+        if busy:
+            # The last round's reads ran out of time and still run: none beside them.
+            pairs, finished = [(None, t) for t in targets], set()
+        else:
+            pool = ThreadPoolExecutor(max_workers=READ_WORKERS)
+            futures = {_submit(pool, "round", _read_new, t, now): t for t in targets}
+            finished, _ = wait(futures, timeout=READ_BUDGET)
+            pool.shutdown(wait=False, cancel_futures=True)
+            pairs = list(futures.items())
+        for future, target in pairs:
             app = f"{target[0]}/{target[1]}"
             try:
-                if future not in finished:
+                if future is None or future not in finished:
                     raise TimeoutError("read took too long")
                 key, newest, got, full, since = future.result()
             except Exception:
@@ -363,7 +393,7 @@ def evaluate(now=None):
         # A container that is gone, or was not read, starts again from a fresh read.
         _cursors.clear()
         _cursors.update(cursors)
-        counted = {r["id"]: _count(r, read, unread, skipped, running) for r in rules}
+        counted = {r["id"]: _count(r, read, unread, skipped, running, busy) for r in rules}
         facts = []
         with _lock:
             fresh = _load()
@@ -479,10 +509,12 @@ def preview(body, now=None):
         return _read(ns, pod, container, 3600, PREVIEW_BYTES)
 
     with LOGSEARCH.exclusive():
+        if _inflight["preview"]:
+            raise ValueError("an earlier try is still reading logs; try again in a moment")
         stamps, found, unread, capped = [], [], set(), set()
         targets = LOGSEARCH.targets(workloads, rule["apps"])[:MAX_CONTAINERS]
         pool = ThreadPoolExecutor(max_workers=PREVIEW_WORKERS)
-        futures = [(t, pool.submit(one, t)) for t in targets]
+        futures = [(t, _submit(pool, "preview", one, t)) for t in targets]
         finished, _ = wait([f for _, f in futures], timeout=PREVIEW_BUDGET)
         pool.shutdown(wait=False, cancel_futures=True)
         for (ns, app, _pod, _container), future in futures:
