@@ -206,8 +206,10 @@ window.fleetShowAll = () => {
 window.fleetOpenSettings = () => {
   fleetMenuClose();
   closeModal();
-  settingsTab("fleet");
-  if (STATE.view === "settings") fleetSettingsPaint(); else go("settings");
+  // On Settings already, the section is shown without its own load and
+  // painted here, so the clusters are read once.
+  if (STATE.view === "settings") { settingsTab("fleet", false); fleetSettingsPaint(); }
+  else { settingsTab("fleet"); go("settings"); }
 };
 window.fleetManage = window.fleetOpenSettings;
 
