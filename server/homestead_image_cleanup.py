@@ -67,20 +67,36 @@ def unused(report):
             and image.get("nodes")]
 
 
+def _held_only_unread(image):
+    """Whether only records Homestead could not read keep this image. They
+    keep every image, so they say nothing about whether this one is used."""
+    rows = image.get("retained_by") or []
+    return bool(image.get("protected") and rows and all(row.get("holds_all") for row in rows))
+
+
 def track(report, now=None):
     """Record when each unused image was first seen unused; forget images
-    that are used again or gone. Returns digest -> first-seen time."""
+    that are used again or gone. Returns digest -> first-seen time.
+
+    An image kept only because a record cannot be read keeps the date it
+    already has (wrap-up row 80): otherwise every clock restarted after the
+    record was fixed. Nothing new starts while it is unread, and an image
+    something readable keeps is forgotten as before."""
     now = int(time.time() if now is None else now)
     current = {image["digest"] for image in unused(report)}
+    unread = {image["digest"] for image in report.get("images") or []
+              if image.get("digest") and _held_only_unread(image)}
     path = _path()
     if not path:
         return {digest: now for digest in current}
     with _lock:
         since = _load_since()
         kept = {digest: int(since[digest]) if isinstance(since.get(digest), (int, float)) else now for digest in current}
+        kept.update({digest: int(since[digest]) for digest in unread
+                     if isinstance(since.get(digest), (int, float))})
         if kept != since:
             SHARED.write_json(path, kept, separators=(",", ":"))
-    return kept
+    return {digest: kept[digest] for digest in current}
 
 
 def token(images):
