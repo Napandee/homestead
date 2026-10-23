@@ -3126,6 +3126,7 @@ ssh_pwauth: true
   // door's rule is over its threshold now; Paperless's is quiet; Jellyfin's
   // app could not be read this minute, so it is not counted (never zero).
   // Ids are the server's; a name may not repeat the query, as on the server.
+  // Not in the bell: the bell's own checks count the demo's two alerts.
   {
     const minute = Math.floor(Date.now() / 60000);
     const hour = shape => Array.from({ length: 60 }, (_, i) => [minute - 59 + i, shape(i)]);
@@ -3150,7 +3151,7 @@ ssh_pwauth: true
         threshold: Number(body.threshold), window: [1, 5, 15].includes(Number(body.window)) ? Number(body.window) : 1, severity: body.severity || "degraded" };
     };
     responses["/api/logalerts"] = (url, init) => {
-      if ((init?.method || "GET") === "GET") return { rules, every: 60, max_rules: 20, max_apps: 5 };
+      if ((init?.method || "GET") === "GET") return { rules, every: 60, max_rules: 20, max_apps: 5, counted_at: Math.round(Date.now() / 1000) - 20 };
       const body = JSON.parse(init.body || "{}"), rule = check(body);
       if (body.id !== undefined) {
         const old = rules.find(r => r.id === body.id) || refuse("that log alert no longer exists; refresh and try again");
@@ -3175,10 +3176,6 @@ ssh_pwauth: true
       const over = counts.filter((_, m) => counts.slice(Math.max(0, m - rule.window + 1), m + 1).reduce((a, c) => a + c[1], 0) > rule.threshold).length;
       return { counts, over_minutes: over, unread: [], capped: [] };
     };
-    if (scenario !== "healthy") responses["/api/alerts"].active.unshift({ key: "logs:la-0d3f5a9b2c71", version: "demo-logs-1", severity: "degraded", category: "logs",
-      title: "Front door camera errors: 26 matching lines in a minute",
-      body: "frigate wrote more than 10 lines matching this log alert in a minute. Open Log alerts to search them.",
-      href: "/containers?panel=logalerts", acknowledged: false, announced: 1 });
   }
   // End of log alerts.
   // On the live demo, say so on every page.

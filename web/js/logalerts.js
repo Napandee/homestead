@@ -7,6 +7,7 @@
    see the rules and try one on the last hour, as anyone can search. */
 const LOGALERT = { draft: null, rules: [] };
 const LOGALERT_WINDOWS = [[1, "a minute"], [5, "5 minutes"], [15, "15 minutes"]];
+const LOGALERT_NOT_COUNTED = ["unread", "skipped", "slow", "failed", "absent"];
 const logAlertSpan = window => (LOGALERT_WINDOWS.find(w => w[0] === window) || LOGALERT_WINDOWS[0])[1];
 
 /* The name an alert starts with: the app and a plain label. Never the query,
@@ -16,19 +17,28 @@ function logAlertDefaultName(app) {
   return name ? `${name} log alert` : "Log alert";
 }
 
-/* Per-minute counts as bars, summed over the rule's window, with the
-   threshold drawn across. A minute that was not read (null) is a short grey
-   tick, never a zero. */
-function logAlertBars(counts, threshold, window = 1, { h = 64 } = {}) {
-  const vals = (counts || []).map(c => c[1]);
-  if (!vals.length) return `<div class="dim xs">No counts yet: the first arrives within a minute of saving.</div>`;
-  const sums = vals.map((v, i) => v === null ? null : vals.slice(Math.max(0, i - window + 1), i + 1).reduce((a, b) => a + (b || 0), 0));
-  const top = Math.max(threshold * 1.4, ...sums.map(v => v || 0), 1), w = 300, bw = w / Math.max(60, vals.length);
+/* Per-minute counts as bars, each at its own minute of the last hour and
+   summed over the rule's window, with the threshold drawn across. A minute
+   that was not read (null) is a short grey tick, never a zero; a minute with
+   no entry stays empty. */
+function logAlertBars(counts, threshold, window = 1, { h = 64, now = null } = {}) {
+  const byMinute = new Map((counts || []).map(c => [c[0], c[1]]));
+  if (!byMinute.size) return `<div class="dim xs">No counts yet: the first arrives within a minute of saving.</div>`;
+  const end = now ?? Math.max(...byMinute.keys()), start = end - 59, w = 300, bw = w / 60;
+  const slots = [...byMinute.keys()].filter(m => m >= start && m <= end).sort((a, b) => a - b).map(m => {
+    const v = byMinute.get(m);
+    let sum = null;
+    if (v !== null) { sum = 0; for (let k = m - window + 1; k <= m; k++) sum += byMinute.get(k) || 0; }
+    return [m, sum];
+  });
+  const top = Math.max(threshold * 1.4, ...slots.map(s => s[1] || 0), 1);
   const y = v => h - (v / top) * (h - 4);
-  const over = sums.filter(v => v !== null && v > threshold).length, unread = sums.filter(v => v === null).length;
-  const bars = sums.map((v, i) => v === null
-    ? `<rect x="${(i * bw + 0.5).toFixed(1)}" y="${h - 3}" width="${Math.max(1, bw - 1).toFixed(1)}" height="3" class="la-unread"/>`
-    : `<rect x="${(i * bw + 0.5).toFixed(1)}" y="${y(v).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${(h - y(v)).toFixed(1)}" class="${v > threshold ? "la-over" : "la-under"}"/>`).join("");
+  const over = slots.filter(s => s[1] !== null && s[1] > threshold).length, unread = slots.filter(s => s[1] === null).length;
+  const bars = slots.map(([m, v]) => {
+    const x = ((m - start) * bw + 0.5).toFixed(1), bwid = Math.max(1, bw - 1).toFixed(1);
+    return v === null ? `<rect x="${x}" y="${h - 3}" width="${bwid}" height="3" class="la-unread"/>`
+      : `<rect x="${x}" y="${y(v).toFixed(1)}" width="${bwid}" height="${(h - y(v)).toFixed(1)}" class="${v > threshold ? "la-over" : "la-under"}"/>`;
+  }).join("");
   const label = `Matching lines per minute over the last hour; ${over} minute${over === 1 ? "" : "s"} over ${threshold}${unread ? `; ${unread} minute${unread === 1 ? "" : "s"} not read` : ""}`;
   return `<svg class="la-bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
     ${bars}<line x1="0" x2="${w}" y1="${y(threshold).toFixed(1)}" y2="${y(threshold).toFixed(1)}" class="la-limit"/></svg>
@@ -38,23 +48,31 @@ function logAlertBars(counts, threshold, window = 1, { h = 64 } = {}) {
 /* What stopped the last count, if anything: a rule not counted is never shown as quiet. */
 function logAlertStatus(status) {
   const state = status?.state || "";
-  if (!["unread", "skipped", "slow", "failed"].includes(state)) return "";
+  if (!LOGALERT_NOT_COUNTED.includes(state)) return "";
   return `<div class="la-status small">${UI.chip("Could not count", "warn")} ${esc(status.detail || "")}</div>`;
 }
 
 function logAlertRow(r, raised) {
-  const known = (r.counts || []).filter(c => c[1] !== null), recent = known.slice(-r.window).reduce((a, c) => a + c[1], 0);
+  const now = Math.floor(Date.now() / 60000);
+  const known = (r.counts || []).filter(c => c[1] !== null), recent = known.filter(c => c[0] > now - r.window).reduce((a, c) => a + c[1], 0);
   const app = r.apps[0] || "/", [ns, name] = app.split("/");
   const change = can("operator")
     ? UI.button("Edit", `logAlertEdit(${jsArg(r.id)})`, { icon: "edit" }) + UI.button("Delete", `logAlertDelete(${jsArg(r.id)})`, { icon: "trash" })
     : "";
-  const chip = raised ? UI.chip("Raised", "bad") : ["unread", "skipped", "slow", "failed"].includes(r.status?.state) ? "" : UI.chip("Watching", "ok");
+  const chip = raised ? UI.chip("Raised", "bad") : LOGALERT_NOT_COUNTED.includes(r.status?.state) ? "" : UI.chip("Watching", "ok");
   return `<div class="la-rule${raised ? " la-raised" : ""}">
     <div class="la-rule-head"><b>${esc(r.name)}</b>${chip}</div>
     <div class="dim small">${esc(r.apps.map(a => a.split("/")[1]).join(", "))} · more than ${Number(r.threshold)} lines matching <code>${esc(r.query)}</code>${r.regex ? " (expression)" : ""} in ${esc(logAlertSpan(r.window))}${known.length ? ` · last ${esc(logAlertSpan(r.window))}: ${recent}` : ""}</div>
     ${logAlertStatus(r.status)}
-    ${logAlertBars(r.counts, r.threshold, r.window, { h: 44 })}
+    ${logAlertBars(r.counts, r.threshold, r.window, { h: 44, now })}
     <div class="la-rule-actions">${UI.button("Search these lines", `closeModal();logSearch(${jsArg(ns)},${jsArg(name)})`, { icon: "search" })}${change}</div></div>`;
+}
+
+/* When the leader last counted, if that was more than three minutes ago: a list
+   that stopped moving says so rather than looking quiet. */
+function logAlertStale(countedAt, nowSeconds = Date.now() / 1000) {
+  if (!countedAt || nowSeconds - countedAt <= 180) return "";
+  return UI.callout("warn", "Log alerts are not being counted", `Homestead has not counted for ${Math.round((nowSeconds - countedAt) / 60)} minutes: the log alert check on the leader has stopped or cannot run, so nothing here is current.`);
 }
 
 /* From a search's form: the same query and options, the app chosen there. */
@@ -73,7 +91,7 @@ window.logAlertEdit = (id = "") => {
   const several = rule.apps.length > 1;
   const appField = several
     ? UI.field("Apps", `<div class="small">${esc(rule.apps.map(a => a.split("/")[1]).join(", "))}</div>`)
-    : UI.field("App", `<select id="la_app" onchange="logAlertPreview()">${[`<option value="">Choose an app…</option>`, ...apps.map(a =>
+    : UI.field("App", `<select id="la_app" onchange="logAlertAppChanged()">${[`<option value="">Choose an app…</option>`, ...apps.map(a =>
         `<option value="${esc(a)}"${rule.apps[0] === a ? " selected" : ""}>${esc(a.split("/")[1])} · ${esc(a.split("/")[0])}</option>`)].join("")}</select>`,
         { help: "A log alert watches one app; never every app." });
   modal(id ? `Edit log alert · ${rule.name}` : "Alert on this search", `<div class="ui-stack">
@@ -81,8 +99,9 @@ window.logAlertEdit = (id = "") => {
     ${UI.fields(
       UI.field("Name", `<input id="la_name" maxlength="60" value="${esc(rule.name || logAlertDefaultName(rule.apps[0]))}">`, { help: "Shown in the alert. It may not repeat the search text." }),
       appField,
-      UI.field("Lines matching", `<input id="la_q" maxlength="200" class="mono" value="${esc(rule.query)}">`,
-        { help: `${rule.regex ? "Regular expression" : "Plain text"}, ${rule.case ? "matching case" : "any case"}, as in the search.` }),
+      UI.field("Lines matching", `<input id="la_q" maxlength="200" class="mono" value="${esc(rule.query)}">
+        <div class="ls-opts"><label class="switch"><input type="checkbox" id="la_case"${rule.case ? " checked" : ""}> Match case</label>
+        <label class="switch"><input type="checkbox" id="la_regex"${rule.regex ? " checked" : ""}> Regular expression</label></div>`),
       UI.field("More than", `<div class="la-thresh"><input id="la_n" type="number" min="1" inputmode="numeric" aria-label="Number of lines" value="${Number(rule.threshold) || 10}">
         <select id="la_w" aria-label="Counted over">${LOGALERT_WINDOWS.map(([v, label]) => `<option value="${v}"${v === rule.window ? " selected" : ""}>lines in ${esc(label)}</option>`).join("")}</select></div>`),
       UI.field("Raise it as", `<select id="la_sev">${[["info", "Information"], ["degraded", "Warning"], ["critical", "Critical"]].map(([v, label]) =>
@@ -96,8 +115,16 @@ window.logAlertEdit = (id = "") => {
 function logAlertForm() {
   const app = $("#la_app")?.value;
   return { ...LOGALERT.draft, name: $("#la_name").value.trim(), apps: $("#la_app") ? (app ? [app] : []) : LOGALERT.draft.apps,
-    query: $("#la_q").value, threshold: Number($("#la_n").value), window: Number($("#la_w").value), severity: $("#la_sev").value };
+    query: $("#la_q").value, regex: !!$("#la_regex")?.checked, case: !!$("#la_case")?.checked, threshold: Number($("#la_n").value), window: Number($("#la_w").value), severity: $("#la_sev").value };
 }
+
+/* A name still at its default follows the app chosen; one typed is kept. */
+window.logAlertAppChanged = () => {
+  const name = $("#la_name"), app = $("#la_app")?.value || "";
+  if (name && name.value === logAlertDefaultName(LOGALERT.draft.apps[0])) name.value = logAlertDefaultName(app);
+  LOGALERT.draft.apps = app ? [app] : [];
+  logAlertPreview();
+};
 
 window.logAlertPreview = async () => {
   const out = $("#la_preview"), body = logAlertForm();
@@ -156,7 +183,7 @@ window.logAlerts = async () => {
   if (!list) return;
   list.innerHTML = `<div class="ui-stack">
     ${UI.lead(`Saved log searches that raise an alert. The leader counts each once a minute, reading only what its app wrote since the last count; the alert carries the count, never the lines. ${LOGALERT.rules.length} of ${Number(d.max_rules) || 20}.`)}
-    ${bell}
+    ${bell}${LOGALERT.rules.length ? logAlertStale(d.counted_at) : ""}
     ${LOGALERT.rules.length ? `<div class="la-rules">${LOGALERT.rules.map(r => logAlertRow(r, raised.has(r.id))).join("")}</div>`
       : UI.empty(can("operator") ? "No log alerts yet. Search the logs, then choose Alert on this search." : "No log alerts yet.")}
     ${UI.actions(UI.cancel("Close"), UI.button("Search logs", "logSearch()", { icon: "search" }))}</div>`;

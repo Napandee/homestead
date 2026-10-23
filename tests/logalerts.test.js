@@ -92,3 +92,25 @@ test("Containers and the log search open log alerts, and a deep link does too", 
   const audit = fs.readFileSync("scripts/audit_dialogs.mjs", "utf8");
   for (const name of ["log-alerts", "log-alert-new", "log-alert-edit"]) assert.ok(audit.includes(`["${name}"`), name);
 });
+
+test("each count is drawn at its own minute, so gaps stay gaps", () => {
+  const run = load();
+  const svg = run(`logAlertBars([[41, 1], [100, 2]], 10, 1, { now: 100 })`);
+  const xs = [...svg.matchAll(/<rect x="([\d.]+)"/g)].map(m => Number(m[1]));
+  assert.equal(xs.length, 2);
+  assert.ok(xs[0] < 5, `minute 41 is the hour's first: ${xs[0]}`);
+  assert.ok(xs[1] > 290, `minute 100 is now: ${xs[1]}`);
+  assert.equal([...run(`logAlertBars([[10, 1], [100, 2]], 10, 1, { now: 100 })`).matchAll(/<rect /g)].length, 1, "older than an hour is left out");
+});
+
+test("a rule for an app with nothing running says so", () => {
+  const run = load();
+  assert.match(run(`logAlertStatus({ state: "absent", detail: "nothing of frigate is running" })`), /Could not count.*nothing of frigate is running/s);
+});
+
+test("the list says when counting stopped", () => {
+  const run = load();
+  assert.equal(run(`logAlertStale(1000, 1100)`), "");
+  assert.equal(run(`logAlertStale(null, 1100)`), "");
+  assert.match(run(`logAlertStale(1000, 1300)`), /<callout warn>.*not counted for 5 minutes/s);
+});
