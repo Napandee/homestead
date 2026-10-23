@@ -116,7 +116,7 @@ window.clusterTag = row => {
   if (!c) return "";
   if (c.age_s == null) return `<span class="tag cluster-tag" title="On ${esc(c.name)}">${esc(c.name)}</span>`;
   const age = fleetAge(c.age_s);
-  return `<span class="tag cluster-tag" title="On ${esc(c.name)}; its last answer, from ${age} ago: it has not answered since">${esc(c.name)} · ${age} ago</span>`;
+  return `<span class="tag cluster-tag" title="On ${esc(c.name)}; its last answer, from ${age} ago: it has not answered since">${esc(c.name)}<span class="cluster-age">· ${age} ago</span></span>`;
 };
 /* A row that lives on another cluster: this one's own records - image
    updates, say - do not describe it. */
@@ -213,8 +213,12 @@ window.fleetOpenSettings = () => {
   fleetMenuClose();
   closeModal();
   // On Settings already, the section is shown without its own load and
-  // painted here, so the clusters are read once.
-  if (STATE.view === "settings") { settingsTab("fleet", false); fleetSettingsPaint(); }
+  // painted here, so the clusters are read once; it then counts as loaded.
+  if (STATE.view === "settings") {
+    settingsTab("fleet", false);
+    (STATE.settingsLoaded || (STATE.settingsLoaded = new Set())).add("fleet");
+    fleetSettingsPaint();
+  }
   else { settingsTab("fleet"); go("settings"); }
 };
 window.fleetManage = window.fleetOpenSettings;

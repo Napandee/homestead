@@ -91,7 +91,7 @@ function tags() {
 
 test("a row kept from a slow cluster's last answer says how old it is on its tag", () => {
   const tag = tags().clusterTag({name: "app", site: {id: "office", name: "Office", self: false, age_s: 95}});
-  assert.match(tag, />Office · 1 min ago</);
+  assert.match(tag, />Office<span class="cluster-age">· 1 min ago<\/span></);
   assert.match(tag, /title="On Office; its last answer, from 1 min ago: it has not answered since"/);
   assert.match(tag, /class="tag cluster-tag"/);
 });
@@ -99,4 +99,14 @@ test("a row kept from a slow cluster's last answer says how old it is on its tag
 test("a row from a cluster that answered just now keeps its plain tag", () => {
   const tag = tags().clusterTag({name: "app", site: {id: "office", name: "Office", self: false}});
   assert.equal(tag, '<span class="tag cluster-tag" title="On Office">Office</span>');
+});
+
+test("under a minute the age is in seconds", () => {
+  const tag = tags().clusterTag({name: "app", site: {id: "office", name: "Office", self: false, age_s: 0}});
+  assert.match(tag, /<span class="cluster-age">· 0 s ago<\/span>/);
+});
+
+test("where columns are narrow the age gives way and stays in the title", () => {
+  const css = fs.readFileSync("web/style.css", "utf8");
+  assert.match(css, /\.comparison-table \.cluster-tag \.cluster-age\{display:none\}/);
 });

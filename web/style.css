@@ -3201,6 +3201,7 @@ html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
   .comparison-full-name,.comparison-note{display:none}
   .comparison-short-name{display:block}
   .comparison-table .cluster-tag{font-size:10px;text-transform:none;letter-spacing:0}
+  .comparison-table .cluster-tag .cluster-age{display:none}
   .single-node-summary .nodemetrics>div:nth-child(-n+2) .between{flex-direction:column;align-items:flex-start;gap:4px}
   .single-node-summary .nodemetrics>div:nth-child(-n+2) .small.mono{white-space:normal}
   .single-node-summary .nodemetrics>div:nth-child(-n+2) .small.mono .dim{display:block}

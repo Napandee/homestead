@@ -16,13 +16,17 @@ function open(view) {
   vm.runInContext(fs.readFileSync("web/js/fleet.js", "utf8"), ctx);
   ctx.fleetSettingsPaint = () => calls.push(["paint"]);
   ctx.fleetOpenSettings();
+  calls.loaded = ctx.STATE.settingsLoaded;
   return calls;
 }
 
 test("on Settings, the section is shown without loading it and painted once", () => {
-  assert.deepEqual(open("settings"), [["settingsTab", "fleet", false], ["paint"]]);
+  const calls = open("settings");
+  assert.deepEqual([...calls], [["settingsTab", "fleet", false], ["paint"]]);
+  // Painted here, it counts as loaded: coming back to it does not read again.
+  assert.ok(calls.loaded.has("fleet"));
 });
 
 test("from another page, Settings opens on the section and its own load paints it", () => {
-  assert.deepEqual(open("workloads"), [["settingsTab", "fleet"], ["go", "settings"]]);
+  assert.deepEqual([...open("workloads")], [["settingsTab", "fleet"], ["go", "settings"]]);
 });
