@@ -64,7 +64,8 @@ class Cluster:
         current = self.objects[path]
         before = journal.identity(current)
         if method == "DELETE":
-            assert body["preconditions"] == before
+            # The API server checks only the preconditions a DELETE gives.
+            assert body["preconditions"] and body["preconditions"] == {k: before[k] for k in body["preconditions"]}
             del self.objects[path]
             result = {"apiVersion": "v1", "kind": "Status", "status": "Success", "details": {"uid": before["uid"]}}
         else:
@@ -463,6 +464,23 @@ class CutoverTests(unittest.TestCase):
         with self.assertRaises(journal.Held): cluster.cutover(lambda proposals: {"blocked": True})
         self.assertEqual(count, len(cluster.sent))
         self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/data", cluster.objects)
+
+    def test_copy_job_status_update_while_removing_it_does_not_stop_cutover(self):
+        # Row 92: the copy Job is Homestead's own helper; its controller may
+        # update its status between Homestead's read and its delete.
+        cluster = self.ready(); path = "/apis/batch/v1/namespaces/lab/jobs/data-copy-job"
+        original = cluster.read
+        def read(p):
+            result = original(p)
+            if p == path and p in cluster.objects:
+                job = cluster.objects[p]
+                job["metadata"]["resourceVersion"] = str(int(job["metadata"]["resourceVersion"]) + 1)
+                job["status"]["ready"] = 0
+            return result
+        cluster.read = read
+        self.finish(cluster)
+        deletes = [b for m, p, b in cluster.sent if m == "DELETE" and p == path]
+        self.assertEqual([["uid"]], [sorted(b["preconditions"]) for b in deletes])
 
 
 class RestartTests(unittest.TestCase):
