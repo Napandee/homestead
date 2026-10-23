@@ -13,12 +13,17 @@ from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import server
+import homestead_host_access as HOST_ACCESS
 from homestead_storage_journal import Held
 
 
 class BootTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        # _guard sets the request role on this thread (a viewer's, in the
+        # recovery test); put back what was there, so a later test in the same
+        # process is not refused as that viewer.
+        self.addCleanup(HOST_ACCESS.set_role, HOST_ACCESS.role())
         self.fence = mock.Mock()
         self.fence.inspect.return_value = {"mode": "start", "writable": False}
         self.fence.require_write.side_effect = Held("held")
