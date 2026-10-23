@@ -83,7 +83,9 @@ class Scope:
                 and meta.get("labels", {}).get("homestead.io/self-data-copy") == self.operation)
         elif method == "DELETE" and path == self.job:
             pre = (body or {}).get("preconditions", {})
-            allowed = (isinstance(body, dict) and bool(pre.get("uid")) and bool(pre.get("resourceVersion"))
+            # The uid always; the resourceVersion is left out when the journal
+            # releases its own copy Job (its controller keeps updating status).
+            allowed = (isinstance(body, dict) and bool(pre.get("uid")) and set(pre) <= {"uid", "resourceVersion"}
                 and body.get("propagationPolicy") == "Foreground" and "gracePeriodSeconds" not in body)
         if not allowed or method == "GET" and body is not None:
             raise Held("The data move request is outside its reviewed API scope")
