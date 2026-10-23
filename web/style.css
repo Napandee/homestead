@@ -251,7 +251,7 @@ html[data-theme="light"] .jobchev{background:rgba(0,0,0,.04)}
 .oplog-copy-progress>span{color:var(--mut);min-width:0}
 .capacity-placement{padding:12px 14px;border:1px solid var(--line2);border-radius:12px;background:rgba(74,158,255,.05)}
 .capacity-placement .ui-section{margin:0}
-.jobitem{padding:11px;border-bottom:1px solid var(--line)}.jobitem:last-child{border-bottom:0}.jobitemtop,.jobfoot,.jobactions{display:flex;align-items:center;justify-content:space-between;gap:10px}.jobitemtop>div{display:flex;flex-direction:column;min-width:0}.jobitemtop b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobitemtop span:not(.pill),.jobfoot{font-size:10px;color:var(--dim)}
+.jobitem{padding:11px;border-bottom:1px solid var(--line)}.jobitem:last-child{border-bottom:0}.jobitemtop,.jobfoot,.jobactions{display:flex;align-items:center;justify-content:space-between;gap:10px}.jobitemtop>div{display:flex;flex-direction:column;min-width:0}.jobitemtop b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobitemtop span:not(.ui-chip),.jobfoot{font-size:10px;color:var(--dim)}
 .jobmeter{height:5px;margin:9px 0 7px;overflow:hidden;border-radius:99px;background:rgba(255,255,255,.07)}.jobmeter span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--med),var(--ok));transition:width .35s var(--e)}.jobmeter span.failed{background:var(--crit)}
 .jobfoot>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobfoot>span:last-child{flex:0 0 auto}.jobactions{justify-content:flex-end;margin-top:8px}
 
@@ -3656,7 +3656,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .logo-fix-name{display:grid;gap:2px;min-width:0}
 .logo-fix-name b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .logo-fix-name .xs{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.logo-fix-name .pill{justify-self:start}
+.logo-fix-name .ui-chip{justify-self:start}
 .logo-fix-acts{display:flex;gap:6px;justify-content:flex-end}
 @media (max-width:640px){
   .logo-fix-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}

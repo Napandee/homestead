@@ -248,7 +248,7 @@ window.mcpCardPaint = async () => {
   const copy = (name, label = "Copy") => `<button type="button" class="btn sm" onclick="copyText(window.__mcpText.${name}).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">${label}</button>`;
   const waiting = requests.pending || 0;
   card.innerHTML = `${UI.moduleHeader("AI agents (MCP)", "Let an AI assistant such as Claude manage this cluster with an API key, through the Model Context Protocol")}
-    <div class="srows">${serviceRow("AI agents", on ? '<span class="pill ok">allowed</span>' : '<span class="pill low">refused</span>',
+    <div class="srows">${serviceRow("AI agents", on ? UI.chip("allowed", "ok") : UI.chip("refused", "neutral"),
       on ? "Agents with an API key marked for AI agents can connect." : "Every request to the endpoint is refused. Each agent also needs an API key marked for AI agents.",
       actionBar([{ label: on ? "Disable" : "Enable", run: `mcpSet(${!on})`, need: "admin" }], { label: "AI agents" }))}</div>
     ${location.protocol === "http:" ? UI.callout("warn", "This page is not served over HTTPS", STATE.data.apiKeys?.you?.node_address

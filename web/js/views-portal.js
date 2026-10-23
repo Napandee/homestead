@@ -198,7 +198,7 @@ window.portalPick = async () => {
     <div class="wg-list">${candidates.map((c, i) => `<label class="wg-item"><input type="checkbox" data-i="${i}" ${have.has(c.url) ? "disabled" : ""}>
       ${appAvatar(c.name, (PORTAL_WORKLOADS.find(w => w.ns === c.ns && w.name === c.name) || {}).icon)}
       <span><b>${esc(c.title)}</b><span class="dim xs mono"> ${esc(c.url)}</span>${c.port_name ? `<span class="dim xs"> · ${esc(c.port_name)}</span>` : ""}</span>
-      ${have.has(c.url) ? '<span class="pill slim neutral">added</span>' : ""}</label>`).join("")}</div>
+      ${have.has(c.url) ? UI.chip("added", "neutral", { size: "slim" }) : ""}</label>`).join("")}</div>
     <div class="row"><button class="btn pri" onclick="portalPickAdd()">Add ticked</button></div>`
     : `<div class="empty">No container has an exposed port yet.</div>`);
   window.__portalCandidates = candidates;

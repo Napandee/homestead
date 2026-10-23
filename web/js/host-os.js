@@ -42,7 +42,7 @@ function hostOsBody(node, f) {
     ["Root filesystem", `${UI.meter({ now: f.root_used_pct || 0, warnAt: 90 })}<span class="dim xs">${f.root_used_pct || 0}% of ${sizeText(f.root_total_gb || 0)}</span>`],
   ]);
   const list = updates.length ? UI.more(`The ${updates.length} update${updates.length === 1 ? "" : "s"}`,
-    `<div class="hos-updates">${updates.slice(0, 300).map(u => `<span class="tag ${u.security ? "warn" : ""}">${esc(u.name)}</span>`).join("")}
+    `<div class="hos-updates">${updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}
       ${updates.length > 300 ? `<span class="dim xs">and ${updates.length - 300} more</span>` : ""}</div>`) : "";
   const lists = f.lists_at ? ` · package lists from ${hostOsAge(f.lists_at)}` : "";
   const last = f.last_upgrade?.at ? ` · last update ${f.last_upgrade.ok ? "installed" : "failed"} ${hostOsAge(f.last_upgrade.at)}` : "";
