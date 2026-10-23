@@ -72,14 +72,15 @@ INLINE_ROUTES = (
 
 
 def handler_methods(source=SS.SERVER_PY):
-    """class H's own methods in server.py, by name."""
-    return {name[2:]: found for name, found in SS.functions(source).items()
+    """class H's own methods in server.py, by name: each name's defs, so a
+    method written twice (if/else alternatives) is read whole."""
+    return {name[2:]: defs for name, defs in SS.every_function(source).items()
             if name.startswith("H.") and name.count(".") == 1}
 
 
-def handler_body(method):
-    """The text of server.py's do_GET, do_POST, ... method."""
-    return handler_methods()[f"do_{method}"].text
+def handler_body(method, source=SS.SERVER_PY):
+    """The text of server.py's do_GET, do_POST, ... method (every def of it)."""
+    return "\n".join(found.text for found in handler_methods(source)[f"do_{method}"])
 
 
 def literals_in(text):
@@ -101,8 +102,8 @@ def helper_literals(source=SS.SERVER_PY):
     lines = (source if isinstance(source, SS.Code) else SS.text(source)).splitlines()
     cls = next(node for node in SS.tree(source).body if isinstance(node, ast.ClassDef) and node.name == "H")
     keep = set(range(cls.lineno, cls.end_lineno + 1))
-    for name, found in handler_methods(source).items():
-        if name.startswith("do_"):
+    for name, defs in handler_methods(source).items():
+        for found in defs if name.startswith("do_") else ():
             first = min([found.node.lineno, *(d.lineno for d in found.node.decorator_list)])
             keep -= set(range(first, found.node.end_lineno + 1))
     return literals_in("\n".join(lines[number - 1] for number in sorted(keep)))
@@ -257,6 +258,22 @@ class RouteLiterals(unittest.TestCase):
                          '    LATER = "/api/x/later"\n\n\ndef outside():\n    return "/api/x/outside"\n')
         self.assertEqual({"/api/x/attribute", "/api/x/helper", "/api/x/comment", "/api/x/later"},
                          helper_literals(source))
+
+
+class TwoDefsOfOneHandler(unittest.TestCase):
+    """A do_* written twice (if/else alternatives) is read whole: a route in
+    either def is seen, and neither def counts as a helper."""
+    SOURCE = SS.code('class H(Base):\n    if FAST:\n        def do_GET(self):\n            if p == "/api/x/first":\n'
+                     '                pass\n    else:\n        def do_GET(self):\n            if p == "/api/x/second":\n'
+                     '                pass\n\n    def _helper(self):\n        return "/api/x/helper"\n')
+
+    def test_a_route_in_either_def_is_in_the_handler_body(self):
+        body = handler_body("GET", self.SOURCE)
+        self.assertIn("/api/x/first", body)
+        self.assertIn("/api/x/second", body)
+
+    def test_neither_def_counts_as_a_helper(self):
+        self.assertEqual({"/api/x/helper"}, helper_literals(self.SOURCE))
 
 
 class MovedHelpers(unittest.TestCase):
