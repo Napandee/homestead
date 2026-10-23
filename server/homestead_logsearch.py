@@ -11,6 +11,7 @@ a cap was reached, so a search is never quietly incomplete.
 Plain text matching by default; a regular expression on request, refused when
 it could take ages to run (a repeated group holding a repeat or a choice).
 """
+import contextlib
 import re
 import threading
 import time
@@ -70,10 +71,19 @@ def search(workloads, query, read, window="1h", apps=None, regex=False, case=Fal
     since = WINDOWS.get(window)
     if not since:
         raise ValueError("choose 15m, 1h, 6h or 24h")
+    with exclusive():
+        return _search(workloads, match, since, read, window, apps, now)
+
+
+@contextlib.contextmanager
+def exclusive():
+    """One log search at a time, shared with whatever else reads logs on
+    someone's request (a log alert's preview): it refuses at once rather
+    than queueing behind a running search."""
     if not _ONE_AT_A_TIME.acquire(blocking=False):
         raise ValueError("another log search is running; try again in a moment")
     try:
-        return _search(workloads, match, since, read, window, apps, now)
+        yield
     finally:
         _ONE_AT_A_TIME.release()
 
