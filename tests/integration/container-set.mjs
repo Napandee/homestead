@@ -129,12 +129,17 @@ try {
     await page.locator('#d_container_name').fill('main');
     await page.locator('#d_workload_name').fill('multi-app');
     await page.locator('#d_image').fill('example/main:1');
-    await page.locator('#d_add_container button').first().click();
-    const extra = page.locator('#d_extra_containers .edit-container');
+    await page.locator('#d_containers_block button', { hasText: 'Add container' }).click();
+    const extra = page.locator('#d_basics_containers .edit-container');
     const newIndex = +(await extra.getAttribute('data-index'));
     await page.locator(`#e_container_name_${newIndex}`).fill('helper');
     await page.locator(`#e_image_${newIndex}`).fill('example/helper:1');
+    // Its other parts sit in their own sections, as in Edit (#544).
+    await page.evaluate(() => UI.selectSection('containerDeploy', 'hardware'));
+    await page.locator(`#d_hardware_containers .edit-container[data-index="${newIndex}"] > summary`).click();
     await page.locator(`.qty[data-target="e_mem_${newIndex}"] .qty-text`).fill('192Mi');
+    await page.evaluate(() => UI.selectSection('containerDeploy', 'environment'));
+    await page.locator(`#d_environment_containers .edit-container[data-index="${newIndex}"] > summary`).click();
     await page.locator(`#e_env_${newIndex} .ek`).fill('MODE');
     await page.locator(`#e_env_${newIndex} .ev`).fill('shared-pod');
     const created = await page.evaluate(() => collect());
@@ -149,10 +154,20 @@ try {
     await page.waitForFunction(() => document.querySelector('#d_container_name').value === 'helper');
     assert.equal((await page.evaluate(() => collect())).additional_containers.length, 0);
     assert.equal(await page.locator('#d_remove_primary').isDisabled(), true);
-    await page.locator('#d_add_container button').first().click();
-    await page.locator('#d_extra_containers .edit-container').getByRole('button', { name: 'Remove container', exact: true }).click();
+    await page.locator('#d_containers_block button', { hasText: 'Add container' }).click();
+    await page.locator('#d_basics_containers .edit-container').getByRole('button', { name: 'Remove container', exact: true }).click();
     assert.equal((await page.evaluate(() => collect())).additional_containers.length, 0);
     assert.equal(await page.locator('#d_container_name').inputValue(), 'helper');
+    // A Compose import or App Store template keeps every other container and field (#544).
+    const prefilled = await page.evaluate(async () => {
+      await viewDeploy({ name: 'stack', image: 'example/main:2', additional_containers: [
+        { name: 'side', image: 'example/side:1', cpu: '20m', memory: '64Mi', env: { A: '1' },
+          ports: [{ name: 'web', container: 81, host: 81, protocol: 'TCP', expose: true }], volumes: [] }] });
+      return collect().additional_containers;
+    });
+    assert.equal(prefilled.length, 1);
+    assert.deepEqual([prefilled[0].name, prefilled[0].image, prefilled[0].cpu, prefilled[0].memory, prefilled[0].env.A, prefilled[0].ports[0].container],
+      ['side', 'example/side:1', '20m', '64Mi', '1', 81]);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false);
     assert.deepEqual(errors, []);
     console.log(`Container additions/removals passed at ${width}px/${theme}`);

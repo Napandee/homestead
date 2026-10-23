@@ -7,7 +7,9 @@ Split out of homestead_longhorn (#623); what bind() sets, the shared helpers
 and the routes stay there.
 """
 import json
+import homestead_longhorn_access as ACCESS
 import homestead_names as NAMES
+import homestead_self as SELF
 import re
 import time
 import urllib.error
@@ -181,7 +183,7 @@ def delete_job(name):
 # default one.
 TRIM_JOB = "homestead-weekly-trim"
 TRIM_CRON = "0 4 * * 6"
-BACKEND = "http://longhorn-backend.longhorn-system:9500/v1"
+BACKEND = ACCESS.URL
 
 
 def ensure_weekly_trim(created_before=False, last_groups=None):
@@ -249,6 +251,7 @@ def trim_volume(volume):
     if state != "attached":
         raise ValueError(f"{name} is {state or 'not attached'}: Longhorn trims a volume only while it is in use; "
                          "the weekly trim reaches it the next time it is")
+    ACCESS.require(LH.kget, LH.ksend, SELF.NS, f"Trimming {name}")
     _backend("POST", f"/volumes/{name}?action=trimFilesystem", {})
     return {"ok": True, "detail": f"{name} is being trimmed: space its deleted files held goes back to Longhorn"}
 

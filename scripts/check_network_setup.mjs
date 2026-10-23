@@ -34,7 +34,7 @@ try {
     await page.setViewportSize({ width, height: 1200 });
     const cards = await page.locator(".vip-card").evaluateAll(cards => cards.map(card => {
       const heading = card.querySelector(".vip-card-heading");
-      const ip = heading.querySelector("b").getBoundingClientRect(), badge = heading.querySelector(".tag").getBoundingClientRect();
+      const ip = heading.querySelector("b").getBoundingClientRect(), badge = heading.querySelector(".ui-chip").getBoundingClientRect();
       return { width: card.clientWidth, scroll: card.scrollWidth, overlap: ip.left < badge.right && ip.right > badge.left && ip.top < badge.bottom && ip.bottom > badge.top };
     }));
     for (const card of cards) {

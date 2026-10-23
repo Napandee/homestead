@@ -79,7 +79,7 @@ try {
     await page.evaluate(() => stepGo("e_steps", 3));
     await page.locator("#e_vols_0 .vro").check();
     for (let index = 0; index < titles.length; index++) {
-      if (width <= 640) await page.locator("#e_steps .dialog-section-picker select").selectOption(String(index));
+      if (width <= 640) await page.locator("#e_steps .dialog-section-picker select").selectOption({ index });
       else await page.locator(`#e_steps .stepper-chip[data-i="${index}"]`).click();
       assert.equal(await page.locator("#e_steps > .stepper-pane:not([hidden])").count(), 1);
       assert.equal(await page.locator("#e_save").isVisible(), true);
