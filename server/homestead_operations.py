@@ -974,11 +974,22 @@ def tick(is_leader, beat=None):
     return ACTIVE_SECONDS if any(job.get("status") not in TERMINAL for job in jobs) else IDLE_SECONDS
 
 
+# However often something asks (every disk-page poll from every tab does), a
+# round starts at most this often.
+MIN_ROUND_SECONDS = 1
+
+
 def run_jobs(is_leader, stop=None, beat=None):
     """The jobs loop: one thread per process; only the leader's does anything."""
     while not (stop and stop.is_set()):
+        began = time.monotonic()
         wait = tick(is_leader, beat)
         _wake.wait(wait)
+        rest = MIN_ROUND_SECONDS - (time.monotonic() - began)
+        if rest > 0:
+            time.sleep(rest)
+        # Cleared after the pause: asks that came during it are answered by
+        # the round about to start, not by another one straight after it.
         _wake.clear()
 
 

@@ -8,6 +8,7 @@ import ast
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -113,8 +114,8 @@ class JobsLoopTests(unittest.TestCase):
 
 
 class JobsLoopHealthTests(unittest.TestCase):
-    """The loop says it is alive (a heartbeat) and wakes when its replica
-    becomes leader."""
+    """The loop says it is alive (a heartbeat), wakes when its replica becomes
+    leader, and runs at most one round a second however often it is asked."""
 
     def setUp(self):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
@@ -174,6 +175,34 @@ class JobsLoopHealthTests(unittest.TestCase):
         OPS._wake.clear()
         LEADER._set(True, LEADER.IDENTITY)
         self.assertTrue(OPS._wake.is_set(), "a new leader would sit out its idle wait first")
+
+    def test_rounds_run_at_most_once_a_second_however_often_asked(self):
+        starts, stop, hammer = [], threading.Event(), threading.Event()
+
+        def tick(is_leader, beat=None):
+            starts.append(time.monotonic())
+            return 3600
+
+        def ask():
+            while not hammer.is_set():
+                OPS.advance_soon()
+                time.sleep(0.01)
+        with mock.patch.object(OPS, "tick", tick):
+            loop = threading.Thread(target=OPS.run_jobs, args=(lambda: True, stop), daemon=True)
+            asker = threading.Thread(target=ask, daemon=True)
+            loop.start()
+            asker.start()
+            deadline = time.monotonic() + 10
+            while len(starts) < 3 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            stop.set()
+            hammer.set()
+            OPS.advance_soon()
+            loop.join(3)
+            asker.join(1)
+        self.assertGreaterEqual(len(starts), 3)
+        gaps = [b - a for a, b in zip(starts, starts[1:])]
+        self.assertTrue(all(gap >= 0.9 for gap in gaps), gaps)
 
 
 class NoRequestAdvancesJobsTests(unittest.TestCase):

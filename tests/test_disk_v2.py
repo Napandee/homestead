@@ -29,7 +29,8 @@ HOST_FACTS = '\n'.join(['DEVICE /dev/sdb', 'SIZE ' + str(1000 * GB), 'UUID fs-da
 
 class Operations(JobStore):
     TERMINAL = OPS.TERMINAL
-    def __init__(self): self.items = []; self._lock = threading.RLock()
+    def __init__(self): self.items = []; self._lock = threading.RLock(); self.woken = 0
+    def advance_soon(self): self.woken += 1
     def _read(self): return copy.deepcopy(self.items)
     def _public(self, item): return OPS._public(item)
     def start(self, kind, title, resource, href, ref, message):
@@ -159,6 +160,10 @@ class DiskV2Tests(unittest.TestCase):
                 saved = patch.object(module, name, getattr(module, name)); saved.start(); self.addCleanup(saved.stop)
         self.c = Cluster()
         p = patch.object(V.HOST, 'run', self.c.host); p.start(); self.addCleanup(p.stop)
+    def test_a_look_at_the_job_asks_the_loop_to_run_soon(self):
+        self.c.start(); self.c.ops.woken = 0
+        V.status(self.c.ops.stored()[0]['id'])
+        self.assertEqual(1, self.c.ops.woken, 'the page polling here would wait for the idle tick')
     def test_review_is_read_only_and_v2_capacity_does_not_count(self):
         plan = self.c.review(); self.assertEqual(plan['blockers'], []); self.assertFalse(self.c.writes)
         self.c.lh['node-1']['spec']['disks']['spare']['diskType'] = 'block'
