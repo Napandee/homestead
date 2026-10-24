@@ -24,10 +24,10 @@ const PROTECT_PLANS = [
 
 /* where: what says why a run failed - Longhorn's own jobs by default. */
 function lastRunText(j, where = "its pod's log in longhorn-system") {
-  if (j.running) return '<span class="pill slim med">running</span>';
+  if (j.running) return UI.chip("running", "warn", { size: "slim" });
   if (!j.last_run) return '<span class="dim">not yet</span>';
   const ago = fmtAgo(Math.max(0, (Date.now() - Date.parse(j.last_run)) / 1000));
-  return j.last_failed ? `<span class="pill slim crit" data-tip="${esc(`The last run did not finish; ${where} says why`)}">failed</span> <span class="dim xs">${esc(ago)}</span>`
+  return j.last_failed ? `${UI.chip("failed", "bad", { size: "slim", tip: `The last run did not finish; ${where} says why` })} <span class="dim xs">${esc(ago)}</span>`
     : `<span class="small">${esc(ago)}</span>`;
 }
 
@@ -50,7 +50,7 @@ function objectStoreCard(store, target) {
   return `<div class="card flat" style="margin-bottom:18px">
     <div class="between node-section-head"><div><div class="ctitle">Backup storage</div>
       <div class="csub">An S3 server (RustFS) on a Longhorn volume, holding every backup this cluster writes</div></div>
-      <div class="row"><span class="pill ${store.ready ? "ok" : "med"}">${store.ready ? "serving" : "starting"}</span>
+      <div class="row">${UI.chip(store.ready ? "serving" : "starting", store.ready ? "ok" : "warn")}
         <button class="btn sm danger" data-need="admin" onclick="objectStoreRemove()">Remove</button></div></div>
     <div class="about-grid" style="margin-top:12px">
       <div><span>Endpoint</span><b class="mono">${esc(store.endpoint || "—")}</b></div>
@@ -143,10 +143,10 @@ async function viewProtect() {
 
   ${objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [
-      `<span class="tag ${cover === 100 ? "ok" : cover ? "warn" : "bad"}">${cover}% covered</span> ${d.protected} of ${d.total} volumes`,
-      objects.deployed ? `Backup storage <span class="tag ${objects.ready ? "ok" : "warn"}">${objects.ready ? "serving" : "starting"}</span>`
-        : objects.unread ? `Backup storage <span class="tag warn" data-tip="${esc("Could not read it: " + objects.unread)}">unknown</span>` : "",
-      tgt.configured ? `Target <span class="tag ${tgt.available ? "ok" : "bad"}">${tgt.available ? "reachable" : "unavailable"}</span>` : '<span class="tag warn">no backup target</span>',
+      `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
+      objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
+        : objects.unread ? `Backup storage ${UI.chip("unknown", "warn", { tip: "Could not read it: " + objects.unread })}` : "",
+      tgt.configured ? `Target ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}` : UI.chip("no backup target", "warn"),
       `${d.backed_up ?? 0} backed up off the cluster`],
     `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
   <div class="grid g3" style="margin-bottom:18px">
@@ -163,7 +163,7 @@ async function viewProtect() {
         <div class="pf-chips">${d.unprotected.slice(0, 6).map(name => {
           const v = d.volumes.find(x => (x.pvc || x.name) === name);
           return v ? `<button type="button" class="tag warn tagbtn" data-need="operator" data-tip="Protect ${esc(name)}" onclick="lhAssign(${jsq(v.name)},${jsq(name)})">${esc(name)}</button>`
-            : `<span class="tag warn">${esc(name)}</span>`;
+            : UI.chip(name, "warn");
         }).join("")}
         ${d.unprotected.length > 6 ? `<button type="button" class="tag tagbtn" data-tip="Show every volume not covered" onclick="protectFilter({show:'uncovered'},true)">+${d.unprotected.length - 6}</button>` : ""}</div></div>` : ""}
     </div>
@@ -173,7 +173,7 @@ async function viewProtect() {
       ${tgt.configured ? `
         <div class="drow"><div class="dl">URL</div><div class="dv mono small">${esc(tgt.url)}</div></div>
         <div class="drow"><div class="dl">Status</div><div class="dv">
-          <span class="pill ${tgt.available ? "ok" : "crit"}">${tgt.available ? "reachable" : "unavailable"}</span></div></div>
+          ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}</div></div>
         ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}
         ${tgt.secret_missing ? `<div class="note warn" style="margin-top:10px"><b>Its keys are missing.</b>
           The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in.
@@ -209,7 +209,7 @@ async function viewProtect() {
         <div style="min-width:0"><div style="font-weight:680">${esc(j.name)}</div>
           <div class="dim xs">${esc(j.task)}</div></div>
       </div>
-      <span class="pill ${j.covers ? "ok" : "med"}">${j.covers} vol</span>
+      ${UI.chip(`${j.covers} vol`, j.covers ? "ok" : "warn")}
     </div>
     <div class="wmeta">
       <div><div class="dim xs">SCHEDULE</div><div class="small" data-tip="cron ${esc(j.cron)} on the cluster's clock (UTC)">${esc(CRON.describe(j.cron))}</div></div>
@@ -217,7 +217,7 @@ async function viewProtect() {
       <div><div class="dim xs">LAST</div><div>${lastRunText(j)}</div></div>
       <div><div class="dim xs">KEEPS</div><div class="mono small">${KEEPS(j.task) ? j.retain : "—"}</div></div>
     </div>
-    <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")}` : "no groups"} · ${j.concurrency} at a time</div>
+    <div class="dim xs">${esc(j.desc)} · ${j.groups.length ? `groups ${j.groups.map(g => UI.chip(g, "neutral")).join(" ")}` : "no groups"} · ${j.concurrency} at a time</div>
     <div class="row wacts">${actionBar([
       { label: "Run now", icon: "play", run: `lhRun(${jsq(j.name)})`, need: "operator", disabled: j.running },
       { label: "Edit", icon: "edit", run: `lhJob(${esc(JSON.stringify(j))})`, need: "operator" },
@@ -238,12 +238,14 @@ async function viewProtect() {
     <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Protected by</th><th data-nosort>Last backup</th><th></th>
   </tr></thead><tbody id="pf_rows"></tbody></table></div></div>
 
+  <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim…</div>')}</div>
+
   <div class="sec">Backups</div>
   ${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
   : backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
     <th>Volume</th><th>Backups</th><th data-nosort>Last backup</th><th>Size</th><th></th></tr></thead><tbody>
     ${backupVolumes.map(b => `<tr>
-      <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ' <span class="tag warn" data-tip="The volume is gone; its backups are all that is left of it">volume deleted</span>'}
+      <td><b>${esc(b.pvc || b.name)}</b>${b.exists ? "" : ` ${UI.chip("volume deleted", "warn", { tip: "The volume is gone; its backups are all that is left of it" })}`}
         <div class="dim xs mono">${esc(b.name)}</div></td>
       <td class="mono">${b.count}</td>
       <td class="small dim">${fmtWhen(b.last_backup_at)}</td>
@@ -251,6 +253,7 @@ async function viewProtect() {
       <td data-actions>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
+  loadWeeklyTrim();
   protectVolumesPaint();
   loadRestoreTests();
   loadPreviousVolumes();
@@ -296,12 +299,12 @@ function protectVolumeRow(v) {
   return `<tr>
     <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
     <td class="mono">${v.size_gb} GiB</td>
-    <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
-    <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
-    <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
-      || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
+    <td>${UI.chip(v.robustness || "?", v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "warn" : "bad")}</td>
+    <td>${v.groups.map(g => UI.chip(g, g === "default" ? "info" : "neutral")).join(" ") || '<span class="dim">—</span>'}</td>
+    <td>${(v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
+      || UI.chip("nothing", "warn", { tip: "No snapshot or backup job covers it" })}</td>
     <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
-      : (v.protected_by || []).length ? '<span class="tag warn" data-tip="A job covers it, but no backup of it has been made yet">never</span>' : "never"}</td>
+      : (v.protected_by || []).length ? UI.chip("never", "warn", { tip: "A job covers it, but no backup of it has been made yet" }) : "never"}</td>
     <td data-actions>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
       { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`;
 }
@@ -347,10 +350,10 @@ function groupCard(g) {
   const guards = jobs.filter(j => /^(snapshot|backup)(-force-create)?$/.test(j.task));
   return `<div class="card flat wcard">
     <div class="between"><div style="min-width:0"><div style="font-weight:680">${esc(g.name)}
-      ${g.name === "default" ? '<span class="tag info">volumes with no other group</span>' : ""}</div>
+      ${g.name === "default" ? UI.chip("volumes with no other group", "info") : ""}</div>
       <div class="dim xs">${vols.length} volume${vols.length === 1 ? "" : "s"} · ${jobs.length} job${jobs.length === 1 ? "" : "s"}</div></div>
-      <span class="pill ${guards.length ? "ok" : vols.length ? "warn" : ""}">${guards.length ? "protected" : vols.length ? "no snapshots" : "empty"}</span></div>
-    <div class="small" style="margin-top:10px">${jobs.map(j => `<span class="tag" data-tip="${esc(CRON.describe(j.cron))}">${TASK_ICON[j.task] || "◷"} ${esc(j.name)}</span>`).join("")
+      ${UI.chip(guards.length ? "protected" : vols.length ? "no snapshots" : "empty", guards.length ? "ok" : vols.length ? "warn" : "neutral")}</div>
+    <div class="small" style="margin-top:10px">${jobs.map(j => UI.chip(`${TASK_ICON[j.task] || "◷"} ${j.name}`, "neutral", { tip: CRON.describe(j.cron) })).join(" ")
       || '<span class="dim">no jobs cover it</span>'}</div>
     <div class="dim xs" style="margin-top:8px">${vols.slice(0, 8).map(v => esc(v.pvc || v.name)).join(", ")}${vols.length > 8 ? ` +${vols.length - 8}` : ""}</div>
     <div class="row wacts">
@@ -392,7 +395,7 @@ window.lhJob = (j) => {
     <div class="f"><label>Groups this job protects</label>
       <div id="lj_groups">${(d.groups || ["default"]).map(g => `<label class="switch" style="margin:0 0 8px">
         <input type="checkbox" class="gk" value="${esc(g)}" ${j.groups.includes(g) ? "checked" : ""}>
-        ${esc(g)} ${groupCount(g)}${g === "default" ? ' <span class="tag info">no other group</span>' : ""}</label>`).join("")}</div>
+        ${esc(g)} ${groupCount(g)}${g === "default" ? ` ${UI.chip("no other group", "info")}` : ""}</label>`).join("")}</div>
       <input type="text" id="lj_newgroup" placeholder="…or type a new group name" oninput="lhJobNewGroup()">
       <div class="dim xs" id="lj_newgroup_note" style="margin-top:6px"></div>
     </div>
@@ -431,9 +434,9 @@ function planList(group, chosen) {
   const d = STATE.data.lh || { jobs: [] };
   const existing = new Set((d.jobs || []).map(j => j.name));
   return PROTECT_PLANS.map(plan => `<label class="plan-card card flat"><input type="radio" name="lp_plan" value="${plan.id}" ${plan.id === chosen ? "checked" : ""}>
-      <div><b>${esc(plan.title)}</b>${plan.needsTarget && !(d.target || {}).configured ? ' <span class="pill slim warn">needs a backup target</span>' : ""}
+      <div><b>${esc(plan.title)}</b>${plan.needsTarget && !(d.target || {}).configured ? ` ${UI.chip("needs a backup target", "warn", { size: "slim" })}` : ""}
         <div class="dim small">${esc(plan.blurb)}</div>
-        <div class="plan-jobs">${plan.jobs.map(j => { const name = planJobName(group, j); return `<span class="tag${existing.has(name) ? " warn" : ""}" data-tip="${existing.has(name) ? "replaces the job of this name" : "new job"}">${esc(name)} · ${esc(CRON.describe(j.cron))}${j.retain ? ` · keeps ${j.retain}` : ""}</span>`; }).join("")}</div></div></label>`).join("");
+        <div class="plan-jobs">${plan.jobs.map(j => { const name = planJobName(group, j); return UI.chip(`${name} · ${CRON.describe(j.cron)}${j.retain ? ` · keeps ${j.retain}` : ""}`, existing.has(name) ? "warn" : "neutral", { tip: existing.has(name) ? "replaces the job of this name" : "new job" }); }).join(" ")}</div></div></label>`).join("");
 }
 window.lhPlans = (group = "default") => {
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
@@ -484,7 +487,7 @@ window.lhGroup = (name = "") => {
       <div class="lg-list" id="lg_vols">${(d.volumes || []).map(v => `<label class="lg-row" data-q="${esc(`${v.pvc} ${v.namespace} ${v.name}`.toLowerCase())}">
         <input type="checkbox" value="${esc(v.name)}" ${row.volumes.includes(v.name) ? "checked" : ""}>
         <span class="lg-name"><b>${esc(v.pvc || v.name)}</b> <span class="dim xs">${esc(v.namespace || "no claim")} · ${v.size_gb} GiB</span></span>
-        <span class="lg-tags">${v.groups.filter(g => g !== name).map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("")}</span></label>`).join("")
+        <span class="lg-tags">${v.groups.filter(g => g !== name).map(g => UI.chip(g, g === "default" ? "info" : "neutral")).join(" ")}</span></label>`).join("")
         || '<div class="dim xs">No volumes.</div>'}</div>
       <div class="row" style="gap:10px;margin-top:6px"><button class="linkish xs" onclick="lhGroupAll(true)">Tick all shown</button>
         <button class="linkish xs" onclick="lhGroupAll(false)">Untick all shown</button></div></div>
@@ -584,11 +587,11 @@ window.lhCovered = name => {
   const vols = STATE.data.lh.volumes || [];
   modal("Covered by · " + name, j && j.volumes.length
     ? `<p class="muted small">${plural(j.volumes.length, "volume")}, via group${j.groups.length === 1 ? "" : "s"}
-       ${j.groups.map(g => `<span class="tag">${esc(g)}</span>`).join("")} or a direct label.</p>
+       ${j.groups.map(g => UI.chip(g, "neutral")).join(" ")} or a direct label.</p>
        <div style="margin-top:14px">${j.volumes.map(v => {
          const vv = vols.find(x => x.name === v) || {};
-         return `<span class="tag ok">${esc(vv.pvc || v)}</span>`;
-       }).join("")}</div>`
+         return UI.chip(vv.pvc || v, "ok");
+       }).join(" ")}</div>`
     : `<div class="empty">This job protects nothing. Add it to a group, or assign volumes directly.</div>`);
 };
 
@@ -649,10 +652,10 @@ function snapshotTimeline(snaps, vol, label) {
     const ago = age >= 1440 ? `${Math.floor(age / 1440)}d ago` : age >= 60 ? `${Math.floor(age / 60)}h ago` : `${age}m ago`;
     return `<article class="snapshot-point ${source === "system" ? "system" : ""}">
       <div class="snapshot-marker">${icon("snapshot")}</div><div class="snapshot-content">
-      <div class="between"><b class="mono small">${esc(s.name)}</b><span class="tag ${source === "system" ? "info" : ""}">${title}</span></div>
+      <div class="between"><b class="mono small">${esc(s.name)}</b>${UI.chip(title, source === "system" ? "info" : "neutral")}</div>
       <div class="snapshot-date">${valid ? `<time datetime="${esc(s.created)}" data-tip="${esc(s.created)}">${esc(fmtAt(date))}</time><span class="dim xs">${ago}</span>` : '<span class="dim small">Snapshot time unavailable</span>'}</div>
-      <div class="row small"><span class="dim">${esc(s.size_mb)} MiB</span>${s.deleting || s.removed ? '<span class="tag warn">cleanup pending</span>' : !s.ready ? '<span class="tag warn">not ready</span>' : ""}
-      ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
+      <div class="row small"><span class="dim">${esc(s.size_mb)} MiB</span>${s.deleting || s.removed ? UI.chip("cleanup pending", "warn") : !s.ready ? UI.chip("not ready", "warn") : ""}
+      ${(s.children || []).includes("volume-head") ? UI.chip("parent of Volume Head", "neutral", { tip: "This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks." }) : ""}</div>
       ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
       ${s.error ? `<p class="warntext small">${esc(s.error)}</p>` : ""}
       <div class="snapshot-actions">${actionBar([
@@ -672,7 +675,7 @@ function snapshotCleanupHtml(p) {
   // Nothing is being cleaned up: nothing to say (#501).
   if (!p.active) return "";
   const pct = p.percent;
-  return `<div class="note"><div class="between"><b>Longhorn cleanup ${pct == null ? "in progress" : `${+pct}%`}</b><span class="tag warn">Merging / purging</span></div>
+  return `<div class="note"><div class="between"><b>Longhorn cleanup ${pct == null ? "in progress" : `${+pct}%`}</b>${UI.chip("Merging / purging", "warn")}</div>
     ${pct == null ? '<span class="spin2"></span>' : `<div class="meter" role="progressbar" aria-label="Longhorn volume cleanup" aria-valuenow="${+pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.max(0, Math.min(100, +pct))}%"></span></div>`}
     <p class="small">Slowest active replica. This is volume-wide cleanup, not a separate percentage for each snapshot. Includes cleanup started in Longhorn or by recurring jobs.</p></div>`;
 }
@@ -727,7 +730,7 @@ function backupTable(bks, vol, label) {
   return `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backups" class="tbl stack">
     <thead><tr><th>Name</th><th>State</th><th>Size</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
     ${bks.map(b => `<tr><td class="mono small">${esc(b.name.slice(0, 28))}</td>
-      <td><span class="pill ${b.state === "Completed" ? "ok" : b.state === "Error" ? "crit" : "med"}">${esc(b.state || "?")}</span>
+      <td>${UI.chip(b.state || "?", b.state === "Completed" ? "ok" : b.state === "Error" ? "bad" : "warn")}
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
       <td class="mono">${b.size_mb} MiB</td>
       <td class="small dim">${fmtWhen(b.created)}</td>
@@ -871,7 +874,7 @@ window.lhRevert = async (vol, snap, label) => {
       <p>${esc(label)} goes back to how it was at <b>${esc(when)}</b>. Everything written since is set aside:
         it is kept first as a snapshot of its own, so rolling forward again is one more rollback.</p>
       ${users.length ? `<div class="note"><b>Stopped while it is done, then started again:</b>
-        ${users.map(u => `<span class="tag">${esc(u.kind === "VirtualMachine" ? "VM" : u.kind)} ${esc(u.name)}</span>`).join(" ")}</div>`
+        ${users.map(u => UI.chip(`${u.kind === "VirtualMachine" ? "VM" : u.kind} ${u.name}`, "neutral")).join(" ")}</div>`
         : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
       ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
@@ -967,6 +970,62 @@ window.lhTargetSave = async () => {
 };
 
 
+/* ---------------- weekly trim (homestead_weekly_trim.py, #591) ----------------
+   Homestead trims every attached volume itself each Saturday: the last run's
+   result, Run now, and the switch. */
+const trimName = r => r.pvc || r.volume;
+const trimPlural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function trimSummary(last) {
+  const whys = {};
+  for (const s of last.skipped || []) whys[s.why] = (whys[s.why] || 0) + 1;
+  const said = Object.entries(whys).map(([why, n]) => why === "no filesystem (VM disk)" ? trimPlural(n, "VM disk") : `${n} ${why}`).join(", ");
+  return `Trimmed ${trimPlural((last.trimmed || []).length, "volume")}, skipped ${(last.skipped || []).length}${said ? ` (${said})` : ""}`;
+}
+
+function weeklyTrimCard(d) {
+  const last = d.last, failed = last?.failed || [], unconfirmed = last?.unconfirmed || [], skipped = last?.skipped || [];
+  const status = d.running ? UI.chip("trimming now", "info") : !last ? UI.chip("not run yet", "neutral")
+    : failed.length ? UI.chip("failed", "bad") : UI.chip("trimmed", "ok");
+  const lines = !last ? '<div class="dim small">Not run yet.</div>'
+    : `<div class="small">${esc(trimSummary(last))} <span class="dim xs">${esc(fmtAt(last.at))}</span></div>
+      ${failed.length ? `<div class="small wt-line">Failed: ${failed.map(f => `<b>${esc(trimName(f))}</b>: ${esc(f.message)}`).join("; ")}</div>` : ""}
+      ${unconfirmed.length ? `<div class="dim xs wt-line">Not confirmed: ${esc(unconfirmed.map(u => `${trimName(u)} (${u.why})`).join(", "))}</div>` : ""}
+      ${skipped.length ? `<div class="dim xs wt-line">Skipped: ${esc(skipped.map(s => `${trimName(s)} (${s.why})`).join(", "))}</div>` : ""}`;
+  return `<div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", `
+    <div class="card flat">
+      <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
+        <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
+        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
+      <div style="margin-top:10px">${lines}</div>
+      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well.</div>` : ""}
+      <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
+        <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
+      ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
+    </div>`)}</div>`;
+}
+
+async function loadWeeklyTrim() {
+  const host = document.getElementById("housekeeping");
+  if (!host) return;
+  try { host.outerHTML = weeklyTrimCard(await api("/api/weekly-trim")); }
+  catch (e) { host.innerHTML = UI.section("Housekeeping", UI.callout("warn", "The weekly trim could not be read", esc(e.message))); }
+}
+
+window.weeklyTrimSwitch = async on => {
+  try { const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); loadWeeklyTrim(); }
+  catch (e) { toast(e.message, "bad"); const box = $("#wt_on"); if (box) box.checked = !on; }
+};
+
+window.weeklyTrimRun = async () => {
+  try {
+    await api("/api/weekly-trim/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast("Weekly trim started; follow it under Jobs", "ok");
+    loadWeeklyTrim();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+
 /* ---------------- restore tests (homestead_restore_test.py) ----------------
    Each app with Longhorn volumes: what a test restores, its last result, and
    Test now. Switched on, Homestead tests each app with backups monthly. */
@@ -981,8 +1040,8 @@ async function loadRestoreTests() {
   STATE.data.restoreTests = d;
   const row = r => {
     const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
-    const result = r.running ? '<span class="pill info">testing now</span>'
-      : last ? `<span class="pill ${last.ok ? "ok" : "crit"}">${last.ok ? "passed" : "failed"}</span> <span class="dim xs">${esc(restoreWhen(last.at))}${last.seconds ? ` · ${Math.round(last.seconds / 60)} min` : ""}</span>`
+    const result = r.running ? UI.chip("testing now", "info")
+      : last ? `${UI.chip(last.ok ? "passed" : "failed", last.ok ? "ok" : "bad")} <span class="dim xs">${esc(restoreWhen(last.at))}${last.seconds ? ` · ${Math.round(last.seconds / 60)} min` : ""}</span>`
       : '<span class="dim xs">never tested</span>';
     return `<tr><td class="cell-name"><div class="vm-name-cell">${appAvatar(r.name, r.icon)}<div class="vm-name-text"><b>${esc(r.name)}</b><div class="dim xs">${esc(r.ns)}</div></div></div></td>
       <td data-label="Restores" class="small">${r.restores.length ? esc(restores) : '<span class="dim">nothing: ' + esc(r.without.map(w => `${w.claim} has ${w.why}`).join("; ")) + "</span>"}

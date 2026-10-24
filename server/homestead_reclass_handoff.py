@@ -424,7 +424,7 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         raise JOURNAL.Held("Cutover's copy Job receipt does not match its proof")
     if not _receipt(item, "delete-copy-job"):
         job = writer.observe(job_entry)
-        writer.write("delete-copy-job", "DELETE", job_entry["target"]["path"], {"propagationPolicy": "Foreground"}, expected=JOURNAL.identity(job))
+        writer.write("delete-copy-job", "DELETE", job_entry["target"]["path"], {"propagationPolicy": "Foreground"}, expected=JOURNAL.identity(job), own=True)
         return "running", 80, "Removing the verified copy helper; waiting for its pods to disappear"
     if writer.observe(_receipt(item, "delete-copy-job")) is not None or using:
         return "running", 81, "Waiting for the copy helper and all pods naming these claims to be removed"

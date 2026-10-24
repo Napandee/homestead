@@ -99,6 +99,9 @@ class GatherTests(unittest.TestCase):
         mock.patch.object(self.a.fleet, "summary", return_value={"self": "me", "members": members}).start()
         self.call = mock.patch.object(self.a.fleet, "call", return_value=[]).start()
         self.addCleanup(mock.patch.stopall)
+        # Kept answers live in the module: start each test without any, and leave none.
+        self.a.fleet.forget_answers()
+        self.addCleanup(self.a.fleet.forget_answers)
 
     def asked_as(self, user):
         self.a.fleet.gather("nodes", lambda: [], user, "viewer")

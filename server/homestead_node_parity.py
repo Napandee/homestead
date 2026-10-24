@@ -21,7 +21,9 @@ machine do not:
   since it can hold no more. Once more nodes are Ready, the default for new
   volumes rises with them, up to three - 1, then 2, then 3 as nodes join -
   only while it is still the installer's one copy or the count Homestead
-  itself set, so a count someone chose is kept, and it is never lowered. A
+  itself set, so a count someone chose is kept, and it is never lowered
+  (except Homestead's own data volume on a one-host cluster, which
+  homestead_data_copies lowers to the one copy that host can keep). A
   change in Ready nodes is noticed within a minute (copies_tick), so apps
   made just after the nodes join get the copies too. Existing volumes keep
   their count; the Volumes page raises those - except Homestead's own data
@@ -381,6 +383,29 @@ def stale_services(now=None):
     return removed
 
 
+def _raised_setting(value, ours, want):
+    """Longhorn's default-replica-count raised to want, or None to leave it.
+    Before Longhorn 1.8 it is one count ("1"); from 1.8 it is JSON with a
+    count per data engine ('{"v1":"1","v2":"1"}'). Each count rises only
+    while it is the installer's one or the count Homestead set, so one
+    someone chose is kept, and it is never lowered; a value Homestead cannot
+    read is left alone."""
+    def rises(count):
+        count = str(count)
+        return count in ours and count.isdigit() and int(count) < want
+
+    if not value.lstrip().startswith("{"):
+        return str(want) if rises(value) else None
+    try:
+        engines = json.loads(value)
+    except ValueError:
+        return None
+    if not isinstance(engines, dict):
+        return None
+    raised = {engine: str(want) if rises(count) else count for engine, count in engines.items()}
+    return json.dumps(raised, separators=(",", ":")) if raised != engines else None
+
+
 def longhorn_copies(storing):
     """The default copies raised with the hosts Longhorn stores on, while it
     is the installer's one or the count Homestead set before. Returns (from,
@@ -405,19 +430,17 @@ def longhorn_copies(storing):
     # The chart's defaults reach a running Longhorn only at its install; the
     # setting is what it reads for each new volume now.
     setting = _get(LONGHORN_SETTING)
-    if setting and str(setting.get("value") or "") in ours:
-        ksend("PATCH", LONGHORN_SETTING, {"value": str(want)}, ctype="application/merge-patch+json")
+    value = _raised_setting(str((setting or {}).get("value") or ""), ours, want)
+    if value is not None:
+        ksend("PATCH", LONGHORN_SETTING, {"value": value}, ctype="application/merge-patch+json")
     state = _load()
     state["longhorn_copies"] = want
     SHARED.write_json(_path(), state, indent=1, sort_keys=True)
     return (have, want)
 
 
-def own_copies(storing):
-    """Homestead's own data volume raised with the hosts Longhorn stores on,
-    while it keeps the
-    installer's one copy or the count Homestead set before. Returns the
-    claims raised, as (claim, to)."""
+def _own_raises(storing):
+    """What own_copies() would raise: [(claim, volume name, to)]. Reads only."""
     want = max(1, min(3, len(storing)))
     ns, name = OWN
     if want < 2 or not ns or not name:
@@ -426,22 +449,41 @@ def own_copies(storing):
     claims = [v["persistentVolumeClaim"]["claimName"] for v in
               (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
               if (v.get("persistentVolumeClaim") or {}).get("claimName")]
-    state = _load()
-    ours = {1, int(state.get("own_copies") or 1)}
-    raised = []
+    ours = {1, int(_load().get("own_copies") or 1)}
+    raises = []
     for claim in claims:
         pv = ((_get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}") or {}).get("spec") or {}).get("volumeName")
         volume = _get(f"{LH_VOLUMES}/{pv}") if pv else None
         have = int(((volume or {}).get("spec") or {}).get("numberOfReplicas") or 0)
-        if not volume or have not in ours or have >= want:
-            continue
+        if volume and have in ours and have < want:
+            raises.append((claim, pv, want))
+    return raises
+
+
+def own_copies(storing):
+    """Homestead's own data volume raised with the hosts Longhorn stores on,
+    while it keeps the
+    installer's one copy or the count Homestead set before. Returns the
+    claims raised, as (claim, to)."""
+    raised = []
+    for claim, pv, want in _own_raises(storing):
         ksend("PATCH", f"{LH_VOLUMES}/{pv}", {"spec": {"numberOfReplicas": want}}, ctype="application/merge-patch+json")
         raised.append((claim, want))
     if raised:
         state = _load()
-        state["own_copies"] = want
+        state["own_copies"] = raised[-1][1]
         SHARED.write_json(_path(), state, indent=1, sort_keys=True)
     return raised
+
+
+def own_copies_due(storing):
+    """Whether copies_tick() raises Homestead's own data volume in place on
+    this platform for these storage hosts: the same test as own_copies(),
+    reading only (homestead_data_copies says "rising" meanwhile)."""
+    p = platform() or {}
+    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2") or not p.get("longhorn"):
+        return False
+    return bool(storing) and bool(_own_raises(storing))
 
 
 _seen_ready = None

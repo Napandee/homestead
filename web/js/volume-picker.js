@@ -163,14 +163,14 @@ window.storageClassOptions = storageClassOptions;
 function storageClassBadges(facts) {
   if (!facts) return "";
   const badges = [];
-  if (facts.replicas) badges.push(`<span class="tag">${esc(facts.replicas)} replica${facts.replicas === "1" ? "" : "s"}</span>`);
-  if (facts.engine) badges.push(`<span class="tag ${facts.engine === "v2" ? "info" : ""}" data-tip="${facts.engine === "v2"
-    ? "Longhorn's V2 data engine (SPDK): faster, and needs hugepages and a V2 disk on each host." : "Longhorn's V1 data engine, the default."}">Longhorn ${esc(facts.engine.toUpperCase())}</span>`);
-  badges.push(facts.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="tag">not encrypted</span>');
-  badges.push(facts.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>');
-  if (facts.reclaim === "Retain") badges.push('<span class="tag info">keeps data on delete</span>');
-  if (facts.migratable) badges.push('<span class="tag" data-tip="Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX).">VM disk class</span>');
-  if (facts.default) badges.push('<span class="tag ok">default</span>');
+  if (facts.replicas) badges.push(UI.chip(`${facts.replicas} replica${facts.replicas === "1" ? "" : "s"}`, "neutral"));
+  if (facts.engine) badges.push(UI.chip(`Longhorn ${facts.engine.toUpperCase()}`, facts.engine === "v2" ? "info" : "neutral", { tip: facts.engine === "v2"
+    ? "Longhorn's V2 data engine (SPDK): faster, and needs hugepages and a V2 disk on each host." : "Longhorn's V1 data engine, the default." }));
+  badges.push(facts.encrypted ? UI.chip("encrypted", "info") : UI.chip("not encrypted", "neutral"));
+  badges.push(facts.expandable ? UI.chip("can grow", "ok") : UI.chip("fixed size", "neutral"));
+  if (facts.reclaim === "Retain") badges.push(UI.chip("keeps data on delete", "info"));
+  if (facts.migratable) badges.push(UI.chip("VM disk class", "neutral", { tip: "Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX)." }));
+  if (facts.default) badges.push(UI.chip("default", "ok"));
   return badges.join("");
 }
 window.storageClassBadges = storageClassBadges;
@@ -327,7 +327,7 @@ function addVolumeRow(host, v = {}) {
   d.dataset.originClaim = (v.origin && v.origin.claim) || "";
   d.dataset.originFolder = (v.origin && v.origin.sub_path) || "";
   const classes = ctx.storageClasses() || [];
-  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? `<span class="tag">${esc(v.role)}</span>` : ""}${v.required ? ' <span class="pill warn">required</span>' : ""}</div>
+  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? UI.chip(v.role, "neutral") : ""}${v.required ? ` ${UI.chip("required", "warn")}` : ""}</div>
       ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
     ${v.description ? `<div class="dim small volume-desc">${esc(v.description)}</div>` : ""}
     <div class="deploy-volume-grid">

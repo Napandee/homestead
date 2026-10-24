@@ -117,6 +117,41 @@ class RenameTests(unittest.TestCase):
         self.assertNotIn("do-not-journal", json.dumps(ops.stored()))
         self.assertEqual(4, len(ops.stored()[0]["ref"]["writes"]))
 
+    def test_the_change_mark_rides_on_both_scale_patches_and_the_receipts_still_pass(self):
+        # The write guard appends the mark to each JSON patch (#621): with no
+        # annotations yet as the whole map under the patch's version test, else
+        # at its own key. The rename's own checks look only at spec.
+        import homestead_changes as CH
+        import homestead_kube as K
+
+        def guarded(method, path, payload, **kwargs):
+            CH.note_write(method, path, payload)
+            result = self.send(method, path, payload, **kwargs)
+            if method != "PATCH":
+                return result
+            self.assertEqual(4, len(payload), "one op added after the rename's own")
+            obj, mark = self.objects[path.rsplit("/", 1)[-1]], payload[3]
+            if mark["path"] == "/metadata/annotations":
+                obj["metadata"]["annotations"] = mark["value"]
+            else:
+                self.assertEqual(CH._AUTHOR_POINTER, mark["path"])
+                obj["metadata"]["annotations"][CH.AUTHOR] = mark["value"]
+            return copy.deepcopy(obj)
+        # A rename runs on the request's own thread, so its writes are the person's.
+        CH.REQUEST.user = "ada"
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+        with mock.patch.object(CH, "_author_key", lambda: b"rename-mark"), mock.patch.object(K, "kget", self.read):
+            result = self.dispatch(send=guarded)
+        for name, value in (("old", self.sent[1][2][3]["value"][CH.AUTHOR]), ("new", self.sent[2][2][3]["value"])):
+            mark = json.loads(value)
+            self.assertEqual(CH._signed(b"rename-mark", "lab", name, mark["at"], "ada"), mark["by"], name)
+        self.assertTrue(result["renamed"])
+        self.assertEqual("succeeded", result["operation"]["status"])
+        self.assertEqual(["POST", "PATCH", "PATCH", "DELETE"], [row[0] for row in self.sent])
+        self.assertEqual("/metadata/annotations", self.sent[1][2][3]["path"], "the original had no annotations")
+        self.assertEqual(CH._AUTHOR_POINTER, self.sent[2][2][3]["path"], "the new one has them from its create")
+        self.assertIn(CH.AUTHOR, self.objects["new"]["metadata"]["annotations"])
+
     def test_late_capacity_block_keeps_both_stopped_and_never_auto_restores(self):
         self.admission.return_value = {"blocked": True}
         with self.assertRaisesRegex(ValueError, "no longer fits"):

@@ -12,7 +12,9 @@ const path = require("node:path");
 // Hand-written chips left, over the files design-rules scans. Not counted:
 // a class built in a template (`${row ? "tag" : "pill"}`), a className
 // assignment, and web/index.html; the migrations take those by hand.
-const COUNTS = { pill: 179, tag: 205 };
+// The floor: buttons and links styled as chips, and the special shapes
+// (cluster-tag, duty, slimtag, more, sched-tag, a plan's warning block).
+const COUNTS = { pill: 5, tag: 23 };
 // A migrated `web/js/…` file → how many non-interactive chips it still writes
 // by hand on purpose (usually 0). Buttons and links styled as chips don't count.
 const MIGRATED = {
@@ -32,6 +34,30 @@ const MIGRATED = {
   "web/js/changes.js": 0,
   "web/js/autoupdate.js": 0,
   "web/js/auth.js": 0,
+  "web/js/views-storage.js": 0,
+  "web/js/views-protect.js": 0,
+  // The cluster-tag shape: the chip that names a VM's k3s cluster.
+  "web/js/views-vms.js": 1,
+  "web/js/vm-hardware.js": 0,
+  "web/js/platform.js": 0,
+  "web/js/views-cluster.js": 0,
+  "web/js/homestead-update.js": 0,
+  "web/js/pwa.js": 0,
+  "web/js/volume-picker.js": 0,
+  "web/js/move.js": 0,
+  "web/js/impact.js": 0,
+  // The Homestead and platform chips open their explanation (onclick), and "+N" ports is the more shape.
+  "web/js/views-workloads.js": 3,
+  "web/js/views-lifecycle.js": 0,
+  // Special shapes: a host's duties (duty), "+N" workloads (more) and a disk's role (slimtag).
+  "web/js/views-overview.js": 7,
+  "web/js/views-stats.js": 0,
+  "web/js/dashboard.js": 0,
+  "web/js/views-settings.js": 0,
+  "web/js/views-ipam.js": 0,
+  "web/js/core.js": 0,
+  // The cluster-tag shape.
+  "web/js/fleet.js": 1,
 };
 
 const ROOT = path.join(__dirname, "..");

@@ -77,7 +77,7 @@ try {
       const values=await group.locator(":scope>b").boundingBox();
       assert.ok(values.y>=caption.y+caption.height,"node tags sit below their heading");
       assert.ok(Math.abs(values.x-caption.x)<1,"wrapped tags align with their heading");
-      for(const tag of await group.locator(".tag").all()) {
+      for(const tag of await group.locator(".tag, .ui-chip").all()) {
         const bounds=await tag.boundingBox();
         assert.ok(bounds.x+bounds.width<=values.x+values.width+1,"node tags fit their group");
       }

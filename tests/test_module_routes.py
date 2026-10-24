@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
+import homestead_web_paths as WEB_PATHS
 import source_scan as SS
 
 SERVER = SS.text(SS.SERVER_PY)
@@ -61,14 +62,15 @@ INLINE_ROUTES = (
 
 
 def handler_methods(source=SS.SERVER_PY):
-    """class H's own methods in server.py, by name."""
-    return {name[2:]: found for name, found in SS.functions(source).items()
+    """class H's own methods in server.py, by name: each name's defs, so a
+    method written twice (if/else alternatives) is read whole."""
+    return {name[2:]: defs for name, defs in SS.every_function(source).items()
             if name.startswith("H.") and name.count(".") == 1}
 
 
-def handler_body(method):
-    """The text of server.py's do_GET, do_POST, ... method."""
-    return handler_methods()[f"do_{method}"].text
+def handler_body(method, source=SS.SERVER_PY):
+    """The text of server.py's do_GET, do_POST, ... method (every def of it)."""
+    return "\n".join(found.text for found in handler_methods(source)[f"do_{method}"])
 
 
 def literals_in(text):
@@ -90,8 +92,8 @@ def helper_literals(source=SS.SERVER_PY):
     lines = (source if isinstance(source, SS.Code) else SS.text(source)).splitlines()
     cls = next(node for node in SS.tree(source).body if isinstance(node, ast.ClassDef) and node.name == "H")
     keep = set(range(cls.lineno, cls.end_lineno + 1))
-    for name, found in handler_methods(source).items():
-        if name.startswith("do_"):
+    for name, defs in handler_methods(source).items():
+        for found in defs if name.startswith("do_") else ():
             first = min([found.node.lineno, *(d.lineno for d in found.node.decorator_list)])
             keep -= set(range(first, found.node.end_lineno + 1))
     return literals_in("\n".join(lines[number - 1] for number in sorted(keep)))
@@ -106,6 +108,7 @@ class DeclaredRoutes(unittest.TestCase):
             self.assertIn(method, ("GET", "POST", "PUT", "DELETE"), path)
             # Outside /api/ only where the guard does not take it for a page,
             # which it lets through before sign-in (/readyz, /metrics: #736).
+            # ModuleRoutesNeedCredentials below is this rule's safety net.
             self.assertTrue(path.startswith("/api/") or not WEB_PATHS.is_page_path(path), path)
             self.assertIn(route.role, ROUTES.ROLES, path)
             self.assertTrue(callable(route.handler), path)
@@ -153,6 +156,53 @@ class DeclaredRoutes(unittest.TestCase):
         self.assertEqual({"a": 1}, seen[0].body)
         self.assertEqual("ada", seen[0].user)
         self.assertIsNone(ROUTES.find("GET", "/api/test/echo"))
+
+
+def guard(path, method="GET", headers=None):
+    """server.H's guard for one request with no session, outside any fence."""
+    import server
+    h = object.__new__(server.H)
+    h.command, h.path, h.headers = method, path, dict(headers or {})
+    h._send = mock.Mock(); h._who = mock.Mock(return_value=None)
+    h.client_address = ("192.0.2.10", 40000)
+    with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
+         mock.patch.object(server, "_self_data_boot_pending", False), \
+         mock.patch.object(server, "require_self_data_write", return_value=None):
+        result = h._guard(path)
+    return h, result
+
+
+class ModuleRoutesNeedCredentials(unittest.TestCase):
+    """The net under DeclaredRoutes' rule (a module route may sit outside
+    /api/ where the guard does not take it for a page): every module route
+    that is not public answers 401 without a session or a key, so none is
+    served before sign-in as a page would be (#736 review, gap 39)."""
+    def test_metrics_and_readyz_are_not_page_paths(self):
+        self.assertFalse(WEB_PATHS.is_page_path("/metrics"))
+        self.assertFalse(WEB_PATHS.is_page_path("/readyz"))
+
+    def test_a_module_route_at_a_bare_path_needs_credentials(self):
+        """A route a module declares at /metrics is not let through as a page."""
+        fake = ROUTES.Route("GET", "/metrics", "viewer", lambda request: "secret", "test")
+        with mock.patch.dict(ROUTES._table, {("GET", "/metrics"): fake}):
+            h, result = guard("/metrics")
+        self.assertTrue(result)
+        self.assertEqual(401, h._send.call_args.args[0])
+
+    def test_the_walk_meets_a_route_outside_api(self):
+        """Not an empty walk: the rule's exception is in the table."""
+        self.assertTrue([path for _, path in ROUTES.table() if not path.startswith("/api/")])
+
+    def test_every_module_route_that_is_not_public_needs_credentials(self):
+        """Any module route, at any path, that is not public answers 401 to
+        a request with no session and no key: none is served as a page."""
+        for (method, path) in ROUTES.table():
+            if WEB_PATHS.is_public_path(path):
+                continue
+            with self.subTest(method=method, path=path):
+                h, result = guard(path, method)
+                self.assertTrue(result, f"{method} {path} passed the guard without credentials")
+                self.assertEqual(401, h._send.call_args.args[0])
 
 
 class ThroughTheServer(unittest.TestCase):
@@ -246,6 +296,22 @@ class RouteLiterals(unittest.TestCase):
                          '    LATER = "/api/x/later"\n\n\ndef outside():\n    return "/api/x/outside"\n')
         self.assertEqual({"/api/x/attribute", "/api/x/helper", "/api/x/comment", "/api/x/later"},
                          helper_literals(source))
+
+
+class TwoDefsOfOneHandler(unittest.TestCase):
+    """A do_* written twice (if/else alternatives) is read whole: a route in
+    either def is seen, and neither def counts as a helper."""
+    SOURCE = SS.code('class H(Base):\n    if FAST:\n        def do_GET(self):\n            if p == "/api/x/first":\n'
+                     '                pass\n    else:\n        def do_GET(self):\n            if p == "/api/x/second":\n'
+                     '                pass\n\n    def _helper(self):\n        return "/api/x/helper"\n')
+
+    def test_a_route_in_either_def_is_in_the_handler_body(self):
+        body = handler_body("GET", self.SOURCE)
+        self.assertIn("/api/x/first", body)
+        self.assertIn("/api/x/second", body)
+
+    def test_neither_def_counts_as_a_helper(self):
+        self.assertEqual({"/api/x/helper"}, helper_literals(self.SOURCE))
 
 
 class MovedHelpers(unittest.TestCase):

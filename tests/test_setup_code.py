@@ -205,6 +205,18 @@ class SetupCodeTests(unittest.TestCase):
         self.assertEqual("ABCD-EFGH-JK", self.stored_code(kube))
         self.assertEqual([], [w for w in kube.writes if w[0] != "GET"])
 
+    def test_a_failed_accounts_read_is_not_answered_from_an_earlier_no_accounts(self):
+        """Gap 44: with two replicas, the other may have made the first admin
+        since this one last read "no accounts". A read that fails now must
+        not fall back on that: no Secret is made or kept on its word."""
+        kube = self.cluster()
+        self.assertTrue(AUTH.needs_setup())         # read fine: no accounts, and kept
+        self.slow = True
+        with self.assertRaises(AUTH.StoreUnavailable):
+            CODE.ensure()
+        self.assertIsNone(kube.object(SECRET_PATH))
+        self.assertFalse(os.path.exists(os.path.join(self.data, CODE.FILE)))
+
     def test_the_start_loop_retries_until_the_cluster_answers(self):
         self.cluster()
         answers = [AUTH.StoreUnavailable("slow"), True]
