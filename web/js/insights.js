@@ -84,6 +84,13 @@ const HealthInsights = (() => {
     if (id.startsWith("condition:")) return "health:"+id.slice(10);
     return "";
   }
+  // The version pairs running now (homestead_upgrade_check): one outside its
+  // support matrix, or on a Kubernetes past its end of life, is worth a review.
+  // Supported and not-checked pairs show on Platform versions only.
+  function pairRows(components) {
+    const severity={outside:"medium",eol:"low"};
+    return (components?.pairs || []).filter(p=>severity[p.status]).map(p=>item("pair:"+p.id,severity[p.status],p.title,p.detail,"settings:updates#settingsComponents"));
+  }
   function backupRows(p, now=Date.now()) {
     return [...(p?.volumes || [])].sort((a,b)=>Number(!!a.last_backup_at)-Number(!!b.last_backup_at) || String(a.last_backup_at || "").localeCompare(String(b.last_backup_at || ""))).map(v=> {
       const stamp=Date.parse(v.last_backup_at), age=Number.isFinite(stamp)&&stamp<=now ? Math.floor((now-stamp)/86400000) : null;
@@ -167,6 +174,7 @@ const HealthInsights = (() => {
     if(id==="updates") {
       const r=data.updates, rows=(r?.workloads || []).filter(w=>w.available || w.images?.some(i=>i.error)).map(w=>item(w.ns+"/"+w.name,w.available?"low":"medium",w.name,w.available?"Image update available":"Registry check failed",w.homestead?"settings:updates#homesteadUpdateCard":"images"));
       for(const c of data.components?.components || [])if(c.next)rows.push(item("component:"+c.id,"low",c.name,`${c.installed} → ${c.next}`,"settings:updates#settingsComponents"));
+      rows.push(...pairRows(data.components));
       for(const [name,h] of Object.entries(data.hosts?.hosts || {}))if(h.updates?.length || h.reboot)rows.push(item("host:"+name,h.security?"medium":"low",name,`${h.updates?.length || 0} package updates${h.reboot?" · restart needed":""}`,"settings:updates#settingsHostUpdates:"+name));
       const incomplete=needs.updates.some(k=>data[k]===null) || r?.partial || (Array.isArray(r?.errors)?r.errors.length:r?.errors) || (data.hosts?.applies && !Object.keys(data.hosts.hosts || {}).length);
       return `<div class="insight-summary">${rows.length} item${rows.length===1?"":"s"} to review</div>`+list(rows,4)+(rows.length?"":'<div class="empty small">No updates reported by the available checks.</div>')+(incomplete?'<div class="ui-help">Some update checks are unavailable or incomplete. Review Updates.</div>':"");
@@ -213,7 +221,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
+  return {titles,advice,acknowledge,alertKey,backupRows,pairRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

@@ -261,6 +261,36 @@ class K3sTests(unittest.TestCase):
         self.assertFalse(self.c.sent)
 
 
+class UpgradeCheckWiringTests(unittest.TestCase):
+    """The report carries each upgrade's check and the pairs running now; an
+    upgrade the check blocks needs the review's tick (homestead_upgrade_check)."""
+    KUBEVIRT = "/apis/kubevirt.io/v1/kubevirts"
+    KV_CHART = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/homestead-kubevirt"
+
+    def setUp(self):
+        nodes = {"items": [{"metadata": {"name": "node-1"}, "status": {"nodeInfo": {"kubeletVersion": "v1.36.4+k3s1"}}}]}
+        self.c = Cluster({"distribution": "k3s", "kubevirt": True, "version": "1.36.4+k3s1"},
+                         {"/api/v1/nodes": nodes, self.KV_CHART: {"metadata": {"name": "homestead-kubevirt"}},
+                          self.KUBEVIRT: {"items": [{"status": {"observedKubeVirtVersion": "v1.9.1", "phase": "Deployed"}}]}})
+        channels = {"data": [{"name": "v1.36", "latest": "v1.36.4+k3s1"}, {"name": "v1.37", "latest": "v1.37.1+k3s1"}]}
+        C.bind(self.c.get, self.c.send, lambda force=False: self.c.platform, self.c.helm, Addons(),
+               lambda url: channels if "k3s.io" in url else [{"tag_name": "v1.9.1"}])
+
+    def test_the_report_carries_the_check_and_the_running_pair(self):
+        report = C.report()
+        cluster = next(r for r in report["components"] if r["id"] == "cluster")
+        self.assertEqual("v1.37.1+k3s1", cluster["next"])
+        self.assertEqual("blocked", cluster["check"]["verdict"])
+        self.assertEqual([("KubeVirt 1.9 on Kubernetes 1.36", "supported")],
+                         [(p["title"], p["status"]) for p in report["pairs"]])
+
+    def test_a_blocked_upgrade_needs_the_tick(self):
+        with self.assertRaisesRegex(ValueError, "tick"):
+            C.upgrade("cluster", "v1.37.1+k3s1")
+        self.assertEqual([], self.c.sent, "nothing was written")
+        self.assertEqual("v1.37.1+k3s1", C.upgrade("cluster", "v1.37.1+k3s1", {"accept_check": True})["to"])
+
+
 class HarvesterTests(unittest.TestCase):
     def test_harvesters_own_parts_are_shown_and_left_to_harvester(self):
         Cluster({"distribution": "harvester", "harvester": True, "longhorn": True, "kubevirt": True},

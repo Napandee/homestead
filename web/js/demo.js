@@ -1870,24 +1870,50 @@ ssh_pwauth: true
       }
       return { links: portalLinks, icons: ["router", "switch", "wifi", "firewall", "nas", "server", "printer", "camera", "ups", "globe"], version: "1" };
     },
-    "/api/cluster/components": demoPlatform === "harvester"
-      ? { distribution: "harvester", harvester: true, checked: Math.floor(Date.now() / 1000), components: [
+    // Each upgrade's check and the pairs running now are what
+    // homestead_upgrade_check says for these versions. window.__demoUpgradeCheck
+    // shows a newer k3s cluster whose next step leaves KubeVirt's support matrix.
+    "/api/cluster/components": () => {
+      const matrix = "https://github.com/kubevirt/sig-release/blob/f3d8a41eb14bc3f7ee8b29e8fcf5b940523af7a4/releases/k8s-support-matrix.md";
+      const lh = "https://github.com/longhorn/longhorn/tree/v1.12.1/chart", checked = "2026-10-23";
+      const eol = v => ({ id: "kubevirt-kubernetes", status: "eol", title: `KubeVirt ${v} on Kubernetes 1.31`, source: matrix, checked,
+        detail: `KubeVirt ${v} supports Kubernetes 1.31, but Kubernetes no longer maintains 1.31 (KubeVirt's support matrix, as of 2026-10-23). None of the Kubernetes versions it supports is still maintained.` });
+      const now = Math.floor(Date.now() / 1000), suc = "Upgraded by Rancher's system-upgrade-controller: servers one at a time, then agents.";
+      if (window.__demoUpgradeCheck) return { distribution: "k3s", harvester: false, checked: now, components: [
+        { id: "cluster", name: "k3s", installed: "v1.36.4+k3s1", newest: "v1.37.1+k3s1", next: "v1.37.1+k3s1", behind: true, how: "suc", note: suc,
+          notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.37.1+k3s1", nodes: { "node-1": "v1.36.4+k3s1" },
+          check: { to: "v1.37.1+k3s1", verdict: "blocked", checked, findings: [{ level: "block", title: "KubeVirt 1.9 is not tested on Kubernetes 1.37", source: matrix,
+            detail: "KubeVirt 1.9 supports Kubernetes 1.34, 1.35 and 1.36 (its support matrix, as of 2026-10-23). It may run, but it is not tested on 1.37. No KubeVirt release in Homestead's table supports 1.37 yet." }] } },
+        { id: "longhorn", name: "Longhorn", installed: "v1.12.0", newest: "v1.13.0", next: "v1.12.1", behind: true, how: "helmchart", steps_left: true, note: "",
+          notes_url: "https://github.com/longhorn/longhorn/releases/tag/v1.12.1",
+          check: { to: "v1.12.1", verdict: "check", checked, findings: [
+            { level: "info", title: "Kubernetes 1.36 meets Longhorn v1.12.1's minimum (1.25)", detail: "Longhorn publishes a minimum Kubernetes version only.", source: lh },
+            { level: "warn", title: "Longhorn fences its manager in with NetworkPolicies", source: lh,
+              detail: "Longhorn v1.12.1's chart turns networkPolicies.restrictInternalTraffic on by default: only Longhorn's own pods may reach longhorn-backend:9500. Homestead keeps its own narrow policy beside Longhorn's (#794), so Trim now and snapshot rollback keep working. Anything else that calls that port, such as a metrics scraper, is cut off unless the chart values set it to false or allow it." }] } },
+        { id: "kubevirt", name: "KubeVirt", installed: "v1.9.1", newest: "v1.9.1", next: "", behind: false, how: "helmchart", phase: "Deployed", note: "" }],
+        pairs: [{ id: "kubevirt-kubernetes", status: "supported", title: "KubeVirt 1.9 on Kubernetes 1.36", source: matrix, checked,
+          detail: "KubeVirt 1.9 supports Kubernetes 1.34, 1.35 and 1.36 (its support matrix, as of 2026-10-23)." }] };
+      if (demoPlatform === "harvester") return { distribution: "harvester", harvester: true, checked: now, pairs: [eol("1.4")], components: [
           { id: "cluster", name: "Harvester", how: "harvester", installed: "" },
           { id: "longhorn", name: "Longhorn", installed: "v1.8.1", newest: "v1.9.1", next: "", behind: true, how: "harvester",
             note: "Comes with Harvester, and is upgraded with it.", notes_url: "https://github.com/longhorn/longhorn/releases/tag/v1.9.1" },
           { id: "kubevirt", name: "KubeVirt", installed: "v1.4.0", newest: "v1.6.0", next: "", behind: true, how: "harvester", phase: "Deployed",
             note: "Comes with Harvester, and is upgraded with it.", notes_url: "https://github.com/kubevirt/kubevirt/releases/tag/v1.6.0" },
           { id: "cdi", name: "CDI", installed: "v1.61.0", newest: "v1.62.0", next: "", behind: true, how: "harvester", phase: "Deployed",
-            note: "Comes with Harvester, and is upgraded with it." }] }
-      : { distribution: "k3s", harvester: false, checked: Math.floor(Date.now() / 1000), components: [
+            note: "Comes with Harvester, and is upgraded with it." }] };
+      const kubevirt = demoPlatform === "kubevirt";
+      return { distribution: "k3s", harvester: false, checked: now, pairs: kubevirt ? [eol("1.6")] : [], components: [
           { id: "cluster", name: "k3s", installed: "v1.31.4+k3s1", newest: "v1.33.4+k3s1", next: "v1.31.12+k3s1", behind: true, how: "suc",
-            steps_left: true, note: "Upgraded by Rancher's system-upgrade-controller: servers one at a time, then agents.",
-            notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" } },
-          ...(demoPlatform === "kubevirt" ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
-            how: "helmchart", phase: "Deployed", note: "" }] : [])] },
-    "/api/longhorn/v2/upgrade": () => {
+            steps_left: true, note: suc, notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" },
+            check: kubevirt ? { to: "v1.31.12+k3s1", verdict: "check", checked, findings: [{ level: "warn", title: "Kubernetes 1.31 is past its end of life", detail: eol("1.6").detail, source: matrix }] }
+              : { to: "v1.31.12+k3s1", verdict: "unchecked", checked, findings: [] } },
+          ...(kubevirt ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
+            how: "helmchart", phase: "Deployed", note: "" }] : [])] };
+    },
+    "/api/longhorn/v2/upgrade": url => {
       const state=window.__demoV2UpgradeState || 'ready', running=['running','failed'].includes(state), blocked=state==='blocked';
-      return {installed:running?'v1.13.0':'v1.12.2',target:'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
+      // The upgrade check's demo (window.__demoUpgradeCheck) goes from v1.12.0 to v1.12.1.
+      return {installed:running?'v1.13.0':window.__demoUpgradeCheck?'v1.12.0':'v1.12.2',target:url?.searchParams?.get('to') || 'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
         offline_ready:false,live_blockers:blocked?['disk-data: needs healthy RW replicas on at least two eligible hosts.','Upgrade Kubernetes to 1.34 or newer on every host first.']:[],
         offline_blockers:[...(blocked?['Upgrade Kubernetes to 1.34 or newer on every host first.']:[]),'Stop workloads, detach V2 volumes and wait for replicas to stop.'],
         upgrade:{enabled:running,timeout:60,current_node:state==='running'?'node-2':'',active:state==='running',pending:running,nodes:running?[

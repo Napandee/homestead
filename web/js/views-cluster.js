@@ -159,7 +159,7 @@ function componentRow(c) {
       <div><b class="mono">${esc(c.installed || "—")}</b> ${state}
         ${c.phase && c.phase !== "Deployed" ? UI.chip(c.phase, "warn", { size: "slim" }) : ""}</div>
       <div class="dim xs">${esc(c.note || COMPONENT_HOW[c.how] || "")}${c.steps_left ? ` · ${esc(c.next)} first, then on to ${esc(c.newest)}: one minor version at a time` : ""}${c.error ? ` · could not check for releases: ${esc(c.error)}` : ""}</div>
-      ${nodes}</div>
+      ${nodes}${running ? "" : componentCheckLine(c)}</div>
     <div class="row">${c.id === "longhorn" ? actionBar([
       !running && c.next && {label:`Upgrade to ${c.next}`,run:`componentUpgrade(${jsq(c.id)})`,need:'admin'},
       {label:'V2 upgrade status',run:'lhV2Upgrade()'},
@@ -183,6 +183,7 @@ function componentsCard(r, settings = false) {
         : "Upgrades go one minor version at a time, as each project supports."}`, `${pill}
         <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check now</button>`)}
     <div class="release-list">${rows.map(componentRow).join("") || '<div class="dim small">Nothing to report.</div>'}</div>
+    ${componentPairsLine(r.pairs)}
   `;
   return settings ? UI.settingsCard(body, {tab:"updates",id:"settingsComponents"})
     : `<section class="card flat cluster-wide" style="margin-top:14px">${body}</section>`;
@@ -208,15 +209,18 @@ window.componentUpgrade = async id => {
   modal(`Upgrade ${c.name} to ${c.next}`, `
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>
+    ${componentCheckSection(c.check)}
     ${c.notes_url ? `<p class="small"><a href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first: they list anything to do before or after.</p>` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button>`)}`);
 };
 
 window.componentUpgradeGo = async (id, to) => {
+  const ack = $("#cmp_check_ack");
+  if (ack && !ack.checked) return toast("Tick that you have read what this upgrade breaks first", "bad");
   try {
     const r = await api("/api/cluster/components/upgrade", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ component: id, to }) });
+      body: JSON.stringify({ component: id, to, ...(ack ? { accept_check: true } : {}) }) });
     closeModal();
     toast(r.detail, "ok");
     if (window.noteOperation) noteOperation(r.operation);
@@ -322,3 +326,49 @@ function upgradesCard(r) {
   </section>`;
 }
 
+
+/* ---------------- before an upgrade: what Homestead's table knows ----------------
+   Each part Homestead upgrades carries a check (homestead_upgrade_check):
+   what its next version is known to break here, from a dated table with a
+   source per row. Unknown is "Not checked", never a pass (#620). The pairs
+   are what runs now: KubeVirt against the hosts' Kubernetes. */
+const CHECK_VERDICT = { blocked: ["Check first", "bad"], check: ["Worth a look", "warn"],
+  clear: ["No known breaks", "ok"], unchecked: ["Not checked", "neutral"] };
+const CHECK_LEVEL = { block: ["Blocks", "bad"], warn: ["Read first", "warn"], info: ["Checked", "ok"], unknown: ["Not checked", "neutral"] };
+const PAIR_STATUS = { supported: ["Supported", "ok"], eol: ["Kubernetes past end of life", "warn"],
+  outside: ["Outside its support matrix", "warn"], unchecked: ["Not checked", "neutral"] };
+
+const checkSource = url => url ? `<a class="btn sm" href="${safeHref(url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Source</a>` : "";
+
+function componentCheckList(r) {
+  const rows = (r.findings || []).map(f => { const [label, tone] = CHECK_LEVEL[f.level] || CHECK_LEVEL.unknown;
+    return { tone, label, title: f.title, detail: f.detail, actionsHtml: checkSource(f.source) }; });
+  return `${rows.length ? UI.insightList(rows) : `<p class="dim small">Homestead's table says nothing about ${esc(r.to)}.</p>`}
+    <p class="dim xs">From Homestead's table of known version pairs, checked ${esc(r.checked)}. It covers a few facts only:
+      "No known breaks" is not a promise, so read the release notes too.</p>`;
+}
+
+function componentCheckLine(c) {
+  const r = c.check;
+  if (!r) return "";
+  const [label, tone] = CHECK_VERDICT[r.verdict] || CHECK_VERDICT.unchecked;
+  const top = ["block", "warn", "unknown"].map(level => (r.findings || []).find(f => f.level === level)).find(Boolean);
+  const said = top ? top.title : r.verdict === "clear" ? `Nothing in Homestead's table breaks ${r.to} here` : `Homestead's table says nothing about ${r.to}`;
+  return `<div class="component-check">${UI.chip(label, tone, { size: "slim" })}<span class="dim xs">${esc(said)}</span></div>
+    ${(r.findings || []).length ? UI.more(`What ${r.to} changes`, componentCheckList(r), false, `component-check-${c.id}`) : ""}`;
+}
+
+/* The upgrade review's part: every finding, and a tick when one blocks. */
+function componentCheckSection(r) {
+  if (!r) return "";
+  return UI.section("Before you upgrade", componentCheckList(r))
+    + (r.verdict === "blocked" ? UI.ack("cmp_check_ack", "I have read what this upgrade breaks, and go ahead anyway") : "");
+}
+
+function componentPairsLine(pairs) {
+  if (!pairs?.length) return "";
+  return `<div class="component-pairs"><span class="cluster-kicker">VERSION PAIRS</span>${pairs.map(p => {
+    const [label, tone] = PAIR_STATUS[p.status] || PAIR_STATUS.unchecked;
+    return `<div class="component-check">${UI.chip(label, tone, { size: "slim" })}<span class="xs"><b>${esc(p.title)}</b>
+      <span class="dim">${esc(p.detail)}</span></span>${checkSource(p.source)}</div>`; }).join("")}</div>`;
+}

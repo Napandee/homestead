@@ -1891,6 +1891,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .release-row .ui-chip{margin-left:4px}
 /* The text keeps its width; the buttons go under it when the row is narrow. */
 .release-row{flex-wrap:wrap}.release-row>div:first-child{flex:1 1 220px;min-width:0}
+/* Before an upgrade (homestead_upgrade_check): the verdict under a part, and
+   the version pairs running now under the list. */
+.component-check{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:6px}
+.component-check .ui-chip{margin-left:0}
+.component-pairs{display:grid;gap:4px;margin-top:12px}
 .upgrade-live{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px}
 .upgrade-live.running{border-color:rgba(245,158,11,.45)}
 .upgrade-live.failed{border-color:rgba(239,68,68,.5)}
