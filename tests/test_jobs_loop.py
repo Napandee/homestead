@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import homestead_operations as OPS
+import source_scan as SS
 from fakes.job_store import store_writes
 
 
@@ -322,14 +323,39 @@ class NoRequestAdvancesJobsTests(unittest.TestCase):
     """Server code reads the saved jobs (snapshot()); only the loop calls
     list_operations(), the function that runs the resolvers."""
 
+    def test_a_reference_to_list_operations_is_seen_not_only_a_call(self):
+        for source in ("OPS.list_operations()\n", "fn = OPS.list_operations\n",
+                       "threading.Thread(target=OPS.list_operations).start()\n",
+                       "from homestead_operations import list_operations\nlist_operations()\n",
+                       "from homestead_operations import list_operations as step\n",
+                       "run = list_operations\n", "step = getattr(OPS, \"list_operations\")\n"):
+            with self.subTest(source=source):
+                self.assertTrue(list_operations_references(SS.code(source)), source)
+        self.assertEqual([], list_operations_references(SS.code(
+            "def list_operations():\n    pass\n# OPS.list_operations()\ntext = \"list_operations\"\n")))
+
     def test_only_the_jobs_loop_calls_list_operations(self):
-        callers = []
-        for path in sorted((ROOT / "server").glob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) == "list_operations":
-                    callers.append(f"{path.name}:{node.lineno}")
-        self.assertEqual([], [c for c in callers if not c.startswith("homestead_operations.py:")], callers)
+        callers = [f"{path.name}:{line}" for path in sorted(SS.SERVER.glob("*.py"))
+                   if path.name != "homestead_operations.py"
+                   for line in list_operations_references(path)]
+        self.assertEqual([], callers)
+
+
+def list_operations_references(source):
+    """The lines that name list_operations in source: a call, a reference
+    handed on (target=OPS.list_operations), an import of it, or getattr with
+    its name. Its own def, a comment or another string is not one."""
+    found = []
+    for node in ast.walk(SS.tree(source)):
+        named = ((isinstance(node, ast.Attribute) and node.attr == "list_operations")
+                 or (isinstance(node, ast.Name) and node.id == "list_operations")
+                 or (isinstance(node, ast.alias) and node.name == "list_operations")
+                 or (isinstance(node, ast.Call) and SS.dotted(node.func) == "getattr"
+                     and any(isinstance(arg, ast.Constant) and arg.value == "list_operations"
+                             for arg in node.args)))
+        if named:
+            found.append(node.lineno)
+    return sorted(found)
 
 
 if __name__ == "__main__":

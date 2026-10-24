@@ -111,6 +111,16 @@ class Functions(unittest.TestCase):
         with self.assertRaises(TypeError):
             SS.functions(ast.parse(PY))
 
+    def test_every_function_keeps_each_def_of_a_name_in_source_order(self):
+        source = SS.code("if X:\n    def go():\n        return 1\nelse:\n    def go():\n        return 2\n"
+                         "class C:\n    @property\n    def v(self):\n        return 3\n"
+                         "    @v.setter\n    def v(self, value):\n        pass\n")
+        found = SS.every_function(source)
+        self.assertEqual(["go", "C.v"], list(found))
+        self.assertEqual(["        return 1", "        return 2"], [f.text.splitlines()[-1] for f in found["go"]])
+        self.assertEqual(["@property", "@v.setter"], [f.text.split("\n")[0].strip() for f in found["C.v"]])
+        self.assertEqual(5, SS.functions(source)["go"].node.lineno, "functions() keeps the last")
+
 
 class Calls(unittest.TestCase):
     def test_calls_are_matched_by_how_the_callee_is_written(self):
