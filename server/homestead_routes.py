@@ -65,6 +65,7 @@ MODULES = (
     "homestead_alerts",
     "homestead_allocation_probe",
     "homestead_api_keys",
+    "homestead_api_v1",
     "homestead_app_settings",
     "homestead_audit",
     "homestead_auth",
@@ -329,8 +330,9 @@ def _headers(handler):
 def connection(handler):
     """The Connection a route sees, from server.py's handler after its guard."""
     raw = _headers(handler)
-    if raw.get("X-Homestead-Fleet") and getattr(handler, "_fleet_who", None) is False:
-        handler._fleet_identity()       # a public path: the guard did not check the sender
+    if (raw.get("X-Homestead-Fleet") and getattr(handler, "_fleet_who", None) is False
+            and not getattr(handler, "api_key", None)):
+        handler._fleet_identity()       # a public path: the guard did not check the sender (a key is its own)
     cookies = {name: value for name, value in handler._cookies().items() if name in COOKIES}
     return Connection(Headers(raw.items()), types.MappingProxyType(cookies), _tls(handler),
                       handler._via_cloudflare(), getattr(handler, "_access", None),
@@ -429,6 +431,8 @@ def table():
                 raise ValueError(f"{method} {path} in {name} has no handler")
             if "*" in path and not (path.endswith("/*") and path.count("*") == 1):
                 raise ValueError(f"{method} {path} in {name}: a prefix route ends in /* and has no other *")
+            if path.startswith("/api/v1/") and name != "homestead_api_v1":
+                raise ValueError(f"{method} {path} in {name}: /api/v1 is homestead_api_v1's, where a key's scopes are checked")
             if path.endswith("/*") and _covers(key[0], path[:-1]):
                 raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)
