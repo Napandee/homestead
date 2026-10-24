@@ -117,7 +117,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error, cause = "") {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.6" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.8" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
@@ -135,7 +135,8 @@ window.recoverySignIn = async () => {
     const r = await fetch("/api/auth/login", { method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
       body: JSON.stringify({ username: document.getElementById("rg_user").value.trim(), password: document.getElementById("rg_pass").value }) });
-    const out = await r.json().catch(() => ({}));
+    // An answer that is not JSON is said, with its status: never a bare "Sign-in failed".
+    const out = await r.json().catch(e => ({ error: `Sign-in failed: the answer could not be read (HTTP ${r.status}, ${e.message})` }));
     if (!r.ok) throw new Error(out.error || "Sign-in failed");
     location.assign(window.__recoveryReview);
   } catch (e) { err.textContent = e.message; err.hidden = false; }
@@ -218,7 +219,7 @@ function loginForm(err, setup) {
   let remember = true;
   try { remember = localStorage.getItem("homestead.remember") !== "0"; } catch (e) { /* ticked */ }
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.6" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.8" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
