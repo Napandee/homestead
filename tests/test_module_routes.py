@@ -17,7 +17,7 @@ import source_scan as SS
 SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 1870
+MAX_LINES = 1868
 MAX_PATH_BRANCHES = 5
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
@@ -218,6 +218,14 @@ class ThroughTheServer(unittest.TestCase):
         with mock.patch.object(server.FIREWALL, "inventory", return_value={"policies": []}):
             handler.do_GET()
         self.assertEqual((200, {"policies": []}), handler._send.call_args.args)
+
+    def test_a_delete_reaches_the_module(self):
+        server, handler = self.handler("DELETE", "/api/workload/lab/web")
+        import homestead_deploy_server as DEPLOY_SERVER
+        with mock.patch.object(DEPLOY_SERVER, "delete_workload", return_value=["web"]) as delete:
+            handler.do_DELETE()
+        delete.assert_called_once_with("lab", "web")
+        self.assertEqual((200, {"ok": True, "services": ["web"]}), handler._send.call_args.args[:2])
 
     def test_a_reply_keeps_its_own_status(self):
         server, handler = self.handler("POST", "/api/test/busy")

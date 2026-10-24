@@ -346,12 +346,18 @@ def route(request):
     return MODULE_ROUTES.Reply(code, answer)
 
 
+def no_delete(request):
+    """No endpoint takes a DELETE: the answer server.py gave before do_DELETE
+    dispatched module routes, with no endpoint run and nothing audited."""
+    return MODULE_ROUTES.Reply(404, {"error": "no route"})
+
+
 # Its routes and who may use them (homestead_routes.py): a key's scopes, or a
 # session's role, decide each endpoint above. No endpoint takes a DELETE; it
 # is declared so a session's DELETE is still checked as an operator's and
-# answered 404, not refused unanswered by do_DELETE's guard.
+# answered 404 (no_delete), not refused unanswered by do_DELETE's guard.
 ROUTES = {
     ("GET", "/api/v1/*"): ("viewer", route),
     ("POST", "/api/v1/*"): ("operator", route),
-    ("DELETE", "/api/v1/*"): ("operator", route),
+    ("DELETE", "/api/v1/*"): ("operator", no_delete),
 }

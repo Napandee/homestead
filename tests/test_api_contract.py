@@ -250,8 +250,8 @@ def web_calls():
     return found, unread
 
 
-# Routes server.py matches by the parts of the path, outside every table:
-# each {} is one segment. A test below checks do_DELETE still does.
+# Routes a module's prefix route matches by the parts of the path: each {} is
+# one segment. A test below checks homestead_deploy_server still does.
 PART_ROUTES = (Route("DELETE", "/api/workload/{}/{}", "parts"),)
 
 
@@ -399,10 +399,12 @@ class Routing(unittest.TestCase):
         self.assertFalse(routed(self.call("DELETE", "/api/workload/", ANY), self.ROUTES))
         self.assertFalse(routed(self.call("GET", "/api/workload/", ANY, "/", ANY), self.ROUTES))
 
-    def test_server_py_still_matches_the_workload_delete_by_its_parts(self):
-        delete = SS.functions(SS.SERVER_PY)["H.do_DELETE"].text
-        self.assertIn('len(parts) == 4 and parts[:2] == ["api", "workload"]', delete,
-                      "do_DELETE changed: update PART_ROUTES in this test")
+    def test_the_workload_delete_is_still_matched_by_its_parts(self):
+        # #764 moved it out of server.py's do_DELETE into a module prefix route.
+        self.assertIn(("DELETE", "/api/workload/*"), ROUTES.table())
+        delete = SS.functions(SS.SERVER / "homestead_deploy_server.py")["_delete_workload"].text
+        self.assertIn('re.fullmatch(r"/api/workload/([a-z0-9.-]+)/([a-z0-9.-]+)", request.path)', delete,
+                      "_delete_workload changed: update PART_ROUTES in this test")
 
 
 class Contract(unittest.TestCase):

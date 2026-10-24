@@ -1737,13 +1737,11 @@ class H(HTTP.LimitedHandler):
         target = self._fleet_target(u.path)
         if target:
             return self._fleet_forward(target, u.path)
-        if self._guard(urllib.parse.urlparse(self.path).path):
-            return
-        parts = [x for x in u.path.split("/") if x]
         try:
-            if len(parts) == 4 and parts[:2] == ["api", "workload"]:
-                return self._send(200, {"ok": True, "services": delete_workload(parts[2], parts[3])})
-            return self._send(404, {"error": "no route"})
+            if not self._guard(u.path) and not self._module_route("DELETE", u.path, Query(urllib.parse.parse_qs(u.query)), None):
+                self._send(404, {"error": "no route"})
+        except PermissionError as e:
+            return self._send(403, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
