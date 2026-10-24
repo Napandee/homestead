@@ -64,15 +64,20 @@ def _needed_list(path, optional_group=None, forbidden_none=False):
         if error.code == 404 and optional_group and _group_absent(optional_group):
             error.close()
             return []
-        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
-                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+        raise ValueError(_unread_message(path, error)) from error
     except Exception as error:
-        raise ValueError(f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
-                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.") from error
+        raise ValueError(_unread_message(path, error)) from error
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or (listing.get("metadata") or {}).get("continue")):
         raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
                          "are still needed, and no image is cleaned up until it can. Try again in a moment.")
+    # A row that is not an object, or whose metadata, spec or status is not
+    # one, cannot say what it needs: the list as a whole is unread.
+    if not all(isinstance(row, dict) and all(isinstance(row.get(key), (dict, type(None)))
+                                             for key in ("metadata", "spec", "status"))
+               for row in listing["items"]):
+        raise ValueError(f"Kubernetes returned a list for {path} that Homestead cannot read, so it cannot tell which "
+                         "images are still needed, and no image is cleaned up until it can. Try again in a moment.")
     return listing["items"]
 
 
@@ -142,19 +147,28 @@ def _stopped_references():
     name them they read as unused, and cleaning one up meant the next start
     - often the moment it is needed - waited on a pull.
 
+    The same holds for a workload that wants pods but has not got them: a
+    suspended Job or one between retries, a DaemonSet that matches no node,
+    a Deployment that cannot make its pods (quota, a webhook). Only a status
+    that shows every pod it wants is there leaves the image to its pods.
+
     The digest each container last ran on is used where Homestead recorded
     it; the image may be matched by its name as well, since a tag in the
     template and the digest the node lists are two names for one image.
     A template that cannot be read keeps every image (_unreadable)."""
     out = []
+    template = lambda o: o["spec"]["template"]["spec"]
     for kind, path, spec_of in (
-            ("Deployment", "/apis/apps/v1/deployments", lambda o: o["spec"]["template"]["spec"]),
-            ("StatefulSet", "/apis/apps/v1/statefulsets", lambda o: o["spec"]["template"]["spec"]),
+            ("Deployment", "/apis/apps/v1/deployments", template),
+            ("StatefulSet", "/apis/apps/v1/statefulsets", template),
+            ("DaemonSet", "/apis/apps/v1/daemonsets", template),
+            ("Job", "/apis/batch/v1/jobs", template),
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
         for obj in _needed_list(path):
-            meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
-            if kind != "CronJob" and not _scaled_to_zero(spec):
-                continue          # running ones are named by their pods
+            meta = obj.get("metadata") or {}
+            reason = _waiting(kind, obj)
+            if reason is None:
+                continue          # its pods name its images, or it will not run again
             try:
                 podspec = spec_of(obj)
             except (KeyError, TypeError):
@@ -174,45 +188,195 @@ def _stopped_references():
                     continue
                 out.append({"ref": _canonical_image(ref),
                             "digest": _image_digest(ref) or _image_digest(ran.get(container.get("name"), "")),
-                            "reason": "scheduled" if kind == "CronJob" else "stopped", "by_name": True,
+                            "reason": reason, "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
-    vms = [(vm, ("spec", "template", "spec"))
-           for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io")
-           if not ((vm.get("status") or {}).get("ready") is True
-                   or (vm.get("status") or {}).get("printableStatus") == "Running")]
+    stopped = [vm for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io")
+               if not ((vm.get("status") or {}).get("ready") is True
+                       or (vm.get("status") or {}).get("printableStatus") == "Running")]
+    vms = [(vm, ("spec", "template", "spec")) for vm in stopped]
     # A VM pool or VM replica set scaled to zero has no VM or pod left to name
     # its template's disks; one with replicas has, so it is left to them.
-    for kind, path, group, template in (
-            ("VirtualMachinePools", "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools", "pool.kubevirt.io",
-             ("spec", "virtualMachineTemplate", "spec", "template", "spec")),
-            ("VirtualMachineInstanceReplicaSets", "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
-             "kubevirt.io", ("spec", "template", "spec"))):
-        rows = _needed_list(path, optional_group=group, forbidden_none=True)
-        if rows is None:      # a role from before these were named may not grant them
-            out.append(_unreadable({"name": kind}, "no permission to list"))
-            continue
-        vms += [(row, template) for row in rows if _scaled_to_zero(row.get("spec") or {})]
+    pools, unread = _optional_list("VirtualMachinePools", "pool.kubevirt.io", "virtualmachinepools")
+    out += unread
+    vms += [(row, ("spec", "virtualMachineTemplate", "spec", "template", "spec"))
+            for row in pools if _scaled_to_zero(row.get("spec") or {})]
+    sets = _needed_list("/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
+                        optional_group="kubevirt.io", forbidden_none=True)
+    if sets is None:      # a role from before these were named may not grant them
+        out.append(_unreadable({"name": "VirtualMachineInstanceReplicaSets"}, "no permission to list"))
+    vms += [(row, ("spec", "template", "spec")) for row in sets or [] if _scaled_to_zero(row.get("spec") or {})]
+    # A Harvester VM template's versions start new VMs, and a VM snapshot
+    # restores one: both boot from the container disks they name.
+    versions, unread = _optional_list("VirtualMachineTemplateVersions", "harvesterhci.io", "virtualmachinetemplateversions")
+    out += unread
+    vms += [(row, ("spec", "vm", "spec", "template", "spec")) for row in versions]
+    contents, unread = _optional_list("VirtualMachineSnapshotContents", "snapshot.kubevirt.io", "virtualmachinesnapshotcontents")
+    out += unread
+    vms += [(row, ("spec", "source", "virtualMachine", "spec", "template", "spec")) for row in contents]
     for vm, template in vms:          # a running VM's pod names its container disks
         meta = vm.get("metadata") or {}
-        tspec = _dig(vm, template)
-        volumes = _rows(tspec, "volumes")
-        domain = (tspec or {}).get("domain") or {}
-        if volumes is None or not isinstance(domain, dict):
+        disks = _disk_images(_dig(vm, template))
+        if disks is None:
             out.append(_unreadable(meta, "template"))
             continue
-        disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", ""))
-                 for volume in volumes]
-        kernel = (((domain.get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
-        disks.append(("kernel-boot", kernel.get("image", "")))
-        for name, ref in disks:
-            if not ref:
-                continue
-            out.append({"ref": _canonical_image(ref), "digest": _image_digest(ref),
-                        "reason": "stopped", "by_name": True,
-                        "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
-                        "container": name})
+        out += [_kept(meta, ref, "stopped", name) for name, ref in disks]
+    # ...and the disks a stopped VM or a template's VMs import from a registry
+    # (a running VM's disks are imported already).
+    for row, vmspec in [(vm, ("spec",)) for vm in stopped] + [(row, ("spec", "vm", "spec")) for row in versions]:
+        templates = _rows(_dig(row, vmspec), "dataVolumeTemplates")
+        if templates is None:
+            out.append(_unreadable(row.get("metadata") or {}, "template"))
+            continue
+        out += _cdi_rows(row, [(_dig(t, ("metadata",)) or {}).get("name", "") or "registry"
+                               for t in templates], [_dig(t, ("spec",)) for t in templates], "stopped")
+    # CDI imports that pull a registry image through the node's runtime
+    # (pullMethod: node) leave it in containerd, and need it again to import.
+    for kind, resource, spec_path, reason in (
+            ("DataVolumes", "datavolumes", ("spec",), "stopped"),
+            ("DataImportCrons", "dataimportcrons", ("spec", "template", "spec"), "scheduled")):
+        rows, unread = _optional_list(kind, "cdi.kubevirt.io", resource)
+        out += unread
+        for row in rows:
+            out += _cdi_rows(row, ["registry"], [_dig(row, spec_path)], reason)
+            if kind == "DataImportCrons" and _node_pull(_dig(row, spec_path)):
+                out += _imported_digests(row)
     return out
+
+
+def _imported_digests(cron):
+    """A DataImportCron imports its tag by digest, and a node that pulled by
+    digest lists no tag to match by name: keep each digest it imported."""
+    meta = cron.get("metadata") or {}
+    imports = (cron.get("status") or {}).get("currentImports")
+    if imports is None:
+        return []
+    if not isinstance(imports, list) or not all(isinstance(row, dict) for row in imports):
+        return [_unreadable(meta, "source")]
+    return [{"ref": "", "digest": _image_digest(row.get("digest")), "reason": "scheduled",
+             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": "registry"}
+            for row in imports if _image_digest(row.get("digest"))]
+
+
+def _kept(meta, ref, reason, container):
+    """A retention row for an image a record names, matched by name too."""
+    return {"ref": _canonical_image(ref), "digest": _image_digest(ref), "reason": reason, "by_name": True,
+            "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": container}
+
+
+def _disk_images(tspec):
+    """(volume, image) for each container image a VM's template spec boots
+    from (containerDisk volumes, kernel boot), or None when it cannot be read."""
+    volumes = _rows(tspec, "volumes")
+    domain = (tspec or {}).get("domain") or {}
+    if volumes is None or not isinstance(domain, dict):
+        return None
+    disks = [(volume.get("name", ""), (volume.get("containerDisk") or {}).get("image", "")) for volume in volumes]
+    kernel = (((domain.get("firmware") or {}).get("kernelBoot") or {}).get("container") or {})
+    disks.append(("kernel-boot", kernel.get("image", "")))
+    return [(name, ref) for name, ref in disks if ref]
+
+
+def _cdi_rows(obj, names, specs, reason):
+    """Retention rows for the CDI import specs of one record (a DataVolume
+    spec, or a DataImportCron's or VM template's DataVolume template spec):
+    the image each pulls through the node, or an unreadable row."""
+    meta, out = obj.get("metadata") or {}, []
+    for name, spec in zip(names, specs):
+        ref = _node_pull(spec)
+        if ref is None:
+            return [_unreadable(meta, "source")]
+        if ref:
+            out.append(_kept(meta, ref, reason, name))
+    return out
+
+
+def _node_pull(spec):
+    """The image a CDI DataVolume spec imports through the node's container
+    runtime (a registry source with pullMethod node), "" when it pulls none
+    that way (the importer pod's own pull, or another source), or None when
+    the spec cannot be read."""
+    if not isinstance(spec, dict):
+        return None
+    source = spec.get("source")
+    if source is None:
+        return ""             # sourceRef, or a blank disk
+    registry = source.get("registry") if isinstance(source, dict) else None
+    if not isinstance(source, dict) or not isinstance(registry, (dict, type(None))):
+        return None
+    if registry is None or registry.get("pullMethod") != "node":
+        return ""
+    url = registry.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _optional_list(kind, group, resource):
+    """The rows of a resource in a group that may not be installed, read at
+    the version API discovery prefers that serves it (a fixed version 404s
+    once the group drops it), and any retention row to add: none when
+    discovery says the group or the resource is absent; an unreadable row
+    when the role may not read discovery or the list."""
+    try:
+        path = _served_path(group, resource)
+    except PermissionError:
+        path = False
+    if path is None:
+        return [], []
+    rows = None if path is False else _needed_list(path, optional_group=group, forbidden_none=True)
+    if rows is None:          # a role from before these were named may not grant them
+        return [], [_unreadable({"name": kind}, "no permission to list")]
+    return rows, []
+
+
+def _discovery(where, group=None):
+    """GET one discovery document. A 404 for a group discovery says is absent
+    is None; a 403 raises PermissionError; anything else that fails is a
+    ValueError, so no image is called unused on a guess."""
+    try:
+        return I.kget(where)
+    except urllib.error.HTTPError as error:
+        error.close()
+        if error.code == 403:
+            raise PermissionError(where) from error
+        if error.code == 404 and group and _group_absent(group):
+            return None
+        raise ValueError(_unread_message(where, error)) from error
+    except Exception as error:
+        raise ValueError(_unread_message(where, error)) from error
+
+
+def _served_path(group, resource):
+    """/apis/<group>/<version>/<resource> at the first version that serves the
+    resource, the preferred one first; None when discovery says the group is
+    not served or serves the resource at no version. Anything unclear is an
+    error, so no image is called unused on a guess."""
+    unclear = ValueError(f"Kubernetes did not say which version of {group} it serves, so Homestead cannot tell "
+                         "which images are still needed, and no image is cleaned up until it can. Try again in a moment.")
+    answer = _discovery(f"/apis/{group}", group)
+    if answer is None:
+        return None
+    preferred = answer.get("preferredVersion") if isinstance(answer, dict) else None
+    listed = answer.get("versions") if isinstance(answer, dict) else None
+    if not isinstance(preferred, dict) or not isinstance(listed, (list, type(None))):
+        raise unclear
+    order = [preferred] + [row for row in listed or [] if row != preferred]
+    for row in order:
+        version = row.get("groupVersion") if isinstance(row, dict) else None
+        if not (isinstance(version, str) and version.startswith(group + "/") and version.count("/") == 1
+                and version != group + "/"):
+            raise unclear
+        served = _discovery(f"/apis/{version}")
+        names = served.get("resources") if isinstance(served, dict) else None
+        if not isinstance(names, list) or not all(isinstance(r, dict) for r in names):
+            raise unclear
+        if any(r.get("name") == resource for r in names):
+            return f"/apis/{version}/{resource}"
+    return None
+
+
+def _unread_message(path, error):
+    return (f"Homestead could not read {path} from Kubernetes ({str(error)[:120]}), so it cannot tell "
+            "which images are still needed, and no image is cleaned up until it can. Try again in a moment.")
 
 
 def _rollback_note(meta):
@@ -246,6 +410,46 @@ def _scaled_to_zero(spec):
     if replicas is None:
         return False
     return not (isinstance(replicas, int) and not isinstance(replicas, bool) and replicas > 0)
+
+
+def _count(value):
+    """A count from a status, or None when it is not a whole number."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _waiting(kind, obj):
+    """Why a workload's template images are kept when no pod may name them:
+    "stopped" or "scheduled", or None when its pods name them (its status
+    shows every pod it wants is there) or a Job has finished for good.
+    A status that is missing, old or unclear proves nothing, so it keeps."""
+    meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
+    status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+    if kind == "CronJob":
+        return "scheduled"
+    if kind == "Job":
+        conditions = status.get("conditions")
+        if isinstance(conditions, list) and any(
+                isinstance(c, dict) and c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
+                for c in conditions):
+            return None       # finished: it makes no more pods
+        if spec.get("suspend") is True:
+            return "stopped"
+        active = _count(status.get("active"))
+        return None if active and active > 0 else "scheduled"     # between retries, or not started
+    generation, observed = _count(meta.get("generation")), _count(status.get("observedGeneration"))
+    if generation is not None and (observed is None or observed < generation):
+        return "stopped"      # the status is from before the last change
+    if kind == "DaemonSet":
+        wanted, updated = _count(status.get("desiredNumberScheduled")), _count(status.get("updatedNumberScheduled"))
+    else:
+        if _scaled_to_zero(spec):
+            return "stopped"
+        wanted = _count(spec.get("replicas"))
+        wanted = 1 if spec.get("replicas") is None else wanted
+        updated = _count(status.get("updatedReplicas"))
+    if wanted and wanted > 0 and updated is not None and updated >= wanted:
+        return None
+    return "stopped"
 
 
 def _dig(obj, keys):

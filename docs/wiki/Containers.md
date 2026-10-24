@@ -491,15 +491,22 @@ some. Two ways clear them from every host at once:
 
 Neither ever removes a running image, a stopped app's or scheduled job's image,
 a stopped VM's container disk (a VM pool's or replica set's at zero too),
-a Roll back copy, or Harvester's and Kubernetes' own images. An image removed
-is pulled again if something needs it later.
+the image of a job or app waiting for its pods (a suspended or retrying Job,
+a DaemonSet on no host, a Deployment that cannot start its pods), the container
+disks a Harvester VM template or a VM snapshot boots from, an image a CDI import
+pulls through the host (`pullMethod: node`), a Roll back copy, or Harvester's
+and Kubernetes' own images. An image removed is pulled again if something needs
+it later.
 
 If a record that says which images are in use can't be read - a Roll back note
 or a template that is malformed, or a VM pool list Homestead may not read -
 every image is kept and tagged *unreadable* with the app it belongs to, and
-nothing is cleaned up until it is fixed. Reading VM pools and replica sets
-needs read-only `get` and `list` on `virtualmachinepools` and
-`virtualmachineinstancereplicasets`; Homestead adds them to its own role when
+nothing is cleaned up until it is fixed. An image's unused days keep counting
+from when it was first seen unused; they don't start again once the record is
+fixed. Reading VM pools, replica sets, VM templates, VM snapshots and CDI's
+scheduled imports needs read-only `get` and `list` on `virtualmachinepools`,
+`virtualmachineinstancereplicasets`, `virtualmachinetemplateversions`,
+`virtualmachinesnapshotcontents` and `dataimportcrons`; Homestead adds them to its own role when
 it starts, or apply the release's `deploy/rbac.yaml` (see
 [updating](Installing-Homestead#updating-homestead)).
 

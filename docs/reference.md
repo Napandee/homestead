@@ -1110,16 +1110,26 @@ TAG=2.8.332-dev.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 
 Image Cache groups kubelet aliases by digest and labels images retained by a
 running pod, a container scaled to zero or a scheduled job (which start from
-it), a stopped VM or a VM pool or VM replica set scaled to zero (their
-container disks), or the immediate managed-update rollback. A record that says
-which images are in use but cannot be read - a malformed rollback note or
-template, or a VM pool or replica-set list the role may not read - keeps every
+it), a workload waiting for its pods (a suspended Job or one between retries,
+a DaemonSet that matches no node, a Deployment or StatefulSet whose status does
+not show every pod it wants), a stopped VM or a VM pool or VM replica set
+scaled to zero (their container disks), a Harvester VM template version or a
+KubeVirt VM snapshot (the container disks they boot from), a CDI DataVolume or
+DataImportCron that pulls a registry image through the node
+(`pullMethod: node`), or the immediate managed-update rollback. A record that
+says which images are in use but cannot be read - a malformed rollback note or
+template, or one of the optional lists the role may not read - keeps every
 image, labelled *unreadable* with the record it names, until it is fixed. That
-read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`
-and `kubevirt.io` `virtualmachineinstancereplicasets`. The Volumes page's
-check of what uses a claim reads the same way: read-only `get` and `list` on
-`replicationcontrollers`, beside the Jobs, Pods and ReplicaSets Homestead
-already lists. Admins can remove an
+read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`,
+`kubevirt.io` `virtualmachineinstancereplicasets`, `harvesterhci.io`
+`virtualmachinetemplateversions`, `snapshot.kubevirt.io`
+`virtualmachinesnapshotcontents` and `cdi.kubevirt.io` `dataimportcrons`. These
+optional groups are read at the version API discovery prefers; a group counts as
+not installed only when discovery says so. While a record is unreadable,
+automatic clean-up keeps each image's "unused since" date rather than starting
+it again. The Volumes page's check of what uses a claim reads the same way:
+read-only `get` and `list` on `replicationcontrollers`, beside the Jobs, Pods
+and ReplicaSets Homestead already lists. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
 starting one short-lived cleanup pod per node; active, stopped, scheduled,
