@@ -1707,6 +1707,7 @@ ssh_pwauth: true
           { name: "alerts", label: "Alerts and notifications", state: "ok", last_ok: now - 8, error: "", every: 20 },
           { name: "history", label: "Long-term stats", state: "ok", last_ok: now - 140, error: "", every: 300 },
           { name: "hardware", label: "Hardware detection", state: "ok", last_ok: now - 20, error: "", every: 30 },
+          { name: "expiry", label: "Certificate expiry check", state: "ok", last_ok: now - 1260, error: "", every: 3600 },
           { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach branch: timed out", every: 10 }],
         probe: { installed: true, desired: 3, ready: 3, reporting: 3, smart: 2, state: "current", detail: "homestead-nodeprobe is running this release's scripts" },
         samba: { installed: true, enabled: true, desired: 1, ready: 1, name: "homestead-smb",
@@ -2264,6 +2265,47 @@ ssh_pwauth: true
     "/api/longhorn/v2/cleanup/recheck": () => ({ok:true}),
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    // Consistent snapshots (fs-freeze.js): off, with a VM disk, a shared volume
+    // and a V2 volume Longhorn cannot freeze. window.__demoFsFreezeOldKernel
+    // adds a host on kernel 5.15; window.__demoFsFreezeUnsupported is Longhorn 1.6.
+    "/api/longhorn/fs-freeze": (url, init) => {
+      if (init?.method === "POST") {
+        demoState.fsFreezeOn = !!JSON.parse(init.body || "{}").enabled;
+        demoState.fsFreezeChanged = Math.floor(Date.now() / 1000);
+        return { ok: true, enabled: demoState.fsFreezeOn, detail: demoState.fsFreezeOn
+          ? "Longhorn now freezes each volume's filesystem for its snapshots and backups"
+          : "Longhorn no longer freezes filesystems for snapshots, except on volumes set to always" };
+      }
+      if (window.__demoFsFreezeUnsupported) return { supported: false, version: "v1.6.2", volumes: [],
+        why: "Longhorn v1.6.2 cannot freeze filesystems for snapshots: Longhorn 1.7 added it." };
+      const on = !!demoState.fsFreezeOn, modes = demoState.fsFreezeModes || (demoState.fsFreezeModes = { "pvc-demo-scratch": "disabled" });
+      const syncWhy = { Block: "A block volume, such as a VM disk: there is no filesystem to freeze, so Longhorn syncs it instead",
+        rwx: "A shared (RWX) volume: Longhorn's share manager holds its filesystem, so Longhorn syncs it instead" };
+      const volumes = [
+        ["pvc-demo-paperless", "lab/paperless-data", "v1", "rwo", "Filesystem"], ["pvc-demo-nextcloud", "lab/nextcloud-data", "v1", "rwo", "Filesystem"],
+        ["pvc-demo-hass", "lab/homeassistant-config", "v1", "rwo", "Filesystem"], ["pvc-demo-frigate", "lab/frigate-config", "v1", "rwo", "Filesystem"],
+        ["pvc-demo-media", "lab/jellyfin-media", "v1", "rwx", "Filesystem"], ["pvc-demo-vm-disk", "lab/windows-disk-0", "v1", "rwo", "Block"],
+        ["pvc-demo-fast", "lab/arr-dashboard-data", "v2", "rwo", "Filesystem"], ["pvc-demo-scratch", "lab/scratch", "v1", "rwo", "Filesystem"],
+      ].map(([name, claim, engine, access, volumeMode]) => {
+        const mode = modes[name] || "ignored", effective = mode === "enabled" || (mode === "ignored" && on);
+        const whenOn = engine === "v2" ? "no" : volumeMode === "Block" || access === "rwx" ? "sync" : "yes";
+        const whyOn = engine === "v2" ? "A V2 volume: Longhorn never freezes these" : syncWhy[volumeMode] || syncWhy[access] || "";
+        const shown = effective || engine === "v2";
+        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, freezes: shown ? whenOn : "no",
+          changed: mode === "ignored" ? null : { who: "admin", at: Math.floor(Date.now() / 1000) - 3 * 86400 },
+          why: shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
+      });
+      return { supported: true, version: "v1.13.0", enabled: on, value: JSON.stringify({ v1: String(on) }), unknown_value: false,
+        from_chart: false, changed: demoState.fsFreezeChanged ? { who: "admin", at: demoState.fsFreezeChanged } : null,
+        old_kernels: window.__demoFsFreezeOldKernel ? [{ host: "harvester-node3", kernel: "5.15.0-91-generic" }] : [],
+        volumes, counts: { total: volumes.length, freezing: volumes.filter(v => v.freezes === "yes").length } };
+    },
+    "/api/longhorn/fs-freeze/volume": (url, init) => {
+      const { volume, mode } = JSON.parse(init?.body || "{}");
+      (demoState.fsFreezeModes = demoState.fsFreezeModes || { "pvc-demo-scratch": "disabled" })[volume] = mode;
+      const said = { ignored: "follows the cluster setting", enabled: "is always frozen for snapshots", disabled: "is never frozen for snapshots" }[mode];
+      return { ok: true, volume, mode, detail: `${volume} ${said}` };
+    },
     "/api/workloads/rebalance/review": (url, init) => {
       const picks = JSON.parse(init?.body || "{}").picks || [];
       const rows = picks.map((p, i) => ({ id: p.id, from: "harvester-node1", to: p.to, cpu_m: 250, mem_mb: 512, reserves: true,
@@ -3127,6 +3169,38 @@ ssh_pwauth: true
     namespaces:["lab","default","kube-system"],policies:[{namespace:firewallConfig.namespace,name:firewallConfig.name,
       uid:"demo-firewall",resource_version:"1",managed:true,config:firewallConfig,spec:firewallSpec(firewallConfig)}]};
   responses["/api/firewall"] = () => firewall;
+  // Certificates and keys that expire (homestead_expiry). Dates are relative to now.
+  const expiryNow = () => Date.now() / 1000;
+  const expiryState = (days, renews, overdue) => days <= 0 ? "expired" : renews ? "renews" : days <= 7 ? "critical"
+    : days <= 21 || overdue ? "warn" : "ok";
+  const expiryRow = (kind, namespace, name, days, { renews = false, overdue = false, note = "" } = {}) => ({ kind, namespace, name,
+    not_after: Math.round(expiryNow() + days * 86400), days_left: Math.trunc(days), state: expiryState(days, renews, overdue),
+    note, renews, overdue });
+  responses["/api/expiry"] = () => {
+    const items = [
+      expiryRow("tls-secret", "media", "photos-tls", 5.4),
+      expiryRow("certificate", "apps", "wiki-example-com", 48.2, { overdue: true, note: "Renewal is overdue: cert-manager has not renewed it" }),
+      expiryRow("tls-secret", "lab", "mqtt-broker-tls", -3.1),
+      expiryRow("tls-secret", "lab", "printer-tls", 16.6),
+      expiryRow("certificate", "lab", "homestead-example-com", 61.3, { renews: true, note: "cert-manager renews it" }),
+      expiryRow("certificate", "monitoring", "grafana-internal", 290, { renews: true, note: "cert-manager renews it" }),
+      expiryRow("api-server", "", "Kubernetes API server", 350.2, { note: "k3s and RKE2 renew it when the server restarts close to its expiry" }),
+      expiryRow("webhook-ca", "", "virt-api-validator", 4.7, { renews: true, note: "Its operator rotates it (it lives 7 days)" }),
+      expiryRow("webhook-ca", "", "cdi-api-validate", 1.3, { renews: true, note: "Its operator rotates it (it lives 2 days)" }),
+      expiryRow("webhook-ca", "", "longhorn-webhook-validator", 3632),
+      expiryRow("tls-secret", "data", "postgres-server-tls", 3412),
+      { ...expiryRow("tls-secret", "lab", "old-import", 0), not_after: null, days_left: null, state: "unknown",
+        note: "Homestead could not read the certificate in tls.crt" },
+    ];
+    const order = ["expired", "critical", "warn", "unknown", "ok", "renews"];
+    items.sort((a, b) => (order.indexOf(a.state) - order.indexOf(b.state)) || ((a.not_after ?? 1e12) - (b.not_after ?? 1e12)));
+    return { checked_at: Math.round(expiryNow() - 1260), items, counts: Object.fromEntries(order.map(s => [s, items.filter(r => r.state === s).length])),
+      errors: {}, partial: false, stale: false, max_secrets: 2000, warn_days: 21, critical_days: 7 };
+  };
+  responses["/api/expiry/keys"] = () => ({ warn_days: 21, critical_days: 7, items: [
+    ...demoKeys.keys.map(k => ({ ...expiryRow("api-key", "", k.name, (k.expires - expiryNow()) / 86400), owner: k.owner })),
+    { ...expiryRow("fleet-key", "", "Linked-cluster key", 0), not_after: null, days_left: null, state: "no-expiry",
+      note: "It has no expiry; it changes when a cluster is unlinked" }] });
   responses["/api/firewall/preview"] = (url, init) => {
     const cfg = JSON.parse(init?.body || "{}");
     return {review:"demo-reviewed-policy",pods:[`${cfg.target.name}-demo`],overlapping:[],update:!!cfg.uid,
