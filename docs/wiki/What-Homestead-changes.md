@@ -50,7 +50,10 @@ once it starts. On the host itself it installs open-iscsi and an NFS client
 for Longhorn, raises the inotify limits (`/etc/sysctl.d/90-homestead.conf`),
 caps the systemd journal and keeps multipathd off Longhorn's disks. Where the
 system disk has free space in LVM, it can give Longhorn a volume of its own,
-mounted at `/var/lib/longhorn` through `/etc/fstab`. The one-line
+mounted at `/mnt/longhorn-os` through `/etc/fstab` for new clusters, while
+runtime files remain on the OS at `/var/lib/longhorn`. Joining hosts match
+the existing cluster's path, and reruns preserve existing chart settings
+and data. The one-line
 `install.sh` can also install the host console.
 
 ## What Homestead does on its own
@@ -302,7 +305,7 @@ stays too.
 | The `homestead.io/*` annotations on apps, and the other taints and labels on hosts | apps, hosts | nothing: they are harmless. The annotations are the only record of how many copies a stopped app had |
 | Settings Homestead changed: Longhorn's copies count and offline rebuilding, kube-vip's values, Longhorn disks the root-disk guard turned off, the default flag it took off extra storage classes | Longhorn, kube-vip, storage classes | they are your cluster's settings now; change them only on purpose |
 | On each host: the journal cap (`/etc/systemd/journald.conf.d/90-homestead.conf`), the inotify limits (`/etc/sysctl.d/90-homestead.conf`), the multipath setting | the host | Longhorn needs multipathd kept off its disks, or volumes fail to mount; apps may need the inotify limits |
-| On each host: Longhorn's own volume (`/var/lib/longhorn`, label `hs-longhorn`) and its `/etc/fstab` line, and the fstab lines of disks Homestead set up for Longhorn | the host | Longhorn's data: without the mount, Longhorn starts on an empty folder |
+| On each host: Longhorn's own volume (`/mnt/longhorn-os` on new installs, `/var/lib/longhorn` on older ones, label `hs-longhorn`) and its `/etc/fstab` line, and the fstab lines of disks Homestead set up for Longhorn | the host | Longhorn's data: without the mount, Longhorn starts on an empty folder |
 | On each host: `/etc/modules-load.d/99-homestead-longhorn-v2.conf` and `/etc/sysctl.d/99-homestead-longhorn-v2.conf` | the host | Longhorn V2 volumes after the next reboot |
 | On each host: the cloud-init files `/etc/cloud/cloud.cfg.d/99-homestead-bridge.cfg` and `99-homestead-bond.cfg`, and the netplan configuration Homestead wrote for a bridge or bond | the host | the host's network: without them cloud-init writes its own netplan again at boot, and the host or its VMs can lose the LAN |
 | On each host: `/usr/local/sbin/homestead-vfio`, `homestead-vfio.service`, `/etc/homestead/vfio.list`, and the IOMMU options in `/etc/default/grub` | the host | PCI and GPU passthrough to VMs after the next boot |

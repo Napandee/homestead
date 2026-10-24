@@ -97,6 +97,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rehearse runtime maintenance on disposable loop images
+        run: |
+          for boundary in complete copying cutover relocated retiring unlink changed-source changed-archive mid-copy fstab-written unmounted retained-mounted runtime-bound copy-capacity; do
+            sudo unshare --mount --propagation private python3 tests/runtime_move_rehearsal.py "$boundary"
+          done
       - name: Rehearse SSH trust and interrupted copies in an isolated fixture
         run: |
           docker build -f tests/integration/source-copy.Dockerfile -t homestead-source-copy-fixture:ci .

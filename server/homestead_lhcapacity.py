@@ -19,6 +19,7 @@ import urllib.error
 import homestead_disk_v2 as DISK_V2
 import homestead_operations as OPS
 import homestead_routes
+import homestead_kube as KUBE
 
 kget = ksend = None
 v2_status = lambda: {}
@@ -190,8 +191,8 @@ def save(cfg, *, allow_v2_enable=False):
         if not cfg["v2"]:
             # Off with V2 data on the cluster would stop every V2 volume and
             # disk: refused here, whatever Longhorn's own checks say.
-            volumes = kget(f"{LH}/volumes").get("items", [])
-            nodes = kget(f"{LH}/nodes").get("items", [])
+            volumes = KUBE.items(f"{LH}/volumes", read=kget)
+            nodes = KUBE.items(f"{LH}/nodes", read=kget)
             v2_volumes = [v["metadata"]["name"] for v in volumes if (v.get("spec") or {}).get("dataEngine") == "v2"]
             v2_disks = [f"{n['metadata']['name']}:{d.get('path')}" for n in nodes
                         for d in ((n.get("spec") or {}).get("disks") or {}).values() if d.get("diskType") == "block"]

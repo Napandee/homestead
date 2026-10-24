@@ -53,9 +53,11 @@ Homestead is tested with **Ubuntu 26.04.1 LTS (minimal installation)**.
 - **4 GB of memory and 2 cores** for each server at least - 8 GB is
   comfortable with Longhorn and a few apps. Workers can be smaller.
 - **A fixed address for each** - static, or a DHCP reservation on your router.
-- **Disk for your data.** Longhorn stores volumes under `/var/lib/longhorn` on
-  each machine's system disk to begin with; give it bigger disks later from
-  Homestead.
+- **Disk for your data.** New clusters store replicas under `/mnt/longhorn-os`,
+  using a separate LVM volume when space is available. Runtime files stay on
+  the OS at `/var/lib/longhorn`. Joining hosts must match their cluster's
+  existing default storage path; the installer asks for it. Existing storage
+  is preserved.
 
 Open these between the machines if a firewall runs on them:
 
@@ -176,13 +178,13 @@ sudo cat /var/lib/rancher/rke2/server/node-token
 Or, with no questions, as a **worker**:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:9345 <token> --rke2
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:9345 <token> --rke2 --longhorn-data-path /mnt/longhorn-os
 ```
 
 As another **server**:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:9345 <token> --rke2
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:9345 <token> --rke2 --longhorn-data-path /mnt/longhorn-os
 ```
 
 Use `192.0.2.10` as the first machine's address, and your token. **Cluster →

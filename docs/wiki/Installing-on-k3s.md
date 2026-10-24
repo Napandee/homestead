@@ -43,7 +43,8 @@ Homestead is tested with **Ubuntu 26.04.1 LTS (minimal installation)**.
   access. x86-64 or 64-bit ARM.
 - **A fixed address for each** - static, or a DHCP reservation on your router.
 - **Disk for your data.** Longhorn stores volumes under
-  `/var/lib/longhorn` on each machine's system disk to begin with; give it
+  `/mnt/longhorn-os` in new clusters; runtime files stay on the OS at
+  `/var/lib/longhorn`. Give replica storage
   more from Homestead later. Plan the disks before installing the OS - see
   [Disks](#disks).
 - **Virtual machines are optional.** k3s runs containers. To run VMs too, the
@@ -103,7 +104,7 @@ It then:
 1. installs what Longhorn needs on the host (`open-iscsi` and an NFS client),
    keeps `multipathd` off the devices Longhorn makes (below), caps the systemd
    journal at 1 GB, and - where the system is on LVM with room - mounts a
-   logical volume of Longhorn's own at `/var/lib/longhorn`;
+   logical volume for replica data at `/mnt/longhorn-os`, keeping runtime on the OS;
 2. installs k3s with an embedded etcd, so more servers can join later;
 3. asks k3s to install Longhorn (one copy of each volume, while there is one
    machine) and Homestead's own manifest;
@@ -140,7 +141,8 @@ Options go after `server`:
 | `--kubevirt-version v1.6.0`, `--cdi-version v1.62.0` | pin KubeVirt and CDI instead of their current releases |
 | `--homestead-version 2.8.118` | pins Homestead instead of the newest release |
 | `--node-ip 192.0.2.10` | the address k3s registers this machine by, when it has more than one |
-| `--longhorn-volume 200` | the size in GB of Longhorn's own LVM volume at `/var/lib/longhorn`; `auto` (the default) takes the volume group's free space less a tenth kept for the system, `none` keeps Longhorn on the root filesystem. Works for `agent` and `join` too |
+| `--longhorn-volume 200` | size in GB of the replica LVM volume at `/mnt/longhorn-os` for new clusters; `auto` takes free space less a tenth kept for the system, `none` uses a folder on the root filesystem |
+| `--longhorn-data-path /mnt/longhorn-os` | required for a fresh `agent` or `join`: match the cluster's `default-data-path` setting. Older clusters commonly use `/var/lib/longhorn`. This does not change the cluster setting |
 | `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Hardware and storage → Add-ons** |
 
 The script is safe to run again: each step finds what the last run left.
@@ -160,6 +162,13 @@ can reach the cluster before changing anything, and joins. Install the same
 k3s version as the existing servers: the summary uses the cluster's version
 where the cluster reports it, and otherwise lets you select it.
 
+The storage folder must match the existing cluster. In Homestead, open
+**Cluster → Add a host → Storage setting for the installer** and copy the value
+into the installer's **Match the Cluster's Storage** screen. This is an existing
+setting, not a choice between storage types. If Homestead cannot read it, the
+installer shows a command to run on an existing server. Do not guess: a wrong
+folder could put volume data on the OS filesystem instead of the reserved space.
+
 Or, with no questions, each joins with the first machine's address and its
 token. The token is on the first machine:
 
@@ -170,13 +179,13 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 As a **worker** (runs apps, not the control plane):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:6443 <token>
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:6443 <token> --longhorn-data-path /mnt/longhorn-os
 ```
 
 As another **server** (control plane and etcd as well):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:6443 <token>
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:6443 <token> --longhorn-data-path /mnt/longhorn-os
 ```
 
 Use `192.0.2.10` as the first machine's address, and your token. **Cluster →
@@ -380,16 +389,19 @@ every k3s or RKE2 node that joined before (never lowering a higher value).
 
 ### Disks
 
-Longhorn starts on each machine's system disk, in `/var/lib/longhorn`, and
-keeps 30% of that filesystem free for the system. Plan the rest before
-installing the OS:
+New clusters keep Longhorn runtime files on the OS at `/var/lib/longhorn`
+and replica data at `/mnt/longhorn-os`. The installer uses a separate LVM
+volume for replica data when space is available. Existing installations are
+preserved. When joining, select the existing cluster's default storage path;
+unattended installs use `HS_LONGHORN_DATA_PATH`. Custom paths need manual
+storage setup. Plan the disks before installing the OS:
 
 | The machine has | At OS install | Then in Homestead |
 |---|---|---|
 | A second drive | Install on the first; leave the second blank | **Nodes → Disks → Add to Longhorn** on it: formatted (ext4 or XFS) and mounted safely, or kept as it is when it already holds Longhorn data |
-| One drive | Choose LVM (Ubuntu Server's default) and give the root volume 64-128 GB; leave the rest of the volume group unallocated | Nothing: the installer mounts a volume of Longhorn's own at `/var/lib/longhorn`. Keep some of the group free for V2 and add it later with **Use free space** |
+| One drive | Choose LVM (Ubuntu Server's default) and give the root volume 64-128 GB; leave the rest of the volume group unallocated | The installer mounts replica storage at `/mnt/longhorn-os`. Keep some space free for V2 and add it later with **Use free space** |
 | One drive, plain partitions | Leave space unpartitioned after the last partition | **Use free space** makes a partition there, live, for V1 or V2 |
-| One drive, one root partition filling it | Nothing more to do | Longhorn stays in `/var/lib/longhorn` on the root filesystem, kept from filling it (see [Room for the system](Storage#room-for-the-system)) |
+| One drive, one root partition filling it | Nothing more to do | Replica data uses `/mnt/longhorn-os` on the root filesystem; it is a separate folder, not a separate capacity boundary (see [Room for the system](Storage#room-for-the-system)) |
 
 - **Why a filesystem of its own.** Longhorn filling a separate volume cannot
   fill the system's filesystem. **Use free space** keeps a tenth of the

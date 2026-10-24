@@ -263,6 +263,67 @@ test('a stopped host power job marks the step it stopped at, and says why once',
   assert.equal(html.split('Longhorn still prevents eviction').length - 1, 1, 'the reason appears once');
 });
 
+test('single-host disconnect pauses the display without inventing power progress', () => {
+  const t = setup(review);
+  const op = {id:'power-1',status:'running',progress:8,message:'Waiting for apps; power has not been sent',
+    power:{phase:'holding',action:'reboot',direct:true,holds:true,planned_outage:true}};
+  const html = t.c.nodePowerProgressMarkup(op, true);
+  assert.match(html, /Waiting for Homestead to reconnect/);
+  assert.match(html, /Last confirmed progress/);
+  assert.match(html, /before the restart was requested/);
+  assert.doesNotMatch(html, /<li class="run">|8%|In progress|host helper was created/);
+  assert.equal(op.power.phase, 'holding');
+  const helper = t.c.nodePowerProgressMarkup({...op,power:{...op.power,handoff:true,phase:'observing'}},true);
+  assert.match(helper, /host helper was created/);
+  assert.doesNotMatch(helper, /<li class="run">|8%/);
+  const prolonged = t.c.nodePowerProgressMarkup(op,true,16*60*1000);
+  assert.match(prolonged, /Still waiting for Homestead|disconnected for 16 min/);
+  assert.match(prolonged, /Check the host console or network/);
+});
+
+test('shutdown and unexpected loss have distinct offline guidance', () => {
+  const t = setup(review);
+  const op = {status:'running',power:{action:'poweroff',phase:'observing',planned_outage:true}};
+  assert.match(t.c.nodePowerProgressMarkup(op,true), /turn the host on manually/);
+  const unknown = t.c.nodePowerProgressMarkup({status:'running',power:{}},true);
+  assert.match(unknown, /current state cannot be confirmed/);
+  assert.doesNotMatch(unknown, /Last confirmed progress|only host|turn the host on/);
+});
+
+test('power follow reconnects to the same job and displays its confirmed result', async () => {
+  for (const status of ['succeeded','failed','missing']) {
+    const t=setup(review), seen=[], paths=[];
+    t.fields['#pwProgress']={set innerHTML(html){seen.push(html);}};
+    let reads=0;
+    const initial={id:'power-1',status:'running',progress:8,message:'Waiting for apps',
+      power:{phase:'holding',planned_outage:true,action:'reboot',holds:true,direct:true}};
+    t.c.api=async (path,options)=>{
+      paths.push(path); assert.equal(options.method,undefined);
+      if(++reads===1) throw new Error('offline');
+      return status==='missing'?[]:[{...initial,status,progress:100,message:status==='succeeded'?'Host returned':'Power was not sent'}];
+    };
+    t.c.setTimeout=resolve=>resolve();
+    await t.c.window.nodePowerFollow('power-1','',initial);
+    assert.match(seen[0],/Waiting for Homestead to reconnect/);
+    assert.match(seen.at(-1),status==='succeeded'?/Finished/:status==='failed'?/Stopped/:/Job not found/);
+    assert.doesNotMatch(seen.at(-1),/Waiting for Homestead to reconnect/);
+    assert.deepEqual(paths,['/api/operations','/api/operations']);
+  }
+});
+
+test('power follow renders loss before its first status and stops on access errors', async () => {
+  const t=setup(review), seen=[];
+  t.fields['#pwProgress']={set innerHTML(html){seen.push(html);}};
+  let reads=0;
+  t.c.api=async ()=>{throw Object.assign(new Error('unavailable'), ++reads===1?{}:{status:403});};
+  t.c.setTimeout=resolve=>resolve();
+  await t.c.window.nodePowerFollow('power-1');
+  assert.match(seen[0],/current state cannot be confirmed/);
+  assert.doesNotMatch(seen[0],/Last confirmed progress|Starting/);
+  assert.match(seen[1],/Sign in with access to Jobs/);
+  assert.equal(reads,2);
+});
+
 test('each app and VM may move or wait for the host, and the choice is sent', async () => {
   const hold = [
     {id:'Deployment/lab/plex',kind:'Deployment',ns:'lab',name:'plex',here:1,hosts:['host2'],options:['move','wait'],default:'move',why:''},
