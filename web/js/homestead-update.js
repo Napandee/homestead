@@ -155,7 +155,7 @@ function clusterUpdateRow({ name, self = false, meta, state, pick = "", picked =
   const box = pick ? `<input type="checkbox" ${picked ? "checked" : ""} ${pickable ? "" : "disabled"} onchange="${pick}"
       aria-label="Update ${esc(name)}">` : "";
   return `<label class="hs-cluster${pick ? "" : " single"}${pickable ? "" : " fixed"}">${box}
-    <span class="hs-cluster-main"><span class="hs-cluster-name"><b>${esc(name)}</b>${self ? '<span class="tag">This cluster</span>' : ""}</span>
+    <span class="hs-cluster-main"><span class="hs-cluster-name"><b>${esc(name)}</b>${self ? UI.chip("This cluster", "neutral") : ""}</span>
       <span class="dim xs mono hs-cluster-meta">${meta}</span>${detail}</span>
     <span class="hs-cluster-state">${state}</span></label>`;
 }
@@ -166,10 +166,10 @@ function fleetUpdateRows() {
     const self = row?.parts?.find(w => w.homestead === "self");
     const release = (self?.images || []).find(i => i.available && i.candidate_tag)?.candidate_tag || "";
     const waiting = (row?.parts || []).filter(w => w.available);
-    const state = !row ? '<span class="pill neutral">checking…</span>'
-      : row.error ? `<span class="pill crit" data-tip="${esc(row.error)}">not answering</span>`
-      : waiting.length ? `<span class="pill warn">${esc(release ? `${m.version || "?"} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`)}</span>`
-      : '<span class="pill ok">up to date</span>';
+    const state = !row ? UI.chip("checking…", "neutral")
+      : row.error ? UI.chip("not answering", "bad", { tip: row.error })
+      : waiting.length ? UI.chip(release ? `${m.version || "?"} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`, "warn")
+      : UI.chip("up to date", "ok");
     return clusterUpdateRow({ name: m.name, state, pick: `fleetUpdatePick(${jsq(m.id)}, this.checked)`,
       picked: FLEET_UPDATES.picked.has(m.id), pickable: waiting.length > 0,
       meta: `${m.version ? `v${esc(m.version)}` : "version unknown"}${row?.channel ? ` · ${row.channel === "dev" ? "Dev" : "Prod"}` : ""}${m.url ? ` · ${esc(m.url)}` : ""}` });
@@ -213,8 +213,8 @@ function homesteadUpdateBody(inCard = false) {
   const me = (window.FLEET?.view?.members || []).find(m => m.self);
   const channel = (STATE.data.appSettings?.updates?.channel || report.channel || "prod") === "dev" ? "Dev" : "Prod";
   const localState = waiting.length
-    ? `<span class="pill warn">${esc(release ? `${HOMESTEAD_VERSION} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`)}</span>`
-    : failed.length ? '<span class="pill crit">check failed</span>' : '<span class="pill ok">up to date</span>';
+    ? UI.chip(release ? `${HOMESTEAD_VERSION} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`, "warn")
+    : failed.length ? UI.chip("check failed", "bad") : UI.chip("up to date", "ok");
   const changing = parts.filter(w => w.available || (w.images || []).some(i => i.error));
   const detail = changing.length > (release ? 1 : 0) ? `<span class="hs-cluster-parts">${changing.map(w => {
     const failure = (w.images || []).find(i => i.error)?.error;

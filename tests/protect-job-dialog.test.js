@@ -20,9 +20,10 @@ function openJobDialog(lh = LH) {
   const el = id => (els[id] ||= { value: "", hidden: false, textContent: "" });
   const ctx = { URL, document: { addEventListener() {} }, STATE: { data: { lh } },
     esc: s => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
-    UI: { actions: s => s }, $: sel => el(sel), closeModal() {} };
+    $: sel => el(sel), closeModal() {} };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/cron.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-protect.js", "utf8"), ctx);
   let html = "";

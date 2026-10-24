@@ -28,7 +28,7 @@ function userRow(u, admin, count) {
   const actions = admin ? actionBar([
     { label: "Sign-in history", run: `userSignins(${jsq(u.name)})` },
     !me && count > 1 && { label: "Remove", run: `userRemove(${jsq(u.name)})`, danger: true }], { shown: 0, label: `More for ${u.name}` }) : "";
-  return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ' <span class="tag ok">you</span>' : ""}</td>
+  return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ` ${UI.chip("you", "ok")}` : ""}</td>
     <td data-label="Role">${role}</td><td data-label="Last sign-in" class="dim xs mono">${esc(u.last_login || "never")}</td>${admin ? `<td>${actions}</td>` : ""}</tr>`;
 }
 
@@ -148,7 +148,7 @@ async function viewSettings() {
   const hardwareRows = features.map(f => {
     const hosts = nodes.filter(n => n.hardware?.[f.id]).map(n => n.name.replace("harvester-", ""));
     return `<div class="settings-list-row"><div><b>${esc(f.name)}</b><div class="dim xs mono">${esc(f.host_path)} → ${esc(f.container_path || f.host_path)}</div></div>
-      <div class="settings-list-meta">${hosts.length ? `<span class="tag hw">${hosts.length} host${hosts.length === 1 ? "" : "s"}</span><span class="dim xs">${esc(hosts.join(", "))}</span>` : '<span class="pill med">no host detected</span>'}</div></div>`;
+      <div class="settings-list-meta">${hosts.length ? `${UI.chip(`${hosts.length} host${hosts.length === 1 ? "" : "s"}`, "hw")}<span class="dim xs">${esc(hosts.join(", "))}</span>` : UI.chip("no host detected", "warn")}</div></div>`;
   }).join("");
   const userRows = users.map(u => userRow(u, can("admin"), users.length)).join("");
 
@@ -172,7 +172,7 @@ async function viewSettings() {
           ${settingRow("Sign out", "This browser", '<button class="btn sm" onclick="doLogout()">Sign out</button>')}
         </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div>`, {tab:`you`})}
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Health thresholds`, `When bars and host cards turn amber and red, for everyone ${tip("Warning turns a bar amber, critical red. A host shows its worst result across CPU, memory, disk and temperature.")}`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Health thresholds`, `When bars and host cards turn amber and red, for everyone ${tip("Warning turns a bar amber, critical red. A host shows its worst result across CPU, memory, disk and temperature.")}`, `${can("admin") ? "" : UI.chip("admin managed", "neutral")}`)}
         <div class="threshold-grid">
           ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained host CPU pressure", thresholds.cpu)}
           ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated host RAM pressure", thresholds.memory)}
@@ -182,7 +182,7 @@ async function viewSettings() {
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Drive health`, `SMART warnings shown on host cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Drive health`, `SMART warnings shown on host cards and in cluster health`, `${can("admin") ? "" : UI.chip("admin managed", "neutral")}`)}
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
           <div class="threshold-card counters"><div><b>Media counters</b> ${tip("NVMe reports media errors; ATA disks report reallocated, pending and uncorrectable sectors. A counter a drive doesn't report shows as unsupported, not zero.")}<div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
@@ -197,7 +197,7 @@ async function viewSettings() {
       `, {tab:`health`, save:`app`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Container updates`, `When Homestead looks for newer images, and when a reviewed rollout may start`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`Container updates`, `When Homestead looks for newer images, and when a reviewed rollout may start`, `${can("admin") ? "" : UI.chip("admin managed", "neutral")}`)}
         <div class="srows">
           ${settingRow(`Policy ${tip("Notify only blocks installs. Approval required permits a reviewed manual rollout. Maintenance window permits reviewed rollouts only during the window. Major releases are never picked on their own, and every install is reviewed.")}`, "",
             `<select id="set_update_policy" ${can("admin") ? "" : "disabled"}>
@@ -215,7 +215,7 @@ async function viewSettings() {
       `, {tab:`updates`, save:`app`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`How hosts share the work`, `One choice for the whole cluster, instead of placement set app by app`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`How hosts share the work`, `One choice for the whole cluster, instead of placement set app by app`, `${can("admin") ? "" : UI.chip("admin managed", "neutral")}`)}
         <div class="srows">
           ${settingRow(`Share the work ${tip("Hot spare taints its hosts homestead.io/standby (PreferNoSchedule): the scheduler avoids them while another host has room, and uses them when none has. No app changes, so it works for apps Flux, Argo CD or Helm apply.")}`,
             `<div class="dim xs" id="set_place_text">${placeModeText(placeMode, placement)}</div>`,
@@ -245,7 +245,7 @@ async function viewSettings() {
       `, {tab:`placement`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`When a host comes back`, `Containers start on the other hosts while one is down or drained, and stay there when it returns`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+        ${UI.moduleHeader(`When a host comes back`, `Containers start on the other hosts while one is down or drained, and stay there when it returns`, `${can("admin") ? "" : UI.chip("admin managed", "neutral")}`)}
         <div class="srows">
           ${settingRow(`Move containers back ${tip("Uses Balance hosts: only moves that bring the busiest host down enough, each restarting its container once. In the window, an app whose scheduled job (a backup, say) runs before the window closes is left where it is, since the job needs its volume on that host.")}`,
             `<div class="dim xs" id="set_rebalance_text" aria-live="polite">${rebalanceModeText(rebalanceMode, maintenance)}</div>`,
@@ -286,7 +286,7 @@ async function viewSettings() {
 
       ${UI.settingsCard(`
         ${UI.moduleHeader(`App Store catalogue`, `The feed the App Store lists apps from: any feed in the Community Applications format`, ``)}
-        ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", '<span class="pill ok">in use</span>',
+        ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", UI.chip("in use", "ok"),
           esc(STATE.data.appSettings?.catalog_url || "The public feed"), can("admin") ? actionBar([{ label: "Change", run: "catalogEdit()" }]) : "")}
       `, {tab:`connections`})}
 
@@ -405,6 +405,35 @@ window.homesteadDataTidy = async () => {
   } catch (e) { toast(e.message, "bad"); if (go) go.disabled = false; }
 };
 
+/* #731: Homestead's data has one copy and two hosts have room for another.
+   Keep two copies makes longhorn-r2 if needed and opens the move with it
+   picked; an existing longhorn-r2 that would not keep two shareable copies
+   is named, and nothing is offered. */
+function dataCopiesNote(copies) {
+  // #620: a read that failed is said, with its reason, not left blank.
+  if (copies?.state === "unknown") return `<div class="note" style="margin-top:10px">Could not read Homestead's data copies: ${esc(copies.error || "no reason given")}</div>`;
+  if (copies?.state !== "can-keep-two") return "";
+  const r2 = copies.r2 || {}, refused = r2.exists && !r2.usable, raise = copies.action === "raise";
+  const how = raise ? ` Keep two copies raises it to two copies in place, on ${esc(copies.storage_class || "its class")}: no move and no outage.`
+    : ` Keep two copies ${r2.exists ? "picks" : "makes"} longhorn-r2 (two copies on different hosts) and opens the move; Homestead stops briefly while its data is copied.`;
+  return `<div class="note" style="margin-top:10px"><b>Homestead's data has one copy; this cluster can now keep two.</b>
+    ${refused ? `${esc(r2.why)}. Pick a class that keeps two copies under Move data.`
+      : `A second copy on another host keeps it if one host fails.${can("admin") ? how : ""}`}
+    ${!refused && can("admin") ? `<div class="row" style="margin-top:6px"><button class="btn sm pri" id="rep_keep_two" onclick="replicasKeepTwo()">Keep two copies</button></div>` : ""}</div>`;
+}
+window.replicasKeepTwo = async () => {
+  const go = $("#rep_keep_two");
+  if (go) go.disabled = true;
+  try {
+    const r = await api("/api/self/data/two-copies", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!r.ok) return toast(r.message, "warn");
+    // Raised in place: nothing to move.
+    if (r.raised) { toast(r.message, "ok"); return replicasPaint(); }
+    await replicasMoveData("", r.storage_class);
+  } catch (e) { toast(e.message, "bad"); }
+  finally { if (go) go.disabled = false; }
+};
+
 async function replicasPaint() {
   let r;
   try { r = await api("/api/self/replicas"); } catch (e) { return; }
@@ -421,6 +450,7 @@ async function replicasPaint() {
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
         <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every host" : " · one host"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
+      ${dataCopiesNote(r.data_copies)}
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.
         Check their jobs before deleting anything.
@@ -428,10 +458,10 @@ async function replicasPaint() {
       <div class="dim xs" style="margin-top:4px">Prepare a destination first, then review the move. Homestead must stop while its data is copied and verified.
         Both volumes are kept. Preparation alone does not move your data.</div>` : ""}
     <table class="tbl dense stack" style="margin-top:10px"><thead><tr><th>Copy</th><th>Host</th><th>State</th></tr></thead><tbody>
-      ${r.pods.map(p => `<tr><td class="mono small">${esc(p.name)}${p.this ? ' <span class="tag">this page</span>' : ""}</td>
+      ${r.pods.map(p => `<tr><td class="mono small">${esc(p.name)}${p.this ? ` ${UI.chip("this page", "neutral")}` : ""}</td>
         <td data-label="Node">${esc(p.node || "unscheduled")}</td>
-        <td data-label="State">${p.terminating ? '<span class="pill slim neutral">stopping</span>' : p.ready ? '<span class="pill slim ok">ready</span>' : '<span class="pill slim med">starting</span>'}
-          ${p.leader ? '<span class="pill slim info" data-tip="Raises alerts and advances moves">leader</span>' : ""}</td></tr>`).join("")}</tbody></table>
+        <td data-label="State">${p.terminating ? UI.chip("stopping", "neutral", { size: "slim" }) : p.ready ? UI.chip("ready", "ok", { size: "slim" }) : UI.chip("starting", "warn", { size: "slim" })}
+          ${p.leader ? UI.chip("leader", "info", { size: "slim", tip: "Raises alerts and advances moves" }) : ""}</td></tr>`).join("")}</tbody></table>
     ${note}`;
   const host = $("#replicaCard");
   if (host) host.innerHTML = STATE.data.replicaHtml;
@@ -443,9 +473,10 @@ window.selfDataClose = () => { selfDataDialog = null; selfDataArchiveDialog = nu
 const selfDataPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const selfDataId = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), n => n.toString(16).padStart(2, "0")).join("");
 const selfDataHostOptions = (nodes, selected = "") => nodes.map(n => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""} ${n.ready ? "" : "disabled"}>${esc(n.name)}${n.ready ? "" : " · unavailable"}</option>`).join("");
-window.replicasMoveData = async (jobId = "") => {
-  // The class picked beside the button is the one the dialog starts with.
-  const picked = $("#rep_class")?.value || "";
+window.replicasMoveData = async (jobId = "", chosen = "") => {
+  // The class picked beside the button is the one the dialog starts with,
+  // unless the caller chose one (Keep two copies: longhorn-r2).
+  const picked = chosen || $("#rep_class")?.value || "";
   selfDataArchiveDialog = null;
   const request = {}; selfDataDialog = request;
   modal("Move Homestead data", '<div id="selfDataFlow" class="ui-stack"><p>Reading volumes and hosts…</p></div>', true, "operation-review");
@@ -697,7 +728,7 @@ async function namespacesPaint() {
   host.innerHTML = `<div class="tblwrap"><table class="tbl stack dense" data-sort="namespaces"><thead><tr>
       <th>Namespace</th><th>Holds</th><th data-nosort>Created</th><th></th></tr></thead><tbody>
     ${inv.namespaces.map(r => `<tr><td data-sort="${esc(r.name)}"><b class="mono">${esc(r.name)}</b>
-        ${r.name === inv.default ? '<span class="tag ok">default for new apps</span>' : ""}${r.homestead ? '<span class="tag">made here</span>' : ""}</td>
+        ${r.name === inv.default ? UI.chip("default for new apps", "ok") : ""}${r.homestead ? ` ${UI.chip("made here", "neutral")}` : ""}</td>
       <td class="small">${esc(what(r))}</td>
       <td class="dim xs">${r.created ? esc(fmtDay(r.created)) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs ns-kept">Kept: ${esc(r.protected)}</span>`
@@ -848,7 +879,7 @@ async function capacityForecastLoad() {
   if (!$("#capacityForecast")) return;
   const rows = (all.hosts || []).map(f => {
     const [tone, word] = capacityVerdict(f.verdict);
-    return `<tr><td><b class="mono">${esc(f.node)}</b> <span class="pill slim ${tone}">${esc(word)}</span></td>
+    return `<tr><td><b class="mono">${esc(f.node)}</b> ${UI.chip(word, tone, { size: "slim" })}</td>
       <td class="small">${esc(f.sentence)}</td>
       <td data-actions>${actionBar([{ label: "Details", run: `nodeIfDown(${jsq(f.node)})`, ariaLabel: `What happens if ${f.node} fails` }])}</td></tr>`;
   });
@@ -1060,20 +1091,35 @@ window.hardwareRescan = async button => {
 const HEALTH_TONE = { ok: "ok", standby: "neutral", starting: "neutral", late: "warn", failing: "bad" };
 const agoText = t => !t ? "not yet" : Date.now() / 1000 - t < 60 ? "just now" : fmtAgo(Math.round(Date.now() / 1000 - t));
 
+/* The card is read again every 15 seconds while Settings shows its section,
+   a failed read included: the next one may answer. On another section it
+   only waits, since coming back does not load the section again; leaving
+   Settings stops it, and Settings starts it again when it paints. */
+function selfHealthLater() {
+  clearTimeout(window.__selfHealthTimer);
+  window.__selfHealthTimer = setTimeout(() => {
+    if (STATE.view !== "settings") return;
+    if (settingsTab() === settingsSection("about")) selfHealthPaint(); else selfHealthLater();
+  }, 15000);
+}
+
 async function selfHealthPaint() {
   const host = $("#selfHealthCard");
   if (!host) return;
   let h;
   try { h = await api("/api/self/health"); }
-  catch (e) { host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message)); return; }
+  catch (e) {
+    host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message));
+    return selfHealthLater();
+  }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   STATE.data.sambaInstalled = !!samba.installed;
-  const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
+  const row = (label, tone, word, detail = "", action = "") => `<div class="health-row">${UI.chip(word, tone)}
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
   const problems = h.loops.filter(l => ["failing", "late"].includes(l.state)).length + (h.api.ok ? 0 : 1)
     + (probe.installed && probe.ready < probe.desired ? 1 : 0) + (samba.enabled && samba.ready < samba.desired ? 1 : 0);
-  host.innerHTML = `${UI.moduleHeader(`Homestead's health`, `What works in the background, checked every 15 seconds while this is open`, `<span class="pill ${problems ? "warn" : "ok"}">${problems ? `${problems} to look at` : "all well"}</span>`)}
+  host.innerHTML = `${UI.moduleHeader(`Homestead's health`, `What works in the background, checked every 15 seconds while this is open`, UI.chip(problems ? `${problems} to look at` : "all well", problems ? "warn" : "ok"))}
     <div class="health-list">
       ${row("Kubernetes API", h.api.ok ? (h.api.ms > 2000 ? "warn" : "ok") : "bad", h.api.ok ? `${h.api.ms} ms` : "no answer",
         h.api.ok ? (h.api.ms > 2000 ? "Slow to answer: pages and actions wait on it." : "Answering promptly.") : esc(h.api.error || ""))}
@@ -1111,14 +1157,19 @@ async function selfHealthPaint() {
           : "When on, Prometheus or an uptime checker reads Homestead's own health from /metrics with an API key.",
         admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}
     </div>`;
-  clearTimeout(window.__selfHealthTimer);
-  window.__selfHealthTimer = setTimeout(() => { if (STATE.view === "settings" && settingsTab() === "about") selfHealthPaint(); }, 15000);
+  selfHealthLater();
 }
 window.selfHealthPaint = selfHealthPaint;
 
 /* /metrics (#736): takes effect at once, like the MCP switch, rather than
-   waiting for Save. Only this setting changes (#601). */
+   waiting for Save. Only this setting changes (#601). Turning it on asks
+   first, as the MCP switch does: every API key there is can then read it.
+   Turning it off only narrows who can read, so it acts at once. */
 window.metricsSet = async enabled => {
+  if (enabled && !(await ask("Every API key there is, whatever it was made for, can then read Homestead's own health from /metrics: "
+    + "counts of hosts, apps, jobs and alerts, the last backup's time and Homestead's version, never names. "
+    + "Turn it on for Prometheus or an uptime checker.",
+    { title: "Turn on metrics", ok: "Turn on metrics" }))) return;
   try {
     await settingsWrite({ metrics: { enabled } });
     STATE.data.appSettings = null;

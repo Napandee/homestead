@@ -60,6 +60,11 @@ rules:
   - apiGroups: [""]
     resources: [services, persistentvolumeclaims, configmaps, endpoints]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Read only: the Volumes page names a bare ReplicationController using a claim,
+  # so its volume does not look unused.
+  - apiGroups: [""]
+    resources: [replicationcontrollers]
+    verbs: [get, list]
   - apiGroups: ["apps"]
     resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -153,6 +158,17 @@ rules:
     verbs: [get, list]
   - apiGroups: ["pool.kubevirt.io"]
     resources: [virtualmachinepools]
+    verbs: [get, list]
+  # Read only, the same: the container disks a Harvester VM template or a VM
+  # snapshot boots from, and the images CDI imports through the node.
+  - apiGroups: ["harvesterhci.io"]
+    resources: [virtualmachinetemplateversions]
+    verbs: [get, list]
+  - apiGroups: ["snapshot.kubevirt.io"]
+    resources: [virtualmachinesnapshotcontents]
+    verbs: [get, list]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: [dataimportcrons]
     verbs: [get, list]
   # KubeVirt's one operator-owned configuration object. Homestead reads its
   # software-emulation fallback and can enable it on an explicitly requested
@@ -331,7 +347,7 @@ metadata:
     app: homestead
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: longhorn-r2
+  storageClassName: longhorn
   resources:
     requests:
       storage: 2Gi
@@ -414,7 +430,7 @@ spec:
             - name: SAMBA_GID
               value: "101"
             - name: STORAGE_CLASS
-              value: "longhorn-r2"
+              value: "longhorn"
             - name: LB_IP
               value: "192.0.2.242"
             # Published through a Cloudflare Tunnel behind Cloudflare Access?

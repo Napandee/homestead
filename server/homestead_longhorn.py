@@ -221,7 +221,7 @@ def register(ops):
 # Every moved name, for one release (#623).
 from homestead_longhorn_jobs import (  # noqa: E402,F401
     list_jobs, _cron_runs, cron_run_state, run_job, run_status, save_job, delete_job, TRIM_JOB,
-    TRIM_CRON, BACKEND, ensure_weekly_trim, _backend, trim_volume,
+    TRIM_CRON, BACKEND, _backend, trim_volume,
 )
 from homestead_longhorn_volumes import (  # noqa: E402,F401
     _volumes, volumes, groups, SOURCE_LABEL, _patch_labels, assign, bulk_assign, _job_objects,

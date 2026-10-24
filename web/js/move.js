@@ -52,9 +52,9 @@ window.moveWorkload = async (name, ns) => {
     <div class="between"><p class="muted small">Currently on <b>${esc(here || "no host")}</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>
       ${plan.recommended ? `<button class="btn pri sm" onclick="pickMove(${jsq(plan.recommended)})">Best fit · ${esc(plan.recommended.replace("harvester-", ""))}</button>` : ""}</div>
     ${(req.devices || []).length || (req.features || []).length || Object.keys(req.labels || {}).length ? `<div class="constraintbar"><b>Required</b>
-      ${(req.devices || []).map(d => `<span class="tag hw">${esc(d.label)}</span>`).join("")}
-      ${(req.features || []).filter(id => !(req.devices || []).some(d => d.id === id)).map(id => `<span class="tag hw">${esc(hardwareName(id))}</span>`).join("")}
-      ${Object.entries(req.labels || {}).map(([k,v]) => `<span class="tag hw">${esc(k)}=${esc(v)}</span>`).join("")}</div>` : '<div class="constraintbar"><span class="dim small">No host-specific hardware requirements.</span></div>'}
+      ${(req.devices || []).map(d => UI.chip(d.label, "hw")).join("")}
+      ${(req.features || []).filter(id => !(req.devices || []).some(d => d.id === id)).map(id => UI.chip(hardwareName(id), "hw")).join("")}
+      ${Object.entries(req.labels || {}).map(([k,v]) => UI.chip(`${k}=${v}`, "hw")).join("")}</div>` : '<div class="constraintbar"><span class="dim small">No host-specific hardware requirements.</span></div>'}
     ${!viable.length ? `<div class="note dependency-danger" style="margin-top:12px"><b>No failover destination.</b> No other ready, schedulable host satisfies every dependency shown above. If <span class="mono">${esc(here)}</span> stops, <b>${esc(name)}</b> will remain Pending and will not come back up until compatible hardware is available.</div>` : ""}
 
     <div class="movegrid" style="margin-top:16px">
@@ -68,9 +68,9 @@ window.moveWorkload = async (name, ns) => {
               <div><div style="font-weight:670">${esc(n.name)}</div>
                 <div class="dim xs">${n.pods_wl} of your pods · score ${n.score}</div></div>
             </div>
-            ${cur ? '<span class="pill low">current</span>'
-              : blocked ? '<span class="pill crit">blocked</span>'
-              : '<span class="pill low">review needed</span>'}
+            ${cur ? UI.chip("current", "neutral")
+              : blocked ? UI.chip("blocked", "bad")
+              : UI.chip("review needed", "neutral")}
           </div>
           <div style="margin-top:12px">
             <div class="between"><span class="dim xs">Preliminary CPU estimate</span>
@@ -82,7 +82,7 @@ window.moveWorkload = async (name, ns) => {
           </div>
           <div style="margin-top:11px">
              ${hardwareTags(Object.entries(n.hardware || {}).filter(([,v]) => v).map(([id]) => id))}
-             ${n.temp_c != null ? `<span class="tag">${n.temp_c}°C</span>` : ""}
+             ${n.temp_c != null ? UI.chip(`${n.temp_c}°C`, "neutral") : ""}
              ${blocked ? `<div class="blockreasons">${n.why.map(x => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
           </div>
         </div>`;
@@ -131,7 +131,7 @@ window.hostMoveReview = async body => {
     if (sequence !== HOST_MOVE_SEQUENCE) return;
     if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
     HOST_MOVE_REVIEW = { config, ...review, submitting: false };
-    childModal("Review move · " + config.name, `<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
+    childModal("Review move · " + config.name, `${gitopsNote(review.managed)}<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
       <div class="note warn">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
@@ -165,7 +165,7 @@ window.confirmHostMove = async () => {
 function impactRows(impact) {
   return (impact.workloads || []).map(w => `<div class="dependency-row ${w.stranded ? "stranded" : ""}">
     <div><b>${esc(w.name)}</b><div class="dim xs">${esc(w.ns)} ${hardwareTags(w.hardware || [])}</div></div>
-    <div style="text-align:right">${w.stranded ? '<span class="pill crit">will stay down</span>' : `<span class="pill ok">${w.eligible.length} destination${w.eligible.length === 1 ? "" : "s"}</span>`}
+    <div style="text-align:right">${w.stranded ? UI.chip("will stay down", "bad") : UI.chip(`${w.eligible.length} destination${w.eligible.length === 1 ? "" : "s"}`, "ok")}
       <div class="dim xs">${w.stranded ? (w.blocked || []).map(x => `${esc(x.name.replace("harvester-", ""))}: ${esc((x.why || []).join(", "))}`).join(" · ") : esc(w.eligible.map(x => x.replace("harvester-", "")).join(", "))}</div></div></div>`).join("");
 }
 /* Host actions → Apps (#375): what breaks first, then where the rest land
@@ -200,7 +200,7 @@ function hostAppsHtml(impact) {
       ${line("Memory requested", h.memory_now, h.memory_after, h.memory, gib, "GiB")}
       ${unknown ? '<div class="dim xs">Its allocatable CPU or memory is not known, so whether it has room is not either.</div>' : ""}
       ${h.unrequested ? `<div class="dim xs">${h.unrequested} of these ask for no CPU or memory, so the real total may be higher.</div>` : ""}
-      ${UI.more(`Show the ${h.apps.length} app${h.apps.length === 1 ? "" : "s"}`, `<div class="hostapps-names">${h.apps.map(a => `<span class="tag">${esc(a.split("/")[1])}</span>`).join("")}</div>`)}</div>`;
+      ${UI.more(`Show the ${h.apps.length} app${h.apps.length === 1 ? "" : "s"}`, `<div class="hostapps-names">${h.apps.map(a => UI.chip(a.split("/")[1], "neutral")).join("")}</div>`)}</div>`;
   };
   const none = hosts.filter(h => !(h.apps || []).length && (h.why || []).length);
   return `<div class="ui-stack">${strip}${down}

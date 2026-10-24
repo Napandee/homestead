@@ -1081,7 +1081,11 @@ flow_harvester() {
   manifest="$WORK_TMP/deploy.yaml"
   ref="$REF"; [ -n "$HS_RELEASE" ] && ref="v$HS_RELEASE"
   run curl -sfL --connect-timeout 10 --max-time 120 "$RAW/$ref/deploy/deploy.yaml" -o "$manifest" || fail "Could not download the Homestead manifest."
-  run sed -i -e "s/192\\.0\\.2\\.242/$vip/g" -e "s/longhorn-r2/$class/g" \
+  # The class only on its two lines, for this manifest's longhorn and an older
+  # release's longhorn-r2 (#731); the same expressions as bootstrap-k3s.sh.
+  run sed -i -e "s/192\\.0\\.2\\.242/$vip/g" \
+    -e "s/storageClassName: longhorn\(-r2\)\{0,1\}$/storageClassName: $class/" \
+    -e "s/value: \"longhorn\(-r2\)\{0,1\}\"$/value: \"$class\"/" \
     -e "s/accessModes: \\[ReadWriteMany\\]/accessModes: [ReadWriteOnce]/" "$manifest"
   # shellcheck disable=SC2086
   run $KC apply -f "$manifest" || fail "kubectl could not apply the Homestead manifest."
