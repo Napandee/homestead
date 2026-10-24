@@ -798,6 +798,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         parked = 0
     return {
         "ns": ns, "name": name, "pod_hostname": pspec.get("hostname", ""),
+        "service_links": pspec.get("enableServiceLinks") is not False,
         "replicas": replicas, "autostart": replicas > 0,
         "start_replicas": replicas or parked or 1, "containers": containers,
         "pod_volumes": reusable,

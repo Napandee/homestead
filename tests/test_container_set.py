@@ -75,6 +75,22 @@ class ContainerSetTests(unittest.TestCase):
         self.assertEqual(self.current["spec"]["template"]["spec"]["volumes"], prepared["deployment"]["spec"]["template"]["spec"]["volumes"])
         self.read.assert_not_called()
 
+    def test_service_links_can_be_turned_off_and_back_on_without_touching_an_app_that_never_set_them(self):
+        # A Service named immich gives every pod IMMICH_PORT=tcp://...; an
+        # image that reads that name itself refuses to start.
+        spec = lambda prepared: prepared["deployment"]["spec"]["template"]["spec"]
+        off = self.prepare(service_links=False)
+        self.assertIs(False, spec(off)["enableServiceLinks"])
+        self.current = off["deployment"]
+        self.assertNotIn("enableServiceLinks", spec(self.prepare(service_links=True)))
+        self.current["spec"]["template"]["spec"].pop("enableServiceLinks")
+        self.assertNotIn("enableServiceLinks", spec(self.prepare(service_links=True)), "Kubernetes' default stays unwritten")
+        self.current["spec"]["template"]["spec"]["enableServiceLinks"] = True
+        self.assertIs(True, spec(self.prepare(service_links=True))["enableServiceLinks"], "an explicit true is no change")
+        self.assertIs(True, spec(self.prepare())["enableServiceLinks"], "an edit that does not name it leaves it")
+        with self.assertRaises(ValueError):
+            self.prepare(service_links="off")
+
     def test_last_container_cannot_be_removed(self):
         with self.assertRaisesRegex(ValueError, "at least one"):
             self.prepare(remove_containers=["main", "old-helper"], containers=[])
