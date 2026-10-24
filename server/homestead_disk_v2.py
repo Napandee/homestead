@@ -18,6 +18,7 @@ from urllib.parse import quote
 import homestead_capacity_review as REVIEW
 import homestead_hostrun as HOST
 import homestead_disk_setup as SETUP
+import homestead_disk_region as REGION
 
 KIND = 'disk-v2-convert'
 LABEL = 'homestead.io/disk-v2-convert'
@@ -96,7 +97,7 @@ def _inventory(node, disk):
         raise ValueError('Choose a healthy V1 filesystem disk')
     if not status.get('diskUUID'):
         raise ValueError('Longhorn disk identity could not be verified')
-    path = spec.get('path', '')
+    path = spec.get('path', '').rstrip('/')
     if not re.fullmatch(r'/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+', path) or any(x in ('.', '..') for x in path.split('/')):
         raise ValueError('This mount path cannot be prepared automatically')
     managers = _items(LH + '/instancemanagers')
@@ -143,6 +144,14 @@ echo "FSTYPE $(blkid -s TYPE -o value "$D")"
 echo "SERIAL $(lsblk -dnro SERIAL "$D")"
 echo "WWN $(lsblk -dnro WWN "$D")"
 echo "KIND $(lsblk -dnro TYPE "$D")"
+case "$(lsblk -dnro TYPE "$D")" in part|lvm)
+__REGION__
+echo "REGION $REGION"
+echo "REGION_PATH $STABLE"
+echo "PARENTS $(printf '%s\n' "$A" | awk -v d="$D" '$1!=d {printf "%s ", $1}')"
+LAYOUT=$(lsblk -J -b -p -o NAME,KNAME,TYPE,SIZE,MOUNTPOINT,START "$PD") || fail 'Cannot inspect disk layout'
+echo "LAYOUT $(printf '%s' "$LAYOUT" | tr -d '\n')"
+;; esac
 [ "$(findmnt -rn --mountpoint "$P" -o FSROOT)" = / ] || fail 'A subdirectory or bind mount cannot be erased'
 [ "$(lsblk -nrpo NAME "$D" | wc -l)" -eq 1 ] || fail 'Partitions or device-mapper children need manual preparation'
 [ "$(findmnt -rn -S "$D" -o TARGET | wc -l)" -eq 1 ] || fail 'This filesystem has other mounts'
@@ -161,31 +170,35 @@ find "$P" -mindepth 1 -maxdepth 1 ! -name replicas ! -name backing-images ! -nam
 awk -v p="$P" '$0 !~ /^[[:space:]]*#/ && $2==p && $4 ~ /x-systemd.automount/ {exit 1}' /etc/fstab || fail 'Disable the automatic mount before preparing this disk'
 for c in wipefs flock findmnt blkid blockdev sha256sum; do command -v "$c" >/dev/null || fail "Host tool $c is missing"; done
 echo END
-'''.replace('__PATH__', shlex.quote(path))
+'''.replace('__PATH__', shlex.quote(path)).replace('__REGION__', REGION.inspection())
 
 
 def _host_facts(path, node):
+    path = path.rstrip('/') or '/'
     out, err = HOST.run(node, inspect_script(path), timeout=60)
     error = next((line[4:] for line in out.splitlines() if line.startswith('ERR ')), '')
     if error or 'END' not in out.splitlines():
         raise ValueError(error or 'Host disk inspection did not finish; ' + str(err or '')[:160])
     lines = {line.partition(' ')[0]: line.partition(' ')[2].strip() for line in out.splitlines()}
-    device = SETUP._device(lines.get('DEVICE'))
-    if lines.get('KIND') != 'disk' or lines.get('FSTYPE') not in ('ext4', 'xfs'):
-        raise ValueError('Automatic conversion needs an ext4 or XFS filesystem on a dedicated whole disk')
-    if path in SETUP.SYSTEM_POINTS or path.startswith(('/boot/', '/var/', '/usr/', '/home/', '/run/', '/etc/')):
+    device = lines.get('DEVICE', '')
+    if not re.fullmatch(r'/dev/(?:[a-z]+[0-9]*|nvme\d+n\d+(?:p\d+)?|mmcblk\d+(?:p\d+)?|dm-\d+)', device):
+        raise ValueError('The mounted block device cannot be verified')
+    partial = REGION.facts(lines) if lines.get('KIND') in ('part', 'lvm') else {}
+    if lines.get('KIND') not in ('disk', 'part', 'lvm') or lines.get('FSTYPE') not in ('ext4', 'xfs'):
+        raise ValueError('Automatic conversion needs a dedicated ext4 or XFS filesystem')
+    if path in SETUP.SYSTEM_POINTS or (path.startswith(('/boot/', '/var/', '/usr/', '/home/', '/run/', '/etc/')) and not (partial and path == '/var/lib/longhorn')):
         raise ValueError('System storage cannot be repurposed for V2')
     try:
         config = json.loads(lines['CONFIG'])
         size = int(lines['SIZE'])
     except (KeyError, ValueError, TypeError) as error:
         raise ValueError('Physical disk or Longhorn identity could not be verified') from error
-    by_id = lines.get('BYID', '')
-    if not re.fullmatch(r'/dev/disk/by-id/[A-Za-z0-9_.:+@-]+', by_id) or not (lines.get('SERIAL') or lines.get('WWN')) or not lines.get('UUID') or size <= 0:
+    by_id = partial.get('by_id') or lines.get('BYID', '')
+    if (not partial and (not re.fullmatch(r'/dev/disk/by-id/[A-Za-z0-9_.:+@-]+', by_id) or not (lines.get('SERIAL') or lines.get('WWN')))) or not lines.get('UUID') or size <= 0:
         raise ValueError('A stable device ID, hardware serial/WWN, size and filesystem UUID are required')
     return {'device': device, 'by_id': by_id, 'serial': lines.get('SERIAL', ''), 'wwn': lines.get('WWN', ''),
             'size_bytes': size, 'uuid': lines['UUID'], 'fstype': lines['FSTYPE'], 'mountpoint': path,
-            'longhorn_uuid': config.get('diskUUID')}
+            'longhorn_uuid': config.get('diskUUID'), **partial}
 
 
 def _soft(v, setting):
@@ -302,6 +315,8 @@ def review(body):
     request_id = secrets.token_hex(12)
     cfg = {'action': 'evacuate', 'node': node, 'disk': disk, 'request_id': request_id}
     return {'node': node, 'disk': disk, 'device': facts['device'], 'size_bytes': facts['size_bytes'],
+            'region_kind': facts.get('kind', 'disk'), 'protected_parents': facts.get('parents', []),
+            'layout': facts.get('layout'), 'mountpoint': facts['mountpoint'], 'stable_device': facts['by_id'],
             'volumes': rows, 'blockers': blockers, 'request_id': request_id,
             'capacity_token': REVIEW.issue(cfg, _context(inv, facts, rows)),
             'detail': 'Move V1 replicas to other V1 disks. The device stays mounted and is not erased.'}
@@ -433,6 +448,8 @@ def prepare_review(operation_id):
         context = {'hardware': facts, 'host_uid': ref['node_uid'], 'boot_id': inv['host']['status']['nodeInfo']['bootID'], 'disk_uuid': ref['disk_uuid'],
                    'volumes': ref['volumes'], 'disk': inv['spec']}
         return {'operation_id': item['id'], 'node': ref['node'], 'device': facts['device'], 'size_bytes': facts['size_bytes'],
+                'region_kind': facts.get('kind', 'disk'), 'protected_parents': facts.get('parents', []),
+                'layout': facts.get('layout'), 'mountpoint': facts['mountpoint'], 'stable_device': facts['by_id'],
                 'request_id': request_id, 'capacity_token': REVIEW.issue(cfg, context),
                 'detail': 'Remove the V1 disk entry, unmount its filesystem, remove its fstab entry and erase its signatures. Add the blank device to V2.'}
 
@@ -527,6 +544,22 @@ echo 'Device is blank; waiting for Homestead to register it with Longhorn V2'
 '''
     for key, value in values.items():
         script = script.replace(key, shlex.quote(value))
+    if facts.get('region'):
+        script = script.replace('[ -b "$D" ] && [ "$(lsblk -dnro TYPE "$D")" = disk ] || fail \'Reviewed device is not a whole disk\'',
+                                '[ -b "$D" ] || fail \'Reviewed region is missing\'\n' + REGION.verify(facts))
+        # Recheck after unmount as well; no parent or LVM metadata is erased.
+        script = script.replace("echo 'Clearing filesystem signatures for Longhorn V2'", REGION.verify(facts) + "\necho 'Clearing filesystem signatures for Longhorn V2'")
+        script = script.replace("# Lock this physical device", r'''# Accept a persistent LVM alias only when it resolves to the reviewed region.
+awk -v p="$P" '$0 !~ /^[[:space:]]*#/ && $2==p {print $1}' /etc/fstab | while read -r s; do
+  [ "$s" = "UUID=$U" ] || [ "$(readlink -f "$s")" = "$D" ] || fail 'fstab source changed'
+done
+for sub in replicas backing-images backing-images-disk lost+found; do
+  [ ! -L "$P/$sub" ] || fail 'A storage directory is a symlink'
+  [ ! -e "$P/$sub" ] || [ -d "$P/$sub" ] || fail 'Unexpected storage file'
+  [ ! -d "$P/$sub" ] || [ -z "$(find "$P/$sub" -mindepth 1 -print -quit)" ] || fail 'Replica, backing-image or other files remain; clean them up before erasing'
+done
+# Lock this physical device''')
+        script = script.replace('(($1!=u && $1!=d && $1!=b) || $4 ~ /x-systemd.automount/)', '($4 ~ /x-systemd.automount/)')
     return script
 
 
@@ -684,7 +717,7 @@ def _replacement_health(ref):
 
 
 def _new_disk(ref):
-    return {'path': ref['hardware']['by_id'], 'diskType': 'block', 'diskDriver': 'auto', 'allowScheduling': True,
+    return {'path': ref['hardware']['by_id'], 'diskType': 'block', 'diskDriver': 'aio' if ref['hardware'].get('region') else 'auto', 'allowScheduling': True,
             'evictionRequested': False, 'storageReserved': 0, 'tags': ref['original_disk'].get('tags') or []}
 
 
@@ -725,6 +758,8 @@ def _verify_blank(ref):
         '[ -z "$(lsblk -nrpo MOUNTPOINT "$D" | grep . || true)" ]',
         '[ -z "$(blkid -p -s TYPE -o value "$D" 2>/dev/null || true)" ]',
         '[ "$(cat /var/lib/homestead/disk-v2/' + ref['prepare_request_id'] + ')" = complete ]', 'echo VERIFIED'])
+    if facts.get('region'):
+        script = script.replace('echo VERIFIED', 'fail() { echo "ERROR $*"; exit 1; }\n' + REGION.verify(facts) + 'echo VERIFIED')
     out, err = HOST.run(ref['node'], script, timeout=60)
     if 'VERIFIED' not in out.splitlines():
         raise ValueError('The blank device or its completion receipt could not be verified; no V2 entry was added')
@@ -780,7 +815,7 @@ def mutation_guard(node, disk=None, device=None):
             ref = item.get('ref') or {}
             if (item.get('kind') == KIND and ref.get('node') == node and ref.get('phase') not in ('complete', 'cancelled')
                     and (disk is None and device is None or disk is not None and disk in (ref.get('disk'), ref.get('v2_disk'))
-                         or device is not None and device in (ref.get('hardware', {}).get('device'), ref.get('hardware', {}).get('by_id'), ref.get('hardware', {}).get('mountpoint')))):
+                         or device is not None and device in (ref.get('hardware', {}).get('device'), ref.get('hardware', {}).get('by_id'), ref.get('hardware', {}).get('mountpoint'), *ref.get('hardware', {}).get('parents', [])))):
                 raise ValueError('This disk has a saved V2 preparation task; open that task before changing it')
 
 

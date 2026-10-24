@@ -207,9 +207,17 @@ With three replicas across three hosts, clearing a host's only V1 disk
 requires a spare V1 disk on that host or another eligible V1 host. The review
 checks capacity; it does not reserve it while evacuation runs.
 
-This guided preparation supports dedicated whole disks with ext4 or XFS.
-System disks, shared filesystems, partitions and LVM require separate disk
-planning. Harvester manages its own disks. Resolve backing-image copies
+This guided preparation supports dedicated ext4 or XFS filesystems on whole
+disks, individual partitions, and ordinary single-segment linear LVM volumes.
+A partition or logical volume can share its physical disk with the OS, provided
+it is a separate Longhorn filesystem. Homestead reuses that region at its
+existing size; it does not repartition, shrink filesystems or remove LVM metadata.
+The review identifies the exact region to erase. Subdevices use the AIO driver,
+which leaves the physical controller under Linux control. Root, boot, swap,
+shared mounts, nested storage, thin pools and complex LVM layouts are refused.
+At `/var/lib/longhorn`, unrelated files (including manager logs) must be moved
+separately; remaining replica, backing-image or lost+found files block erasing.
+See [Longhorn block disk drivers](https://longhorn.io/docs/1.13.0/nodes-and-volumes/nodes/multidisk/). Harvester manages its own disks. Resolve backing-image copies
 before starting, and attach affected volumes so their writable replicas can
 be checked.
 
@@ -453,8 +461,8 @@ the simpler guided route. See [the small third-server design](Installing-on-k3s#
 ### Disks, migration and recovery
 
 V1 and V2 can coexist, but enabling V2 does not convert existing volumes or
-filesystem disks. Homestead's guided V2 disk preparation uses dedicated whole
-disks. Check IOMMU grouping for the SPDK NVMe driver; a device that cannot be
+filesystem disks. Homestead's guided V2 disk preparation also supports dedicated partitions
+and linear LVM volumes with AIO. Check IOMMU grouping for the SPDK NVMe driver; a device that cannot be
 isolated may need the upstream AIO path instead. Never hand over an OS disk or
 a device still carrying wanted data.
 
