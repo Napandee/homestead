@@ -198,7 +198,7 @@ async function viewProtect() {
   </div>
 `)}
 
-  <div id="restore-tests" class="restore-tests"><div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div></div>
+  <div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>
   <div id="previous-volumes" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
@@ -1034,10 +1034,26 @@ const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");
   if (!host) return;
-  let d;
-  try { d = await api("/api/restore-tests"); }
-  catch (e) { host.innerHTML = `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(e.message))}`; return; }
-  STATE.data.restoreTests = d;
+  // A list that cannot be read is kept as the error, so the next page paint says so too.
+  try { STATE.data.restoreTests = await api("/api/restore-tests"); }
+  catch (e) { STATE.data.restoreTests = { error: e.message }; }
+  // Morphed in, prepared as the page paint prepares it, so rows that did not change stay put.
+  const next = host.cloneNode(false);
+  next.innerHTML = restoreTestsSection();
+  enhanceActions(next);
+  morph(host, next);
+  loadAppIcons(host);
+  // A box someone clicked keeps its own state through a morph: the setting decides it.
+  const box = $("#rt_on");
+  if (box && document.activeElement !== box) box.checked = !!STATE.data.restoreTests.enabled;
+  if (window.applyRole) window.applyRole();
+}
+
+// The section as the page paints it: the last list while it is read again,
+// and the placeholder only before the first (#834).
+function restoreTestsSection(d = STATE.data.restoreTests) {
+  if (!d) return `<div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div>`;
+  if (d.error) return `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(d.error))}`;
   const row = r => {
     const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
     const result = r.running ? UI.chip("testing now", "info")
@@ -1049,7 +1065,7 @@ async function loadRestoreTests() {
       <td data-label="Last test">${result}${last && !last.ok ? `<div class="dim xs restore-why">${esc(last.message || "")}</div>` : ""}</td>
       <td data-actions>${r.restores.length && !r.running ? actionBar([{ label: "Test now", icon: "play", run: `restoreTestRun(${jsq(r.ns)},${jsq(r.name)})`, need: "admin" }], { label: `Restore test for ${r.name}` }) : ""}</td></tr>`;
   };
-  host.innerHTML = `<div class="between restore-head"><div class="sec">Restore tests</div>
+  return `<div class="between restore-head"><div class="sec">Restore tests</div>
       <label class="switch" data-need="admin"><input type="checkbox" id="rt_on" ${d.enabled ? "checked" : ""} onchange="restoreTestsSwitch(this.checked)"> Test each app every ${d.every_days} days</label></div>
     <div class="dim xs" id="rt_off"${d.enabled ? " hidden" : ""}>Off · tests run only when you click Test now</div>
     ${UI.guide("How restore tests work", `<p>A test restores an app's newest backups into new volumes, starts a copy of it on them - cut off from the network, its other volumes left empty so it cannot touch real data - and checks it starts and answers. Then it removes everything it made. One runs at a time, outside the maintenance window, when Longhorn has room.</p>`)}
@@ -1058,7 +1074,8 @@ async function loadRestoreTests() {
 }
 
 window.restoreTestsSwitch = async on => {
-  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); const off = $("#rt_off"); if (off) off.hidden = on; }
+  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); const off = $("#rt_off"); if (off) off.hidden = on;
+    if (STATE.data.restoreTests) STATE.data.restoreTests.enabled = on; }
   catch (e) { toast(e.message, "bad"); const box = $("#rt_on"); if (box) box.checked = !on; }
 };
 
