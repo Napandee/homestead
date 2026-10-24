@@ -14,12 +14,13 @@ function load() {
                  "#lj_retain": "5", "#lj_conc": "1", "#lj_newgroup": "" };
   const c = { window: {}, sent, toasts, LJ_GENERATION: null, STATE: { data: { lh: { groups: ["default"], tasks: { snapshot: "Snapshot" } } } },
     esc: s => String(s ?? ""), modal() {}, closeModal() {}, resetPaint() {}, viewProtect() {}, fieldError() {},
-    scheduleBuilder: () => "", scheduleChanged() {}, groupCount: () => "", lhTaskChanged() {}, UI: { actions: s => s },
+    scheduleBuilder: () => "", scheduleChanged() {}, groupCount: () => "", lhTaskChanged() {},
     $: sel => ({ value: form[sel] ?? "", hidden: false }),
     $$: () => [{ checked: true, value: "default" }],
     toast(...args) { toasts.push(args); },
     api: async (path, opts = {}) => { sent.push({ path, body: JSON.parse(opts.body) }); return { ok: true }; } };
   vm.createContext(c);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(between(src, "window.lhJob = ", "window.lhJobNewGroup"), c);
   vm.runInContext(between(src, "const KEEPS", "window.lhTaskChanged"), c);
   vm.runInContext(between(src, "window.lhJobSave", "window.lhJobDel"), c);

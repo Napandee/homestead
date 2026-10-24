@@ -301,12 +301,12 @@ function volumeCopiesTip(x) {
 function volumeUseCell(x) {
   const use = volumeUse(x);
   if (use.kind === "in-use") return attachedWorkloads(x).length
-    ? `<div class="attachlist">${attachedWorkloads(x).map(w => `<span class="tag info">${esc(w)}</span>`).join("")}</div>`
+    ? `<div class="attachlist">${attachedWorkloads(x).map(w => UI.chip(w, "info")).join("")}</div>`
     : '<span class="dim">attached</span>';
-  if (use.kind === "stopped") return `<div class="attachlist">${use.by.map(w => `<span class="tag" data-tip="${esc(w)} is defined to use this volume and is stopped; the data waits for it to start">${esc(w.split("/").pop())} · stopped</span>`).join("")}</div>`;
-  if (use.kind === "orphaned") return `<span class="tag warn" data-tip="No container, VM or job refers to this volume. If its data is not wanted, it can be deleted; otherwise attach it to something from its editor">orphaned</span>`;
-  if (use.kind === "unclaimed") return `<span class="tag warn" data-tip="Its claim is gone and the volume was kept - an old copy from a storage class change, or a claim deleted with its data retained. Nothing can mount it as it is">no claim</span>`;
-  if (use.kind === "unknown") return `<span class="tag" data-tip="Homestead could not read what is defined to use this volume, so it is not called unused. Refresh to check again">could not check</span>`;
+  if (use.kind === "stopped") return `<div class="attachlist">${use.by.map(w => UI.chip(`${w.split("/").pop()} · stopped`, "neutral", { tip: `${w} is defined to use this volume and is stopped; the data waits for it to start` })).join("")}</div>`;
+  if (use.kind === "orphaned") return UI.chip("orphaned", "warn", { tip: "No container, VM or job refers to this volume. If its data is not wanted, it can be deleted; otherwise attach it to something from its editor" });
+  if (use.kind === "unclaimed") return UI.chip("no claim", "warn", { tip: "Its claim is gone and the volume was kept - an old copy from a storage class change, or a claim deleted with its data retained. Nothing can mount it as it is" });
+  if (use.kind === "unknown") return UI.chip("could not check", "neutral", { tip: "Homestead could not read what is defined to use this volume, so it is not called unused. Refresh to check again" });
   return '<span class="dim">detached</span>';
 }
 
@@ -320,25 +320,25 @@ const volumeProgressBar = pct => `<div class="meter volprogress" role="progressb
 
 function volumeHealthCell(x) {
   const restore = x.restore, rebuild = x.rebuild;
-  if (restore && restore.error) return `<span class="pill crit">restore failed</span>
+  if (restore && restore.error) return `${UI.chip("restore failed", "bad")}
     <span class="dim xs volume-reason">${esc(restore.error)}</span>`;
-  if (restore) return `<span class="pill info" data-tip="Longhorn is copying this volume's data in from a backup; it can be used once the restore finishes">restoring ${restore.pct}%</span>
+  if (restore) return `${UI.chip(`restoring ${restore.pct}%`, "info", { tip: "Longhorn is copying this volume's data in from a backup; it can be used once the restore finishes" })}
     ${volumeProgressBar(restore.pct)}`;
-  if (rebuild && rebuild.error) return `<span class="pill crit">rebuild failed</span>
+  if (rebuild && rebuild.error) return `${UI.chip("rebuild failed", "bad")}
     <span class="dim xs volume-reason">${esc(rebuild.error)}</span>`;
   // Rebalancing builds the new copy before the old one goes: nothing is short.
-  if (rebuild && x.rebalancing) return `<span class="pill ok" data-tip="${esc(x.health_reason || "Building a copy on another host before the old one is removed; every copy it had stays whole meanwhile")}">moving a copy ${rebuild.pct}%</span>
+  if (rebuild && x.rebalancing) return `${UI.chip(`moving a copy ${rebuild.pct}%`, "ok", { tip: x.health_reason || "Building a copy on another host before the old one is removed; every copy it had stays whole meanwhile" })}
     ${volumeProgressBar(rebuild.pct)}`;
-  if (x.rebalancing && x.state === "attached") return `<span class="pill ok" data-tip="${esc(x.health_reason)}">healthy</span> <span class="tag info">moving a copy</span>
+  if (x.rebalancing && x.state === "attached") return `${UI.chip("healthy", "ok", { tip: x.health_reason || "" })} ${UI.chip("moving a copy", "info")}
     ${volumeShortCell(x)}`;
-  if (rebuild) return `<span class="pill low" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
+  if (rebuild) return `${UI.chip(`rebuilding ${rebuild.pct}%`, "neutral", { tip: "Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile" })}
     ${volumeProgressBar(rebuild.pct)}
     <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 replica" : `${rebuild.replicas} replicas`} catching up</span>`;
   return `${x.state === "attached"
-    ? `<span class="pill ${x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "med" : "crit"}"${x.health_reason ? ` data-tip="${esc(x.health_reason)}"` : ""}>${esc(x.robustness)}</span>`
+    ? UI.chip(x.robustness, x.robustness === "healthy" ? "ok" : x.robustness === "degraded" ? "warn" : "bad", { tip: x.health_reason || "" })
     // Detached is where a volume sits when nothing is using it - a stopped
     // workload, not a fault. Longhorn calls it detached, so do we.
-    : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
+    : UI.chip("detached", "neutral", { tip: "Nothing is mounting this volume, so Longhorn reports no live replica health" })}
     ${volumeShortCell(x)}
     ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}`;
 }
@@ -348,8 +348,8 @@ function volumeHealthCell(x) {
 function volumeShortCell(x) {
   const short = x.copies_short;
   if (!short) return "";
-  if (!short.whole) return `<span class="pill crit" data-tip="No whole copy of this volume is left; Longhorn cannot rebuild it">no whole copy</span>`;
-  return `<span class="pill med" data-tip="Detached with ${short.whole} of ${short.wanted} copies. Longhorn rebuilds the rest only while the volume is attached, or offline when that is on. Rebuild now is in the row's actions">${short.whole} of ${short.wanted} copies</span>`;
+  if (!short.whole) return UI.chip("no whole copy", "bad", { tip: "No whole copy of this volume is left; Longhorn cannot rebuild it" });
+  return UI.chip(`${short.whole} of ${short.wanted} copies`, "warn", { tip: `Detached with ${short.whole} of ${short.wanted} copies. Longhorn rebuilds the rest only while the volume is attached, or offline when that is on. Rebuild now is in the row's actions` });
 }
 /* A volume row's buttons (#506): Rebuild now first when a detached volume is
    short of copies, then Snapshots and Edit, the rest and Delete in ⋯. */
@@ -391,7 +391,7 @@ function forecastCard(f) {
   const pool = rows.find(r => r.kind === "pool");
   const collecting = !rows.some(r => r.days >= (f.min_days || 7));
   const line = r => `<div class="forecast-row">
-      <span class="tag ${forecastTone(r.days_left, f.warn_days)}">Full ${esc(forecastWhen(r.days_left))}</span>
+      ${UI.chip(`Full ${forecastWhen(r.days_left)}`, forecastTone(r.days_left, f.warn_days))}
       <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GiB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
   return `<div class="card flat forecast-card"><div class="between"><div><div class="ctitle">Filling up</div>
       <div class="csub">From how each volume, disk and the pool has grown over the last 30 days</div></div></div>
@@ -409,7 +409,7 @@ function volumeUsageCell(x) {
   return `<div class="volusage-body">${known
     ? `<div class="volusage-line" data-tip="Filesystem usage reported by kubelet; filesystem capacity can be slightly smaller than the provisioned block device.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
     : `<span class="dim xs" data-tip="No fresh filesystem measurement is available. Detached volumes and some shared/raw-block mounts do not report filesystem usage.">Filesystem usage unavailable</span>`}
-    ${soon ? `<span class="tag ${forecastTone(soon.days_left)} forecast-tag" data-tip="${esc(`Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GiB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate`)}">Full ${esc(forecastWhen(soon.days_left))}</span>` : ""}
+    ${soon ? `<span class="forecast-tag">${UI.chip(`Full ${forecastWhen(soon.days_left)}`, forecastTone(soon.days_left), { tip: `Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GiB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate` })}</span>` : ""}
     <span class="dim xs mono volsizes"><span data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
 }
 
@@ -468,8 +468,8 @@ function otherVolumesHtml(rows) {
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.namespace)}</div></td>
       <td data-label="Class" class="mono">${esc(r.storage_class)}</td><td data-label="Size" class="mono">${esc(r.size || "—")}</td>
-      <td data-label="Mode"><span class="tag">${esc(r.access_modes.map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", ") || "?")}</span></td>
-      <td data-label="State"><span class="pill ${r.phase === "Bound" ? "ok" : "crit"}">${esc(r.phase === "Bound" ? "in use" : r.phase || "unknown")}</span>
+      <td data-label="Mode">${UI.chip(r.access_modes.map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", ") || "?", "neutral")}</td>
+      <td data-label="State">${UI.chip(r.phase === "Bound" ? "in use" : r.phase || "unknown", r.phase === "Bound" ? "ok" : "bad")}
         ${r.reason ? `<div class="dim xs" style="margin-top:4px">${esc(r.reason)}</div>` : ""}</td>
       <td data-actions>${actionBar([{ label: "Delete", icon: "trash", run: `volumeDelete(${esc(JSON.stringify({ name: r.volume || "", pvc_name: r.name, namespace: r.namespace }))})`,
         need: "admin", danger: true, tip: "Review what uses it and what would be lost before deleting" }], { shown: 0, label: `Actions for ${r.name}` })}</td></tr>`).join("")}</tbody></table></div></div>`;
@@ -509,7 +509,7 @@ async function viewStorage() {
   ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
   ${st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
-      `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
+      `${UI.chip(`${st.healthy} healthy`, "ok")}${st.degraded ? ` ${UI.chip(`${st.degraded} degraded`, "warn")}` : ""}${st.faulted ? ` ${UI.chip(`${st.faulted} faulted`, "bad")}` : ""}`,
       `${st.attached} of ${st.volumes} attached`],
     `<div class="grid g4 statgrid">
     <div class="card flat"><div class="ctitle">Free space</div>
@@ -521,10 +521,10 @@ async function viewStorage() {
     <div class="card flat statwide"><div class="ctitle">Replica health</div>${(st.reasons || []).length
       ? `<div class="dim xs volume-reason" style="margin-top:8px">${esc(st.reasons[0].name)}: ${esc(st.reasons[0].reason)}${st.reasons.length > 1 ? ` · and ${st.reasons.length - 1} more` : ""}</div>` : ""}
       <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
-        <span class="tag ok">${st.healthy} healthy</span>
-        ${st.degraded ? `<span class="tag warn">${st.degraded} degraded</span>` : ""}
-        ${st.faulted ? `<span class="tag bad">${st.faulted} faulted</span>` : ""}
-        ${(st.detached ?? st.unknown) ? `<span class="tag">${st.detached ?? st.unknown} detached</span>` : ""}</div>
+        ${UI.chip(`${st.healthy} healthy`, "ok")}
+        ${st.degraded ? UI.chip(`${st.degraded} degraded`, "warn") : ""}
+        ${st.faulted ? UI.chip(`${st.faulted} faulted`, "bad") : ""}
+        ${(st.detached ?? st.unknown) ? UI.chip(`${st.detached ?? st.unknown} detached`, "neutral") : ""}</div>
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
   </div>`, "Per host") : ""}
@@ -537,10 +537,10 @@ async function viewStorage() {
        ${volumeCopiesLine(x)}</div></td>
      <td data-label="Attached to">${volumeUseCell(x)}${x.pod_status ? `<span class="dim xs"> · ${esc(x.pod_status)}</span>` : ""}</td>
      <td data-label="Health" class="volhealth${volumeReason(x) || volumeBusy(x) ? " hasreason" : ""}">${volumeHealthCell(x)}</td>
-     <td data-label="Mode"><span class="tag">${esc((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "))}</span>
-       <span class="tag ${+x.replicas === 1 || (x.copies?.length && x.copies.length < +x.replicas) ? "warn" : ""}" data-tip="${esc(volumeCopiesTip(x))}">×${esc(x.replicas)}</span><span class="tag ${x.engine === "v2" ? "info" : ""}" data-tip="${x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default"}">${x.engine === "v2" ? "V2" : "V1"}</span></td>
+     <td data-label="Mode">${UI.chip((x.access_modes || ["?"]).map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", "), "neutral")}
+       ${UI.chip(`×${x.replicas}`, +x.replicas === 1 || (x.copies?.length && x.copies.length < +x.replicas) ? "warn" : "neutral", { tip: volumeCopiesTip(x) })} ${UI.chip(x.engine === "v2" ? "V2" : "V1", x.engine === "v2" ? "info" : "neutral", { tip: x.engine === "v2" ? "Longhorn's V2 data engine (SPDK)" : "Longhorn's V1 data engine - the default" })}</td>
      <td data-label="Usage" class="volusage">${volumeUsageCell(x)}</td>
-     <td data-label="Last used" class="small dim">${x.state === "attached" ? '<span class="tag">in use</span>' : esc(fmtAgo(x.last_used_secs))}</td>
+     <td data-label="Last used" class="small dim">${x.state === "attached" ? UI.chip("in use", "neutral") : esc(fmtAgo(x.last_used_secs))}</td>
      <td class="volactions" data-actions>${volumeActions(x)}</td>
       </tr>`).join("") || `<tr><td colspan=7 class="empty">No volumes to show.</td></tr>`}
    </tbody></table></div></div>
@@ -734,13 +734,13 @@ window.volumeDeleteNow = async (namespace, name, uid) => {
 function v2Summary(v2, rows) {
   // Unread is not "off" (#620); it matters only where a class uses V2.
   if (v2?.unread) return rows.some(row => row.engine === "v2")
-    ? `<div class="dim xs v2line"><span class="tag warn">Longhorn V2</span> Could not read whether it is on: ${esc(v2.unread)}
+    ? `<div class="dim xs v2line">${UI.chip("Longhorn V2", "warn")} Could not read whether it is on: ${esc(v2.unread)}
       ${STATE.data.v2 && !STATE.data.v2.unread ? '<a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">last reading</a>' : ""}</div>` : "";
   if (!v2 || (!v2.enabled && !rows.some(row => row.engine === "v2"))) return "";
   const text = !v2.enabled ? "switched off, yet a class uses it: its volumes will not schedule"
     : v2.ready_nodes ? `${v2.ready_nodes} of ${v2.total_nodes} host${v2.total_nodes === 1 ? "" : "s"} ready for its volumes`
     : "on, but no host has a V2 disk and hugepages yet";
-  return `<div class="dim xs v2line"><span class="tag ${v2.enabled && v2.ready_nodes ? "info" : "warn"}">Longhorn V2</span> ${esc(text)}
+  return `<div class="dim xs v2line">${UI.chip("Longhorn V2", v2.enabled && v2.ready_nodes ? "info" : "warn")} ${esc(text)}
     <a onclick="v2Details()" style="cursor:pointer;text-decoration:underline">details</a></div>`;
 }
 /* Longhorn's V2 engine as a checklist: what the cluster needs, then what
@@ -792,7 +792,7 @@ window.v2Details = async (fresh = false) => {
       ${nodes.map(n => `<tr><td><b>${esc(n.name)}</b></td>${cell(n, "cpu", "CPU")}
         ${cell(n, "modules", "Kernel modules", n.missing_modules?.length ? `needs ${n.missing_modules.join(", ")}` : n.checks?.modules == null ? "probe has not said" : "")}
         ${cell(n, "hugepages", "Hugepages", `${n.hugepages_mb} MiB`)}${cell(n, "disk", "V2 disk", n.block_disks ? `${n.block_disks}` : "")}
-        <td data-label="Ready">${n.ready ? '<span class="pill ok">ready</span>' : '<span class="pill">not yet</span>'}</td></tr>`).join("")
+        <td data-label="Ready">${n.ready ? UI.chip("ready", "ok") : UI.chip("not yet", "neutral")}</td></tr>`).join("")
         || '<tr><td colspan="6" class="empty">Longhorn reported no hosts</td></tr>'}</tbody></table></div></div>
     <div class="row" style="margin-top:12px"><button class="btn sm" onclick="v2Details(true)">${icon("refresh")}Check again</button>
       <span class="dim xs">${v2.ready_nodes ?? 0} of ${v2.total_nodes ?? 0} host${v2.total_nodes === 1 ? "" : "s"} ready. A volume keeping 2 copies needs 2 ready hosts.</span></div>`, true);
@@ -837,24 +837,24 @@ function storageClassCard(classes, v2 = null) {
       ${restores.length ? ` · <a class="linkish" data-need="admin" onclick="storageClassCleanup()">Remove unused restore classes</a>` : ""}</div>` : "";
   // What a volume on it can do, as tags: one column, not three.
   const features = row => [
-    row.migratable ? '<span class="tag" data-tip="Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX).">VM disk class</span>'
-      : '<span class="tag ok" data-tip="Volumes can be shared between pods (RWX)">shareable</span>',
-    row.encrypted ? '<span class="tag info">encrypted</span>' : "",
-    row.expandable ? '<span class="tag">can grow</span>' : '<span class="tag" data-tip="Volumes keep the size they were made with">fixed size</span>',
+    row.migratable ? UI.chip("VM disk class", "neutral", { tip: "Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX)." })
+      : UI.chip("shareable", "ok", { tip: "Volumes can be shared between pods (RWX)" }),
+    row.encrypted ? UI.chip("encrypted", "info") : "",
+    row.expandable ? UI.chip("can grow", "neutral") : UI.chip("fixed size", "neutral", { tip: "Volumes keep the size they were made with" }),
   ].filter(Boolean).join(" ");
-  const kind = row => row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>'
-    : row.made_for === "restore" ? '<span class="tag" data-tip="Made to restore a backup; kept while claims reference it so they can be resized">restore</span>'
-    : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : "";
+  const kind = row => row.made_for === "image" ? ` ${UI.chip("image", "neutral", { tip: "Harvester made it for one image: disks from that image are made on it" })}`
+    : row.made_for === "restore" ? ` ${UI.chip("restore", "neutral", { tip: "Made to restore a backup; kept while claims reference it so they can be resized" })}`
+    : row.made_for === "iso" ? ` ${UI.chip("ISO copies", "neutral", { tip: "ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares" })}` : "";
   return `${UI.moduleHeader(`Storage classes`, `What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.`, `<button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button>`, {extraHtml:`${v2Summary(v2, rows)}`})}
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack dense"><thead><tr>
       <th>Class</th><th>Engine</th><th>Copies</th><th data-nosort>Its volumes</th><th>In use</th><th data-nosort></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
-      <td><b>${esc(row.name)}</b> ${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${kind(row)}
+      <td><b>${esc(row.name)}</b> ${row.default ? UI.chip("default", "ok") : ""}${row.internal ? ` ${UI.chip("Harvester internal", "neutral")}` : ""}${kind(row)}
         <div class="dim xs mono">${esc(row.provisioner || "")}</div>
         ${(row.disk_tags || []).length || (row.node_tags || []).length ? `<div class="row" style="gap:4px;margin-top:4px">
-          ${(row.disk_tags || []).map(t => `<span class="tag info" data-tip="Only on disks tagged ${esc(t)}">disk: ${esc(t)}</span>`).join("")}
-          ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">host: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
-      <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
+          ${(row.disk_tags || []).map(t => UI.chip(`disk: ${t}`, "info", { tip: `Only on disks tagged ${t}` })).join("")}
+          ${(row.node_tags || []).map(t => UI.chip(`host: ${t}`, "neutral", { tip: `Only on nodes tagged ${t}` })).join("")}</div>` : ""}</td>
+      <td data-label="Engine">${row.engine === "v2" ? UI.chip("V2", "info", { tip: "Longhorn V2 (SPDK)" }) : row.engine ? UI.chip("V1", "neutral") : '<span class="dim">—</span>'}</td>
       <td class="mono" data-label="Copies">${esc(row.replicas || "—")}</td>
       <td data-label="Its volumes">${features(row)}</td>
       <td class="mono" data-label="In use">${row.in_use ?? 0}</td>
@@ -1168,13 +1168,13 @@ async function viewShares() {
   <div class="card flat pad0"><div class="tblwrap sharetable"><table data-sort="shares" class="tbl stack">
     <thead><tr><th>Share</th><th>Storage</th><th>Size</th><th>Access</th><th>UNC path</th><th></th></tr></thead><tbody>
     ${sh.map(s => `<tr><td class="shareidentity"><div class="row" style="gap:9px"><div class="av n2">${esc(s.name.slice(0, 2).toUpperCase())}</div>
-      <div><b>${esc(s.name)}</b>${(smb.offline_shares || []).some(row => row.name === s.name) ? ' <span class="pill crit">SMB offline · storage unavailable</span>' : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
+      <div><b>${esc(s.name)}</b>${(smb.offline_shares || []).some(row => row.name === s.name) ? ` ${UI.chip("SMB offline · storage unavailable", "bad")}` : ""}<div class="dim xs">${esc(s.created || "")}</div></div></div></td>
       <td class="small mono" data-label="Storage"><span class="sharevol">${esc(s.pvc || "—")}${s.sub_path ? `<span class="dim">/${esc(s.sub_path)}</span>` : ""}</span>
-        ${s.owned === false ? '<span class="tag">shared volume</span>' : ""}</td>
+        ${s.owned === false ? UI.chip("shared volume", "neutral") : ""}</td>
       <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GiB" : "—"}</td>
-      <td data-label="Access"><span>${s.public ? `<span class="pill med" data-tip="No sign-in. Windows 11 refuses guest shares until two of its own settings are changed - see Allow guest access when making or editing a share">guest</span>` : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private: signs in as ${esc(s.user)}. SMB users" onclick="smbUsers()">${esc(s.user)}</button>` : `<span class="pill low">${esc(s.user)}</span>`)}
-        ${s.read_only ? '<span class="tag">read only</span>' : '<span class="tag">read/write</span>'}
-        ${s.nfs_clients ? `<span class="pill slim info" data-tip="NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${esc(s.nfs_clients)}">NFS</span>` : ""}</span></td>
+      <td data-label="Access"><span>${s.public ? UI.chip("guest", "warn", { tip: "No sign-in. Windows 11 refuses guest shares until two of its own settings are changed - see Allow guest access when making or editing a share" }) : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private: signs in as ${esc(s.user)}. SMB users" onclick="smbUsers()">${esc(s.user)}</button>` : UI.chip(s.user, "neutral"))}
+        ${s.read_only ? UI.chip("read only", "neutral") : UI.chip("read/write", "neutral")}
+        ${s.nfs_clients ? UI.chip("NFS", "info", { size: "slim", tip: `NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${s.nfs_clients}` }) : ""}</span></td>
       <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
       <td data-actions>${actionBar([
         { label: "Edit", icon: "edit", run: `editShare(${jsq(s.name)})`, need: "admin", tip: "Grow this share or change its access policy" },
@@ -1428,11 +1428,11 @@ window.rmShare = async name => {
    bar for each; the filters narrow the table in place, so typing in the
    text filter keeps its focus. */
 const SIGNIN_WORDS = {
-  signin: ["Signed in", "ok"], "signin-failed": ["Sign-in failed", "med"], "signin-blocked": ["Blocked: too many tries", "crit"],
-  signout: ["Signed out", "low"], "signout-everywhere": ["Signed out everywhere", "low"], password: ["Password changed", "low"],
-  "password-failed": ["Password change refused", "med"], setup: ["Set Homestead up", "low"], "user-added": ["User added", "low"],
-  "user-removed": ["User removed", "med"], role: ["Role changed", "low"],
-  "key-added": ["API key made", "low"], "key-changed": ["API key changed", "low"], "key-revoked": ["API key revoked", "low"], "key-refused": ["API key refused", "med"],
+  signin: ["Signed in", "ok"], "signin-failed": ["Sign-in failed", "warn"], "signin-blocked": ["Blocked: too many tries", "bad"],
+  signout: ["Signed out", "neutral"], "signout-everywhere": ["Signed out everywhere", "neutral"], password: ["Password changed", "neutral"],
+  "password-failed": ["Password change refused", "warn"], setup: ["Set Homestead up", "neutral"], "user-added": ["User added", "neutral"],
+  "user-removed": ["User removed", "warn"], role: ["Role changed", "neutral"],
+  "key-added": ["API key made", "neutral"], "key-changed": ["API key changed", "neutral"], "key-revoked": ["API key revoked", "neutral"], "key-refused": ["API key refused", "warn"],
 };
 const SIGNIN_GROUPS = {
   signins: x => x.event === "signin", failures: x => !x.ok,
@@ -1491,16 +1491,16 @@ function eventMatches(x) {
 function eventRowHtml(x) {
   const ago = fmtAgo(Math.max(0, (Date.now() - eventTime(x)) / 1000));
   if (eventTab() === "signins") {
-    const [word, tone] = SIGNIN_WORDS[x.event] || [x.event, "low"];
+    const [word, tone] = SIGNIN_WORDS[x.event] || [x.event, "neutral"];
     const when = new Date(x.at * 1000);
     return `<tr><td><b>${esc(x.user || "—")}</b><div class="dim xs">${x.detail ? `${esc(x.detail)}` : ""}<span class="ev-when-sm">${x.detail ? " · " : ""}${esc(ago)}</span></div></td>
-      <td data-status><span class="pill slim ${tone}">${esc(word)}</span></td>
+      <td data-status>${UI.chip(word, tone, { size: "slim" })}</td>
       <td class="small ev-from"><span class="mono">${esc(x.ip || "—")}</span>${x.device || x.via ? ` <span class="dim xs">${esc([x.device, x.via && `via ${x.via}`].filter(Boolean).join(" · "))}</span>` : ""}</td>
       <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(when))}">${esc(ago)}</td></tr>`;
   }
   return `<tr><td><b>${esc(x.obj)}</b><div class="dim xs">${esc(x.ns)} · ${esc(x.kind)}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
-    <td data-status><span class="pill slim ${x.type === "Warning" ? "med" : "low"}">${esc(x.reason)}</span></td>
-    <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` <span class="tag">×${x.count}</span>` : ""}</td>
+    <td data-status>${UI.chip(x.reason, x.type === "Warning" ? "warn" : "neutral", { size: "slim" })}</td>
+    <td class="small muted ev-msg">${esc(x.msg)}${x.count > 1 ? ` ${UI.chip(`×${x.count}`, "neutral")}` : ""}</td>
     <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(x.time))}">${esc(ago)}</td></tr>`;
 }
 
@@ -1567,8 +1567,8 @@ function lhNodeRows(cap) {
 
 function lhLargest(cap) {
   const count = (cap.nodes || []).length;
-  return [1, 2, 3].filter(c => c <= count).map(c => `<span class="tag ${cap.largest[c] < 10 ? "bad" : cap.largest[c] < 50 ? "warn" : ""}"
-    data-tip="Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different hosts. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.">${c} cop${c === 1 ? "y" : "ies"} · ${esc(sizeText(cap.largest[c]))}</span>`).join("");
+  return [1, 2, 3].filter(c => c <= count).map(c => UI.chip(`${c} cop${c === 1 ? "y" : "ies"} · ${sizeText(cap.largest[c])}`, cap.largest[c] < 10 ? "bad" : cap.largest[c] < 50 ? "warn" : "neutral",
+    { tip: `Logical allocation upper bound for ${c} empty cop${c === 1 ? "y" : "ies"} on different hosts. Not rebuild capacity or a placement guarantee: existing data and snapshots also need physical space.` })).join("");
 }
 
 /* The Volumes page's per-node card. */
@@ -1601,7 +1601,7 @@ async function lhSettingsPaint() {
   STATE.data.lhOffline = offline;
   const admin = can("admin"), v2 = cap.v2 || {};
   host.innerHTML = `${UI.moduleHeader(`Longhorn storage`, `How much Longhorn may promise on each disk, and its V2 data engine`, `<button class="btn sm" onclick="lhDisks()">Disks</button>
-      ${admin ? "" : '<span class="pill neutral">admin managed</span>'}`)}
+      ${admin ? "" : UI.chip("admin managed", "neutral")}`)}
     <div class="f2">
       <div class="f"><label>Over-provisioning ${tip("Longhorn books a volume's full size on a disk when it places a replica, however little it holds. At 100% a disk can be promised its own size; at 200%, twice that, betting volumes never fill up. If they do, the disk runs out and its replicas fail.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
@@ -1630,7 +1630,7 @@ async function lhSettingsPaint() {
       <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and usually 2 GiB of hugepages (setup checks the installed requirement), and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
         It cannot be switched off while V2 volumes exist. <a class="linkish" onclick="v2Details(true)">What each host needs</a></div>
-      ${(v2.nodes || []).length ? `<div class="lh-v2-nodes">${v2.nodes.map(n => `<span class="tag ${n.ready ? "ok" : ""}" ${n.missing.length ? `data-tip="Needs ${esc(n.missing.join(" and "))}"` : ""}>${esc(lhShort(n.name))} · ${n.ready ? "ready" : "not ready"}</span>`).join("")}</div>` : ""}</div>`;
+      ${(v2.nodes || []).length ? `<div class="lh-v2-nodes">${v2.nodes.map(n => UI.chip(`${lhShort(n.name)} · ${n.ready ? "ready" : "not ready"}`, n.ready ? "ok" : "neutral", { tip: n.missing.length ? `Needs ${n.missing.join(" and ")}` : "" })).join("")}</div>` : ""}</div>`;
 }
 window.lhSettingsPaint = lhSettingsPaint;
 
@@ -1664,25 +1664,25 @@ window.lhSettingsSave = async () => {
 /* ---------------- node disks ----------------
    Every disk on a node, what it is for, and the Longhorn disks on it - with
    adding a disk to Longhorn and taking one out. */
-const DISK_ROLE = { longhorn: ["Longhorn", "ok"], system: ["system", ""], provisioning: ["being added", "warn"],
-  "in use": ["in use", ""], unused: ["unused", "info"] };
+const DISK_ROLE = { longhorn: ["Longhorn", "ok"], system: ["system", "neutral"], provisioning: ["being added", "warn"],
+  "in use": ["in use", "neutral"], unused: ["unused", "info"] };
 
 function diskRowsHtml(node, disks, harvester) {
   return disks.map(d => {
-    const [word, tone] = DISK_ROLE[d.role] || [d.role, ""];
+    const [word, tone] = DISK_ROLE[d.role] || [d.role, "neutral"];
     const lh = d.longhorn.map(x => {
       const pct = x.size_gb ? Math.round(x.used_gb / x.size_gb * 100) : 0;
       return `<div class="disk-lh">
-        <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ' <span class="tag info">V2</span>' : ""}</span>
+        <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ` ${UI.chip("V2", "info")}` : ""}</span>
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
         ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
-        <div class="row disk-tags">${(x.tags || []).map(t => `<span class="tag info">${esc(t)}</span>`).join("")
+        <div class="row disk-tags">${(x.tags || []).map(t => UI.chip(t, "info")).join("")
           || '<span class="dim xs">no tags</span>'}
           <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(x.tags || []))}"
             onclick="diskTags(${jsq(node)},${jsq(x.id)},JSON.parse(this.dataset.tags))">${(x.tags || []).length ? "Edit tags" : "Add tags"}</button></div>
         <div class="row disk-lh-acts">
-          ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ''}
+          ${x.evicting ? UI.chip("moving replicas off", "warn") : !x.scheduling ? UI.chip("no new replicas", "neutral") : ''}
           ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
             !x.ready && {label:'Replace failed disk',need:'admin',run:`diskRetire(${jsq(node)},${jsq(x.id)})`},
             {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
@@ -1695,7 +1695,7 @@ function diskRowsHtml(node, disks, harvester) {
     return `<div class="disk-card">
       <div class="between"><div><b class="mono">${esc(d.device || "Longhorn")}</b> <span class="dim xs">${esc(d.model || "")}</span>
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
-        <div class="row">${d.system ? '<span class="tag">system</span>' : ""}${d.system && d.role === "system" ? "" : `<span class="tag ${tone}">${esc(word)}</span>`}
+        <div class="row">${d.system ? UI.chip("system", "neutral") : ""}${d.system && d.role === "system" ? "" : UI.chip(word, tone)}
           ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
           ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
@@ -1709,7 +1709,7 @@ function nodeTagsLine(node, inv) {
   const tags = (inv.node_tags || {})[node];
   if (!tags) return "";
   return `<div class="row disk-tags node-tags"><span class="dim xs">Node tags</span>
-    ${tags.map(t => `<span class="tag">${esc(t)}</span>`).join("") || '<span class="dim xs">none</span>'}
+    ${tags.map(t => UI.chip(t, "neutral")).join("") || '<span class="dim xs">none</span>'}
     <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(tags))}"
       onclick="nodeTags(${jsq(node)},JSON.parse(this.dataset.tags))">${tags.length ? "Edit" : "Add"}</button></div>`;
 }
@@ -2025,7 +2025,7 @@ window.diskRetire = async (node, disk) => {
       each volume rebuilds from its healthy copy, then takes the disk out of Longhorn${p.harvester_device ? " and Harvester" : ""}
       so the new drive can be added in its place.</p>
     ${p.volumes.length ? `<div class="sec">${p.volumes.length} volume${p.volumes.length === 1 ? "" : "s"} had a copy on it</div>
-      <div class="rc-uses">${p.volumes.map(v => `<div><b>${esc(v.claim)}</b> <span class="tag ${word[v.outcome][1]}">${word[v.outcome][0]}</span>
+      <div class="rc-uses">${p.volumes.map(v => `<div><b>${esc(v.claim)}</b> ${UI.chip(word[v.outcome][0], word[v.outcome][1])}
         <span class="dim xs">${esc(v.why)}</span></div>`).join("")}</div>` : '<div class="dim small">No replicas were on it.</div>'}
     ${p.only_copies ? `<div class="note bad" style="margin-top:12px"><b>${p.only_copies} volume${p.only_copies === 1 ? "" : "s"} had the only copy on this disk.</b>
       If the drive is only unplugged, reconnect it instead: the data comes back with it. Otherwise restore

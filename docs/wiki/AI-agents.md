@@ -167,8 +167,8 @@ Tools come in three classes:
 | `rebalance_containers` | Moves containers as preview_container_rebalance reviewed them: settings {moves, review_token, restart: true, exclude}, or {picks, review_token, restart: true} for chosen moves, which stop at the first that does not go | `containers:manage` | change |
 | `get_uptime` | Each app's and VM's uptime check and how it has answered | `read` | read |
 | `set_uptime_check` | How an app or VM is checked: settings {kind, ns, name, mode (auto, tcp, http, off), port, path} | `containers:manage` | change |
-| `set_outage_actions` | What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook}} | `containers:manage` | change |
-| `test_outage_webhook` | Sends a test call to the webhook an app's or VM's outage actions would call: settings {kind, ns, name, webhook} | `containers:manage` | change |
+| `set_outage_actions` | What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook, format (generic, ntfy, gotify), lan (admins only)}} | `containers:manage` | change |
+| `test_outage_webhook` | Sends a test call to the webhook an app's or VM's outage actions would call: settings {kind, ns, name, webhook, format}; an admin approves it | `containers:manage` | change |
 
 ### Schedules
 

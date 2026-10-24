@@ -75,6 +75,7 @@ MODULES = (
     "homestead_config_backup",
     "homestead_container_diagnostics",
     "homestead_container_rebalance",
+    "homestead_data_copies",
     "homestead_deploy",
     "homestead_deploy_server",
     "homestead_diagnostics",
@@ -85,6 +86,7 @@ MODULES = (
     "homestead_fleet",
     "homestead_flow",
     "homestead_forecast",
+    "homestead_gitops",
     "homestead_group_tiers",
     "homestead_hardware",
     "homestead_helm",
@@ -163,6 +165,7 @@ MODULES = (
     "homestead_vms",
     "homestead_vmstore",
     "homestead_volumes",
+    "homestead_weekly_trim",
     "homestead_workloads",
 )
 ROLES = ("viewer", "operator", "admin")
