@@ -46,6 +46,9 @@ window.vmConsole = (ns, name, kind = "vnc") => {
         ${VMC_TOUCH() ? `<button class="btn sm" id="vmcKeyboard" onclick="vmConsoleKeyboard()" title="Open this device's keyboard to type into the VM">Keyboard</button>` : ""}
         <button class="btn sm" onclick="vmConsoleKeys()" title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
         <button class="btn sm" onclick="vmConsolePaste()" title="Paste text into the VM - it is typed key by key (Ctrl+Shift+V on the screen)">${icon("copy")}Paste</button>
+        <select id="vmcLayout" class="sm" style="width:auto" aria-label="The VM's keyboard layout" onchange="vmKeyLayoutChanged(this.value)"
+          title="The keyboard layout set inside the VM: pasted text is typed as the keys that make each character there">${Object.entries(VMC_LAYOUTS).map(([id, label]) =>
+          `<option value="${id}" ${id === vmKeyLayout() ? "selected" : ""}>${label} keyboard</option>`).join("")}</select>
         <button class="btn sm" id="vmcCopy" hidden onclick="vmConsoleCopyGuest()" title="Copy what the VM last put on its clipboard (Ctrl+Shift+C)">Copy from VM</button>
         <button class="btn sm" onclick="vmConsoleFull()" title="Fill the screen">${icon("ext")}Full screen</button></span>`
       : `<span class="vmc-tools">
@@ -58,8 +61,7 @@ window.vmConsole = (ns, name, kind = "vnc") => {
         <textarea id="vmcPasteText" rows="3" spellcheck="false" autocomplete="off"
           placeholder="Paste here (Ctrl+V), then Type it: the VM has no shared clipboard, so it is typed key by key"></textarea>
         ${UI.actions(`<button class="btn sm pri" onclick="vmConsoleTypePasted()">Type into the VM</button>
-          <label class="switch" style="margin:0"><input type="checkbox" id="vmcPasteEnter"> <span>Press Enter after</span></label>
-          <button data-dialog-dismiss="true" class="btn sm" onclick="vmConsolePasteClose()">Cancel</button>`)}</div>
+          <label class="switch" style="margin:0"><input type="checkbox" id="vmcPasteEnter"> <span>Press Enter after</span></label>          <button data-dialog-dismiss="true" class="btn sm" onclick="vmConsolePasteClose()">Cancel</button>`)}</div>
       <div class="vmc-wrap" id="vmcWrap"><div class="vmc-screen" id="vmcScreen" tabindex="0"></div>
         <textarea class="vmc-keys" id="vmcKeys" aria-label="Type into the VM" autocapitalize="off" autocomplete="off"
           autocorrect="off" spellcheck="false" enterkeyhint="send"></textarea></div>`
@@ -158,7 +160,9 @@ function vmConsoleKeyInput(rfb) {
     let same = 0;
     while (same < held.length && same < now.length && held[same] === now[same]) same++;
     for (let i = same; i < held.length; i++) press(0xff08);
-    for (const ch of now.slice(same)) press(keysymOf(ch));
+    for (const ch of now.slice(same)) {
+      for (const [keysym, code, down] of vmKeyStrokes(ch)) if (VMC.rfb === rfb) rfb.sendKey(keysym, code, down);
+    }
     held = now;
     // Mid-word the keyboard is still editing its own text; leave it be.
     if (!composing) reset();
@@ -196,23 +200,74 @@ function keysymOf(ch) {
   return code < 0x100 ? code : 0x01000000 + code;
 }
 
+/* Which key, and whether Shift, types each character on the VM's own
+   keyboard layout. A character alone is turned into a key by QEMU's US
+   keymap, without Shift: "A" came out as "a", and on a UK guest "\" as "#".
+   So a character is sent as the key that types it there, Shift held round
+   it; one the layout has no key for goes as the character, as before. */
+const VMC_ROWS = [
+  ["Backquote Digit1 Digit2 Digit3 Digit4 Digit5 Digit6 Digit7 Digit8 Digit9 Digit0 Minus Equal", "`1234567890-=", "~!@#$%^&*()_+"],
+  ["KeyQ KeyW KeyE KeyR KeyT KeyY KeyU KeyI KeyO KeyP BracketLeft BracketRight Backslash", "qwertyuiop[]\\", "QWERTYUIOP{}|"],
+  ["KeyA KeyS KeyD KeyF KeyG KeyH KeyJ KeyK KeyL Semicolon Quote", "asdfghjkl;'", "ASDFGHJKL:\""],
+  ["KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Comma Period Slash", "zxcvbnm,./", "ZXCVBNM<>?"]];
+// A UK keyboard: the keys whose characters differ from a US one, and its
+// extra key left of Z.
+const VMC_UK = { Backquote: ["`", "¬"], Digit2: ["2", "\""], Digit3: ["3", "£"], Quote: ["'", "@"],
+  Backslash: ["#", "~"], IntlBackslash: ["\\", "|"] };
+const VMC_LAYOUTS = { us: "US", gb: "UK" };
+function vmKeyMap(layout) {
+  const map = { " ": ["Space", false], "\n": ["Enter", false], "\t": ["Tab", false], "\b": ["Backspace", false] };
+  const keys = {};
+  for (const [codes, plain, shifted] of VMC_ROWS) codes.split(" ").forEach((code, i) => { keys[code] = [plain[i], shifted[i]]; });
+  if (layout === "gb") Object.assign(keys, VMC_UK);
+  for (const [code, [plain, shifted]] of Object.entries(keys)) {
+    map[plain] = [code, false];
+    map[shifted] = [code, true];
+  }
+  return map;
+}
+/* The key events that type one character: [keysym, code, down]. */
+function vmKeyStrokes(ch, layout = vmKeyLayout()) {
+  const keysym = keysymOf(ch), key = vmKeyMap(layout)[ch];
+  if (!key) return [[keysym, null, true], [keysym, null, false]];
+  const [code, shift] = key, press = [[keysym, code, true], [keysym, code, false]];
+  return shift ? [[0xffe1, "ShiftLeft", true], ...press, [0xffe1, "ShiftLeft", false]] : press;
+}
+/* The VM's keyboard layout, as last chosen here; a browser set to UK
+   English starts on UK. */
+function vmKeyLayout() {
+  if (VMC_LAYOUTS[VMC.layout]) return VMC.layout;
+  try {
+    const saved = localStorage.getItem("homestead.vm-keyboard");
+    if (VMC_LAYOUTS[saved]) return saved;
+  } catch (e) { /* storage blocked: the default */ }
+  return /^en-GB\b/i.test(navigator.language || "") ? "gb" : "us";
+}
+window.vmKeyLayoutChanged = value => {
+  try { localStorage.setItem("homestead.vm-keyboard", value); } catch (e) { /* kept for this page only */ }
+  VMC.layout = value;
+};
+
 /* Typed a little at a time, so a long paste does not flood the VM's
    keyboard and lose keys. */
 function vmConsoleTypeText(text, enter = false) {
   const rfb = VMC.rfb;
   if (!rfb) return toast("The screen is not connected", "bad");
-  const keys = [...String(text).replace(/\r\n?/g, "\n")].map(keysymOf);
-  if (enter) keys.push(0xff0d);
-  if (!keys.length) return;
+  const chars = [...String(text).replace(/\r\n?/g, "\n")];
+  if (enter) chars.push("\n");
+  if (!chars.length) return;
+  const layout = vmKeyLayout();
   let at = 0;
   const step = () => {
     if (VMC.rfb !== rfb) return;
-    for (const end = Math.min(keys.length, at + 40); at < end; at++) rfb.sendKey(keys[at], null);
-    if (at < keys.length) {
-      vmConsoleState(`typing · ${at} of ${keys.length}`);
+    for (const end = Math.min(chars.length, at + 40); at < end; at++) {
+      for (const [keysym, code, down] of vmKeyStrokes(chars[at], layout)) rfb.sendKey(keysym, code, down);
+    }
+    if (at < chars.length) {
+      vmConsoleState(`typing · ${at} of ${chars.length}`);
       setTimeout(step, 30);
     } else {
-      vmConsoleState(`typed ${keys.length} key${keys.length === 1 ? "" : "s"}`);
+      vmConsoleState(`typed ${chars.length} key${chars.length === 1 ? "" : "s"}`);
       rfb.focus({ preventScroll: true });
     }
   };
