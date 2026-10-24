@@ -47,11 +47,14 @@ import homestead_ports as PORTS
 import homestead_push as PUSH
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
+import homestead_restarts as RESTARTS
 import homestead_restore_swap as RESTORE_SWAP
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
 import homestead_routes as MODULE_ROUTES
 import homestead_schedules as SCHEDULES
+import homestead_scheduled_jobs as CRONJOBS
+import homestead_start_order as START_ORDER
 import homestead_self as SELF
 import homestead_storage as STORAGE
 import homestead_updates as UPDATES
@@ -132,7 +135,13 @@ def _uptime_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=cached("vms", 5, VMS.list_vms))
+                try:
+                    vms = cached("vms", 5, VMS.list_vms)
+                except Exception as error:
+                    # Unread VMs sit this round out; their records are left as they were, not checked as gone.
+                    vms = None
+                    print(f"uptime: VMs not read: {str(error)[:160]}", flush=True)
+                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=vms)
                 try:
                     outage_tick()
                 except Exception as error:
@@ -199,7 +208,7 @@ def _schedules_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                if SCHEDULES.tick(scheduled_items(), schedule_act):
+                if SCHEDULES.tick(scheduled_items(), schedule_act, arrange=START_ORDER.arrange):
                     _cache.pop("wl", None)
                     _cache.pop("vms", None)
                 beat("schedules", 60, leader_only=True)
@@ -284,8 +293,10 @@ def _alert_sources():
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, NODES.ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
+    take("cronjobs", CRONJOBS.cronjob_alert_facts)
     take("outage", lambda: OUTAGE.alert_facts())
     take("outage-lan", OUTAGE_CARRY.alert_facts)
+    take("starts-after", lambda: START_ORDER.alert_facts(cached("wl", 5, WORKLOADS.get_workloads)))
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("gitops", GITOPS.alert_facts)
@@ -582,7 +593,16 @@ def guard_managed_smb(ns, name):
 def workload_start_plan(ns, name, replicas=1):
     ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    return PLACE.start_plan(ns, name, replicas, threshold)
+    plan = PLACE.start_plan(ns, name, replicas, threshold)
+    # The apps it starts after that are stopped: it would wait for them (#746).
+    try:
+        plan["waits_for"] = START_ORDER.waits_for(ns, name, kget)
+    except Exception as error:
+        plan["waits_for"] = []
+        # #620: Start says it could not check, rather than that nothing waits.
+        plan["waits_for_error"] = f"could not check which apps it starts after: {str(error)[:160]}"
+        print(f"start plan: starts-after not read for {ns}/{name}: {str(error)[:160]}", flush=True)
+    return plan
 
 
 def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
@@ -691,7 +711,19 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
 def page_inputs():
     """What one snapshot cycle reads once and shares: the pod list (the
     Volumes page's bare pods read it too)."""
-    return {"pods": lambda: kget("/api/v1/pods")}
+    return {"pods": _pods_seen}
+
+
+def _pods_seen():
+    """The cycle's pod list, which the leader also notes restarts from
+    (#740), on a thread of its own: the pages never wait for it, and a
+    failed note never costs them their pods."""
+    pods = kget("/api/v1/pods")
+    try:
+        RESTARTS.observe_later(pods)
+    except Exception as error:
+        print(f"restart record: {str(error)[:160]}", flush=True)
+    return pods
 
 
 def page_builders():

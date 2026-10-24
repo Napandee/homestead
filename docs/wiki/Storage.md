@@ -601,6 +601,31 @@ host preparation and required restarts; Homestead observes its progress rather
 than running generic host jobs. V2 needs Longhorn 1.8 or newer. It cannot be
 disabled while V2 volumes or block disks remain.
 
+### Disable V2 and recover its resources
+
+Open **Settings > Hardware and storage > Longhorn > Disable V2**. First move
+V2 volumes to V1 and remove the empty V2 disk registrations. The review lists
+each host's recoverable memory and explains reservations that must stay.
+
+Homestead disables the engine and waits for its instance managers to stop,
+releasing their polling CPU and process memory. For hugepages, new host
+preparations record the original pool and the additional reservation. Cleanup
+preserves that original pool and refuses changes if another workload needs the
+extra pages, host identity or configuration changed, or ownership is uncertain.
+Older preparations have no ownership record: their hugepages remain reserved.
+Shared hugepage policies and multiple NUMA nodes require manual review.
+
+Eligible hosts are cordoned, and only Homestead's hugepage boot setting is
+restored. **Review restart** opens the normal workload, quorum and storage
+checks; cleanup never restarts hosts automatically or shrinks the live pool.
+Restart one host at a time. The saved job verifies both host memory and
+Kubernetes capacity after restart. Then allow scheduling from the host page.
+On a single-host cluster, the restart interrupts Homestead and its workloads.
+
+Disks, packages, drivers and CPU isolation settings are left in place. Return
+through **Jobs** or **Review V2 resource cleanup** while V2 is off. Harvester
+continues to manage its own host resources through its existing V2 setting.
+
 ## Changing a volume's storage class
 
 Kubernetes cannot change a volume's class, so **Change storage class** makes a
