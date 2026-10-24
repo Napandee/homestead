@@ -41,10 +41,10 @@ shot() { # name text-the-screen-shows
   fi
 }
 key() { tmux send-keys -t tui "$@"; }
-start() { # PATH-prefix [rows]
+start() { # PATH-prefix [rows] [fixture environment]
   tmux kill-session -t tui 2>/dev/null
   tmux new-session -d -s tui -x 100 -y "${2:-32}" \
-    "env PATH=$1:$PATH TERM=xterm-256color NEWT_COLORS=root=white,black sh scripts/install.sh --dry-run; sleep 30"
+    "env PATH=$1:$PATH ${3:-} TERM=xterm-256color NEWT_COLORS=root=white,black sh scripts/install.sh --dry-run; sleep 30"
   sleep 2
 }
 
@@ -60,6 +60,12 @@ key Enter; shot console "Show a live status screen"   # default-on physical cons
 key Enter; shot ready "Review the settings"   # the installation summary
 key Down; key Enter; shot versions "Select the k3s version"       # a component's releases
 key Escape; sleep 1; key Escape
+
+# Joining cannot infer the remote Longhorn setting from a node token.
+start "$BIN" 32 "HS_ROLE=agent HS_DIST=k3s HS_SERVER=192.0.2.10 HS_TOKEN=example-token HS_NODE_IP=192.0.2.50"
+shot join-checks "Results for"
+key Enter; shot join-storage "Cluster Storage Path"
+key Escape
 
 # ---- a k3s server with things to fix
 stub systemctl 'case "$1" in

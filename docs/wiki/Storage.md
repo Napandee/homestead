@@ -367,17 +367,20 @@ Longhorn folder, so pair it with another drive or host for redundancy.
 
 ### Room for the system
 
-Longhorn's first disk, `/var/lib/longhorn`, is a folder on the system's root
-filesystem unless it is a volume of its own. Longhorn keeps 30% of that
+New installations use `/mnt/longhorn-os` for replica data and keep runtime
+files at `/var/lib/longhorn` on the OS. Older installations often share
+`/var/lib/longhorn` for both. Without a dedicated data volume, the replica
+folder shares the system's root filesystem. Longhorn keeps 30% of that
 filesystem out of its sums, but that only decides where *new* copies go:
 copies already there, and their snapshots, keep growing. Three things keep the
 system's space the system's:
 
 - **A volume of its own.** Where the system is on LVM with room, the installer
-  mounts a logical volume at `/var/lib/longhorn` before Longhorn starts - on
-  every machine it sets up, joining ones too - so Longhorn can never fill the
-  root filesystem. It asks how big; space left out stays free for the system or
-  for V2.
+  mounts a logical volume at `/mnt/longhorn-os` for new clusters. Replicas
+  cannot fill the OS filesystem; runtime files remain on the OS. Joining
+  hosts match the existing cluster's storage path. Existing layouts are
+  preserved. Space left out stays free for the system or V2. If allocation
+  starts but formatting or mounting fails, installation stops for inspection.
 - **A capped journal.** The systemd journal is capped at 1 GB on every host
   (journald's own default is up to 4 GB), unless a cap is set already.
 - **A floor.** When a root filesystem holding a Longhorn disk falls under 15%

@@ -37,6 +37,8 @@
 #   HS_NODEPROBE=yes|no                         the node probe, installed by Homestead (default yes)
 #   HS_CONSOLE=yes|no                           local host status screen (default yes; native on Harvester)
 #   HS_LONGHORN_VOLUME=200|0                    GB for Longhorn's own LVM volume where there is room (0: none)
+#   HS_LONGHORN_DATA_PATH=/mnt/longhorn-os       joining: match the cluster's Longhorn default-data-path
+#                                              older clusters commonly use /var/lib/longhorn
 #   HS_K8S_VERSION=v1.33.4+k3s1                 k3s or RKE2 version
 #   HS_LONGHORN_VERSION=v1.9.1  HS_KUBEVIRT_VERSION=v1.6.0  HS_CDI_VERSION=v1.62.0
 #   HS_VERSION=2.8.184                          Homestead version
@@ -890,6 +892,7 @@ lvm_room() {
   [ -n "$vg" ] || return 0
   lvs "$vg/longhorn" >/dev/null 2>&1 </dev/null && return 0
   mountpoint -q /var/lib/longhorn 2>/dev/null && return 0
+  mountpoint -q /mnt/longhorn-os 2>/dev/null && return 0
   vgs --noheadings --units g --nosuffix -o vg_size,vg_free "$vg" 2>/dev/null </dev/null |
     awk -v vg="$vg" '{s = int($1); f = int($2); r = int(s / 10); if (r < 10) r = 10; if (f - r >= 20) print vg, f - r, r}'
 }
@@ -907,7 +910,7 @@ pick_longhorn_volume() {
   while :; do
     size=$(ask HS_LONGHORN_VOLUME "Longhorn Volume" "This machine's system is on LVM, and $1 has $2 GB free beyond $3 GB kept for the system.
 
-Longhorn can have a volume of its own there, mounted at /var/lib/longhorn, so its data can never fill the system's filesystem. Space left out stays free: for the system, or later for Longhorn's V2 engine (Nodes > Disks > Use free space).
+Longhorn replica data can have a volume of its own at ${LH_DATA_PATH:-/mnt/longhorn-os}, so replicas cannot fill the system's filesystem. New clusters keep runtime files on the OS at /var/lib/longhorn. Space left out stays free for the system or Longhorn's V2 engine (Hosts > Storage > Use free space).
 
 Size in GB (0 keeps Longhorn on the system's filesystem):" "$2") || exit
     case "$size" in ''|*[!0-9]*) ;; *) break ;; esac
@@ -917,7 +920,24 @@ Size in GB (0 keeps Longhorn on the system's filesystem):" "$2") || exit
   if [ "$size" = 0 ]; then LH_VOLUME=none; LH_LINE="on the system's filesystem"
   else [ "$size" -gt "$2" ] && size=$2; LH_VOLUME=$size; LH_LINE="$1/longhorn, $size GB of its own"; fi
 }
-volume_args() { [ -n "${LH_VOLUME:-}" ] && printf -- ' --longhorn-volume %s' "$LH_VOLUME"; true; }
+volume_args() {
+  [ -n "${LH_VOLUME:-}" ] && printf -- ' --longhorn-volume %s' "$LH_VOLUME"
+  [ -n "${LH_DATA_PATH:-}" ] && printf -- ' --longhorn-data-path %s' "$LH_DATA_PATH"
+  true
+}
+
+pick_longhorn_path() {
+  if [ "$DIST" = rke2 ]; then path_command='/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml'
+  else path_command='k3s kubectl'; fi
+  LH_DATA_PATH=$(choose HS_LONGHORN_DATA_PATH "Cluster Storage Path" "Match the existing cluster's Longhorn default-data-path setting. On a server, check with:
+
+sudo $path_command -n longhorn-system get settings.longhorn.io default-data-path -o jsonpath='{.value}'
+
+This selects where replica data goes on this host. It does not change the cluster's settings. A custom path needs manual storage setup." \
+    /mnt/longhorn-os "/mnt/longhorn-os   Replica data only (new layout)" \
+    /var/lib/longhorn "/var/lib/longhorn  Replicas and runtime (legacy layout)") || exit
+  case "$LH_DATA_PATH" in /mnt/longhorn-os|/var/lib/longhorn) ;; *) fail "HS_LONGHORN_DATA_PATH must match one of the two supported layouts." ;; esac
+}
 
 dist_name() { if [ "$DIST" = rke2 ]; then echo RKE2; else echo k3s; fi; }
 token_file() { echo "/var/lib/rancher/$DIST/server/node-token"; }
@@ -981,7 +1001,8 @@ join_cluster() { # server|agent|tiebreaker
   SECRET="$token"
   case "$1" in server|tiebreaker) mode=join ;; *) mode=agent ;; esac
   # A tiebreaker holds an etcd vote and no Longhorn data (#364).
-  if [ "$1" = tiebreaker ]; then LH_VOLUME=""; LH_LINE=""; else pick_longhorn_volume; fi
+  if [ "$1" = tiebreaker ]; then LH_VOLUME=""; LH_LINE=""; LH_DATA_PATH=""
+  else pick_longhorn_path; pick_longhorn_volume; fi
   pick_console
   summary "Review the settings below. Select a component to change its version, or select Install to begin.
 
@@ -992,6 +1013,7 @@ join_cluster() { # server|agent|tiebreaker
   Node name            $(hostname)
   Node IP address      $NODE_IP${LH_LINE:+
   Longhorn data        $LH_LINE}
+  Storage path         ${LH_DATA_PATH:-Not used}
 
 Longhorn host packages (open-iscsi, NFS client) are installed first." k8s
   # shellcheck disable=SC2046
