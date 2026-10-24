@@ -47,5 +47,23 @@ try {
   await page.mouse.click(10, 300);
   assert.equal(await error.count(), 0, "the next click elsewhere clears the error");
   assert.deepEqual(errors, []);
-  console.log("Dialog focus: moves in, Tab stays inside, returns to the opener; Close is a button; error toasts stay until dismissed or the next action, and let clicks through");
+
+  // ask() and askText() fit their box: the button bar reached 4px past each
+  // side of it, so every confirm had a horizontal scrollbar (#833).
+  for (const [width, height] of [[1280, 900], [390, 844]]) {
+    const sized = await browser.newPage({ viewport: { width, height } });
+    await sized.goto(`${base}/?demo=1`, { waitUntil: "networkidle" });
+    for (const open of ['ask("Discard your changes to Add a host?", { title: "Unsaved changes", ok: "Discard changes", cancel: "Keep editing", danger: true })',
+      'askText("Name the snapshot", "nightly", { title: "Take a snapshot" })']) {
+      await sized.evaluate(`void ${open}`);   // not awaited: ask() resolves only once answered
+      const box = sized.locator(".askbox");
+      await box.waitFor();
+      const { scroll, client } = await box.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      assert.ok(scroll <= client, `${open.split("(")[0]}() at ${width}px scrolls sideways: ${scroll} > ${client}`);
+      await sized.keyboard.press("Escape");
+      await box.waitFor({ state: "detached" });
+    }
+    await sized.close();
+  }
+  console.log("Dialog focus: moves in, Tab stays inside, returns to the opener; Close is a button; error toasts stay until dismissed or the next action, and let clicks through; ask() fits its box at desktop and phone width");
 } finally { await browser.close(); }
