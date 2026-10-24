@@ -207,9 +207,23 @@ With three replicas across three hosts, clearing a host's only V1 disk
 requires a spare V1 disk on that host or another eligible V1 host. The review
 checks capacity; it does not reserve it while evacuation runs.
 
-This guided preparation supports dedicated whole disks with ext4 or XFS.
-System disks, shared filesystems, partitions and LVM require separate disk
-planning. Harvester manages its own disks. Resolve backing-image copies
+This guided preparation supports dedicated ext4 or XFS filesystems on whole
+disks, individual partitions, and ordinary single-segment linear LVM volumes.
+A partition or logical volume can share its physical disk with the OS, provided
+it is a separate Longhorn filesystem. Homestead reuses that region at its
+existing size; it does not repartition, shrink filesystems or remove LVM metadata.
+The review identifies the exact region to erase. Subdevices use the AIO driver,
+which leaves the physical controller under Linux control. Root, boot, swap,
+shared mounts, nested storage, thin pools and complex LVM layouts are refused.
+The installer can mount its dedicated Longhorn LV at `/var/lib/longhorn`.
+Longhorn also keeps runtime files there, including engine binaries, sockets,
+metadata and logs. **That layout cannot be converted while runtime storage
+still shares the filesystem.** Homestead names the entries blocking review.
+For a supported installer LV, **Runtime maintenance** offers the separate
+move and retirement workflow below. Changing **Default Data Path** alone does not relocate those runtime
+paths ([Longhorn host paths](https://longhorn.io/docs/1.13.0/deploy/install/)).
+Remaining replica, backing-image, lost+found or other files also block erasing.
+See [Longhorn block disk drivers](https://longhorn.io/docs/1.13.0/nodes-and-volumes/nodes/multidisk/). Harvester manages its own disks. Resolve backing-image copies
 before starting, and attach affected volumes so their writable replicas can
 be checked.
 
@@ -222,9 +236,85 @@ automatically recreated. Keep the task and inspect its log, the device and
 the host receipt in `/var/lib/homestead/disk-v2` before recovering partial
 changes; unresolved tasks cannot be dismissed.
 
+Erasing is blocked while another V1 store registration uses the same filesystem,
+including an alias or nested folder. Backing-image claims, orphan records,
+remaining replica directories and unknown files also block it. Move the data,
+or delete it through its normal reviewed action and wait for cleanup; preparation
+never deletes volumes to make room. A tracked volume disappearing during
+evacuation requires a new review rather than being treated as a successful move.
+Immediately before unmounting, the helper makes the filesystem read-only and
+checks its contents again. If this final check fails, it keeps the filesystem
+read-only for inspection and does not erase it. The task log explains the blocker.
+
 Preparing a physical disk does not convert its volumes. Create a V2 storage
 class, then use **Change storage class** on each volume you want to move.
 That copies the volume and stops its workloads for the copy.
+
+### Move runtime off a legacy installer LV
+
+Older installations put both Longhorn replicas and its runtime files on the LV
+mounted at `/var/lib/longhorn`. Runtime is shared by V1 and V2. New installations
+keep runtime on the OS and replicas on `/mnt/longhorn-os`; an existing mount is
+never changed by an upgrade.
+
+On the legacy store, open **… → Runtime maintenance**, or **Review runtime move**
+from its blocked V2 review. This supports a dedicated, ordinary linear LV in the
+OS's single-PV volume group, an ext4 or XFS OS filesystem, Python 3.11 or newer,
+and one K3s server or agent service. Other layouts require manual maintenance.
+The disk diagram identifies the selected LV and the OS and sibling regions to keep.
+
+1. Move every replica and backing image elsewhere, or remove it through its normal
+   separately reviewed action. Wait for cleanup and healthy replacement copies.
+   Other registered stores on the same filesystem, residual data, unfinished
+   storage jobs, unknown files and automatic default-disk creation block review.
+2. Review **Move runtime**. Homestead checks room on the OS filesystem for an active
+   copy, a separate archive and 5 GiB remaining. It disables the V1 disk and rebinds
+   its existing registration to a protected retained mount. Scheduling stays off.
+   This step saves a boot worker and a required K3s startup dependency; it does not
+   remove the original files or restart the host.
+3. Use **Review host restart**. During the restart, before K3s starts, the worker
+   checks device identities, mounts and process use, makes the source read-only,
+   and copies and verifies supported runtime files. Runtime goes under
+   `/var/lib/homestead/longhorn-runtime/<operation>/active` on the OS, with a separate
+   `archive` beside it. A persistent bind mount keeps the fixed `/var/lib/longhorn`
+   path. The original LV remains read-only at `/mnt/homestead-retired-<operation>`.
+4. Once the host returns, **Review retirement** verifies the retained source and
+   archive again. Type the exact device and confirm removal of only the verified
+   archived originals. A second separately reviewed restart performs this removal
+   before K3s starts. The filesystem, LV boundary, disk configuration and archive
+   remain; this action does not format the LV or delete volume data.
+5. After retirement succeeds, **Prepare for V2** opens the ordinary evacuation and
+   erase reviews for that retained registration. All existing V2 safety checks still
+   apply. It is only this separate erase approval that clears filesystem signatures
+   and registers the raw LV as a V2 disk. Volumes are converted separately.
+
+A single-host cluster is unavailable during each restart. On a multi-host cluster,
+finish one host's runtime workflow before starting another. Each restart still
+uses host maintenance's workload, capacity and quorum review; moving runtime never
+automatically restarts a host. Resolve other host and
+storage maintenance first; do not change its LVM layout, mounts or disk registration
+while this job is open. Both the active runtime and its archive consume OS space;
+normal runtime growth continues there after the move.
+
+If an inspection or verification fails, the worker blocks K3s startup and preserves
+its last durable phase. It never treats an interrupted copy as success or switches
+back to an old runtime copy after activation. Open the saved job in **Jobs** and use
+**Recheck outcome** when the host is reachable. If Kubernetes cannot start, inspect
+`RECOVERY.txt`, `state.json`, `failure.txt` and `journalctl -u homestead-longhorn-runtime`
+from the host console. Keep the original LV, archive and startup dependency.
+For an **unarmed** job that never started copying, `RECOVERY.txt` provides a local
+`recover-staging` command. It verifies the original writable mount, fstab, receipt,
+worker and protected retained placeholder before releasing only Homestead's exact
+startup dependency. It leaves the disk disabled and all data intact. After explicitly
+starting K3s, **Recheck outcome** restores and verifies staging. This recovery is
+refused once copying starts, if Kubernetes is running, or if any checked identity
+or configuration differs. Interrupted staging can also be repaired directly by
+**Recheck outcome** while Homestead remains reachable; no missing helper is silently
+redispatched in the background.
+Fix the recorded cause and retry the recorded phase; never clear a recovery hold
+by deleting the receipt or forcing an erase. Interrupted retirement resumes only
+when every remaining file still matches its archive. Unknown files, unreadable
+process state, private mounts or open files block removal.
 
 ## When a drive fails
 
@@ -342,17 +432,20 @@ Longhorn folder, so pair it with another drive or host for redundancy.
 
 ### Room for the system
 
-Longhorn's first disk, `/var/lib/longhorn`, is a folder on the system's root
-filesystem unless it is a volume of its own. Longhorn keeps 30% of that
+New installations use `/mnt/longhorn-os` for replica data and keep runtime
+files at `/var/lib/longhorn` on the OS. Older installations often share
+`/var/lib/longhorn` for both. Without a dedicated data volume, the replica
+folder shares the system's root filesystem. Longhorn keeps 30% of that
 filesystem out of its sums, but that only decides where *new* copies go:
 copies already there, and their snapshots, keep growing. Three things keep the
 system's space the system's:
 
 - **A volume of its own.** Where the system is on LVM with room, the installer
-  mounts a logical volume at `/var/lib/longhorn` before Longhorn starts - on
-  every machine it sets up, joining ones too - so Longhorn can never fill the
-  root filesystem. It asks how big; space left out stays free for the system or
-  for V2.
+  mounts a logical volume at `/mnt/longhorn-os` for new clusters. Replicas
+  cannot fill the OS filesystem; runtime files remain on the OS. Joining
+  hosts match the existing cluster's storage path. Existing layouts are
+  preserved. Space left out stays free for the system or V2. If allocation
+  starts but formatting or mounting fails, installation stops for inspection.
 - **A capped journal.** The systemd journal is capped at 1 GB on every host
   (journald's own default is up to 4 GB), unless a cap is set already.
 - **A floor.** When a root filesystem holding a Longhorn disk falls under 15%
@@ -453,8 +546,8 @@ the simpler guided route. See [the small third-server design](Installing-on-k3s#
 ### Disks, migration and recovery
 
 V1 and V2 can coexist, but enabling V2 does not convert existing volumes or
-filesystem disks. Homestead's guided V2 disk preparation uses dedicated whole
-disks. Check IOMMU grouping for the SPDK NVMe driver; a device that cannot be
+filesystem disks. Homestead's guided V2 disk preparation also supports dedicated partitions
+and linear LVM volumes with AIO. Check IOMMU grouping for the SPDK NVMe driver; a device that cannot be
 isolated may need the upstream AIO path instead. Never hand over an OS disk or
 a device still carrying wanted data.
 
@@ -507,6 +600,31 @@ On Harvester, the enable review uses Harvester's own setting. Harvester owns
 host preparation and required restarts; Homestead observes its progress rather
 than running generic host jobs. V2 needs Longhorn 1.8 or newer. It cannot be
 disabled while V2 volumes or block disks remain.
+
+### Disable V2 and recover its resources
+
+Open **Settings > Hardware and storage > Longhorn > Disable V2**. First move
+V2 volumes to V1 and remove the empty V2 disk registrations. The review lists
+each host's recoverable memory and explains reservations that must stay.
+
+Homestead disables the engine and waits for its instance managers to stop,
+releasing their polling CPU and process memory. For hugepages, new host
+preparations record the original pool and the additional reservation. Cleanup
+preserves that original pool and refuses changes if another workload needs the
+extra pages, host identity or configuration changed, or ownership is uncertain.
+Older preparations have no ownership record: their hugepages remain reserved.
+Shared hugepage policies and multiple NUMA nodes require manual review.
+
+Eligible hosts are cordoned, and only Homestead's hugepage boot setting is
+restored. **Review restart** opens the normal workload, quorum and storage
+checks; cleanup never restarts hosts automatically or shrinks the live pool.
+Restart one host at a time. The saved job verifies both host memory and
+Kubernetes capacity after restart. Then allow scheduling from the host page.
+On a single-host cluster, the restart interrupts Homestead and its workloads.
+
+Disks, packages, drivers and CPU isolation settings are left in place. Return
+through **Jobs** or **Review V2 resource cleanup** while V2 is off. Harvester
+continues to manage its own host resources through its existing V2 setting.
 
 ## Changing a volume's storage class
 
@@ -589,6 +707,64 @@ or needs recovery. Jobs from older releases keep their original engine and recov
 behavior. Externally forced downgrades, manual cluster changes, and external
 controllers are outside these internal guards; do not force an upgrade to bypass
 a recovery hold without an administrator-approved recovery plan.
+
+## Adjust the installer OS and Longhorn allocation
+
+On a host's system disk, choose **Adjust allocation**. Homestead can grow the
+existing OS or installer-created `longhorn` logical volume using unallocated
+space in its LVM volume group. The filesystem stays mounted and files remain
+in place. Normal ext4 and XFS filesystems are supported on ordinary linear LVs
+in a single local physical volume; thin pools, snapshots, RAID, network devices,
+external XFS log/realtime devices and ambiguous layouts are refused.
+
+The current/proposed bars show **logical allocation**, not physical partition
+positions. Review the mount folder, filesystem UUID, stable logical-volume
+identity, live used space, filesystem reserve and remaining unallocated space.
+The minimum offered online size is the existing LV size: the control cannot
+reduce either filesystem. Unused space *inside* the OS or Longhorn filesystem
+cannot be used to expand the other LV until it is safely reclaimed separately.
+
+Growth first extends the selected LV to an absolute number of extents, then
+grows its filesystem and verifies both sizes. The other LVs and partition table
+are retained. A short-lived review binds host boot, LV/VG/PV identities,
+filesystem identity and allocation geometry. The one-shot helper repeats the
+inspection under a Homestead operation lock for the volume group immediately
+before changing it. Growth runs in a private mount namespace and uses pinned
+device/filesystem references so later host mount changes cannot redirect it.
+Concurrent Homestead disk preparation and host maintenance are blocked while
+the saved allocation job remains unresolved. **Do not run external LVM changes
+during adjustment**, including renaming logical volumes or volume groups.
+Homestead's operation lock does not fence external administration; LVM still
+selects the logical volume by its verified name when extending it.
+
+If a helper fails, use **Jobs → Storage allocation → Recheck outcome**. Recheck
+reads the original helper and current allocation. If the LV already reached its
+approved size but the filesystem did not, it offers a separate **Finish
+filesystem growth** review. That operation allocates no more extents. A missing
+or altered helper, changed identity or unexpected allocation needs administrator
+inspection; Homestead does not replay an uncertain change. Keep its saved job
+and host receipts under `/var/lib/homestead/allocation` until resolved.
+
+### Reclaiming space and changing physical partitions
+
+This online feature does not shrink, erase, move or recreate an existing LV or
+partition. Shrinking a mounted ext4 root filesystem is not supported: it needs
+an offline rescue environment, verified backups and a filesystem-specific
+maintenance procedure. Homestead does not support shrinking XFS.
+
+Reducing an existing Longhorn allocation needs a separate evacuation/recreate
+workflow. Every V1 store on that filesystem (including aliases and nested
+paths), replicas, backing images, orphaned data and temporary/import files must
+be accounted for and moved to verified healthy copies or deliberately deleted
+through their normal approved workflows. The filesystem must then be proven
+unused and empty before an erase can be reviewed. Disabling scheduling or an
+empty Kubernetes list is insufficient. That destructive reclaim workflow is
+**not implemented by Adjust allocation**; it never erases data to make room.
+
+The underlying tools support the selected growth operations:
+[LVM lvextend](https://man7.org/linux/man-pages/man8/lvextend.8.html),
+[ext4 resize2fs](https://man7.org/linux/man-pages/man8/resize2fs.8.html) and
+[XFS online growth](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsgrow).
 
 ## Without Longhorn
 

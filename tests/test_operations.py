@@ -12,6 +12,17 @@ import homestead_operations as operations
 
 
 class OperationTests(unittest.TestCase):
+    def test_power_outage_context_requires_a_confirmed_helper(self):
+        for ref, expected in [
+            ({"planned_outage": True}, (True, False)),
+            ({"forced": True}, (False, False)),
+            ({"planned_outage": True, "handoff": True}, (True, False)),
+            ({"planned_outage": True, "handoff": True, "helper_uid": "helper-uid"}, (True, True)),
+        ]:
+            out = {}
+            operations._view_node_power({"ref": ref}, out)
+            self.assertEqual(expected, (out["power"]["planned_outage"], out["power"]["handoff"]))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.objects = {}

@@ -104,7 +104,8 @@ rules:
     # fromBackup parameter points at the selected Longhorn backup.
     verbs: [get, list, create]
   - apiGroups: ["longhorn.io"]
-    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols]
+    # Orphan records must be empty before a V1 filesystem can be erased.
+    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols, orphans]
     verbs: [get, list, watch]
   # Observe V2 live upgrades; Longhorn owns the rolling controller and pods.
   - apiGroups: ["longhorn.io"]
@@ -362,7 +363,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/homestead-lab/homestead:2.8.332-dev.3"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/homestead-lab/homestead:2.8.332-dev.8"}'
 spec:
   replicas: 1
   strategy:
@@ -397,7 +398,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/homestead-lab/homestead:2.8.332-dev.3
+          image: ghcr.io/homestead-lab/homestead:2.8.332-dev.8
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -414,7 +415,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/homestead-lab/homestead:2.8.332-dev.3
+          image: ghcr.io/homestead-lab/homestead:2.8.332-dev.8
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

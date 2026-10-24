@@ -106,7 +106,59 @@ window.lhV2Reboot = async node => {
   lhV2ReturnToSetup();
 };
 window.lhV2Disable = async () => {
-  if(!(await ask('Disable Longhorn V2? This is refused while V2 volumes or block disks exist.', { title: 'Disable Longhorn V2', ok: 'Disable V2', danger: true }))) return;
-  try { await api('/api/longhorn/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({v2:false})}); await lhSettingsPaint(); }
-  catch(e) { toast(e.message,'bad'); }
+  if(typeof STATE!=='undefined' && STATE.data.lhcap?.v2?.harvester_setting!=null){
+    if(!(await ask('Disable V2 through Harvester? Harvester manages host memory. V2 volumes and block disks must be removed first.',{title:'Disable Harvester V2',ok:'Disable V2',danger:true})))return;
+    try{await api('/api/longhorn/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({v2:false})});await lhSettingsPaint();}catch(e){toast(e.message,'bad');}
+    return;
+  }
+  return lhV2CleanupOpen();
 };
+
+let v2CleanupSeq=0,v2CleanupTimer=null,v2CleanupApproval=null,v2CleanupBusy=false;
+const v2CleanupPost=(path,body)=>api('/api/longhorn/v2/cleanup'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+function v2CleanupHosts(rows){
+  return UI.table([{label:'Host'},{label:'RAM owned by V2'},{label:'Result'}],rows.map(row=>[
+    esc(row.node),`${esc((row.owned_pages||0)*2)} MiB`,
+    row.reason?esc(row.reason):row.phase==='complete'?'Released':row.phase==='restart-required'?
+      UI.button('Review restart',`nodePowerReview(${jsArg(row.node)},'reboot')`,{attrs:'data-need="admin"'}):
+      `${esc((row.baseline||0)*2)} MiB kept for the original pool`
+  ]));
+}
+window.lhV2CleanupOpen=async()=>{
+  const seq=++v2CleanupSeq;clearTimeout(v2CleanupTimer);v2CleanupApproval=null;
+  modal('Disable V2 and release resources','<div id="v2Cleanup"><div class="empty"><span class="spin2"></span>Checking V2 and memory ownership</div></div>',true,'longhorn-v2');
+  const host=$('#v2Cleanup');
+  try{
+    const plan=await api('/api/longhorn/v2/cleanup');
+    if(seq!==v2CleanupSeq||$('#v2Cleanup')!==host||$('#modal')?.classList.contains('hidden'))return;
+    if(plan.operation)return lhV2CleanupWatch(plan.operation.id);
+    v2CleanupApproval={request_id:plan.request_id,capacity_token:plan.capacity_token};
+    host.innerHTML=UI.lead('Stop V2 to release its CPU and process memory. Release owned hugepage RAM after reviewed host restarts.')+
+      v2CleanupHosts(plan.nodes)+UI.more('What cleanup changes','<p class="ui-help">Only the recorded V2 addition is removed from the host’s memory configuration. Earlier or changed reservations stay. Hosts needing a restart are cordoned to prevent new placements while Kubernetes reports the old capacity. Review each restart separately, then allow scheduling when the host is ready. Disks, drivers and other CPU or memory settings stay in place.</p>')+
+      UI.ack('v2CleanupAck','Disable V2 and cordon hosts needing RAM cleanup; I will review their restarts separately',{onchange:"$('#v2CleanupStart').disabled=!this.checked"})+
+      UI.actions(UI.cancel('Close')+UI.button('Disable and prepare cleanup','lhV2CleanupStart()',{kind:'pri',id:'v2CleanupStart',disabled:true,attrs:'data-need="admin"'}));
+    window.applyRole?.();
+  }catch(e){if(seq===v2CleanupSeq&&$('#v2Cleanup')===host)host.innerHTML=UI.callout('warn','Cleanup unavailable',esc(e.message))+UI.actions(UI.cancel('Close'));}
+};
+window.lhV2CleanupStart=async()=>{
+  if(v2CleanupBusy||!v2CleanupApproval||!$('#v2CleanupAck')?.checked||$('#modal')?.classList.contains('hidden'))return;
+  const plan=v2CleanupApproval,seq=v2CleanupSeq;v2CleanupApproval=null;v2CleanupBusy=true;
+  try{const item=await v2CleanupPost('',{...plan,confirm_capacity:true});window.noteOperation?.(item);if(seq===v2CleanupSeq&&!$('#modal')?.classList.contains('hidden'))await lhV2CleanupWatch(item.id);}
+  catch(e){if(seq===v2CleanupSeq&&$('#v2Cleanup'))$('#v2Cleanup').innerHTML=UI.callout('warn','Cleanup not confirmed',esc(e.message))+UI.actions(UI.cancel('Close')+UI.button('Review again','lhV2CleanupOpen()'));}
+  finally{v2CleanupBusy=false;}
+};
+window.lhV2CleanupWatch=async id=>{
+  const seq=++v2CleanupSeq;clearTimeout(v2CleanupTimer);v2CleanupApproval=null;
+  modal('V2 resource cleanup','<div id="v2CleanupStatus"></div>',true,'longhorn-v2');const host=$('#v2CleanupStatus');
+  async function poll(){
+    if(seq!==v2CleanupSeq||$('#v2CleanupStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
+    try{const item=await api('/api/longhorn/v2/cleanup/status?id='+encodeURIComponent(id));
+      if(seq!==v2CleanupSeq||$('#v2CleanupStatus')!==host)return;
+      host.innerHTML=UI.lead(esc(item.message))+v2CleanupHosts(item.nodes)+
+        UI.actions(UI.cancel('Close')+UI.button('Recheck',`lhV2CleanupRecheck(${jsArg(id)})`));
+      window.applyRole?.();if(['succeeded','failed'].includes(item.status))return;
+    }catch(e){if($('#v2CleanupStatus')===host)host.innerHTML=UI.callout('warn','Status unavailable',esc(e.message))+UI.actions(UI.cancel('Close')+UI.button('Recheck',`lhV2CleanupRecheck(${jsArg(id)})`));return;}
+    v2CleanupTimer=setTimeout(poll,4000);
+  }await poll();
+};
+window.lhV2CleanupRecheck=async id=>{try{await v2CleanupPost('/recheck',{id});await lhV2CleanupWatch(id);}catch(e){toast(e.message,'bad');}};

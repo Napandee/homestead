@@ -7,6 +7,16 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
+  const demoV2Region = (force=false) => (force || window.__demoDiskV2Region) ? {
+    mountpoint:'/var/lib/longhorn',stable_device:'/dev/disk/by-id/dm-uuid-LVM-example-storage-volume',
+    layout:{path:'/dev/nvme0n1',kind:'disk',size_bytes:2147483648000,children:[
+      {path:'/dev/nvme0n1p1',kind:'part',start_bytes:1048576,size_bytes:1073741824,mountpoint:'/boot/efi',children:[]},
+      {path:'/dev/nvme0n1p2',kind:'part',start_bytes:1074790400,size_bytes:2146408857600,children:[
+        {path:'/dev/dm-0',kind:'lvm',size_bytes:214748364800,mountpoint:'/',children:[]},
+        {path:'/dev/dm-1',kind:'lvm',size_bytes:1073741824000,mountpoint:'/var/lib/longhorn',children:[]}
+      ]}
+    ]}
+  } : {};
   const DEMO_TRIM_FAILURE = "Longhorn refused the trim: engine is not running";
 
   /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
@@ -330,8 +340,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, platform: "Homestead", homestead: "self", desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/homestead-lab/homestead:2.8.332-dev.3"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.332-dev.3")] },
+      images: ["ghcr.io/homestead-lab/homestead:2.8.332-dev.8"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.332-dev.8")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true, platform: "Homestead", homestead: "smb",
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -630,6 +640,32 @@
         "Choose existing storage for retained recordings or create a suitably sized Longhorn claim.",
       ], dependencies: [] },
     } };
+  // Starts after (#746): home-assistant and paperless start after postgres,
+  // which these fixtures have stopped, so paperless's new pod waits for it.
+  // The healthy scenario starts postgres and paperless (below). Added after
+  // the network fixtures, which give every other app an address of its own.
+  const demoStartsAfter = { "lab/home-assistant": ["postgres"], "lab/paperless": ["postgres"], "lab/doublecommander": ["postgres"] };
+  // Flux applies doublecommander: Edit shows the lines to commit, and they aren't committed yet.
+  const demoManaged = { "lab/doublecommander": "Flux" };
+  const demoGitLines = after => `metadata:\n  annotations:\n    homestead.io/starts-after: ${JSON.stringify(JSON.stringify({ after, on_timeout: "start", timeout: 300 }))}\n`
+    + "spec:\n  template:\n    spec:\n      initContainers:   # first, before any others\n        - name: homestead-start-gate\n"
+    + "          image: \"docker.io/library/alpine:3.24@sha256:…\"\n"
+    + `          env: [{"name": "HS_AFTER", "value": "${after.map(a => `${a.service}.${a.ns}.svc:${a.port}`).join(" ")}"}, …]\n`;
+  workloads.push({ name: "postgres", ns: "lab", kind: "Deployment", failover: "move", desired: 0, ready: 0, uptime: 0,
+    cpu: 0, mem_mb: 0, nodes: [], hardware: [], images: ["docker.io/library/postgres:17"], ports: [], claims: ["postgres-data"],
+    pod_count: 0, container_count: 1, pods: [] });
+  for (const w of workloads) {
+    const after = demoStartsAfter[`${w.ns}/${w.name}`] || [];
+    const managed = !!demoManaged[`${w.ns}/${w.name}`];
+    Object.assign(w, { starts_after: after, start_unreadable: false, start_gate: !after.length ? "none" : managed ? "missing" : "rendered", start_wait: null,
+      start_setting: after.length ? { after: after.map(app => ({ ns: "lab", app, gone: false })), timeout: 300, on_timeout: "start", managed } : null });
+  }
+  Object.assign(workloads.find(w => w.name === "paperless"), { ready: 0, uptime: 0, cpu: 0, mem_mb: 0,
+    start_wait: { waiting_for: ["postgres"], since: Math.floor(Date.now() / 1000) - 140 },
+    pods: [{ name: "paperless-5d9c7b6f4-x2k8q", node: "harvester-node3", phase: "Pending", ready: false, restarts: 0, container_count: 1,
+      containers: [{ name: "paperless", image: "ghcr.io/paperless-ngx/paperless-ngx:latest", kind: "app", state: "PodInitializing", ready: false, restarts: 0 }] }] });
+  // The stopped apps a start of ns/name would wait for, as the server's start plan says.
+  const demoWaitsFor = (ns, name) => (demoStartsAfter[`${ns}/${name}`] || []).filter(app => !workloads.find(w => w.ns === "lab" && w.name === app)?.desired);
   const responses = {
     "/api/auth/state": { setup: false, user: "demo", role: "admin", remember: true,
       session_started: Math.floor(Date.now() / 1000) - 86400 * 3,
@@ -643,7 +679,7 @@
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       audit: { file: true },
-      info: { version: "2.8.332-dev.3", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.332-dev.8", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -935,13 +971,13 @@
       { name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.332-dev.3", local_protocol: 1,
+      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.332-dev.8", local_protocol: 1,
         state: "unreachable", message: "could not reach dr-site: no answer from http://192.0.2.251:8088" };
-      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.332-dev.3",
+      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.332-dev.8",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "staging runs 2.8.190 and this one 2.8.332-dev.3. Moves work between them; this Homestead is the newer of the two." };
-      return { name, version: "2.8.332-dev.3", protocol: 1, local_version: "2.8.332-dev.3", local_protocol: 1,
-        state: "same", compatible: true, message: "Both run Homestead 2.8.332-dev.3." };
+        message: "staging runs 2.8.190 and this one 2.8.332-dev.8. Moves work between them; this Homestead is the newer of the two." };
+      return { name, version: "2.8.332-dev.8", protocol: 1, local_version: "2.8.332-dev.8", local_protocol: 1,
+        state: "same", compatible: true, message: "Both run Homestead 2.8.332-dev.8." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // branch is ready to move from; staging has no backup storage yet.
@@ -956,7 +992,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on staging at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "branch", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.332-dev.3", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.332-dev.8", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -1019,9 +1055,9 @@
         volume_mode: isVm ? "Block" : "Filesystem", backing_image: "" }], total_gb: isVm ? 32 : 10 };
       })(),
     "/api/move/start": { id: "d1", status: "running" },
-    "/api/host-console": { version: "2.8.332-dev.3", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
+    "/api/host-console": { version: "2.8.332-dev.8", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
       { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },
-      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.332-dev.3", detail: "Installed 2.8.332-dev.3; matches this release" },
+      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.332-dev.8", detail: "Installed 2.8.332-dev.8; matches this release" },
       { name: "node-3", ready: true, native: true, detail: "Native Harvester console" }] },
     "/api/compose/preview": () => ({ capacity_token: "demo-compose-review", capacity: {
       status: "fits", blocked: false, requires_confirmation: true, pods: 3,
@@ -1115,16 +1151,34 @@
         ...(body.gone ? ["Cleared the finalizers holding machine custom-8a1b2c3d", "Deleted 2 replica records; Longhorn rebuilds them from the remaining copies"] : []),
         `Deleted Longhorn's record of ${body.node}`] };
     },
+    // Every namespace's CronJobs (#739): one app backup failing every night.
     "/api/schedules": [
-      { name: "nightly-db-dump", namespace: "lab", schedule: "0 3 * * *", time_zone: "Etc/UTC", image: "docker.io/library/postgres:16",
+      { name: "nightly-db-dump", ns: "lab", schedule: "0 3 * * *", time_zone: "Etc/UTC", image: "docker.io/library/postgres:16",
         command: "pg_dumpall -h db -U paperless > /backup/all.sql", last: "2026-09-22T03:00:04Z", suspend: false, active: 0,
-        managed: true, managed_by: "", generation: 3 },
-      { name: "prune-recordings-older-than-thirty-days", namespace: "lab", schedule: "*/30 * * * *",
+        managed: true, managed_by: "", generation: 3, owner: "homestead", runnable: true, editable: true,
+        result: "ok", result_at: "2026-09-22T03:01:12Z", result_reason: "", last_success: "2026-09-22T03:01:12Z",
+        missed: false, next_run: "", claims: ["db-backup"] },
+      { name: "prune-recordings-older-than-thirty-days", ns: "lab", schedule: "*/30 * * * *",
         image: "ghcr.io/example/long-image-name-for-cleanup-tasks:2026.09.1", command: "find /media -mtime +30 -delete",
-        last: "2026-09-22T13:30:00Z", suspend: true, active: 0, managed: true, managed_by: "", generation: 7 },
-      { name: "restic-backup", namespace: "lab", schedule: "15 2 * * *", time_zone: "Etc/UTC", image: "docker.io/restic/restic:0.17.3",
+        last: "2026-09-22T13:30:00Z", suspend: true, active: 0, managed: true, managed_by: "", generation: 7,
+        owner: "homestead", runnable: true, editable: true, result: "ok", result_at: "2026-09-22T13:30:20Z",
+        result_reason: "", last_success: "2026-09-22T13:30:20Z", missed: false, next_run: "", claims: [] },
+      { name: "restic-backup", ns: "lab", schedule: "15 2 * * *", time_zone: "Etc/UTC", image: "docker.io/restic/restic:0.17.3",
         command: "restic backup /data", last: "2026-09-22T02:15:02Z", suspend: false, active: 0,
-        managed: false, managed_by: "Helm", generation: 1 }],
+        managed: false, managed_by: "Helm", generation: 1, owner: "", runnable: true, editable: false,
+        result: "ok", result_at: "2026-09-22T02:19:40Z", result_reason: "", last_success: "2026-09-22T02:19:40Z",
+        missed: false, next_run: "", claims: ["restic-cache"] },
+      // Other namespaces: health only - no image, command or volumes.
+      { name: "backup-photos", ns: "media", schedule: "30 2 * * *", time_zone: "Europe/London",
+        last: "2026-09-22T01:30:00Z", created: "2026-03-02T10:00:00Z", suspend: false, active: 0,
+        managed: false, managed_by: "", owner: "", runnable: false, editable: false,
+        result: "failed", result_at: "2026-09-22T01:34:51Z", result_reason: "BackoffLimitExceeded",
+        last_success: "2026-09-19T01:31:07Z", missed: false, next_run: "" },
+      { name: "export-config", ns: "automation", schedule: "45 3 * * *", time_zone: "Europe/London",
+        last: "2026-09-22T02:45:00Z", created: "2026-04-11T09:00:00Z", suspend: false, active: 0,
+        managed: false, managed_by: "", owner: "flux", runnable: false, editable: false,
+        result: "ok", result_at: "2026-09-22T02:45:31Z", result_reason: "", last_success: "2026-09-22T02:45:31Z",
+        missed: false, next_run: "" }],
     "/api/events": () => [
       { obj: "frigate-7d9f8c6b5-x2abc", ns: "lab", kind: "Pod", type: "Normal", reason: "Pulled",
         msg: "Successfully pulled image \"ghcr.io/blakeblackshear/frigate:stable\" in 12.4s", count: 1,
@@ -1631,7 +1685,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.332-dev.3", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.332-dev.8", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1794,6 +1848,7 @@ ssh_pwauth: true
       current: 0, requested: 1, additional: 1, pod_memory_gb: 1.5, pod_request_gb: 0.5, pod_cpu_request_percent: 25,
       reservations_known: true, resource_slots: 3, topology_status: "not-needed", unbounded: [], warning_percent: 88,
       warnings: ["projected RAM reaches 91% (warning at 88%)"], requires_confirmation: true, blocked: false,
+      waits_for: demoWaitsFor(url.searchParams.get("ns"), url.searchParams.get("name")),
       candidates: [
         { name: "harvester-node1", eligible: true, reasons: [], used_gb: 12.6, capacity_gb: 15.6, projected_gb: 14.2, projected_percent: 91,
           metrics_available: true, warnings: ["projected RAM reaches 91% (warning at 88%)"], reservations_known: true,
@@ -1923,6 +1978,7 @@ ssh_pwauth: true
     },
     "/api/longhorn/v2/upgrade/review": () => ({capacity_token:'demo-v2-upgrade-review'}),
     "/api/longhorn/v2/upgrade/settings": () => ({ok:true,detail:'V2 upgrade settings updated in this demo'}),
+    "/api/cluster/components/manage-operator": {ok:true, detail:"Homestead operator upgrades enabled"},
     "/api/cluster/components/upgrade": { ok: true, component: "cluster", name: "k3s", from: "v1.31.4+k3s1", to: "v1.31.12+k3s1",
       detail: "Installing Rancher's system-upgrade-controller first; then the servers move to v1.31.12+k3s1 one at a time, and the agents after them" },
     "/api/cluster/upgrades/start": { ok: true, upgrade: "hvst-upgrade-demo", detail: "Harvester is upgrading to v1.9.0" },
@@ -2126,9 +2182,33 @@ ssh_pwauth: true
       v2: { enabled: false, harvester_setting: false, ready_nodes: 0, total_nodes: 3,
         nodes: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: false, block_disks: 0, hugepages_mb: 0,
           missing: ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"] })) } },
+    "/api/disks/allocation/review": (url,init) => {
+      const body=JSON.parse(init?.body||'{}'),gib=1073741824,free=window.__demoAllocationNoFree?0:64;
+      const areas=[['os','Host OS','/',64,28],['longhorn','Longhorn','/var/lib/longhorn',128,72]].map(([role,name,mountpoint,size,used],i)=>({role,name,mountpoint,size_bytes:size*gib,fs_bytes:size*gib,used_bytes:used*gib,reserved_bytes:2*gib,minimum_bytes:size*gib,filesystem:'ext4',device:`/dev/dm-${i}`,stable_device:`/dev/disk/by-id/dm-uuid-LVM-example-volume-group-${role}-logical-volume`,fs_uuid:`example-filesystem-${role}`}));
+      const role=body.role||'os',target=(body.size_gib||80)*gib,selected=areas.find(a=>a.role===role);
+      return {node:body.node||'node-1',vg:'system-vg',total_bytes:(192+free)*gib,extent_bytes:4194304,free_bytes:free*gib,areas,role,
+        size_gib:body.size_gib??null,target_bytes:target,remaining_bytes:free*gib-target+selected.size_bytes,request_id:'c'.repeat(24),capacity_token:'demo-allocation'};
+    },
+    "/api/disks/allocation/start":()=>{window.__demoAllocationState='growing';return responses['/api/disks/allocation/status']();},
+    "/api/disks/allocation/status":()=>{
+      const state=window.__demoAllocationState||'growing',done=state==='complete',failed=state==='failed';
+      return {id:'demo-allocation',kind:'disk-allocation',node:'node-1',phase:state,status:done?'succeeded':failed?'failed':'running',role:'os',mountpoint:'/',device:'/dev/dm-0',target_bytes:80*1073741824,progress:done?100:50,
+        message:done?'Logical volume and filesystem reached the approved size.':failed?'Filesystem growth stopped after the logical volume grew.':'Growing the logical volume and mounted filesystem; existing files are retained.',cancellable:false,dismissible:done};
+    },
+    "/api/disks/allocation/recheck":()=>{
+      const plan=responses['/api/disks/allocation/review'](null,{body:'{}'}),area={...plan.areas[0],size_bytes:80*1073741824};
+      return {...plan,area,operation_id:'demo-allocation',action:'finish-filesystem',request_id:'d'.repeat(24),capacity_token:'demo-finish'};
+    },
+    "/api/disks/allocation/finish":()=>{window.__demoAllocationState='complete';return responses['/api/disks/allocation/status']();},
+    "/api/disks/runtime/review": () => ({...demoV2Region(true),node:'host-1',disk:'disk-data',device:'/dev/dm-1',stable_device:'/dev/disk/by-id/dm-uuid-LVM-example-group-longhorn-volume',size_bytes:1000*1073741824,runtime_bytes:134217728,available_bytes:64*1073741824,destination:'/var/lib/homestead/longhorn-runtime/example-maintenance/active',retained:'/mnt/homestead-retired-example-maintenance',request_id:'a'.repeat(24),capacity_token:'demo-runtime'}),
+    "/api/disks/runtime/start": () => {window.__demoRuntimePhase='staged';return responses['/api/disks/runtime/status']();},
+    "/api/disks/runtime/status": () => ({...responses['/api/disks/runtime/review'](),id:'demo-runtime',kind:'longhorn-runtime',phase:window.__demoRuntimePhase||'relocated',status:window.__demoRuntimePhase==='retired'?'succeeded':'running',message:window.__demoRuntimePhase==='staged'?'Restart through host maintenance to move runtime.':'Runtime moved; original files and a separate archive are retained.'}),
+    "/api/disks/runtime/retirement-review": () => ({...responses['/api/disks/runtime/review'](),id:'demo-runtime',action:'retire-runtime'}),
+    "/api/disks/runtime/retire": () => {window.__demoRuntimePhase='retire-staged';return responses['/api/disks/runtime/status']();},
+    "/api/disks/runtime/recheck": () => responses['/api/disks/runtime/status'](),
     "/api/disks/v2/plan": (url,init) => {
       const body=JSON.parse(init?.body||'{}');
-      return {node:body.node||'node-1',disk:body.disk||'disk-data',device:'/dev/sdb',size_bytes:1073741824000,
+      return {...demoV2Region(),node:body.node||'node-1',disk:body.disk||'disk-data',device:window.__demoDiskV2Region?'/dev/dm-1':'/dev/sdb',region_kind:window.__demoDiskV2Region?'lvm':'disk',protected_parents:window.__demoDiskV2Region?['/dev/nvme0n1p3','/dev/nvme0n1']:[],size_bytes:1073741824000,
         request_id:'a'.repeat(24),capacity_token:'demo-evacuate',volumes:[{volume:'volume-media',size_bytes:107374182400,replicas:3,destination:'node-1 / spare-v1'}],
         blockers:window.__demoDiskV2State==='blocked'?['No other eligible V1 disk has room. Add a spare V1 disk on this host or another eligible V1 host.']:[]};
     },
@@ -2141,7 +2221,7 @@ ssh_pwauth: true
         remaining:phase==='evacuating'?1:0,needs_erase_review:phase==='awaiting-erase',cancellable:['evacuating','awaiting-erase'].includes(phase),dismissible:done,
         volumes:[{volume:'volume-media',size_bytes:107374182400,replicas:3,destination:'node-1 / spare-v1'}]};
     },
-    "/api/disks/v2/prepare-review": {operation_id:'demo-disk-v2',node:'node-1',device:'/dev/sdb',size_bytes:1073741824000,request_id:'b'.repeat(24),capacity_token:'demo-prepare'},
+    "/api/disks/v2/prepare-review": () => ({...demoV2Region(),region_kind:window.__demoDiskV2Region?'lvm':'disk',protected_parents:window.__demoDiskV2Region?['/dev/nvme0n1p3','/dev/nvme0n1']:[],operation_id:'demo-disk-v2',node:'node-1',device:window.__demoDiskV2Region?'/dev/dm-1':'/dev/sdb',size_bytes:1073741824000,request_id:'b'.repeat(24),capacity_token:'demo-prepare'}),
     "/api/disks/v2/prepare": () => {window.__demoDiskV2State='preparing';return responses['/api/disks/v2/status']();},
     "/api/longhorn/v2/plan": () => {
       const state=window.__demoV2State || 'missing', harvester=state==='harvester';
@@ -2157,6 +2237,16 @@ ssh_pwauth: true
     },
     "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
+    "/api/longhorn/v2/cleanup": (url,init) => {
+      const rows=[{node:'node-1',baseline:256,owned_pages:1024,phase:'prepared'},
+        {node:'node-2',baseline:1024,owned_pages:0,phase:'retained',reason:'No ownership record. Existing hugepages are retained.'}];
+      if(init?.method==='POST')return {id:'demo-v2-cleanup',kind:'longhorn-v2-cleanup',status:'running',phase:'stopping',nodes:rows};
+      return {enabled:true,request_id:'demo-review',capacity_token:'demo-cleanup',nodes:rows};
+    },
+    "/api/longhorn/v2/cleanup/status": () => ({id:'demo-v2-cleanup',kind:'longhorn-v2-cleanup',status:'running',phase:'restart-required',message:'V2 stopped. Review the host restart to release owned RAM.',nodes:[
+      {node:'node-1',baseline:256,owned_pages:1024,phase:'restart-required'},
+      {node:'node-2',baseline:1024,owned_pages:0,phase:'retained',reason:'No ownership record. Existing hugepages are retained.'}]}),
+    "/api/longhorn/v2/cleanup/recheck": () => ({ok:true}),
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
     "/api/workloads/rebalance/review": (url, init) => {
@@ -2318,6 +2408,7 @@ ssh_pwauth: true
           why: "rebuilds on harvester-node2 from its healthy copy" }] },
     "/api/disks/retire": { ok: true, operation: { id: "op-retire" } },
     "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
+      storage_path: "/mnt/longhorn-os", storage_supported: true,
       agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
       server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage',
       tiebreaker: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage --node-taint node-role/tiebreaker=true:NoSchedule --node-label node-role/tiebreaker=true',
@@ -2541,7 +2632,19 @@ ssh_pwauth: true
       pod: "example-server-abc-123", container: "server", pods: [{ name: "example-server-abc-123", uid: "demo-pod", node: "node-1", phase: "Running",
         containers: [{ name: "server", kind: "app", ready: false, restarts: 7, image: "example/server:1",
           state: { waiting: { reason: "CrashLoopBackOff" } }, last_state: { terminated: { reason: "Error", exitCode: 1 } } }] }],
-      logs: { previous: { text: "Server exited: configuration could not be loaded." }, current: { text: "Preparing server…" } } }),
+      logs: { previous: { text: "Server exited: configuration could not be loaded." }, current: { text: "Preparing server…" } },
+      // #740: what the leader kept - OOM-killed twice overnight, after an image update.
+      restart_history: (() => {
+        const at = h => new Date(Date.now() - h * 3600e3).toISOString().replace(/\.\d+Z$/, "Z");
+        return { since: Math.round(Date.now() / 1000) - 12 * 86400, records: [
+          { at: at(2), kind: "restart", reason: "Ran out of memory", detail: "limit 512 MiB", pod: "example-server-abc-123",
+            container: "server", count: 1, total: 7, exit_code: 137, finished_at: at(2),
+            log_tail: "Loading index…\nIndex loaded: 1.9 GB\nWarming cache…" },
+          { at: at(7), kind: "restart", reason: "Ran out of memory", detail: "limit 512 MiB", pod: "example-server-abc-123",
+            container: "server", count: 1, total: 6, exit_code: 137, finished_at: at(7),
+            log_tail: "Loading index…\nIndex loaded: 1.8 GB" },
+          { at: at(30), kind: "rollout", reason: "Updated to example/server:1", detail: "", pod: "example-server-abc-123" }] };
+      })() }),
     "/api/container/command/preview": (url, init) => ({ settings: JSON.parse(init.body), review_token: "demo-command",
       summary: { limit: "Requires timeout in the image. Sends TERM, then KILL after 2 seconds; detached children may survive." } }),
     "/api/container/command": { exit_code: 0, stdout: "Linux example-server 6.12.0 x86_64\n", stderr: "", truncated: false, timed_out: false },
@@ -2735,6 +2838,10 @@ ssh_pwauth: true
     },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
+      // Starts after (#746): a loop is refused, as the server refuses it.
+      const back = (body.starts_after?.after || []).find(a => (demoStartsAfter[`${a.ns}/${a.app}`] || []).includes(body.name));
+      if (back) return new Response(JSON.stringify({ error: `a cycle: ${body.name} → ${back.app} → ${body.name}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } });
       const rename = body.workload_name && body.workload_name !== body.name;
       return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
@@ -2756,6 +2863,21 @@ ssh_pwauth: true
       warnings: [rename ? "Old pods stop before the replacement starts. A failed or uncertain step keeps resources for inspection, without automatic rollback." : "Editing restarts all containers in the pod. This is a demo capacity snapshot."],
       rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: [], release_request_gb: 0.5, max_surge: 0, max_unavailable: 1 }
     } }; },
+    // Starts after (#746): Edit's block, and its own save.
+    "/api/workloads/starts-after": (url, init) => {
+      const ports = { postgres: [5432], frigate: [5000, 8554] };
+      if (init?.method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        const picked = (body.after || []).map(a => ({ ns: a.ns || "lab", app: a.app, service: a.service || a.app, port: a.port || ports[a.app]?.[0] || 80 }));
+        return body.lines ? { git: demoGitLines(picked) } : { ok: true, restarts: true };
+      }
+      const ns = url.searchParams.get("ns"), name = url.searchParams.get("name"), by = demoManaged[`${ns}/${name}`] || null;
+      const after = (demoStartsAfter[`${ns}/${name}`] || []).map(app => ({ ns: "lab", app, service: app, port: ports[app]?.[0] || 80 }));
+      return { after, timeout: 300, on_timeout: "start", unreadable: false, managed_by: by,
+        gate: !after.length ? "none" : by ? "not-committed" : "rendered", git: by && after.length ? demoGitLines(after) : "",
+        candidates: workloads.filter(w => !(w.ns === ns && w.name === name) && (w.self || !w.homestead)).map(w => ({ ns: w.ns, app: w.name,
+          services: [{ name: w.name, ports: ports[w.name] || (w.ports || []).map(p => p.port) }] })) };
+    },
     "/api/edit": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, name: body.workload_name || body.name, renamed: body.workload_name && body.workload_name !== body.name,
@@ -2827,7 +2949,7 @@ ssh_pwauth: true
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.332-dev.3"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.332-dev.8"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
       // Deployed by Flux from git: its update is a notice, made in git (#296).
       { ns: "monitoring", name: "loki", available: true, can_rollback: false,
         managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
@@ -2852,8 +2974,12 @@ ssh_pwauth: true
         { id: "v:router", name: "router-disk", replicas: 1, size_gb: 16, robustness: "unknown", attached: "" },
         { id: "v:orphan", name: "paperless-old-copy", replicas: 1, size_gb: 100, robustness: "unknown", attached: "" }],
       workloads: [{ id: "w:lab/frigate", name: "frigate", ns: "lab", kind: "container", node: "harvester-node2", hardware: ["igpu", "coral_usb"], uptime: 472221, cpu: .84, mem_mb: 1840, claims: [{ pvc: "frigate-config", vid: "v:frigate" }], ports: [{ name: "web", port: 5000, vip: "192.0.2.214" }] },
-        { id: "w:lab/home-assistant", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }] },
-        { id: "w:lab/paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }] },
+        { id: "w:lab/home-assistant", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }],
+          after: [{ id: "w:lab/postgres", committed: true }] },
+        { id: "w:lab/paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }],
+          after: [{ id: "w:lab/postgres", committed: true }] },
+        // Stopped in these fixtures, as the Apps list has it; the healthy scenario starts it.
+        { id: "w:lab/postgres", name: "postgres", ns: "lab", kind: "container", node: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [], ports: [] },
         { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.0.2.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.0.2.217" }] },
         { id: "w:vm-router", name: "router", ns: "lab", kind: "vm", node: "", running: false, state: "Stopped", ip: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [{ pvc: "router-disk", vid: "v:router" }], ports: [] }],
       // A nightly backup per app, as a cluster with ReadWriteOnce volumes has:
@@ -3019,7 +3145,7 @@ ssh_pwauth: true
   Object.assign(responses, {
     "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
       default: id !== "users", present: id !== "vmstore" })),
-    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.332-dev.3", site: "Main site",
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.332-dev.8", site: "Main site",
       created: new Date().toISOString(), parts: [] },
     "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
@@ -3160,6 +3286,11 @@ ssh_pwauth: true
         uncorrectable: nvme ? null : 0, media_errors: nvme ? 0 : null });
       withHealth(disk);
     }
+    // Starts after (#746): postgres runs, so nothing waits for it.
+    Object.assign(workloads.find(row => row.name === "postgres"), { desired: 1, cpu: 0.05, mem_mb: 96, nodes: ["harvester-node1"] });
+    for (const workload of workloads) workload.start_wait = null;
+    Object.assign(workloads.find(row => row.name === "paperless"), { cpu: 0.18, mem_mb: 512 });
+    Object.assign(responses["/api/flow"].workloads.find(row => row.id === "w:lab/postgres"), { node: "harvester-node1", uptime: 3600, cpu: .05, mem_mb: 96 });
     for (const workload of workloads.filter(row => row.desired > 0 && row.ready < row.desired)) {
       workload.ready = workload.desired;
       workload.uptime = 3600;
@@ -3209,7 +3340,7 @@ ssh_pwauth: true
       ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);
     const moves = responses["/api/move/moves"];
     responses["/api/move/moves"] = (...args) => moves(...args).filter(row => row.status !== "failed");
-    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.332-dev.3", error: "" });
+    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.332-dev.8", error: "" });
     const mqtt = responses["/api/mqtt/preview"].states[0].payload;
     Object.assign(mqtt, { health: "healthy", vol_total: storage.volumes, vol_degraded: 0, vol_faulted: 0 });
   } else {
@@ -3358,6 +3489,8 @@ ssh_pwauth: true
     }
     const configured = responses[key];
     let value = typeof configured === "function" ? configured(url, init) : configured;
+    // An answer that is not 200 (a refusal), as the server would send it.
+    if (value instanceof Response) return value;
     // The live demo: a change the demo has no answer for is taken, and kept nowhere.
     if (value === undefined && live && (init?.method || "GET") !== "GET") value = { ok: true, detail: "Demo: nothing is saved" };
     if (value === undefined) return new Response(JSON.stringify({ error: `Demo endpoint not available: ${url.pathname}` }), { status: 404, headers: { "Content-Type": "application/json" } });
