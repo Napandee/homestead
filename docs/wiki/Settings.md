@@ -324,6 +324,48 @@ Three are marked **Kept** and cannot be deleted from here: the default (new apps
 go there, and so does Homestead's own state), the namespace Homestead itself runs
 in, and Kubernetes' own `default`.
 
+## Audit log
+
+Every request that changes something - a scale, a delete, a new user, a linked
+cluster, an AI agent's change - writes one line: who, how they came in (browser,
+API key, MCP, a linked Homestead), what, the target, the result and how long it
+took. Opening a console or a host shell writes one line when it ends.
+
+```json
+{"v":1,"at":"2026-10-21T09:14:03.512Z","replica":"homestead-6d9f-abcde","via":"browser","user":"ada","role":"operator","addr":"192.0.2.10","method":"POST","path":"/api/workload/scale","target":{"ns":"lab","kind":"Deployment","name":"app-1"},"status":200,"ms":142}
+```
+
+- **The pod log always has every line**, for Loki, Vector or anything else that
+  reads pod logs.
+- **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two
+  files of 10 MiB at most (about 60,000 lines). **Settings › About › Audit log**
+  turns that off (admin); the pod log keeps writing.
+- So that a flood of refused requests cannot push real changes out of those two
+  files, the file keeps every success and every real server error, but limits
+  refusals (4xx, a busy server's 503 to someone not signed in, and an AI
+  agent's refused tool call). Each minute it keeps the first refusal from each
+  person, or from each address for requests with no user (an IPv6 address
+  counts by its /64), up to 50 such firsts; then at most 5 more from each, and
+  120 in all (one ceiling for requests with no user, another for signed-in
+  people). One line says how many it left out. Those lines are written when the
+  minute is over, on the next request, so a pod that stops first loses them.
+- With two copies of Homestead on a shared (ReadWriteMany, NFS) data volume,
+  lines appended by both at the same moment can overwrite each other in
+  `audit.jsonl`; the pod logs keep them all.
+- If `audit.jsonl` fills 10 MiB in under an hour, something may be flooding
+  Homestead with requests: the bell says so ("The audit log is filling fast"),
+  and the pod log has a line about it too.
+- If the volume is full, a line that could not be written is counted and the
+  next line that fits says how many were lost; a line cut short is followed by
+  an `audit-line-truncated` line, so a reader can skip it. Nothing already
+  written is ever cut back.
+- An AI agent's refused call with a bad key, or for a tool that does not
+  exist, has no line here; the agent audit records it.
+- Never written: passwords, setup codes, API keys, cookies, request bodies
+  (only the target's namespace, kind and name) and query strings.
+- Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
+  asked for, with their arguments, in the agent audit.
+
 ## Sign-in history
 
 Every sign-in to Homestead, failed attempt, sign-out, password change and
