@@ -335,8 +335,11 @@ function joinCommandHtml(g, role) {
   // RKE2's guide installs an agent; a server holding a vote joins through the
   // installer, which writes the role's config and checks the machine first.
   if (!k3s && role !== "app") {
+    const storage = role !== "tiebreaker" && g.storage_supported
+      && ["/mnt/longhorn-os", "/var/lib/longhorn"].includes(g.storage_path)
+      ? ` HS_LONGHORN_DATA_PATH=${g.storage_path}` : "";
     return `<p class="dim xs">On RKE2 the installer joins a ${role === "tiebreaker" ? "tiebreaker" : "server"}: it asks for this cluster's address and token, checks the machine, and writes the role's settings.</p>`
-      + guideCopy(`curl -sfL ${INSTALLER} | sudo HS_ROLE=${role === "tiebreaker" ? "tiebreaker" : "server"} sh`);
+      + guideCopy(`curl -sfL ${g.installer_url || INSTALLER} | sudo HS_DIST=rke2 HS_ROLE=${role === "tiebreaker" ? "tiebreaker" : "server"}${storage} sh`);
   }
   const cmd = k3s && role === "tiebreaker" ? g.tiebreaker : k3s && role === "control-plane" ? g.server_join : g.agent;
   const shared = role !== "app" && k3s && !g.settings_known
@@ -351,8 +354,13 @@ window.joinCommandHtml = joinCommandHtml;
 function joinLonghornHtml(g, role) {
   if (role === "tiebreaker") return `<p class="dim small">Not needed: a tiebreaker runs no apps and holds no storage.</p>`;
   const wiki = `https://github.com/homestead-lab/homestead/wiki/Installing-on-${g.distribution === "rke2" ? "RKE2" : "k3s"}#if-something-is-stuck`;
+  const storage = `<details><summary>Storage setting for the installer</summary>`
+    + (g.storage_path ? `<p class="dim small">This cluster uses the folder below for Longhorn data. If the Homestead installer asks for a storage folder, copy this value exactly. It keeps data in the space prepared for this cluster.</p>${guideCopy(g.storage_path)}`
+      + (g.storage_supported ? "" : `<p class="dim small">This custom folder requires manual storage setup; the guided installer cannot prepare it.</p>`)
+      : `<p class="dim small">The cluster's storage setting could not be read. If the Homestead installer asks for it, follow its instructions to read the value on an existing server. Do not guess a folder.</p>`)
+    + `</details>`;
   return guideCopy(g.longhorn)
-    + `<p class="dim xs">Longhorn attaches volumes over iSCSI on the host where an app runs, so every host that runs apps needs these, even one that holds no copies. If Longhorn's pods keep restarting on it, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>`;
+    + `<p class="dim xs">Longhorn attaches volumes over iSCSI on the host where an app runs, so every host that runs apps needs these, even one that holds no copies. If Longhorn's pods keep restarting on it, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>` + storage;
 }
 window.joinLonghornHtml = joinLonghornHtml;
 window.platformJoinRole = role => {

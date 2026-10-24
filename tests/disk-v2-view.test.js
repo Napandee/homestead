@@ -77,3 +77,51 @@ test('the system drive shows one system tag',()=>{
   const html=t.c.diskRowsHtml('node-1',[{device:'nvme0n1',mounts:['/'],system:true,role:'system',longhorn:[]}],false);
   assert.equal((html.match(/>system</g)||[]).length,1);
 });
+
+test('runtime move is offered for either spelling of its mount and capacity explains the reserve',()=>{
+  const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=v=>`${v} GiB`;t.c.meter=()=>'';
+  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  const store={id:'data',type:'filesystem',ready:true,scheduling:true,tags:[],replicas:0,capacity_gb:120,reserved_gb:30,size_gb:90};
+  const disk={device:'sdb',mounts:['/var/lib/longhorn'],role:'longhorn',longhorn:[store]};
+  for(const path of ['/var/lib/longhorn','/var/lib/longhorn/']){
+    store.path=path;const html=t.c.diskRowsHtml('node-1',[disk],false);
+    assert.match(html,/Move Longhorn runtime/);assert.match(html,/Capacity breakdown/);
+    assert.match(html,/Reserved by Longhorn/);assert.match(html,/30 GiB/);assert.match(html,/90 GiB/);
+  }
+  store.path='/var/lib/longhorn/replicas';assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],false),/Move Longhorn runtime/);
+  store.path='/var/lib/longhorn/';assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],true),/Move Longhorn runtime/);
+  store.type='block';store.path='/dev/sdb';const block=t.c.diskRowsHtml('node-1',[disk],false);
+  assert.match(block,/Store capacity/);assert.doesNotMatch(block,/Filesystem capacity|filesystem overhead/);
+});
+
+test('runtime blocker offers a direct review for the selected store without starting maintenance',async()=>{
+  const t=setup();t.c.api=async()=>{throw new Error('Longhorn runtime storage shares this filesystem. Move replicas first.');};
+  await t.c.diskV2Open('node-1','data');const html=t.fields['#diskV2Review'].innerHTML;
+  assert.match(html,/Move Longhorn runtime before preparing V2/);assert.match(html,/Review runtime move/);
+  assert.match(html,/runtimeMoveOpen\(&quot;node-1&quot;,&quot;data&quot;\)/);
+  assert.doesNotMatch(html,/diskV2Begin|runtimeMoveStart/);
+});
+
+test('LV erase review identifies the whole filesystem and the protected siblings',async()=>{
+  const t=setup(),layout={path:'/dev/nvme0n1',size_bytes:2000,children:[{path:'/dev/nvme0n1p3',kind:'part',start_bytes:100,size_bytes:1900,children:[{path:'/dev/dm-0',kind:'lvm',size_bytes:500,mountpoint:'/',children:[]},{path:'/dev/dm-1',kind:'lvm',size_bytes:1000,mountpoint:'/var/lib/longhorn',children:[]}]}]};
+  Object.assign(t.plan,{region_kind:'lvm',layout,device:'/dev/dm-1',mountpoint:'/var/lib/longhorn'});
+  await t.c.diskV2Open('node-1','data');
+  assert.match(t.fields['#diskV2Review'].innerHTML,/Erase contents/);
+  assert.match(t.fields['#diskV2Review'].innerHTML,/do not represent physical extents/);
+  Object.assign(t.prep,{...t.plan});
+  await t.c.diskV2Watch('task-1');await t.c.diskV2EraseReview('task-1');
+  assert.match(t.html(),/Erase all contents of/);assert.match(t.html(),/Keep its size and boundary/);
+  assert.match(t.html(),/\/dev\/dm-0/);assert.match(t.html(),/>Keep</);
+});
+
+test('whole-disk PV renders its OS and selected logical volumes without invented partition extents',()=>{
+  const t=setup();
+  const html=t.c.diskV2Region({device:'/dev/dm-1',mountpoint:'/var/lib/longhorn',layout:{path:'/dev/sdb',kind:'disk',size_bytes:2000,children:[
+    {path:'/dev/dm-0',kind:'lvm',size_bytes:500,mountpoint:'/',children:[]},
+    {path:'/dev/dm-1',kind:'lvm',size_bytes:1000,mountpoint:'/var/lib/longhorn',children:[]}
+  ]}});
+  assert.match(html,/\/dev\/dm-0/);assert.match(html,/\/dev\/dm-1/);
+  assert.match(html,/share this disk/);assert.match(html,/do not represent physical extents/);
+  assert.match(html,/Contains selected volume/);assert.match(html,/Erase contents/);
+  assert.doesNotMatch(html,/pmap-seg free/);
+});

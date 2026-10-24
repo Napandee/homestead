@@ -836,13 +836,60 @@ function workloadActions(w, update, off, compact = false) {
   ]);
 }
 
+/* Starts after (#746): names in words, and a time in seconds or minutes. */
+const startsWords = names => { const list = [...names]; return list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`; };
+const startsSpan = seconds => seconds < 60 ? `${Math.max(0, Math.round(seconds))} s` : `${Math.round(seconds / 6) / 10} min`;
+/* What a row says about the apps it starts after: {chip, tone, line} while
+   it waits, when it started without an app, or when
+   its gate or setting is not as saved; null when there is nothing to say. */
+function startWaitText(w, now = Date.now() / 1000) {
+  const setting = w.start_setting || {}, wait = w.start_wait || {}, timeout = setting.timeout;
+  const said = line => ({ chip: "", tone: "", line });
+  // #620: a setting the server could not work out is "could not read", never none.
+  if (w.start_note) return said("Could not read its Starts after setting");
+  if (w.start_unreadable) return said("Its Starts after setting can't be read: set it again in Edit");
+  if (wait.waiting_for?.length) {
+    const so = timeout ? `${startsSpan(now - wait.since)} of ${startsSpan(timeout)}` : `${startsSpan(now - wait.since)} so far`;
+    return { chip: "Waiting", tone: "warn", line: `Waiting for ${startsWords(wait.waiting_for)} (${so})` };
+  }
+  if (wait.started_without?.length) {
+    const names = startsWords(wait.started_without);
+    return said(`Started without ${names} at ${fmtClock(wait.at)}: ${names} ${wait.started_without.length > 1 ? "were" : "was"} not ready${timeout ? ` after ${startsSpan(timeout)}` : ""}`);
+  }
+  if (w.start_gate === "missing" && setting.managed) return said("Its start gate isn't committed yet: commit the lines Edit shows");
+  if (w.start_gate === "differs" || w.start_gate === "missing") return said("Its start gate doesn't match its setting: put it back in Edit → Placement");
+  return null;
+}
+/* The apps it starts after, the ones that no longer exist marked. */
+function startsAfterNames(w) {
+  const after = w.start_setting?.after;
+  return after ? after.map(a => `${a.app}${a.gone ? " (gone)" : ""}`).join(", ") : (w.starts_after || []).join(", ");
+}
+/* Start's lead: the stopped apps a start of this one would wait for, or
+   that it could not check (#620). */
+function startWaitsLine(name, waits, timeout, onTimeout = "start", error = "") {
+  if (error) return ` ${error[0].toUpperCase()}${error.slice(1)}.`;
+  if (!waits?.length) return "";
+  const many = waits.length > 1;
+  const until = onTimeout === "wait" ? `until ${many ? "they are" : "it is"} up` : timeout ? `up to ${startsSpan(timeout)}` : "before it starts";
+  return ` ${startsWords(waits)} ${many ? "are" : "is"} stopped: ${name} will wait for ${many ? "them" : "it"} ${until}.`;
+}
+/* The app's details: Starts after, and what its start is waiting on. */
+function startsAfterFact(w) {
+  const names = startsAfterNames(w), said = startWaitText(w);
+  if (!names && !said) return "";
+  return `<div class="wl-detail-starts"><span>Starts after</span><b>${esc(names || "—")}</b>${said ? `<div class="dim xs">${esc(said.line)}</div>` : ""}</div>`;
+}
+const startWaitChip = w => { const said = startWaitText(w); return said?.chip ? UI.chip(said.chip, said.tone, { size: "slim", tip: said.line }) : ""; };
+window.startWaitText = startWaitText;
+
 /* A workload's state tags, the same in a row and a card so the two can't
    drift: its schedule, how it updates, who updates it, and an update waiting.
    A row whose own Update button is shown says the update there, not twice. */
 function workloadStateTags(w, update, { row = false } = {}) {
   const owner = updateOwner(update);
   const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
-  return `${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
+  return `${startWaitChip(w)}${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
     : update?.available && !button ? UI.chip("update available", "warn") : ""}${uncheckedMark(update)}`;
 }
 
@@ -956,6 +1003,7 @@ function workloadTableRows(rows) {
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
           ${gitopsDetail(w)}
+          ${startsAfterFact(w)}
         </div>
         ${workloadHierarchy(w)}
         <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>
@@ -1113,11 +1161,15 @@ window.wlScale = async (ns, name, n) => {
   if (n > 0) {
     try {
       const plan = await api(`/api/workloads/start-plan?${new URLSearchParams({ ns, name, replicas: n })}`);
-      if (plan.requires_confirmation || plan.blocked) {
+      // Starts after (#746): the apps it starts after that are stopped, which it would wait for.
+      const waits = plan.waits_for || [];
+      if (plan.requires_confirmation || plan.blocked || waits.length || plan.waits_for_error) {
         const pods = plan.additional > 1 ? `${plan.additional} pods of` : "";
-        modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok" })
+        const row = waits.length ? (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) : null, setting = row?.start_setting;
+        modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok",
+          extra: esc(startWaitsLine(name, waits, setting?.timeout, setting?.on_timeout, plan.waits_for_error)) })
           + UI.actions(plan.blocked ? UI.cancel("Close")
-            : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},true)`, { kind: "pri" })));
+            : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},${!!plan.requires_confirmation},true)`, { kind: "pri" })));
         return;
       }
     } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }
@@ -1126,12 +1178,12 @@ window.wlScale = async (ns, name, n) => {
   if (!n && !(await ask(`Stop ${name}? Its pods stop and what it serves goes away until you start it again. Its data and settings are kept.`, { title: "Stop", ok: "Stop" }))) return;
   return wlScaleGo(ns, name, n, false);
 };
-window.wlScaleGo = async (ns, name, n, confirmed = false) => {
+window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
   if (confirmed && $("#wl_capacity_ok") && !$("#wl_capacity_ok").checked) return toast("Tick Start it anyway to accept the warning", "bad");
   try {
     await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, replicas: n, confirm_capacity: confirmed }) });
-    if (confirmed) closeModal();
+    if (confirmed || reviewed) closeModal();
     toast(`${name} ${n ? "started" : "stopped"}`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -1823,7 +1875,10 @@ let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
 /* An update can be for a linked cluster (the Homestead updates dialog
    updates them too): its requests carry that cluster, and its rollout is
    keyed by it, since the same app can run on two clusters. */
-const clusterHeaders = item => item?.cluster ? { "X-Homestead-Cluster": item.cluster } : {};
+const clusterHeaders = item => {
+  const cluster = item?.cluster || window.FLEET?.view?.self;
+  return cluster ? { "X-Homestead-Cluster": cluster } : {};
+};
 const rolloutKey = item => `${item?.cluster ? `${item.cluster}|` : ""}${updateKey(item.ns, item.name)}`;
 const rolloutBody = config => { const { cluster, clusterName, part, ...rest } = config; return rest; };
 // Homestead replacing itself: its API is away for a minute, which is not a failure.
@@ -1909,72 +1964,92 @@ window.imageUpdateApply = () => imageReviewedApply();
 window.imageReviewedApply = async () => {
   if (!imageReviewReady()) return toast("Review and acknowledge the image and capacity changes first", "bad");
   const rows = IMAGE_REVIEW; IMAGE_REVIEW = null;
-  // Updating Homestead itself from this page: when the new one answers, the
-  // page reloads into it rather than going on as the old one (auth.js).
-  if (rows.some(r => restartsHomestead(r.config) && !r.config.cluster && r.config.action !== "rollback")) {
-    try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
-  }
+  // Arm the reload only when this Homestead's own rollout starts, and hold
+  // version notices until the whole queue has finished, including both pods
+  // of a redundant Homestead. An unrelated early response cannot end it.
+  try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   const items = rows.map(r => r.config);
   const states = Object.fromEntries(items.map(item => [rolloutKey(item), {phase: "queued", ready: 0, desired: 1}]));
   const failures = [];
   modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
   const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
+  window.homesteadUpdateQueueActive = active;
+  delete window.__homesteadQueuedVersion;
   const paint = () => {if (active()) paintRollout($("#imageQueue"), batchUpdateMarkup(items, states, failures, false, true));};
   // Runs the queue from `start`; a failure stops it there, and Skip and
   // continue (#295) picks it up again after the failed app.
   const run = async start => {
     IMAGE_QUEUE = null;
-    for (let index = start; index < rows.length; index++) {
-      const {config, preview} = rows[index], key = rolloutKey(config);
-      if (!active()) return;
-      let job = "";
-      try {
-        const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
-          {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
-           body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
-        job = result.operation?.id || "";
-        states[key] = result; paint();
-        // Never start the next workload until this exact accepted generation is ready.
-        if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
-        const deadline = Date.now() + 15 * 60 * 1000;
-        while (true) {
-          if (!active()) return;
-          let state;
-          try {
-            state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
-              {timeout: 10000, ...(config.cluster ? {headers: clusterHeaders(config)} : {})});
-          } catch (error) {
-            // Homestead is replacing itself - here, or on a linked cluster the
-            // relay cannot reach for that minute: wait for it to answer again.
-            if (!restartsHomestead(config) || Date.now() > deadline) throw error;
-            states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
-            await new Promise(resolve => setTimeout(resolve, 3000));
+    let complete = false;
+    try {
+      for (let index = start; index < rows.length; index++) {
+        const {config, preview} = rows[index], key = rolloutKey(config);
+        if (!active()) return;
+        let job = "";
+        try {
+          if (restartsHomestead(config) && !config.cluster && config.action !== "rollback") {
+            try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
+          }
+          const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
+            {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
+             body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
+          job = result.operation?.id || "";
+          states[key] = result; paint();
+          // Never start the next workload until this exact accepted generation is ready.
+          if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
+          const deadline = Date.now() + 15 * 60 * 1000;
+          while (true) {
+            if (!active()) return;
+            let state;
+            try {
+              state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
+                {timeout: 10000, headers: clusterHeaders(config)});
+            } catch (error) {
+              // Homestead is replacing itself - here, or on a linked cluster the
+              // relay cannot reach for that minute: wait for it to answer again.
+              if (!restartsHomestead(config) || Date.now() > deadline) throw error;
+              states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              continue;
+            }
+            states[key] = state; paint();
+            if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
+            if (state.phase === "failed") throw new Error("Rollout failed");
+            if (state.phase === "ready") { refreshAfterRollout(); break; }
+            if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        } catch (error) {
+          // Already on the newest image - updated elsewhere since the review,
+          // by GitOps for one: nothing to do, and no reason to stop the rest.
+          if (!job && /no image update is currently available/i.test(error.message || "")) {
+            states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
             continue;
           }
-          states[key] = state; paint();
-          if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
-          if (state.phase === "failed") throw new Error("Rollout failed");
-          if (state.phase === "ready") { refreshAfterRollout(); break; }
-          if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
+          const rest = rows.slice(index + 1);
+          for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
+          IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
+          paint();
+          return;
         }
-      } catch (error) {
-        // Already on the newest image - updated elsewhere since the review,
-        // by GitOps for one: nothing to do, and no reason to stop the rest.
-        if (!job && /no image update is currently available/i.test(error.message || "")) {
-          states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
-          continue;
-        }
-        failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
-        const rest = rows.slice(index + 1);
-        for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
-        IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
-        paint();
-        return;
+      }
+      paint();
+      complete = true;
+    } finally {
+      if (!complete && window.homesteadUpdateQueueActive === active) {
+        try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
+      }
+      // Keep the hold while Skip and continue is offered. Closing the dialog
+      // makes active() false, so an abandoned queue never blocks later notices.
+      if (window.homesteadUpdateQueueActive === active && (complete || !IMAGE_QUEUE || !active())) {
+        delete window.homesteadUpdateQueueActive;
+        const served = window.__homesteadQueuedVersion;
+        delete window.__homesteadQueuedVersion;
+        if (served && window.homesteadUpdated) window.homesteadUpdated(served);
       }
     }
-    paint();
   };
   paint();
   await run(0);

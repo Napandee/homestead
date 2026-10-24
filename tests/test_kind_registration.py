@@ -60,7 +60,7 @@ STORAGE_APPS = [
     (VM_MUTATION_JOB, {"vm-create": VM_MUTATION_JOB.status, "vm-edit": VM_MUTATION_JOB.status}, {"vm-create", "vm-edit"}),
     (LH, {"protect-run": JOBS.run_status}, {}),
     (MOVE_ENGINE, {"move": PLAN.op_state}, {}),
-    (LHV2_SETUP, {"longhorn-v2-prepare": LHV2_SETUP.progress}, {}),
+    (LHV2_SETUP, {"longhorn-v2-prepare": LHV2_SETUP.progress, "longhorn-v2-cleanup": LHV2_SETUP.CLEANUP.progress}, {}),
     (SHARES, {"share-remove": SHARES.removal_progress}, {}),
     (UNRAID_VMS, {UNRAID_VMS.KIND: UNRAID_VMS.status}, {UNRAID_VMS.KIND}),
 ]
@@ -92,10 +92,15 @@ ALIASES = {"homestead_host_os": "HOST_OS", "homestead_os_rollout": "OS_ROLLOUT",
 
 
 def fake_ops():
-    return SimpleNamespace(RESOLVERS={}, CANCELLERS={}, RESUMABLE={}, LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set())
+    return SimpleNamespace(RESOLVERS={}, CANCELLERS={}, CANCEL_BLOCKS={}, RESUMABLE={}, LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set())
 
 
 class HostKindTests(unittest.TestCase):
+    def test_v2_cleanup_cannot_discard_a_pending_memory_change(self):
+        ops = fake_ops()
+        LHV2_SETUP.register(ops)
+        self.assertIn('restart', ops.CANCEL_BLOCKS['longhorn-v2-cleanup']({}))
+
     def test_each_host_module_registers_its_kinds(self):
         for module, resolves, cancels in HOSTS + STORAGE_APPS:
             with self.subTest(module=module.__name__):

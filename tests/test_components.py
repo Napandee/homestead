@@ -270,7 +270,7 @@ class UpgradeCheckWiringTests(unittest.TestCase):
     def setUp(self):
         nodes = {"items": [{"metadata": {"name": "node-1"}, "status": {"nodeInfo": {"kubeletVersion": "v1.36.4+k3s1"}}}]}
         self.c = Cluster({"distribution": "k3s", "kubevirt": True, "version": "1.36.4+k3s1"},
-                         {"/api/v1/nodes": nodes, self.KV_CHART: {"metadata": {"name": "homestead-kubevirt"}},
+                         {"/api/v1/nodes": nodes, self.KV_CHART: {"metadata": {"name": "homestead-kubevirt", "labels": {"homestead.io/managed": "true"}}},
                           self.KUBEVIRT: {"items": [{"status": {"observedKubeVirtVersion": "v1.9.1", "phase": "Deployed"}}]}})
         channels = {"data": [{"name": "v1.36", "latest": "v1.36.4+k3s1"}, {"name": "v1.37", "latest": "v1.37.1+k3s1"}]}
         C.bind(self.c.get, self.c.send, lambda force=False: self.c.platform, self.c.helm, Addons(),

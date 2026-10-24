@@ -28,7 +28,8 @@ function architectureData(data) {
   const graph={workloads:[],volumes:[],nodes:[],vips:[],jobs:[],missing:data.missing || []};
   for(const cluster of data.clusters){
     const site=cluster.site, key=id=>id?archId(id,site):id;
-    graph.workloads.push(...cluster.workloads.map(w=>({...w,site,id:key(w.id),claims:w.claims.map(c=>({...c,vid:key(c.vid)}))})));
+    graph.workloads.push(...cluster.workloads.map(w=>({...w,site,id:key(w.id),claims:w.claims.map(c=>({...c,vid:key(c.vid)})),
+      after:(w.after||[]).map(a=>({...a,id:key(a.id)}))})));
     graph.volumes.push(...cluster.volumes.map(v=>({...v,site,id:key(v.id)})));
     graph.nodes.push(...cluster.nodes.map(n=>({...n,site,id:key(n.id),copies:n.copies.map(c=>({...c,vid:key(c.vid)}))})));
     graph.vips.push(...cluster.vips.map(v=>({...v,site,id:key(v.id)})));
@@ -48,6 +49,7 @@ async function viewFlow() {
   f.workloads.forEach(w => w.ports.forEach(p => { if (p.vip) links.push([portId(p.vip, p.port, w.site), w.id, "access"]); }));
   f.workloads.forEach(w => w.claims.forEach(c => { if (c.vid) links.push([w.id, c.vid, "mount"]); }));
   f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
+  links.push(...archStartLinks(f.workloads));
   STATE.data.alinks = links;
   const used = new Set(links.flat());
   const mountedVolumes = mountedVolumeIds(links, f.jobs);
@@ -59,6 +61,7 @@ async function viewFlow() {
           title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MiB` : ""}">
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
+          ${(w.after || []).length ? `<span class="a2after">after ${esc(w.after.map(a => f.workloads.find(x => x.id === a.id)?.name || a.id.split("/").pop()).join(", "))}</span>` : ""}
           ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
             onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove(${jsq(w.ns || "lab")},${jsq(w.name)})` : `moveWorkload(${jsq(w.name)},${jsq(w.ns || "lab")})`}">⇄</button>`}
         </div>`;
@@ -118,6 +121,7 @@ async function viewFlow() {
           <span><i style="background:var(--arch-access)"></i>port</span>
           <span><i style="background:var(--arch-mount)"></i>mount</span>
           <span><i style="background:repeating-linear-gradient(90deg,var(--arch-copy) 0 3px,transparent 3px 7px)"></i>replica</span>
+          ${f.workloads.some(w => (w.after || []).length) ? `<span><i style="background:var(--arch-after)"></i>starts after (→ the app it waits for)</span>` : ""}
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${archMissingCallout(f.missing)}
@@ -127,6 +131,13 @@ async function viewFlow() {
   else drawArch();
   archWatch();
 }
+
+/* Starts after (#746): an app to each app it starts after, as [from, to,
+   type]; "pending" while its gate isn't in the template (Flux, not committed). */
+function archStartLinks(workloads) {
+  return (workloads || []).flatMap(w => (w.after || []).map(a => [w.id, a.id, a.committed ? "starts-after" : "starts-after pending"]));
+}
+const archStartsAfter = type => String(type).startsWith("starts-after");
 
 /* The volumes something is defined to mount: an app's or a VM's, and one
    only a scheduled job mounts - a backup target - which is in use too. */
@@ -219,21 +230,27 @@ function archRelated(id) {
   const beside = id.startsWith("i:") ? places.filter(v => v.id === id).map(v => archId("n:" + v.node,v.site))
     : id.startsWith("n:") ? places.filter(v => archId("n:" + v.node,v.site) === id).map(v => v.id) : [];
   const keep = new Set(start);
+  // Starts after joins two apps, not a path to their data: only the apps
+  // either side of the one traced light up, and the trace does not go on.
   const walk = (from, forward) => {
-    links.forEach(([a, b]) => {
+    links.forEach(([a, b, type]) => {
+      if (archStartsAfter(type)) return;
       const next = forward ? (a === from ? b : null) : (b === from ? a : null);
       if (next && !keep.has(next)) { keep.add(next); walk(next, forward); }
     });
   };
   start.forEach(item => { walk(item, true); walk(item, false); });
+  links.forEach(([a, b, type]) => { if (archStartsAfter(type) && (a === id || b === id)) { keep.add(a); keep.add(b); } });
   beside.forEach(item => keep.add(item));
   return keep;
 }
 
 function drawArch(keep = STATE.data.archKeep) {
-  $$(".arch2wrap").forEach(wrap=>{
+  $$(".arch2wrap").forEach((wrap,index)=>{
   const svg=wrap.querySelector(".archsvg");
   if(!svg)return;
+  const arrow=`a2arrow-${index}`;
+  let arrows=false;
   const localKeep=keep && [...wrap.querySelectorAll("[data-id]")].some(el=>el.dataset.id===STATE.data.archHover)?keep:null;
   const R = wrap.getBoundingClientRect();
   svg.setAttribute("viewBox", `0 0 ${R.width} ${R.height}`);
@@ -251,11 +268,16 @@ function drawArch(keep = STATE.data.archKeep) {
     const A = box(a), B = box(b);
     if (!A || !B) return "";
     const lit = localKeep && localKeep.has(a) && localKeep.has(b);
-    const bend = Math.max(24, (B.l - A.r) / 2);
-    const d = `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.l - bend} ${B.y} ${B.l} ${B.y}`;
+    const after = archStartsAfter(type);
+    arrows ||= after;
+    const bend = after ? 18 + Math.min(42, Math.abs(B.y - A.y) / 5) : Math.max(24, (B.l - A.r) / 2);
+    // Both apps are in one column: starts after loops out on its right, to an arrowhead.
+    const d = after ? `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.r + bend} ${B.y} ${B.r + 2} ${B.y}`
+      : `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.l - bend} ${B.y} ${B.l} ${B.y}`;
     const cls = `a2link ${type}${localKeep ? (lit ? " lit" : " faded") : ""}`;
-    return `<path class="${cls}" d="${d}"/>` + (lit && motion ? `<path class="a2flow ${type}" d="${d}"/>` : "");
+    return `<path class="${cls}" d="${d}"${after ? ` marker-end="url(#${arrow})"` : ""}/>` + (lit && motion ? `<path class="a2flow ${type}" d="${d}"/>` : "");
   }).join("");
+  if (arrows) svg.insertAdjacentHTML("afterbegin", `<defs><marker id="${arrow}" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path class="a2arrowhead" d="M0,0L6,3L0,6z"/></marker></defs>`);
   });
 }
 
@@ -1627,7 +1649,7 @@ async function lhSettingsPaint() {
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
-        v2.enabled && {label:'Disable V2',run:'lhV2Disable()',danger:true}
+        ...(v2.enabled || v2.harvester_setting == null ? [{label:v2.enabled?'Disable V2':'Review V2 resource cleanup',run:'lhV2Disable()',danger:!!v2.enabled}] : [])
       ],{shown:1}) : ''}</div>
       <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and usually 2 GiB of hugepages (setup checks the installed requirement), and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
@@ -1678,6 +1700,11 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ` ${UI.chip("V2", "info")}` : ""}</span>
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
+        ${x.reserved_gb > 0 ? UI.more('Capacity breakdown',UI.facts([
+          [x.type==='block'?'Store capacity':'Filesystem capacity',esc(sizeText(x.capacity_gb))],
+          ['Reserved by Longhorn',esc(sizeText(x.reserved_gb))],
+          ['Capacity after reserve',esc(sizeText(x.size_gb))]
+        ])+`<p class="ui-help">The usage bar excludes Longhorn’s reserve.${x.type==='block'?'':' Filesystem capacity is smaller than the underlying device because of filesystem overhead.'} Growing the OS does not grow this store.</p>`) : ''}
         ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
         <div class="row disk-tags">${(x.tags || []).map(t => UI.chip(t, "info")).join("")
           || '<span class="dim xs">no tags</span>'}
@@ -1687,10 +1714,11 @@ function diskRowsHtml(node, disks, harvester) {
           ${x.evicting ? UI.chip("moving replicas off", "warn") : !x.scheduling ? UI.chip("no new replicas", "neutral") : ''}
           ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
             !x.ready && {label:'Replace failed disk',need:'admin',run:`diskRetire(${jsq(node)},${jsq(x.id)})`},
+            !harvester && (x.path?.replace(/\/+$/,'')==='/var/lib/longhorn'||x.path?.startsWith('/mnt/homestead-retired-')) && {label:'Move Longhorn runtime',need:'admin',run:`runtimeMoveOpen(${jsq(node)},${jsq(x.id)})`},
             {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
             x.ready && x.replicas && !x.evicting && {label:'Move replicas off',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},true)`},
             x.evicting && {label:'Stop moving',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},false)`},
-            !harvester && !d.system && x.ready && x.type!=='block' && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
+            !harvester && x.ready && x.type!=='block' && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
             !x.replicas && !x.scheduling && {label:'Remove from Longhorn',need:'admin',kind:'danger',run:`diskAction('remove',${jsq(node)},${jsq(x.id)})`}
           ],{shown:1,label:'Disk actions'})}</div></div>`;
     }).join("");
@@ -1700,7 +1728,7 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="row">${d.system ? UI.chip("system", "neutral") : ""}${d.system && d.role === "system" ? "" : UI.chip(word, tone)}
           ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
+          ${!harvester && d.system ? actionBar([{label:"Adjust allocation",need:"admin",run:`diskAllocationOpen(${jsq(node)})`},{label:"Use free space",need:"admin",run:`diskOsSpace(${jsq(node)})`}],{shown:1,label:"Storage allocation"}) : ""}</div></div>
       ${lh}${d.v2_preparation && !d.longhorn.length ? UI.actions(UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'})) : ''}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");

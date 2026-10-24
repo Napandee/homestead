@@ -50,7 +50,10 @@ once it starts. On the host itself it installs open-iscsi and an NFS client
 for Longhorn, raises the inotify limits (`/etc/sysctl.d/90-homestead.conf`),
 caps the systemd journal and keeps multipathd off Longhorn's disks. Where the
 system disk has free space in LVM, it can give Longhorn a volume of its own,
-mounted at `/var/lib/longhorn` through `/etc/fstab`. The one-line
+mounted at `/mnt/longhorn-os` through `/etc/fstab` for new clusters, while
+runtime files remain on the OS at `/var/lib/longhorn`. Joining hosts match
+the existing cluster's path, and reruns preserve existing chart settings
+and data. The one-line
 `install.sh` can also install the host console.
 
 ## What Homestead does on its own
@@ -112,7 +115,7 @@ Each is done once. One you remove later is not put back.
 | Unused images removed from hosts | helper `Pod` | image **Automatic clean-up** (off by default) |
 | Automatic image updates: a snapshot of each volume, then the new image (keeping the two newest snapshots) | Longhorn `Snapshot`, `Deployment` | per app, **Updates** set to automatic, and the update window |
 | Update checks about twice a day record the image digests an app ran | `Deployment` annotation | always |
-| Power schedules stop and start apps and VMs | `Deployment` (replicas), `VirtualMachine` | an app's or VM's own schedule |
+| Power schedules stop and start apps and VMs; when several start in the same minute, the apps others start after go first | `Deployment` (replicas), `VirtualMachine` | an app's or VM's own schedule |
 | Outage actions restart an app or VM that stays down | `Deployment`, `VirtualMachine` | an app's or VM's outage actions |
 | A rebalance moves apps back onto a host that returned | `Deployment` | **Settings → When a host comes back** |
 | OS updates on a schedule: cordon, drain, reboot, apps held and given back. Taking over updates also turns Ubuntu's own automatic updates off on each host (`/etc/apt/apt.conf.d/99-homestead-hold`) | helper `Pod`s, `Node`, `Eviction`, `Deployment`, `StatefulSet`, `VirtualMachine` | **Nodes → OS updates** (off by default); k3s and RKE2 only |
@@ -151,6 +154,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/rebalancing` | Longhorn `Volume` | a volume's copies move to balance hosts |
 | `homestead.io/one-host-copies` | Homestead's own Longhorn `Volume` | on a one-host cluster Homestead lowers its data volume to one copy; it holds the count asked for before |
 | `homestead.io/iso-unused-since` | ISO `PersistentVolumeClaim` | an ISO volume no VM uses |
+| `homestead.io/starts-after` | `Deployment` | you set **Starts after** on an app. It comes with the start gate: an init container, `homestead-start-gate`, first in the pod template, which only opens TCP connections to the apps it waits for. Saving it, changing it or clearing it restarts the app once. Never written on an app Flux or Argo CD applies |
 
 Apps deployed through Homestead also carry the `homestead.io/managed=true`
 label. Hosts get the taints and labels in the table above.
@@ -170,7 +174,7 @@ them up where the last one left off.
 | `PersistentVolumeClaim` | new volumes and VM disks, imports, restores from a backup, moving a volume to another storage class, ISO volumes for VMs, moves between clusters, a claim made again empty when its host is removed for good |
 | `Pod` | short helpers: file browsing on a volume, a node shell, a host's script (OS updates, disk setup), asking a node's container runtime about images, import probes, the last step of a reboot or shutdown, copies while moving Homestead's own data |
 | `Job`, `CronJob` | copies during imports and storage changes, preparing a disk for Longhorn V2, ISO copies, schedules you save on **Schedules**, running a Longhorn job now |
-| `DaemonSet` | pre-pulling an image onto every host (`homestead-pull-*`, removed once done); the VM placement checks when you switch them on |
+| `DaemonSet` | pre-pulling an image onto every host (`homestead-pull-*`, removed once done), including the start gate's image once, when the first app gets **Starts after**; the VM placement checks when you switch them on |
 | `Secret` | registry and source passwords, a VM's cloud-init, an app's secret-looking environment values (kept out of its Deployment), backup target keys, linked-cluster and move credentials, MQTT and UniFi settings, user accounts (`homestead-auth`) |
 | `ConfigMap` | Homestead's settings and records: settings, portal links, IP records, hardware mappings, group tiers, linked clusters (`homestead-fleet`), the outage webhook carry-over (`homestead-outage-carry`), the VM store (`homestead-vm-store`, in `lab`), a VM's GPU ROMs, a configuration restore |
 | `Namespace` | **Settings → Namespaces**, and a move from another cluster into a namespace that is not there yet |
@@ -301,7 +305,7 @@ stays too.
 | The `homestead.io/*` annotations on apps, and the other taints and labels on hosts | apps, hosts | nothing: they are harmless. The annotations are the only record of how many copies a stopped app had |
 | Settings Homestead changed: Longhorn's copies count and offline rebuilding, kube-vip's values, Longhorn disks the root-disk guard turned off, the default flag it took off extra storage classes | Longhorn, kube-vip, storage classes | they are your cluster's settings now; change them only on purpose |
 | On each host: the journal cap (`/etc/systemd/journald.conf.d/90-homestead.conf`), the inotify limits (`/etc/sysctl.d/90-homestead.conf`), the multipath setting | the host | Longhorn needs multipathd kept off its disks, or volumes fail to mount; apps may need the inotify limits |
-| On each host: Longhorn's own volume (`/var/lib/longhorn`, label `hs-longhorn`) and its `/etc/fstab` line, and the fstab lines of disks Homestead set up for Longhorn | the host | Longhorn's data: without the mount, Longhorn starts on an empty folder |
+| On each host: Longhorn's own volume (`/mnt/longhorn-os` on new installs, `/var/lib/longhorn` on older ones, label `hs-longhorn`) and its `/etc/fstab` line, and the fstab lines of disks Homestead set up for Longhorn | the host | Longhorn's data: without the mount, Longhorn starts on an empty folder |
 | On each host: `/etc/modules-load.d/99-homestead-longhorn-v2.conf` and `/etc/sysctl.d/99-homestead-longhorn-v2.conf` | the host | Longhorn V2 volumes after the next reboot |
 | On each host: the cloud-init files `/etc/cloud/cloud.cfg.d/99-homestead-bridge.cfg` and `99-homestead-bond.cfg`, and the netplan configuration Homestead wrote for a bridge or bond | the host | the host's network: without them cloud-init writes its own netplan again at boot, and the host or its VMs can lose the LAN |
 | On each host: `/usr/local/sbin/homestead-vfio`, `homestead-vfio.service`, `/etc/homestead/vfio.list`, and the IOMMU options in `/etc/default/grub` | the host | PCI and GPU passthrough to VMs after the next boot |

@@ -110,7 +110,8 @@ rules:
     # fromBackup parameter points at the selected Longhorn backup.
     verbs: [get, list, create]
   - apiGroups: ["longhorn.io"]
-    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols]
+    # Orphan records must be empty before a V1 filesystem can be erased.
+    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols, orphans]
     verbs: [get, list, watch]
   # Observe V2 live upgrades; Longhorn owns the rolling controller and pods.
   - apiGroups: ["longhorn.io"]
