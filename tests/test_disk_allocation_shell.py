@@ -17,7 +17,7 @@ class AllocationShellTests(unittest.TestCase):
     def setUp(self):
         self.directory=tempfile.TemporaryDirectory();self.addCleanup(self.directory.cleanup)
         self.root=Path(self.directory.name)
-        for path in ('bin','dev/disk/by-id','var/lib/longhorn','proc/sys/kernel/random','sys/class/block/dm-0/dm','sys/class/block/dm-1/dm'):
+        for path in ('bin','dev/disk/by-id','dev/mapper','var/lib/longhorn','proc/sys/kernel/random','sys/class/block/dm-0/dm','sys/class/block/dm-1/dm'):
             (self.root/path).mkdir(parents=True)
         (self.root/'proc/sys/kernel/random/boot_id').write_text('boot-test')
         (self.root/'sys/class/block/nvme0n1').mkdir(parents=True)
@@ -27,6 +27,9 @@ class AllocationShellTests(unittest.TestCase):
             dm='LVM-testvguuid'+uid
             (self.root/f'dev/dm-{index}').write_text('preserved filesystem contents')
             (self.root/f'sys/class/block/dm-{index}/dm/uuid').write_text(dm)
+            name='system--vg-'+('root' if index==0 else 'longhorn')
+            (self.root/f'sys/class/block/dm-{index}/dm/name').write_text(name)
+            (self.root/f'dev/mapper/{name}').symlink_to(self.root/f'dev/dm-{index}')
             (self.root/f'dev/disk/by-id/dm-uuid-{dm}').symlink_to(self.root/f'dev/dm-{index}')
         self.state={'os_size':64,'lh_size':128,'os_fs':64,'fs':'ext4'}
         (self.root/'state.json').write_text(json.dumps(self.state))
@@ -45,7 +48,13 @@ def trace(text):
 def role(): return 'longhorn' if any('testdatauuid' in a or 'dm-1' in a or 'longhorn' in a for a in args) else 'os'
 r=role();size=state['os_size' if r=='os' else 'lh_size'];fs_size=state['os_fs'] if r=='os' else state['lh_size']
 if os.environ.get('FAIL_TOOL')==cmd:sys.exit(2)
-if cmd=='lvs':print('system-vg' if '--noheadings' in args else section(raw,'LVS'))
+if cmd=='lvs':
+ if '--noheadings' in args:
+  assert args==['--noheadings','--separator','|','-o','vg_name,vg_uuid,lv_uuid',str(root/'dev/mapper/system--vg-root')], 'Canonical dm-N is not an LVM selector'
+  print('system-vg|test-vg-uuid|'+('other-root-uuid' if os.environ.get('MISMATCH_REPORT')=='yes' else 'test-root-uuid'))
+  if os.environ.get('CHANGE_MAPPER')=='yes':
+   alias=root/'dev/mapper/system--vg-root';alias.unlink();alias.symlink_to(root/'dev/dm-1')
+ else:print(section(raw,'LVS'))
 elif cmd=='vgs':print(section(raw,'VGS'))
 elif cmd=='pvs':print(section(raw,'PVS'))
 elif cmd=='mountpoint':sys.exit(0)
@@ -62,6 +71,7 @@ elif cmd=='xfs_info':print('data = bsize=4096 blocks='+str(fs_size*1024**3//4096
 elif cmd=='blockdev':print(state['os_size']*1024**3)
 elif cmd=='lvextend':
  assert '--extents' in args and '--resizefs' not in args
+ assert args[-2]==str(root/'dev/mapper/system--vg-root'), 'Growth must use the verified LVM selector'
  extent=int(args[args.index('--extents')+1]);assert extent*PE>size*1024**3
  state['os_size']=extent*PE//1024**3;save();trace('lv-grown')
  if os.environ.get('LATE_IDENTITY')=='yes':(root/'changed-fs').write_text('changed')
@@ -73,7 +83,7 @@ else:raise AssertionError(cmd)
             path=self.root/'bin'/cmd;path.write_text(code);path.chmod(0o755)
         self.env={**os.environ,'FIXTURE':str(self.root),'PATH':str(self.root/'bin')+':'+os.environ['PATH']}
     def rebase(self,script):
-        for source in ('/dev/disk/','/var/lib/homestead','/var/lib/longhorn','/mnt/longhorn-os','/proc/sys/kernel/random/boot_id','/sys/class/block/'):
+        for source in ('/dev/disk/','/dev/mapper/','/var/lib/homestead','/var/lib/longhorn','/mnt/longhorn-os','/proc/sys/kernel/random/boot_id','/sys/class/block/'):
             script=script.replace(source,str(self.root)+source)
         return script.replace('[ -b "$D" ]','[ -f "$D" ]')
     def shell(self,script,**env):
@@ -114,6 +124,14 @@ else:raise AssertionError(cmd)
         ref=self.ref();self.state['lh_size']=132;(self.root/'state.json').write_text(json.dumps(self.state))
         result=self.shell(A._script(ref));self.assertNotEqual(result.returncode,0);self.assertEqual(self.trace(),'')
         result=self.shell(A._script(ref),FAIL_TOOL='pvs');self.assertNotEqual(result.returncode,0);self.assertEqual(self.trace(),'')
+
+    def test_lvm_report_mismatch_and_changed_mapper_alias_block_growth(self):
+        ref=self.ref()
+        for env in ({'MISMATCH_REPORT':'yes'},{'CHANGE_MAPPER':'yes'}):
+            with self.subTest(env=env):
+                result=self.shell(A._script(ref),**env)
+                self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertEqual(self.trace(),'')
 
 
 if __name__=='__main__':unittest.main()

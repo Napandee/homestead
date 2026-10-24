@@ -35,8 +35,17 @@ SNAPSHOT = r'''
 snapshot() {
   ROOT=$(findmnt -rn --mountpoint / -o SOURCE) || fail 'Cannot identify the OS filesystem'
   ROOT=$(readlink -f "$ROOT") || fail 'Cannot resolve the OS device'
-  VG=$(lvs --noheadings -o vg_name "$ROOT") || fail 'The OS is not on an accessible LVM volume'
-  VG=$(printf '%s' "$VG" | tr -d ' ')
+  ROOT_ID=$(cat /sys/class/block/${ROOT##*/}/dm/uuid) || fail 'Cannot identify the OS logical volume'
+  ROOT_NAME=$(cat /sys/class/block/${ROOT##*/}/dm/name) || fail 'Cannot read the OS logical volume name'
+  case "$ROOT_NAME" in ''|*[!A-Za-z0-9+_.-]*) fail 'The OS logical volume name is invalid';; esac
+  ROOT_LV="/dev/mapper/$ROOT_NAME"
+  [ "$(readlink -f "$ROOT_LV")" = "$ROOT" ] || fail 'The OS logical volume name points to another device'
+  ROOT_REPORT=$(lvs --noheadings --separator '|' -o vg_name,vg_uuid,lv_uuid "$ROOT_LV") || fail 'The OS is not on an accessible LVM volume'
+  [ "$(printf '%s\n' "$ROOT_REPORT" | wc -l)" -eq 1 ] || fail 'The OS logical volume report is ambiguous'
+  REPORTED_ID=$(printf '%s\n' "$ROOT_REPORT" | awk -F'|' '{gsub(/[ -]/,"",$2);gsub(/[ -]/,"",$3);print "LVM-" $2 $3}')
+  [ "$REPORTED_ID" = "$ROOT_ID" ] || fail 'The OS LVM report identifies another device'
+  [ "$(readlink -f "$ROOT_LV")" = "$ROOT" ] && [ "$(cat /sys/class/block/${ROOT##*/}/dm/uuid)" = "$ROOT_ID" ] || fail 'The OS logical volume changed during inspection'
+  VG=$(printf '%s' "$ROOT_REPORT" | cut -d'|' -f1 | tr -d ' ')
   case "$VG" in ''|*[!A-Za-z0-9+_.-]*) fail 'Volume group name is invalid';; esac
   LVS=$(lvs -a --segments --reportformat json --units b --nosuffix -o lv_name,lv_uuid,lv_path,lv_size,vg_uuid,lv_attr,segtype,devices,lv_kernel_major,lv_kernel_minor "$VG") || fail 'Cannot inspect logical volumes'
   VGS=$(vgs --reportformat json --units b --nosuffix -o vg_name,vg_uuid,vg_extent_size,vg_extent_count,vg_free_count "$VG") || fail 'Cannot inspect free extents'
@@ -296,6 +305,9 @@ __INSPECT__
 B=__STABLE__; P=__POINT__; U=__FSUUID__; TARGET=__TARGET__; PV=__PV__
 D=$(readlink -f "$B") || fail 'Cannot resolve reviewed logical volume'
 [ -b "$D" ] || fail 'Reviewed logical volume is missing'
+LV_NAME=$(cat /sys/class/block/${D##*/}/dm/name) || fail 'Cannot read the reviewed logical volume name'
+case "$LV_NAME" in ''|*[!A-Za-z0-9+_.-]*) fail 'Logical volume name is invalid';; esac
+L="/dev/mapper/$LV_NAME"
 exec 8<"$D" || fail 'Cannot pin the reviewed logical volume'
 exec 7<"$P" || fail 'Cannot pin the mounted filesystem'
 R=/var/lib/homestead/allocation
@@ -311,6 +323,7 @@ HASH=$(printf '%s\n' "$FRESH" | sed '/^USAGE /d' | sha256sum | cut -d' ' -f1)
 mount_identity() {
   CURRENT=$(readlink -f "$B") || fail 'Cannot resolve stable volume identity'
   [ "$CURRENT" = "$D" ] || fail 'Logical volume device changed'
+  [ "$(readlink -f "$L")" = "$D" ] || fail 'Logical volume name points to another device'
   [ "$(cat /sys/class/block/${D##*/}/dm/uuid)" = __DM__ ] || fail 'Logical volume UUID changed'
   [ "$(blkid -s UUID -o value "$D")" = "$U" ] || fail 'Filesystem UUID changed'
   SOURCE=$(findmnt -rn --mountpoint "$P" -o SOURCE) || fail 'The filesystem was unmounted'
@@ -340,7 +353,7 @@ printf 'complete\n' > "$J.next"; sync "$J.next"; mv "$J.next" "$J"; sync "$R"
 echo 'Logical volume and filesystem reached the approved size'
 '''
     extend = ('[ "$(blockdev --getsize64 /proc/self/fd/8)" = "$TARGET" ]' if ref.get('filesystem_only') else
-              'lvextend --autobackup y --extents ' + str(target // ref['extent_bytes']) + ' "$B" "$PV"')
+              'lvextend --autobackup y --extents ' + str(target // ref['extent_bytes']) + ' "$L" "$PV"')
     grow = ('resize2fs "$B" ' + shlex.quote(str(target // 1024) + 'K') if area['filesystem'] == 'ext4' else
             'xfs_growfs -D ' + str(target // area['block_bytes']) + ' "$P"')
     values = {'__BOOT__':ref['boot_id'], '__STABLE__':area['stable_device'], '__POINT__':area['mountpoint'], '__FSUUID__':area['fs_uuid'],
