@@ -78,6 +78,20 @@ class PlatformTests(unittest.TestCase):
         guide = PLATFORM.join_guide()
         self.assertIn("server: https://10.0.0.5:9345", guide["config"])
 
+    def test_join_storage_reads_both_existing_layouts_without_a_default(self):
+        path = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/settings/default-data-path"
+        for value in ("/mnt/longhorn-os", "/var/lib/longhorn", "/custom/data"):
+            self.use({"longhorn.io"}, "v1.31.4+k3s1", extra={path: {"value": value}})
+            guide = PLATFORM.join_guide()
+            self.assertEqual(value, guide["storage_path"])
+            self.assertEqual(value != "/custom/data", guide["storage_supported"])
+            self.assertIn(f"/v{PLATFORM.VERSION}/", guide["installer_url"])
+        for error in (OSError("timeout"), urllib.error.HTTPError(path, 403, "forbidden", None, None)):
+            with mock.patch.object(PLATFORM, "kget", side_effect=error):
+                setting = PLATFORM.join_storage()
+            self.assertIsNone(setting["storage_path"])
+            self.assertFalse(setting["storage_supported"])
+
     def with_args(self, args):
         node = {"metadata": {"name": "n1", "labels": {"node-role.kubernetes.io/control-plane": "true"},
                              "annotations": {"k3s.io/node-args": args}},

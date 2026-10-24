@@ -36,7 +36,7 @@ def run(args, env=None, path_extra=None):
 class InstallerTests(unittest.TestCase):
     def test_console_defaults_on_and_can_be_disabled(self):
         env = {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.11", "HS_SERVER": "192.0.2.10",
-               "HS_TOKEN": "example-token", "HS_YES": "1"}
+               "HS_TOKEN": "example-token", "HS_YES": "1", "HS_LONGHORN_DATA_PATH": "/mnt/longhorn-os"}
         code, out = run(["--dry-run", "--skip-checks"], env)
         self.assertEqual(0, code, out)
         self.assertIn("install-console.sh enable", out)
@@ -69,9 +69,26 @@ class InstallerTests(unittest.TestCase):
 
     def test_joining_as_a_worker(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6",
-                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "K10example::server:secret", "HS_YES": "1"})
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "K10example::server:secret", "HS_YES": "1",
+                                                          "HS_LONGHORN_DATA_PATH": "/mnt/longhorn-os"})
         self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6", out)
         self.assertNotIn("K10example", out, "the cluster token is never shown or logged")
+        self.assertIn("--longhorn-data-path /mnt/longhorn-os", out)
+
+    def test_join_without_a_storage_path_asks_instead_of_guessing(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
+                                                          "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1"})
+        self.assertNotEqual(0, code)
+        self.assertIn("HS_LONGHORN_DATA_PATH", out)
+        self.assertNotIn("bootstrap-k3s.sh agent", out)
+
+    def test_custom_join_storage_stops_before_installing(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
+                       "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1",
+                       "HS_LONGHORN_DATA_PATH": "/custom/data"})
+        self.assertNotEqual(0, code)
+        self.assertIn("Custom storage folders need manual setup", out)
+        self.assertNotIn("bootstrap-k3s.sh agent", out)
 
     def test_joining_as_a_tiebreaker(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "tiebreaker", "HS_NODE_IP": "192.0.2.6",
@@ -104,8 +121,10 @@ class InstallerTests(unittest.TestCase):
 
     def test_joining_an_rke2_cluster_uses_its_supervisor_port(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
-                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1",
+                                                          "HS_LONGHORN_DATA_PATH": "/var/lib/longhorn"})
         self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
+        self.assertIn("--longhorn-data-path /var/lib/longhorn", out)
 
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
@@ -122,7 +141,8 @@ class InstallerTests(unittest.TestCase):
 
     def test_a_joining_node_takes_the_version_given(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_SERVER": "10.0.0.5",
-                                                          "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1"})
+                                                          "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1",
+                                                          "HS_LONGHORN_DATA_PATH": "/mnt/longhorn-os"})
         self.assertIn("agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
 
     def test_default_pins_homestead_to_the_installer_release_without_lookups(self):

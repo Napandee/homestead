@@ -430,6 +430,8 @@ def _view_node_power(item, out):
     ref = item.get("ref") or {}
     out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
                     "direct": bool(ref.get("planned_outage") or ref.get("forced")),
+                    "planned_outage": bool(ref.get("planned_outage")),
+                    "handoff": bool(ref.get("handoff") and ref.get("helper_uid")),
                     "failed_phase": ref.get("failed_phase", ""),
                     # Apps and VMs stopped to wait for the host, or VMs moved first.
                     "holds": bool(ref.get("held")) or any(

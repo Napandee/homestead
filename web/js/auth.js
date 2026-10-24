@@ -35,7 +35,9 @@ window.fetch = async (url, opts = {}) => {
     throw Object.assign(new Error("Your sign-in has expired; signing you in again"), { status: 0, signIn: true });
   }
   const served = r.headers?.get?.("X-Homestead-Version");
-  if (served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION) homesteadUpdated(served);
+  const target = opts.headers?.["X-Homestead-Cluster"];
+  const remote = target && target !== window.FLEET?.view?.self;
+  if (!remote && served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION) homesteadUpdated(served);
   return r;
 };
 
@@ -46,6 +48,12 @@ window.fetch = async (url, opts = {}) => {
    says so and offers to. During a rolling update the old copy may still
    answer in between, so it only ever moves forward to the new one. */
 window.homesteadUpdated = served => {
+  // A redundant Homestead serves the new version as soon as its first new
+  // pod answers. The queue still has to wait for the rest of that rollout.
+  if (window.homesteadUpdateQueueActive?.()) {
+    window.__homesteadQueuedVersion = served;
+    return;
+  }
   if (window.__homesteadUpdated === served) return;
   window.__homesteadUpdated = served;
   let mine = false;
@@ -109,7 +117,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error, cause = "") {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.3" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.8" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
@@ -210,7 +218,7 @@ function loginForm(err, setup) {
   let remember = true;
   try { remember = localStorage.getItem("homestead.remember") !== "0"; } catch (e) { /* ticked */ }
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.3" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.332-dev.8" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}

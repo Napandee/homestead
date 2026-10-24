@@ -27,9 +27,11 @@ from contextlib import nullcontext
 import homestead_vm_power_job as VM_POWER
 import homestead_vm_write as VM_WRITE
 import homestead_k3s_health as HEALTH
+from homestead_version import VERSION
 import urllib.parse
 
-BOOTSTRAP = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh"
+# Generated flags and installer behaviour must come from the same release.
+BOOTSTRAP = f"https://raw.githubusercontent.com/homestead-lab/homestead/v{VERSION}/scripts/bootstrap-k3s.sh"
 K3S = "https://get.k3s.io"
 # Pin the released 26.04.1 minimal build; later point releases must be chosen explicitly.
 UBUNTU = "https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20260827/ubuntu-26.04-minimal-cloudimg-amd64.img"
@@ -140,9 +142,9 @@ def user_data(node, first, token, password, setup, k3s_version="", kubevirt=Fals
         vms = " --kubevirt" if kubevirt else ""
         line = f"curl -sfL {BOOTSTRAP} | K3S_TOKEN={token} sh -s - server{storage}{vms}{version}"
     elif node["role"] == "server":
-        line = f"curl -sfL {BOOTSTRAP} | sh -s - join https://{first}:6443 {token}{version}"
+        line = f"curl -sfL {BOOTSTRAP} | sh -s - join https://{first}:6443 {token}{version} --longhorn-data-path /mnt/longhorn-os"
     else:
-        line = f"curl -sfL {BOOTSTRAP} | sh -s - agent https://{first}:6443 {token}{version}"
+        line = f"curl -sfL {BOOTSTRAP} | sh -s - agent https://{first}:6443 {token}{version} --longhorn-data-path /mnt/longhorn-os"
     return "\n".join([
         "#cloud-config",
         f"hostname: {node['name']}",

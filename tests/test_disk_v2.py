@@ -68,6 +68,7 @@ class Cluster:
         self.managers = [{'metadata': {'name': 'im-v2'}, 'spec': {'nodeID': 'node-1', 'dataEngine': 'v2', 'type': 'aio'},
                           'status': {'currentState': 'running'}}]
         self.volumes = {}; self.replicas = []; self.engines = []; self.control = None
+        self.backingimages = []; self.orphans = []; self.store_devices = {}
         self.volume('volume-data', 100)
         self.facts = HOST_FACTS; self.blank = 'VERIFIED\n'
         REVIEW.bind(lambda: b'test-only-review-key')
@@ -99,6 +100,8 @@ class Cluster:
         if path == V.LH + '/replicas': return copy.deepcopy({'items': self.replicas})
         if path == V.LH + '/volumes': return copy.deepcopy({'items': list(self.volumes.values())})
         if path == V.LH + '/engines': return copy.deepcopy({'items': self.engines})
+        if path == V.LH + '/backingimages': return copy.deepcopy({'items': self.backingimages})
+        if path == V.LH + '/orphans': return copy.deepcopy({'items': self.orphans})
         if path == V.LH + '/instancemanagers': return copy.deepcopy({'items': self.managers})
         if path.startswith(V.LH + '/settings/'): return {'value': self.settings[path.rsplit('/', 1)[1]]}
         if '/instancemanagerupgradecontrols/' in path and self.control is not None: return self.control
@@ -132,6 +135,10 @@ class Cluster:
             return {}
         raise AssertionError((method, path))
     def host(self, node, script, **options):
+        if 'echo STORECHECK' in script:
+            device = next(line.split()[1] for line in self.facts.splitlines() if line.startswith('DEVICE '))
+            stores = self.lh[node]['spec']['disks']
+            return '\n'.join(['STORECHECK'] + ['STORE ' + name + ' ' + self.store_devices.get(name, device if name == 'data' else '/dev/sdc') for name, spec in stores.items() if spec.get('diskType', 'filesystem') == 'filesystem'] + ['STORESEND']), ''
         return (self.blank if 'echo VERIFIED' in script else self.facts), ''
     def review(self): return V.review({'node': 'node-1', 'disk': 'data'})
     def start(self, plan=None):
@@ -391,34 +398,53 @@ class HostShellTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(); self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        for folder in ('dev/disk/by-id', 'mnt/data', 'etc', 'proc/sys/kernel/random', 'sys/class/block/sdb/holders', 'bin'):
+        for folder in ('dev/disk/by-id', 'mnt/data', 'etc', 'proc/sys/kernel/random', 'proc/1', 'proc/2', 'sys/class/block/sdb/holders', 'bin'):
             (self.root / folder).mkdir(parents=True)
         (self.root / 'dev/sdb').write_text('fixture filesystem signature')
         (self.root / 'dev/disk/by-id/ata-TEST-DISK-01').symlink_to(self.root / 'dev/sdb')
         (self.root / 'proc/sys/kernel/random/boot_id').write_text('boot-1')
+        for pid in ('1', '2'): (self.root / ('proc/' + pid + '/mountinfo')).write_text('1 0 8:1 / / rw - ext4 /dev/os rw\n')
         (self.root / 'mnt/data/longhorn-disk.cfg').write_text('{"diskUUID":"disk-source-uuid"}')
         (self.root / 'etc/fstab').write_text('UUID=other / ext4 defaults 0 1\nUUID=fs-data ' + str(self.root / 'mnt/data') + ' ext4 defaults 0 2\n')
         self.initial = (self.root / 'etc/fstab').read_text()
         commands = {
-            'lsblk': r'case "$*" in *SERIAL*) echo "${TEST_SERIAL:-TEST-DISK-01}";; *WWN*) echo test-wwn;; *TYPE*) echo disk;; *NAME*) echo "$FIXTURE/dev/sdb";; *MOUNTPOINT*) :;; *) exit 2;; esac',
+            'lsblk': r'''[ "${TEST_READ_FAIL:-}" != lsblk ] || exit 2
+case "$*" in *SERIAL*) echo "${TEST_SERIAL:-TEST-DISK-01}";; *WWN*) echo test-wwn;; *TYPE*) echo disk;; *NAME*) echo "$FIXTURE/dev/sdb";; *MAJ:MIN*) echo 8:16;; *MOUNTPOINT*) [ "${TEST_LATE_MOUNT:-no}" != yes ] || echo /pod/mount;; *) exit 2;; esac''',
             'blockdev': 'echo ' + str(1000 * GB),
-            'blkid': r'case "$*" in *" -p "*|-p*) exit 2;; *) echo "${TEST_UUID:-fs-data}";; esac',
-            'findmnt': r'case "$*" in *FSROOT*) echo /;; *"--mountpoint"*SOURCE*) echo "$FIXTURE/dev/sdb";; *"--target"*) echo /dev/fixture-other;; *TARGET*) echo "$FIXTURE/mnt/data";; *) exit 2;; esac',
-            'umount': r'[ "${TEST_BUSY:-no}" != yes ] || exit 1; echo unmounted >> "$FIXTURE/trace"',
-            'wipefs': r'[ "$(cat "$FIXTURE/var/lib/homestead/disk-v2/' + 'b' * 24 + r'")" = started ] || exit 99; echo wiped >> "$FIXTURE/trace"',
+            'blkid': r'[ ! -e "$FIXTURE/changed-uuid" ] || { echo other-filesystem; exit 0; }; case "$*" in *" -p "*|-p*) exit 2;; *) echo "${TEST_UUID:-fs-data}";; esac',
+            'findmnt': r'''[ "${TEST_READ_FAIL:-}" != findmnt ] || exit 2
+case "$*" in *OPTIONS*) echo ro;; *FSROOT*) echo /;; *"--mountpoint"*SOURCE*) echo "$FIXTURE/dev/sdb";; *"--target"*) echo /dev/fixture-other;; *TARGET*) echo "$FIXTURE/mnt/data";; *) exit 2;; esac''',
+            'umount': r'''[ "${TEST_BUSY:-no}" != yes ] || exit 1
+echo unmounted >> "$FIXTURE/trace"
+case "${TEST_AFTER_UNMOUNT:-}" in
+ uuid) touch "$FIXTURE/changed-uuid";;
+ alias) rm "$FIXTURE/dev/disk/by-id/ata-TEST-DISK-01"; ln -s /dev/fixture-other "$FIXTURE/dev/disk/by-id/ata-TEST-DISK-01";;
+ holders) rmdir "$FIXTURE/sys/class/block/sdb/holders";;
+ private) echo '2 0 8:16 / /pod/data rw - ext4 /dev/data rw' > "$FIXTURE/proc/2/mountinfo";;
+ unreadable) rm "$FIXTURE/proc/2/mountinfo"; mkdir "$FIXTURE/proc/2/mountinfo";;
+esac''',
+            'mount': r'[ "${TEST_READONLY_FAIL:-no}" != yes ] || exit 1; if [ "${TEST_LATE_DATA:-no}" = yes ]; then mkdir -p "$FIXTURE/mnt/data/replicas"; echo data > "$FIXTURE/mnt/data/replicas/late"; fi',
+            'wipefs': r'''[ "$1" != --version ] || { echo 'wipefs from util-linux'; exit 0; }
+[ "$1" != --no-act ] || { [ "${TEST_SIGNATURE_FAIL:-no}" != yes ] || exit 2; [ "${TEST_SIGNATURE:-no}" != yes ] || echo ext4; exit 0; }
+[ "$*" = '-a /proc/self/fd/8' ] || exit 98
+[ "${TEST_EXCLUSIVE_BUSY:-no}" != yes ] || exit 1
+[ "$(cat "$FIXTURE/var/lib/homestead/disk-v2/''' + 'b' * 24 + r'''")" = started ] || exit 99; echo wiped >> "$FIXTURE/trace"''',
             'systemctl': 'exit 0',
         }
         for name, body in commands.items():
             target = self.root / 'bin' / name; target.write_text('#!/bin/sh\nset -eu\n' + body + '\n'); target.chmod(0o755)
         facts = {'by_id': '/dev/disk/by-id/ata-TEST-DISK-01',
             'uuid': 'fs-data', 'serial': 'TEST-DISK-01', 'wwn': 'test-wwn', 'size_bytes': 1000 * GB, 'mountpoint': '/mnt/data'}
-        self.script = V._host_script({'hardware': facts, 'boot_id': 'boot-1', 'prepare_request_id': 'b' * 24, 'disk_uuid': 'disk-source-uuid'})
-        for source in ('/dev/disk/by-id/ata-TEST-DISK-01', '/mnt/data', '/proc/sys/kernel/random/boot_id', '/sys/class/block/', '/var/lib/homestead', '/etc/'):
-            self.script = self.script.replace(source, str(self.root) + source)
+        self.facts = facts
+        self.script = self.rebase(V._host_script({'hardware': facts, 'boot_id': 'boot-1', 'prepare_request_id': 'b' * 24, 'disk_uuid': 'disk-source-uuid'}))
+        self.env = dict(os.environ, FIXTURE=str(self.root), PATH=str(self.root / 'bin') + ':' + os.environ['PATH'])
+
+    def rebase(self, script):
+        for source in ('/dev/disk/', '/dev/mapper/', '/mnt/data', '/proc/sys/kernel/random/boot_id', '/proc/[0-9]', '/proc/swaps', '/sys/class/block/', '/var/lib/homestead', '/etc/'):
+            script = script.replace(source, str(self.root) + source)
         # A regular fixture file stands in for a physical device; all actual
         # device inspection and mutation commands above are fixture executables.
-        self.script = self.script.replace('[ -b "$D" ]', '[ -f "$D" ]')
-        self.env = dict(os.environ, FIXTURE=str(self.root), PATH=str(self.root / 'bin') + ':' + os.environ['PATH'])
+        return script.replace('[ -b "$D" ]', '[ -f "$D" ]')
     def run_script(self, **env):
         return subprocess.run(['sh', '-c', self.script], env=dict(self.env, **env), text=True, capture_output=True, timeout=15)
     def trace(self):
@@ -437,6 +463,40 @@ class HostShellTests(unittest.TestCase):
         (self.root / 'mnt/data/user-file').write_text('keep')
         result = self.run_script(); self.assertNotEqual(result.returncode, 0)
         self.assertIn('Other files appeared', result.stdout); self.assertEqual(self.trace(), '')
+
+    def test_late_replica_data_and_readonly_failure_never_reach_erase(self):
+        for options in ({'TEST_READONLY_FAIL':'yes'}, {'TEST_LATE_DATA':'yes'}):
+            with self.subTest(options=options):
+                result = self.run_script(**options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.trace(), '')
+                self.assertEqual((self.root / 'etc/fstab').read_text(), self.initial)
+
+    def test_failed_reads_late_alias_mount_holder_private_mount_and_busy_open_block_erase(self):
+        for options in ({'TEST_READ_FAIL':'lsblk'}, {'TEST_READ_FAIL':'findmnt'}, {'TEST_LATE_MOUNT':'yes'},
+                        *({'TEST_AFTER_UNMOUNT':case} for case in ('alias', 'holders', 'private', 'unreadable')),
+                        {'TEST_EXCLUSIVE_BUSY':'yes'}):
+            with self.subTest(options=options):
+                # Every attempt has a fresh isolated device and one-shot receipt.
+                fixture = HostShellTests(); fixture.setUp()
+                try:
+                    result = fixture.run_script(**options)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertNotIn('wiped', fixture.trace())
+                finally: fixture.doCleanups()
+
+    def test_registration_never_treats_failed_inspection_as_blank(self):
+        captured = []
+        with patch.object(V.HOST, 'run', side_effect=lambda node, script, **kwargs: (captured.append(script) or 'VERIFIED', '')):
+            V._verify_blank({'hardware':self.facts, 'node':'node-1', 'prepare_request_id':'b'*24})
+        folder = self.root / 'var/lib/homestead/disk-v2'; folder.mkdir(parents=True)
+        (folder / ('b'*24)).write_text('complete')
+        self.script = self.rebase(captured[0])
+        good = self.run_script(); self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        for options in ({'TEST_READ_FAIL':'lsblk'}, {'TEST_SIGNATURE_FAIL':'yes'}, {'TEST_SIGNATURE':'yes'}, {'TEST_LATE_MOUNT':'yes'}):
+            with self.subTest(options=options):
+                result = self.run_script(**options)
+                self.assertNotEqual(result.returncode, 0); self.assertNotIn('VERIFIED', result.stdout)
 
 
 if __name__ == '__main__': unittest.main()
