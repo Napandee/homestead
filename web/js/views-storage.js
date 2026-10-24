@@ -1627,7 +1627,7 @@ async function lhSettingsPaint() {
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
-        v2.enabled && {label:'Disable V2',run:'lhV2Disable()',danger:true}
+        ...(v2.enabled || v2.harvester_setting == null ? [{label:v2.enabled?'Disable V2':'Review V2 resource cleanup',run:'lhV2Disable()',danger:!!v2.enabled}] : [])
       ],{shown:1}) : ''}</div>
       <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and usually 2 GiB of hugepages (setup checks the installed requirement), and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}

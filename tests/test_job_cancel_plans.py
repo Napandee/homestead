@@ -39,6 +39,9 @@ def reference_plan(item):
     if item.get("kind") == "longhorn-v2-prepare":
         plan.update(can=False, why_not="Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log")
         return plan
+    if item.get("kind") == "longhorn-v2-cleanup":
+        plan.update(can=False, why_not="Inspect saved V2 cleanup. A host may have memory changes awaiting restart.")
+        return plan
     if item.get("kind") == "snapshot-delete":
         plan.update(can=False, why_not="Longhorn snapshot removal cannot be undone or safely cancelled")
         return plan
@@ -57,7 +60,7 @@ def reference_plan(item):
     return plan
 
 
-BLOCKED = ["self-data-handoff", "reclass", "longhorn-v2-prepare", "snapshot-delete", "disk-allocation", "longhorn-runtime"]
+BLOCKED = ["self-data-handoff", "reclass", "longhorn-v2-prepare", "longhorn-v2-cleanup", "snapshot-delete", "disk-allocation", "longhorn-runtime"]
 # Every blocked kind, a kind cancellable while its CDI receipt is held, kinds
 # with and without a canceller of their own, and one no registry knows.
 KIND_NAMES = BLOCKED + ["vm-disk-import", "workload-copy", "vm-power", "no-such-kind"]

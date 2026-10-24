@@ -71,6 +71,8 @@ const DIALOGS = [
   ["disk-v2-failed", "nodes", "window.__demoDiskV2State='failed';diskV2Watch('demo-disk-v2')"],
   ["disk-v2-complete", "nodes", "window.__demoDiskV2State='complete';diskV2Watch('demo-disk-v2')"],
   ["longhorn-v2-missing", "settings", "window.__demoV2State='missing';lhV2Setup()"],
+  ["longhorn-v2-cleanup-review", "settings", "lhV2CleanupOpen()"],
+  ["longhorn-v2-cleanup-restart", "settings", "lhV2CleanupWatch('demo-v2-cleanup')"],
   ["longhorn-v2-prepare", "settings", "window.__demoV2State='missing';lhV2Setup()", "lhV2ReviewHost('k3s-test')"],
   ["longhorn-v2-running", "settings", "window.__demoV2State='running';lhV2Setup()"],
   ["longhorn-v2-reboot", "settings", "window.__demoV2State='reboot';lhV2Setup()"],
