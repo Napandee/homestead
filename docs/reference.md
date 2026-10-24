@@ -168,13 +168,36 @@ StorageClass used in `deploy/deploy.yaml` exists:
 kubectl get storageclass
 ```
 
-The supplied manifest uses `longhorn-r2`. Longhorn makes `longhorn`, not
-`longhorn-r2`, so on a new Longhorn the data claim stays Pending and Homestead
-never starts; `kubectl describe pvc -n lab` shows why. Change
-`storageClassName` (and the `STORAGE_CLASS` value) to a class the cluster
-has: `longhorn`, or create a `longhorn-r2` class first. Without Longhorn -
-k3s's `local-path`, say - use that class and change the claim to
-`ReadWriteOnce`. The k3s script does both.
+The supplied manifest uses `longhorn`, the class Longhorn makes itself.
+Without Longhorn - k3s's `local-path`, say - change `storageClassName` (and
+the `STORAGE_CLASS` value) to that class and the claim to `ReadWriteOnce`;
+otherwise the data claim stays Pending and Homestead never starts
+(`kubectl describe pvc -n lab` shows why). The k3s script does both.
+
+Longhorn's `longhorn` class asks for three copies. On a cluster with exactly
+one host (one Kubernetes node and one Longhorn node) the leader lowers
+Homestead's own data volume to one copy once Longhorn says another cannot be
+placed and none is being rebuilt, so it reads healthy; no other volume, class
+or Longhorn setting is changed. Once a second host can hold a copy,
+`longhorn-r2` ("Longhorn, two copies") is the class to move Homestead's data
+onto: create it under **Settings > Hardware and storage > Storage
+classes** (two copies, not migratable) and move from **Settings > About >
+Redundancy**. On k3s and RKE2 Homestead raises its own volume's copies in
+place as hosts join.
+
+A claim's class cannot change. On a cluster installed from an older manifest
+that said `longhorn-r2`, check the claim first:
+
+```bash
+kubectl -n lab get pvc homestead-data
+```
+
+Only if its STATUS is `Pending` does it hold nothing: then
+`kubectl -n lab delete pvc homestead-data` and apply again (or create
+`longhorn-r2` first). **Never delete a `Bound` claim: that can lose
+Homestead's data.** A Bound claim keeps its class and keeps working, and
+in-app updates change only the image; to apply the manifest again over it,
+set `storageClassName` back to the claim's class first.
 
 ### 2. Configure and install
 
@@ -1880,7 +1903,7 @@ authenticated.
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
 | `SAMBA_IMAGE` | `dperson/samba:latest` | image Samba is installed from when the first share is created |
 | `NFS_IMAGE` | `pedroetb/nfs-server:v2.4.0` | image used by the optional NFSv4 server |
-| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
+| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes (the manifest sets `longhorn`) |
 | `LB_IP` | empty | shared kube-vip address |
 | `SESSION_TTL_HOURS` | `12` | idle window for an ordinary session |
 | `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |
