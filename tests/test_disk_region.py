@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -180,18 +181,70 @@ ls() { [ "${READ_FAIL:-}" != holders ] || return 2; [ "${HOLDER:-no}" = no ] || 
 readlink() {
   case "$2" in
     /dev/disk/*) [ "${TEST_STABLE:-yes}" = yes ] && echo "$D" || echo /dev/other;;
+    /dev/mapper/*)
+      [ "${READ_FAIL:-}" != mapper ] || return 2
+      if [ "${ALIAS:-same}" = other ] || { [ "${ALIAS:-same}" = changed ] && [ -f "$TRACE/lvs" ]; }; then echo /dev/other; else echo "$D"; fi;;
     /sys/*) echo /sys/devices/pci0000/fixture;;
     *) echo "$2";;
   esac
 }
-lvs() { echo "fixture-lv|fixture-vg|${SEGMENT:-linear}|${ATTR:--wi-ao----}|/dev/sda3(0)"; }
-cat() { echo LVM-fixture; }
+lvs() {
+  # Match LVM's real argument handling: /dev/dm-N is NOT an LV selector.
+  [ "$*" = "--segments --noheadings --separator | -o lv_uuid,vg_uuid,segtype,lv_attr,devices /dev/mapper/fixture--vg-longhorn" ] || { echo 'Cannot process volume group dm-1' >&2; return 5; }
+  [ "${READ_FAIL:-}" != lvs ] || return 5
+  touch "$TRACE/lvs"
+  echo "${LV_UUID:-fixture-lv}|fixture-vg|${SEGMENT:-linear}|${ATTR:--wi-ao----}|/dev/sda3(0)"
+  [ "${MULTI_SEGMENT:-no}" = no ] || echo 'fixture-lv|fixture-vg|linear|-wi-ao----|/dev/sda3(1)'
+}
+cat() {
+  case "$1" in
+    */dm/name) [ "${READ_FAIL:-}" != name ] || return 2; echo "${DM_NAME:-fixture--vg-longhorn}";;
+    */dm/uuid)
+      [ "${READ_FAIL:-}" != uuid ] || return 2
+      if [ "${IDENTITY:-same}" = changed ] && [ -f "$TRACE/lvs" ]; then echo LVM-other; else echo LVM-fixturevgfixturelv; fi;;
+    *) return 2;;
+  esac
+}
 findmnt() { [ "${SYSTEM:-no}" = no ] && echo /dev/os || echo "$D"; }
 '''
 
     def run_check(self, **options):
         script = self.fixture + R.inspection() + '\nprintf "%s\\n" "$REGION"\n'
-        return subprocess.run(['sh', '-c', script], env=dict(os.environ, **options), capture_output=True, text=True, timeout=5)
+        with tempfile.TemporaryDirectory() as trace:
+            return subprocess.run(['sh', '-c', script], env=dict(os.environ, TRACE=trace, **options), capture_output=True, text=True, timeout=5)
+
+    def test_runtime_and_other_contents_remain_blocked_with_bounded_plain_text_names(self):
+        for runtime in (False, True):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if runtime: (root / 'engine-binaries').mkdir()
+                names = [str(root / ('user-<file>' + str(n) + 'x' * 100)) for n in range(9)]
+                script = 'set -eu\nfail() { echo "$*"; exit 1; }\n' + V.foreign_contents_message() + '\necho ALLOWED\n'
+                result = subprocess.run(['sh', '-c', script], env=dict(os.environ, P=directory, OTHER='\n'.join(names)), capture_output=True, text=True, timeout=5)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Longhorn runtime storage' if runtime else 'Other files', result.stdout, result.stderr)
+                self.assertIn('whole filesystem', result.stdout)
+                self.assertNotIn('ALLOWED', result.stdout)
+                self.assertNotIn('<', result.stdout)
+                self.assertNotIn(directory, result.stdout)
+                self.assertLess(len(result.stdout), 500)
+
+    def test_mapper_selector_is_bound_to_device_and_lvm_uuid_before_and_after_report(self):
+        for options, error in (
+                ({'ALIAS':'other'}, 'different device'),
+                ({'ALIAS':'changed'}, 'changed during inspection'),
+                ({'IDENTITY':'changed'}, 'changed during inspection'),
+                ({'LV_UUID':'another-lv'}, 'report does not match'),
+                ({'DM_NAME':'../other'}, 'name is invalid'),
+                ({'READ_FAIL':'name'}, 'Cannot read logical volume name'),
+                ({'READ_FAIL':'uuid'}, 'Cannot read logical volume identity'),
+                ({'READ_FAIL':'mapper'}, 'Cannot resolve logical volume name'),
+                ({'READ_FAIL':'lvs'}, 'Cannot inspect logical volume'),
+                ({'MULTI_SEGMENT':'yes'}, 'Multi-segment')):
+            with self.subTest(options=options):
+                result = self.run_check(**options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stdout)
 
     def test_partition_and_linear_lv_have_stable_distinct_identities(self):
         lv = self.run_check(); part = self.run_check(KIND='part')
@@ -208,7 +261,7 @@ findmnt() { [ "${SYSTEM:-no}" = no ] && echo /dev/os || echo "$D"; }
 
     def test_full_generated_region_helpers_keep_os_sibling_and_refuse_late_identity_change(self):
         for kind in ('part', 'lvm'):
-            for changed in (False, True):
+            for changed in (('', 'uuid') if kind == 'part' else ('', 'uuid', 'mapper', 'dm-identity')):
                 with self.subTest(kind=kind, changed=changed):
                     fixture = FIXTURES.HostShellTests(); fixture.setUp()
                     try:
@@ -218,8 +271,18 @@ findmnt() { [ "${SYSTEM:-no}" = no ] && echo /dev/os || echo "$D"; }
                         (root / 'sys/class/block/sda').mkdir()
                         (root / 'sys/class/block/sda/device').symlink_to(root / 'sys/devices/pci0000')
                         (root / 'sys/class/block/sdb/dm').mkdir()
-                        (root / 'sys/class/block/sdb/dm/uuid').write_text('LVM-fixture')
-                        stable = '/dev/disk/by-partuuid/fixture-part' if kind == 'part' else '/dev/disk/by-id/dm-uuid-LVM-fixture'
+                        (root / 'sys/class/block/sdb/dm/uuid').write_text('LVM-fixturevgfixturelv')
+                        (root / 'sys/class/block/sdb/dm/name').write_text('fixture--vg-longhorn')
+                        (root / 'dev/mapper').mkdir()
+                        (root / 'dev/mapper/fixture--vg-longhorn').symlink_to(root / 'dev/sdb')
+                        umount = root / 'bin/umount'
+                        umount.write_text(umount.read_text() + r'''
+case "${TEST_AFTER_UNMOUNT:-}" in
+ mapper) rm "$FIXTURE/dev/mapper/fixture--vg-longhorn"; ln -s "$FIXTURE/dev/os" "$FIXTURE/dev/mapper/fixture--vg-longhorn";;
+ dm-identity) echo LVM-other > "$FIXTURE/sys/class/block/sdb/dm/uuid";;
+esac
+''')
+                        stable = '/dev/disk/by-partuuid/fixture-part' if kind == 'part' else '/dev/disk/by-id/dm-uuid-LVM-fixturevgfixturelv'
                         link = root / stable.lstrip('/'); link.parent.mkdir(exist_ok=True); link.symlink_to(root / 'dev/sdb')
                         tool = root / 'bin/lsblk'
                         original = tool.read_text()
@@ -233,14 +296,16 @@ findmnt() { [ "${SYSTEM:-no}" = no ] && echo /dev/os || echo "$D"; }
 esac
 '''
                         tool.write_text('#!/bin/sh\nset -eu\n' + extra + original.split('\n', 2)[2])
-                        lvs = root / 'bin/lvs'; lvs.write_text('#!/bin/sh\necho "fixture-lv|fixture-vg|linear|-wi-ao----|/dev/sda3(0)"\n'); lvs.chmod(0o755)
+                        lvs = root / 'bin/lvs'
+                        lvs.write_text('#!/bin/sh\n[ "$*" = "--segments --noheadings --separator | -o lv_uuid,vg_uuid,segtype,lv_attr,devices $FIXTURE/dev/mapper/fixture--vg-longhorn" ] || exit 5\necho "fixture-lv|fixture-vg|linear|-wi-ao----|/dev/sda3(0)"\n')
+                        lvs.chmod(0o755)
                         fixture.env['TEST_KIND'] = kind
                         inspect = 'set -eu\nD=' + str(root / 'dev/sdb') + '\nfail() { echo "$*"; exit 1; }\n' + fixture.rebase(R.inspection()) + '\necho "$REGION"'
                         result = subprocess.run(['sh','-c',inspect],env=fixture.env,capture_output=True,text=True,timeout=5)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                         facts = {**fixture.facts, 'kind':kind, 'by_id':stable, 'region':result.stdout.strip()}
                         fixture.script = fixture.rebase(V._host_script({'hardware':facts,'boot_id':'boot-1','prepare_request_id':'b'*24,'disk_uuid':'disk-source-uuid'}))
-                        result = fixture.run_script(TEST_AFTER_UNMOUNT='uuid' if changed else '')
+                        result = fixture.run_script(TEST_AFTER_UNMOUNT=changed)
                         if changed:
                             self.assertNotEqual(result.returncode, 0); self.assertNotIn('wiped', fixture.trace())
                         else:

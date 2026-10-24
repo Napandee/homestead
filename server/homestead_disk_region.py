@@ -39,11 +39,24 @@ region_identity() {
     STABLE="/dev/disk/by-partuuid/$RID"
   else
     command -v lvs >/dev/null || fail 'LVM inspection tool is missing'
-    EXTRA=$(lvs --segments --noheadings --separator '|' -o lv_uuid,vg_uuid,segtype,lv_attr,devices "$D") || fail 'Cannot inspect logical volume'
-    [ "$(printf '%s\n' "$EXTRA" | wc -l)" -eq 1 ] || fail 'Multi-segment logical volumes need manual preparation'
-    printf '%s\n' "$EXTRA" | awk -F'|' '{gsub(/ /,"",$3); gsub(/ /,"",$4); if($3!="linear" || substr($4,1,1)!="-") exit 1}' || fail 'Only ordinary linear logical volumes without snapshots can be converted'
     RID=$(cat /sys/class/block/${D##*/}/dm/uuid) || fail 'Cannot read logical volume identity'
     case "$RID" in LVM-*) ;; *) fail 'Logical volume identity is missing';; esac
+    # lvs accepts the mapper name, but interprets /dev/dm-N as a VG name.
+    # Resolve it from this device, then bind both the alias and LVM report
+    # back to its identity; never trust a mapper alias by name alone.
+    DM_NAME=$(cat /sys/class/block/${D##*/}/dm/name) || fail 'Cannot read logical volume name'
+    case "$DM_NAME" in ''|*[!A-Za-z0-9+_.-]*) fail 'Logical volume name is invalid';; esac
+    LV_PATH="/dev/mapper/$DM_NAME"
+    LV_DEVICE=$(readlink -f "$LV_PATH") || fail 'Cannot resolve logical volume name'
+    [ "$LV_DEVICE" = "$D" ] || fail 'Logical volume name points to a different device'
+    EXTRA=$(lvs --segments --noheadings --separator '|' -o lv_uuid,vg_uuid,segtype,lv_attr,devices "$LV_PATH") || fail 'Cannot inspect logical volume'
+    [ "$(printf '%s\n' "$EXTRA" | wc -l)" -eq 1 ] || fail 'Multi-segment logical volumes need manual preparation'
+    printf '%s\n' "$EXTRA" | awk -F'|' '{gsub(/ /,"",$3); gsub(/ /,"",$4); if($3!="linear" || substr($4,1,1)!="-") exit 1}' || fail 'Only ordinary linear logical volumes without snapshots can be converted'
+    REPORT_ID=$(printf '%s\n' "$EXTRA" | awk -F'|' '{gsub(/[ -]/,"",$1); gsub(/[ -]/,"",$2); print "LVM-" $2 $1}')
+    [ "$REPORT_ID" = "$RID" ] || fail 'LVM report does not match the selected device'
+    LV_DEVICE=$(readlink -f "$LV_PATH") || fail 'Cannot recheck logical volume name'
+    CURRENT_ID=$(cat /sys/class/block/${D##*/}/dm/uuid) || fail 'Cannot recheck logical volume identity'
+    [ "$LV_DEVICE" = "$D" ] && [ "$CURRENT_ID" = "$RID" ] || fail 'Logical volume identity changed during inspection'
     STABLE="/dev/disk/by-id/dm-uuid-$RID"
   fi
   RESOLVED=$(readlink -f "$STABLE") || fail 'Cannot resolve stable region path'
