@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_outage as OUTAGE
 import homestead_yaml as YAML
 
 kget = ksend = table_get = None
@@ -150,6 +151,9 @@ def get_object(group, version, resource, namespace, name, reveal=False):
     if kind["kind"] == "Secret" and kind["group"] == "" and not reveal:
         obj["data"] = {key: "(hidden)" for key in (obj.get("data") or {})}
         obj.pop("stringData", None)
+    if not reveal and (obj.get("metadata") or {}).get("annotations"):
+        # An outage webhook's address can carry a token (#741).
+        obj["metadata"]["annotations"] = OUTAGE.mask_annotations(obj["metadata"]["annotations"])
     return {"kind": kind, "object": obj, "yaml": YAML.dump(obj), "secret_hidden": kind["kind"] == "Secret" and not reveal}
 
 
@@ -183,6 +187,9 @@ def save_object(group, version, resource, namespace, name, text):
         raise ValueError("the name and namespace cannot change here; create a new object instead")
     if kind["kind"] == "Secret" and any(v == "(hidden)" for v in (obj.get("data") or {}).values()):
         raise ValueError("reveal the secret's values before editing it, or they would be saved as '(hidden)'")
+    if OUTAGE.HIDDEN in str((meta.get("annotations") or {}).get(OUTAGE.NAMES.key(OUTAGE.KEY)) or ""):
+        current = (kget(_path(kind, namespace, name)).get("metadata") or {}).get("annotations") or {}
+        meta["annotations"] = OUTAGE.unmask_annotations(meta["annotations"], current)
     if not meta.get("resourceVersion"):
         raise ValueError("keep metadata.resourceVersion: it is how a change made elsewhere meanwhile is caught")
     try:

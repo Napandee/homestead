@@ -101,6 +101,11 @@ class ScanTests(unittest.TestCase):
                 return {"items": [node]}
             if "labelSelector" in path and "image-scan" in path:
                 return {"items": self.pods}
+            # Groups that may not be installed are not: discovery says so.
+            if path == "/apis":
+                return {"groups": [{"name": "apps"}]}
+            if path.count("/") == 2 and path.startswith("/apis/"):
+                raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
             return {"items": []}
         IMP.kget, IMP.ksend, IMP.NS, IMP._cache = kget, lambda m, p, b=None, **k: self.sent.append((m, p, b)), "lab", {}
         import homestead_names as NAMES

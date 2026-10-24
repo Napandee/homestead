@@ -95,6 +95,28 @@ class AutomaticTests(Base):
         self.images[0]["protected"] = True
         self.assertEqual(["sha256:" + "b" * 64], list(CLEANUP.track({"images": self.images}, now=6000)))
 
+    def test_unused_since_is_kept_while_a_record_that_keeps_every_image_cannot_be_read(self):
+        # Wrap-up row 80: an unreadable record keeps every image, so nothing is
+        # unused for a while; that must not restart every image's clock.
+        unreadable = {"reason": "unreadable", "holds_all": True, "namespace": "lab", "workload": "web",
+                      "container": "update-previous", "ref": "", "digest": ""}
+        CLEANUP.track({"images": self.images}, now=1000)            # a and b unused since 1000
+        held = [{**i, "protected": True, "retained_by": [unreadable]} for i in self.images]
+        held.append({**image("f", ["node1"]), "protected": True, "retained_by": [unreadable]})
+        self.assertEqual({}, CLEANUP.track({"images": held}, now=5000))
+        # Read again: a and b keep their dates; f, never seen unused, starts now.
+        self.images.append(image("f", ["node1"]))
+        self.assertEqual({"sha256:" + "a" * 64: 1000, "sha256:" + "b" * 64: 1000, "sha256:" + "f" * 64: 9000},
+                         CLEANUP.track({"images": self.images}, now=9000))
+        # An image something readable keeps is used again, unreadable or not.
+        held[0]["retained_by"] = [unreadable, {"reason": "active", "namespace": "lab", "workload": "web",
+                                               "container": "web", "ref": "", "digest": ""}]
+        CLEANUP.track({"images": held}, now=9500)
+        self.assertEqual({"sha256:" + "b" * 64: 1000, "sha256:" + "f" * 64: 9000},
+                         CLEANUP.track({"images": self.images[1:]}, now=10000))
+        self.assertEqual({"sha256:" + "a" * 64: 10500, "sha256:" + "b" * 64: 1000, "sha256:" + "f" * 64: 9000},
+                         CLEANUP.track({"images": self.images}, now=10500))
+
     def test_off_it_only_tracks(self):
         self.assertIsNone(CLEANUP.auto_tick(now=100 * DAY))
         self.assertEqual([], self.removed)

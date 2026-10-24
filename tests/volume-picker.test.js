@@ -7,6 +7,8 @@ const vm = require("node:vm");
 
 const context = { window: {}, console };
 vm.createContext(context);
+context.esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+require("./helpers/load-ui")(context);
 context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/volume-picker.js", "utf8"), context);
 
@@ -75,7 +77,7 @@ test("a new pod volume defaults to the first class that isn't migratable, not to
 test("a migratable class's badge says what it is fit for, not that it is for VM disks only", () => {
   const html = context.window.storageClassBadges({ migratable: true });
   assert.doesNotMatch(html, /VM disks only/);
-  assert.match(html, /<span class="tag" data-tip="[^"]*several hosts[^"]*">VM disk class<\/span>/);
+  assert.match(html, /<span class="ui-chip neutral"[^>]* data-tip="[^"]*several hosts[^"]*">VM disk class<\/span>/);
 });
 
 test("with no classes the picker offers the cluster's default rather than a name it made up", () => {

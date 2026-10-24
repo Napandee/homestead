@@ -86,6 +86,7 @@ MODULES = (
     "homestead_fleet",
     "homestead_flow",
     "homestead_forecast",
+    "homestead_gitops",
     "homestead_group_tiers",
     "homestead_hardware",
     "homestead_helm",

@@ -211,6 +211,8 @@ class MenuBootstrapTests(unittest.TestCase):
             pkg = root / manager
             pkg.write_text("""#!/bin/sh
 printf '%s %s\\n' "$(basename "$0")" "$*" >> "$TEST_CALLS"
+# A slow machine: each package call takes this long.
+[ -n "${TEST_DELAY:-}" ] && sleep "$TEST_DELAY"
 printf 'repository progress\\n'
 printf 'package diagnostic\\n' >&2
 case "$TEST_BEHAVIOR" in
@@ -230,11 +232,14 @@ touch "$TEST_INSTALLED"
             real_timeout = shutil.which("timeout")
             if not real_timeout:
                 self.skipTest("timeout is unavailable")
+            # Only the hang case needs a short deadline; others get room to
+            # finish on a busy machine (three package calls on the retry path).
+            deadline = "-k 0.1 0.2" if behavior == "hang" else "-k 1 20"
             timer = root / "timeout"
             timer.write_text(f"""#!/bin/sh
 [ "$1 $2 $3" = '-k 10 120' ] || exit 99
 shift 3
-exec '{real_timeout}' -k 0.1 0.2 "$@"
+exec '{real_timeout}' {deadline} "$@"
 """, encoding="utf-8")
             timer.chmod(0o755)
             script = SCRIPT.read_text(encoding="utf-8").split("# Boxes are as tall", 1)[0]
@@ -268,7 +273,7 @@ have() {
             if behavior == "installed":
                 (root / "installed").touch()
             result = subprocess.run([SH, "-s", "--", *args], input=script, text=True,
-                                    capture_output=True, env=env, timeout=5)
+                                    capture_output=True, env=env, timeout=30)
             def read(name):
                 path = root / name
                 return path.read_text() if path.exists() else ""
@@ -302,7 +307,7 @@ have() {
         self.assertEqual(1, len(calls.splitlines()), "do not retry after a timeout")
 
     def test_apt_can_refresh_stale_indexes_and_retry(self):
-        result, terminal, calls, _ = self.startup(behavior="retry")
+        result, terminal, calls, _ = self.startup(behavior="retry", extra_env={"TEST_DELAY": "0.1"})
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("INSTALLER_CONTINUES:whiptail", result.stdout)
         commands = calls.splitlines()

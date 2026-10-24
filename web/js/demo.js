@@ -287,6 +287,16 @@
   const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
     { name: w.name.replace(/(^|-)([a-z])/g, (_, dash, c) => (dash ? " " : "") + c.toUpperCase()), icon: demoLogo(w.name[0].toUpperCase(), (i * 47) % 360), repo: w.images[0], key: `${w.name}|${w.images[0]}` },
     { name: `${w.name}-alt`, icon: demoLogo(w.name[0].toUpperCase(), (i * 47 + 180) % 360), repo: `example/${w.name}-alt`, key: `${w.name}-alt|example` }]);
+  // Flux applies paperless from git (#734): its edit, move and rename reviews say so.
+  const demoGitops = body => body.ns === "lab" && body.name === "paperless"
+    ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {};
+  // The edit as YAML for git (#735): the demo shows the containers' image and memory as sent.
+  const demoEditYaml = body => body.workload_name && body.workload_name !== body.name ? "" : [
+    "apiVersion: apps/v1", "kind: Deployment", "metadata:", `  name: ${body.name}`, `  namespace: ${body.ns || "lab"}`,
+    "spec:", "  template:", "    spec:", "      containers:",
+    ...(body.containers || []).flatMap(c => [`      - name: ${c.name || c.original_name}`,
+      ...(c.image ? [`        image: ${c.image}`] : []),
+      ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
@@ -2419,7 +2429,10 @@ ssh_pwauth: true
       const said = [a?.restart && `restarted after ${a.restart.after_min} min down, at most ${a.restart.max} times`, a?.webhook && "its webhook called"].filter(Boolean);
       return { ok: true, actions: a || null, detail: `When ${body.name} is down: ${said.join(" and ") || "nothing is done"}` };
     },
-    "/api/monitoring/actions/test": () => ({ ok: true, detail: "The webhook took the test" }),
+    "/api/monitoring/actions/test": (url, init) => {
+      const format = JSON.parse(init?.body || "{}").format;
+      return { ok: true, detail: `${({ ntfy: "ntfy", gotify: "Gotify" })[format] || "The webhook"} took the test` };
+    },
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const port = body.mode !== "off" && body.port ? `:${body.port}` : "", path = body.path || "/";
@@ -2635,7 +2648,7 @@ ssh_pwauth: true
     },
     "/api/move/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      return { capacity_token: "demo-host-move", capacity: {
+      return { capacity_token: "demo-host-move", managed: demoGitops(body), capacity: {
         blocked: false, requires_confirmation: true, additional: 1, candidates: [],
         pod_request_gb: 0.5, pod_memory_gb: 1, pod_cpu_request_percent: 10,
         warnings: ["Demo snapshot: all containers stop before replacements start. Placement is not reserved."],
@@ -2644,10 +2657,24 @@ ssh_pwauth: true
       } };
     },
     "/api/move": { ok: true },
+    // Is Flux applying it (#742): one Kustomization failing, so the Cluster page and paperless's details show it.
+    "/api/gitops": () => {
+      const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+      return { summary: "2 Kustomizations, 1 HelmRelease: 1 not ready",
+        apps: { "lab/paperless": "Kustomization flux-system/apps", "monitoring/loki": "Kustomization flux-system/monitoring" },
+        objects: [
+          { id: "Kustomization flux-system/apps", kind: "Kustomization", namespace: "flux-system", name: "apps", ready: false, suspended: false,
+            revision: "main@4f1c2d9", tried: ago(3), since: ago(95), interval: "10m",
+            message: "Secret/lab/paperless-env not found: kustomize build failed" },
+          { id: "Kustomization flux-system/monitoring", kind: "Kustomization", namespace: "flux-system", name: "monitoring", ready: true, suspended: false,
+            revision: "main@4f1c2d9", tried: ago(6), since: ago(2000), interval: "10m", message: "Applied revision: main@sha1:4f1c2d9" },
+          { id: "HelmRelease dev/actions-runner", kind: "HelmRelease", namespace: "dev", name: "actions-runner", ready: true, suspended: false,
+            revision: "runner-chart 0.15.0", tried: ago(40), since: ago(9000), interval: "30m", message: "Helm upgrade succeeded" }] };
+    },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const rename = body.workload_name && body.workload_name !== body.name;
-      return { capacity_token: "demo-review", capacity: {
+      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
       candidates: [
         { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,
@@ -2742,6 +2769,7 @@ ssh_pwauth: true
       // Deployed by Flux from git: its update is a notice, made in git (#296).
       { ns: "monitoring", name: "loki", available: true, can_rollback: false,
         managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
+        yaml: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: loki\n  namespace: monitoring\nspec:\n  template:\n    spec:\n      containers:\n      - name: loki\n        image: grafana/loki:3.5.0",
         images: [{ container: "loki", deployed: "grafana/loki:3.4.2", candidate: "grafana/loki:3.5.0", candidate_tag: "3.5.0", remote_digest: "sha256:aaa", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
