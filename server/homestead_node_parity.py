@@ -57,7 +57,8 @@ VIP_INTERFACE = re.compile(r'(?m)^  vip_interface: "?([A-Za-z0-9_.:-]{1,15})"?\n
 # Newer installs also give Longhorn its priority (addons.longhorn_values).
 INSTALLER_COPIES = re.compile(r"\s*persistence:\s*\n\s+defaultClassReplicaCount:\s*(\d+)\s*\n"
                               r"\s*defaultSettings:\s*\n\s+defaultReplicaCount:\s*(\d+)\s*"
-                              r"(?:priorityClass:\s*(" + re.escape(addons.LONGHORN_PRIORITY) + r")\s*)?")
+                              r"(?:priorityClass:\s*(" + re.escape(addons.LONGHORN_PRIORITY) + r")\s*)?"
+                              r"(?:defaultDataPath:\s*(/mnt/longhorn-os|/var/lib/longhorn)\s*)?")
 
 # The host steps this release takes; a host done with fewer is done again.
 HOST_STEPS = 2
@@ -422,10 +423,13 @@ def longhorn_copies(storing):
     have = int(match.group(1))
     if want <= have:
         return None
+    updated = addons.longhorn_values(want, priority=bool(match.group(3)))
+    if match.group(4):
+        updated += f"  defaultDataPath: {match.group(4)}\n"
     ksend("PATCH", f"{HELMCHARTS}/longhorn",
           # The priority stays as the install wrote it: an older install's
           # Longhorn changes it only with every volume detached.
-          {"spec": {"valuesContent": addons.longhorn_values(want, priority=bool(match.group(3)))}},
+          {"spec": {"valuesContent": updated}},
           ctype="application/merge-patch+json")
     # The chart's defaults reach a running Longhorn only at its install; the
     # setting is what it reads for each new volume now.

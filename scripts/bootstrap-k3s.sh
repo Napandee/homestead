@@ -6,10 +6,10 @@
 #     curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
 #
 #   Another machine, as a worker (the token is in /var/lib/rancher/k3s/server/node-token on the first):
-#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - agent https://<first-machine>:6443 <token>
+#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - agent https://<first-machine>:6443 <token> --longhorn-data-path /mnt/longhorn-os
 #
 #   Another machine, as a second or third server (control plane and etcd):
-#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - join https://<first-machine>:6443 <token>
+#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - join https://<first-machine>:6443 <token> --longhorn-data-path /mnt/longhorn-os
 #
 #   A k3s (or RKE2) server that is already running, to add Longhorn and Homestead to it:
 #     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - addons
@@ -17,7 +17,7 @@
 #   RKE2 instead of k3s - full upstream Kubernetes, hardened, what Harvester
 #   runs on - add --rke2 to any of these. RKE2's servers are joined on 9345:
 #     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - server --rke2
-#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - agent https://<first-machine>:9345 <token> --rke2
+#     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - agent https://<first-machine>:9345 <token> --rke2 --longhorn-data-path /mnt/longhorn-os
 #   (the token is in /var/lib/rancher/rke2/server/node-token on the first).
 #
 # For a guided install that asks these questions and checks the machine
@@ -52,10 +52,14 @@
 # Options for every mode:
 #   --rke2                   RKE2 instead of k3s
 #   --longhorn-volume auto|none|200   where the system is on LVM, give
-#                            Longhorn a volume of its own at /var/lib/longhorn,
+#                            replica data a volume at /mnt/longhorn-os,
 #                            of that many GB (auto: the volume group's free
 #                            space, less a tenth kept for the system), so it
 #                            can never fill the system's filesystem
+#   --longhorn-data-path /mnt/longhorn-os|/var/lib/longhorn
+#                            required when joining: match the existing cluster's
+#                            default-data-path setting; new clusters use the
+#                            first path, leaving runtime files on the OS
 #   --node-ip 192.0.2.50   the address the cluster registers this machine
 #                            by, when it has more than one
 #
@@ -97,6 +101,7 @@ MULTUS_VERSION=""
 NODE_PROBE=1
 VIP=""
 LONGHORN_VOLUME=auto
+LONGHORN_DATA_PATH=""
 NODE_IP=""
 JOIN_TAINT=""
 JOIN_LABEL=""
@@ -110,6 +115,7 @@ fail() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || fail "curl is needed"
 
 host_packages() {
+  longhorn_layout
   # Longhorn mounts volumes over iSCSI and serves shared (RWX) volumes over NFS.
   say "Installing host packages for Longhorn (open-iscsi, NFS client)"
   if command -v apt-get >/dev/null 2>&1; then
@@ -128,28 +134,68 @@ host_packages() {
   host_longhorn_volume
 }
 
-# Longhorn's data in a filesystem of its own, so a volume filling up can
+# Existing hosts keep their layout. A joining host must use the cluster's
+# configured default path; a join token cannot read Longhorn's settings.
+longhorn_layout() {
+  [ "$TIEBREAKER" = 1 ] && { LONGHORN_VOLUME=none; return 0; }
+  [ -r /etc/fstab ] || fail "Cannot inspect fstab; existing storage must be checked before installation."
+  for configured in /var/lib/longhorn /mnt/longhorn-os; do
+    if awk -v p="$configured" '$1 !~ /^#/ && $2 == p {found=1} END {exit !found}' /etc/fstab \
+       && ! mountpoint -q "$configured" 2>/dev/null; then
+      fail "$configured is configured in fstab but is not mounted. Restore that mount before continuing."
+    fi
+  done
+  for point in /var/lib/longhorn /mnt/longhorn-os; do
+    if mountpoint -q "$point" 2>/dev/null || [ -n "$(ls -A "$point" 2>/dev/null)" ] \
+       || awk -v p="$point" '$1 !~ /^#/ && $2 == p {found=1} END {exit !found}' /etc/fstab; then
+      # Runtime on the OS is expected when the separate data mount exists.
+      if [ "$point" = /var/lib/longhorn ] && { mountpoint -q /mnt/longhorn-os 2>/dev/null \
+         || [ -n "$(ls -A /mnt/longhorn-os 2>/dev/null)" ]; }; then
+        mountpoint -q /var/lib/longhorn 2>/dev/null \
+          && fail "Both Longhorn locations are in use. Inspect the existing layout before running the installer."
+        continue
+      fi
+      [ -z "$LONGHORN_DATA_PATH" ] || [ "$LONGHORN_DATA_PATH" = "$point" ] \
+        || fail "Existing Longhorn storage at $point is preserved. Use host storage maintenance to change its layout."
+      LONGHORN_DATA_PATH="$point"
+      return 0
+    fi
+  done
+  if [ -z "$LONGHORN_DATA_PATH" ]; then
+    case "$MODE" in
+      agent|join) fail "Joining a cluster requires --longhorn-data-path: use its Longhorn default-data-path setting (/mnt/longhorn-os for new Homestead clusters, /var/lib/longhorn for older installs). No storage has been changed." ;;
+      *) LONGHORN_DATA_PATH=/mnt/longhorn-os ;;
+    esac
+  fi
+}
+
+# Longhorn's replica data in a filesystem of its own, so a volume filling up can
 # never fill the system's: where the root filesystem is on LVM and the group
-# has room, a logical volume mounted at /var/lib/longhorn - the folder
-# Longhorn uses - before Longhorn first starts. A tenth of the group (at
+# has room, a logical volume mounted at /mnt/longhorn-os before Longhorn
+# first starts. Runtime files remain at /var/lib/longhorn on the OS. A tenth of the group (at
 # least 10 GB) stays free for the system to grow into; asked for less, the
 # rest stays free for the V2 engine too. As Homestead mounts disks: fstab by
 # UUID with nofail, and the empty folder locked, so a machine whose volume
 # will not mount still starts and nothing lands on the system disk instead.
 host_longhorn_volume() {
-  [ "$LONGHORN_VOLUME" = none ] && return 0
-  mountpoint -q /var/lib/longhorn 2>/dev/null && return 0
-  if [ -n "$(ls -A /var/lib/longhorn 2>/dev/null)" ]; then
-    echo "  /var/lib/longhorn holds data already; Longhorn stays where it is."
+  [ "$TIEBREAKER" = 1 ] && return 0
+  [ -n "$LONGHORN_DATA_PATH" ] || fail "Longhorn's data path has not been selected"
+  point=$LONGHORN_DATA_PATH
+  mountpoint -q "$point" 2>/dev/null && return 0
+  if awk -v p="$point" '$1 !~ /^#/ && $2 == p {found=1} END {exit !found}' /etc/fstab; then
+    fail "$point is configured in fstab but is not mounted. Restore that mount before continuing."
+  fi
+  if [ -n "$(ls -A "$point" 2>/dev/null)" ] || [ -L "$point" ]; then
+    echo "  $point holds data already; Longhorn stays where it is."
     return 0
   fi
+  [ "$LONGHORN_VOLUME" = none ] && return 0
   command -v lvcreate >/dev/null 2>&1 || return 0
   root=$(findmnt -n -o SOURCE / 2>/dev/null || true)
   vg=$(lvs --noheadings -o vg_name,lv_path,lv_dm_path 2>/dev/null </dev/null | awk -v r="$root" '$2 == r || $3 == r {print $1; exit}')
   [ -n "$vg" ] || return 0
   if lvs "$vg/longhorn" >/dev/null 2>&1 </dev/null; then
-    echo "  $vg/longhorn exists already; it is left as it is."
-    return 0
+    fail "$vg/longhorn exists but is not mounted at $point. It is left intact; inspect it before continuing."
   fi
   size=$(vgs --noheadings --units g --nosuffix -o vg_size "$vg" </dev/null | awk '{print int($1)}')
   free=$(vgs --noheadings --units g --nosuffix -o vg_free "$vg" </dev/null | awk '{print int($1)}')
@@ -161,27 +207,25 @@ host_longhorn_volume() {
     echo "  $vg has $free GB free, $reserve GB of it kept for the system: too little for a Longhorn volume of its own."
     return 0
   fi
-  echo "  Longhorn gets a volume of its own: $vg/longhorn, $want GB, at /var/lib/longhorn ($((free - want)) GB left free in $vg)"
-  # Anything failing here leaves Longhorn on the root filesystem, as before,
-  # rather than stopping the installation.
+  echo "  Longhorn replica data: $vg/longhorn, $want GB, at $point ($((free - want)) GB left free in $vg)"
+  # Once allocation starts, failure requires inspection. Never silently use
+  # the OS filesystem instead of the dedicated volume someone selected.
   if ! lvcreate -y -L "${want}G" -n longhorn "$vg" >/dev/null </dev/null; then
-    echo "  Could not make $vg/longhorn; Longhorn stays on the root filesystem."
-    return 0
+    fail "Could not make $vg/longhorn. Inspect LVM before retrying."
   fi
   udevadm settle 2>/dev/null || true
   if ! mkfs.ext4 -q -F -L hs-longhorn "/dev/$vg/longhorn"; then
-    echo "  Could not format $vg/longhorn; Longhorn stays on the root filesystem."
-    return 0
+    fail "Could not format the new $vg/longhorn. It is retained for inspection."
   fi
   uuid=$(blkid -s UUID -o value "/dev/$vg/longhorn")
-  mkdir -p /var/lib/longhorn
-  chattr +i /var/lib/longhorn 2>/dev/null || true
+  mkdir -p "$point"
+  chattr +i "$point" 2>/dev/null || fail "Cannot protect the empty mount point $point; inspect the new LV before retrying."
   cp /etc/fstab /etc/fstab.homestead-backup
-  echo "UUID=$uuid /var/lib/longhorn ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
-  if ! mount /var/lib/longhorn; then
+  echo "UUID=$uuid $point ext4 defaults,nofail,x-systemd.device-timeout=10s 0 2" >> /etc/fstab
+  if ! mount "$point"; then
     cp /etc/fstab.homestead-backup /etc/fstab
-    chattr -i /var/lib/longhorn 2>/dev/null || true
-    echo "  $vg/longhorn would not mount; fstab is as it was and Longhorn stays on the root filesystem."
+    chattr -i "$point" 2>/dev/null || true
+    fail "$vg/longhorn would not mount. The new LV is retained and fstab restored; inspect it before retrying."
   fi
 }
 
@@ -417,6 +461,10 @@ parse_common() { # sets DIST, NODE_IP, versions; leaves the rest to the caller
       case "$2" in auto|none) LONGHORN_VOLUME="$2" ;; 0) LONGHORN_VOLUME=none ;;
         *[!0-9]*|"") fail "--longhorn-volume is auto, none or a size in GB" ;; *) LONGHORN_VOLUME="$2" ;; esac
       return 2 ;;
+    --longhorn-data-path)
+      case "${2:-}" in /mnt/longhorn-os|/var/lib/longhorn) LONGHORN_DATA_PATH="$2" ;;
+        *) fail "--longhorn-data-path must be /mnt/longhorn-os or /var/lib/longhorn; custom layouts need manual storage setup" ;; esac
+      return 2 ;;
   esac
   return 0
 }
@@ -519,9 +567,17 @@ for f in homestead.yaml longhorn.yaml kubevirt-operator.yaml kubevirt-cr.yaml cd
   [ -f "$AUTODEPLOY/$f" ] && [ ! -e "$AUTODEPLOY/$f.skip" ] && touch "$AUTODEPLOY/$f.skip"
 done
 
-if [ "$LONGHORN" = 1 ] && [ "$MODE" = addons ] && $KUBECTL get crd volumes.longhorn.io >/dev/null 2>&1 \
-   && ! $KUBECTL -n kube-system get helmchart longhorn >/dev/null 2>&1; then
-  # Installed another way already: used as it is.
+LONGHORN_FOUND=""
+if [ "$LONGHORN" = 1 ]; then
+  LONGHORN_FOUND=$($KUBECTL get crd volumes.longhorn.io --ignore-not-found -o name) \
+    || fail "Cannot check the existing Longhorn installation. Restore Kubernetes access and retry."
+  if [ -z "$LONGHORN_FOUND" ]; then
+    LONGHORN_FOUND=$($KUBECTL -n kube-system get helmchart longhorn --ignore-not-found -o name) \
+      || fail "Cannot check Longhorn's chart. Restore Kubernetes access and retry."
+  fi
+fi
+if [ "$LONGHORN" = 1 ] && [ -n "$LONGHORN_FOUND" ]; then
+  # Reruns preserve all existing chart values, including the storage path.
   say "Longhorn is already installed"
   CLASS=longhorn; MODE_RW=ReadWriteMany
 elif [ "$LONGHORN" = 1 ]; then
@@ -553,6 +609,7 @@ $CHART_VERSION
     defaultSettings:
       defaultReplicaCount: 1
       priorityClass: system-node-critical
+      defaultDataPath: $LONGHORN_DATA_PATH
 EOF
   apply "$MANIFESTS/longhorn.yaml"
   CLASS=longhorn; MODE_RW=ReadWriteMany
