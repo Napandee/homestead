@@ -1155,13 +1155,16 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     <div class="f" id="v_drivers_row" hidden><label>Drivers CD ${tip("A second CD-ROM for the installer's drivers. Windows setup sees no disk until it loads the VirtIO storage driver: attach virtio-win.iso here, and in setup choose Load driver, then vioscsi or viostor for your Windows version.")}</label>
       <select id="v_drivers"><option value="">none</option>${(opts.isos || []).map(i => `<option value="${esc(i.name)}" ${/virtio/i.test(i.file) ? "selected" : ""}>${esc(i.file)}</option>`).join("")}</select>
       <div class="dim xs" style="margin-top:4px">${(opts.isos || []).some(i => /virtio/i.test(i.file)) ? "" : "For Windows, make virtio-win.iso (from the Fedora project) ready in the ISO library."}</div></div>
-    <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Adjust them under Hardware, now or later.")}</label>
+    <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+`;
+  // A step of its own, as Edit has a Hardware tab: the guest type first, then
+  // the fields it fills in.
+  const vmHardware = `
+    <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Adjust them below, now or later in Edit.")}</label>
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
       <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
-    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, memory</summary>
-      ${vmHardwareFields(opts.hardware_base, opts, false, true, true)}</details>` : ""}
-    <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+    ${opts.hardware_base ? vmHardwareFields(opts.hardware_base, opts, false, true, true) : ""}
 `;
   const vmNetwork = `
     <label class="check"><input id="v_isolated" type="checkbox" onchange="vmNetChanged()"> Isolated VM</label>
@@ -1195,10 +1198,11 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
-  modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
-    { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
-    // The display and virtual devices, a step of their own as on the Edit dialog.
+  modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [
+    // The Edit dialog's tabs, in its order: what is set here is changed there.
+    { title: "General", html: vmMachine }, { title: "Hardware", html: vmHardware },
     ...(opts.hardware_base ? [{ title: "Display and devices", html: vmDisplayFields(opts.hardware_base) }] : []),
+    { title: "Disks", html: vmDisk + vmStorage }, { title: "Network", html: vmNetwork },
     { title: "Passthrough", html: window.vmDevicesPane ? vmDevicesPane({}, devices) : "" }],
     `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true, "vm-config");
   window.__vmPreset = "";

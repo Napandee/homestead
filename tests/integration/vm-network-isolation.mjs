@@ -31,12 +31,12 @@ try {
     await page.route('**/*',route=>route.request().url().startsWith(base)?route.continue():route.abort());
     await page.goto(`${base}/?demo=1`);
     await page.waitForFunction(()=>typeof vmNew==='function' && ME && document.querySelector('#gate').classList.contains('hidden'));
-    await page.evaluate(async()=>{await vmNew();stepGo('v_steps',2);});
+    await page.evaluate(async()=>{await vmNew();stepGo('v_steps',4);});
     await page.locator('#v_isolated').check();
     assert.equal(await page.locator('#v_net').isDisabled(),true);
     assert.equal(await page.locator('#v_nic_model').isDisabled(),true);
     assert.equal(await page.locator('#v_service').isDisabled(),true);
-    await page.evaluate(()=>{stepGo('v_steps',3);stepGo('v_steps',2);});
+    await page.evaluate(()=>{stepGo('v_steps',5);stepGo('v_steps',4);});
     assert.equal(await page.locator('#v_isolated').isChecked(),true);
     await page.screenshot({path:`${output}/create-${width}.png`});
     assert.equal(await page.evaluate(()=>document.querySelector('#mbody').scrollWidth>document.querySelector('#mbody').clientWidth+1),false);
