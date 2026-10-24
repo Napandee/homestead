@@ -38,6 +38,13 @@ def _active(items):
     return [item for item in items if item.get("kind") == "reclass" and CONFLICTS.unresolved(item)]
 
 
+def active_moves(items):
+    """The storage moves this guard protects storage for, finished or not:
+    a failed one whose cleanup was never confirmed still counts. While any
+    does, Homestead's own replicas are not changed (send)."""
+    return _active(items)
+
+
 def _matches(item, namespace="", claim="", pv="", handle="", job=""):
     ref = item["ref"]
     claims = {n for n in (ref.get("claim"), ref.get("temp")) if n}

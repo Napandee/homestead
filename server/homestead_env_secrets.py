@@ -42,11 +42,9 @@ def _refs(dep, name):
             if ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == name}
 
 
-def externalize(ns, dep, read, send, masked=()):
-    """Move secret-looking literal values into the workload's Secret, writing
-    the Secret first. Changes dep in place and returns it; a Deployment with
-    nothing secret-looking, and no Secret yet, is left exactly as it was."""
-    name = secret_name(dep)
+def _move(dep, name, masked):
+    """Turn each secret-looking literal into a reference to Secret name, in
+    place; {key: base64 value} of what moved."""
     moved = {}
     for container in _containers(dep):
         for item in container.get("env") or []:
@@ -57,15 +55,112 @@ def externalize(ns, dep, read, send, masked=()):
             moved[key] = base64.b64encode(str(value).encode()).decode()
             item.pop("value")
             item["valueFrom"] = {"secretKeyRef": {"name": name, "key": key}}
-    if not moved and not own(dep):
-        return dep  # nothing secret here, and no Secret of its own to tidy
-    path = f"/api/v1/namespaces/{ns}/secrets/{name}"
+    return moved
+
+
+def kept(dep):
+    """Names of the variables the workload keeps in its own Secret now."""
+    name = own(dep)
+    return {item.get("name") for container in _containers(dep) for item in container.get("env") or []
+            if name and ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == name}
+
+
+# A credential in the value itself, whatever the variable is called: a URL
+# with a password in it (postgres://user:pass@host), or a token, key or
+# signature in a query string (https://hooks.example.com/x?token=...).
+CREDENTIAL = re.compile(r"[a-z][a-z0-9+.-]*://[^/\s:@]*:[^/\s@]+@"
+                        r"|[?&;](?:access_?token|refresh_?token|token|api_?key|apikey|key|secret|password|passwd|pwd"
+                        r"|sig|signature|auth|code)=[^&\s]+", re.I)
+
+
+def secret_value(value):
+    return bool(CREDENTIAL.search(str(value or "")))
+
+
+def _read(path, read):
     try:
-        current = read(path)
+        return read(path)
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        current = None
+        return None
+
+
+def _ours(secret, dep):
+    """The data of the workload's own Secret; {} for none, or another's."""
+    if not secret or ((secret.get("metadata") or {}).get("labels") or {}).get(LABEL) is None:
+        return {}
+    return dict(secret.get("data") or {})
+
+
+def held(ns, dep, read):
+    """The data its own Secret holds now ({} when none or unreadable): for the
+    YAML for git, which must decide as a save would."""
+    if not own(dep):
+        return {}
+    try:
+        return _ours(_read(f"/api/v1/namespaces/{ns}/secrets/{own(dep)}", read), dep)
+    except Exception:
+        return {}
+
+
+def to_move(dep, masked=(), data=None):
+    """Names of the variables a save moves into the Secret, beyond names that
+    look secret (secretish): fields masked in the form, values with a
+    credential in them, and values - or keys - the Secret holds already.
+    data is the Secret's data as Kubernetes keeps it (base64)."""
+    data = data or {}
+    values = set()
+    for encoded in data.values():
+        try:
+            values.add(base64.b64decode(encoded).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+    names = set(masked or ())
+    for container in _containers(dep):
+        for item in container.get("env") or []:
+            value = item.get("value")
+            if "valueFrom" in item or not value:
+                continue
+            if (str(value) in values or secret_value(value)
+                    or KEY.sub("_", f"{container.get('name')}.{item.get('name')}") in data):
+                names.add(item.get("name"))
+    return names
+
+
+def as_saved(dep, current, masked=(), data=None):
+    """dep as a save would write it, with nothing written (the YAML for git,
+    #735): to_move decides for both, so the save moves exactly what this
+    shows as a reference. current is the Deployment before the edit; data
+    the Secret's data now (held()). Its kept variables count even when
+    the Secret could not be read. Changes dep in place; returns {"name",
+    "keys"} of the Secret the result refers to, or {} when none."""
+    names = to_move(dep, set(masked or ()) | kept(current), data)
+    name = secret_name(current)
+    _move(dep, name, names)
+    keys = _refs(dep, name) - {None}
+    if not keys:
+        return {}
+    # A save records which Secret is the app's own; the YAML does the same.
+    dep.setdefault("metadata", {}).setdefault("annotations", {})[ANNOTATION] = name
+    return {"name": name, "keys": sorted(keys)}
+
+
+def externalize(ns, dep, read, send, masked=()):
+    """Move secret-looking literal values into the workload's Secret, writing
+    the Secret first. Changes dep in place and returns it; a Deployment with
+    nothing secret-looking, and no Secret yet, is left exactly as it was."""
+    name = secret_name(dep)
+    path = f"/api/v1/namespaces/{ns}/secrets/{name}"
+    # What the Secret holds now is read first when there is one: a variable
+    # renamed in the form keeps its value there (to_move, shared with the
+    # YAML for git so the save moves exactly what that shows).
+    current = _read(path, read) if own(dep) else None
+    moved = _move(dep, name, to_move(dep, masked, _ours(current, dep)))
+    if not moved and not own(dep):
+        return dep  # nothing secret here, and no Secret of its own to tidy
+    if not own(dep):
+        current = _read(path, read)
     if current is None and not moved:
         return dep
     owner = dep["metadata"]["name"]

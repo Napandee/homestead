@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import homestead_icons as ICONS
-import homestead_move_engine as MOVE_ENGINE
+import homestead_move_phases as MOVE_PHASES
 import homestead_names as NAMES
 import homestead_nfs as NFS
 import homestead_objectstore as OBJECTS
@@ -60,7 +60,7 @@ def _heal_icon(reference, annotations):
     found = ""
     if moved_from:
         try:
-            found = MOVE_ENGINE.carry_icon(moved_from, dict(annotations))
+            found = MOVE_PHASES.carry_icon(moved_from, dict(annotations))
         except Exception:
             found = ""
     if not found:

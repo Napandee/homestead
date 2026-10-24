@@ -11,7 +11,8 @@ function setup(guide = GUIDE) {
   const ctx = { console, Promise, document: { addEventListener() {} }, STATE: { data: {} },
     $: key => fields[key] || (fields[key] = { innerHTML: "" }), $$: () => [],
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
-    modal: () => {}, guideCopy: cmd => `<pre>${cmd}</pre>`, api: async () => guide };
+    modal: () => {}, guideCopy: cmd => `<pre>${cmd}</pre>`, api: async () => guide,
+    UI: { button: (label, onclick, { kind = "" } = {}) => `<button class="btn ${kind}" onclick="${onclick}">${label}</button>` } };
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(fs.readFileSync("web/js/platform.js", "utf8"), ctx);
   return { ctx, fields };
@@ -32,7 +33,7 @@ test("a role asked for is chosen and its command shown", async () => {
   assert.doesNotMatch(t.fields["#mbody"].innerHTML, /AGENT-CMD/);
 });
 
-test("choosing another role redraws only the command", async () => {
+test("choosing another role redraws the command", async () => {
   const t = setup();
   await t.ctx.platformJoinGuide();
   t.ctx.platformJoinRole("control-plane");
@@ -64,4 +65,75 @@ test("a server or tiebreaker is checked before it joins", () => {
   const html = setup().ctx.joinCommandHtml({ ...GUIDE, check: "CHECK-CMD" }, "tiebreaker");
   assert.match(html, /CHECK-CMD[^]*TIEBREAKER-CMD/);
   assert.doesNotMatch(setup().ctx.joinCommandHtml({ ...GUIDE, check: "CHECK-CMD" }, "app"), /CHECK-CMD/);
+});
+
+// #833: the role comes before the Longhorn step, and the step follows the role.
+const headings = html => [...html.matchAll(/<h4><span>(\d)<\/span>([^<]*)<\/h4>/g)].map(m => `${m[1]} ${m[2]}`);
+
+test("the role is chosen before the Longhorn step, and the join command comes after it", async () => {
+  const t = setup();
+  await t.ctx.platformJoinGuide();
+  assert.deepEqual(headings(t.fields["#mbody"].innerHTML), ["1 Read the join token", "2 Choose what it does",
+    "3 Install Longhorn's host packages", "4 Join it", "5 Watch it join"]);
+});
+
+test("an app host is told to install Longhorn's packages, why, and where to look if it sticks", async () => {
+  for (const role of ["app", "control-plane"]) {
+    const t = setup();
+    await t.ctx.platformJoinGuide(role);
+    const step = t.fields["#mbody"].innerHTML.split("<h4><span>3</span>")[1].split("<h4><span>4</span>")[0];
+    assert.match(step, /LONGHORN-CMD/);
+    assert.match(step, /iSCSI on the host where an app runs/);
+    assert.match(step, /If Longhorn.s pods keep restarting on it, see the wiki/);
+    assert.match(step, /<a class="linkish" href="https:\/\/github\.com\/homestead-lab\/homestead\/wiki\/Installing-on-k3s#if-something-is-stuck"/);
+  }
+});
+
+test("on RKE2 the Longhorn step links the RKE2 page", () => {
+  const html = setup().ctx.joinLonghornHtml({ distribution: "rke2", longhorn: "LONGHORN-CMD" }, "app");
+  assert.match(html, /wiki\/Installing-on-RKE2#if-something-is-stuck/);
+  assert.match(html, /LONGHORN-CMD/);
+});
+
+test("a tiebreaker is told it needs no Longhorn packages, straight away", async () => {
+  const t = setup();
+  await t.ctx.platformJoinGuide("tiebreaker");
+  const html = t.fields["#mbody"].innerHTML;
+  assert.match(html, /Not needed: a tiebreaker runs no apps and holds no storage\./);
+  assert.doesNotMatch(html, /LONGHORN-CMD/);
+});
+
+test("changing the role redraws the Longhorn step as well as the command", async () => {
+  const t = setup();
+  await t.ctx.platformJoinGuide();
+  t.ctx.platformJoinRole("tiebreaker");
+  assert.match(t.fields["#joinLonghorn"].innerHTML, /Not needed/);
+  assert.doesNotMatch(t.fields["#joinLonghorn"].innerHTML, /LONGHORN-CMD/);
+  assert.match(t.fields["#joinCmd"].innerHTML, /TIEBREAKER-CMD/);
+  t.ctx.platformJoinRole("control-plane");
+  assert.match(t.fields["#joinLonghorn"].innerHTML, /LONGHORN-CMD/);
+});
+
+// Found while testing #833: the role radios choose what the guide shows, they
+// are not an edit, so closing it after a role change asks nothing.
+test("dismissing the guide after a role change does not ask about unsaved changes", async () => {
+  const t = setup();
+  t.ctx.modal = () => { t.ctx.__modalGuard = null; };   // as core.js modal() does
+  await t.ctx.platformJoinGuide();
+  t.ctx.platformJoinRole("tiebreaker");
+  assert.equal(typeof t.ctx.__modalGuard, "function");
+  assert.equal(t.ctx.__modalGuard(), "");
+});
+
+test("the last step opens the Hosts page, as the Harvester guide's View hosts does", async () => {
+  const t = setup();
+  await t.ctx.platformJoinGuide();
+  const step = t.fields["#mbody"].innerHTML.split("<h4><span>5</span>")[1];
+  assert.match(step, /<button class="btn pri" onclick="closeModal\(\);go\('nodes'\)">View hosts<\/button>/);
+});
+
+test("the wiki section the Longhorn step links to exists on both pages", () => {
+  for (const page of ["Installing-on-k3s", "Installing-on-RKE2"]) {
+    assert.match(fs.readFileSync(`docs/wiki/${page}.md`, "utf8"), /^## If something is stuck$/m, `${page} has "If something is stuck"`);
+  }
 });

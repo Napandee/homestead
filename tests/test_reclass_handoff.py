@@ -482,6 +482,42 @@ class CutoverTests(unittest.TestCase):
         deletes = [b for m, p, b in cluster.sent if m == "DELETE" and p == path]
         self.assertEqual([["uid"]], [sorted(b["preconditions"]) for b in deletes])
 
+    def test_temporary_claim_status_update_while_removing_it_does_not_stop_cutover(self):
+        # Row 98 E: the temporary claim is Homestead's own (the journal's
+        # copy-volume receipt); pv-controller may update it between
+        # Homestead's read and its delete. The user's claim keeps the full check.
+        cluster = self.ready()
+        temporary = "/api/v1/namespaces/lab/persistentvolumeclaims/data-copy"
+        source = "/api/v1/namespaces/lab/persistentvolumeclaims/data"
+        original = cluster.read
+        def read(p):
+            result = original(p)
+            if p == temporary and p in cluster.objects and handoff._receipt(cluster.item, "delete-copy-job"):
+                claim = cluster.objects[p]
+                claim["metadata"]["resourceVersion"] = str(int(claim["metadata"]["resourceVersion"]) + 1)
+                claim.setdefault("status", {})["conditions"] = [{"type": "Resizing", "status": "False"}]
+            return result
+        cluster.read = read
+        self.finish(cluster)
+        deletes = {p: sorted(b["preconditions"]) for m, p, b in cluster.sent if m == "DELETE" and p in (temporary, source)}
+        self.assertEqual({temporary: ["uid"], source: ["resourceVersion", "uid"]}, deletes)
+
+    def test_replaced_temporary_claim_is_never_deleted(self):
+        cluster = self.ready()
+        temporary = "/api/v1/namespaces/lab/persistentvolumeclaims/data-copy"
+        for _ in range(10):
+            cluster.cutover(restored=True)
+            if handoff._receipt(cluster.item, "delete-copy-job") and temporary not in [p for _, p, _ in cluster.sent]:
+                break
+        else:
+            self.fail("Cutover never reached the temporary claim's release")
+        # Refused by the cutover's uid check against the copy's proof, before
+        # the journal's own=True receipt check is even reached.
+        cluster.objects[temporary]["metadata"]["uid"] = "replacement"
+        for _ in range(3):
+            with self.assertRaises(journal.Held): cluster.cutover(restored=True)
+        self.assertFalse(any(m == "DELETE" and p == temporary for m, p, _ in cluster.sent))
+
 
 class RestartTests(unittest.TestCase):
     def ready(self, second=False):

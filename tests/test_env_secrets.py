@@ -45,6 +45,46 @@ class Store:
 SECRET = "/api/v1/namespaces/lab/secrets/tunnel-env"
 
 
+class SaveMovesWhatThePreviewShows(unittest.TestCase):
+    """#735 review: the save and the YAML for git decide what moves into the
+    app's Secret by one rule, so the save never writes in plain text what
+    the preview shows as a secretKeyRef."""
+
+    def check(self, store, current, env, var, value):
+        saved = deployment(env, (current["metadata"].get("annotations") or {}))
+        shown = copy.deepcopy(saved)
+        ENVSEC.externalize("lab", saved, store.read, store.send)
+        ENVSEC.as_saved(shown, current, (), ENVSEC.held("lab", current, store.read))
+        for dep in (saved, shown):
+            row = next(r for r in dep["spec"]["template"]["spec"]["containers"][0]["env"] if r["name"] == var)
+            self.assertEqual({"secretKeyRef": {"name": "tunnel-env", "key": f"cloudflared.{var}"}}, row.get("valueFrom"), row)
+            self.assertNotIn(value, json.dumps(dep))
+        self.assertEqual(b64(value), store.objects[SECRET]["data"][f"cloudflared.{var}"])
+
+    def test_a_credential_url_under_a_plain_name(self):
+        self.check(Store(), deployment([]), [{"name": "DATABASE_URL", "value": "postgres://app:pw-1a2b@db.example.com/app"},
+                                             {"name": "TZ", "value": "UTC"}],
+                   "DATABASE_URL", "postgres://app:pw-1a2b@db.example.com/app")
+
+    def test_a_token_in_a_query_string(self):
+        self.check(Store(), deployment([]), [{"name": "HOOK", "value": "https://hooks.example.com/x?token=tk-99"}],
+                   "HOOK", "https://hooks.example.com/x?token=tk-99")
+
+    def test_a_renamed_variable_the_secret_held(self):
+        store = Store({SECRET: {"metadata": {"name": "tunnel-env", "labels": {ENVSEC.LABEL: "tunnel"}},
+                                "data": {"cloudflared.TUNNEL_TOKEN": b64("held-77")}}})
+        current = deployment([{"name": "TUNNEL_TOKEN", "valueFrom": {"secretKeyRef": {"name": "tunnel-env", "key": "cloudflared.TUNNEL_TOKEN"}}}],
+                             {ENVSEC.ANNOTATION: "tunnel-env"})
+        self.check(store, current, [{"name": "LOGIN", "value": "held-77"}], "LOGIN", "held-77")
+
+    def test_a_plain_url_stays_plain(self):
+        store = Store()
+        dep = deployment([{"name": "SITE", "value": "https://example.com/page?lang=en"}])
+        ENVSEC.externalize("lab", dep, store.read, store.send)
+        self.assertEqual("https://example.com/page?lang=en", dep["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
+        self.assertEqual([], store.sent)
+
+
 class ExternalizeTests(unittest.TestCase):
     def test_a_token_goes_into_the_workloads_secret_and_the_rest_stays(self):
         store = Store()
@@ -128,6 +168,25 @@ class EditRoundTripTests(unittest.TestCase):
         self.assertNotIn("second", json.dumps(saved))
         self.assertEqual(b64("second"), self.store.objects[SECRET]["data"]["cloudflared.TUNNEL_TOKEN"])
         self.assertEqual({"TUNNEL_TOKEN": "second", "TZ": "UTC"}, self.payload()["env"])
+
+    def test_saving_a_rename_or_a_credential_url_writes_references_in_the_put(self):
+        """#735 review: the real save (the Deployment PUT) moves what the YAML
+        for git shows as a reference - a renamed Secret-held variable and a
+        credential URL under a plain name."""
+        lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+            {"original_name": "cloudflared", "name": "cloudflared",
+             "env": {"LOGIN": "first", "DATABASE_URL": "postgres://u:pw-5c@db.example.com/x", "TZ": "UTC"}}]})
+        method, path, saved = self.store.sent[-1]
+        self.assertEqual(("PUT", "/apis/apps/v1/namespaces/lab/deployments/tunnel"), (method, path))
+        self.assertNotIn("first", json.dumps(saved))
+        self.assertNotIn("pw-5c", json.dumps(saved))
+        env = {r["name"]: r for r in saved["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual("cloudflared.LOGIN", env["LOGIN"]["valueFrom"]["secretKeyRef"]["key"])
+        self.assertEqual("cloudflared.DATABASE_URL", env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["key"])
+        self.assertEqual("UTC", env["TZ"]["value"])
+        data = self.store.objects[SECRET]["data"]
+        self.assertEqual((b64("first"), b64("postgres://u:pw-5c@db.example.com/x")),
+                         (data["cloudflared.LOGIN"], data["cloudflared.DATABASE_URL"]))
 
     def test_removing_the_variable_in_the_form_removes_it(self):
         lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [

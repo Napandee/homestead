@@ -42,6 +42,8 @@ const DIALOGS = [
   ["longhorn-v2-upgrade-running", "settings", "window.__demoV2UpgradeState='running';lhV2Upgrade()"],
   ["longhorn-v2-upgrade-failed", "settings", "window.__demoV2UpgradeState='failed';lhV2Upgrade()"],
   ["longhorn-v2-upgrade-settings", "settings", "window.__demoV2UpgradeState='running';lhV2Upgrade()", "lhV2UpgradeSettings(false)"],
+  ["component-upgrade-check-blocked", "settings", "window.__demoUpgradeCheck=true;clusterComponentsPaint().then(()=>componentUpgrade('cluster'))"],
+  ["component-upgrade-check-longhorn", "settings", "window.__demoUpgradeCheck=true;window.__demoV2UpgradeState='ready';clusterComponentsPaint().then(()=>componentUpgrade('longhorn'))"],
   ["disk-v2-review", "nodes", "window.__demoDiskV2State='ready';diskV2Open('node-1','disk-data')"],
   ["disk-v2-blocked", "nodes", "window.__demoDiskV2State='blocked';diskV2Open('node-1','disk-data')"],
   ["disk-v2-evacuating", "nodes", "window.__demoDiskV2State='evacuating';diskV2Watch('demo-disk-v2')"],
@@ -88,6 +90,8 @@ const DIALOGS = [
   ["add-harvester-host-4", "cluster", "clusterOnboarding()", "stepGo('host_join',3)"],
   ["remove-host", "cluster", "clusterRemovePick()"],
   ["add-host", "cluster", "platformJoinGuide()"],
+  ["add-host-control-plane", "cluster", "platformJoinGuide('control-plane')"],
+  ["add-host-tiebreaker", "cluster", "platformJoinGuide('tiebreaker')"],
   ["helm-release", "helm", "click:helmRelease"],
   ["helm-install", "helm", "helmInstall()"],
   // The addresses load only on the network page's IP tab. Each runner takes
@@ -224,6 +228,9 @@ const DIALOGS = [
   ["vm-schedule", "vms", "vmSchedule('lab','k3s-demo-server-1')"],
   ["schedules-overview", "workloads", "schedulesOverview()"],
   ["log-search-results", "workloads", "logSearch();document.querySelector('#ls_q').value='error';logSearchRun()"],
+  ["log-alerts", "workloads", "logAlerts()"],
+  ["log-alert-new", "workloads", "logSearch('lab','frigate');document.querySelector('#ls_q').value='Unable to read';logAlertFromSearch()"],
+  ["log-alert-edit", "workloads", "logAlerts()", "logAlertEdit('la-0d3f5a9b2c71')"],
   ["history-undo", "workloads", "historyUndo('lab','paperless','c2')"],
   ["node-if-down", "nodes", "nodeIfDown('harvester-node2')"],
   ["set-restart-review", "nodes", "STATE.platform.harvester=false", "setRestartReview('data','postgres','harvester-node3')"],
@@ -295,7 +302,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; STATE.operationsStale = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; window.__demoUpgradeCheck = false; STATE.operationsStale = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);

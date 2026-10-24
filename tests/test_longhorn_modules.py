@@ -95,7 +95,7 @@ class LonghornModuleTests(unittest.TestCase):
                 self.assertNotIn(name, OWN, f"{part.__name__}.{name} is homestead_longhorn's")
                 seen.add(name)
                 self.assertIs(getattr(LH, name), getattr(part, name), f"{part.__name__}.{name}")
-        self.assertEqual(63, len(seen))
+        self.assertEqual(62, len(seen))
         self.assertIn("TRIM_JOB", seen)
         self.assertIn("K8S_LABEL", seen)
 

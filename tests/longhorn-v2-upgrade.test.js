@@ -45,3 +45,18 @@ test('progress shows actual stage, host and escaped error',async()=>{
 test('Harvester shows upgrade status without independent upgrade controls',async()=>{
   const t=setup();Object.assign(t.report,{installed:'v1.13.0',harvester:true});await t.c.lhV2Upgrade();assert.doesNotMatch(t.fields['#lhV2UpgradeBody'].innerHTML,/lhV2UpgradeSettings\(/);
 });
+test('the upgrade check shows in the review, and a blocked one needs its tick',async()=>{
+  const t=setup();t.fields['#cmp_check_ack']={checked:false};
+  // core.js declares STATE with const: a global name, not a window property.
+  vm.runInContext("const STATE={data:{components:{components:[{id:'longhorn',next:'v1.13.0',check:{verdict:'blocked',findings:[]}}]}}};",t.c);
+  t.c.componentCheckSection=r=>r?.verdict==='blocked'?'<section>Before you upgrade</section>':'';
+  await t.c.lhV2Upgrade('v1.13.0');t.fields['#lhV2UpgradeBackup'].checked=true;
+  assert.match(t.fields['#lhV2UpgradeBody'].innerHTML,/Before you upgrade/);
+  await t.c.lhV2UpgradeStart();assert.equal(t.sent.length,0,'not without the tick');
+  t.fields['#cmp_check_ack'].checked=true;const pending=t.c.lhV2UpgradeStart();assert.equal(t.sent.length,1);
+  assert.equal(t.sent[0].body.accept_check,true);t.resolve();await pending;
+});
+test('an upgrade with no blocked check sends no acceptance',async()=>{
+  const t=setup();t.fields['#lhV2UpgradeBackup'].checked=true;await t.c.lhV2Upgrade('v1.13.0');
+  const pending=t.c.lhV2UpgradeStart();assert.equal(t.sent.length,1);assert.equal('accept_check' in t.sent[0].body,false);t.resolve();await pending;
+});

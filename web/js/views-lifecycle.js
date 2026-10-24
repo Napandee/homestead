@@ -71,12 +71,12 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>`,
     environment: () => `
       <div class="subsec">Environment</div>
-      ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span><span class="pill info">managed reference</span></div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
+      ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span>${UI.chip("managed reference", "info")}</div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
       <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value, (container.secret_env || []).includes(key))).join("")}</div>
       <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>
       <div class="dim xs">Passwords, tokens and keys are kept in this app's Secret rather than in its Deployment when you save.</div>`,
     storage: () => `
-      ${managed.length ? `<div class="edit-mount-list">${managed.map(volume => `<span class="tag info">${esc(volume.source || "?")} → ${esc(volume.path)}${volume.read_only ? " · read-only" : ""}</span>`).join("")}</div><div class="dim xs edit-mount-note">ConfigMap, Secret and hardware device mounts are managed by Homestead and stay as they are.</div>` : ""}
+      ${managed.length ? `<div class="edit-mount-list">${managed.map(volume => UI.chip(`${volume.source || "?"} → ${volume.path}${volume.read_only ? " · read-only" : ""}`, "info")).join("")}</div><div class="dim xs edit-mount-note">ConfigMap, Secret and hardware device mounts are managed by Homestead and stay as they are.</div>` : ""}
       <div class="e-vols" id="e_vols_${index}"></div>
       <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>`,
   };
@@ -84,7 +84,7 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
     : section === "storage" ? plural(mounts.length, "mount") : section === "address" ? plural(ports.length, "port") : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
-    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
+    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? UI.chip(String(count), "neutral") : ""}</summary>
     <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="edit-container-remove"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
       ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
@@ -250,8 +250,8 @@ function placementSection(p, w, nodes, containers) {
   return `<section class="placement card flat" id="e_placement">
     <div class="sec" style="margin-top:0">Placement</div>
     <div class="place-level"><div class="place-title">Containers in this pod</div>
-      <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
-        : `<span class="tag">${esc(names[0] || w.name)}</span> is this pod's only container.`}
+      <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => UI.chip(n, "neutral")).join(" ")} always run together on one node, sharing its network and any pod volumes.`
+        : `${UI.chip(names[0] || w.name, "neutral")} is this pod's only container.`}
         Containers in one pod cannot be spread apart; to run one on its own host, make it an app of its own and use the rules below.</div></div>
     <div class="place-level"><div class="place-title">Copies of this app</div>
       <div class="place-grid">
@@ -374,7 +374,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the app so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
-          <div class="between seed-head"><div><b>${esc(s.key)}</b><div class="dim xs mono">ConfigMap ${esc(s.config_map)} · init ${esc(s.init_container)}</div></div><span class="pill info">seeded on start</span></div>
+          <div class="between seed-head"><div><b>${esc(s.key)}</b><div class="dim xs mono">ConfigMap ${esc(s.config_map)} · init ${esc(s.init_container)}</div></div>${UI.chip("seeded on start", "info")}</div>
           <label for="e_seed_${i}">Contents</label>
           <textarea id="e_seed_${i}" class="e_seed mono" rows="14"
             data-init="${esc(s.init_container)}" data-config-map="${esc(s.config_map)}" data-key="${esc(s.key)}">${esc(s.value)}</textarea>
@@ -465,7 +465,7 @@ function editContainerListChanged() {
   const host = $("#e_pod_containers");
   if (!host) return;
   const names = $$("#e_basics_containers .edit-container").map(panel => $("#e_container_name_" + panel.dataset.index).value);
-  host.innerHTML = `${names.map(name => `<span class="tag">${esc(name || "unnamed")}</span>`).join(" ")} run together in every pod, sharing its network and volumes.`;
+  host.innerHTML = `${names.map(name => UI.chip(name || "unnamed", "neutral")).join(" ")} run together in every pod, sharing its network and volumes.`;
 }
 function containerRemovedPaint() {
   $("#e_removed_containers").innerHTML = [...EDIT_REMOVED_PANELS].map(([index, entry]) =>
@@ -581,14 +581,16 @@ window.editReview = async body => {
     const concerns = capacityNotes(review.capacity).concerns;
     const copying = !!review.capacity.copy_helper;
     if (copying) {
-      childModal("Move container data", storageCopyReview(config,review.capacity), true, "operation-review");
+      childModal("Move container data", gitopsNote(review.managed) + storageCopyReview(config,review.capacity), true, "operation-review");
       return;
     }
     childModal(rename ? "Rename app" : "Review app changes", `
+      ${gitopsNote(review.managed, { rename: !!rename, yaml: review.yaml })}
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
         <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${plural((review.capacity.warnings || []).length, "warning")}</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
+      ${gitopsYamlBlock(review.yaml, review.secret)}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename app" : "Save changes"}</button>`)}`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
@@ -600,6 +602,11 @@ window.confirmEdit = async () => {
   const body = { ...review.config, capacity_token: review.capacity_token, confirm_capacity: true };
   const { ns, name, workload_name: workloadName } = body;
   const renaming = workloadName && workloadName !== name;
+  // Flux or Argo CD brings the old name back (#734): its own tick, sent so the server knows.
+  if (renaming && review.managed?.by) {
+    if (!$("#editManagedConfirm")?.checked) return toast(`Tick "${review.managed.by} will bring back the old name" first`, "bad");
+    body.confirm_managed = true;
+  }
   review.submitting = true;
   const button = $("#editGo");
   button.disabled = true;
@@ -1155,13 +1162,16 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     <div class="f" id="v_drivers_row" hidden><label>Drivers CD ${tip("A second CD-ROM for the installer's drivers. Windows setup sees no disk until it loads the VirtIO storage driver: attach virtio-win.iso here, and in setup choose Load driver, then vioscsi or viostor for your Windows version.")}</label>
       <select id="v_drivers"><option value="">none</option>${(opts.isos || []).map(i => `<option value="${esc(i.name)}" ${/virtio/i.test(i.file) ? "selected" : ""}>${esc(i.file)}</option>`).join("")}</select>
       <div class="dim xs" style="margin-top:4px">${(opts.isos || []).some(i => /virtio/i.test(i.file)) ? "" : "For Windows, make virtio-win.iso (from the Fedora project) ready in the ISO library."}</div></div>
-    <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Adjust them under Hardware, now or later.")}</label>
+    <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+`;
+  // A step of its own, as Edit has a Hardware tab: the guest type first, then
+  // the fields it fills in.
+  const vmHardware = `
+    <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Adjust them below, now or later in Edit.")}</label>
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
       <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
-    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, memory</summary>
-      ${vmHardwareFields(opts.hardware_base, opts, false, true, true)}</details>` : ""}
-    <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
+    ${opts.hardware_base ? vmHardwareFields(opts.hardware_base, opts, false, true, true) : ""}
 `;
   const vmNetwork = `
     <label class="check"><input id="v_isolated" type="checkbox" onchange="vmNetChanged()"> Isolated VM</label>
@@ -1195,10 +1205,11 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
-  modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
-    { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
-    // The display and virtual devices, a step of their own as on the Edit dialog.
+  modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [
+    // The Edit dialog's tabs, in its order: what is set here is changed there.
+    { title: "General", html: vmMachine }, { title: "Hardware", html: vmHardware },
     ...(opts.hardware_base ? [{ title: "Display and devices", html: vmDisplayFields(opts.hardware_base) }] : []),
+    { title: "Disks", html: vmDisk + vmStorage }, { title: "Network", html: vmNetwork },
     { title: "Passthrough", html: window.vmDevicesPane ? vmDevicesPane({}, devices) : "" }],
     `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true, "vm-config");
   window.__vmPreset = "";
@@ -1342,9 +1353,9 @@ window.vmCreateReviewedApply = async () => {
 /* Why an image is kept: something runs it, will run it, or can go back to it. */
 const IMAGE_REASONS = {
   active: { tone: "ok", tip: "a running container uses it" },
-  rollback: { tone: "", tip: "kept so Roll back can return to it" },
-  stopped: { tone: "", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
-  scheduled: { tone: "", tip: "a scheduled job that runs this image" },
+  rollback: { tone: "neutral", tip: "kept so Roll back can return to it" },
+  stopped: { tone: "neutral", tip: "stopped, and starts from this image; delete it or change its image to clean this up" },
+  scheduled: { tone: "neutral", tip: "a scheduled job that runs this image" },
   unreadable: { tone: "warn", tip: "Kept: a record that says which images are in use couldn't be read" },
 };
 async function viewImages() {
@@ -1387,13 +1398,13 @@ async function viewImages() {
       ${imgs.map(i => {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
         const retained = i.retained_by || [];
-        const retention = retained.length ? retained.slice(0, 3).map(r => `<span class="tag ${IMAGE_REASONS[r.reason]?.tone ?? "ok"}"
-          data-tip="${esc(`${r.namespace} · ${r.workload} · ${r.container}`)}${IMAGE_REASONS[r.reason]?.tip ? esc(" - " + IMAGE_REASONS[r.reason].tip) : ""}">${esc(r.reason)} · ${esc(r.workload)}</span>`).join("") +
-          (retained.length > 3 ? `<span class="tag">+${retained.length - 3}</span>` : "") : '<span class="tag">unreferenced</span>';
+        const retention = retained.length ? retained.slice(0, 3).map(r => UI.chip(`${r.reason} · ${r.workload}`, IMAGE_REASONS[r.reason]?.tone ?? "ok",
+          { tip: `${r.namespace} · ${r.workload} · ${r.container}${IMAGE_REASONS[r.reason]?.tip ? " - " + IMAGE_REASONS[r.reason].tip : ""}` })).join(" ") +
+          (retained.length > 3 ? ` ${UI.chip(`+${retained.length - 3}`, "neutral")}` : "") : UI.chip("unreferenced", "neutral");
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>
         <td class="mono">${bytesText(i.size_mb * 1024 ** 2)}</td>
-        <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
-            ${missing.map(n => `<span class="tag dim" data-tip="Not cached on this host">${esc(n.replace("harvester-", ""))}</span>`).join("")}
+        <td>${i.nodes.map(n => UI.chip(n.replace("harvester-", ""), "ok")).join(" ")}
+            ${missing.map(n => UI.chip(n.replace("harvester-", ""), "neutral", { tip: "Not cached on this host" })).join(" ")}
             ${missing.length ? "" : '<span class="dim xs">everywhere</span>'}</td>
         <td><div class="row" style="gap:5px">${retention}</div></td>
         <td data-actions>${actionBar([
@@ -1416,8 +1427,8 @@ function imageCleanupRow(d, auto) {
   const unused = imageUnused(d);
   const size = Math.round(unused.reduce((sum, i) => sum + i.size_mb * i.nodes.length, 0));
   const last = auto?.last;
-  const state = auto?.error ? `<span class="tag warn" data-tip="${esc(auto.error)}">unknown</span>`
-    : auto?.auto ? `<span class="pill ok">on · ${esc(auto.after_days)} days</span>` : '<span class="pill neutral">off</span>';
+  const state = auto?.error ? UI.chip("unknown", "warn", { tip: auto.error })
+    : auto?.auto ? UI.chip(`on · ${auto.after_days} days`, "ok") : UI.chip("off", "neutral");
   const detail = auto?.error ? "The automatic clean-up's setting could not be read"
     : auto?.auto ? `Images nothing uses for ${auto.after_days} days are removed from every host, checked hourly${last
         ? ` · last: ${last.removed ? `removed ${last.removed} (${bytesText(last.freed_mb * 1024 ** 2)})` : "nothing due"} ${esc(fmtAgo(Date.now() / 1000 - last.at))}` : ""}`
@@ -1492,17 +1503,17 @@ function vmImagesSection(vm, nodeNames) {
       <th>Image</th><th>Size</th><th>Copies on</th><th>Disks made from it</th><th></th></tr></thead><tbody>
       ${rows.map(i => {
         const missing = (nodeNames || []).filter(n => !i.nodes.includes(n));
-        const state = i.deleting ? '<span class="tag">deleting</span>'
-          : i.state === "failed" ? `<span class="tag bad" data-tip="${esc(i.message)}">download failed</span>`
-          : i.state === "downloading" ? `<span class="tag warn">downloading ${i.progress}%</span>` : "";
-        const used = i.used_by.length ? i.used_by.map(v => `<span class="tag ok">${esc(v.split("/").pop())}</span>`).join("")
-          : i.disks.length ? `<span class="tag" data-tip="${esc(i.disks.join(", "))}">${i.disks.length} disk${i.disks.length === 1 ? "" : "s"}, no VM</span>`
-          : '<span class="tag">unused</span>';
+        const state = i.deleting ? UI.chip("deleting", "neutral")
+          : i.state === "failed" ? UI.chip("download failed", "bad", { tip: i.message })
+          : i.state === "downloading" ? UI.chip(`downloading ${i.progress}%`, "warn") : "";
+        const used = i.used_by.length ? i.used_by.map(v => UI.chip(v.split("/").pop(), "ok")).join(" ")
+          : i.disks.length ? UI.chip(`${i.disks.length} disk${i.disks.length === 1 ? "" : "s"}, no VM`, "neutral", { tip: i.disks.join(", ") })
+          : UI.chip("unused", "neutral");
         return `<tr><td class="imgname"><b>${esc(i.display)}</b> ${state}
             <div class="dim xs mono">${esc(i.namespace)}${i.source ? ` · from ${esc(i.source)}` : ""}${i.virtual_size_gb ? ` · ${i.virtual_size_gb} GiB disk` : ""}</div></td>
           <td class="mono nowrap" data-sort="${i.size_mb}">${i.size_mb ? size(i.size_mb) : '<span class="dim">—</span>'}</td>
-          <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
-            ${missing.map(n => `<span class="tag dim" data-tip="Not cached on this host">${esc(n.replace("harvester-", ""))}</span>`).join("")}</td>
+          <td>${i.nodes.map(n => UI.chip(n.replace("harvester-", ""), "ok")).join(" ")}
+            ${missing.map(n => UI.chip(n.replace("harvester-", ""), "neutral", { tip: "Not cached on this host" })).join(" ")}</td>
           <td><div class="row" style="gap:5px">${used}</div></td>
           <td data-actions>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}
@@ -1598,8 +1609,8 @@ async function viewSchedules() {
         <td class="small">${jobNext(j)}</td>
         <td class="mono small dim">${esc(j.image)}</td>
         <td class="small dim">${fmtWhen(j.last)}</td>
-        <td>${j.suspend ? '<span class="pill low">paused</span>'
-            : j.active ? '<span class="pill low">running</span>' : '<span class="pill ok">active</span>'}</td>
+        <td>${j.suspend ? UI.chip("paused", "neutral")
+            : j.active ? UI.chip("running", "neutral") : UI.chip("active", "ok")}</td>
         <td data-actions>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
           ...(j.managed === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
           { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }])], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
@@ -1692,9 +1703,9 @@ async function viewImport() {
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="imports" class="tbl stack"><thead><tr>
       <th>App</th><th>Job</th><th>State</th><th>Progress</th><th data-nosort>Started</th><th></th></tr></thead><tbody>
-      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== defaultNamespace() ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
+      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? ` ${UI.chip("ownership", "neutral")}` : ""}${j.namespace && j.namespace !== defaultNamespace() ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
-        <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "low"}">${esc(j.state)}</span></td>
+        <td>${UI.chip(j.state, j.state === "done" ? "ok" : j.state === "failed" ? "bad" : "neutral")}</td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${fmtWhen(j.start)}</td>
         <td data-actions>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
@@ -1962,7 +1973,7 @@ window.srcBrowse = async name => {
     $("#mbody").innerHTML = `${dc.containers.length ? `<div class="ctitle">Containers on ${esc(name)}</div>
       <p class="muted small">Choose a container to carry over its image, ports, environment variables, icon and appdata mount automatically.</p>
       <div class="apps importapps" style="margin-top:14px">${dc.containers.map(c => `<div class="card flat importapp">
-        <div class="between"><b>${esc(c.name)}</b><span class="pill ${c.state === "running" ? "ok" : "low"}">${esc(c.state || "unknown")}</span></div>
+        <div class="between"><b>${esc(c.name)}</b>${UI.chip(c.state || "unknown", c.state === "running" ? "ok" : "neutral")}</div>
         <div class="mono xs dim" style="margin-top:7px;word-break:break-all">${esc(c.image)}</div>
         <button class="btn pri wide sm" style="margin-top:10px" onclick="inspectImport(${jsq(name)},${jsq(c.name)})">Import container</button></div>`).join("")}</div>
       <div class="sec">Appdata folders</div>` : ""}` + (entries.length
@@ -2265,7 +2276,7 @@ window.imStepGuard = step => {
 /* Existing volumes live in a namespace: choosing another one offers its own. */
 window.imNamespace = async ns => {
   const storage = await api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(e => ({ unread: e.message }));
-  if (!storage || $("#im_ns")?.value !== ns) return;
+  if ($("#im_ns")?.value !== ns) return;
   // Unread volumes here are not the last namespace's: none is offered, and it says so (#620).
   if (storage.unread) {
     STATE.data.importStorage = { ...(STATE.data.importStorage || {}), pvcs: [] };
@@ -2438,7 +2449,7 @@ window.clusterCheck = async name => {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
   } catch (e) { check = { state: "refused", message: e.message }; }
   const [tone, label] = CLUSTER_VERSION_TAGS[check.state] || CLUSTER_VERSION_TAGS.refused;
-  host.innerHTML = `<span class="tag ${tone}" title="${esc(check.message || "")}">${esc(label(check.version))}</span>`;
+  host.innerHTML = UI.chip(label(check.version), tone, { tip: check.message || "" });
   // A reason to act gets a note; a harmless difference gets a quiet line.
   const trouble = check.compatible === false || ["unreachable", "refused"].includes(check.state);
   if (!note) return;
@@ -2596,19 +2607,19 @@ window.clusterInventory = report => {
   ${rows.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
     <th>App</th><th>Runs</th><th>Volumes</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(w => `<tr>
-      <td><b>${esc(w.name)}</b> ${w.kind === "vm" ? '<span class="tag">VM</span>' : ""}
+      <td><b>${esc(w.name)}</b> ${w.kind === "vm" ? UI.chip("VM", "neutral") : ""}
         <div class="dim xs mono">${esc(w.namespace)}</div></td>
       <td class="mono small" style="word-break:break-all">${w.kind === "vm"
         ? `${esc(w.cores || "?")} vCPUs · ${esc(w.memory || "?")}` : esc(w.image)}</td>
       <td class="small">${w.volumes.length
         ? w.volumes.map(v => `<div class="mono xs">${esc(v.claim)} · ${v.size_gb} GiB${v.path ? ` → ${esc(v.path)}` : ""}</div>`).join("")
         : '<span class="dim">none</span>'}</td>
-      <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
+      <td>${UI.chip(w.running ? "running" : "stopped", w.running ? "ok" : "neutral")}</td>
       <td>${w.movable
         ? actionBar([{ label: "Copy to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)},'copy',${jsq(w.namespace || "")})`, need: "admin" },
                      { label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)},'move',${jsq(w.namespace || "")})`, need: "admin" }])
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
-        : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
+        : `${UI.chip("cannot move", "bad")}<div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">That cluster is running nothing Homestead can see.</div>'}
   ${clusterVolumesHtml(report)}
@@ -2625,14 +2636,14 @@ function clusterVolumesHtml(report) {
   <div class="tblwrap"><table class="tbl stack dense"><thead><tr>
     <th>Volume</th><th>Size</th><th>Used by</th><th></th></tr></thead><tbody>
     ${volumes.map(v => `<tr>
-      <td><b class="mono">${esc(v.name)}</b>${v.volume_mode === "Block" ? ' <span class="tag">disk</span>' : ""}
+      <td><b class="mono">${esc(v.name)}</b>${v.volume_mode === "Block" ? ` ${UI.chip("disk", "neutral")}` : ""}
         <div class="dim xs mono">${esc(v.namespace)}${v.storage_class ? ` · ${esc(v.storage_class)}` : ""}</div></td>
       <td class="mono small">${v.size_gb} GiB</td>
       <td class="small">${v.used_by.length ? v.used_by.map(esc).join(", ") : '<span class="dim">nothing</span>'}</td>
       <td>${v.movable
         ? actionBar([{ label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},'volume',${jsq(v.name)})`, need: "admin" }])
           + ((v.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${v.warnings.map(esc).join("; ")}</div>` : "")
-        : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${v.blockers.map(esc).join("; ")}</div>`}</td>
+        : `${UI.chip("cannot move", "bad")}<div class="dim xs" style="max-width:240px">${v.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -2849,8 +2860,8 @@ const MOVE_PHASE_WORDS = { joining: "Share storage", quiescing: "Stop there", "b
 function movesHtml(moves) {
   return (moves || []).map(m => {
     const copy = m.transfer_mode === "copy";
-    const tone = m.status === "succeeded" ? "ok" : m.status === "failed" ? "crit"
-      : m.status === "cancelled" ? "low" : "warn";
+    const tone = m.status === "succeeded" ? "ok" : m.status === "failed" ? "bad"
+      : m.status === "cancelled" ? "neutral" : "warn";
     const steps = m.phases.filter(p => p !== "done").map((phase, index) => {
       const state = m.status === "succeeded" || index < m.phase_index ? "done"
         : index === m.phase_index ? (m.status === "failed" ? "failed" : m.status === "running" ? "active" : "")
@@ -2870,9 +2881,9 @@ function movesHtml(moves) {
     const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
     return `<div class="card flat moveitem">
       <div class="between"><div><div class="ctitle">${esc(m.name)} <span class="dim">from ${esc(m.cluster)}</span>
-        ${m.kind === "vm" ? '<span class="tag">VM</span>' : ""}${copy ? ' <span class="tag">Copy</span>' : ""}</div>
+        ${m.kind === "vm" ? UI.chip("VM", "neutral") : ""}${copy ? ` ${UI.chip("Copy", "neutral")}` : ""}</div>
         <div class="csub">into ${esc(m.namespace)} · started ${esc(started < 90 ? "just now" : fmtAgo(started))}</div></div>
-        <span class="pill ${tone}">${esc(m.status)}</span></div>
+        ${UI.chip(m.status, tone)}</div>
       <div class="rollout-meter"><span style="width:${Math.max(2, m.progress)}%"></span></div>
       <div class="rollout-steps movesteps">${steps}</div>
       <div class="between"><span class="dim xs">${esc(m.message || "")}</span><div class="row">${actions}</div></div>

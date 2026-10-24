@@ -17,6 +17,26 @@ KIND = "workload-copy"
 MARKER = "homestead.io/storage-copy-job"
 
 
+def _starter():
+    """Who the request starting this copy is for, so its later steps are theirs (#621)."""
+    import homestead_changes as CHANGES
+    return getattr(CHANGES.REQUEST, "user", None) or ""
+
+
+def _as(who, write):
+    """Run write as who's: the jobs loop serves no request, so the change mark
+    would say the job. A copy journalled with no starter stays the job's; a
+    starter whose account is gone by then signs a mark that no longer checks
+    out, read as outside Homestead, as for any write by a removed account."""
+    import homestead_changes as CHANGES
+    was = getattr(CHANGES.REQUEST, "user", None)
+    CHANGES.REQUEST.user = who or None
+    try:
+        return write()
+    finally:
+        CHANGES.REQUEST.user = was
+
+
 def controls(dep):
     annotations = dep.get("metadata", {}).get("annotations", {})
     return {key: annotations.get(key) for key in (MARKER, COPY.HELD, "homestead.io/autostart-replicas")}
@@ -102,7 +122,7 @@ def start(body, context, prepared, moves, read, ops, apply):
     ref = {"namespace": ns, "name": name, "moves": moves, "deployment": source,
            "phase": "preparing", "retain_resources": True, "claims": previous,
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
-           "review_expires": int(body["capacity_token"].split(".", 1)[0])}
+           "review_expires": int(body["capacity_token"].split(".", 1)[0]), "started_by": _starter()}
     operation = ops.start(KIND, f"Move {name}'s data", {"kind": "Deployment", "namespace": ns, "name": name},
                           "/containers", ref, "Recording storage edit; uncertain steps are never replayed")
     ident = operation["id"]
@@ -261,7 +281,8 @@ def resolve(item, read, send, ops, admission):
         ref.update(phase="release_intent", running_digest=digest(proposed["spec"]))
         ops._finish(item, "running", 75, "Copy completed and fresh placement checked; recording the restart request")
         ops.checkpoint(item)
-        result = send("PATCH", IDENT.base(ref["namespace"]) + "/" + ref["name"], patch, ctype="application/json-patch+json")
+        result = _as(ref.get("started_by"), lambda: send("PATCH", IDENT.base(ref["namespace"]) + "/" + ref["name"], patch,
+                                                         ctype="application/json-patch+json"))
         if IDENT.identity(result)["uid"] != meta["uid"] or digest(result["spec"]) != ref["running_digest"] or result["metadata"].get("annotations", {}).get(MARKER):
             raise IDENT.Stopped("Restart response did not confirm the reviewed configuration")
         ref["phase"] = "starting"

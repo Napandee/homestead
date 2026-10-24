@@ -88,7 +88,14 @@ class Cluster:
 
 
 class UpgradeTests(unittest.TestCase):
-    def setUp(self): self.c = Cluster()
+    def setUp(self):
+        # Cluster() binds both modules to its fake; later tests in the same
+        # process must find them as they were.
+        bound = {name: getattr(V, name) for name in ('kget', 'ksend', 'platform', 'version', 'parse')}
+        key = R._key
+        self.addCleanup(lambda: [setattr(V, name, value) for name, value in bound.items()] and None)
+        self.addCleanup(setattr, R, '_key', key)
+        self.c = Cluster()
 
     def test_live_supported_offline_attached_refused(self):
         r = V.plan('v1.13.0')

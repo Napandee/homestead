@@ -119,7 +119,7 @@ try {
     assert.equal(await page.locator('.collection-disclosure[aria-expanded=true]').evaluate(b=>b.closest('tr').dataset.rowKey),key);
     await page.evaluate(()=>{localStorage.removeItem('homestead.sort.containers');renderWorkloads()});
     if(width<=560) {
-      const shortRows=await page.locator('.wl-row:not(.wl-off)').evaluateAll(rows=>rows.filter(r=>!r.querySelector('.tag.warn')).map(r=>r.getBoundingClientRect().height));
+      const shortRows=await page.locator('.wl-row:not(.wl-off)').evaluateAll(rows=>rows.filter(r=>!r.querySelector('.ui-chip.warn')).map(r=>r.getBoundingClientRect().height));
       assert.ok(shortRows.every(h=>h<=64),`ordinary mobile rows remain compact: ${shortRows.join(', ')}`);
       assert.equal(await page.locator('.wl-row').first().locator('.wl-row-meta').isVisible(),false);
       const heads=await page.locator('.wgroup-headrow').evaluateAll(rows=>rows.map(r=>[...r.children].map(c=>{const b=c.getBoundingClientRect();return b.top+b.height/2})));

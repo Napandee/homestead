@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -141,6 +142,51 @@ class CleanupTests(unittest.TestCase):
         self.c.objects[target]["metadata"]["uid"] = "replacement"
         with self.assertRaisesRegex(Held, "replacement"): self.finish()
         self.assertIn(target, self.c.objects)
+
+    def _touch_before_delete(self, paths, change):
+        """Change an object between cleanup's read and its DELETE, as kubelet
+        or a controller does when it updates a helper's status."""
+        def send(method, path, body, **kwargs):
+            if method == "DELETE" and path in paths and path in self.c.objects:
+                change(self.c.objects[path]["metadata"])
+            return self.c.send(method, path, body, **kwargs)
+        return send
+
+    def test_helper_status_update_before_delete_does_not_stall_cleanup(self):
+        # Row 93 (follows #824): every helper Homestead created is released by
+        # its uid, so a status update between the read and the DELETE is no 409.
+        setup = self.anchor.state["setup"]
+        helpers = {r["target"]["path"]: receipt["after"]["uid"] for r, receipt in zip(setup["resources"], setup["receipts"])}
+        bump = lambda meta: meta.update(resourceVersion=str(int(meta["resourceVersion"]) + 1))
+        self.assertTrue(self.finish(self._touch_before_delete(set(helpers), bump))["done"])
+        for path, uid in helpers.items():
+            self.assertNotIn(path, self.c.objects)
+            sent = [b for m, p, b in self.c.sent if m == "DELETE" and p == path]
+            self.assertEqual([{"uid": uid}], [b["preconditions"] for b in sent])
+
+    def test_replaced_helper_between_read_and_delete_is_refused(self):
+        pod = self.anchor.state["setup"]["resources"][7]["target"]["path"]
+        replace = lambda meta: meta.update(uid="replacement")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.finish(self._touch_before_delete({pod}, replace))
+        self.assertEqual(409, caught.exception.code)
+        self.assertIn(pod, self.c.objects)
+        # The next pass names the replacement and sends nothing more.
+        deletes = sum(m == "DELETE" for m, _, _ in self.c.sent)
+        with self.assertRaisesRegex(Held, "replacement"): self.finish()
+        self.assertEqual(deletes, sum(m == "DELETE" for m, _, _ in self.c.sent))
+        self.assertIn(pod, self.c.objects)
+
+    def test_control_record_keeps_its_version_check(self):
+        # The control record is verified by its content before release, so a
+        # change after that check is refused rather than deleted unseen.
+        bump = lambda meta: meta.update(resourceVersion=str(int(meta["resourceVersion"]) + 1))
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.finish(self._touch_before_delete({self.anchor.path}, bump))
+        self.assertEqual(409, caught.exception.code)
+        self.assertIn(self.anchor.path, self.c.objects)
+        sent = [b for m, p, b in self.c.sent if m == "DELETE" and p == self.anchor.path]
+        self.assertEqual({"uid", "resourceVersion"}, set(sent[0]["preconditions"]))
 
     def test_certificate_cannot_claim_deletion_of_different_uid(self):
         self.finish()

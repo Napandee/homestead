@@ -947,6 +947,9 @@ def snapshot():
 # Only the leader advances jobs, in one loop (#622): every ACTIVE_SECONDS while a
 # job is active, every IDLE_SECONDS otherwise, or at once when something asks.
 ACTIVE_SECONDS, IDLE_SECONDS = 3, 20
+# Its heartbeat's interval: health calls the loop late after three of these.
+# Longer than IDLE_SECONDS because one host OS step can take 60-90 s.
+JOBS_BEAT_EVERY = 60
 _wake = threading.Event()
 
 
@@ -956,25 +959,107 @@ def advance_soon():
     _wake.set()
 
 
-def tick(is_leader):
+def tick(is_leader, beat=None):
     """One round of the jobs loop: on the leader, run every active job's
-    resolver. Returns how long to wait before the next round."""
+    resolver, and once a day tidy the locks of jobs that are gone. beat(error=None)
+    is told how the round went, so health shows a stalled or failing loop.
+    Returns how long to wait before the next round."""
     if not is_leader():
         return IDLE_SECONDS
     try:
         jobs = list_operations()
     except Exception as error:
         print(f"jobs not advanced: {str(error)[:160]}", flush=True)
+        if beat:
+            beat(error)
         return IDLE_SECONDS
+    if beat:
+        beat()
+    if time.time() - _tidied["at"] >= LOCK_TIDY_EVERY:
+        # After the jobs, so a new leader's first round moves them on first.
+        try:
+            done = tidy_job_locks() is not None
+        except Exception as error:
+            print(f"job locks not tidied: {str(error)[:160]}", flush=True)
+            done = False
+        # One that could not run (the volume held, the store busy) is tried
+        # again within the hour rather than the next day.
+        _tidied["at"] = time.time() - (0 if done else LOCK_TIDY_EVERY - LOCK_TIDY_RETRY)
     return ACTIVE_SECONDS if any(job.get("status") not in TERMINAL for job in jobs) else IDLE_SECONDS
 
 
-def run_jobs(is_leader, stop=None):
+# However often something asks (every disk-page poll from every tab does), a
+# round starts at most this often.
+MIN_ROUND_SECONDS = 1
+
+
+def run_jobs(is_leader, stop=None, beat=None):
     """The jobs loop: one thread per process; only the leader's does anything."""
     while not (stop and stop.is_set()):
-        wait = tick(is_leader)
+        began = time.monotonic()
+        wait = tick(is_leader, beat)
         _wake.wait(wait)
+        rest = MIN_ROUND_SECONDS - (time.monotonic() - began)
+        if rest > 0 and stop:
+            stop.wait(rest)
+        elif rest > 0:
+            time.sleep(rest)
+        # Cleared after the pause: asks that came during it are answered by
+        # the round about to start, not by another one straight after it.
         _wake.clear()
+
+
+# A lock file per job that ran outside the store's lock (_job_lock) stays on the
+# data volume after its job has gone; once a day the leader removes those over a
+# day old whose job is in neither store. This is safe only because nothing but
+# the loop's _resolve_outside opens a job's lock, and it gives up on a job that
+# is not in the store: a later caller must never take _job_lock for a job that
+# is gone, or it could hold a lock file this has removed while another replica
+# makes a new one.
+LOCK_KEEP_SECONDS = LOCK_TIDY_EVERY = 86400
+LOCK_TIDY_RETRY = 3600
+_tidied = {"at": 0}
+
+
+def tidy_job_locks(now=None):
+    """Remove the lock files of jobs no longer kept, over LOCK_KEEP_SECONDS old.
+    Holds the store's lock, so no job is added or removed meanwhile, and takes
+    each file's own lock first (only tries), so a lock in use is never removed.
+    Returns how many went, or None if the data volume is held (nothing more is
+    removed then; try again later)."""
+    try:
+        require_write()
+    except STORAGE_JOURNAL.Held:
+        return None
+    try:
+        return _tidy_job_locks(time.time() if now is None else now)
+    except STORAGE_JOURNAL.Held:
+        return None  # the volume became held part-way
+
+
+def _tidy_job_locks(now):
+    folder = os.path.join(DATA_DIR, ".locks")
+    removed = 0
+    with _lock:
+        kept = {f"operations-job-{_job_lock_name(item.get('id'))}" for item in _read()}
+        try:
+            names = os.listdir(folder)
+        except FileNotFoundError:
+            return 0
+        for file in names:
+            name = file[:-len(".lock")]
+            if not (name.startswith("operations-job-") and file.endswith(".lock")) or name in kept:
+                continue
+            path = os.path.join(folder, file)
+            try:
+                if now - os.path.getmtime(path) < LOCK_KEEP_SECONDS:
+                    continue
+                with SHARED.SharedLock(name, strict=True, directory=lambda: DATA_DIR, timeout=0):
+                    os.remove(path)
+                removed += 1
+            except (TimeoutError, FileNotFoundError):
+                continue
+    return removed
 
 
 # Kinds whose resolvers run outside the job store's lock (#622 step 5): a slow
@@ -983,18 +1068,25 @@ def run_jobs(is_leader, stop=None):
 # only if nobody changed the job meanwhile. Every other kind is resolved under
 # the store's lock, as before; more kinds move here once their requests that
 # change a running job are checked.
-OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy"}
+# The weekly trim (homestead_weekly_trim) waits up to 60 s on Longhorn per step.
+OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy", "weekly-trim"}
 _resolving = threading.local()
+
+
+def _job_lock_name(operation_id):
+    """The part of a job's lock file name that names the job (ids are 24 hex
+    digits; anything else is hashed)."""
+    return str(operation_id) if re.fullmatch(r"[0-9a-f]{8,64}", str(operation_id)) else \
+        f"crc{zlib.crc32(str(operation_id).encode()):08x}"
 
 
 def _job_lock(operation_id):
     """The lock one job's resolver and its cancel share, on every replica. One
-    per job (ids are 24 hex digits), so a slow step holds up only its own job."""
-    name = str(operation_id) if re.fullmatch(r"[0-9a-f]{8,64}", str(operation_id)) else \
-        f"crc{zlib.crc32(str(operation_id).encode()):08x}"
+    per job, so a slow step holds up only its own job."""
     # Only the loop takes it, and only tries: a job busy elsewhere (an old
     # leader's step still running) is left for the next round, not waited on.
-    return SHARED.SharedLock(f"operations-job-{name}", strict=True, directory=lambda: DATA_DIR, timeout=0)
+    return SHARED.SharedLock(f"operations-job-{_job_lock_name(operation_id)}", strict=True,
+                             directory=lambda: DATA_DIR, timeout=0)
 
 
 def _same(a, b):
@@ -1026,6 +1118,12 @@ def _resolve_outside(operation_id):
             if not stored or stored.get("status") in TERMINAL or stored.get("status") == CANCELLING:
                 return False
             work = copy.deepcopy(stored)
+            # The job this step started from, so its checkpoints can tell its own
+            # earlier saves from someone else's change. Per thread: a checkpoint
+            # made from a helper thread the resolver started finds no base, so
+            # the step's own save then looks like someone else's change and its
+            # result is dropped (safe; the step runs again next round), so
+            # checkpoint only from the resolver's own thread.
             bases = _resolving.__dict__.setdefault("bases", {})
             bases[operation_id] = copy.deepcopy(stored)
             try:
@@ -1352,10 +1450,16 @@ def _apply_cancel(operation_id):
         before = _mark_cancelling(match, plan)
         _write(items)
         work = json.loads(json.dumps(match))
+    # The canceller's writes are for whoever cancelled, not the loop (#621).
+    import homestead_changes as CHANGES
+    was = getattr(CHANGES.REQUEST, "user", None)
+    CHANGES.REQUEST.user = request.get("by") or None
     try:
         _run_cancel(operation_id, work, plan, chosen, before, request.get("by", ""))
     except ValueError as error:   # the job is running again and says why
         print(f"job {operation_id} not cancelled: {str(error)[:160]}", flush=True)
+    finally:
+        CHANGES.REQUEST.user = was
     return True
 
 

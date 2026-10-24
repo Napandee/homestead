@@ -11,13 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
+import homestead_web_paths as WEB_PATHS
 import source_scan as SS
 
 SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 2053
-MAX_PATH_BRANCHES = 27
+MAX_LINES = 1848
+MAX_PATH_BRANCHES = 3
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
 # Lines in server.py's alias block (names tests still patch on server). Only lowered.
@@ -28,58 +29,32 @@ ALIAS_END = "# End of the names tests still patch on server."
 # The routes server.py's handler still answers itself, each with the reason it
 # needs the handler. Every other route is declared in its module's ROUTES.
 INLINE_ROUTES = (
-    ("GET", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
-    ("GET", "/api/diagnostics/download", "connection-bound: sets Content-Disposition"),
     ("GET", "/api/console", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/node/shell", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/vm/console", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/icons/", "connection-bound: serves a file with its own headers (path prefix)"),
-    ("GET", "/api/auth/state", "connection-bound: cookies/session"),
-    ("GET", "/api/fleet", "connection-bound: fleet forwarding"),
-    ("GET", "/api/fleet/state", "connection-bound: fleet forwarding"),
-    ("GET", "/api/fleet/home", "connection-bound: cookies/session"),
-    ("GET", "/api/fleet/all/", "connection-bound: fleet forwarding"),
-    ("GET", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
-    ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
-    ("POST", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
-    ("POST", "/api/auth/keys", "connection-bound: fleet forwarding (refused when relayed)"),
-    ("POST", "/api/auth/keys/revoke", "connection-bound: fleet forwarding (refused when relayed)"),
-    ("POST", "/api/auth/keys/edit", "connection-bound: fleet forwarding (refused when relayed)"),
-    ("POST", "/api/fleet/", "connection-bound: fleet forwarding"),
-    ("POST", "/api/auth/setup", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/login", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/logout", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/preferences/dashboard", "auth: stays with sign-in and sessions"),
-    ("POST", "/api/auth/password", "connection-bound: cookies/session"),
-    ("POST", "/api/auth/users", "connection-bound: sign-in history (address, User-Agent)"),
-    ("POST", "/api/auth/role", "connection-bound: sign-in history (address, User-Agent)"),
-    ("POST", "/api/auth/users/delete", "connection-bound: sign-in history (address, User-Agent)"),
-    ("POST", "/api/auth/signout-everywhere", "connection-bound: cookies/session"),
-    ("POST", "/api/self/data/move", "connection-bound: cookies/session"),
+    ("ANY", "/api/self/data/handoff/", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/self/data/abandon", "not a route here: _guard lets the recovery action through while boot is pending; the route is in homestead_self_data_server"),
-    ("ANY", "/api/fleet/accept", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/address", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/join", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/leave", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/link-legacy", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/remove", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/switch", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/sync", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/v1/openapi.json", "connection-bound: API keys and sessions (homestead_api_v1)"),
+    ("ANY", "/api/fleet/home", "not a route here: the guard checks it before routing"),
+    ("ANY", "/api/v1/", "not a route here: the guard checks it before routing"),
+    ("ANY", "/api/auth/login", "not a route here: the guard checks it before routing"),
+    ("ANY", "/api/auth/setup", "not a route here: the guard checks it before routing"),
+    ("ANY", "/api/auth/state", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/auth/", "not a route: a prefix _send tests before it hides a diagnostic report"),
     ("ANY", "/api/diagnostics", "not a route: a prefix _send tests before it hides a diagnostic report"),
 )
 
 
 def handler_methods(source=SS.SERVER_PY):
-    """class H's own methods in server.py, by name."""
-    return {name[2:]: found for name, found in SS.functions(source).items()
+    """class H's own methods in server.py, by name: each name's defs, so a
+    method written twice (if/else alternatives) is read whole."""
+    return {name[2:]: defs for name, defs in SS.every_function(source).items()
             if name.startswith("H.") and name.count(".") == 1}
 
 
-def handler_body(method):
-    """The text of server.py's do_GET, do_POST, ... method."""
-    return handler_methods()[f"do_{method}"].text
+def handler_body(method, source=SS.SERVER_PY):
+    """The text of server.py's do_GET, do_POST, ... method (every def of it)."""
+    return "\n".join(found.text for found in handler_methods(source)[f"do_{method}"])
 
 
 def literals_in(text):
@@ -96,13 +71,13 @@ def api_literals(method):
 
 def helper_literals(source=SS.SERVER_PY):
     """Every "/api/..." path written in class H outside its do_* methods:
-    helpers such as _fleet_post answer routes too, and so could a class
+    helpers such as _fleet_target check routes too, and so could a class
     attribute they read."""
     lines = (source if isinstance(source, SS.Code) else SS.text(source)).splitlines()
     cls = next(node for node in SS.tree(source).body if isinstance(node, ast.ClassDef) and node.name == "H")
     keep = set(range(cls.lineno, cls.end_lineno + 1))
-    for name, found in handler_methods(source).items():
-        if name.startswith("do_"):
+    for name, defs in handler_methods(source).items():
+        for found in defs if name.startswith("do_") else ():
             first = min([found.node.lineno, *(d.lineno for d in found.node.decorator_list)])
             keep -= set(range(first, found.node.end_lineno + 1))
     return literals_in("\n".join(lines[number - 1] for number in sorted(keep)))
@@ -117,6 +92,7 @@ class DeclaredRoutes(unittest.TestCase):
             self.assertIn(method, ("GET", "POST", "PUT", "DELETE"), path)
             # Outside /api/ only where the guard does not take it for a page,
             # which it lets through before sign-in (/readyz, /metrics: #736).
+            # ModuleRoutesNeedCredentials below is this rule's safety net.
             self.assertTrue(path.startswith("/api/") or not WEB_PATHS.is_page_path(path), path)
             self.assertIn(route.role, ROUTES.ROLES, path)
             self.assertTrue(callable(route.handler), path)
@@ -166,6 +142,53 @@ class DeclaredRoutes(unittest.TestCase):
         self.assertIsNone(ROUTES.find("GET", "/api/test/echo"))
 
 
+def guard(path, method="GET", headers=None):
+    """server.H's guard for one request with no session, outside any fence."""
+    import server
+    h = object.__new__(server.H)
+    h.command, h.path, h.headers = method, path, dict(headers or {})
+    h._send = mock.Mock(); h._who = mock.Mock(return_value=None)
+    h.client_address = ("192.0.2.10", 40000)
+    with mock.patch.object(server.CFACCESS, "enabled", return_value=False), \
+         mock.patch.object(server, "_self_data_boot_pending", False), \
+         mock.patch.object(server, "require_self_data_write", return_value=None):
+        result = h._guard(path)
+    return h, result
+
+
+class ModuleRoutesNeedCredentials(unittest.TestCase):
+    """The net under DeclaredRoutes' rule (a module route may sit outside
+    /api/ where the guard does not take it for a page): every module route
+    that is not public answers 401 without a session or a key, so none is
+    served before sign-in as a page would be (#736 review, gap 39)."""
+    def test_metrics_and_readyz_are_not_page_paths(self):
+        self.assertFalse(WEB_PATHS.is_page_path("/metrics"))
+        self.assertFalse(WEB_PATHS.is_page_path("/readyz"))
+
+    def test_a_module_route_at_a_bare_path_needs_credentials(self):
+        """A route a module declares at /metrics is not let through as a page."""
+        fake = ROUTES.Route("GET", "/metrics", "viewer", lambda request: "secret", "test")
+        with mock.patch.dict(ROUTES._table, {("GET", "/metrics"): fake}):
+            h, result = guard("/metrics")
+        self.assertTrue(result)
+        self.assertEqual(401, h._send.call_args.args[0])
+
+    def test_the_walk_meets_a_route_outside_api(self):
+        """Not an empty walk: the rule's exception is in the table."""
+        self.assertTrue([path for _, path in ROUTES.table() if not path.startswith("/api/")])
+
+    def test_every_module_route_that_is_not_public_needs_credentials(self):
+        """Any module route, at any path, that is not public answers 401 to
+        a request with no session and no key: none is served as a page."""
+        for (method, path) in ROUTES.table():
+            if WEB_PATHS.is_public_path(path):
+                continue
+            with self.subTest(method=method, path=path):
+                h, result = guard(path, method)
+                self.assertTrue(result, f"{method} {path} passed the guard without credentials")
+                self.assertEqual(401, h._send.call_args.args[0])
+
+
 class ThroughTheServer(unittest.TestCase):
     """A request for a declared route reaches its module through server.py's
     handler, after the guard, and its errors are answered as before."""
@@ -193,6 +216,14 @@ class ThroughTheServer(unittest.TestCase):
         with mock.patch.object(server.FIREWALL, "inventory", return_value={"policies": []}):
             handler.do_GET()
         self.assertEqual((200, {"policies": []}), handler._send.call_args.args)
+
+    def test_a_delete_reaches_the_module(self):
+        server, handler = self.handler("DELETE", "/api/workload/lab/web")
+        import homestead_deploy_server as DEPLOY_SERVER
+        with mock.patch.object(DEPLOY_SERVER, "delete_workload", return_value=["web"]) as delete:
+            handler.do_DELETE()
+        delete.assert_called_once_with("lab", "web")
+        self.assertEqual((200, {"ok": True, "services": ["web"]}), handler._send.call_args.args[:2])
 
     def test_a_reply_keeps_its_own_status(self):
         server, handler = self.handler("POST", "/api/test/busy")
@@ -259,6 +290,22 @@ class RouteLiterals(unittest.TestCase):
                          helper_literals(source))
 
 
+class TwoDefsOfOneHandler(unittest.TestCase):
+    """A do_* written twice (if/else alternatives) is read whole: a route in
+    either def is seen, and neither def counts as a helper."""
+    SOURCE = SS.code('class H(Base):\n    if FAST:\n        def do_GET(self):\n            if p == "/api/x/first":\n'
+                     '                pass\n    else:\n        def do_GET(self):\n            if p == "/api/x/second":\n'
+                     '                pass\n\n    def _helper(self):\n        return "/api/x/helper"\n')
+
+    def test_a_route_in_either_def_is_in_the_handler_body(self):
+        body = handler_body("GET", self.SOURCE)
+        self.assertIn("/api/x/first", body)
+        self.assertIn("/api/x/second", body)
+
+    def test_neither_def_counts_as_a_helper(self):
+        self.assertEqual({"/api/x/helper"}, helper_literals(self.SOURCE))
+
+
 class MovedHelpers(unittest.TestCase):
     def test_each_moved_helper_lives_in_its_module_and_is_not_late_bound_there(self):
         """MOVED (#527 track 2) says which module a helper moved to; _late looks
@@ -304,7 +351,7 @@ class ServerStaysRouting(unittest.TestCase):
         INLINE_ROUTES with the reason it needs the handler (cookies, request
         headers, fleet forwarding, a WebSocket): under its method when it is in
         do_GET, do_POST or do_DELETE, under "ANY" when only a helper method
-        (such as _fleet_post) writes it. A new route goes in its module's ROUTES
+        (such as _fleet_target) writes it. A new route goes in its module's ROUTES
         instead. A route that moves out of server.py comes off INLINE_ROUTES in
         the same commit. Only literals are seen: a path compared with a constant
         (p == MCP.PATH) is not."""

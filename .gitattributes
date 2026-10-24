@@ -1,1 +1,8 @@
-*.sh text eol=lf
+# Every text file is LF on every platform, whatever core.autocrlf says: tests
+# read sources byte for byte, and scripts run inside Linux containers.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+*.ttf binary

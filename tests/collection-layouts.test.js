@@ -11,7 +11,7 @@ function context() {
   c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
   require("./helpers/load-time")(c);
   vm.runInContext(between(core,null,"/* Put text on the clipboard."),c);
-  for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","views-workloads.js","views-overview.js"])
+  for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","gitops.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
   vm.runInContext("this.workloadRowKey=workloadRowKey;this.nodeComparisonKey=nodeComparisonKey",c);
   return c;
@@ -81,7 +81,7 @@ test("rows and cards show the same tags, scheduled included, and name an update 
   const row=c.workloadTableRows([a]).split('<tr class="wl-detail-row"')[0],card=c.workloadCard(a);
   for(const html of [row,card])assert.match(html,/sched-tag/,"scheduled shows in both views");
   assert.match(card,/update available/);
-  assert.doesNotMatch(row,/class="tag warn">(Update|update available)</,"a row says it once, with its Update button");
+  assert.doesNotMatch(row,/class="ui-chip warn">(Update|update available)</,"a row says it once, with its Update button");
   assert.match(row,/aria-label="Update example-app"/);
   vm.runInContext('this.can=()=>false',c);
   assert.match(c.workloadTableRows([a]).split('<tr class="wl-detail-row"')[0],/update available/,"someone who can't update still sees it");

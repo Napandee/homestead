@@ -2,6 +2,7 @@
 stay distinct when they are too long to fit: two that start the same never
 share one object, so one never reuses, overwrites or deletes the other's."""
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -131,6 +132,8 @@ class DiskIdTests(unittest.TestCase):
 
     def setUp(self):
         self.disks, self.sent = {}, []
+        self.data = tempfile.TemporaryDirectory()
+        self.addCleanup(self.data.cleanup)
 
         def get(path):
             return {"spec": {"disks": self.disks}, "status": {"diskStatus": {}}}
@@ -141,7 +144,10 @@ class DiskIdTests(unittest.TestCase):
                 self.disks[key] = value
         self.patches = [mock.patch.object(DISKS, "kget", get, create=True),
                         mock.patch.object(DISKS, "_patch", patch),
-                        mock.patch.object(DISKS, "harvester", lambda: False, create=True)]
+                        mock.patch.object(DISKS, "harvester", lambda: False, create=True),
+                        # Adding a disk takes the operations lock in the data
+                        # folder: this test's own, never the real /data.
+                        mock.patch.object(DISKS.OPS, "DATA_DIR", self.data.name)]
         for p in self.patches:
             p.start()
 

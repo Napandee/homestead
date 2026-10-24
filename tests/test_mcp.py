@@ -20,6 +20,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_mcp as MCP
 import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
+import homestead_audit as AUDIT_LOG
 
 
 def key(scopes=("read",), mcp=True, role="viewer", kid="k1", name="claude"):
@@ -443,6 +444,55 @@ class AuditTests(Base):
         self.assertEqual(["GET /api/v1/vms", "POST /api/v1/containers/lab/web/stop"], [r["action"] for r in AUDIT.recent()])
 
 
+class AuditLineTests(Base):
+    """What the audit log (#738) learns of a POST to /mcp: the tool, only when it
+    changes something, and whether it was held for a person or refused."""
+
+    def setUp(self):
+        super().setUp()
+        ROUTER._clear_notes()
+        self.objects["/apis/apps/v1/namespaces/lab/deployments/web"] = {
+            "metadata": {"uid": "u1"}, "spec": {"template": {"spec": {"containers": [{"image": "nginx"}]}}}}
+
+    def lines(self, message, k):
+        out = []
+        with mock.patch.object(AUDIT_LOG, "emit", side_effect=lambda entry, keep=True: out.append(entry)):
+            self.ask(message, k)
+            conn = ROUTER.Connection(ROUTER.Headers([]), {}, False, False, None, None, k, None)
+            AUDIT_LOG.record(ROUTER.Request("POST", "/mcp", None, {}, f"api-key:{k['name']}", k["role"],
+                                            "192.0.2.40", conn), 200, 4, notes=ROUTER._take_notes())
+        return out
+
+    def tool(self, name, args):
+        return rpc("tools/call", {"name": name, "arguments": args})
+
+    def test_a_change_tool_writes_its_name(self):
+        k = key(["read", "containers:control"], role="operator")
+        with mock.patch.object(TOOLS.API_V1, "handle", return_value=(200, {"ok": True})):
+            (line,) = self.lines(self.tool("container_restart", {"namespace": "lab", "name": "web"}), k)
+        self.assertEqual(("mcp", "container_restart", "k1", "ada"), (line["via"], line["tool"], line["key"], line["owner"]))
+        self.assertNotIn("outcome", line)
+        self.assertNotIn("kind", line)
+
+    def test_reads_write_nothing(self):
+        for message in (rpc("tools/list"), rpc("ping"), rpc("initialize"), self.tool("whoami", {})):
+            with self.subTest(method=message["method"]):
+                self.assertEqual([], self.lines(message, key()))
+
+    def test_a_held_destructive_call_says_so(self):
+        k = key(["read", "containers:manage"], role="operator")
+        (line,) = self.lines(self.tool("delete_container", {"namespace": "lab", "name": "web", "reason": "unused"}), k)
+        self.assertEqual("delete_container", line["tool"])
+        self.assertEqual("pending", REQUESTS.get(line["held"])["status"])
+        self.assertEqual([], self.deleted)
+
+    def test_a_refused_tool_call_says_so(self):
+        k = key(["read", "containers:manage"], role="operator")
+        with mock.patch.object(TOOLS, "call", side_effect=TOOLS.ToolError("review node memory before starting")):
+            (line,) = self.lines(self.tool("scale_container", {"namespace": "lab", "name": "web", "replicas": 2}), k)
+        self.assertEqual(("scale_container", "refused"), (line["tool"], line["outcome"]))
+
+
 class CatalogueTests(unittest.TestCase):
     """What the tools reach: real routes, never the ones kept from agents."""
     NEVER = ("/api/auth", "/api/settings", "/api/console", "/api/node/shell", "/api/vm/console", "/api/files",
@@ -474,6 +524,9 @@ class CatalogueTests(unittest.TestCase):
     NOT_TOOLS = {
         "/api/agents/requests/approve": "approving is a person's", "/api/agents/requests/deny": "deciding is a person's",
         "/api/alerts/pending": "the app's own bell",
+        "/api/logalerts": "a log alert notifies people: who is woken is a person's call",
+        "/api/logalerts/delete": "a log alert notifies people: who is woken is a person's call",
+        "/api/logalerts/preview": "the log alert editor's trial run, for the person writing the alert",
         "/api/volumes/previous/keep": "keeping or letting a previous volume expire is a person's call (#743)", "/api/push/status": "a browser's push subscription",
         "/api/push/subscribe": "a browser's push subscription", "/api/push/unsubscribe": "a browser's push subscription",
         "/api/setup/complete": "the setup guide is a person's", "/api/setup/hide": "the setup guide is a person's",
@@ -483,6 +536,11 @@ class CatalogueTests(unittest.TestCase):
         "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
         "/api/push/test": "a browser's push subscription", "/api/alerts/acknowledge": "the app's own bell",
         "/api/alerts/delivered": "the app's own bell",
+        "/api/weekly-trim/run": "trim_volume trims one volume; trimming them all is the weekly job's",
+        **{f"/api/auth/{path}": "a person's own session" for path in (
+            "setup", "login", "logout", "password", "signout-everywhere", "preferences/dashboard")},
+        "/api/fleet/switch": "a browser's choice of cluster",
+        "/api/v1/*": "the public API is its own door",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):

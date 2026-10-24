@@ -123,6 +123,21 @@ class SiteNameTests(unittest.TestCase):
         self.assertEqual("", server.APP_SETTINGS.validate({"site_name": "   "})["site_name"])
 
 
+class AuditFileSettingTests(unittest.TestCase):
+    """Whether the audit log (#738) is also kept on the data volume: on until an admin turns it off."""
+
+    def test_it_is_on_by_default(self):
+        self.assertEqual({"file": True}, server.APP_SETTINGS.validate({})["audit"])
+
+    def test_it_can_be_turned_off(self):
+        self.assertEqual({"file": False}, server.APP_SETTINGS.validate({"audit": {"file": False}})["audit"])
+
+    def test_it_must_be_on_or_off(self):
+        for value in ("no", 0, None, [True]):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "audit log file must be on or off"):
+                server.APP_SETTINGS.validate({"audit": {"file": value}})
+
+
 class PlacementSettingTests(unittest.TestCase):
     def test_moving_back_after_a_host_returns_defaults_to_off_and_takes_only_its_modes(self):
         self.assertEqual("off", server.APP_SETTINGS.validate({})["placement"]["rebalance"])

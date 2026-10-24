@@ -10,7 +10,10 @@ Who made it: every write Homestead sends to a Deployment is noted with the
 person whose request sent it (a job of Homestead's own has none). The write
 also carries it, as an annotation on the app's own metadata (never its pod
 template, which would restart it), so the leader credits a change whichever
-copy of Homestead served it. The annotation names nobody: it holds a keyed
+copy of Homestead served it. Every write means every one: a whole object or a
+merge patch takes it as a field, a JSON patch as one more op of its own, and
+Stop, Start and schedules write the Deployment itself rather than its scale,
+which has no metadata to carry it. The annotation names nobody: it holds a keyed
 digest of the app, the moment and the person, which the leader checks against
 the accounts and API keys. A mark that does not check out for that app -
 copied from another app, or altered - is ignored. A change
@@ -51,6 +54,8 @@ BY_SCHEDULE = "schedule"    # a power schedule's stop or start: not a change to 
 AUTHOR = NAMES.key("changedBy")   # on an app's own metadata: who last wrote it, and when
 MARK_MAX = 256                    # a longer mark is not one Homestead wrote
 _AUTHOR_POINTER = "/metadata/annotations/" + AUTHOR.replace("~", "~0").replace("/", "~1")
+_known = {}                       # the author key and names as last read (_accounts)
+_known_lock = threading.Lock()
 
 
 # server.py's review of an undo, and its writer (bind); for the loop, the
@@ -80,28 +85,52 @@ def _save(data):
     SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
 
 
-# A Deployment, or its scale - how Stop, Start and schedules change copies.
+# A Deployment, or its scale: Homestead itself now scales the Deployment (#621),
+# but a write to /scale is still noted.
 _DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([a-z0-9-]+)/deployments(?:/([a-z0-9.-]+)(?:/scale)?)?(?:\?.*)?$")
+
+
+def _accounts():
+    """The author key and the names a write can be for, as the account store last said.
+
+    Every read that answers replaces them - a factory reset's new key, or no
+    key at all before setup. A read that fails answers from the last one, so a
+    copy that has read them once marks and checks marks through an outage of
+    the account Secret. Read only: looking must never make a key."""
+    import homestead_auth as AUTH
+    try:
+        data = AUTH._load()
+    except Exception:
+        with _known_lock:
+            if _known:
+                return dict(_known)
+        raise
+    key = data.get("signing_key")
+    fresh = {"key": hmac.new(key.encode(), b"homestead-change-author-v1", hashlib.sha256).digest() if key else None,
+             "users": list(data.get("users") or {}),
+             "api_keys": [entry.get("name", "") for entry in (data.get("api_keys") or {}).values()]}
+    with _known_lock:
+        _known.clear()
+        if key:
+            _known.update(fresh)
+    return fresh
 
 
 def _author_key():
     """A key every copy of Homestead shares, so a mark can be checked without naming anyone.
 
-    Read only: before setup there is no key, and looking for changes must not
-    make one (it raises, so the write goes unmarked and a mark reads as outside)."""
-    import homestead_auth as AUTH
-    key = AUTH._load().get("signing_key")
+    Before setup there is no key: it raises, so the write goes unmarked and a
+    mark reads as outside."""
+    key = _accounts()["key"]
     if not key:
         raise LookupError("no signing key yet")
-    return hmac.new(key.encode(), b"homestead-change-author-v1", hashlib.sha256).digest()
+    return key
 
 
 def _authors():
     """Everyone a write can be for: the accounts and the API keys, by name."""
-    import homestead_auth as AUTH
-    data = AUTH._load()
-    return {"users": list(data.get("users") or {}),
-            "api_keys": [key.get("name", "") for key in (data.get("api_keys") or {}).values()]}
+    known = _accounts()
+    return {"users": known["users"], "api_keys": known["api_keys"]}
 
 
 def _label(who):
@@ -158,12 +187,21 @@ def _strip_object(value, path):
         value.pop(AUTHOR, None)
 
 
+def _mark(ns, name, who, now):
+    """The mark itself; raises when the key cannot be read."""
+    return json.dumps({"at": int(now), "by": _signed(_author_key(), ns, name, now, who)}, separators=(",", ":"))
+
+
 def _carry(path, body, ns, name, who, now):
     """Put the mark on the app's own metadata, when this body can hold it.
 
-    A JSON patch (a list) and a Scale have no app metadata to put it on; they
-    are only noted on this copy, as before."""
-    if not isinstance(body, dict) or "/scale" in path.split("?")[0]:
+    A Scale has no app metadata to put it on (Homestead no longer sends one);
+    it is only noted on this copy, as before."""
+    if "/scale" in path.split("?")[0]:
+        return
+    if isinstance(body, list):
+        return _carry_patch(body, ns, name, who, now)
+    if not isinstance(body, dict):
         return
     meta = body.setdefault("metadata", {})
     if not isinstance(meta, dict):
@@ -172,10 +210,37 @@ def _carry(path, body, ns, name, who, now):
         meta["annotations"] = {}
     if isinstance(meta["annotations"], dict):
         try:
-            meta["annotations"][AUTHOR] = json.dumps(
-                {"at": int(now), "by": _signed(_author_key(), ns, name, now, who)}, separators=(",", ":"))
+            meta["annotations"][AUTHOR] = _mark(ns, name, who, now)
         except Exception:
             pass    # the credentials could not be read: the note on this copy still says who
+
+
+def _carry_patch(ops, ns, name, who, now):
+    """Add the mark to a JSON patch as one more op, after the caller's own.
+
+    The app is read once to choose its form: at its own key when the app has
+    annotations, or as the whole map when it has none - but only under the
+    patch's own test of the version just read, which proves none appeared
+    since, so the map overwrites nobody's. Otherwise, or when the app or the
+    key cannot be read, or the patch sets the app's metadata wholesale, the
+    patch goes as it came. The patch still applies whole or not at all, its
+    own tests included. Marking cannot refuse a patch that tests its
+    resourceVersion, as rename's and the copy job's do: if the app changed
+    since the read, that test fails it anyway. One without such a test fails
+    only if every annotation went between the read and the write."""
+    if not name or any(isinstance(op, dict) and op.get("op") != "test" and op.get("path") in _METADATA for op in ops):
+        return
+    try:
+        mark = _mark(ns, name, who, now)
+        import homestead_kube as KUBE
+        meta = (KUBE.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}") or {}).get("metadata") or {}
+    except Exception:
+        return
+    if isinstance(meta.get("annotations"), dict):
+        ops.append({"op": "add", "path": _AUTHOR_POINTER, "value": mark})
+    elif meta.get("resourceVersion") and {"op": "test", "path": "/metadata/resourceVersion",
+                                          "value": meta["resourceVersion"]} in ops:
+        ops.append({"op": "add", "path": "/metadata/annotations", "value": {AUTHOR: mark}})
 
 
 def _marked_by(dep, ns, name, since, now):
