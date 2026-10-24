@@ -3726,7 +3726,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .answer-strip.mon-mini{height:16px;width:100%}
 .mon-allup{padding:6px 2px}
 /* Restore tests on Data Protection. */
-.restore-tests{margin:6px 0 18px}.restore-head{align-items:center;gap:12px;flex-wrap:wrap}
+.housekeeping{margin:6px 0 18px}.wt-line{margin-top:6px}.wt-foot{margin-top:12px;align-items:center;gap:12px;flex-wrap:wrap}.restore-tests{margin:6px 0 18px}.restore-head{align-items:center;gap:12px;flex-wrap:wrap}
 .restore-table .restore-why{max-width:420px;white-space:normal}
 @media (max-width:560px){
   .tbl.stack.compact.restore-table tr{grid-template-columns:minmax(0,1fr)}

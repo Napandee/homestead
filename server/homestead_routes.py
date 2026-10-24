@@ -165,6 +165,7 @@ MODULES = (
     "homestead_vms",
     "homestead_vmstore",
     "homestead_volumes",
+    "homestead_weekly_trim",
     "homestead_workloads",
 )
 ROLES = ("viewer", "operator", "admin")

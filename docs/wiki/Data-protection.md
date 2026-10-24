@@ -135,19 +135,30 @@ still be going ([Settings](Settings#when-a-host-comes-back)).
 
 Files deleted inside a volume leave their space allocated in Longhorn until
 the filesystem is trimmed. Media, databases and VM disks can hold far more
-than their files use. So Homestead sets up **homestead-weekly-trim** for every
-volume: Saturdays at 04:00 UTC, in the default group and in every group a
-volume is in, kept in step as groups come and go.
+than their files use. So Homestead trims **every attached volume** itself,
+once a week: Saturdays at 04:00 UTC, one volume at a time, as a job in the
+job tray.
 
-- You can change its schedule, and your change is kept.
-- If you delete it, it isn't made again.
-- If you already have a trim job for the default group, Homestead doesn't add
-  a second.
-- Its **Run now** trims every volume at once.
+- Longhorn trims a volume only while it's attached. A detached volume (a
+  stopped app's) is skipped and named; the first weekly run that finds it
+  attached trims it.
+- A VM disk has no filesystem Longhorn can trim, so it is skipped and named
+  too.
+- The job ends with what it did: "Trimmed 12 volumes, skipped 4 (3 detached,
+  1 VM disk)", then which volume failed and Longhorn's answer, if any.
+- **Data protection › Housekeeping** shows the last run, **Run now** (trims
+  every attached volume now) and the switch that turns the weekly trim off.
 - A single volume's snapshot panel has **Trim now**.
+- If you have a trim job of your own for the default group, Homestead's
+  doesn't run as well.
 
-Longhorn trims a volume only while it's attached. A stopped app's volume is
-trimmed the next time it runs.
+Earlier releases made a Longhorn recurring job, **homestead-weekly-trim**,
+for this. Homestead removes it once, if it is as Homestead left it. If you
+changed its schedule or groups, it is yours: it stays, and Homestead's own
+weekly trim is off; to use Homestead's instead, delete that job and turn the
+weekly trim on under Housekeeping. If you had deleted it, Homestead's weekly
+trim starts off; turn it on there. After the update, Homestead's first run is
+the next Saturday's.
 
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster

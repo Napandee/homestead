@@ -2545,6 +2545,22 @@ ssh_pwauth: true
         { key: "disk:harvester-node2:disk-1", kind: "disk", label: "harvester-node2 · /var/lib/harvester/defaultdisk", node: "harvester-node2", used: 610 * GB, capacity: 930 * GB, pct: 65.6, days: 30, days_left: 44.8, per_day: 7.1 * GB, why: "", full_on: day(45) },
         { key: "pool", kind: "pool", label: "Longhorn storage, all hosts", used: 1400 * GB, capacity: 2790 * GB, pct: 50.2, days: 30, days_left: null, per_day: 0.2 * GB, why: "not growing", full_on: "" }] };
     },
+    // Homestead's weekly trim (views-protect.js, #591): last Saturday's run, one detached volume skipped.
+    "/api/weekly-trim": () => {
+      // Last Saturday 04:00 UTC, as homestead_weekly_trim.last_slot.
+      const now = Date.now() / 1000, today = new Date();
+      let slot = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (today.getUTCDay() + 1) % 7, 4) / 1000;
+      if (slot > now) slot -= 7 * 86400;
+      return { enabled: demoState.weeklyTrimOn !== false, next: new Date((slot + 7 * 86400) * 1000).toISOString(), running: false, theirs: "",
+        last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", "pvc-demo-frigate"], unconfirmed: [], failed: [],
+          skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
+    },
+    "/api/weekly-trim/settings": (url, init) => {
+      const on = !!JSON.parse(init?.body || "{}").enabled;
+      demoState.weeklyTrimOn = on;
+      return { ok: true, enabled: on, detail: on ? "Attached volumes are trimmed every Saturday at 04:00 UTC" : "The weekly trim is off; Run now still trims every attached volume" };
+    },
+    "/api/weekly-trim/run": () => ({ ok: true, operation: { id: "demo-weekly-trim", kind: "weekly-trim", status: "queued" } }),
     // Restore tests (views-protect.js): one passed, one failed, one never tested.
     "/api/restore-tests": () => {
       const now = Date.now() / 1000;
