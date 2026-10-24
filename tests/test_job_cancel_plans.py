@@ -45,6 +45,9 @@ def reference_plan(item):
     if item.get("kind") == "disk-allocation":
         plan.update(can=False, why_not="Storage growth cannot be interrupted safely. Let the helper finish, then recheck its saved outcome.")
         return plan
+    if item.get("kind") == "longhorn-runtime":
+        plan.update(can=False, why_not='Runtime maintenance keeps a boot gate and retained source. Recheck its saved state; do not discard it.')
+        return plan
     if entry:
         plan.update(entry[0](item) or {})
     plan["mode"] = plan["mode"] if plan["mode"] in OPS.MODES else "stop"
@@ -54,7 +57,7 @@ def reference_plan(item):
     return plan
 
 
-BLOCKED = ["self-data-handoff", "reclass", "longhorn-v2-prepare", "snapshot-delete", "disk-allocation"]
+BLOCKED = ["self-data-handoff", "reclass", "longhorn-v2-prepare", "snapshot-delete", "disk-allocation", "longhorn-runtime"]
 # Every blocked kind, a kind cancellable while its CDI receipt is held, kinds
 # with and without a canceller of their own, and one no registry knows.
 KIND_NAMES = BLOCKED + ["vm-disk-import", "workload-copy", "vm-power", "no-such-kind"]

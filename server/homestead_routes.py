@@ -87,6 +87,7 @@ MODULES = (
     "homestead_diagnostics",
     "homestead_disk_v2",
     "homestead_disk_allocation",
+    "homestead_longhorn_runtime",
     "homestead_disks",
     "homestead_files",
     "homestead_firewall",

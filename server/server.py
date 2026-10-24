@@ -646,6 +646,7 @@ import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
 import homestead_disk_v2 as DISK_V2
 import homestead_disk_allocation as DISK_ALLOCATION
+import homestead_longhorn_runtime as LH_RUNTIME
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
@@ -760,7 +761,6 @@ PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
 SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME,
                   follow_fleet=lambda: _follow_fleet_address())
 
-
 BASELINE.vip_setup = installer_vip
 OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
@@ -772,16 +772,14 @@ DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 HOST_BONDS.bind(HOSTRUN, kget, ksend, PLATFORM.detect)
 
-
 UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
 # Each module registers its own kinds of job (#622).
 for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS,
-                VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISK_ALLOCATION, DISKS, HELM, ADDONS):
+                VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISK_ALLOCATION, LH_RUNTIME, DISKS, HELM, ADDONS):
     _module.register(OPS)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
                   LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
                   lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
-
 
 AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
                 lambda volume, name, annotations: LH.create_snapshot(volume, name, annotations),
@@ -804,6 +802,8 @@ DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
 DISK_V2.protect_mutations(DISKS)
 DISK_ALLOCATION.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
 DISK_ALLOCATION.protect_mutations(DISKS)
+LH_RUNTIME.bind(OPS)
+LH_RUNTIME.protect_mutations(DISKS)
 
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: STORAGE_CLASSES.cleanup_restore_classes())
