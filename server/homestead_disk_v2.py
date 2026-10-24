@@ -134,6 +134,22 @@ def _rw(inv, volume):
             and host_ready(r) and r.get('status', {}).get('currentState') == 'running' and modes.get(r['metadata']['name']) == 'RW']
 
 
+def foreign_contents_message():
+    # Names are untrusted filesystem data: show a short, plain-text list only.
+    # This explains the refusal; it never makes additional entries erasable.
+    return r'''
+if [ -n "$OTHER" ]; then
+  NAMES=$(printf '%s\n' "$OTHER" | sed 's|.*/||' | LC_ALL=C tr -cd -- '-A-Za-z0-9._\n' | awk 'NR<=5 {printf "%s%s", (NR>1 ? ", " : ""), substr($0,1,40)} END {if(NR>5) printf ", ..."}')
+  for name in engine-binaries instance-manager unix-domain-socket metadata; do
+    if [ -e "$P/$name" ] || [ -L "$P/$name" ]; then
+      fail "Longhorn runtime storage shares this filesystem ($NAMES). Conversion erases the whole filesystem, not just replica files. Relocating runtime storage requires a separate host maintenance plan before conversion."
+    fi
+  done
+  fail "Other files on this filesystem need to be moved first ($NAMES). Conversion erases the whole filesystem."
+fi
+'''
+
+
 def inspect_script(path):
     return r'''set -eu
 P=__PATH__
@@ -171,12 +187,12 @@ done
 echo "CONFIG $(tr -d '\n' < "$P/longhorn-disk.cfg")"
 # A dedicated Longhorn filesystem must not also hold unrelated user files.
 OTHER=$(find "$P" -mindepth 1 -maxdepth 1 ! -name replicas ! -name backing-images ! -name backing-images-disk ! -name longhorn-disk.cfg ! -name lost+found -print) || fail 'Filesystem contents cannot be inspected'
-[ -z "$OTHER" ] || fail 'Other files on this filesystem need to be moved first'
+__FOREIGN_CONTENTS__
 [ -f /etc/fstab ] && [ ! -L /etc/fstab ] || fail 'The host fstab is not a regular file'
 awk -v p="$P" '$0 !~ /^[[:space:]]*#/ && $2==p && $4 ~ /x-systemd.automount/ {exit 1}' /etc/fstab || fail 'Disable the automatic mount before preparing this disk'
 for c in wipefs flock findmnt blkid blockdev sha256sum; do command -v "$c" >/dev/null || fail "Host tool $c is missing"; done
 echo END
-'''.replace('__PATH__', shlex.quote(path)).replace('__REGION__', REGION.inspection())
+'''.replace('__PATH__', shlex.quote(path)).replace('__REGION__', REGION.inspection()).replace('__FOREIGN_CONTENTS__', foreign_contents_message())
 
 
 def _host_facts(path, node):

@@ -215,8 +215,15 @@ existing size; it does not repartition, shrink filesystems or remove LVM metadat
 The review identifies the exact region to erase. Subdevices use the AIO driver,
 which leaves the physical controller under Linux control. Root, boot, swap,
 shared mounts, nested storage, thin pools and complex LVM layouts are refused.
-At `/var/lib/longhorn`, unrelated files (including manager logs) must be moved
-separately; remaining replica, backing-image or lost+found files block erasing.
+The installer can mount its dedicated Longhorn LV at `/var/lib/longhorn`.
+Longhorn also keeps runtime files there, including engine binaries, sockets,
+metadata and logs. **That layout cannot be converted while runtime storage
+still shares the filesystem.** Homestead names the entries blocking review;
+it does not delete or relocate them. Moving runtime storage needs a separate
+host maintenance plan and may require stopping workloads and Longhorn on the
+host. Changing **Default Data Path** alone does not relocate those runtime
+paths ([Longhorn host paths](https://longhorn.io/docs/1.13.0/deploy/install/)).
+Remaining replica, backing-image, lost+found or other files also block erasing.
 See [Longhorn block disk drivers](https://longhorn.io/docs/1.13.0/nodes-and-volumes/nodes/multidisk/). Harvester manages its own disks. Resolve backing-image copies
 before starting, and attach affected volumes so their writable replicas can
 be checked.

@@ -440,7 +440,7 @@ esac''',
         self.env = dict(os.environ, FIXTURE=str(self.root), PATH=str(self.root / 'bin') + ':' + os.environ['PATH'])
 
     def rebase(self, script):
-        for source in ('/dev/disk/', '/mnt/data', '/proc/sys/kernel/random/boot_id', '/proc/[0-9]', '/proc/swaps', '/sys/class/block/', '/var/lib/homestead', '/etc/'):
+        for source in ('/dev/disk/', '/dev/mapper/', '/mnt/data', '/proc/sys/kernel/random/boot_id', '/proc/[0-9]', '/proc/swaps', '/sys/class/block/', '/var/lib/homestead', '/etc/'):
             script = script.replace(source, str(self.root) + source)
         # A regular fixture file stands in for a physical device; all actual
         # device inspection and mutation commands above are fixture executables.
