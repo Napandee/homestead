@@ -169,6 +169,7 @@ MODULES = (
     "homestead_storage",
     "homestead_storage_classes",
     "homestead_storage_server",
+    "homestead_timeline",
     "homestead_unraid_vms",
     "homestead_update_notes",
     "homestead_updates",
