@@ -283,7 +283,9 @@ def vm_edit_capacity(prepared):
     before, after = VMS._strategy(current), VMS._strategy(vm)
     needed = (vm["spec"]["template"] != current["spec"]["template"] or
               (vm.get("metadata", {}).get("labels") or {}) != (current.get("metadata", {}).get("labels") or {}) or
-              bool(prepared["resize"] or prepared["effects"] or prepared["to_create"]) or
+              # Growing a disk expands its claim, checked on its own; KubeVirt
+              # starts no new launcher for it, so it needs no room for one.
+              bool(prepared["effects"] or prepared["to_create"]) or
               (before != after and after not in ("Halted", "Manual")))
     observations, claims, expanded_spec = {}, {}, None
     def read(path):
