@@ -108,7 +108,14 @@ role says what each is for. Image clean-up, for one, has read-only `get` and
 `virtualmachineinstancereplicasets` (`kubevirt.io`): a VM pool or replica set
 scaled to zero still starts from its template's container disks, and only these
 lists name them. Without that read, Homestead keeps every image and says why on
-the Image cache page; it never cleans up an image it cannot account for.
+the Image cache page; it never cleans up an image it cannot account for. The
+Volumes page, for another, has read-only `get` and `list` on
+`replicationcontrollers`, so a volume that only a ReplicationController made on
+its own uses is not shown as orphaned. Until that permission is applied
+(Homestead brings its own permissions up to date, or apply `deploy/rbac.yaml`),
+a volume nothing else names shows as unknown, never as orphaned, and installing
+an app over a leftover volume of the same name is refused, because Homestead
+cannot check what uses it.
 
 ## Next
 

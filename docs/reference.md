@@ -1116,7 +1116,10 @@ which images are in use but cannot be read - a malformed rollback note or
 template, or a VM pool or replica-set list the role may not read - keeps every
 image, labelled *unreadable* with the record it names, until it is fixed. That
 read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`
-and `kubevirt.io` `virtualmachineinstancereplicasets`. Admins can remove an
+and `kubevirt.io` `virtualmachineinstancereplicasets`. The Volumes page's
+check of what uses a claim reads the same way: read-only `get` and `list` on
+`replicationcontrollers`, beside the Jobs, Pods and ReplicaSets Homestead
+already lists. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
 starting one short-lived cleanup pod per node; active, stopped, scheduled,
