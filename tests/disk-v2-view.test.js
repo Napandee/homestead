@@ -77,3 +77,27 @@ test('the system drive shows one system tag',()=>{
   const html=t.c.diskRowsHtml('node-1',[{device:'nvme0n1',mounts:['/'],system:true,role:'system',longhorn:[]}],false);
   assert.equal((html.match(/>system</g)||[]).length,1);
 });
+
+test('LV erase review identifies the whole filesystem and the protected siblings',async()=>{
+  const t=setup(),layout={path:'/dev/nvme0n1',size_bytes:2000,children:[{path:'/dev/nvme0n1p3',kind:'part',start_bytes:100,size_bytes:1900,children:[{path:'/dev/dm-0',kind:'lvm',size_bytes:500,mountpoint:'/',children:[]},{path:'/dev/dm-1',kind:'lvm',size_bytes:1000,mountpoint:'/var/lib/longhorn',children:[]}]}]};
+  Object.assign(t.plan,{region_kind:'lvm',layout,device:'/dev/dm-1',mountpoint:'/var/lib/longhorn'});
+  await t.c.diskV2Open('node-1','data');
+  assert.match(t.fields['#diskV2Review'].innerHTML,/Erase contents/);
+  assert.match(t.fields['#diskV2Review'].innerHTML,/do not represent physical extents/);
+  Object.assign(t.prep,{...t.plan});
+  await t.c.diskV2Watch('task-1');await t.c.diskV2EraseReview('task-1');
+  assert.match(t.html(),/Erase all contents of/);assert.match(t.html(),/Keep its size and boundary/);
+  assert.match(t.html(),/\/dev\/dm-0/);assert.match(t.html(),/>Keep</);
+});
+
+test('whole-disk PV renders its OS and selected logical volumes without invented partition extents',()=>{
+  const t=setup();
+  const html=t.c.diskV2Region({device:'/dev/dm-1',mountpoint:'/var/lib/longhorn',layout:{path:'/dev/sdb',kind:'disk',size_bytes:2000,children:[
+    {path:'/dev/dm-0',kind:'lvm',size_bytes:500,mountpoint:'/',children:[]},
+    {path:'/dev/dm-1',kind:'lvm',size_bytes:1000,mountpoint:'/var/lib/longhorn',children:[]}
+  ]}});
+  assert.match(html,/\/dev\/dm-0/);assert.match(html,/\/dev\/dm-1/);
+  assert.match(html,/share this disk/);assert.match(html,/do not represent physical extents/);
+  assert.match(html,/Contains selected volume/);assert.match(html,/Erase contents/);
+  assert.doesNotMatch(html,/pmap-seg free/);
+});

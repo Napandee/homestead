@@ -7,6 +7,16 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
+  const demoV2Region = () => window.__demoDiskV2Region ? {
+    mountpoint:'/var/lib/longhorn',stable_device:'/dev/disk/by-id/dm-uuid-LVM-example-storage-volume',
+    layout:{path:'/dev/nvme0n1',kind:'disk',size_bytes:2147483648000,children:[
+      {path:'/dev/nvme0n1p1',kind:'part',start_bytes:1048576,size_bytes:1073741824,mountpoint:'/boot/efi',children:[]},
+      {path:'/dev/nvme0n1p2',kind:'part',start_bytes:1074790400,size_bytes:2146408857600,children:[
+        {path:'/dev/dm-0',kind:'lvm',size_bytes:214748364800,mountpoint:'/',children:[]},
+        {path:'/dev/dm-1',kind:'lvm',size_bytes:1073741824000,mountpoint:'/var/lib/longhorn',children:[]}
+      ]}
+    ]}
+  } : {};
   const DEMO_TRIM_FAILURE = "Longhorn refused the trim: engine is not running";
 
   /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
@@ -2128,7 +2138,7 @@ ssh_pwauth: true
           missing: ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"] })) } },
     "/api/disks/v2/plan": (url,init) => {
       const body=JSON.parse(init?.body||'{}');
-      return {node:body.node||'node-1',disk:body.disk||'disk-data',device:'/dev/sdb',size_bytes:1073741824000,
+      return {...demoV2Region(),node:body.node||'node-1',disk:body.disk||'disk-data',device:window.__demoDiskV2Region?'/dev/dm-1':'/dev/sdb',region_kind:window.__demoDiskV2Region?'lvm':'disk',protected_parents:window.__demoDiskV2Region?['/dev/nvme0n1p3','/dev/nvme0n1']:[],size_bytes:1073741824000,
         request_id:'a'.repeat(24),capacity_token:'demo-evacuate',volumes:[{volume:'volume-media',size_bytes:107374182400,replicas:3,destination:'node-1 / spare-v1'}],
         blockers:window.__demoDiskV2State==='blocked'?['No other eligible V1 disk has room. Add a spare V1 disk on this host or another eligible V1 host.']:[]};
     },
@@ -2141,7 +2151,7 @@ ssh_pwauth: true
         remaining:phase==='evacuating'?1:0,needs_erase_review:phase==='awaiting-erase',cancellable:['evacuating','awaiting-erase'].includes(phase),dismissible:done,
         volumes:[{volume:'volume-media',size_bytes:107374182400,replicas:3,destination:'node-1 / spare-v1'}]};
     },
-    "/api/disks/v2/prepare-review": {operation_id:'demo-disk-v2',node:'node-1',device:'/dev/sdb',size_bytes:1073741824000,request_id:'b'.repeat(24),capacity_token:'demo-prepare'},
+    "/api/disks/v2/prepare-review": () => ({...demoV2Region(),region_kind:window.__demoDiskV2Region?'lvm':'disk',protected_parents:window.__demoDiskV2Region?['/dev/nvme0n1p3','/dev/nvme0n1']:[],operation_id:'demo-disk-v2',node:'node-1',device:window.__demoDiskV2Region?'/dev/dm-1':'/dev/sdb',size_bytes:1073741824000,request_id:'b'.repeat(24),capacity_token:'demo-prepare'}),
     "/api/disks/v2/prepare": () => {window.__demoDiskV2State='preparing';return responses['/api/disks/v2/status']();},
     "/api/longhorn/v2/plan": () => {
       const state=window.__demoV2State || 'missing', harvester=state==='harvester';
