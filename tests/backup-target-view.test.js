@@ -9,6 +9,7 @@ function setup() {
     esc: s => String(s).replaceAll("<", "&lt;").replaceAll('"', "&quot;") };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-protect.js", "utf8"), ctx);
   return ctx;
 }

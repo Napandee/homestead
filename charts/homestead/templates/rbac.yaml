@@ -56,6 +56,11 @@ rules:
   - apiGroups: [""]
     resources: [services, persistentvolumeclaims, configmaps, endpoints]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Read only: the Volumes page names a bare ReplicationController using a claim,
+  # so its volume does not look unused.
+  - apiGroups: [""]
+    resources: [replicationcontrollers]
+    verbs: [get, list]
   - apiGroups: ["apps"]
     resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]

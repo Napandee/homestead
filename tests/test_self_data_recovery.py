@@ -101,6 +101,25 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(any(e["step"] in ("switch", "start") for e in self.anchor().item()["ref"]["storage_writes"]))
         self.assertTrue(all("persistentvolume" not in path for method, path, _ in self.c.sent if method == "DELETE"))
 
+    def test_copy_job_status_update_does_not_stop_its_release_before_recovery(self):
+        # Row 92: the copy Job is Homestead's own helper; a status update by its
+        # controller between the read and the delete must not hold recovery.
+        self.confirm()
+        original = self.c.read
+        def read(path):
+            result = original(path)
+            if path == self.c.job_path and path in self.c.objects:
+                job = self.c.objects[path]
+                job["metadata"]["resourceVersion"] = str(int(job["metadata"]["resourceVersion"]) + 1)
+                job["status"]["ready"] = 0
+            return result
+        self.c.read = read
+        self.assertNotEqual("held", self.runner().tick()["status"])
+        deletes = [b for m, p, b in self.c.sent if m == "DELETE" and p == self.c.job_path]
+        self.assertEqual([{"uid": "homestead-data-copy-" + self.c.handle["operation"] + "-created"}],
+                         [b["preconditions"] for b in deletes])
+        self.assertIn("recover-release-copy", [e["step"] for e in self.anchor().item()["ref"]["storage_writes"]])
+
     def test_restored_source_stays_read_only_until_verified_then_cleanup_survives_restart(self):
         runner = self.restored()
         with tempfile.TemporaryDirectory() as directory:

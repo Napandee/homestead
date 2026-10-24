@@ -32,9 +32,12 @@ people start from the [App Store](App-Store) instead, which fills all of that in
 from the app's template, or [import](Importing) one from Unraid or a Compose
 file.
 
-Passwords, tokens and keys - a field the form masks, or a variable named like
-one (`*_PASSWORD`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*PEPPER*` and so on) -
-are kept in a Secret named `<app>-env`, not in the Deployment. The container
+Passwords, tokens and keys - a field the form masks, a variable named like
+one (`*_PASSWORD`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*PEPPER*` and so on), a
+value with a password or token in it (`postgres://user:pass@db`,
+`https://hooks.example.com/x?token=...`), or a value the Secret already holds
+under a variable you renamed - are kept in a Secret named `<app>-env`, not in
+the Deployment. The container
 reads them with `secretKeyRef`; **Edit** shows them as ordinary variables, typed
 blind, and saving puts changes back in the Secret. A container saved before
 this moves its values over the next time it is edited. The Secret is deleted
@@ -129,6 +132,72 @@ its data along - it stops the container, copies, and starts it again - and the
 old volume is kept until you remove it. A new volume is given the old
 location's owner and permissions, whether its data comes along or it starts
 empty, so an app that runs as its own user can still write to it.
+
+### Apps applied by Flux or Argo CD
+
+Flux and Argo CD put back what git says at their next sync, usually within ten
+minutes. So when one of them applies an app - Homestead reads the labels Flux
+and the annotation Argo CD leave on it, or your own **Updated elsewhere** mark -
+the **Edit** and **Move** reviews say so before you save:
+
+> Flux applies this app (Kustomization flux-system/apps). This change lasts
+> until Flux next applies it. To keep it, change it in git.
+
+You can still save: trying a change here and then committing it is fine.
+**Rename** asks for one more tick, "Flux will bring back the old name": a
+rename makes the app under its new name and removes the old one, and Flux then
+brings the old one back, so you would have two copies. Rename it in git
+instead. An AI agent renaming such an app has to say the same, with
+`confirm_managed: true`.
+
+#### Is Flux applying it?
+
+A note that says "change it in git" is only half the story if Flux has
+stopped applying what is in git - after a bad commit, an expired deploy key or
+a missing Secret. So Homestead also reads each Kustomization and HelmRelease,
+once a minute:
+
+- **An app's details** (open its row on Containers) show what applies it,
+  whether that is Ready, the revision it last applied (`main@a1b2c3d`, or a
+  chart and its version), when it last tried, and Flux's own message when it is
+  not Ready.
+- **System › Cluster** has one GitOps line, for example "2 Kustomizations,
+  6 HelmReleases: all ready", and lists any that are not Ready.
+- **An alert** (Degraded) is raised when one has not been Ready for 10 minutes,
+  and cleared when it is again. Flux's message is on the Cluster page, not in
+  the alert, since it can name repositories and Secrets. A suspended one is shown
+  as suspended and never alerts: someone paused it on purpose.
+
+This only reads; Homestead does not reconcile, suspend or change Flux objects.
+Argo CD's Applications are not read.
+
+#### Copy as YAML for git
+
+The edit review has **YAML for git**: the change as a patch, with only the
+fields it sets, under the app's kind, name and namespace. **Copy as YAML for
+git** puts it on the clipboard; paste it into a kustomize patch, or set the same
+fields in the app's manifest. Containers, environment variables and volumes are
+listed by name, so the patch merges into the ones there; one you removed is
+marked `$patch: delete`. Homestead's own bookkeeping - update history, the
+digests it last ran, restart stamps - is left out; settings you chose, such as
+the group or logo, stay in. Services and volumes are not in it.
+
+Secret values are moved out of the YAML, as well as Homestead can tell them:
+a variable it keeps in the app's own Secret (a masked field, a name that looks
+like a password or token, or one the Secret already holds, even under a new
+name) and any value with a password or token in it (`postgres://user:pass@db`,
+`https://hooks.example.com/x?token=...`) appear as a `secretKeyRef` to that
+Secret, with the `homestead.io/env-secret` annotation a save adds. It is a
+heuristic: check the YAML before committing it to a public repository.
+
+That Secret (`<app>-env`) exists only once Homestead has saved the app, and
+never in git. If Flux applies the app, create the Secret in git first - for
+example encrypted with SOPS - with the keys the review lists, or save the app
+here first. Otherwise the pod cannot start.
+
+On **Image updates**, an app Flux or Argo CD updates has the same button: the
+new `image:` line for each container, pinned to the new digest when only what
+the tag points at moved.
 
 ### Start and scale capacity checks
 
@@ -479,12 +548,15 @@ Monitoring says why, until another is chosen. None of this restarts the app.
   an automatic update watches the app itself and rolls the image back if it
   stays down, and a restart then would read as the update failing. A VM is
   rebooted cleanly, and only while it is monitored on a port you chose.
-- **Call a webhook**: an HTTP POST of JSON when it goes down, comes back, is
+- **Call a webhook**: an HTTP POST when it goes down, comes back, is
   restarted or runs out of tries, and when an automatic update of it finishes or
-  is rolled back. Besides its fields (`event`, `kind`, `namespace`, `name`,
-  `state`, `since`, `error`, `detail`, `at`) it carries a sentence as `text`,
-  `content` and `message`, which Slack, Discord and Home Assistant show as it is.
-  **Send a test** sends one now.
+  is rolled back. **Format** is Generic JSON (fields `event`, `kind`,
+  `namespace`, `name`, `state`, `since`, `error`, `detail`, `at`, and a
+  sentence as `text`, `content` and `message`, which Slack, Discord and Home
+  Assistant show as it is), **ntfy** or **Gotify**. Once saved, the address
+  shows only up to its host, the rest as `(hidden)`, and a LAN address needs
+  an admin's **Allow a LAN address**. **Send a test** (admins) sends one now. More in
+  [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#outage-webhooks).
 
 ## Logos
 

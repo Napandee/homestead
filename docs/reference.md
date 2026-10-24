@@ -1127,7 +1127,9 @@ read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`,
 optional groups are read at the version API discovery prefers; a group counts as
 not installed only when discovery says so. While a record is unreadable,
 automatic clean-up keeps each image's "unused since" date rather than starting
-it again. Admins can remove an
+it again. The Volumes page's check of what uses a claim reads the same way:
+read-only `get` and `list` on `replicationcontrollers`, beside the Jobs, Pods
+and ReplicaSets Homestead already lists. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
 starting one short-lived cleanup pod per node; active, stopped, scheduled,
