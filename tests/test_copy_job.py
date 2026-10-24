@@ -177,6 +177,32 @@ class CopyJobTests(unittest.TestCase):
                          "the release is credited to whoever cancelled, not to the job")
         self.assertIsNone(CH.REQUEST.user, "the loop thread is left serving no one")
 
+    def restart_mark(self, CH):
+        self.poll(); self.complete()
+        CH.REQUEST.user = None   # the jobs loop's thread serves no request
+        self.assertEqual("running", self.poll()["status"])
+        mark = json.loads(self.dep["metadata"]["annotations"][CH.AUTHOR])
+        meta = self.dep["metadata"]
+        self.assertIsNone(CH.REQUEST.user, "the loop thread is left serving no one")
+        return lambda who: CH._signed(b"copy-mark", meta["namespace"], meta["name"], mark["at"], who) == mark["by"]
+
+    def test_the_restart_is_credited_to_whoever_started_the_copy(self):
+        CH = self.guarded()
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+        CH.REQUEST.user = "ada"   # the request that started the copy
+        self.start()
+        self.assertTrue(self.restart_mark(CH)("ada"), "the restart is ada's, not the job's")
+
+    def test_a_copy_journalled_before_this_restarts_as_the_job(self):
+        CH = self.guarded()
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+        CH.REQUEST.user = "ada"
+        self.start()
+        with ops.transaction() as tx:   # an older Homestead recorded no starter
+            tx.items[0]["ref"].pop("started_by", None)
+            tx.save()
+        self.assertTrue(self.restart_mark(CH)(""), "no starter on record: credited to the job")
+
     def test_capacity_changed_during_copy_leaves_app_stopped_and_data_retained(self):
         self.start(); self.poll(); self.complete()
         self.admission.return_value = {"blocked": True}
