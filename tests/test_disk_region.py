@@ -1,5 +1,4 @@
 """Only the reviewed, dedicated filesystem region may become a V2 disk."""
-import copy
 import json
 import os
 import subprocess
