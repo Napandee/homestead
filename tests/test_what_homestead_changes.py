@@ -69,6 +69,25 @@ def install_kinds(root=ROOT):
     return found
 
 
+def install_names(root=ROOT):
+    """{name: [where]}: the literal top-level metadata.name of each object the
+    plain manifest and the Helm chart install. A templated name is left out."""
+    found = {}
+    for pattern in INSTALL_FILES[:2]:
+        for path in sorted(root.glob(pattern)):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for number, line in enumerate(lines, 1):
+                if line.rstrip() != "metadata:":
+                    continue
+                for below in lines[number:]:
+                    match = re.match(r"  name: ([A-Za-z0-9.-]+)\s*$", below)
+                    if match:
+                        found.setdefault(match.group(1), []).append(f"{path.relative_to(root)}:{number}")
+                    if not below.startswith("  ") or match:
+                        break
+    return found
+
+
 def code_kinds(root=ROOT):
     """{kind: [where]} from the object bodies server code builds."""
     found = {}
@@ -188,6 +207,15 @@ class WhatHomesteadChanges(unittest.TestCase):
         self.assertEqual(missing, {}, "Name these kinds on docs/wiki/What-Homestead-changes.md "
                          "(in backticks, with when Homestead makes them):\n" + "\n".join(
                              f"  {kind}: {', '.join(where[:3])}" for kind, where in sorted(missing.items())))
+
+    def test_every_object_the_install_makes_is_named_on_the_page(self):
+        found = install_names()
+        for name in ("homestead", "homestead-data", "homestead-console", "homestead-nodeprobe"):
+            self.assertIn(name, found, "the name scan found nothing it should")
+        page = PAGE.read_text(encoding="utf-8")
+        missing = {name: where for name, where in found.items() if f"`{name}`" not in page}
+        self.assertEqual(missing, {}, "Name these installed objects on the page, in backticks:\n" + "\n".join(
+            f"  {name}: {', '.join(where[:3])}" for name, where in sorted(missing.items())))
 
     def test_the_sidebar_and_install_pages_link_to_it(self):
         for name in LINKED_FROM:
