@@ -52,7 +52,7 @@ try {
   assert.equal(saved.update, true); assert.equal(saved.uid, "svc-uid");
   assert.equal(saved.ports[0].name, "web", "VIP-only updates preserve named Ingress port references");
   assert.equal(saved.ports[0].target_port, "5001"); assert.equal(saved.vip, "192.0.2.108");
-  await page.evaluate(async () => { closeModal(); await vmNew(); stepGo("v_steps", 2); });
+  await page.evaluate(async () => { closeModal(); await vmNew(); stepGo("v_steps", 4); });
   await page.locator("#v_service").selectOption("manual");
   await page.locator("#vsvc_lb_pick").selectOption("192.0.2.109");
   assert.equal(await page.locator("#v_service_pick").isVisible(), true);
