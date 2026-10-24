@@ -7,6 +7,7 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
+  const DEMO_TRIM_FAILURE = "Longhorn refused the trim: engine is not running";
 
   /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
      two copies; window.__demoDataCopies = true shows the one-copy cluster that
@@ -2552,7 +2553,9 @@ ssh_pwauth: true
       let slot = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (today.getUTCDay() + 1) % 7, 4) / 1000;
       if (slot > now) slot -= 7 * 86400;
       return { enabled: demoState.weeklyTrimOn !== false, next: new Date((slot + 7 * 86400) * 1000).toISOString(), running: false, theirs: "",
-        last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", "pvc-demo-frigate"], unconfirmed: [], failed: [],
+        last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
+          // The incidents and critical scenarios: one attached volume failed to trim (#749).
+          failed: scenario === "healthy" ? [] : [{ volume: "pvc-demo-frigate", pvc: "lab/frigate-config", message: DEMO_TRIM_FAILURE }],
           skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
     },
     "/api/weekly-trim/settings": (url, init) => {
@@ -3169,7 +3172,9 @@ ssh_pwauth: true
   } else {
     const overview = responses["/api/overview"];
     Object.assign(overview, { health: "degraded", health_state: "degraded", health_summary: "A workload and storage replicas need attention",
-      health_issues: [...demoSetup.steps.health.issues, { kind: "Volume", name: "lab/arr-dashboard-data", severity: "degraded", reason: storage.reasons[0].reason }] });
+      health_issues: [...demoSetup.steps.health.issues, { kind: "Volume", name: "lab/arr-dashboard-data", severity: "degraded", reason: storage.reasons[0].reason },
+        { kind: "Trim", name: "lab/frigate-config", severity: "degraded",
+          reason: `The weekly trim of lab/frigate-config failed: ${DEMO_TRIM_FAILURE}. It is tried again next Saturday; Trim now on its snapshot panel tries it now.` }] });
     if (scenario === "critical") {
       nodes[2].status = "NotReady";
       // A real cluster loses a node's live readings with it (metrics-server and

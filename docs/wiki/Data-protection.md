@@ -146,6 +146,9 @@ job tray.
   too.
 - The job ends with what it did: "Trimmed 12 volumes, skipped 4 (3 detached,
   1 VM disk)", then which volume failed and Longhorn's answer, if any.
+- If an attached volume fails to trim, the Dashboard says so, naming the
+  volume and Longhorn's answer, until the next run trims it. Skipped volumes
+  never raise anything.
 - **Data protection › Housekeeping** shows the last run, **Run now** (trims
   every attached volume now) and the switch that turns the weekly trim off.
 - A single volume's snapshot panel has **Trim now**.

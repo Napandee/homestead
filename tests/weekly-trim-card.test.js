@@ -56,3 +56,38 @@ test("off, never run, running, and a trim job of the user's each say so", () => 
   assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "my-trim" }),
     /my-trim.*already trims the default group/);
 });
+
+// #749: a weekly trim that failed on one volume, in the demo's incidents scenario only.
+async function scenario(name) {
+  const ctx = { URL, URLSearchParams, Response, Date, console, location: { search: `?demo=1&demo-scenario=${name}`, origin: "https://demo.example.com" },
+    HOMESTEAD_DEMO: false, document: { body: null, addEventListener() {} },
+    fetch: async () => { throw new Error("demo must never reach a real cluster"); } };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/demo.js", "utf8"), ctx);
+  return async path => (await ctx.fetch(path)).json();
+}
+
+test("the incidents demo shows a weekly trim that failed on one volume, the healthy demo none (its alert list stays as notification-alerts.mjs expects)", async () => {
+  const api = await scenario("incidents");
+  const trims = (await api("/api/overview")).health_issues.filter(i => i.kind === "Trim");
+  assert.deepEqual(trims.map(i => [i.name, i.severity]), [["lab/frigate-config", "degraded"]]);
+  assert.match(trims[0].reason, /engine is not running/);
+  const last = (await api("/api/weekly-trim")).last;
+  assert.deepEqual(last.failed.map(f => f.pvc), ["lab/frigate-config"]);
+  const healthy = await scenario("");
+  assert.deepEqual((await healthy("/api/weekly-trim")).last.failed, []);
+});
+
+test("the Dashboard names a failed trim and leads to Data protection", () => {
+  global.window = {}; global.STATE = { platform: {} };
+  global.document = { querySelectorAll: () => [], querySelector: () => null };
+  global.UI = new Proxy({}, { get: () => () => "" });
+  global.esc = String; global.jsArg = JSON.stringify; global.jsq = JSON.stringify; global.fmtAge = String; global.fmtDay = String;
+  const file = require.resolve("../web/js/insights.js");
+  delete require.cache[file];
+  const rows = require(file).advice({ overview: { health_issues: [{ kind: "Trim", name: "frigate-config", severity: "degraded", reason: "x" }] } });
+  const row = rows.find(r => r.id === "condition:Trim:frigate-config");
+  assert.equal(row.title, "Weekly trim failed: frigate-config");
+  assert.equal(row.route, "protect");
+});

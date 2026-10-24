@@ -53,6 +53,7 @@ import homestead_schedules as SCHEDULES
 import homestead_self as SELF
 import homestead_storage as STORAGE
 import homestead_updates as UPDATES
+import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
 import homestead_vips as VIPS
@@ -426,10 +427,11 @@ def schedule_act(item, action):
     return f"starting {name}"
 
 
-def protection_issues(jobs, target):
+def protection_issues(jobs, target, trim=None):
     """Protection that has quietly stopped working: a snapshot or backup job
     whose last run failed, or backup jobs with nowhere they can write to.
-    Nothing else says so until the copy is needed."""
+    Nothing else says so until the copy is needed. trim is the weekly trim's
+    saved state: an attached volume it failed to trim is one too (#749)."""
     issues = []
     guarding = [j for j in jobs or [] if str(j.get("task", "")).split("-")[0] in ("snapshot", "backup")
                 and j.get("task") not in ("snapshot-cleanup", "snapshot-delete") and j.get("covers")]
@@ -446,7 +448,7 @@ def protection_issues(jobs, target):
             issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
                            "reason": f"{target.get('url', 'the backup target')} cannot be reached"
                                      + (f": {target['reason']}" if target.get("reason") else "")})
-    return issues
+    return issues + WEEKLY_TRIM.issues(trim or {})
 
 
 def _history_loop():
@@ -650,7 +652,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     flt = [v for v in vols if v["robustness"] == "faulted"]
     try:
         protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
-                                       cached("lhtarget-health", 60, LH.backup_target))
+                                       cached("lhtarget-health", 60, LH.backup_target),
+                                       cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
     health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
