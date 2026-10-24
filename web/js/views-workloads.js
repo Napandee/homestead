@@ -1501,10 +1501,14 @@ window.wlFailover = async () => {
     // Without Longhorn there is no policy to show; with it, an unread one is said (#620).
     STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(e => ({ unread: e.message }))]);
   const policy = lh?.unread ? "" : lh?.node_down || "";
+  // Not knowing whether Longhorn is installed (/api/platform unread), a failed
+  // read may only mean it is not there.
+  const unread = lh?.unread && (STATE.platform?.longhorn == null
+    ? `${String(lh.unread).replace(/\.$/, "")}. Longhorn may not be installed on this cluster.` : lh.unread);
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
-    ${lh?.unread ? UI.callout("warn", "Could not read Longhorn's node-failure policy", esc(lh.unread)) : lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
+    ${lh?.unread ? UI.callout("warn", "Could not read Longhorn's node-failure policy", esc(unread)) : lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
       ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another host takes its volume with it.`
       : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
     ${rows.unread ? `${UI.callout("warn", "Could not read the containers", esc(rows.unread))}
@@ -1719,7 +1723,7 @@ window.checkImageUpdates = async () => {
           bar.insertAdjacentHTML("beforeend", ` <span class="scan-unread">· could not read the progress just now: ${esc(at.unread)}</span>`);
         continue;
       }
-      if (!at || !at.total) continue;
+      if (!at.total) continue;
       const done = Math.min(at.done, at.total);
       if (button && at.running) button.textContent = `Checking ${done}/${at.total}…`;
       const bar = $("#scanprogress");

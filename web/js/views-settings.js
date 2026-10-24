@@ -1060,12 +1060,27 @@ window.hardwareRescan = async button => {
 const HEALTH_TONE = { ok: "ok", standby: "neutral", starting: "neutral", late: "warn", failing: "bad" };
 const agoText = t => !t ? "not yet" : Date.now() / 1000 - t < 60 ? "just now" : fmtAgo(Math.round(Date.now() / 1000 - t));
 
+/* The card is read again every 15 seconds while Settings shows its section,
+   a failed read included: the next one may answer. On another section it
+   only waits, since coming back does not load the section again; leaving
+   Settings stops it, and Settings starts it again when it paints. */
+function selfHealthLater() {
+  clearTimeout(window.__selfHealthTimer);
+  window.__selfHealthTimer = setTimeout(() => {
+    if (STATE.view !== "settings") return;
+    if (settingsTab() === settingsSection("about")) selfHealthPaint(); else selfHealthLater();
+  }, 15000);
+}
+
 async function selfHealthPaint() {
   const host = $("#selfHealthCard");
   if (!host) return;
   let h;
   try { h = await api("/api/self/health"); }
-  catch (e) { host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message)); return; }
+  catch (e) {
+    host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message));
+    return selfHealthLater();
+  }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   STATE.data.sambaInstalled = !!samba.installed;
@@ -1111,8 +1126,7 @@ async function selfHealthPaint() {
           : "When on, Prometheus or an uptime checker reads Homestead's own health from /metrics with an API key.",
         admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}
     </div>`;
-  clearTimeout(window.__selfHealthTimer);
-  window.__selfHealthTimer = setTimeout(() => { if (STATE.view === "settings" && settingsTab() === "about") selfHealthPaint(); }, 15000);
+  selfHealthLater();
 }
 window.selfHealthPaint = selfHealthPaint;
 

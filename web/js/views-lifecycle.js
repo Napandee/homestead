@@ -2272,7 +2272,7 @@ window.imStepGuard = step => {
 /* Existing volumes live in a namespace: choosing another one offers its own. */
 window.imNamespace = async ns => {
   const storage = await api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(e => ({ unread: e.message }));
-  if (!storage || $("#im_ns")?.value !== ns) return;
+  if ($("#im_ns")?.value !== ns) return;
   // Unread volumes here are not the last namespace's: none is offered, and it says so (#620).
   if (storage.unread) {
     STATE.data.importStorage = { ...(STATE.data.importStorage || {}), pvcs: [] };
