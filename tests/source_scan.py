@@ -89,12 +89,14 @@ def _source_text(source):
     return source if isinstance(source, Code) else text(source)
 
 
-def functions(source):
+def every_function(source):
     """Every def and async def, nested ones too, by qualified name
-    ("H.do_GET", "outer.inner"), in source order. Each comes with its
-    node and its text: from its first decorator (or its def line) through
-    its last statement. Class attributes, and comments between or after
-    functions, belong to none. Two defs with one name: the last one wins."""
+    ("H.do_GET", "outer.inner"), in source order: for each name, a list of
+    its defs in source order, so a second def of a name (a property's
+    setter, if/else alternatives) does not hide the first. Each comes with
+    its node and its text: from its first decorator (or its def line)
+    through its last statement. Class attributes, and comments between or
+    after functions, belong to none."""
     lines = _source_text(source).splitlines()
     found = {}
 
@@ -104,13 +106,21 @@ def functions(source):
                 name = prefix + child.name
                 if not isinstance(child, ast.ClassDef):
                     first = min([child.lineno, *(d.lineno for d in child.decorator_list)])
-                    found[name] = Function(name, child, "\n".join(lines[first - 1:child.end_lineno]))
+                    found.setdefault(name, []).append(
+                        Function(name, child, "\n".join(lines[first - 1:child.end_lineno])))
                 visit(child, name + ".")
             else:
                 visit(child, prefix)
 
     visit(tree(source), "")
     return found
+
+
+def functions(source):
+    """every_function(), one def per name: two defs with one name, the last
+    one wins. A guard that reads a function's text and could meet a name
+    defined twice reads every_function() instead."""
+    return {name: defs[-1] for name, defs in every_function(source).items()}
 
 
 def dotted(node):

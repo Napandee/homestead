@@ -50,6 +50,25 @@ class LeaderTests(unittest.TestCase):
         with mock.patch.object(LEADER, "IDENTITY", name):
             return LEADER.attempt(at)
 
+    def test_becoming_leader_tells_who_asked_once_per_term(self):
+        called = []
+        self.addCleanup(LEADER._listeners.__setitem__, slice(None), list(LEADER._listeners))
+        LEADER.when_leading(lambda: called.append(1))
+        with mock.patch.object(LEADER.time, "monotonic", return_value=100.0):
+            LEADER._set(True, LEADER.IDENTITY)
+            LEADER._set(True, LEADER.IDENTITY)  # a renew is not a new term
+        self.assertEqual([1], called)
+        LEADER._set(False, "homestead-b")
+        with mock.patch.object(LEADER.time, "monotonic", return_value=200.0):
+            LEADER._set(True, LEADER.IDENTITY)
+        self.assertEqual([1, 1], called)
+
+    def test_a_listener_that_fails_does_not_stop_the_lease(self):
+        self.addCleanup(LEADER._listeners.__setitem__, slice(None), list(LEADER._listeners))
+        LEADER.when_leading(mock.Mock(side_effect=RuntimeError("boom")))
+        with mock.patch("builtins.print"):
+            self.assertTrue(LEADER._set(True, LEADER.IDENTITY))
+
     def test_a_leader_that_cannot_renew_stops_leading_by_its_own_clock(self):
         # #621: the flag stayed True until a renew raised, and a renew can hang
         # for as long as the API write timeout - past the lease, while another

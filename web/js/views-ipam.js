@@ -76,18 +76,19 @@ window.viewIpam = viewIpam;
 
 function ipamSeen(row) {
   const bits = [];
-  if (row.scan && row.scan.up) bits.push(`<span class="pill slim ok" data-tip="Answered the last scan${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}">up</span>`);
-  if (row.unifi?.reserved) bits.push('<span class="pill slim info" data-tip="UniFi holds this address for this device">DHCP reservation</span>');
-  if (row.unifi) bits.push(`<span class="pill slim ${row.unifi.online === false ? "neutral" : "info"}" data-tip="${esc(row.unifi.type === "device" ? `UniFi device${row.unifi.model ? ` · ${row.unifi.model}` : ""}` : row.unifi.online === false ? "UniFi reservation; the client is offline" : `UniFi ${row.unifi.type || "client"}`)}">UniFi</span>`);
+  if (row.scan && row.scan.up) bits.push(UI.chip("up", "ok", { size: "slim", tip: `Answered the last scan${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}` }));
+  if (row.unifi?.reserved) bits.push(UI.chip("DHCP reservation", "info", { size: "slim", tip: "UniFi holds this address for this device" }));
+  if (row.unifi) bits.push(UI.chip("UniFi", row.unifi.online === false ? "neutral" : "info", { size: "slim",
+    tip: row.unifi.type === "device" ? `UniFi device${row.unifi.model ? ` · ${row.unifi.model}` : ""}` : row.unifi.online === false ? "UniFi reservation; the client is offline" : `UniFi ${row.unifi.type || "client"}` }));
   return bits.join(" ") || '<span class="dim">—</span>';
 }
 
 function ipamKind(row) {
-  if (row.cluster === "node") return '<span class="tag info">cluster host</span>';
-  if (row.cluster === "vip") return `<span class="tag info" data-tip="${esc((row.services || []).join(", "))}">cluster VIP</span>`;
-  if (row.gateway) return '<span class="tag">gateway</span>';
-  if (!row.kind) return row.pool ? `<span class="tag" data-tip="Inside Harvester's ${esc(row.pool)} VIP pool">VIP pool</span>` : '<span class="dim">undocumented</span>';
-  return `<span class="tag ${row.kind === "static" ? "ok" : row.kind === "reservation" ? "info" : ""}">${esc(IPAM_KIND_LABELS[row.kind] || row.kind)}</span>`;
+  if (row.cluster === "node") return UI.chip("cluster host", "info");
+  if (row.cluster === "vip") return UI.chip("cluster VIP", "info", { tip: (row.services || []).join(", ") });
+  if (row.gateway) return UI.chip("gateway", "neutral");
+  if (!row.kind) return row.pool ? UI.chip("VIP pool", "neutral", { tip: `Inside Harvester's ${row.pool} VIP pool` }) : '<span class="dim">undocumented</span>';
+  return UI.chip(IPAM_KIND_LABELS[row.kind] || row.kind, row.kind === "static" ? "ok" : row.kind === "reservation" ? "info" : "neutral");
 }
 
 /* Without UniFi connected, the page is plain IPAM: rows carry nothing of it,
@@ -189,7 +190,7 @@ function ipamRow(row) {
     : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
   const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
   const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" role="img" tabindex="0" aria-label="${esc(`${f.level === "warn" ? "Warning" : "Note"}: ${f.text}`)}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
-    + (row.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") + (note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : "");
+    + (row.tags || []).map(t => UI.chip(t, "neutral")).join("") + (note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : "");
   // Cells with nothing in them are left empty, so on a phone - where each
   // row is a short card - they take no room.
   return `<tr class="ipam-row ${row.flags.some(f => f.level === "warn") ? "ipam-warn" : ""}">
@@ -410,8 +411,8 @@ function ipamUnifiCard(now = Date.now() / 1000) {
   const u = ((STATE.data.ipam || {}).unifi) || {};
   const age = u.last_sync ? now - u.last_sync : null;
   const stale = u.configured && (age === null || age > UNIFI_STALE);
-  const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">sync failing</span>'
-    : stale ? '<span class="pill warn">out of date</span>' : '<span class="pill ok">connected</span>';
+  const state = !u.configured ? UI.chip("not connected", "neutral") : u.last_error ? UI.chip("sync failing", "bad")
+    : stale ? UI.chip("out of date", "warn") : UI.chip("connected", "ok");
   const when = t => fmtAt(t, { weekday: true });
   const facts = u.configured ? UI.facts([
     ["Controller", `<span class="mono">${esc(u.url)}</span>${u.site_name ? ` <span class="dim xs">· ${esc(u.site_name)}</span>` : ""}`],

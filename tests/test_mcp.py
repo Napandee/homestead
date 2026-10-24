@@ -483,6 +483,7 @@ class CatalogueTests(unittest.TestCase):
         "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
         "/api/push/test": "a browser's push subscription", "/api/alerts/acknowledge": "the app's own bell",
         "/api/alerts/delivered": "the app's own bell",
+        "/api/weekly-trim/run": "trim_volume trims one volume; trimming them all is the weekly job's",
         **{f"/api/auth/{path}": "a person's own session" for path in (
             "setup", "login", "logout", "password", "signout-everywhere", "preferences/dashboard")},
         "/api/fleet/switch": "a browser's choice of cluster",

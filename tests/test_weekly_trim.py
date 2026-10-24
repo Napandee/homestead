@@ -1,4 +1,5 @@
-"""A weekly trim for every Longhorn volume, by default, and a trim on demand."""
+"""A trim of one Longhorn volume on demand (Trim now). The weekly trim is
+homestead_weekly_trim's, tested in test_weekly_trim_run."""
 import copy
 import sys
 import unittest
@@ -48,11 +49,6 @@ class Longhorn:
         return body
 
 
-def job(name, task, groups):
-    return {"metadata": {"name": name, "resourceVersion": "1"},
-            "spec": {"name": name, "task": task, "cron": "0 1 * * *", "groups": groups}}
-
-
 def volume(name, groups=(), state="attached"):
     return {"metadata": {"name": name, "labels": {LH.GROUP_LABEL + g: "enabled" for g in groups}},
             "spec": {"size": str(10 * 1024 ** 3)}, "status": {"state": state}}
@@ -62,40 +58,6 @@ class WeeklyTrimTests(unittest.TestCase):
     def bind(self, cluster):
         LH.bind(cluster.get, cluster.send, {}, "longhorn")
         return cluster
-
-    def test_every_volume_gets_a_weekly_trim_its_groups_included(self):
-        lh = self.bind(Longhorn([job("nightly", "snapshot", ["media"])], [volume("pvc-a", ["media"]), volume("pvc-b")]))
-        made, change, written = LH_JOBS.ensure_weekly_trim(False)
-        self.assertTrue(made)
-        self.assertEqual(["default", "media"], written)
-        spec = lh.jobs[LH_JOBS.TRIM_JOB]["spec"]
-        self.assertEqual(("filesystem-trim", "0 4 * * 6", 0), (spec["task"], spec["cron"], spec["retain"]))
-        self.assertEqual(["default", "media"], sorted(spec["groups"]))
-        self.assertEqual((False, "", ["default", "media"]), LH_JOBS.ensure_weekly_trim(True, written), "already right: nothing to do")
-        # A new group appears: the trim follows it, and a schedule someone changed stays.
-        lh.jobs[LH_JOBS.TRIM_JOB]["spec"]["cron"] = "0 2 * * 0"
-        lh.volumes.append(volume("pvc-c", ["cameras"]))
-        made, change, written = LH_JOBS.ensure_weekly_trim(True, written)
-        self.assertEqual((False, "weekly trim now covers cameras, default, media"), (made, change))
-        self.assertEqual("0 2 * * 0", lh.jobs[LH_JOBS.TRIM_JOB]["spec"]["cron"])
-        # Someone takes a group out: theirs from now on, not put back.
-        lh.jobs[LH_JOBS.TRIM_JOB]["spec"]["groups"] = ["default"]
-        lh.volumes.append(volume("pvc-d", ["databases"]))
-        self.assertEqual((False, "", None), LH_JOBS.ensure_weekly_trim(True, written))
-        self.assertEqual(["default"], lh.jobs[LH_JOBS.TRIM_JOB]["spec"]["groups"])
-
-    def test_one_someone_deleted_is_not_made_again_nor_a_second_trim(self):
-        self.bind(Longhorn([], [volume("pvc-a")]))
-        self.assertEqual((False, "", None), LH_JOBS.ensure_weekly_trim(True))
-        lh = self.bind(Longhorn([job("weekly-trim", "filesystem-trim", ["default"])], [volume("pvc-a")]))
-        self.assertEqual((False, "", None), LH_JOBS.ensure_weekly_trim(False), "a trim of their own already covers everything")
-        self.assertNotIn(LH_JOBS.TRIM_JOB, lh.jobs)
-
-    def test_nothing_is_done_when_the_jobs_cannot_be_read(self):
-        lh = Longhorn()
-        LH.bind(lambda path: (_ for _ in ()).throw(OSError("api down")), lh.send, {}, "longhorn")
-        self.assertIsNone(LH_JOBS.ensure_weekly_trim(False))
-        self.assertEqual([], lh.sent)
 
     def test_a_volume_is_trimmed_now_only_while_attached(self):
         self.bind(Longhorn([], [volume("pvc-11111111-2222-4333-8444-555555555555"),

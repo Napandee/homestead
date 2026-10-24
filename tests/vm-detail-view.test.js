@@ -78,3 +78,12 @@ test("a VM's Network tab leads with Configure VIP / ports as its own action, not
   assert.match(pane[1],/class="ui-lead/,"the explanation is a lead");
   assert.ok(pane[1].indexOf("Configure VIP / ports")<pane[1].indexOf("<table"),"the action comes before the table");
 });
+/* #543: a chip with a tip is a Tab stop, so a VM row's status chip takes one only when there is a problem to say. */
+test("a VM row's status chip is a Tab stop only when it has a problem to explain",()=>{
+  const t=open(detail);
+  Object.assign(t.ctx,{clusterAttr:()=>"",clusterTag:()=>"",answerTag:()=>"",scheduleTag:()=>"",vmAvatar:()=>"",vmAddress:()=>"",vmActions:()=>""});
+  const row=v=>vm.runInContext("vmTable",t.ctx)([{ns:"lab",name:"guest",node:"node-a",ips:[],...v}]);
+  const chip=html=>(html.match(/<span class="ui-chip [^"]*"[^>]*>(Running|Stopped)<\/span>/)||[""])[0];
+  assert.match(chip(row({status:"Running"})),/^<span class="ui-chip ok">/,"a healthy VM's chip is plain");
+  assert.match(chip(row({status:"Stopped",problem:"the disk is missing"})),/tabindex="0"[^>]*data-tip="the disk is missing"/);
+});
