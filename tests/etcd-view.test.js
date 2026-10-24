@@ -5,8 +5,10 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 function load(files) {
   const ctx = { console, Map, Set, document: { addEventListener() {} }, STATE: { data: {} }, $: () => null, $$: () => [],
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
-    tip: t => t, UI: { button: (label, run) => `<button onclick="${run}">${label}</button>`, chip: l => l } };
-  ctx.window = ctx; vm.createContext(ctx);
+    tip: t => t };
+  ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
+  // The real chip; a plain button, so the onclick reads as written.
+  ctx.UI.button = (label, run) => `<button onclick="${run}">${label}</button>`;
   for (const f of files) vm.runInContext(fs.readFileSync(f, "utf8"), ctx);
   return ctx;
 }
@@ -43,7 +45,7 @@ test("Harvester has no join guide, so no tiebreaker is offered there", () => {
 test("the tiebreaker badge is a neutral tag", () => {
   const ctx = load(["web/js/views-cluster.js"]);
   const html = ctx.etcdMembersHtml({ etcd_total: 3, members: [{ name: "pi", ready: true, role: "tiebreaker" }] }, true);
-  assert.match(html, /pill slim neutral">tiebreaker/);
+  assert.match(html, /ui-chip neutral slim">tiebreaker/);
 });
 
 test("two members on k3s also point to making an app host a server", () => {

@@ -92,6 +92,12 @@ test("turning AI agents on changes nothing else", async () => {
   assert.deepEqual(posts, [{ ...without(STORED, "info"), mcp: { enabled: true } }]);
 });
 
+test("keeping the audit log in the pod log only changes nothing else (#738)", async () => {
+  const { ctx, posts } = load();
+  await ctx.auditFileSet(false);
+  assert.deepEqual(posts, [{ ...without(STORED, "info"), audit: { file: false } }]);
+});
+
 test("the update window keeps the rest of the update policy as it is now", async () => {
   const { ctx, posts } = load();
   ctx.$ = id => ({ "#set_update_start": { value: "02:00" }, "#set_update_duration": { value: "120" } })[id] || null;
@@ -104,6 +110,30 @@ test("the update window keeps the rest of the update policy as it is now", async
 test("the old partial saves are gone", () => {
   const { ctx } = load();
   for (const name of ["saveHealthSettings", "saveUpdateSettings", "saveSiteName"]) assert.equal(typeof ctx[name], "undefined", name);
+});
+
+test("turning metrics on asks first, since every API key can then read them; declined, nothing is saved", async () => {
+  for (const [answer, saved] of [[false, []], [true, [{ ...without(STORED, "info"), metrics: { enabled: true } }]]]) {
+    const { ctx, posts } = load();
+    const asked = [];
+    ctx.ask = async (text, options) => { asked.push([text, options]); return answer; };
+    ctx.selfHealthPaint = () => {};
+    await ctx.metricsSet(true);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0][0], /every API key/i);
+    assert.equal(asked[0][1].ok, "Turn on metrics");
+    assert.deepEqual(posts, saved);
+  }
+});
+
+test("turning metrics off acts at once: it only narrows who can read", async () => {
+  const { ctx, posts } = load();
+  let asked = 0;
+  ctx.ask = async () => { asked++; return false; };
+  ctx.selfHealthPaint = () => {};
+  await ctx.metricsSet(false);
+  assert.equal(asked, 0);
+  assert.deepEqual(posts, [{ ...without(STORED, "info"), metrics: { enabled: false } }]);
 });
 
 // The save bar's form: every section drawn, as the page opened with it.

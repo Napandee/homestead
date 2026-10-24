@@ -132,6 +132,12 @@ class BoundedHTTPServer(ThreadingHTTPServer):
                 self._counted(-1)
 
 
+# Called at the start of every request, on its thread: what another module keeps
+# per request on the thread (homestead_routes' notes) is cleared, so nothing from
+# one request on a kept-alive connection is read as the next one's.
+REQUEST_STARTED = []
+
+
 class LimitedHandler(BaseHTTPRequestHandler):
     """For standalone helpers: header deadline plus strict small body framing.
 
@@ -187,6 +193,11 @@ class LimitedHandler(BaseHTTPRequestHandler):
         self._served = True
         for name in self.PER_REQUEST:
             setattr(self, name, None)
+        for reset in REQUEST_STARTED:
+            try:
+                reset()
+            except Exception:
+                pass
         self._header_deadline = deadline(self.connection, HEADER_SECONDS)
         self._header_deadline.__enter__()
         try:

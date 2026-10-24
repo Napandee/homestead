@@ -115,6 +115,19 @@ class OneAtATimeTests(unittest.TestCase):
         first.join(5)
         self.assertEqual(2, LS.search(WORKLOADS, "error", reader())["total"], "and runs once it has finished")
 
+    def test_exclusive_is_the_same_limit_other_readers_share(self):
+        # A log alert's preview reads an hour of logs too: it takes this
+        # limit, so it cannot be used to get round it.
+        with LS.exclusive():
+            with self.assertRaisesRegex(ValueError, "another log search is running"):
+                LS.search(WORKLOADS, "error", reader())
+            with self.assertRaisesRegex(ValueError, "another log search is running"):
+                with LS.exclusive():
+                    pass
+        with LS.exclusive():
+            pass
+        self.assertEqual(2, LS.search(WORKLOADS, "error", reader())["total"])
+
 
 class RouteTests(unittest.TestCase):
     def test_route_is_open_to_viewers(self):

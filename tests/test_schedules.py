@@ -190,6 +190,32 @@ class HistoryTests(unittest.TestCase):
         entry = C.history("lab", "paperless")[0]
         self.assertEqual(("homestead", "admin"), (entry["source"], entry["by"]), "not outside Homestead")
 
+    def test_a_scheduled_stop_or_start_through_another_copy_is_not_listed(self):
+        # The copy that ran the schedule may not be the one that leads (#621):
+        # the write itself says it was a schedule.
+        import time
+        import server
+        from fakes.kube import Kube
+        from test_scale_write import deployment, plan, scale_subresource
+        C, OV = self.C, server.OVERVIEW_ROUTES
+        C.bind(self.dir.name)                       # importing server binds /data
+        path = "/apis/apps/v1/namespaces/lab/deployments/web"
+        with mock.patch.object(C, "_author_key", lambda: b"test-key"), \
+                mock.patch.object(C, "_authors", lambda: {"users": [], "api_keys": []}), \
+                mock.patch.object(OV, "workload_start_plan", lambda *a: plan()):
+            for action, replicas in (("stop", 2), ("start", 0)):
+                with self.subTest(action=action), Kube(deployment(replicas=replicas)) as kube:
+                    C._load().clear()
+                    scale_subresource(kube, "web")
+                    start = time.time() - 30
+                    C.observe([kube.object(path)], now=start)
+                    C.REQUEST.user = C.BY_SCHEDULE
+                    OV.schedule_act({"kind": "app", "ns": "lab", "name": "web"}, action)
+                    C.REQUEST.user = None
+                    C._notes.clear()                # the leader is another copy
+                    C.observe([kube.object(path)], now=time.time() + 1, since=start)
+                    self.assertEqual([], C.history("lab", "web"))
+
 
 class PolicyTests(unittest.TestCase):
     def test_routes_apart_from_scheduled_jobs(self):

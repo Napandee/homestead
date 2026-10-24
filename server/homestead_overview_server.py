@@ -16,12 +16,14 @@ import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_alerts as ALERTS
 import homestead_api_v1 as API_V1
+import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
 import homestead_disks as DISKS
 import homestead_forecast as FORECAST
+import homestead_gitops as GITOPS
 import homestead_history as HISTORY
 import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
@@ -30,12 +32,14 @@ import homestead_leader as LEADER
 import homestead_longhorn as LH
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
+import homestead_logalerts as LOGALERTS
 import homestead_mcp as MCP
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
+import homestead_outage_carry as OUTAGE_CARRY
 import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_portal as PORTAL
@@ -51,6 +55,7 @@ import homestead_schedules as SCHEDULES
 import homestead_self as SELF
 import homestead_storage as STORAGE
 import homestead_updates as UPDATES
+import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
 import homestead_vips as VIPS
@@ -280,12 +285,17 @@ def _alert_sources():
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
+    take("outage-lan", OUTAGE_CARRY.alert_facts)
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
+    take("gitops", GITOPS.alert_facts)
     take("recovery", RECOVERY.alert_facts)
+    # Log alerts read on their own thread; this only takes their last count.
+    take("logs", LOGALERTS.alert_facts)
     take("previous-volumes", lambda: cached("previous-volumes", 60, RESTORE_SWAP.alert_facts))
     take("agents", MCP.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
+    take("audit", AUDIT_LOG.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
     # Twice a day whether or not anyone is looking - the Containers header and
@@ -314,6 +324,7 @@ def push_alerts(fresh):
 
 
 def _alerts_loop():
+    LOGALERTS.start()
     while True:
         # One replica raises alerts, or every notification arrives twice.
         if LEADER.is_leader():
@@ -354,22 +365,29 @@ def set_schedule(b):
 
 
 def outage_tick():
-    """After a monitoring round, on the leader: any outage action that is due."""
+    """After a monitoring round, on the leader: any outage action that is due,
+    then the carry-over of webhooks saved before #741 - after, and guarded, so
+    nothing in it can hold up or stop an outage action."""
     found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
-    if not found:
-        return []
-    operations = OPS.snapshot()
-    working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
-               for o in operations if o.get("status") in ("queued", "running")}
+    did = []
+    if found:
+        operations = OPS.snapshot()
+        working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
+                   for o in operations if o.get("status") in ("queued", "running")}
 
-    def restart(item):
-        if item["kind"] == "app":
-            restart_workload(item["ns"], item["name"])
-        else:
-            api_vm_power(item["ns"], item["name"], "restart")
-        _cache.pop("wl" if item["kind"] == "app" else "vms", None)
+        def restart(item):
+            if item["kind"] == "app":
+                restart_workload(item["ns"], item["name"])
+            else:
+                api_vm_power(item["ns"], item["name"], "restart")
+            _cache.pop("wl" if item["kind"] == "app" else "vms", None)
 
-    return OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+        did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+    try:
+        OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
+    except Exception as error:
+        print(f"outage actions: carry-over: {type(error).__name__}", flush=True)
+    return did
 
 
 def scheduled_items():
@@ -415,10 +433,11 @@ def schedule_act(item, action):
     return f"starting {name}"
 
 
-def protection_issues(jobs, target):
+def protection_issues(jobs, target, trim=None):
     """Protection that has quietly stopped working: a snapshot or backup job
     whose last run failed, or backup jobs with nowhere they can write to.
-    Nothing else says so until the copy is needed."""
+    Nothing else says so until the copy is needed. trim is the weekly trim's
+    saved state: an attached volume it failed to trim is one too (#749)."""
     issues = []
     guarding = [j for j in jobs or [] if str(j.get("task", "")).split("-")[0] in ("snapshot", "backup")
                 and j.get("task") not in ("snapshot-cleanup", "snapshot-delete") and j.get("covers")]
@@ -435,7 +454,7 @@ def protection_issues(jobs, target):
             issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
                            "reason": f"{target.get('url', 'the backup target')} cannot be reached"
                                      + (f": {target['reason']}" if target.get("reason") else "")})
-    return issues
+    return issues + WEEKLY_TRIM.issues(trim or {})
 
 
 def _history_loop():
@@ -584,7 +603,9 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
             raise WORKLOADS.WorkloadRefused("review node memory before starting", plan)
     if n:
         clear_unstarted_pods(ns, name, stopping=False)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
+    # The Deployment itself, not its /scale, so the write carries who made it
+    # (#621). A policy that refuses it is the answer: no second try through /scale.
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
     if not n:
         clear_unstarted_pods(ns, name, stopping=True)
@@ -639,7 +660,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     flt = [v for v in vols if v["robustness"] == "faulted"]
     try:
         protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
-                                       cached("lhtarget-health", 60, LH.backup_target))
+                                       cached("lhtarget-health", 60, LH.backup_target),
+                                       cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
     health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
@@ -667,7 +689,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
 
 
 def page_inputs():
-    """What one snapshot cycle reads once and shares: the pod list."""
+    """What one snapshot cycle reads once and shares: the pod list (the
+    Volumes page's bare pods read it too)."""
     return {"pods": lambda: kget("/api/v1/pods")}
 
 
@@ -676,7 +699,7 @@ def page_builders():
     volumes are read once, for the Volumes page, the hosts' duties, storage
     and the overview."""
     return [
-        ("vol", lambda got: STORAGE.get_volumes()),
+        ("vol", lambda got: STORAGE.get_volumes(pods=got.get("pods"))),
         ("nodes", lambda got: NODES.get_nodes(pods=got["pods"], vols=got.get("vol"))),
         ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
         ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),

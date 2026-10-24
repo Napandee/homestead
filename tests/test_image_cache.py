@@ -45,6 +45,10 @@ class ImageCacheTests(unittest.TestCase):
                     "images": {"nginx": "docker.io/library/nginx@" + self.rollback},
                     "at": "2026-09-19T18:00:00Z",
                 })}},
+            # Running: its status says its pod (web-abc) is there.
+            "spec": {"replicas": 1, "template": {"spec": {"containers": [
+                {"name": "nginx", "image": "nginx:1.27.0"}, {"name": "redis", "image": "redis:7.2"}]}}},
+            "status": {"replicas": 1, "updatedReplicas": 1},
         }]
 
         def get(path):
@@ -55,10 +59,16 @@ class ImageCacheTests(unittest.TestCase):
             if path == "/apis/apps/v1/deployments":
                 return {"items": deployments}
             if path in ("/apis/apps/v1/statefulsets", "/apis/batch/v1/cronjobs",
+                        "/apis/apps/v1/daemonsets", "/apis/batch/v1/jobs",
                         "/apis/kubevirt.io/v1/virtualmachines",
                         "/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
                         "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools"):
                 return {"items": []}
+            # No KubeVirt add-ons, Harvester or CDI here: discovery says so.
+            if path == "/apis":
+                return {"groups": [{"name": "apps"}, {"name": "batch"}, {"name": "kubevirt.io"}]}
+            if path.count("/") == 2 and path.startswith("/apis/"):
+                raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
             raise AssertionError(path)
 
         # Scans saved to disk belong to the tests that ask for it.

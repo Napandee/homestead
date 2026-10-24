@@ -1,7 +1,7 @@
 """
 Longhorn's recurring jobs: listing them with when each last ran, saving,
-deleting and running one now, and Homestead's weekly trim, which keeps one
-trim job covering every group, plus trimming a single volume now.
+deleting and running one now, the name and schedule of the trim job earlier
+releases made, and trimming a single volume now.
 
 Split out of homestead_longhorn (#623); what bind() sets, the shared helpers
 and the routes stay there.
@@ -177,50 +177,13 @@ def delete_job(name):
 
 # Deleted files leave their blocks allocated in a Longhorn volume until the
 # filesystem is trimmed: a volume that churns - media, databases, VM disks -
-# holds far more space than its files use. A weekly trim for every volume is
-# Homestead's default: one recurring job in the default group, and in every
-# group a volume wears, since a volume in a group of its own is outside the
-# default one.
+# holds far more space than its files use. Homestead trims every attached
+# volume itself each week (homestead_weekly_trim). Earlier releases kept a
+# recurring job for it, TRIM_JOB on TRIM_CRON; the weekly trim removes that
+# job once if it is unchanged, and reads these to tell.
 TRIM_JOB = "homestead-weekly-trim"
 TRIM_CRON = "0 4 * * 6"
 BACKEND = ACCESS.URL
-
-
-def ensure_weekly_trim(created_before=False, last_groups=None):
-    """Keep Homestead's weekly trim in place, covering every group.
-
-    Made once. One someone deleted is not made again (created_before says it
-    was made), and none is made where a trim job already covers the default
-    group. Its groups follow the groups in use until someone changes them:
-    groups other than those it last wrote (last_groups) are theirs, and are
-    left as they are. Returns (made_now, what changed, the groups it holds
-    as Homestead wrote them, or None once someone chose them), or None when
-    Longhorn's jobs could not be read."""
-    try:
-        items = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs").get("items", [])
-    except Exception:
-        return None
-    ours = next((j for j in items if j["metadata"]["name"] == TRIM_JOB), None)
-    wanted = VOLUMES.groups()
-    if ours is None:
-        other = [j["metadata"]["name"] for j in items if (j.get("spec") or {}).get("task") == "filesystem-trim"
-                 and "default" in ((j.get("spec") or {}).get("groups") or [])]
-        if created_before or other:
-            return False, "", None
-        save_job({"name": TRIM_JOB, "task": "filesystem-trim", "cron": TRIM_CRON, "retain": 0,
-                  "concurrency": 1, "groups": wanted})
-        return True, f"weekly trim set up for every volume ({', '.join(wanted)})", wanted
-    spec = ours.get("spec") or {}
-    current = sorted(spec.get("groups") or [])
-    if last_groups is not None and current != sorted(last_groups):
-        return False, "", None          # someone chose its groups: theirs from now on
-    if current == wanted:
-        return False, "", current
-    # Only its groups: a schedule someone changed stays theirs.
-    save_job({"name": TRIM_JOB, "task": spec.get("task") or "filesystem-trim", "cron": spec.get("cron") or TRIM_CRON,
-              "retain": 0, "concurrency": spec.get("concurrency", 1), "groups": wanted,
-              "labels": spec.get("labels") or {}})
-    return False, f"weekly trim now covers {', '.join(wanted)}", wanted
 
 
 def _backend(method, path, body=None):

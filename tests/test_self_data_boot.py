@@ -13,12 +13,17 @@ from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import server
+import homestead_host_access as HOST_ACCESS
 from homestead_storage_journal import Held
 
 
 class BootTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        # _guard sets the request role on this thread (a viewer's, in the
+        # recovery test); put back what was there, so a later test in the same
+        # process is not refused as that viewer.
+        self.addCleanup(HOST_ACCESS.set_role, HOST_ACCESS.role())
         self.fence = mock.Mock()
         self.fence.inspect.return_value = {"mode": "start", "writable": False}
         self.fence.require_write.side_effect = Held("held")
@@ -222,6 +227,7 @@ from unittest import mock
 sys.path.insert(0, sys.argv[1])
 import homestead_self_data_fence as F
 import homestead_auth as AUTH
+import homestead_http as HTTP
 import http.server
 root = pathlib.Path(sys.argv[2]) / "uncreated"
 os.environ.update(DATA_DIR=str(root), HOSTNAME="pod1", PORT="0", STORAGE_CLASS="fixture")
@@ -250,6 +256,7 @@ with mock.patch("builtins.open", side_effect=file_open), mock.patch("os.path.exi
      mock.patch.object(F, "Fence") as fence, mock.patch("threading.Thread") as threads, \
      mock.patch.object(AUTH, "review_signing_key", return_value=b"fixture"), \
      mock.patch.object(http.server, "ThreadingHTTPServer", Server), \
+     mock.patch.object(HTTP, "BoundedHTTPServer", Server), \
      mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("unexpected cluster request")):
     fence.return_value.inspect.return_value = {"mode": "start", "writable": False}
     runpy.run_path(str(pathlib.Path(sys.argv[1]) / "server.py"), run_name="__main__")

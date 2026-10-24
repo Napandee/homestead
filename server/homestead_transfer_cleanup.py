@@ -1,5 +1,6 @@
 """Cleanup of transfer-owned artifacts, without deleting shared or live data."""
 import re
+import urllib.error
 
 import homestead_csi_restore as CSI
 import homestead_kube as KUBE
@@ -44,16 +45,43 @@ def owned(obj, transfer_id, source_uid=None):
             and (source_uid is None or NAMES.annotation_of(meta, SOURCE_UID) == source_uid))
 
 
-def delete(read, send, path, obj):
-    """Request normal deletion with identity/version fences; wait for finalizers."""
+def delete(read, send, path, obj, own=False):
+    """Request normal deletion with identity/version fences; wait for finalizers.
+
+    own=True is only for a transfer's Longhorn Backup or its retained CSI
+    restore metadata, stamped by this transfer and checked on this read
+    (transfer stamp, source uid, owner labels), with no in-use check whose
+    answer the version would fence: longhorn-manager and snapshot-controller
+    keep updating them, so the uid alone is the precondition, as the storage
+    journal's own=True does (#824). A same-name replacement has a new uid and
+    is still refused. Everything else keeps uid + resourceVersion: what a
+    person can edit or adopt (destination workloads, Services, claims,
+    credentials) and what was just checked to be unused (delete_unused). An
+    object already deleting is left to its finalizers, never deleted again."""
     meta = obj.get("metadata") or {}
     if not meta.get("uid") or not meta.get("resourceVersion"):
         raise ValueError("Cleanup cannot verify the resource identity and version")
     if not meta.get("deletionTimestamp"):
+        pinned = ("uid",) if own else ("uid", "resourceVersion")
         KUBE.delete_if_present(path, {"apiVersion": "v1", "kind": "DeleteOptions",
-            "propagationPolicy": "Background",
-            "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}}, send=send)
+            "propagationPolicy": "Background", "preconditions": {key: meta[key] for key in pinned}}, send=send)
     return optional(read, path) is None
+
+
+def delete_unused(read, send, path, obj):
+    """Delete an artifact only just checked to be unused (a Snapshot no
+    Backup names, a backing image no volume or backup uses).
+
+    It keeps uid + resourceVersion: a change since that check, which may be
+    a new user, is not overridden. Such a 409 leaves it pending, and the next
+    pass lists its users again before trying once more."""
+    try:
+        return delete(read, send, path, obj)
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+        return False
 
 
 def source(read, send, transfer_id, source_uid):
@@ -71,7 +99,7 @@ def source(read, send, transfer_id, source_uid):
     for backup in backups:
         if owned(backup, transfer_id, source_uid):
             name = backup["metadata"]["name"]
-            if not delete(read, send, LH + "/backups/" + name, backup):
+            if not delete(read, send, LH + "/backups/" + name, backup, own=True):
                 pending.append("backup " + name)
     # Do not remove snapshots while any Backup still names them. Re-list after
     # requesting deletion; asynchronous Longhorn finalizers may still be working.
@@ -82,7 +110,7 @@ def source(read, send, transfer_id, source_uid):
         name = snapshot["metadata"]["name"]
         if name == "volume-head" or any((b.get("spec") or {}).get("snapshotName") == name for b in backups):
             pending.append("snapshot " + name)
-        elif not delete(read, send, LH + "/snapshots/" + name, snapshot):
+        elif not delete_unused(read, send, LH + "/snapshots/" + name, snapshot):
             pending.append("snapshot " + name)
     for image in images:
         if not owned(image, transfer_id, source_uid):
@@ -101,7 +129,7 @@ def source(read, send, transfer_id, source_uid):
             # An unfinished foreign backup may not have discovered its image
             # yet. Missing status is not evidence that the image is unused.
             pending.append("image backup " + name + " waiting for backup inventory")
-        elif not delete(read, send, LH + "/backupbackingimages/" + name, image):
+        elif not delete_unused(read, send, LH + "/backupbackingimages/" + name, image):
             pending.append("image backup " + name)
     return {"ok": True, "complete": not pending, "pending": pending, "retained": retained}
 
@@ -125,6 +153,6 @@ def destination(read, send, move, cancelled=False):
                 pending.append("backing image " + name + " waiting for disk reclamation")
             elif users:
                 retained.append("Backing image " + name + " retained because another or retained volume uses it")
-            elif not delete(read, send, LH + "/backingimages/" + name, image):
+            elif not delete_unused(read, send, LH + "/backingimages/" + name, image):
                 pending.append("backing image " + name)
     return {"complete": not pending, "pending": pending, "retained": retained}

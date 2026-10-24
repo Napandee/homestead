@@ -35,6 +35,8 @@ The Helm chart and the plain manifest make the same objects
 | `ServiceAccount` | `homestead` | who Homestead is to the cluster |
 | `ClusterRole`, `ClusterRoleBinding` | `homestead` | what Homestead may do: read every kind and change most of them ([why](Installing-on-an-existing-cluster#what-homestead-is-allowed-to-do)) |
 | `Role`, `RoleBinding` | `homestead-console` | container consoles, only in the apps' namespace |
+| `Role`, `RoleBinding` | `homestead-setup` | lets Homestead make, read and delete its one-time setup code, only in its own namespace. Read and delete are for that one Secret; create is for any Secret there, as Kubernetes cannot limit create to one name |
+| `Secret` | `homestead-setup` | the one-time setup code for the first administrator, only when you chose it ahead (the chart's `setupCode`, the installer's `HS_SETUP_CODE`); otherwise Homestead makes it when it starts (below) |
 | `PersistentVolumeClaim` | `homestead-data` | settings, job history, stats and the audit log |
 | `Deployment`, `Service` | `homestead` | Homestead itself and its address |
 | `DaemonSet`, `ConfigMap` | `homestead-nodeprobe` and its scripts | the node probe: one privileged pod per host, for temperatures, devices and drive health. The Helm chart installs it (`nodeprobe.enabled`, on by default); with the plain manifest Homestead installs it itself once it starts (below) |
@@ -65,6 +67,7 @@ leads (it holds a `Lease`, `homestead-leader`, renewed all the time).
 | Renames old `harvui.io/*` labels and annotations to `homestead.io/*`, once | nodes, services, claims, ConfigMaps, Secrets, Deployments, StatefulSets, DaemonSets, VMs | runs once only |
 | Brings the node probe's scripts up to this release, and the VM placement checks if you switched them on | `ConfigMap`, `DaemonSet` | removing the probe |
 | Fits its own Deployment's rollout strategy, without a restart | `Deployment` `homestead` | always |
+| Makes the one-time setup code until the first account exists, and deletes it once one does (and again at each start, should an upgrade put it back) | `Secret` `homestead-setup` | always |
 | Removes join tokens and network-boot pods left by 2.8.68-2.8.71 | `Secret`, `Pod` | always |
 
 **Once, soon after it starts**
@@ -73,6 +76,12 @@ leads (it holds a `Lease`, `homestead-leader`, renewed all the time).
   unless the installer was told not to (`node-probe: no` in
   `homestead-install`) or Homestead runs with
   `HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`.
+- **Outage webhooks saved before Allow a LAN address existed** that resolve
+  to a LAN or cluster address get it ticked (`lan` in `homestead.io/outage-actions`, on the
+  `Deployment` or `VirtualMachine`), so they keep working. An address a
+  webhook never reaches stays refused. This happens once per cluster: what
+  was done is kept in the `ConfigMap` `homestead-outage-carry`, in
+  Homestead's namespace next to `homestead-settings`. A webhook it could not carry within a day is a warning in the bell.
 - **What `homestead-install` asked for:** the VIP, and kube-vip and Multus as
   `HelmChart`s. macvtap comes with Multus, once KubeVirt is there.
 
@@ -83,9 +92,10 @@ Each is done once. One you remove later is not put back.
 | What | Kinds | Turned on or off by |
 |---|---|---|
 | Keeps Homestead ranked at least as high as any app, every minute: moves Homestead to the lowest class that preempts and is at or above the highest app's, creating `homestead-critical` only when there is none, or back to the default when no app ranks above it. Each move restarts Homestead once and is marked with `homestead.io/priority-protect` | `PriorityClass`, `Deployment` `homestead` | always |
-| Weekly trim for every Longhorn volume, made once and kept covering every group ([details](Data-protection#weekly-trim-by-default)) | Longhorn `RecurringJob` `homestead-weekly-trim` | delete it: it is not made again |
+| Trims every attached Longhorn volume each Saturday as a Homestead job, and removes the Longhorn `RecurringJob` `homestead-weekly-trim` earlier releases made, once, if it is unchanged ([details](Data-protection#weekly-trim-by-default)) | Longhorn `Volume` (trim action); Longhorn `RecurringJob` `homestead-weekly-trim` | the weekly trim switch under **Data protection › Housekeeping** |
 | Lets Homestead's own pods reach Longhorn's API (`longhorn-manager`, TCP 9500), only while another network policy fences the manager in (Longhorn 1.13's own, by default, or one you made). Those policies own it, so it goes when they do; Homestead removes it too | `NetworkPolicy` `homestead-backend-access` in `longhorn-system` | always; without it, rolling back and **Trim now** cannot reach Longhorn |
 | More copies of each volume as storage hosts are added (up to 3), while the value is still the installer's or Homestead's own | Longhorn `HelmChart` values and `Setting`, Homestead's own Longhorn `Volume` | change the value yourself; k3s and RKE2 only |
+| On a cluster of one host, Homestead's own data volume asks for the one copy that host can keep, once Longhorn says another cannot be placed and none is being rebuilt; no other volume, class or setting | Homestead's own Longhorn `Volume` | always, with Longhorn on exactly one host; not on Harvester |
 | Longhorn rebuilds copies of detached volumes: Homestead turns Longhorn's `offline-replica-rebuilding` on, once. On older Longhorn without that setting, Homestead attaches a detached volume that is a copy short itself (no frontend, nothing can mount it), for up to 6 hours, until its copies are whole | Longhorn `Setting`; Longhorn `VolumeAttachment` ticket `homestead-rebuild` | the offline rebuilding switch on **Volumes** (on by default) |
 | Stops Longhorn using a host's root disk when it has less than 15 % or 10 GB free, and allows it again above 20 % or 15 GB, only for disks it turned off itself ([details](Storage#room-for-the-system)) | Longhorn `Node` | always |
 | Tags a new Longhorn disk the first time it sees it | Longhorn `Node` | always |
@@ -102,7 +112,7 @@ Each is done once. One you remove later is not put back.
 | Unused images removed from hosts | helper `Pod` | image **Automatic clean-up** (off by default) |
 | Automatic image updates: a snapshot of each volume, then the new image (keeping the two newest snapshots) | Longhorn `Snapshot`, `Deployment` | per app, **Updates** set to automatic, and the update window |
 | Update checks about twice a day record the image digests an app ran | `Deployment` annotation | always |
-| Power schedules stop and start apps and VMs | `Deployment` (scale), `VirtualMachine` | an app's or VM's own schedule |
+| Power schedules stop and start apps and VMs | `Deployment` (replicas), `VirtualMachine` | an app's or VM's own schedule |
 | Outage actions restart an app or VM that stays down | `Deployment`, `VirtualMachine` | an app's or VM's outage actions |
 | A rebalance moves apps back onto a host that returned | `Deployment` | **Settings → When a host comes back** |
 | OS updates on a schedule: cordon, drain, reboot, apps held and given back. Taking over updates also turns Ubuntu's own automatic updates off on each host (`/etc/apt/apt.conf.d/99-homestead-hold`) | helper `Pod`s, `Node`, `Eviction`, `Deployment`, `StatefulSet`, `VirtualMachine` | **Nodes → OS updates** (off by default); k3s and RKE2 only |
@@ -124,12 +134,12 @@ writes starts with `homestead.io/`. Among them:
 
 | Annotation | On | When |
 |---|---|---|
-| `homestead.io/changedBy` | `Deployment` | each create, replace or merge-patch Homestead makes to an app, automatic ones too: who (a person, a job or a schedule) and when. Scaling and JSON-patch writes do not carry it |
+| `homestead.io/changedBy` | `Deployment` | each write Homestead makes to an app, automatic ones too: who (a person, a job or a schedule) and when. Every write carries it when it can, scaling and JSON patches included. It is left off, and the write goes as it came, before setup (no signing key yet) and on a JSON patch that sets the app's metadata wholesale, that comes while the app or the key cannot be read, or whose app has no annotations and no test of the `resourceVersion` just read. A cluster shutdown's own helpers (running Homestead as one copy, and the automatic recovery that gives its copies back) write without it too; recovering from the dialog carries it |
 | `homestead.io/update-action`, `update-previous`, `update-sources`, `update-rollout-at`, `updates-managed` | `Deployment` | an update or a rollback, automatic ones too |
 | `homestead.io/update-mode` | `Deployment` | you set the app's updates to automatic |
 | `homestead.io/ran-digests` | `Deployment` | update checks, about twice a day |
 | `homestead.io/schedule`, `schedule-copies` | `Deployment`, `VirtualMachine` | you give an app a power schedule; a schedule stops it |
-| `homestead.io/outage-actions` | `Deployment`, `VirtualMachine` | you set what happens when it stays down |
+| `homestead.io/outage-actions` | `Deployment`, `VirtualMachine` | you set what happens when it stays down; once after an upgrade, a webhook saved before Allow a LAN address existed is given it when its address is on the LAN |
 | `homestead.io/restartedAt`, `editedAt`, `movedAt` | the pod template | you restart, edit or move the app, or an outage action restarts it |
 | `homestead.io/uptime` | `Deployment`, `VirtualMachine` | you turn monitoring on |
 | `homestead.io/icon`, `icon-source` | `Deployment`, `VirtualMachine` | an app's or VM's icon |
@@ -139,6 +149,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/restore-tested` | `Deployment` | a restore test of the app finishes |
 | `homestead.io/renamed-from`, `renamed-at` | `Deployment` | you rename an app |
 | `homestead.io/rebalancing` | Longhorn `Volume` | a volume's copies move to balance hosts |
+| `homestead.io/one-host-copies` | Homestead's own Longhorn `Volume` | on a one-host cluster Homestead lowers its data volume to one copy; it holds the count asked for before |
 | `homestead.io/iso-unused-since` | ISO `PersistentVolumeClaim` | an ISO volume no VM uses |
 
 Apps deployed through Homestead also carry the `homestead.io/managed=true`
@@ -148,6 +159,10 @@ label. Hosts get the taints and labels in the table above.
 
 Each of these happens only after someone signed in (or an API key, or an AI
 agent with the right scope) asks for it, and most go through a review first.
+A job someone starts (copying or renaming an app, an import, a host network
+change) carries on in the background without a page open: the copy of
+Homestead that leads moves every job on, in one loop, and a new leader picks
+them up where the last one left off.
 
 | Kind | When |
 |---|---|
@@ -157,7 +172,7 @@ agent with the right scope) asks for it, and most go through a review first.
 | `Job`, `CronJob` | copies during imports and storage changes, preparing a disk for Longhorn V2, ISO copies, schedules you save on **Schedules**, running a Longhorn job now |
 | `DaemonSet` | pre-pulling an image onto every host (`homestead-pull-*`, removed once done); the VM placement checks when you switch them on |
 | `Secret` | registry and source passwords, a VM's cloud-init, an app's secret-looking environment values (kept out of its Deployment), backup target keys, linked-cluster and move credentials, MQTT and UniFi settings, user accounts (`homestead-auth`) |
-| `ConfigMap` | Homestead's settings and records: settings, portal links, IP records, hardware mappings, group tiers, linked clusters (`homestead-fleet`), the VM store (`homestead-vm-store`, in `lab`), a VM's GPU ROMs, a configuration restore |
+| `ConfigMap` | Homestead's settings and records: settings, portal links, IP records, hardware mappings, group tiers, linked clusters (`homestead-fleet`), the outage webhook carry-over (`homestead-outage-carry`), the VM store (`homestead-vm-store`, in `lab`), a VM's GPU ROMs, a configuration restore |
 | `Namespace` | **Settings → Namespaces**, and a move from another cluster into a namespace that is not there yet |
 | `StorageClass` | a storage class you create, the class for ISO volumes, the object store's one-copy class, a restore class Homestead repairs, a snapshot's temporary read-only clone |
 | `VolumeSnapshot`, `VolumeSnapshotContent` | importing a Longhorn backup as a snapshot, browsing the files of a snapshot |
@@ -183,6 +198,9 @@ Homestead also changes and deletes existing objects when you ask:
 
 - an app's `Deployment` or `StatefulSet` when you edit, scale, restart,
   update, stop or move it;
+- an app's own `Secret` (`<app>-env`) when you save it: environment values
+  that look secret move there - by name, a password or token in the value, or
+  a value it already held under a variable you renamed;
 - a `Node` when you cordon, drain, label or remove a host, and the Cluster
   API `Machine` behind it, where there is one;
 - a `PersistentVolume`'s reclaim policy and claim while a volume moves to
@@ -228,14 +246,17 @@ Only Homestead uses these.
 | `Secret` `homestead-auth` | `lab` | Homestead's user accounts; only Homestead reads them. Keep it if you may reinstall and want the same accounts |
 | `ConfigMap` `homestead-install` | `lab` | the installer's request to Homestead; only Homestead reads it |
 | The node probe: `DaemonSet` and `ConfigMap` `homestead-nodeprobe`, `Secret`s `homestead-smart-key` and `homestead-allocation-auth` | `lab` | the probe only reports to Homestead, and only the probe uses the two Secrets. Delete all four together |
-| Longhorn `RecurringJob` `homestead-weekly-trim` | `longhorn-system` | nothing refers to it; without it your volumes are no longer trimmed each week. Keep it if you changed it and want the trim |
+| Longhorn `RecurringJob` `homestead-weekly-trim` | `longhorn-system` | only there from an earlier release, when you changed it (Homestead removes an unchanged one). Nothing refers to it; keep it if you want the weekly trim without Homestead |
 | `NetworkPolicy` `homestead-backend-access` | `longhorn-system` | it only lets Homestead's pods reach Longhorn's API; Longhorn's own policies are separate and stay |
 | The `homestead.io/standby` taint on hot spare hosts | the hosts | with Homestead gone nothing moves work onto a spare, so the taint only keeps the host empty |
 | The Longhorn attachment tickets `homestead-rebuild` and `homestead-revert` | `longhorn-system` | Homestead holds a volume attached with these while it rebuilds copies or reverts a volume, and lets go itself. One left behind keeps the volume attached where it is, so its app cannot start on another host. Remove it (below) |
 | `/etc/apt/apt.conf.d/99-homestead-hold` on each host | the host | only there if Homestead managed OS updates. Removing it gives Ubuntu its own automatic updates back, with the host's own settings: if those reboot automatically, hosts reboot without being drained first |
 | `Role` and `RoleBinding` `homestead-console` | `lab` | they give only Homestead's own account the container consoles |
+| `Secret`, `Role` and `RoleBinding` `homestead-setup` | Homestead's namespace (`lab` with the plain manifest) | the one-time setup code and the permission to use it; only Homestead reads them. The Secret is only still there if no account was ever made |
 
 ```bash
+# Homestead's own namespace: lab with the plain manifest, the release's with Helm
+kubectl -n lab delete secret/homestead-setup role/homestead-setup rolebinding/homestead-setup
 kubectl -n lab delete daemonset/homestead-nodeprobe configmap/homestead-nodeprobe \
   secret/homestead-smart-key secret/homestead-allocation-auth configmap/homestead-install \
   role/homestead-console rolebinding/homestead-console
@@ -276,7 +297,7 @@ stays too.
 | `StorageClass`es Homestead made (`homestead-single-copy`, the ISO class `homestead-isos`, restore classes) | the cluster | volumes made from them |
 | `PriorityClass`es `homestead-critical`, `homestead-normal`, `homestead-low`, or `homestead-<tier>-<value>` | the cluster | Kubernetes refuses a new pod that names a class that is gone, so an app, VM or Helm release still naming one cannot restart, update or move. Delete one only once nothing names it (below) |
 | What Homestead made for an app: its VIP `Service`, firewall `NetworkPolicy`s, `NetworkAttachmentDefinition`s, its environment `Secret` | the app's namespace | the app |
-| Homestead's records: `ConfigMap`s `homestead-settings`, `homestead-portal`, `homestead-ipam`, `homestead-group-tiers`, `homestead-mqtt` in `default`; `homestead-hardware`, `homestead-sources`, `homestead-vm-store`, `homestead-fleet` in `lab`; `Secret`s `homestead-unifi`, `homestead-mqtt`, `homestead-fleet-key` | `default`, `lab` | nothing known, but they are harmless to keep, and a reinstall picks them up |
+| Homestead's records: `ConfigMap`s `homestead-settings` and `homestead-outage-carry` in Homestead's namespace (`DEFAULT_NS`, `lab` in the plain manifest); `homestead-portal`, `homestead-ipam`, `homestead-group-tiers`, `homestead-mqtt` in `default`; `homestead-hardware`, `homestead-sources`, `homestead-vm-store`, `homestead-fleet` in `lab`; `Secret`s `homestead-unifi`, `homestead-mqtt`, `homestead-fleet-key` | Homestead's namespace, `default`, `lab` | nothing known, but they are harmless to keep, and a reinstall picks them up |
 | The `homestead.io/*` annotations on apps, and the other taints and labels on hosts | apps, hosts | nothing: they are harmless. The annotations are the only record of how many copies a stopped app had |
 | Settings Homestead changed: Longhorn's copies count and offline rebuilding, kube-vip's values, Longhorn disks the root-disk guard turned off, the default flag it took off extra storage classes | Longhorn, kube-vip, storage classes | they are your cluster's settings now; change them only on purpose |
 | On each host: the journal cap (`/etc/systemd/journald.conf.d/90-homestead.conf`), the inotify limits (`/etc/sysctl.d/90-homestead.conf`), the multipath setting | the host | Longhorn needs multipathd kept off its disks, or volumes fail to mount; apps may need the inotify limits |

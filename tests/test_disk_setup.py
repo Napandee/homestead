@@ -389,6 +389,11 @@ class LonghornTests(unittest.TestCase):
         no_v2(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.patched = []
+        # Adding a disk takes the operations lock in the data folder: this
+        # test's own, never the real /data.
+        data = mock.patch.object(DISKS.OPS, "DATA_DIR", self.tmp.name)
+        data.start()
+        self.addCleanup(data.stop)
         self.node = {"spec": {"disks": {"disk-mnt-nvme0n1": {"path": "/mnt/nvme0n1", "allowScheduling": True}}},
                      "status": {"diskStatus": {"disk-mnt-nvme0n1": {"conditions": [{"type": "Ready", "status": "False"}]}}}}
         # Patched for this test only: other tests use the same modules.

@@ -7,6 +7,20 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
+  const DEMO_TRIM_FAILURE = "Longhorn refused the trim: engine is not running";
+
+  /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
+     two copies; window.__demoDataCopies = true shows the one-copy cluster that
+     can now keep two, for the checks and screenshots of that offer, and
+     "unknown" a read that failed (#620). */
+  const demoDataCopies = () => window.__demoDataCopies === "unknown"
+    ? { state: "unknown", error: "Longhorn's nodes could not be read", claim: "homestead-data", storage_class: "longhorn", copies: 1 }
+    : window.__demoDataCopies
+    ? { state: "can-keep-two", claim: "homestead-data", storage_class: "longhorn", copies: 1, storage_hosts: 2, room_hosts: 2, size_gb: 2,
+      r2: window.__demoTwoCopiesMade
+        ? { exists: true, replicas: 2, migratable: false, longhorn: true, usable: true, why: "" }
+        : { exists: false, replicas: 0, migratable: false, longhorn: false, usable: true, why: "" } }
+    : { state: "ok", claim: "homestead-data", storage_class: "longhorn-r2", copies: 2, storage_hosts: 3, room_hosts: 3, size_gb: 2, r2: null };
 
   /* What the counters add up to, the way the server computes it. */
   const diskHealth = smart => {
@@ -274,6 +288,16 @@
   const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
     { name: w.name.replace(/(^|-)([a-z])/g, (_, dash, c) => (dash ? " " : "") + c.toUpperCase()), icon: demoLogo(w.name[0].toUpperCase(), (i * 47) % 360), repo: w.images[0], key: `${w.name}|${w.images[0]}` },
     { name: `${w.name}-alt`, icon: demoLogo(w.name[0].toUpperCase(), (i * 47 + 180) % 360), repo: `example/${w.name}-alt`, key: `${w.name}-alt|example` }]);
+  // Flux applies paperless from git (#734): its edit, move and rename reviews say so.
+  const demoGitops = body => body.ns === "lab" && body.name === "paperless"
+    ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {};
+  // The edit as YAML for git (#735): the demo shows the containers' image and memory as sent.
+  const demoEditYaml = body => body.workload_name && body.workload_name !== body.name ? "" : [
+    "apiVersion: apps/v1", "kind: Deployment", "metadata:", `  name: ${body.name}`, `  namespace: ${body.ns || "lab"}`,
+    "spec:", "  template:", "    spec:", "      containers:",
+    ...(body.containers || []).flatMap(c => [`      - name: ${c.name || c.original_name}`,
+      ...(c.image ? [`        image: ${c.image}`] : []),
+      ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
@@ -618,6 +642,7 @@
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
+      audit: { file: true },
       info: { version: "2.8.332-dev.1", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
@@ -1621,7 +1646,8 @@ ssh_pwauth: true
         permissions: { state: "current", detail: "Homestead's permissions match this release" },
         backups: { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000" },
         addresses: { lb_ip: "192.0.2.242", problem: "", clashes: [], platform: ["192.0.2.210"] },
-        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 } };
+        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 },
+        data_copies: demoDataCopies() };
     },
     "/api/network/vips/add": { ok: true, added: ["192.0.2.232"], skipped: [], detail: "1 address added" },
     "/api/network/vips/remove": { ok: true, detail: "192.0.2.231 is no longer reserved for Homestead" },
@@ -1844,24 +1870,50 @@ ssh_pwauth: true
       }
       return { links: portalLinks, icons: ["router", "switch", "wifi", "firewall", "nas", "server", "printer", "camera", "ups", "globe"], version: "1" };
     },
-    "/api/cluster/components": demoPlatform === "harvester"
-      ? { distribution: "harvester", harvester: true, checked: Math.floor(Date.now() / 1000), components: [
+    // Each upgrade's check and the pairs running now are what
+    // homestead_upgrade_check says for these versions. window.__demoUpgradeCheck
+    // shows a newer k3s cluster whose next step leaves KubeVirt's support matrix.
+    "/api/cluster/components": () => {
+      const matrix = "https://github.com/kubevirt/sig-release/blob/f3d8a41eb14bc3f7ee8b29e8fcf5b940523af7a4/releases/k8s-support-matrix.md";
+      const lh = "https://github.com/longhorn/longhorn/tree/v1.12.1/chart", checked = "2026-10-23";
+      const eol = v => ({ id: "kubevirt-kubernetes", status: "eol", title: `KubeVirt ${v} on Kubernetes 1.31`, source: matrix, checked,
+        detail: `KubeVirt ${v} supports Kubernetes 1.31, but Kubernetes no longer maintains 1.31 (KubeVirt's support matrix, as of 2026-10-23). None of the Kubernetes versions it supports is still maintained.` });
+      const now = Math.floor(Date.now() / 1000), suc = "Upgraded by Rancher's system-upgrade-controller: servers one at a time, then agents.";
+      if (window.__demoUpgradeCheck) return { distribution: "k3s", harvester: false, checked: now, components: [
+        { id: "cluster", name: "k3s", installed: "v1.36.4+k3s1", newest: "v1.37.1+k3s1", next: "v1.37.1+k3s1", behind: true, how: "suc", note: suc,
+          notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.37.1+k3s1", nodes: { "node-1": "v1.36.4+k3s1" },
+          check: { to: "v1.37.1+k3s1", verdict: "blocked", checked, findings: [{ level: "block", title: "KubeVirt 1.9 is not tested on Kubernetes 1.37", source: matrix,
+            detail: "KubeVirt 1.9 supports Kubernetes 1.34, 1.35 and 1.36 (its support matrix, as of 2026-10-23). It may run, but it is not tested on 1.37. No KubeVirt release in Homestead's table supports 1.37 yet." }] } },
+        { id: "longhorn", name: "Longhorn", installed: "v1.12.0", newest: "v1.13.0", next: "v1.12.1", behind: true, how: "helmchart", steps_left: true, note: "",
+          notes_url: "https://github.com/longhorn/longhorn/releases/tag/v1.12.1",
+          check: { to: "v1.12.1", verdict: "check", checked, findings: [
+            { level: "info", title: "Kubernetes 1.36 meets Longhorn v1.12.1's minimum (1.25)", detail: "Longhorn publishes a minimum Kubernetes version only.", source: lh },
+            { level: "warn", title: "Longhorn fences its manager in with NetworkPolicies", source: lh,
+              detail: "Longhorn v1.12.1's chart turns networkPolicies.restrictInternalTraffic on by default: only Longhorn's own pods may reach longhorn-backend:9500. Homestead keeps its own narrow policy beside Longhorn's (#794), so Trim now and snapshot rollback keep working. Anything else that calls that port, such as a metrics scraper, is cut off unless the chart values set it to false or allow it." }] } },
+        { id: "kubevirt", name: "KubeVirt", installed: "v1.9.1", newest: "v1.9.1", next: "", behind: false, how: "helmchart", phase: "Deployed", note: "" }],
+        pairs: [{ id: "kubevirt-kubernetes", status: "supported", title: "KubeVirt 1.9 on Kubernetes 1.36", source: matrix, checked,
+          detail: "KubeVirt 1.9 supports Kubernetes 1.34, 1.35 and 1.36 (its support matrix, as of 2026-10-23)." }] };
+      if (demoPlatform === "harvester") return { distribution: "harvester", harvester: true, checked: now, pairs: [eol("1.4")], components: [
           { id: "cluster", name: "Harvester", how: "harvester", installed: "" },
           { id: "longhorn", name: "Longhorn", installed: "v1.8.1", newest: "v1.9.1", next: "", behind: true, how: "harvester",
             note: "Comes with Harvester, and is upgraded with it.", notes_url: "https://github.com/longhorn/longhorn/releases/tag/v1.9.1" },
           { id: "kubevirt", name: "KubeVirt", installed: "v1.4.0", newest: "v1.6.0", next: "", behind: true, how: "harvester", phase: "Deployed",
             note: "Comes with Harvester, and is upgraded with it.", notes_url: "https://github.com/kubevirt/kubevirt/releases/tag/v1.6.0" },
           { id: "cdi", name: "CDI", installed: "v1.61.0", newest: "v1.62.0", next: "", behind: true, how: "harvester", phase: "Deployed",
-            note: "Comes with Harvester, and is upgraded with it." }] }
-      : { distribution: "k3s", harvester: false, checked: Math.floor(Date.now() / 1000), components: [
+            note: "Comes with Harvester, and is upgraded with it." }] };
+      const kubevirt = demoPlatform === "kubevirt";
+      return { distribution: "k3s", harvester: false, checked: now, pairs: kubevirt ? [eol("1.6")] : [], components: [
           { id: "cluster", name: "k3s", installed: "v1.31.4+k3s1", newest: "v1.33.4+k3s1", next: "v1.31.12+k3s1", behind: true, how: "suc",
-            steps_left: true, note: "Upgraded by Rancher's system-upgrade-controller: servers one at a time, then agents.",
-            notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" } },
-          ...(demoPlatform === "kubevirt" ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
-            how: "helmchart", phase: "Deployed", note: "" }] : [])] },
-    "/api/longhorn/v2/upgrade": () => {
+            steps_left: true, note: suc, notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" },
+            check: kubevirt ? { to: "v1.31.12+k3s1", verdict: "check", checked, findings: [{ level: "warn", title: "Kubernetes 1.31 is past its end of life", detail: eol("1.6").detail, source: matrix }] }
+              : { to: "v1.31.12+k3s1", verdict: "unchecked", checked, findings: [] } },
+          ...(kubevirt ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
+            how: "helmchart", phase: "Deployed", note: "" }] : [])] };
+    },
+    "/api/longhorn/v2/upgrade": url => {
       const state=window.__demoV2UpgradeState || 'ready', running=['running','failed'].includes(state), blocked=state==='blocked';
-      return {installed:running?'v1.13.0':'v1.12.2',target:'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
+      // The upgrade check's demo (window.__demoUpgradeCheck) goes from v1.12.0 to v1.12.1.
+      return {installed:running?'v1.13.0':window.__demoUpgradeCheck?'v1.12.0':'v1.12.2',target:url?.searchParams?.get('to') || 'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
         offline_ready:false,live_blockers:blocked?['disk-data: needs healthy RW replicas on at least two eligible hosts.','Upgrade Kubernetes to 1.34 or newer on every host first.']:[],
         offline_blockers:[...(blocked?['Upgrade Kubernetes to 1.34 or newer on every host first.']:[]),'Stop workloads, detach V2 volumes and wait for replicas to stop.'],
         upgrade:{enabled:running,timeout:60,current_node:state==='running'?'node-2':'',active:state==='running',pending:running,nodes:running?[
@@ -2290,9 +2342,19 @@ ssh_pwauth: true
       ? { ok: true, desired: JSON.parse(init.body || "{}").replicas, detail: "Homestead runs as 2 copies, spread over different nodes" }
       : { desired: 1, max: 3, leader: "homestead-6f9c-a1", spread_nodes: 1, pods: [
         { name: "homestead-6f9c-a1", node: "harvester-node1", ready: true, leader: true, this: true, terminating: false }],
-        data: { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
+        data: window.__demoDataCopies
+          ? { pvc: "homestead-data", storage_class: "longhorn", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: true, reason: "",
+            candidates: ["longhorn"], classes: window.__demoTwoCopiesMade ? [{ name: "longhorn-r2", shareable: true }] : [] }
+          : { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
           reason: "homestead-data is on longhorn-r2, a migratable class: Longhorn gives it a VM-disk volume that only one node can mount, so a copy on a second node would never start",
-          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] } },
+          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] },
+        data_copies: demoDataCopies() },
+    "/api/self/data/two-copies": () => {
+      const created = !window.__demoTwoCopiesMade;
+      window.__demoTwoCopiesMade = true;
+      return { ok: true, storage_class: "longhorn-r2", created,
+        message: (created ? "longhorn-r2 created: two copies on different hosts. " : "") + "Review the move of Homestead's data onto longhorn-r2; Homestead stops briefly while it is copied" };
+    },
     "/api/self/data/prepare": (url, init) => {
       if (init?.method === "POST") {
         window.__demoDataPrepared = true;
@@ -2309,7 +2371,9 @@ ssh_pwauth: true
           window.__demoOps.push(blocker);
         }
       }
-      return { source: "homestead-data", classes: [{ name: "longhorn", shareable: true }], execution_ready: false,
+      return { source: "homestead-data", classes: window.__demoDataCopies
+          ? (window.__demoTwoCopiesMade ? [{ name: "longhorn-r2", shareable: true }] : [])
+          : [{ name: "longhorn", shareable: true }], execution_ready: false,
         blocking_jobs: blocker?.mutation_recovery ? [blocker] : [],
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
         preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,
@@ -2393,7 +2457,10 @@ ssh_pwauth: true
       const said = [a?.restart && `restarted after ${a.restart.after_min} min down, at most ${a.restart.max} times`, a?.webhook && "its webhook called"].filter(Boolean);
       return { ok: true, actions: a || null, detail: `When ${body.name} is down: ${said.join(" and ") || "nothing is done"}` };
     },
-    "/api/monitoring/actions/test": () => ({ ok: true, detail: "The webhook took the test" }),
+    "/api/monitoring/actions/test": (url, init) => {
+      const format = JSON.parse(init?.body || "{}").format;
+      return { ok: true, detail: `${({ ntfy: "ntfy", gotify: "Gotify" })[format] || "The webhook"} took the test` };
+    },
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const port = body.mode !== "off" && body.port ? `:${body.port}` : "", path = body.path || "/";
@@ -2506,6 +2573,24 @@ ssh_pwauth: true
         { key: "disk:harvester-node2:disk-1", kind: "disk", label: "harvester-node2 · /var/lib/harvester/defaultdisk", node: "harvester-node2", used: 610 * GB, capacity: 930 * GB, pct: 65.6, days: 30, days_left: 44.8, per_day: 7.1 * GB, why: "", full_on: day(45) },
         { key: "pool", kind: "pool", label: "Longhorn storage, all hosts", used: 1400 * GB, capacity: 2790 * GB, pct: 50.2, days: 30, days_left: null, per_day: 0.2 * GB, why: "not growing", full_on: "" }] };
     },
+    // Homestead's weekly trim (views-protect.js, #591): last Saturday's run, one detached volume skipped.
+    "/api/weekly-trim": () => {
+      // Last Saturday 04:00 UTC, as homestead_weekly_trim.last_slot.
+      const now = Date.now() / 1000, today = new Date();
+      let slot = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (today.getUTCDay() + 1) % 7, 4) / 1000;
+      if (slot > now) slot -= 7 * 86400;
+      return { enabled: demoState.weeklyTrimOn !== false, next: new Date((slot + 7 * 86400) * 1000).toISOString(), running: false, theirs: "",
+        last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
+          // The incidents and critical scenarios: one attached volume failed to trim (#749).
+          failed: scenario === "healthy" ? [] : [{ volume: "pvc-demo-frigate", pvc: "lab/frigate-config", message: DEMO_TRIM_FAILURE }],
+          skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
+    },
+    "/api/weekly-trim/settings": (url, init) => {
+      const on = !!JSON.parse(init?.body || "{}").enabled;
+      demoState.weeklyTrimOn = on;
+      return { ok: true, enabled: on, detail: on ? "Attached volumes are trimmed every Saturday at 04:00 UTC" : "The weekly trim is off; Run now still trims every attached volume" };
+    },
+    "/api/weekly-trim/run": () => ({ ok: true, operation: { id: "demo-weekly-trim", kind: "weekly-trim", status: "queued" } }),
     // Restore tests (views-protect.js): one passed, one failed, one never tested.
     "/api/restore-tests": () => {
       const now = Date.now() / 1000;
@@ -2609,7 +2694,7 @@ ssh_pwauth: true
     },
     "/api/move/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      return { capacity_token: "demo-host-move", capacity: {
+      return { capacity_token: "demo-host-move", managed: demoGitops(body), capacity: {
         blocked: false, requires_confirmation: true, additional: 1, candidates: [],
         pod_request_gb: 0.5, pod_memory_gb: 1, pod_cpu_request_percent: 10,
         warnings: ["Demo snapshot: all containers stop before replacements start. Placement is not reserved."],
@@ -2618,10 +2703,24 @@ ssh_pwauth: true
       } };
     },
     "/api/move": { ok: true },
+    // Is Flux applying it (#742): one Kustomization failing, so the Cluster page and paperless's details show it.
+    "/api/gitops": () => {
+      const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+      return { summary: "2 Kustomizations, 1 HelmRelease: 1 not ready",
+        apps: { "lab/paperless": "Kustomization flux-system/apps", "monitoring/loki": "Kustomization flux-system/monitoring" },
+        objects: [
+          { id: "Kustomization flux-system/apps", kind: "Kustomization", namespace: "flux-system", name: "apps", ready: false, suspended: false,
+            revision: "main@4f1c2d9", tried: ago(3), since: ago(95), interval: "10m",
+            message: "Secret/lab/paperless-env not found: kustomize build failed" },
+          { id: "Kustomization flux-system/monitoring", kind: "Kustomization", namespace: "flux-system", name: "monitoring", ready: true, suspended: false,
+            revision: "main@4f1c2d9", tried: ago(6), since: ago(2000), interval: "10m", message: "Applied revision: main@sha1:4f1c2d9" },
+          { id: "HelmRelease dev/actions-runner", kind: "HelmRelease", namespace: "dev", name: "actions-runner", ready: true, suspended: false,
+            revision: "runner-chart 0.15.0", tried: ago(40), since: ago(9000), interval: "30m", message: "Helm upgrade succeeded" }] };
+    },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const rename = body.workload_name && body.workload_name !== body.name;
-      return { capacity_token: "demo-review", capacity: {
+      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
       candidates: [
         { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,
@@ -2716,6 +2815,7 @@ ssh_pwauth: true
       // Deployed by Flux from git: its update is a notice, made in git (#296).
       { ns: "monitoring", name: "loki", available: true, can_rollback: false,
         managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
+        yaml: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: loki\n  namespace: monitoring\nspec:\n  template:\n    spec:\n      containers:\n      - name: loki\n        image: grafana/loki:3.5.0",
         images: [{ container: "loki", deployed: "grafana/loki:3.4.2", candidate: "grafana/loki:3.5.0", candidate_tag: "3.5.0", remote_digest: "sha256:aaa", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
@@ -3099,7 +3199,9 @@ ssh_pwauth: true
   } else {
     const overview = responses["/api/overview"];
     Object.assign(overview, { health: "degraded", health_state: "degraded", health_summary: "A workload and storage replicas need attention",
-      health_issues: [...demoSetup.steps.health.issues, { kind: "Volume", name: "lab/arr-dashboard-data", severity: "degraded", reason: storage.reasons[0].reason }] });
+      health_issues: [...demoSetup.steps.health.issues, { kind: "Volume", name: "lab/arr-dashboard-data", severity: "degraded", reason: storage.reasons[0].reason },
+        { kind: "Trim", name: "lab/frigate-config", severity: "degraded",
+          reason: `The weekly trim of lab/frigate-config failed: ${DEMO_TRIM_FAILURE}. It is tried again next Saturday; Trim now on its snapshot panel tries it now.` }] });
     if (scenario === "critical") {
       nodes[2].status = "NotReady";
       // A real cluster loses a node's live readings with it (metrics-server and
@@ -3119,9 +3221,66 @@ ssh_pwauth: true
   }
   responses["/api/alerts"] = {devices:[],log:[],agents:{enabled:true,pending:2},active:scenario === "healthy" ? [] : [
     {key:"health:Disk:harvester-node2/sda",version:"demo-drive-24",severity:"degraded",category:"degraded",title:"Drive harvester-node2/sda needs attention",body:"24 reallocated sectors",href:"/nodes",acknowledged:false},
-    {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false}
+    {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false},
+    {key:"audit:filling-fast",version:"demo-audit-fast",severity:"degraded",category:"degraded",title:"The audit log is filling fast",body:"audit.jsonl filled 10 MiB in 12 minutes: something may be flooding Homestead with requests, and older lines on the data volume are being replaced. The pod log keeps every line.",href:"/settings?tab=about",acknowledged:false}
   ]};
   responses["/api/alerts/acknowledge"] = (url,opts) => {const body=JSON.parse(opts.body || "{}");const row=responses["/api/alerts"].active.find(a=>a.key===body.key && a.version===body.version);if(!row)throw new Error("This alert changed. Refresh and review its current state.");row.acknowledged=!body.undo;return {ok:true};};
+  // Log alerts (logalerts.js): counts per minute for the last hour. Front
+  // door's rule is over its threshold now; Paperless's is quiet; Jellyfin's
+  // app could not be read this minute, so it is not counted (never zero).
+  // Ids are the server's; a name may not repeat the query, as on the server.
+  // Not in the bell: the bell's own checks count the demo's two alerts.
+  {
+    const minute = Math.floor(Date.now() / 60000);
+    const hour = shape => Array.from({ length: 60 }, (_, i) => [minute - 59 + i, shape(i)]);
+    const noise = i => [2, 0, 1, 3, 1, 0, 2, 4, 1, 0][i % 10];
+    const ok = { state: "ok", detail: "" };
+    const rules = [
+      { id: "la-0d3f5a9b2c71", name: "Front door camera errors", apps: ["lab/frigate"], query: "Unable to read frames", regex: false, case: false,
+        threshold: 10, window: 1, severity: "degraded", status: ok, counts: hour(i => i > 52 ? 14 + (i % 3) * 6 : i > 30 && i < 35 ? 8 + i % 4 : noise(i)) },
+      { id: "la-5e8a1c4f7b20", name: "Paperless OCR timeouts", apps: ["lab/paperless"], query: "timeout waiting for OCR", regex: false, case: false,
+        threshold: 3, window: 5, severity: "info", status: ok, counts: hour(i => i === 12 || i === 41 ? 1 : 0) },
+      { id: "la-9b6e2d0a3f15", name: "Jellyfin server errors", apps: ["media/jellyfin"], query: "\" 5\\d\\d ", regex: true, case: false,
+        threshold: 20, window: 5, severity: "degraded", status: { state: "unread", detail: "could not read jellyfin" }, counts: hour(i => i === 59 ? null : noise(i) * 2) }];
+    const refuse = message => { throw new Error(message); };
+    const check = body => {
+      const name = String(body.name || "").trim(), query = String(body.query || "").trim();
+      if (!name || name.length > 60) refuse("give the alert a name of at most 60 characters");
+      if (!(body.apps || []).length) refuse("choose the app (or up to five apps) to watch");
+      if (!query) refuse("type something to search for");
+      if (query.length >= 3 && name.toLowerCase().includes(query.toLowerCase())) refuse("the name may not repeat the search text: alert names reach lock screens and config backups");
+      if (!(Number(body.threshold) >= 1)) refuse("the threshold is a number of lines, from 1");
+      return { name, apps: body.apps, query: body.query, regex: !!body.regex, case: !!body.case,
+        threshold: Number(body.threshold), window: [1, 5, 15].includes(Number(body.window)) ? Number(body.window) : 1, severity: body.severity || "degraded" };
+    };
+    responses["/api/logalerts"] = (url, init) => {
+      if ((init?.method || "GET") === "GET") return { rules, every: 60, max_rules: 20, max_apps: 5, counted_at: Math.round(Date.now() / 1000) - 20 };
+      const body = JSON.parse(init.body || "{}"), rule = check(body);
+      if (body.id !== undefined) {
+        const old = rules.find(r => r.id === body.id) || refuse("that log alert no longer exists; refresh and try again");
+        Object.assign(old, rule);
+        return old;
+      }
+      if (rules.length >= 20) refuse("at most 20 log alerts");
+      const made = { ...rule, id: `la-${Math.random().toString(16).slice(2, 14).padEnd(12, "0")}`, counts: [], status: { state: "waiting", detail: "" } };
+      rules.push(made);
+      return made;
+    };
+    responses["/api/logalerts/delete"] = (url, init) => {
+      const at = rules.findIndex(r => r.id === JSON.parse(init.body || "{}").id);
+      if (at < 0) refuse("that log alert no longer exists; refresh and try again");
+      rules.splice(at, 1);
+      return { ok: true };
+    };
+    responses["/api/logalerts/preview"] = (url, init) => {
+      const body = JSON.parse(init.body || "{}"), rule = check(body), app = rule.apps[0];
+      const rate = app.endsWith("/frigate") ? 1 : app.endsWith("/paperless") ? 0.15 : 0.4;
+      const counts = hour(i => Math.round((i > 52 ? 16 : i > 30 && i < 35 ? 9 : noise(i)) * rate));
+      const over = counts.filter((_, m) => counts.slice(Math.max(0, m - rule.window + 1), m + 1).reduce((a, c) => a + c[1], 0) > rule.threshold).length;
+      return { counts, over_minutes: over, unread: [], capped: [] };
+    };
+  }
+  // End of log alerts.
   // On the live demo, say so on every page.
   if (live) {
     const banner = () => {
@@ -3178,6 +3337,7 @@ ssh_pwauth: true
       if (sent.mcp) responses["/api/settings"].mcp = { enabled: !!sent.mcp.enabled };
       if (sent.metrics) responses["/api/settings"].metrics = { enabled: !!sent.metrics.enabled };
       if (sent.updates?.maintenance) responses["/api/settings"].updates.maintenance = sent.updates.maintenance;
+      if (sent.audit) responses["/api/settings"].audit = { file: sent.audit.file !== false };
       return new Response(JSON.stringify({ ok: true, ...responses["/api/settings"] }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];

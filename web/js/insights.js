@@ -50,8 +50,8 @@ const HealthInsights = (() => {
     for(const issue of data.overview?.health_issues || []) {
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
-      const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster";
-      const finding=item(id,severity,`${({Node:"Host",Workload:"App"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
+      const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Trim:"protect",Workload:"workloads"})[issue.kind] || "cluster";
+      const finding=item(id,severity,`${({Node:"Host",Workload:"App",Trim:"Weekly trim failed:"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
     }
@@ -59,6 +59,8 @@ const HealthInsights = (() => {
     if (h) {
       if (h.api?.ok === false) rows.push(item("self-api","critical","Homestead cannot reach Kubernetes",h.api.error || "Check cluster connectivity.","settings:about#selfHealthCard"));
       if (h.replicas?.pods && h.replicas.pods.filter(p=>p.ready).length < h.replicas.desired) rows.push(item("self-replicas","medium","Homestead has unavailable replicas","Inspect its pods and restart errors.","settings:about#replicaCard"));
+      if (h.data_copies?.state === "can-keep-two") rows.push(item("self-data-copies","low","Homestead's data has one copy; this cluster can now keep two","Keep a second copy on another host from Redundancy.","settings:about#replicaCard"));
+      else if (h.data_copies?.state === "unknown") rows.push(item("self-data-copies","low","Could not read Homestead's data copies",h.data_copies.error || "Retry or check access.","settings:about#replicaCard"));
       const loops=(h.loops || []).filter(l=>["failing","stale","error"].includes(l.state));
       if (loops.length) rows.push(item("self-loops","medium",`${loops.length} Homestead background check${loops.length===1?" needs":"s need"} attention`,loops.map(l=>l.label || l.name).join(", ")+". Review Homestead health.","settings:about#selfHealthCard"));
       if (h.permissions?.state === "error") rows.push(item("self-permissions","critical","Homestead permissions need repair",h.permissions.detail || "Review the installation permissions.","about"));
@@ -81,6 +83,13 @@ const HealthInsights = (() => {
     if (id.startsWith("node:")) return "health:Node:"+id.slice(5);
     if (id.startsWith("condition:")) return "health:"+id.slice(10);
     return "";
+  }
+  // The version pairs running now (homestead_upgrade_check): one outside its
+  // support matrix, or on a Kubernetes past its end of life, is worth a review.
+  // Supported and not-checked pairs show on Platform versions only.
+  function pairRows(components) {
+    const severity={outside:"medium",eol:"low"};
+    return (components?.pairs || []).filter(p=>severity[p.status]).map(p=>item("pair:"+p.id,severity[p.status],p.title,p.detail,"settings:updates#settingsComponents"));
   }
   function backupRows(p, now=Date.now()) {
     return [...(p?.volumes || [])].sort((a,b)=>Number(!!a.last_backup_at)-Number(!!b.last_backup_at) || String(a.last_backup_at || "").localeCompare(String(b.last_backup_at || ""))).map(v=> {
@@ -165,6 +174,7 @@ const HealthInsights = (() => {
     if(id==="updates") {
       const r=data.updates, rows=(r?.workloads || []).filter(w=>w.available || w.images?.some(i=>i.error)).map(w=>item(w.ns+"/"+w.name,w.available?"low":"medium",w.name,w.available?"Image update available":"Registry check failed",w.homestead?"settings:updates#homesteadUpdateCard":"images"));
       for(const c of data.components?.components || [])if(c.next)rows.push(item("component:"+c.id,"low",c.name,`${c.installed} → ${c.next}`,"settings:updates#settingsComponents"));
+      rows.push(...pairRows(data.components));
       for(const [name,h] of Object.entries(data.hosts?.hosts || {}))if(h.updates?.length || h.reboot)rows.push(item("host:"+name,h.security?"medium":"low",name,`${h.updates?.length || 0} package updates${h.reboot?" · restart needed":""}`,"settings:updates#settingsHostUpdates:"+name));
       const incomplete=needs.updates.some(k=>data[k]===null) || r?.partial || (Array.isArray(r?.errors)?r.errors.length:r?.errors) || (data.hosts?.applies && !Object.keys(data.hosts.hosts || {}).length);
       return `<div class="insight-summary">${rows.length} item${rows.length===1?"":"s"} to review</div>`+list(rows,4)+(rows.length?"":'<div class="empty small">No updates reported by the available checks.</div>')+(incomplete?'<div class="ui-help">Some update checks are unavailable or incomplete. Review Updates.</div>':"");
@@ -211,7 +221,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
+  return {titles,advice,acknowledge,alertKey,backupRows,pairRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

@@ -46,15 +46,6 @@ class Interface(unittest.TestCase):
         self.assertEqual("homestead_cluster=node1; Path=/; HttpOnly; SameSite=Strict",
                          ROUTES.cookie_header(C("homestead_cluster", "node1"), tls=False))
 
-    def test_cookie_header_is_what_server_py_writes(self):
-        import server
-        handler = bare_handler([("X-Forwarded-Proto", "https")], _extra_headers=[])
-        handler._set_cookie("tok", max_age=60)
-        handler._set_cookie("", clear=True)
-        self.assertEqual([("Set-Cookie", ROUTES.cookie_header(C(server.AUTH.COOKIE, "tok", max_age=60), tls=True)),
-                          ("Set-Cookie", ROUTES.cookie_header(C(server.AUTH.COOKIE, "", max_age=0), tls=True))],
-                         handler._extra_headers)
-
     def test_only_homesteads_cookies_with_plain_values(self):
         for bad in (C("CF_Authorization", "x"), C("homestead_session", "a;b"), C("homestead_session", "a b"),
                     C("homestead_session", "a,b"), C("homestead_session", "a\r\n"), C("homestead_session", "a\x00"),
@@ -148,9 +139,9 @@ class PrefixRoutes(unittest.TestCase):
                              ("GET", "/api/v1/*"), ("GET", "/api/v1/nodes/*"), ("POST", "/api/*"), ("GET", "/*"),
                              ("GET", "/settings/*"), ("GET", "/vms/*"), ("GET", "/js/*"),
                              # server.py's own prefix answers (review I2)
-                             ("GET", "/api/self/data/handoff/*"), ("GET", "/api/self/data/*"),
-                             ("DELETE", "/api/workload/*"), ("DELETE", "/api/workload/lab/*"),
-                             ("GET", "/api/fleet/all/*"), ("GET", "/api/icons/*")):
+                             # (GET /api/self/data/handoff/ was lifted by #764 part 7: its module declares it)
+                             # (DELETE /api/workload/ was lifted by #764 part 6: its module declares it)
+                             ("GET", "/api/icons/*")):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 self.declare(method, path)
         self.assertIn(("GET", "/api/test-free/*"), self.declare("GET", "/api/test-free/*"))

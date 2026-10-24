@@ -145,8 +145,14 @@ def finish(fence, read_api, send):
                 state = anchor._decode(obj, anchor.state["operation"], uid)
                 if (state["phase"] != "done" and not state.get("setup_aborted")) or state.get("plan") != anchor.state.get("plan"):
                     raise Held("The completed control record changed before cleanup")
+            # A helper's uid matches its accepted creation receipt (checked
+            # above), so it is Homestead's own: kubelet and controllers keep
+            # updating its status, and the uid alone is the precondition, as
+            # the storage journal's own=True does (#824). The control record's
+            # verified content keeps uid + resourceVersion.
+            pinned = {"uid": uid} if fingerprint is not None else identity(obj)
             value["cleanup"][path] = {"uid": uid, "state": "intent"}; _save(directory, value)
-            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": identity(obj)})
+            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": pinned})
             if _get(read_api, path) is not None: return {"done": False, "message": "Waiting for temporary helper removal"}
             value["cleanup"][path]["state"] = "deleted"; _save(directory, value)
         # The destination receipt is already durable; a crash before/after this

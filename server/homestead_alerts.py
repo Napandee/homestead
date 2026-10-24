@@ -272,14 +272,17 @@ def health_facts(overview):
     for key, row in grouped.items():
         kind, name, issues = row["kind"], row["name"], row["issues"]
         critical = any(i.get("severity") == "critical" for i in issues)
-        href = {"Node": "/nodes", "Disk": "/nodes", "Volume": "/volumes", "Backup": "/data-protection"}.get(kind, "/containers")
+        href = {"Node": "/nodes", "Disk": "/nodes", "Volume": "/volumes", "Backup": "/data-protection",
+                "Trim": "/data-protection#housekeeping"}.get(kind, "/containers")
         title = {"Node": f"Host {name} is not ready", "Disk": f"Drive {name} needs attention",
                  "Volume": f"Volume {name} is {'faulted' if critical else 'degraded'}",
                  "Workload": f"{name.split('/')[-1]} is not ready",
-                 "Backup": f"Backup protection needs attention: {name}"}.get(kind, f"{kind} {name}")
+                 "Backup": f"Backup protection needs attention: {name}",
+                 "Trim": f"Weekly trim failed: {name}"}.get(kind, f"{kind} {name}")
         resolved = {"Node": f"Host readiness warning cleared: {name}", "Volume": f"Volume warning cleared: {name}",
                     "Workload": f"Workload readiness warning cleared: {name.split('/')[-1]}",
-                    "Disk": f"Drive warnings cleared: {name}", "Backup": f"Backup warning cleared: {name}"}.get(kind)
+                    "Disk": f"Drive warnings cleared: {name}", "Backup": f"Backup warning cleared: {name}",
+                    "Trim": f"Weekly trim worked again: {name}"}.get(kind)
         signals = {i.get("metric") or "condition": i.get("value", 1) for i in issues}
         signals.update({"device:" + i["device_identity"]: 1 for i in issues if i.get("device_identity")})
         extra = {}

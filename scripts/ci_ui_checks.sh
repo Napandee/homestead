@@ -29,6 +29,7 @@ case "${1:-}" in
     SET_RESTART_SCREENSHOTS=release-assets/dialogs/set-restart node tests/integration/set-restart.mjs
     SNAPSHOT_RESTORE_SCREENSHOTS=release-assets/dialogs/snapshot-restore node tests/integration/snapshot-restore.mjs
     HOST_SELECT_SCREENSHOTS=release-assets/dialogs/host-select node tests/integration/host-select-chips.mjs
+    node tests/integration/data-copies.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs

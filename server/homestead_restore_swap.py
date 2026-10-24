@@ -210,10 +210,16 @@ def keep_days(values=None):
     return days
 
 
+def _day(at):
+    """"7 Nov": the day unpadded on any platform (strftime's %-d is glibc's)."""
+    day = datetime.datetime.fromtimestamp(at, datetime.timezone.utc)
+    return f"{day.day} {day:%b}"
+
+
 def _until(at, days):
     if not days:
         return "until you delete it"
-    return "until " + datetime.datetime.fromtimestamp(at + days * DAY, datetime.timezone.utc).strftime("%-d %b")
+    return "until " + _day(at + days * DAY)
 
 
 def _gib(quantity):
@@ -1138,7 +1144,7 @@ def alert_facts(now=None):
                           "href": "/data-protection?" + urllib.parse.urlencode({"previous": f"{ns}/{name}"})})
             continue
         when = ("soon" if due <= now else "tomorrow" if due - now <= 1.5 * DAY else
-                "on " + datetime.datetime.fromtimestamp(due, datetime.timezone.utc).strftime("%-d %b"))
+                "on " + _day(due))
         facts.append({"key": f"previous-volume:{ns}/{name}", "category": "degraded", "severity": "info",
                       "title": f"{who} previous volume {name} will be deleted {when}",
                       "resolved": f"{who} previous volume {name} is no longer due for deletion",

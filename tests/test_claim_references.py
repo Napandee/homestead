@@ -8,11 +8,41 @@ import homestead_storage as STORAGE
 DEPLOYMENTS = "/apis/apps/v1/deployments"
 STATEFULSETS = "/apis/apps/v1/statefulsets"
 VMS = "/apis/kubevirt.io/v1/virtualmachines"
+CRONJOBS = "/apis/batch/v1/cronjobs"
+JOBS = "/apis/batch/v1/jobs"
+PODS = "/api/v1/pods"
+REPLICASETS = "/apis/apps/v1/replicasets"
+CONTROLLERS = "/api/v1/replicationcontrollers"
+CLAIMS = "/api/v1/persistentvolumeclaims"
 
 
 def deployment(name, claim, ns="lab"):
     return {"metadata": {"namespace": ns, "name": name},
             "spec": {"template": {"spec": {"volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": claim}}]}}}}
+
+
+def owned(kind, uid, name="owner"):
+    return [{"apiVersion": "v1", "kind": kind, "name": name, "uid": uid, "controller": True}]
+
+
+def pod(name, claim, ns="lab", owners=None, phase="Running", uid=None):
+    meta = {"namespace": ns, "name": name, "uid": uid or f"uid-{name}"}
+    if owners:
+        meta["ownerReferences"] = owners
+    return {"metadata": meta, "status": {"phase": phase},
+            "spec": {"volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": claim}}]}}
+
+
+def job(name, claim, ns="lab", owners=None, uid=None):
+    meta = {"namespace": ns, "name": name, "uid": uid or f"uid-{name}"}
+    if owners:
+        meta["ownerReferences"] = owners
+    return {"metadata": meta, "spec": {"template": pod(name, claim, ns)}}
+
+
+def replicas(name, claim, ns="lab", owners=None, uid=None):
+    """A ReplicaSet or ReplicationController: both carry a pod template."""
+    return job(name, claim, ns, owners, uid)
 
 
 class Lists:
@@ -87,6 +117,138 @@ class ClaimReferencesTests(unittest.TestCase):
 
     def test_with_everything_read_a_claim_nothing_uses_is_unused(self):
         self.assertEqual([], self.users(Lists(), "old-data"))
+
+
+class BareWorkloadTests(unittest.TestCase):
+    """A Job, Pod, ReplicaSet or ReplicationController made on its own, with
+    nothing above it, is what uses its claim: without it the claim read as
+    orphaned and could be deleted (gap 12). One made by something that was
+    read is already named by that owner."""
+
+    def users(self, claim, **answers):
+        with patch.object(STORAGE, "kget", Lists(**answers)):
+            return STORAGE._references_for(STORAGE.claim_references(), "lab", claim)
+
+    def test_a_bare_job_names_its_claim(self):
+        self.assertEqual(["Job/migrate"], self.users("db-dump", **{JOBS: {"items": [job("migrate", "db-dump")]}}))
+
+    def test_a_bare_pod_names_its_claim_running_or_finished(self):
+        for phase in ("Running", "Succeeded", "Failed", "Pending"):
+            with self.subTest(phase):
+                self.assertEqual(["Pod/debug"], self.users("scratch", **{PODS: {"items": [pod("debug", "scratch", phase=phase)]}}))
+
+    def test_a_bare_replicaset_and_replication_controller_name_their_claims(self):
+        self.assertEqual(["ReplicaSet/web"], self.users("web-data", **{REPLICASETS: {"items": [replicas("web", "web-data")]}}))
+        self.assertEqual(["ReplicationController/legacy"],
+                         self.users("legacy-data", **{CONTROLLERS: {"items": [replicas("legacy", "legacy-data")]}}))
+
+    def test_what_a_read_owner_made_is_named_by_that_owner_only(self):
+        cron = {"metadata": {"namespace": "lab", "name": "backup", "uid": "uid-cron"},
+                "spec": {"jobTemplate": {"spec": {"template": pod("t", "backup-data")}}}}
+        deploy = deployment("plex", "plex-config")
+        deploy["metadata"]["uid"] = "uid-plex"
+        answers = {
+            CRONJOBS: {"items": [cron]},
+            DEPLOYMENTS: {"items": [deploy]},
+            JOBS: {"items": [job("backup-1", "backup-data", owners=owned("CronJob", "uid-cron"))]},
+            REPLICASETS: {"items": [replicas("plex-6d9", "plex-config", owners=owned("Deployment", "uid-plex"))]},
+            PODS: {"items": [pod("backup-1-x", "backup-data", owners=owned("Job", "uid-backup-1")),
+                             pod("plex-6d9-y", "plex-config", owners=owned("ReplicaSet", "uid-plex-6d9"))]},
+        }
+        self.assertEqual(["CronJob/backup"], self.users("backup-data", **answers))
+        self.assertEqual(["Deployment/plex"], self.users("plex-config", **answers))
+
+    def test_a_job_whose_owner_was_not_read_is_named(self):
+        """Its owner is gone, or of a kind not read (an operator's own
+        resource): nothing else would name the claim."""
+        self.assertEqual(["Job/orphan"], self.users("old-run", **{JOBS: {"items": [
+            job("orphan", "old-run", owners=owned("CronJob", "uid-deleted"))]}}))
+        self.assertEqual(["Pod/db-0"], self.users("db-data", **{PODS: {"items": [
+            pod("db-0", "db-data", owners=owned("Cluster", "uid-operator-cr"))]}}))
+
+    def test_a_vms_launcher_pod_is_named_by_the_vm_and_a_lone_instance_s_by_itself(self):
+        vm = {"metadata": {"namespace": "lab", "name": "win11", "uid": "uid-vm"},
+              "spec": {"template": {"spec": {"volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": "win11-disk"}}]}}}}
+        answers = {VMS: {"items": [vm]}, PODS: {"items": [
+            pod("virt-launcher-win11-abcde", "win11-disk", owners=owned("VirtualMachineInstance", "uid-vmi", "win11")),
+            pod("virt-launcher-lone-fghij", "lone-disk", owners=owned("VirtualMachineInstance", "uid-lone", "lone"))]}}
+        self.assertEqual(["VM/win11"], self.users("win11-disk", **answers))
+        self.assertEqual(["Pod/virt-launcher-lone-fghij"], self.users("lone-disk", **answers))
+
+    def test_a_claim_the_owner_no_longer_names_is_named_by_what_still_mounts_it(self):
+        """The owner's template moved on (a CronJob edited, a Deployment rolled
+        out, a volume hotplugged into a VM or added by a webhook), but what it
+        made still mounts the old claim: that claim is in use."""
+        cron = {"metadata": {"namespace": "lab", "name": "backup", "uid": "uid-cron"},
+                "spec": {"jobTemplate": {"spec": {"template": pod("t", "backup-new")}}}}
+        deploy = deployment("plex", "plex-new")
+        deploy["metadata"]["uid"] = "uid-plex"
+        answers = {
+            CRONJOBS: {"items": [cron]},
+            DEPLOYMENTS: {"items": [deploy]},
+            JOBS: {"items": [job("backup-1", "backup-old", owners=owned("CronJob", "uid-cron", "backup"))]},
+            REPLICASETS: {"items": [replicas("plex-old", "plex-old-data", owners=owned("Deployment", "uid-plex", "plex"))]},
+            PODS: {"items": [pod("backup-1-x", "backup-old", owners=owned("Job", "uid-backup-1", "backup-1")),
+                             pod("plex-old-y", "plex-old-data", owners=owned("ReplicaSet", "uid-plex-old", "plex-old")),
+                             pod("hp-volume-z", "hotplugged", owners=owned("Pod", "uid-launcher", "virt-launcher-vm1"))]},
+        }
+        self.assertEqual(["Job/backup-1"], self.users("backup-old", **answers))
+        self.assertEqual(["ReplicaSet/plex-old"], self.users("plex-old-data", **answers))
+        self.assertEqual(["Pod/hp-volume-z"], self.users("hotplugged", **answers))
+
+    def test_a_statefulset_s_own_claims_are_not_named_again_by_its_pods(self):
+        sts = {"metadata": {"namespace": "lab", "name": "db", "uid": "uid-db"},
+               "spec": {"template": {"spec": {}}, "volumeClaimTemplates": [{"metadata": {"name": "data"}}]}}
+        answers = {STATEFULSETS: {"items": [sts]},
+                   PODS: {"items": [pod("db-0", "data-db-0", owners=owned("StatefulSet", "uid-db", "db"))]}}
+        self.assertEqual(["StatefulSet/db"], self.users("data-db-0", **answers))
+
+    def test_each_new_kind_unreadable_leaves_unused_claims_unknown(self):
+        for path in (JOBS, PODS, REPLICASETS, CONTROLLERS):
+            for answer in (forbidden(path), {"metadata": {"continue": "t"}, "items": []}, {"items": [{"spec": {}}]}):
+                with self.subTest(path=path, answer=answer):
+                    self.assertIsNone(self.users("old-data", **{path: answer}))
+
+    def test_a_pod_list_already_read_is_used_and_not_read_again(self):
+        """The page snapshot's cycle reads the pods once for every part."""
+        read = []
+        lists = Lists()
+
+        def get(path, **kw):
+            read.append(path)
+            return lists(path, **kw)
+        with patch.object(STORAGE, "kget", get):
+            refs = STORAGE.claim_references(pods={"items": [pod("debug", "scratch")], "metadata": {}})
+        self.assertNotIn(PODS, read)
+        self.assertEqual(["Pod/debug"], STORAGE._references_for(refs, "lab", "scratch"))
+
+    def test_a_claim_owned_by_something_is_in_use(self):
+        """A CDI golden image: a DataVolume owns its claim, nothing mounts it,
+        and later clones need it. Any owner keeps a claim from reading unused."""
+        claims = {"items": [
+            {"metadata": {"namespace": "lab", "name": "fedora-golden", "uid": "uid-c1",
+                          "ownerReferences": owned("DataVolume", "uid-dv", "fedora-golden")}},
+            {"metadata": {"namespace": "lab", "name": "old-data", "uid": "uid-c2"}}], "metadata": {}}
+        self.assertEqual(["DataVolume/fedora-golden"], self.users("fedora-golden", **{CLAIMS: claims}))
+        self.assertEqual([], self.users("old-data", **{CLAIMS: claims}))
+
+    def test_claims_that_could_not_be_read_leave_unused_claims_unknown(self):
+        for answer in (forbidden(CLAIMS), {"metadata": {"continue": "t"}, "items": []}, {"items": [{"spec": {}}]}):
+            with self.subTest(answer=answer):
+                self.assertIsNone(self.users("old-data", **{CLAIMS: answer}))
+
+    def test_a_replica_set_or_job_without_a_pod_template_names_nothing_and_hides_nothing(self):
+        """A missing template is no claims, not an unreadable kind: otherwise
+        every claim nothing names reads unknown and installs over a leftover
+        claim are refused."""
+        for path in (REPLICASETS, CONTROLLERS, JOBS):
+            with self.subTest(path=path):
+                answers = {path: {"items": [{"metadata": {"namespace": "lab", "name": "x", "uid": "u"}, "spec": {}}]}}
+                self.assertEqual([], self.users("old-data", **answers))
+                self.assertEqual(["Deployment/plex"], self.users("plex-config", **answers))
+
+    def test_with_everything_read_a_claim_nothing_uses_is_still_unused(self):
+        self.assertEqual([], self.users("old-data", **{PODS: {"items": [pod("debug", "scratch")]}}))
 
 
 class VolumesPageTests(unittest.TestCase):

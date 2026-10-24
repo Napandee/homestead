@@ -40,6 +40,7 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_routes as MODULE_ROUTES
 import homestead_self as SELF
 import homestead_self_data_prepare as SELF_DATA_PREPARE
+import homestead_storage_guard as STORAGE_GUARD
 import homestead_updates as UPDATES
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
@@ -192,8 +193,12 @@ def preview_image_update(body):
 def _jobs_loop():
     """Only the leader advances jobs (#622): every 3 s while one is active, every
     20 s otherwise, or at once when something asks (OPS.advance_soon). Requests
-    read the saved jobs (OPS.snapshot) and never run a resolver themselves."""
-    OPS.run_jobs(LEADER.is_leader)
+    read the saved jobs (OPS.snapshot) and never run a resolver themselves.
+    It beats each round, so a stalled loop or a hung resolver shows in health,
+    and starts a round as soon as this replica becomes leader."""
+    LEADER.when_leading(OPS.advance_soon)
+    OPS.run_jobs(LEADER.is_leader,
+                 beat=lambda error=None: beat("jobs", OPS.JOBS_BEAT_EVERY, error, leader_only=True))
 
 
 def _detached_copies_loop():
@@ -323,10 +328,26 @@ def cluster_shutdown(review=False):
     image = _self_data_helper_image(kget, SELF.NS)[1] if review else ""
     def busy():
         with OPS.transaction():
-            return ["Finish or recover job: " + j["title"] for j in SELF_DATA_PREPARE.blocking_jobs(OPS)
-                    if j["kind"] != "cluster-shutdown"]
-    return CLUSTER_SHUTDOWN.Shutdown(kget, lambda *a, **kw: _ksend(*a, **kw, shutdown_bypass=True), SELF.NS, SELF.POD, image,
+            jobs = [j for j in SELF_DATA_PREPARE.blocking_jobs(OPS) if j["kind"] != "cluster-shutdown"]
+            # The shutdown changes Homestead's replicas from a helper pod no
+            # write guard reaches, so it waits for every move the storage guard
+            # would refuse that for - a failed one not yet cleaned up too.
+            listed = {j["id"] for j in jobs}
+            moves = [m for m in STORAGE_GUARD.active_moves(OPS.stored()) if m["id"] not in listed]
+        return (["Finish or recover job: " + j["title"] for j in jobs] +
+                ["Recover the storage move first: " + (m.get("title") or m["id"]) for m in moves])
+    return CLUSTER_SHUTDOWN.Shutdown(kget, _shutdown_send, SELF.NS, SELF.POD, image,
                                       enabled=LC.NODE_POWER_ENABLED, busy=busy)
+
+
+def _shutdown_send(method, path, body=None, **kwargs):
+    """The shutdown's own writes from here: past the shutdown fence and the
+    other write guards - recovery gives Homestead its copies back even while
+    a storage move waits, which the review kept from starting - but saying
+    who made them, like every write to an app (#621)."""
+    import homestead_changes as CHANGES
+    CHANGES.note_write(method, path, body)
+    return _ksend(method, path, body, **kwargs, shutdown_bypass=True)
 
 
 def _upgrade_node_probe():
