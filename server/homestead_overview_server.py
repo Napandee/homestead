@@ -52,6 +52,7 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
 import homestead_routes as MODULE_ROUTES
 import homestead_schedules as SCHEDULES
+import homestead_scheduled_jobs as CRONJOBS
 import homestead_start_order as START_ORDER
 import homestead_self as SELF
 import homestead_storage as STORAGE
@@ -285,6 +286,7 @@ def _alert_sources():
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, NODES.ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
+    take("cronjobs", CRONJOBS.cronjob_alert_facts)
     take("outage", lambda: OUTAGE.alert_facts())
     take("outage-lan", OUTAGE_CARRY.alert_facts)
     take("starts-after", lambda: START_ORDER.alert_facts(cached("wl", 5, WORKLOADS.get_workloads)))
