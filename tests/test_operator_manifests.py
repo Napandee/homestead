@@ -239,6 +239,14 @@ class ManifestOperatorTests(unittest.TestCase):
         with patch.object(C, "kubevirt_version", return_value=("v1.9.1", "Deployed")):
             self.assertEqual("succeeded", C.status(item)[0])
 
+    def test_a_matching_helmchart_name_is_not_enough_to_claim_ownership(self):
+        chart = {"metadata": {"name": "homestead-kubevirt"}, "spec": {"chart": "another-chart"}}
+        self.assertTrue(C._operator_chart_owner(chart))
+        chart["metadata"]["labels"] = {"homestead.io/managed": "true"}
+        self.assertEqual("", C._operator_chart_owner(chart))
+        chart["metadata"]["labels"]["kustomize.toolkit.fluxcd.io/name"] = "platform"
+        self.assertEqual("Flux", C._operator_chart_owner(chart))
+
     def test_manage_route_requires_confirmation_and_rejects_unknown_components(self):
         request = type("Request", (), {"body": {"component": "kubevirt"}})()
         with self.assertRaisesRegex(ValueError, "Review and confirm"):

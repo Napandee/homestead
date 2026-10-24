@@ -38,6 +38,7 @@ import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_upgrade_check as UPGRADE_CHECK
 import homestead_routes
 import homestead_operator_manifests as OPERATOR_MANIFESTS
+import homestead_names as NAMES
 
 kget = ksend = None
 ktext = None            # path -> plain text: a pod's log
@@ -249,6 +250,15 @@ def _helmchart(name):
     return _get(f"/apis/helm.cattle.io/v1/namespaces/{HELM_NS}/helmcharts/{name}")
 
 
+def _operator_chart_owner(chart):
+    owner = OPERATOR_MANIFESTS.external(chart)
+    if owner:
+        return owner
+    if (chart.get("metadata", {}).get("labels") or {}).get(NAMES.key("managed")) != "true":
+        return "an unrecognized HelmChart installation"
+    return ""
+
+
 def _image_tag(path):
     ds = _get(path) or {}
     containers = (((ds.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
@@ -348,7 +358,7 @@ def report(force=False):
             continue
         installed, phase = version()
         chart = None if p.get("harvester") else _helmchart(CHARTS[component])
-        external = OPERATOR_MANIFESTS.external(chart) if chart else ""
+        external = _operator_chart_owner(chart) if chart else ""
         managed = bool(chart and not external)
         state = ({"how": "harvester", "note": harvester_note} if p.get("harvester") else
                  {"how": "manual", "note": f"Managed by {external}; upgrade it through that manager."} if external else
@@ -439,7 +449,7 @@ def _start_operator(component, target):
     chart = _helmchart(CHARTS[component])
     if not chart:
         raise ValueError(f"Homestead did not install {component}")
-    owner = OPERATOR_MANIFESTS.external(chart)
+    owner = _operator_chart_owner(chart)
     if owner:
         raise ValueError(f"{component} is managed by {owner}; upgrade it through that manager")
     base = addons.KUBEVIRT if component == "kubevirt" else addons.CDI
