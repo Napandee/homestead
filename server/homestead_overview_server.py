@@ -597,7 +597,9 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
             raise WORKLOADS.WorkloadRefused("review node memory before starting", plan)
     if n:
         clear_unstarted_pods(ns, name, stopping=False)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
+    # The Deployment itself, not its /scale, so the write carries who made it
+    # (#621). A policy that refuses it is the answer: no second try through /scale.
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
     if not n:
         clear_unstarted_pods(ns, name, stopping=True)

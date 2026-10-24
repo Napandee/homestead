@@ -1450,10 +1450,16 @@ def _apply_cancel(operation_id):
         before = _mark_cancelling(match, plan)
         _write(items)
         work = json.loads(json.dumps(match))
+    # The canceller's writes are for whoever cancelled, not the loop (#621).
+    import homestead_changes as CHANGES
+    was = getattr(CHANGES.REQUEST, "user", None)
+    CHANGES.REQUEST.user = request.get("by") or None
     try:
         _run_cancel(operation_id, work, plan, chosen, before, request.get("by", ""))
     except ValueError as error:   # the job is running again and says why
         print(f"job {operation_id} not cancelled: {str(error)[:160]}", flush=True)
+    finally:
+        CHANGES.REQUEST.user = was
     return True
 
 

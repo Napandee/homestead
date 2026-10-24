@@ -137,6 +137,46 @@ class CopyJobTests(unittest.TestCase):
         self.assertEqual("64Mi", helper["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]["memory"])
         self.assertEqual("", guard.pending(self.admission.call_args_list[1].args[0], "lab", self.read))
 
+    def guarded(self):
+        """The write guard in front of this send, as in the app (#621)."""
+        import homestead_changes as CH
+        import homestead_kube as K
+        send = self.send
+
+        def guarded(method, path, body, **kwargs):
+            CH.note_write(method, path, body)
+            return send(method, path, body, **kwargs)
+        self.send = guarded
+        for patch in (mock.patch.object(CH, "_author_key", lambda: b"copy-mark"), mock.patch.object(K, "kget", self.read)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return CH
+
+    def test_the_restart_carries_the_change_mark_and_its_receipt_still_passes(self):
+        CH = self.guarded()
+        self.start(); self.poll(); self.complete()
+        self.assertEqual("running", self.poll()["status"])
+        self.assertEqual("succeeded", self.poll()["status"])
+        self.assertEqual(1, self.dep["spec"]["replicas"])
+        self.assertNotIn(flow.MARKER, self.dep["metadata"]["annotations"])
+        self.assertIn(CH.AUTHOR, self.dep["metadata"]["annotations"])
+        self.assertEqual(CH._AUTHOR_POINTER, self.sent[-1][2][-1]["path"])
+
+    def test_releasing_the_hold_carries_the_change_mark(self):
+        CH = self.guarded()
+        result = self.start(); self.poll(); self.complete(failed=True); self.poll()
+        ops.cancel(result["operation"]["id"], {"ack": True}, "app", by="ada")
+        CH.REQUEST.user = None   # the jobs loop's thread serves no request
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+        self.poll()  # the jobs loop applies a copy job's cancel (#622)
+        self.assertNotIn(flow.MARKER, self.dep["metadata"]["annotations"])
+        self.assertEqual(0, self.dep["spec"]["replicas"])
+        mark = json.loads(self.dep["metadata"]["annotations"][CH.AUTHOR])
+        meta = self.dep["metadata"]
+        self.assertEqual(CH._signed(b"copy-mark", meta["namespace"], meta["name"], mark["at"], "ada"), mark["by"],
+                         "the release is credited to whoever cancelled, not to the job")
+        self.assertIsNone(CH.REQUEST.user, "the loop thread is left serving no one")
+
     def test_capacity_changed_during_copy_leaves_app_stopped_and_data_retained(self):
         self.start(); self.poll(); self.complete()
         self.admission.return_value = {"blocked": True}
