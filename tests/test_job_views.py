@@ -47,6 +47,8 @@ def reference_view(item):
         ref = item.get("ref") or {}
         out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
                         "direct": bool(ref.get("planned_outage") or ref.get("forced")),
+                        "planned_outage": bool(ref.get("planned_outage")),
+                        "handoff": bool(ref.get("handoff") and ref.get("helper_uid")),
                         "failed_phase": ref.get("failed_phase", ""),
                         "holds": bool(ref.get("held")) or any(
                             choice == "wait" or (choice == "move" and key.startswith("VirtualMachine/"))
