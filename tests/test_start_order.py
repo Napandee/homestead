@@ -770,12 +770,11 @@ class StateTests(Fixture):
         differs = facts["starts-after:differs:lab/app-1"]
         self.assertEqual(("info", "app-1's start gate does not match its setting"), (differs["severity"], differs["title"]))
         # Advice that works: the same setting saved again is no change, so it
-        # names restore_gate (SaveTests.test_restore_gate_puts_the_gate_back).
-        self.assertIn('save its Starts after again with "restore_gate": true to put the gate back; that restarts it once',
-                      differs["body"])
+        # names Edit's button, which sends restore_gate (SaveTests.test_restore_gate_puts_the_gate_back).
+        self.assertIn("use Put the start gate back in Edit → Placement; that restarts it once", differs["body"])
         self.assertNotIn("save Starts after in Edit", differs["body"])
         flux = facts["starts-after:differs:lab/app-3"]
-        self.assertIn("commit the lines /api/workloads/starts-after gives for it", flux["body"])
+        self.assertIn("commit the lines Edit → Placement shows", flux["body"])
 
     def test_bad_rows_never_break_the_alerts(self):
         self.assertEqual([], START.alert_facts([{"ns": "lab", "name": "x"}, {}], now=T0))

@@ -722,9 +722,9 @@ def alert_facts(workloads, now=None):
                           "signals": {}})
         gate = row.get("start_gate")
         if gate == "differs" or (gate == "missing" and (setting or {}).get("managed")):
-            # The same setting saved again is no change: restore_gate is what puts it back.
-            fix = ("commit the lines /api/workloads/starts-after gives for it" if (setting or {}).get("managed")
-                   else 'save its Starts after again with "restore_gate": true to put the gate back; that restarts it once')
+            # The same setting saved again is no change: Edit's button sends restore_gate.
+            fix = ("commit the lines Edit → Placement shows" if (setting or {}).get("managed")
+                   else "use Put the start gate back in Edit → Placement; that restarts it once")
             facts.append({"key": f"starts-after:differs:{ns}/{name}", "category": "degraded", "severity": "info",
                           "title": f"{name}'s start gate does not match its setting",
                           "body": f"Its pods don't wait as Starts after says: {fix}.",
