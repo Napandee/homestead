@@ -63,7 +63,14 @@ window.diskV2Open = async (node,disk) => {
       (!plan.blockers.length?UI.ack('diskV2Confirm','Disable new replicas and move existing replicas off this disk',{onchange:"$('#diskV2Begin').disabled=!this.checked"}):'') +
       UI.actions(UI.cancel('Close')+UI.button('Move replicas off','diskV2Begin()',{kind:'pri',id:'diskV2Begin',disabled:true,attrs:'data-need="admin"'}),UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`));
     window.applyRole?.();
-  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`) + (e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):e.message.includes('Longhorn runtime storage shares')?UI.button('Review runtime move',`runtimeMoveOpen(${jsArg(node)},${jsArg(disk)})`,{kind:'pri',attrs:'data-need="admin"'}):''));}
+  } catch(e) {
+    if(sequence!==diskV2Sequence || $('#diskV2Review')!==host)return;
+    const runtime=e.message.includes('Longhorn runtime storage shares');
+    host.innerHTML=UI.callout('warn',runtime?'Move Longhorn runtime before preparing V2':'Disk review unavailable',esc(e.message))+
+      UI.actions(UI.cancel('Close')+(runtime?UI.button('Review runtime move',`runtimeMoveOpen(${jsArg(node)},${jsArg(disk)})`,{kind:'pri',attrs:'data-need="admin"'}):
+        e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`)));
+    window.applyRole?.();
+  }
 };
 window.diskV2Begin = async () => {
   if(diskV2Busy || !diskV2Approval || !$('#diskV2Confirm')?.checked || !$('#diskV2Review') || $('#modal')?.classList.contains('hidden')) return;

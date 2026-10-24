@@ -1678,6 +1678,11 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ` ${UI.chip("V2", "info")}` : ""}</span>
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
+        ${x.reserved_gb > 0 ? UI.more('Capacity breakdown',UI.facts([
+          [x.type==='block'?'Store capacity':'Filesystem capacity',esc(sizeText(x.capacity_gb))],
+          ['Reserved by Longhorn',esc(sizeText(x.reserved_gb))],
+          ['Capacity after reserve',esc(sizeText(x.size_gb))]
+        ])+`<p class="ui-help">The usage bar excludes Longhorn’s reserve.${x.type==='block'?'':' Filesystem capacity is smaller than the underlying device because of filesystem overhead.'} Growing the OS does not grow this store.</p>`) : ''}
         ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
         <div class="row disk-tags">${(x.tags || []).map(t => UI.chip(t, "info")).join("")
           || '<span class="dim xs">no tags</span>'}
@@ -1687,7 +1692,7 @@ function diskRowsHtml(node, disks, harvester) {
           ${x.evicting ? UI.chip("moving replicas off", "warn") : !x.scheduling ? UI.chip("no new replicas", "neutral") : ''}
           ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
             !x.ready && {label:'Replace failed disk',need:'admin',run:`diskRetire(${jsq(node)},${jsq(x.id)})`},
-            !harvester && (x.path==='/var/lib/longhorn'||x.path?.startsWith('/mnt/homestead-retired-')) && {label:'Runtime maintenance',need:'admin',run:`runtimeMoveOpen(${jsq(node)},${jsq(x.id)})`},
+            !harvester && (x.path?.replace(/\/+$/,'')==='/var/lib/longhorn'||x.path?.startsWith('/mnt/homestead-retired-')) && {label:'Move Longhorn runtime',need:'admin',run:`runtimeMoveOpen(${jsq(node)},${jsq(x.id)})`},
             {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
             x.ready && x.replicas && !x.evicting && {label:'Move replicas off',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},true)`},
             x.evicting && {label:'Stop moving',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},false)`},
