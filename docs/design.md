@@ -621,7 +621,10 @@ file and line, when it finds:
   hand-written acknowledgement checkboxes and "I accept" wording, and
   hand-written `.pill`/`.tag` chips (`tests/chip-count.test.js`; use
   `UI.chip(label, tone)`). That count only shrinks: lower it in the same
-  change that removes some;
+  change that removes some. What is left are buttons and links styled
+  `.tag`/`.pill` (`tagbtn`, `pillbtn`, `linkish`, `movable`) and a few
+  special shapes (`cluster-tag`, `duty`, `slimtag`, `more`); a `UI.chip`
+  for buttons would be its own issue;
 - more reads than today that turn a failure into an empty answer
   (`.catch(() => [])` and the like) or an invented one (a made-up namespace
   or storage class). A read that failed is not "nothing there": say it could

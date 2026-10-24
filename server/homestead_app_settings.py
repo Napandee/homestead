@@ -80,6 +80,9 @@ DEFAULTS = {
     # before it is deleted (homestead_restore_swap): 0 keeps it until a
     # person deletes it.
     "restore_swap": {"keep_days": 7},
+    # The audit log (homestead_audit) always goes to the pod log; this keeps it
+    # on the data volume too, as audit.jsonl.
+    "audit": {"file": True},
 }
 
 
@@ -187,6 +190,10 @@ def validate(value):
     if keep < 0 or keep > 90:
         raise ValueError("previous volumes are kept 1 to 90 days, or 0 to keep them until deleted")
     out["restore_swap"] = {"keep_days": keep}
+    audit_file = ((value or {}).get("audit") or {}).get("file", True)
+    if not isinstance(audit_file, bool):
+        raise ValueError("the audit log file must be on or off")
+    out["audit"] = {"file": audit_file}
     site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")

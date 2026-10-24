@@ -134,6 +134,10 @@ def create_storage_class(cfg):
         raise ValueError("copies go on different hosts or different disks")
     if copies == "disks":
         parameters.update(replicaSoftAntiAffinity="enabled", replicaDiskSoftAntiAffinity="disabled")
+    elif cfg.get("hosts_only"):
+        # Different hosts whatever Longhorn's global soft anti-affinity says:
+        # Homestead's "Longhorn, two copies" class (homestead_data_copies).
+        parameters["replicaSoftAntiAffinity"] = "disabled"
     warning = ""
     disk_tags, node_tags = DISKS.clean_tags(cfg.get("disk_tags")), DISKS.clean_tags(cfg.get("node_tags"))
     if disk_tags:

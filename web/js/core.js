@@ -199,9 +199,13 @@ applySettings();
    answer over the page you actually asked for, leaving the URL, the title and
    the body disagreeing. A read whose answer arrives after you have navigated
    away is for a page nobody is looking at, so it is abandoned rather than
-   returned. Writes are never abandoned: their result has to be reported. */
+   returned. Writes are never abandoned: their result has to be reported.
+   An abandoned read never settles, so nothing of the page left runs on. Each
+   gets a promise of its own that nothing else holds: the frames awaiting it,
+   and the page data they keep, are then freed with it. One shared promise
+   would hold every abandoned page for the rest of the visit. */
 window.NAV_TOKEN = 0;
-const ABANDONED = new Promise(() => { });
+const abandoned = () => new Promise(() => { });
 
 /* Dropping a late answer is not enough: the request itself keeps one of the
    browser's six connections to Homestead busy until the cluster answers, and
@@ -248,7 +252,7 @@ async function api(path, opts) {
     // A connection that broke after you left the page is for a page nobody is
     // looking at too: dropped like a late answer, so its error is not shown on
     // the page you went to.
-    if (left) return ABANDONED;
+    if (left) return abandoned();
     throw error;
   }
   const missing = r.headers.get("x-homestead-fleet-missing");
@@ -260,11 +264,11 @@ async function api(path, opts) {
     const left = readOnly && startedAt !== window.NAV_TOKEN;
     diagnostic?.done(r.status, undefined, left && error?.name === "AbortError");
     // Cancelled while its answer was still arriving, because you left the page.
-    if (left) return ABANDONED;
+    if (left) return abandoned();
     throw error;
   }
   diagnostic?.done(r.status, b?.operation?.id);
-  if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
+  if (readOnly && startedAt !== window.NAV_TOKEN) return abandoned();
   if (!r.ok) throw Object.assign(new Error((b && b.error) || r.statusText), { status: r.status, body: b });
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;
@@ -289,8 +293,8 @@ function hardwareDef(id) {
 const hardwareName = id => hardwareDef(id).name;
 const hardwareTags = ids => (ids || []).map(id => {
   const f = hardwareDef(id);
-  return `<span class="tag hw" title="${esc(f.host_path || "Configured hardware feature")}">${esc(f.name)}</span>`;
-}).join("");
+  return UI.chip(f.name, "hw", { tip: f.host_path || "Configured hardware feature" });
+}).join(" "); // a space, as .tag's margin gave, where the row has no gap
 function hardwareChoices(cls, selected = []) {
   const chosen = new Set(selected || []);
   const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
@@ -298,8 +302,8 @@ function hardwareChoices(cls, selected = []) {
     const hosts = nodes.filter(n => (n.hardware || {})[f.id]).map(n => n.name);
     return `<label class="switch hwchoice">
     <input type="checkbox" class="${esc(cls)}" data-hwid="${esc(f.id)}" ${chosen.has(f.id) ? "checked" : ""}>
-    <span><b>${esc(f.name)}</b>${f.builtin ? ' <span class="tag">built in</span>' : ""}
-    <span class="tag hw">${esc(f.host_path)} → ${esc(f.container_path || f.host_path)}</span>
+    <span><b>${esc(f.name)}</b>${f.builtin ? ` ${UI.chip("built in", "neutral")}` : ""}
+    ${UI.chip(`${f.host_path} → ${f.container_path || f.host_path}`, "hw")}
     ${f.usb_ids?.length ? `<span class="dim xs"> USB ${esc(f.usb_ids.join(", "))}</span>` : ""}
     <span class="dim xs hw-hosts">${hosts.length ? `${hosts.length} host${hosts.length === 1 ? "" : "s"}: ${esc(hosts.map(x => x.replace("harvester-", "")).join(", "))}` : "no eligible host detected"}</span></span></label>`;
   }).join("");

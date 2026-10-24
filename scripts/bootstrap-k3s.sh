@@ -548,8 +548,12 @@ TMP=$(mktemp)
 curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$TMP" || fail "Could not download $RAW/$REF/deploy/deploy.yaml."
 # Harvester's answers become this cluster's: its storage class, and this
 # machine's address - the ServiceLB publishes Services on the nodes' own
-# addresses, so there is no separate VIP to choose.
-sed -e "s/longhorn-r2/$CLASS/g" \
+# addresses, so there is no separate VIP to choose. The class is rewritten on
+# its two lines only (a bare "longhorn" would hit longhorn.io and
+# longhorn-system), for this manifest's longhorn and an older release's
+# longhorn-r2 (#731).
+sed -e "s/storageClassName: longhorn\(-r2\)\{0,1\}$/storageClassName: $CLASS/" \
+    -e "s/value: \"longhorn\(-r2\)\{0,1\}\"$/value: \"$CLASS\"/" \
     -e "s/accessModes: \[ReadWriteMany\]/accessModes: [$MODE_RW]/" \
     -e "s/192\.0\.2\.242/$IP/g" \
     -e "/kube-vip.io\/loadbalancerIPs/d" \

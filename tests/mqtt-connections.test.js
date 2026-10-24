@@ -4,13 +4,16 @@ const fs = require("node:fs"), vm = require("node:vm");
 
 function load() {
   const actions = [], callouts = [];
-  const ctx = { STATE: { data: {} }, esc: v => String(v ?? ""), fmtAgo: s => `${Math.round(s)}s ago`,
-    serviceRow: (title, pill, detail, bar) => `<row>${title}|${pill}|${detail}|${bar}</row>`,
-    actionBar: rows => { const kept = rows.filter(Boolean); actions.push(...kept); return kept.map(r => `[${r.label}]`).join(""); },
-    UI: { moduleHeader: (t, s) => `<h>${t}</h><p>${s}</p>`, facts: rows => rows.map(([k, v]) => `<f>${k}: ${v}</f>`).join(""),
-      callout: (tone, title, body) => { callouts.push([tone, title]); return `<c ${tone}>${title}: ${body}</c>`; } } };
+  const ctx = { STATE: { data: {} }, esc: v => String(v ?? "").replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`) };
   ctx.window = ctx;
   vm.createContext(ctx);
+  // The real UI.chip draws the status chips; the rest of UI is stubbed below.
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
+  Object.assign(ctx, { fmtAgo: s => `${Math.round(s)}s ago`,
+    serviceRow: (title, pill, detail, bar) => `<row>${title}|${pill}|${detail}|${bar}</row>`,
+    actionBar: rows => { const kept = rows.filter(Boolean); actions.push(...kept); return kept.map(r => `[${r.label}]`).join(""); } });
+  Object.assign(ctx.UI, { moduleHeader: (t, s) => `<h>${t}</h><p>${s}</p>`, facts: rows => rows.map(([k, v]) => `<f>${k}: ${v}</f>`).join(""),
+    callout: (tone, title, body) => { callouts.push([tone, title]); return `<c ${tone}>${title}: ${body}</c>`; } });
   vm.runInContext(fs.readFileSync("web/js/views-stats.js", "utf8"), ctx);
   return { ctx, actions, callouts };
 }
@@ -30,9 +33,9 @@ test("the card is laid out as UniFi is: the broker, its facts, then power contro
   const html = ctx.mqttCardHtml({ enabled: true, host: "192.0.2.177", port: 1883, tls: false, username: "", base: "harvester",
     discovery: "homeassistant", interval: 60, sensors: { cluster: 15, node: 9 }, control: true, controlled: ["vm:vms/win11", "app:lab/frigate"],
     status: { state: "publishing", last_publish: 980 } }, 1000);
-  assert.match(html, /MQTT broker\|<span class="pill ok">publishing/);
+  assert.match(html, /MQTT broker\|<span class="ui-chip ok">publishing/);
   assert.match(html, /Broker: <span class="mono">192\.0\.2\.177:1883/);
-  assert.match(html, /Power control from Home Assistant\|<span class="pill ok">on · 2/);
+  assert.match(html, /Power control from Home Assistant\|<span class="ui-chip ok">on · 2/);
   assert.deepEqual(actions.map(a => a.label).sort(), ["Choose", "Edit", "Turn off", "What is published"]);
   assert.deepEqual(actions.filter(a => a.need).map(a => a.need), ["admin", "admin", "admin"]);
   // control on a broker with no sign-in and no TLS: a warning
@@ -42,7 +45,7 @@ test("the card is laid out as UniFi is: the broker, its facts, then power contro
 test("with no broker it offers to connect one, and no power control yet", () => {
   const { ctx, actions } = load();
   const html = ctx.mqttCardHtml({ enabled: false, host: "", sensors: { cluster: 15, node: 9 }, status: { state: "off" } });
-  assert.match(html, /No broker\|<span class="pill neutral">not connected/);
+  assert.match(html, /No broker\|<span class="ui-chip neutral">not connected/);
   assert.doesNotMatch(html, /Power control/);
   assert.deepEqual(actions.map(a => a.label), ["Connect MQTT"]);
 });

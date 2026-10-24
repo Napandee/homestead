@@ -45,6 +45,7 @@ needs the handler itself: a WebSocket, /mcp, a file served with its own headers.
 """
 import collections
 import collections.abc
+import functools
 import importlib
 import json
 import queue
@@ -55,6 +56,7 @@ import types
 import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
+import homestead_http as HTTP
 
 MODULES = (
     "homestead_addons",
@@ -63,8 +65,11 @@ MODULES = (
     "homestead_alerts",
     "homestead_allocation_probe",
     "homestead_api_keys",
+    "homestead_api_v1",
     "homestead_app_settings",
+    "homestead_audit",
     "homestead_auth",
+    "homestead_auth_routes",
     "homestead_baseline",
     "homestead_capacity",
     "homestead_changes",
@@ -75,6 +80,7 @@ MODULES = (
     "homestead_config_backup",
     "homestead_container_diagnostics",
     "homestead_container_rebalance",
+    "homestead_data_copies",
     "homestead_deploy",
     "homestead_deploy_server",
     "homestead_diagnostics",
@@ -83,8 +89,10 @@ MODULES = (
     "homestead_files",
     "homestead_firewall",
     "homestead_fleet",
+    "homestead_fleet_routes",
     "homestead_flow",
     "homestead_forecast",
+    "homestead_gitops",
     "homestead_group_tiers",
     "homestead_hardware",
     "homestead_helm",
@@ -104,6 +112,7 @@ MODULES = (
     "homestead_lhv2_setup",
     "homestead_lhv2_upgrade",
     "homestead_lifecycle",
+    "homestead_logalerts",
     "homestead_longhorn",
     "homestead_metrics",
     "homestead_move",
@@ -163,6 +172,7 @@ MODULES = (
     "homestead_vms",
     "homestead_vmstore",
     "homestead_volumes",
+    "homestead_weekly_trim",
     "homestead_workloads",
 )
 ROLES = ("viewer", "operator", "admin")
@@ -214,6 +224,14 @@ _HOOK_BODY = 64 * 1024
 # How many requests' hooks may wait for the hooks' thread before more are dropped.
 HOOK_QUEUE = 256
 _hooks = []
+# What a request may note for its hooks (note()): keys each hook declared,
+# values short names or whole numbers, kept on the request's thread and
+# cleared when the next request on it starts.
+NOTE_CAP = 64
+_NOTE_KEY = re.compile(r"[a-z][a-z_]{0,31}")
+_NOTE_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_note_keys = {}
+_notes = threading.local()
 _queue = queue.Queue(HOOK_QUEUE)
 _served = []
 _dropped = [0]
@@ -313,8 +331,9 @@ def _headers(handler):
 def connection(handler):
     """The Connection a route sees, from server.py's handler after its guard."""
     raw = _headers(handler)
-    if raw.get("X-Homestead-Fleet") and getattr(handler, "_fleet_who", None) is False:
-        handler._fleet_identity()       # a public path: the guard did not check the sender
+    if (raw.get("X-Homestead-Fleet") and getattr(handler, "_fleet_who", None) is False
+            and not getattr(handler, "api_key", None)):
+        handler._fleet_identity()       # a public path: the guard did not check the sender (a key is its own)
     cookies = {name: value for name, value in handler._cookies().items() if name in COOKIES}
     return Connection(Headers(raw.items()), types.MappingProxyType(cookies), _tls(handler),
                       handler._via_cloudflare(), getattr(handler, "_access", None),
@@ -413,6 +432,8 @@ def table():
                 raise ValueError(f"{method} {path} in {name} has no handler")
             if "*" in path and not (path.endswith("/*") and path.count("*") == 1):
                 raise ValueError(f"{method} {path} in {name}: a prefix route ends in /* and has no other *")
+            if path.startswith("/api/v1/") and name != "homestead_api_v1":
+                raise ValueError(f"{method} {path} in {name}: /api/v1 is homestead_api_v1's, where a key's scopes are checked")
             if path.endswith("/*") and _covers(key[0], path[:-1]):
                 raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)
@@ -451,7 +472,7 @@ def role(path, method):
     return route.role if route else None
 
 
-def after(fn=None, fields=()):
+def after(fn=None, fields=(), notes=()):
     """Register fn(request, status, ms) to run after each request that reached
     its request line, answered or refused, wherever it was answered. request is
     what a route gets, without its body, query, cookies or session; status is
@@ -464,16 +485,52 @@ def after(fn=None, fields=()):
     dropped and counted (hooks_dropped()). What a hook sees came from the
     client: escape and cut the path and headers before keeping them. It must
     not read thread-locals (homestead_changes.REQUEST, the host-access role):
-    it runs on another thread."""
+    it runs on another thread. What it needs from the request's own thread
+    comes through notes: the keys it declares here, which code handling the
+    request sets with note(key, value); fn is then called with notes={...}
+    holding those of its keys that were set."""
     if isinstance(fields, str) or any(field not in HOOK_FIELDS for field in fields):
         raise ValueError(f"a hook may ask only for {', '.join(HOOK_FIELDS)}, not {fields!r}")
+    if isinstance(notes, str) or any(not isinstance(key, str) or not _NOTE_KEY.fullmatch(key) for key in notes):
+        raise ValueError(f"a hook declares its note keys as names, not {notes!r}")
 
     def register(fn):
         if not callable(fn):
             raise TypeError(f"a hook is a function, not {fn!r}")
         _hooks.append((fn, tuple(fields)))
+        if notes:
+            _note_keys[fn] = tuple(notes)
+        else:
+            _note_keys.pop(fn, None)
         return fn
     return register if fn is None else register(fn)
+
+
+def note(key, value):
+    """Something about this request for the hooks that declared key: a short
+    name (cut to NOTE_CAP) or a whole number, never free text."""
+    if key not in {k for keys in _note_keys.values() for k in keys}:
+        raise ValueError(f"no hook takes a note called {key!r}")
+    if isinstance(value, str) and value:
+        value = value[:NOTE_CAP]
+        if not _NOTE_VALUE.fullmatch(value):
+            raise ValueError(f"a note is a name or a number, not {value!r}")
+    elif type(value) is not int:
+        raise ValueError(f"a note is a name or a number, not {value!r}")
+    _notes.__dict__.update(AUDIT.redact({key: value}))
+
+
+def _take_notes():
+    taken = dict(_notes.__dict__)
+    _notes.__dict__.clear()
+    return taken
+
+
+def _clear_notes():
+    _notes.__dict__.clear()
+
+
+HTTP.REQUEST_STARTED.append(_clear_notes)
 
 
 def hooks_dropped():
@@ -511,6 +568,11 @@ def _hook_fields(raw, fields):
                          if isinstance(body.get(field), str) and _HOOK_VALUE.fullmatch(body[field])})
 
 
+def _with_notes(fn, noted):
+    keys = _note_keys.get(fn)
+    return functools.partial(fn, notes={k: v for k, v in noted.items() if k in keys}) if keys else fn
+
+
 def _read_only(value):
     return types.MappingProxyType(dict(value)) if isinstance(value, dict) else value
 
@@ -531,8 +593,9 @@ def after_request(handler):
                               None))
     ms = round((time.monotonic() - handler._started) * 1000)
     body = getattr(handler, "_raw", None)
-    jobs = [(fn, view._replace(body=_hook_fields(body, fields)) if fields else view, handler._status, ms)
-            for fn, fields in list(_hooks)]
+    noted = _take_notes()
+    jobs = [(_with_notes(fn, noted), view._replace(body=_hook_fields(body, fields)) if fields else view,
+             handler._status, ms) for fn, fields in list(_hooks)]
     _ensure_worker()
     try:
         _queue.put_nowait(jobs)

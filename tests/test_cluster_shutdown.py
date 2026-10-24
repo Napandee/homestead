@@ -633,6 +633,74 @@ class ShutdownTests(unittest.TestCase):
                 send.assert_not_called()
 
 
+class ServerShutdownTests(unittest.TestCase):
+    """The shutdown as server.py wires it: its review and its own sender (#621 wrap-up 75)."""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        import server  # binds homestead_cluster_server
+        import homestead_changes as CH
+        import homestead_cluster_server as CLUSTER
+        import homestead_operations as OPS
+        self.CH, self.CLUSTER, self.OPS = CH, CLUSTER, OPS
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        patcher = mock.patch.object(OPS, "DATA_DIR", directory.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+
+    def move(self, status, phase, ident="move-1"):
+        return {"id": ident, "kind": "reclass", "title": "Move data's storage", "status": status, "progress": 50,
+                "message": "", "resource": {"kind": "PersistentVolumeClaim", "namespace": "lab", "name": "data"},
+                "href": "/storage", "started_at": "", "updated_at": "", "finished_at": "", "history": [],
+                "ref": {"namespace": "lab", "claim": "data", "phase": phase, "retain_resources": False}}
+
+    def busy(self, *items):
+        from fakes.job_store import put
+        put(self.OPS, list(items))
+        return self.CLUSTER.cluster_shutdown().busy()
+
+    def test_a_storage_move_the_storage_guard_still_protects_blocks_the_shutdown(self):
+        # Failed, its cleanup never confirmed: the storage guard still refuses
+        # to change Homestead's replicas for it, and the shutdown's helper pod
+        # would change them where no guard runs.
+        blockers = self.busy(self.move("failed", "copying"))
+        self.assertEqual(1, len(blockers), blockers)
+        self.assertIn("Move data's storage", blockers[0])
+
+    def test_a_move_is_listed_once_and_a_finished_one_not_at_all(self):
+        self.assertEqual(1, len(self.busy(self.move("running", "copying"))))
+        self.assertEqual([], self.busy(self.move("failed", "rolled-back"), self.move("succeeded", "done", "move-2")))
+
+    def test_its_own_writes_skip_the_fence_and_say_who_made_them(self):
+        from unittest import mock
+        CH = self.CH
+        CH.REQUEST.user = "ada"   # an admin recovering the cluster from the dialog
+        body = {"metadata": {"annotations": {S.HELD_BY: None, S.HELD_AS: None}}, "spec": {"replicas": 2}}
+        with mock.patch.object(self.CLUSTER, "_ksend", return_value={}) as transport, \
+             mock.patch.object(CH, "_author_key", lambda: b"shutdown-mark"):
+            self.CLUSTER.cluster_shutdown().send("PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead", body,
+                                                 ctype="application/merge-patch+json")
+        self.assertTrue(transport.call_args.kwargs["shutdown_bypass"])
+        mark = json.loads(body["metadata"]["annotations"][CH.AUTHOR])
+        self.assertEqual(CH._signed(b"shutdown-mark", "lab", "homestead", mark["at"], "ada"), mark["by"])
+
+    def test_its_own_writes_still_pass_while_a_move_is_unresolved(self):
+        # Recovery gives Homestead its copies back even then: the review kept
+        # the shutdown from starting, and refusing now would strand it at one.
+        from unittest import mock
+        from fakes.job_store import put
+        put(self.OPS, [self.move("failed", "copying")])
+        with mock.patch.object(self.CLUSTER, "_ksend", return_value={"ok": True}) as transport, \
+             mock.patch.object(self.CH, "_author_key", lambda: b"shutdown-mark"):
+            self.assertEqual({"ok": True}, self.CLUSTER.cluster_shutdown().send(
+                "PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead", {"spec": {"replicas": 2}},
+                ctype="application/merge-patch+json"))
+        transport.assert_called_once()
+
+
 
 class MaintenanceTests(unittest.TestCase):
     """A planned cluster shutdown leaves a maintenance entry per host (#535)."""

@@ -34,6 +34,7 @@ import urllib.request
 import homestead_helm as HELM
 import homestead_operations as OPS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
+import homestead_upgrade_check as UPGRADE_CHECK
 import homestead_routes
 
 kget = ksend = None
@@ -316,7 +317,7 @@ def report(force=False):
     if force:
         _releases.clear()
     distribution = p.get("distribution", "")
-    rows = []
+    rows, versions = [], {}
     if p.get("harvester"):
         rows.append({"id": "cluster", "name": "Harvester", "how": "harvester", "installed": "",
                      "note": "Harvester's own releases and upgrades are below."})
@@ -364,7 +365,11 @@ def report(force=False):
             managed = bool(_helmchart(CHARTS["macvtap"]))
             rows.append(_row("macvtap", "macvtap", state["version"], "macvtap", "helmchart" if managed else "manual",
                              "" if managed else "Installed outside Homestead: upgrade it the way it was installed."))
-    return {"distribution": distribution, "harvester": bool(p.get("harvester")), "components": rows,
+    # Every host's Kubernetes minor (the API server's where hosts aren't read):
+    # what each upgrade, and the pairs running now, are checked against.
+    kube = {parse(v)[:2] for v in (list(versions.values()) or [p.get("version", "")]) if parse(v)}
+    pairs = UPGRADE_CHECK.annotate(rows, kube)
+    return {"distribution": distribution, "harvester": bool(p.get("harvester")), "components": rows, "pairs": pairs,
             "checked": max((entry["at"] for entry in _releases.values()), default=0)}
 
 
@@ -389,6 +394,11 @@ def upgrade(component, target, options=None):
     if target != found["next"]:
         raise ValueError(f"{found['name']} goes from {found['installed']} to {found['next']} next; "
                          f"{target} would skip a step")
+    # Outside what the project supports, or a known break: the review shows
+    # why, and goes ahead only with its tick (the table can be out of date).
+    if (found.get("check") or {}).get("verdict") == "blocked" and (options or {}).get("accept_check") is not True:
+        first = next(f for f in found["check"]["findings"] if f["level"] == "block")
+        raise ValueError(f"{first['title']}. Review the upgrade and tick that you have read what it breaks")
     held = []
     if component == "cluster":
         held = cordoned()

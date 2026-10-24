@@ -3,10 +3,12 @@ import re
 import unittest
 from pathlib import Path
 
-CSS = Path(__file__).resolve().parents[1] / "web" / "style.css"
+ROOT = Path(__file__).resolve().parents[1]
+CSS = ROOT / "web" / "style.css"
 LIGHT = 'html[data-theme="light"] '
 # The tag classes that carry a state colour; a plain tag has none of them.
-TONES = ("ok", "warn", "bad", "info", "capacity", "hw", "gpu", "link", "neutral")
+# Since #543 only buttons, links and special shapes are still tags.
+TONES = ("ok", "warn", "bad", "info")
 # One tone set for every chip (#543), and the older names that alias it.
 CHIP_TONES = ("ok", "warn", "bad", "info", "hw", "link", "neutral")
 CHIP_ALIASES = {"med": "warn", "crit": "bad", "low": "neutral"}
@@ -132,13 +134,32 @@ class StylesheetTests(unittest.TestCase):
             colours = [d.get("color") for selectors, d in rules() if f".ui-chip.{tone}" in selectors and "color" in d]
             self.assertIn(f"var(--tone-{tone})", colours, f".ui-chip.{tone} takes its colour from --tone-{tone}")
 
-    def test_legacy_tone_names_alias_the_set(self):
-        """med, crit and low are older names for warn, bad and neutral: one rule draws both."""
-        for alias, tone in CHIP_ALIASES.items():
-            holding = [selectors for selectors, d in rules() if f".ui-chip.{tone}" in selectors and "color" in d]
-            self.assertTrue(holding, f"a rule draws .ui-chip.{tone}")
-            self.assertTrue(any(f".ui-chip.{alias}" in selectors for selectors in holding),
-                            f".ui-chip.{alias} is drawn by the .ui-chip.{tone} rule")
+    def test_older_tone_names_are_mapped_by_ui_chip(self):
+        """med, crit and low are older names for warn, bad and neutral: UI.chip maps them, so no rule draws them."""
+        ui = (ROOT / "web" / "js" / "ui.js").read_text(encoding="utf-8")
+        self.assertIn('CHIP_ALIASES = { med: "warn", crit: "bad", low: "neutral" }', ui)
+        for alias in CHIP_ALIASES:
+            for selectors, _ in rules():
+                self.assertFalse(any(re.search(rf"\.ui-chip\.{alias}\b", s) for s in selectors),
+                                 f".ui-chip.{alias} has a rule; UI.chip writes {CHIP_ALIASES[alias]}")
+
+    def test_no_unused_chip_tones(self):
+        """#543: every status chip is UI.chip; a pill or tag colour nothing writes any more has no rule."""
+        sources = [f.read_text(encoding="utf-8") for f in (ROOT / "web" / "js").glob("*.js") if f.name != "demo.js"]
+        sources.append((ROOT / "web" / "index.html").read_text(encoding="utf-8"))
+        lines = [line for text in sources for line in text.splitlines() if re.search(r'class="(pill|tag)\b|"(pill|tag) ', line)]
+        names = {"pill": ("ok", "crit", "high", "med", "low", "warn", "info", "neutral", "slim"),
+                 "tag": ("ok", "bad", "warn", "gpu", "hw", "capacity", "info", "link", "neutral")}
+        for kind, tones in names.items():
+            for tone in tones:
+                # Written literally (`pill warn`), or as a tone inside a pill/tag class expression (`"warn"`).
+                written = any(re.search(rf"\b{kind}\b[^\"]*\b{tone}\b", line) or (f'"{tone}"' in line and f'class="{kind}' in line)
+                              for line in lines)
+                if written:
+                    continue
+                drawn = [s for selectors, _ in rules() for s in selectors
+                         if re.search(rf"\.{kind}(?::where\()?\.{tone}\b", re.sub(r":not\([^)]*\)", "", s))]
+                self.assertFalse(drawn, f".{kind}.{tone} is written nowhere but style.css still draws it: {drawn}")
 
     def test_every_chip_tone_reads_in_the_light_theme(self):
         white = (255, 255, 255, 1.0)
@@ -147,16 +168,6 @@ class StylesheetTests(unittest.TestCase):
             ground = over(rgba(background), white)
             ratio = contrast(over(rgba(color), ground), ground)
             self.assertGreaterEqual(ratio, 4.5, f".ui-chip.{tone} is {ratio:.2f}:1 in the light theme")
-
-    def test_neutral_tags_keep_their_hover(self):
-        """A neutral tag is the plain tag: a rule for it must not outrank .tag:hover (Settings health)."""
-        ordered = [(i, s, d) for i, (selectors, d) in enumerate(rules()) for s in selectors]
-        for theme in ("", LIGHT):
-            hover = max((specificity(s), i) for i, s, d in ordered if s == theme + ".tag:hover")
-            for i, s, d in ordered:
-                if s.startswith(theme) and ".neutral" in re.sub(r":not\([^)]*\)", "", s) and re.match(r"\.tag\b", s[len(theme):]) and "background" in d \
-                        and ":hover" not in s and (s.startswith(LIGHT) == bool(theme)):
-                    self.assertLess((specificity(s), i), hover, f"{s} outranks {theme}.tag:hover, so a neutral tag never lights up")
 
     def test_light_theme_meters_keep_their_warning_colour(self):
         """The light theme's black bar once beat the amber and red ones."""

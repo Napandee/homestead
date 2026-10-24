@@ -269,7 +269,7 @@ window.vmIsoLibrary = async () => {
   STATE.data.isoLibrary = lib;
   const size = bytes => bytesText(bytes);
   const state = f => f.volume
-    ? (f.state === "ready" ? `<span class="pill ok">ready</span>` : f.state === "copying" ? '<span class="pill low">copying</span>' : '<span class="pill crit">failed</span>')
+    ? (f.state === "ready" ? UI.chip("ready", "ok") : f.state === "copying" ? UI.chip("copying", "neutral") : UI.chip("failed", "bad"))
     : '<span class="dim xs">on the share only</span>';
   const volumeOf = f => lib.volumes.find(v => v.name === f.volume);
   // Each list is a stack table whose rows end in an actionBar (#506).

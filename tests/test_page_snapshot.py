@@ -182,6 +182,15 @@ class LeaderCycleTests(unittest.TestCase):
         self.assertEqual(1, len(self.cluster.gets("/api/v1/pods")))
         self.assertEqual(1, len(self.cluster.gets("/apis/longhorn.io/v1beta2/volumes")))
 
+    def test_the_volumes_part_is_handed_the_cycle_s_pod_list(self):
+        import homestead_storage as STORAGE
+        pods = {"items": [], "metadata": {}}
+        builders = dict(self.OV.page_builders())
+        with mock.patch.object(STORAGE, "get_volumes", return_value=[]) as volumes:
+            builders["vol"]({"pods": pods})
+            builders["vol"]({})
+        self.assertEqual([mock.call(pods=pods), mock.call(pods=None)], volumes.call_args_list)
+
     def test_after_a_cycle_the_six_routes_ask_the_cluster_nothing(self):
         self.cycle()
         self.cluster.calls.clear()

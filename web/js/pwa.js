@@ -166,7 +166,7 @@ async function pwaPaint() {
   refreshPwaAlerts();
   const card = $("#pwaCard .pwa-body");
   if (!card) return;
-  const installLine = pwaInstalled() ? '<span class="pill ok">installed</span>'
+  const installLine = pwaInstalled() ? UI.chip("installed", "ok")
     : PWA.installPrompt ? '<button class="btn sm" onclick="pwaInstall()">Install app</button>'
     : "";
   $("#pwaInstallSlot").innerHTML = installLine;
@@ -185,8 +185,8 @@ async function pwaPaint() {
   const chosen = on ? status.categories : key.defaults;
   const others = (alerts.devices || []).filter(d => !PWA.subscription || d.tag !== status.tag);
   const state = permission === "denied"
-    ? '<span class="pill crit">blocked in browser settings</span>'
-    : on ? '<span class="pill ok">on</span>' : '<span class="pill neutral">off</span>';
+    ? UI.chip("blocked in browser settings", "bad")
+    : on ? UI.chip("on", "ok") : UI.chip("off", "neutral");
   card.innerHTML = `
     <div class="pwa-state"><div><b>This device</b> ${state}<div class="dim xs">${esc(pwaDeviceName())}${
       on && status.last_ok ? ` · last sent ${esc(fmtAgo(Math.max(1, Date.now() / 1000 - status.last_ok)))}` : ""}${
@@ -212,8 +212,9 @@ function pwaRecent(alerts) {
   if (!rows.length) return '<div class="dim xs">No notifications recorded.</div>';
   return `<div class="sec">Recent alerts</div><div class="settings-list">${rows.map(a => `
     <div class="settings-list-row"><div><b>${esc(a.title)}</b>${a.body ? `<div class="dim xs">${esc(a.body)}</div>` : ""}</div>
-      <div class="settings-list-meta"><span class="pill ${a.phase === "resolved" ? "ok" : a.severity === "critical" ? "crit" : a.severity === "degraded" ? "warn" : "neutral"}">${
-        a.phase === "resolved" ? "Cleared" : a.phase === "worsened" ? "Worsened" : esc({outage:"Critical",degraded:"Warning",jobs:"Job",joins:"Host",updates:"Update"}[a.category] || "Information")}</span><span class="dim xs">${esc(fmtAgo(Math.max(1, Date.now() / 1000 - a.at)))}</span></div></div>`).join("")}</div>`;
+      <div class="settings-list-meta">${UI.chip(
+        a.phase === "resolved" ? "Cleared" : a.phase === "worsened" ? "Worsened" : {outage:"Critical",degraded:"Warning",jobs:"Job",joins:"Host",updates:"Update"}[a.category] || "Information",
+        a.phase === "resolved" ? "ok" : a.severity === "critical" ? "bad" : a.severity === "degraded" ? "warn" : "neutral")}<span class="dim xs">${esc(fmtAgo(Math.max(1, Date.now() / 1000 - a.at)))}</span></div></div>`).join("")}</div>`;
 }
 
 function pwaCard() {

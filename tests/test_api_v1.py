@@ -23,6 +23,7 @@ WORKLOADS = [{"ns": "lab", "name": "photos", "desired": 1, "ready": 1, "images":
 class DispatchTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
+        self.enterContext(mock.patch.dict(API.ctx))     # the server's own bindings come back after
         API.bind(nodes=lambda: [{"name": "k3s-1", "status": "Ready", "roles": ["control-plane"], "cpu_pct": 7.5,
                                  "mem_pct": 20.0, "mem_used_gb": 3.0, "mem_cap_gb": 15.0, "pods": 30, "vms": 1}],
                  workloads=lambda: WORKLOADS,

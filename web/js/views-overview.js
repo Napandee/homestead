@@ -84,8 +84,8 @@ async function viewDash() {
   window.refreshPwaAlerts?.();
   const hp = $("#healthPill");
   const healthState = o.health_state || o.health;
-  hp.className = "pill " + (healthState === "healthy" ? "ok" :
-    healthState === "critical" ? "crit" : healthState === "degraded" ? "med" : "low");
+  hp.className = "ui-chip " + (healthState === "healthy" ? "ok" :
+    healthState === "critical" ? "bad" : healthState === "degraded" ? "warn" : "neutral");
   hp.textContent = healthState.toUpperCase();
   hp.title = o.health_summary || "";
   $("#lbinfo").textContent = o.lb_ip ? "VIP " + o.lb_ip : "";
@@ -146,10 +146,10 @@ async function viewDash() {
       <div class="drow"><div class="dl">Provisioned</div><div class="dv mono nowrap">${sizeText(st.provisioned_gb)}</div></div>
       <div style="margin-top:10px">${meter(st.used_pct)}
         <div class="csub" style="margin-top:6px">${st.used_pct}% of raw capacity used
-          ${st.degraded || st.faulted ? `· <span class="tag ${st.faulted ? "bad" : "warn"}">${st.degraded + st.faulted} unhealthy</span>` : `· <span class="tag ok">all healthy</span>`}</div>
+          ${st.degraded || st.faulted ? `· ${UI.chip(`${st.degraded + st.faulted} unhealthy`, st.faulted ? "bad" : "warn")}` : `· ${UI.chip("all healthy", "ok")}`}</div>
         ${tight.length ? `<a class="tag ${tight.some(n => n.level === "crit") ? "bad" : "warn"} lh-tight" onclick="go('storage')"
           data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GiB allocated, room for a ${n.room_gb} GiB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}
-        ${capRead?.unread && STATE.platform?.longhorn === true ? `<div class="csub" style="margin-top:6px"><span class="tag warn">Could not read Longhorn's allocation limits</span>
+        ${capRead?.unread && STATE.platform?.longhorn === true ? `<div class="csub" style="margin-top:6px">${UI.chip("Could not read Longhorn's allocation limits", "warn")}
           a host near its limit is not flagged: ${esc(capRead.unread)}</div>` : ""}</div>
       </div></div>`
       : stRead?.unread ? UI.callout("warn", "Could not read storage", esc(stRead.unread))
@@ -292,8 +292,8 @@ window.nodeUptimePaint = async n => {
   const all = await api("/api/nodes/uptime").catch(e => ({ unread: e.message }));
   const u = all?.nodes?.[n.name];
   const now = n.status === "Ready"
-    ? `<span class="pill low">Up now</span><span class="mono small">${esc(nodeUpFor(n))}</span>`
-    : `<span class="pill crit">${esc(n.status || "Down")} now</span>`;
+    ? `${UI.chip("Up now", "neutral")}<span class="mono small">${esc(nodeUpFor(n))}</span>`
+    : UI.chip(`${n.status || "Down"} now`, "bad");
   const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${now}</div></div>`;
   if (all?.unread) { host.innerHTML = `${head}<div class="dim small">Could not read uptime: ${esc(all.unread)}</div>`; return; }
   if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
@@ -319,16 +319,16 @@ window.nodeUptimePaint = async n => {
     <div class="between dim xs" style="margin-top:3px"><span>90 days ago</span><span>today</span></div>
     <div class="dim xs uptime-loghead">OUTAGES, MAINTENANCE AND REBOOTS</div>
     ${events.length ? `<div class="uptime-events">${events.map(e => e.kind === "reboot"
-      ? (e.planned ? `<div><span class="tag">rebooted (planned)</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`
-        : `<div><span class="tag warn">unexpected reboot</span><span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`)
+      ? (e.planned ? `<div>${UI.chip("rebooted (planned)", "neutral")}<span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`
+        : `<div>${UI.chip("unexpected reboot", "warn")}<span class="mono xs">${esc(uptimeWhen(e.t))}</span></div>`)
       : e.kind === "maint"
-        ? (e.m.ongoing ? `<div><span class="tag">maintenance: ${esc(e.m.reason)}, since ${esc(uptimeWhen(e.m.start))}</span></div>`
-          : `<div><span class="tag">maintenance: ${esc(e.m.reason)}</span><span class="mono xs">${esc(uptimeWhen(e.m.start))}</span>
+        ? (e.m.ongoing ? `<div>${UI.chip(`maintenance: ${e.m.reason}, since ${uptimeWhen(e.m.start)}`, "neutral")}</div>`
+          : `<div>${UI.chip(`maintenance: ${e.m.reason}`, "neutral")}<span class="mono xs">${esc(uptimeWhen(e.m.start))}</span>
             <span class="dim xs">for ${uptimeDuration(e.m.end - e.m.start)}</span></div>`)
       : e.o.ongoing
-        ? `<div><span class="tag bad">down now</span><span class="mono xs">since ${esc(uptimeWhen(e.o.start))}</span>
+        ? `<div>${UI.chip("down now", "bad")}<span class="mono xs">since ${esc(uptimeWhen(e.o.start))}</span>
             <span class="dim xs">${took(e.o)} so far</span></div>`
-        : `<div><span class="tag warn">was down</span><span class="mono xs">${esc(uptimeWhen(e.o.start))}</span>
+        : `<div>${UI.chip("was down", "warn")}<span class="mono xs">${esc(uptimeWhen(e.o.start))}</span>
             <span class="dim xs">for ${took(e.o)}, then back</span></div>`).join("")}</div>`
       : '<div class="dim small">No outage or reboot recorded.</div>'}`;
 };
@@ -352,8 +352,10 @@ function nodeAddressTags(n) {
   const own = [...new Set([n.addresses?.InternalIP, n.addresses?.ExternalIP].filter(Boolean))];
   const d = n.duties || {};
   const vips = (d.vips || []).filter(ip => !(d.management_vip || []).includes(ip));
-  return own.map(ip => `<span class="tag mono" data-tip="${esc(n.name)}'s own address. Services k3s's ServiceLB publishes answer here too">${esc(ip)}</span>`).join("")
-    + vips.map(ip => `<span class="tag info mono" data-tip="${esc(n.name)} answers for VIP ${esc(ip)} now. If it goes down another host takes the address over">VIP ${esc(ip)}</span>`).join("");
+  // The mono wrapper sets the chip's font: an address reads as one.
+  // .ui-chip has no margin, and three of the four places that show these have no gap: a space keeps them apart.
+  return [...own.map(ip => `<span class="mono">${UI.chip(ip, "neutral", { tip: `${n.name}'s own address. Services k3s's ServiceLB publishes answer here too` })}</span>`),
+    ...vips.map(ip => `<span class="mono">${UI.chip(`VIP ${ip}`, "info", { tip: `${n.name} answers for VIP ${ip} now. If it goes down another host takes the address over` })}</span>`)].join(" ");
 }
 
 /* A node at a glance. The head is the same shape on every card - name, roles
@@ -379,9 +381,9 @@ function nodeCard(n) {
           <div class="dim xs" title="${esc(n.roles.join(" · "))}">${esc([n.roles.join(" · "), up].filter(Boolean).join(" · "))}</div></div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
-        ${n.schedulable === false ? '<span class="pill med">cordoned</span>' : ""}
-        ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="pill ${n.host_os.tone === "bad" ? "crit" : "med"}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}
-        <span class="pill ${bad ? "crit" : "ok"}">${n.status}</span>
+        ${n.schedulable === false ? UI.chip("cordoned", "warn") : ""}
+        ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? UI.chip("host OS", n.host_os.tone === "bad" ? "bad" : "warn", { tip: n.host_os.text }) : ""}
+        ${UI.chip(n.status, bad ? "bad" : "ok")}
         <button class="btn sm" onclick="event.stopPropagation();nodeActions(${jsq(n.name)})">⋯</button>
       </div>
     </div>
@@ -448,7 +450,7 @@ function comparisonDisk(n, d) {
   const asReported = !d.name && label === d.device;  // a device name is case-sensitive: shown as the system gives it
   return `<div class="comparison-disk">
     <b class="comparison-disk-name${asReported ? " mono" : ""}" title="${esc([label,d.device,d.model,...(d.lh_paths || [])].filter(Boolean).join(" · "))}">${esc(label)}</b>
-    <div class="comparison-disk-tags">${d.system ? '<span class="tag">system</span>' : ""}${lh ? '<span class="tag ok">Longhorn</span>' : !d.system ? `<span class="tag">${esc(d.role || "unassigned")}</span>` : ""}</div>
+    <div class="comparison-disk-tags">${d.system ? UI.chip("system", "neutral") : ""}${lh ? UI.chip("Longhorn", "ok") : !d.system ? UI.chip(d.role || "unassigned", "neutral") : ""}</div>
     <div class="comparison-disk-capacity mono small">${usage.capacity ? `<b>${usage.pct}%</b><span class="dim">${sizePair(usage.used,usage.capacity)}</span>` : `<span class="dim">${sizeText(d.size_gb)}</span>`}</div>
     ${usage.capacity ? `${driveBar(usage)}<span class="dim xs">Filesystem use${usage.physical ? ` · ${sizeText(usage.physical)} disk` : ""}</span>` : '<span class="dim xs">Usage unavailable</span>'}
     </div>`;
@@ -467,7 +469,7 @@ function nodeComparisonRows(nodes) {
   const live = (n, value) => n.status === "Ready" ? value : null;
   return [
     metric("Status", n => { const h = nodeHealth(n);
-      return `<span class="tag ${h.tone}" data-tip="${esc([n.status, ...h.issues, n.host_os && h.tone !== "ok" ? n.host_os.text : ""].filter(Boolean).join(" · "))}">${esc(h.status)}</span>`; }),
+      return UI.chip(h.status, h.tone, { tip: [n.status, ...h.issues, n.host_os && h.tone !== "ok" ? n.host_os.text : ""].filter(Boolean).join(" · ") }); }),
     metric("CPU", n => percent(live(n, n.cpu_pct), "cpu")),
     metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>${n.temps?.cpu_model ? `<span class="comparison-note">${esc(n.temps.cpu_model)}</span>` : ""}`),
     metric("Memory", n => n.status === "Ready" ? `${percent(n.mem_pct, "memory")}<span class="comparison-note">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span>` : percent(null)),
@@ -680,10 +682,10 @@ async function nodePage(name) {
   const disks = (n.temps && n.temps.disks) || [];
   const given = Object.fromEntries((n.disks || []).map(x => [x.device, x.name || ""]));
   const diskRows = disks.map(d => { const s = d.smart || null; return `<div class="diskrow ${d.health?.state === "critical" ? "smart-failed" : ""}">
-    <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} <span class="tag">${esc(d.kind || "Disk")}</span>
+    <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} ${UI.chip(d.kind || "Disk", "neutral")}
       ${can("admin") ? `<button class="btn sm" data-tip="Name this drive" onclick="diskRename(${jsq(n.name)},${jsq(d.name)},${jsq(given[d.name] || "")})">${given[d.name] ? "Rename" : "Name"}</button>` : ""}</b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
     <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GiB</b></div>
-    <div><span class="disklabel">HEALTH</span><b><span class="tag ${diskHealthTone(d.health?.state)}" data-tip="${esc(d.health?.summary || "no SMART data for this drive")}">${esc(diskHealthWord(d.health?.state))}</span></b></div>
+    <div><span class="disklabel">HEALTH</span><b>${UI.chip(diskHealthWord(d.health?.state), diskHealthTone(d.health?.state) || "neutral", { tip: d.health?.summary || "no SMART data for this drive" })}</b></div>
     <div><span class="disklabel">LIFE</span><b class="mono ${lifeTone(d.health?.life_pct)}">${d.health?.life_pct == null ? "—" : esc(d.health.life_pct) + "%"}</b></div>
     <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
     <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MiB/s</b></div>
@@ -709,7 +711,7 @@ async function nodePage(name) {
         ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
         ${fact("CPU", cpuSummary(n))}
         ${fact("Serves", nodeDutyTags(n) || "—")}
-        ${fact("Takes new work", n.schedulable ? "yes" : '<span class="tag warn">cordoned</span>')}
+        ${fact("Takes new work", n.schedulable ? "yes" : UI.chip("cordoned", "warn"))}
       </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
     ["workloads", "Apps and VMs", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
       <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
@@ -727,8 +729,8 @@ async function nodePage(name) {
       <div class="card flat" id="nodeDevices"><div class="ctitle">Devices for VMs</div><div class="csub">PCI and USB devices this host can give to its virtual machines</div>
         <div class="pt-body" style="margin-top:10px"></div></div>
       <div class="card flat"><div class="ctitle">Temperatures</div>
-        <div style="margin-top:10px">${n.temps && n.temps.sensors ? ([...(n.temps.hwmon || []), ...(n.temps.thermal || [])].sort((a, b) => b.celsius - a.celsius).slice(0, 14)
-          .map(t => `<span class="tag ${tempTag(t.celsius)}">${esc(t.chip ? t.chip + " " : "")}${esc(t.name)} ${t.celsius}°</span>`).join("")
+        <div class="node-chips" style="margin-top:10px">${n.temps && n.temps.sensors ? ([...(n.temps.hwmon || []), ...(n.temps.thermal || [])].sort((a, b) => b.celsius - a.celsius).slice(0, 14)
+          .map(t => UI.chip(`${t.chip ? t.chip + " " : ""}${t.name} ${t.celsius}°`, tempTag(t.celsius) || "neutral")).join("")
           || `<span class="small">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}°C</b> · hottest sensor <b class="${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}°C</b>${tempSource(n.temps)}</span>`)
           : `<span class="dim small">No thermal data: it comes from the node probe. <a class="linkish" data-need="admin" onclick="probeInstallConfirm()">Install it</a></span>`}</div></div>`],
     ["network", "Network", `${(n.rx_mbps || 0).toFixed(1)} Mb/s in${vips.length ? ` · ${vips.length} VIP${vips.length === 1 ? "" : "s"}` : ""}`, `
@@ -751,7 +753,7 @@ async function nodePage(name) {
         ${fact("Kubelet", `<span class="mono">${esc(i.kubeletVersion || "—")}</span>`)}
         ${fact("Image storage", `<span class="mono">${n.img_used_gb || 0} GiB</span>`)}
       </div>
-      <div style="margin-top:10px">${(n.conditions || []).map(c => `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div></div>`],
+      <div class="node-chips" style="margin-top:10px">${(n.conditions || []).map(c => UI.chip(`${c.type}: ${c.status}`, c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "neutral"))).join("")}</div></div>`],
   ];
   // ?section= opens one directly: an alert about a port links to Network.
   const asked = new URLSearchParams(location.search).get("section");
@@ -778,12 +780,12 @@ async function nodePage(name) {
 function nodePageSummary(n) {
   const h = nodeHealth(n), known = value => h.ready && value != null && value !== "";
   const pair = (used, cap) => known(used) && known(cap) ? `${esc(used)}/${esc(cap)} GiB` : "—";
-  return `<span class="sumitem"><span class="pill ${h.tone === "bad" ? "crit" : h.tone}" data-tip="${esc([n.status, ...h.issues].join(" · "))}">${esc(h.status)}</span></span>
+  return `<span class="sumitem">${UI.chip(h.status, h.tone, { tip: [n.status, ...h.issues].join(" · ") })}</span>
     <span class="sumitem">CPU <b>${known(n.cpu_pct) ? `${esc(n.cpu_pct)}%` : "—"}</b> of ${esc(n.cpu_cap ?? "—")}</span>
     <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
     <span class="sumitem" data-tip="${esc(NODE_FS_TIP)}">Node filesystem <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
     ${h.ready && nodeTemp(n).value != null ? `<span class="sumitem">${nodeTemp(n).label} <b class="${tempCls(nodeTemp(n).value)}">${esc(nodeTemp(n).text)}</b>${nodeTemp(n).extra ? ` <span class="dim xs">${esc(nodeTemp(n).extra)}</span>` : ""}</span>` : ""}
-    ${n.schedulable ? "" : '<span class="sumitem"><span class="tag warn">cordoned</span></span>'}`;
+    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip("cordoned", "warn")}</span>`}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */
 window.nodeDriveBack = () => {
@@ -823,12 +825,12 @@ window.smartDisk = async (node, disk) => {
     const stat = (label, value, tone = "") => `<div class="smartstat ${tone}"><span>${label}</span><b class="mono">${esc(smartMetric(value))}</b></div>`;
     target.innerHTML = `
       <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
-        <span class="pill ${diskHealthTone(health.state)}">${esc(diskHealthWord(health.state))}</span></div>
+        ${UI.chip(diskHealthWord(health.state), diskHealthTone(health.state) || "neutral")}</div>
       ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
       ${health.issues?.length ? `<div class="note ${health.state === "critical" ? "bad" : "warn"}">
         <b>${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}</b>
         <ul class="diskfindings">${health.issues.map(issue =>
-          `<li><span class="tag ${issue.severity === "critical" ? "bad" : "warn"}">${esc(issue.severity)}</span> ${esc(issue.reason)}</li>`).join("")}</ul>
+          `<li>${UI.chip(issue.severity, issue.severity === "critical" ? "bad" : "warn")} ${esc(issue.reason)}</li>`).join("")}</ul>
         <span class="dim xs">Measured against the drive-health policy in Settings.</span></div>`
       : s.available ? `<div class="note good"><b>No defects reported.</b> Every counter is within the
           thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.</div>` : ""}
@@ -859,9 +861,9 @@ window.smartDisk = async (node, disk) => {
       <div class="drow"><div class="dl">Firmware</div><div class="dv mono">${esc(s.firmware || "—")}</div></div>
       <div class="drow"><div class="dl">SMART enabled</div><div class="dv">${s.smart_enabled == null ? "not reported" : s.smart_enabled ? "yes" : "no"}</div></div>
       <div class="drow"><div class="dl">Drive's own health check ${tip("smartctl's overall-health bit. Drives report PASSED until failure is imminent, which is why Homestead judges the counters as well.")}</div>
-        <div class="dv"><span class="tag ${smartTone(s.health)}">${esc(s.health || "not reported")}</span></div></div>
+        <div class="dv">${UI.chip(s.health || "not reported", smartTone(s.health) || "neutral")}</div></div>
       <div class="sec">Self-test history</div>
-      ${tests.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td><span class="tag ${smartTestTone(t.status)}">${esc(t.status || "Unknown")}</span></td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
+      ${tests.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td>${UI.chip(t.status || "Unknown", smartTestTone(t.status) || "neutral")}</td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
       <div class="smart-actions"><div><b>Run a drive self-test</b><div class="dim xs">Tests run inside the drive. A long test can reduce disk performance while active.</div></div><div class="row">
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'short')">Short test</button>
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
@@ -994,9 +996,9 @@ window.hardwareFeatureSettings = async () => {
     <div class="between"><p class="muted small">Define reusable passthrough and placement features. iGPU remains built in; everything else is editable.</p>
       <div class="row"><button class="btn pri sm" data-need="admin" onclick="hardwareFeatureEdit()">＋ Add feature</button></div></div>
     <div class="featurelist" style="margin-top:14px">${defs.map(f => `<div class="card flat featurecard">
-      <div class="between"><div><b>${esc(f.name)}</b> ${f.builtin ? '<span class="tag">built in</span>' : ""}<div class="dim xs mono">${esc(f.id)} · ${esc(f.label)}</div></div>
+      <div class="between"><div><b>${esc(f.name)}</b> ${f.builtin ? UI.chip("built in", "neutral") : ""}<div class="dim xs mono">${esc(f.id)} · ${esc(f.label)}</div></div>
       ${f.builtin ? "" : `<div class="row"><button class="btn sm" onclick="hardwareFeatureEdit(${jsq(f.id)})">Edit</button><button class="btn sm danger" onclick="hardwareFeatureDelete(${jsq(f.id)})">Delete</button></div>`}</div>
-      <div class="small" style="margin-top:9px"><span class="tag hw">${esc(f.host_path)} → ${esc(f.container_path)}</span> <span class="tag">${esc(f.path_type)}</span></div>
+      <div class="small" style="margin-top:9px">${UI.chip(`${f.host_path} → ${f.container_path}`, "hw")} ${UI.chip(f.path_type, "neutral")}</div>
       ${f.usb_ids?.length ? `<div class="dim xs" style="margin-top:7px">USB IDs: ${esc(f.usb_ids.join(", "))}</div>` : ""}
       ${f.description ? `<div class="dim small" style="margin-top:7px">${esc(f.description)}</div>` : ""}</div>`).join("")}</div>
     <div class="note" style="margin-top:14px">A feature adds a node selector and mounts its host path into the container. USB IDs control host detection; the configured path controls passthrough.</div>`, true);
@@ -1027,7 +1029,7 @@ window.hardwareFeatureEdit = async id => {
       <div class="f"><label>USB vendor:product IDs ${tip("Optional comma-separated VID:PID pairs, for example 18d1:9302. A matching device marks the feature present on that host.")}</label><input id="hf_usb" value="${esc((old.usb_ids || []).join(", "))}" placeholder="18d1:9302"></div></div>
     <div class="device-browser">
       <div class="between"><div><b>Browse a host</b><div class="dim xs">Choose the host whose <span class="mono">/dev</span> tree you want to map.</div></div>
-        <span class="tag">read only</span></div>
+        ${UI.chip("read only", "neutral")}</div>
       ${hostsUnread ? `<div style="margin-top:10px">${UI.callout("warn", "Could not read the hosts", esc(hostsUnread))}</div>` : `
       <div class="f2" style="margin-top:10px"><div class="f"><label>Host</label><select id="hf_browse_node" onchange="hardwareBrowseRender()">
         ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.status !== "Ready" ? " · " + esc(n.status) : ""}</option>`).join("")}</select></div>
@@ -1056,7 +1058,7 @@ window.hardwareBrowseRender = () => {
   }
   el.innerHTML = window.__hardwareBrowseItems.length ? `<div class="device-list">${window.__hardwareBrowseItems.map((x, i) =>
     `<button class="device-row" type="button" onclick="hardwareUsePath(${i})"><span><b>${esc(x.kind === "usb" ? x.name : x.path)}</b>
-      <span class="dim xs mono">${x.kind === "usb" ? `${esc(x.id)} · ${esc(x.path || "/dev/bus/usb")}` : esc(x.type)}</span></span><span class="tag">Use</span></button>`).join("")}</div>
+      <span class="dim xs mono">${x.kind === "usb" ? `${esc(x.id)} · ${esc(x.path || "/dev/bus/usb")}` : esc(x.type)}</span></span>${UI.chip("Use", "neutral")}</button>`).join("")}</div>
     ${window.__hardwareBrowseItems.length >= 160 ? '<div class="dim xs" style="margin-top:7px">Showing the first 160 matches — type a filter to narrow the list.</div>' : ""}`
     : '<div class="empty small">No matching device paths on this host.</div>';
 };
@@ -1101,6 +1103,7 @@ async function viewNodes() {
   const layout = viewLayout("nodes");
   paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
+        {label:"Add a host…",run:"clusterOnboarding()",need:"admin"},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}

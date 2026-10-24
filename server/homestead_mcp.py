@@ -31,6 +31,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_agent_audit as AUDIT
+import homestead_audit as AUDIT_LOG
 import homestead_agent_requests as REQUESTS
 import homestead_agent_tools as TOOLS
 import homestead_alerts as ALERTS
@@ -150,6 +151,7 @@ def call_tool(name, args, key, addr):
     tool = TOOLS.BY_NAME.get(name)
     if tool is None or tool not in TOOLS.offered(key["scopes"]):
         raise TOOLS.ToolError(f"there is no tool {name} for this key; tools/list shows what it has")
+    AUDIT_LOG.note(tool=name, kind=tool.kind)
     unknown = sorted(set(args) - set(tool.schema["properties"]))
     if unknown:
         raise TOOLS.ToolError(f"{name} takes no {', '.join(unknown)}")
@@ -161,6 +163,7 @@ def call_tool(name, args, key, addr):
         summary, _ = tool.plan(args, ctx)
         request = REQUESTS.create(tool, args, summary, tool.role, key, reason, addr)
         AUDIT.record(key, "mcp", name, args, "pending", detail=request["id"], addr=addr)
+        AUDIT_LOG.note(held=request["id"])
         return {"status": "pending_approval", "request": request["id"], "action": summary.get("action"),
                 "note": "A person must approve this in Homestead (it is in their bell). Follow it with "
                         "get_agent_request; it expires if nobody answers within 30 minutes."}
@@ -170,6 +173,7 @@ def call_tool(name, args, key, addr):
         request = REQUESTS.create(tool, args, {"action": f"{tool.title}: {needed.reason}", "settings": args},
                                   needed.role, key, needed.reason, addr, escalated=True)
         AUDIT.record(key, "mcp", name, args, "pending", detail=f"{request['id']}: {needed.reason}", addr=addr)
+        AUDIT_LOG.note(held=request["id"])
         return {"status": "pending_approval", "request": request["id"], "action": request["action"],
                 "note": f"This needs the {needed.role} role, so a person must approve it in Homestead. "
                         "Follow it with get_agent_request."}
@@ -209,10 +213,12 @@ def handle(message, key, addr, origin="", host=""):
             return 200, _result(rid, _content(call_tool(name, dict(params.get("arguments") or {}), key, addr)))
         except (TOOLS.ToolError, ValueError, PermissionError, TOOLS.NeedsApproval) as error:
             AUDIT.record(key, "mcp", name, params.get("arguments") or {}, "refused", detail=str(error), addr=addr)
+            AUDIT_LOG.note(outcome="refused")
             return 200, _result(rid, _content({"error": str(error)[:600]}, error=True))
         except urllib.error.HTTPError as error:
             text = "it no longer exists" if error.code == 404 else f"the cluster refused it ({error.code})"
             AUDIT.record(key, "mcp", name, params.get("arguments") or {}, "error", detail=text, addr=addr)
+            AUDIT_LOG.note(outcome="error")
             return 200, _result(rid, _content({"error": text}, error=True))
     return 200, _error(rid, -32601, f"Homestead's MCP server does not offer {method}")
 

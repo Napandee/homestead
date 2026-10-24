@@ -429,7 +429,10 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
     if writer.observe(_receipt(item, "delete-copy-job")) is not None or using:
         return "running", 81, "Waiting for the copy helper and all pods naming these claims to be removed"
     if not _receipt(item, "delete-temporary"):
-        writer.write("delete-temporary", "DELETE", f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['temp']}", expected=JOURNAL.identity(temporary))
+        # This journal created the temporary claim (copy-volume); pv-controller
+        # may still update it, so only its uid is pinned (#824). The user's
+        # claim (delete-source) keeps uid + resourceVersion.
+        writer.write("delete-temporary", "DELETE", f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['temp']}", expected=JOURNAL.identity(temporary), own=True)
         return "running", 83, "Releasing the temporary claim; its copied data remains protected"
     if temporary is not None:
         return "running", 84, "Waiting for the temporary claim's finalizers; no forced removal"
