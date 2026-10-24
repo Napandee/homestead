@@ -192,12 +192,12 @@ class DashboardPreferencesTests(unittest.TestCase):
     def test_routes_are_personal_and_available_to_viewers(self):
         for method in ("GET", "POST"):
             self.assertEqual("viewer", POLICY.role("/api/auth/preferences/dashboard", method))
-        tree = ast.parse((Path(__file__).resolve().parents[1] / "server/server.py").read_text(encoding="utf-8"))
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "server/homestead_auth_routes.py").read_text(encoding="utf-8"))
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                  and node.func.attr in ("dashboard_preferences", "save_dashboard_preferences")]
         self.assertEqual(2, len(calls))
         for call in calls:
-            self.assertEqual("self.user", ast.unparse(call.args[0]))
+            self.assertEqual("request.user", ast.unparse(call.args[0]))
 
 
 if __name__ == "__main__":

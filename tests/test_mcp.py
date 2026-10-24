@@ -534,6 +534,8 @@ class CatalogueTests(unittest.TestCase):
         "/api/push/test": "a browser's push subscription", "/api/alerts/acknowledge": "the app's own bell",
         "/api/alerts/delivered": "the app's own bell",
         "/api/weekly-trim/run": "trim_volume trims one volume; trimming them all is the weekly job's",
+        **{f"/api/auth/{path}": "a person's own session" for path in (
+            "setup", "login", "logout", "password", "signout-everywhere", "preferences/dashboard")},
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):

@@ -966,6 +966,8 @@ import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 import homestead_setup_code as SETUP_CODE
+import homestead_auth_routes as AUTH_ROUTES
+AUTH_ROUTES.bind(DEFAULT_NS)
 API_KEYS.bind(DATA_DIR)
 API_KEYS.CLIENTADDR.bind(lambda path: KUBE_HELPERS.kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
@@ -1298,19 +1300,11 @@ class H(HTTP.LimitedHandler):
         forwarded = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
         return forwarded == "https" or bool(getattr(self.connection, "context", None))
 
-    def _set_cookie(self, token, clear=False, max_age=None):
+    def _set_cookie(self, token, max_age=None):
         # Secure only behind TLS: Homestead is usually served over plain HTTP
         # on a LAN address, and a Secure cookie there would never be sent back.
-        secure = "; Secure" if self._over_tls() else ""
-        if clear:
-            self._extra_headers.append(
-                ("Set-Cookie",
-                 f"{AUTH.COOKIE}=; Path=/; HttpOnly; SameSite=Strict{secure}; Max-Age=0"))
-        else:
-            age = AUTH.SESSION_TTL if max_age is None else max_age
-            self._extra_headers.append(
-                ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; "
-                               f"SameSite=Strict{secure}; Max-Age={age}"))
+        self._extra_headers.append(("Set-Cookie", MODULE_ROUTES.cookie_header(MODULE_ROUTES.Cookie(
+            AUTH.COOKIE, token, max_age=AUTH.SESSION_TTL if max_age is None else max_age), self._over_tls())))
 
     def _who(self):
         if FLEET.signed(self.headers):
@@ -1738,19 +1732,6 @@ class H(HTTP.LimitedHandler):
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
                 return self._send(200, {"ok": True})
-            if p == "/api/auth/state":
-                who = self._who()
-                return self._send(200, {"setup": AUTH.needs_setup() and not (who and who.get("fleet")),
-                                        "via": ((who or {}).get("fleet") or {}).get("name", ""),
-                                        "user": who["user"] if who else None,
-                                        "role": who["role"] if who else None,
-                                        "remember": bool(who and who.get("remember")),
-                                        "session_expires": who.get("expires") if who else None,
-                                        "session_started": who.get("started") if who else None,
-                                        "session_max_days": AUTH.ABSOLUTE_TTL // 86400,
-                                        # Where Deploy puts a new app unless told otherwise.
-                                        "default_namespace": DEFAULT_NS if who else None,
-                                        "roles": list(AUTH.ROLES)})
             if p == "/api/fleet":
                 self._who()
                 return self._send(200, FLEET.summary(via=self._fleet_from))
@@ -1770,8 +1751,6 @@ class H(HTTP.LimitedHandler):
                     self._extra_headers.append(("X-Homestead-Fleet-Missing",
                                                 urllib.parse.quote(json.dumps(missing))))
                 return self._send(200, rows)
-            if p == "/api/auth/preferences/dashboard":
-                return self._send(200, AUTH.dashboard_preferences(self.user))
             if p.startswith("/api/self/data/handoff/"):
                 if re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}/view", p):
                     return self._send(200, SELF_DATA_WORKER.maintenance_page(p.split("/")[-2]), "text/html; charset=utf-8")
@@ -1814,7 +1793,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(400, {"error": "a JSON object is required"})
             if p in ROUTE_POLICY.TARGET_CHECKED:
                 KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
-            addr = self._client_ip()
             if p.startswith("/api/v1/"):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
@@ -1829,47 +1807,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, done)
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
-            if p == "/api/auth/setup":
-                # The first administrator: from the LAN only, and with the setup code (#737).
-                if self._via_cloudflare():
-                    return self._send(403, {"error": "finish setting Homestead up from your LAN; "
-                                                     "setup is not offered through the tunnel"})
-                first = SETUP_CODE.first_admin(b, addr, self.headers.get("User-Agent", ""))
-                self._signin("setup", first, detail="the first administrator")
-                remember = bool(b.get("remember"))
-                self._set_cookie(AUTH.issue_token(first, remember), max_age=AUTH.idle_ttl(remember))
-                return self._send(200, {"ok": True, "user": b.get("username")})
-            if p == "/api/auth/login":
-                tried = (b.get("username") or "").strip().lower()
-                try:
-                    remember = bool(b.get("remember"))
-                    tok = AUTH.login(b.get("username"), b.get("password"), addr, remember)
-                except PermissionError as e:
-                    blocked = "too many" in str(e)
-                    self._signin("signin-blocked" if blocked else "signin-failed", tried, ok=False, detail=str(e))
-                    return self._send(401, {"error": str(e)})
-                self._signin("signin", tried, detail="kept signed in" if remember else "")
-                self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
-                return self._send(200, {"ok": True, "remember": remember,
-                                        "user": (b.get("username") or "").strip().lower()})
-            if p == "/api/auth/logout":
-                self._signin("signout", self.user)
-                self._set_cookie("", clear=True)
-                return self._send(200, {"ok": True})
-            if p == "/api/auth/preferences/dashboard":
-                try:
-                    return self._send(200, AUTH.save_dashboard_preferences(self.user, b))
-                except AUTH.StoreConflict as error:
-                    return self._send(409, {"error": str(error)})
-            if p == "/api/auth/password":
-                try:
-                    AUTH.change_password(self.user, b.get("old"), b.get("new"))
-                except (PermissionError, ValueError) as error:
-                    self._signin("password-failed", self.user, ok=False, detail=str(error))
-                    raise
-                self._signin("password", self.user)
-                self._set_cookie(AUTH.issue_token(self.user))
-                return self._send(200, {"ok": True})
             if p == "/api/auth/users":
                 AUTH.create_user(b.get("username"), b.get("password"),
                                  role=b.get("role", "operator"))
@@ -1885,11 +1822,6 @@ class H(HTTP.LimitedHandler):
                 ALERTS.forget_user(str(b.get("username") or "").strip().lower())
                 self._signin("user-removed", b.get("username"), detail=f"by {FLEET.words(self.user)}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
-            if p == "/api/auth/signout-everywhere":
-                AUTH.logout_everywhere(self.user)
-                self._signin("signout-everywhere", self.user)
-                self._set_cookie("", clear=True)
-                return self._send(200, {"ok": True})
             if p == "/api/self/data/move":
                 try:
                     result, token = start_self_data_move(b, self.user)

@@ -168,6 +168,7 @@ class ThroughServer(unittest.TestCase):
         self.who = self.enterContext(mock.patch.object(server.H, "_who", return_value={
             "user": "ada", "role": "admin", "stale": False, "remember": False, "started": None}))
         self.enterContext(mock.patch.object(server.H, "_signin", lambda *a, **k: None))
+        self.enterContext(mock.patch.object(server.SIGNINS, "record", lambda *a, **k: None))
         self.enterContext(mock.patch.object(server.FLEET, "self_id", return_value="home"))
 
     def route(self, method, path, role, handler):
