@@ -2136,6 +2136,24 @@ ssh_pwauth: true
       v2: { enabled: false, harvester_setting: false, ready_nodes: 0, total_nodes: 3,
         nodes: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: false, block_disks: 0, hugepages_mb: 0,
           missing: ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"] })) } },
+    "/api/disks/allocation/review": (url,init) => {
+      const body=JSON.parse(init?.body||'{}'),gib=1073741824,free=window.__demoAllocationNoFree?0:64;
+      const areas=[['os','Host OS','/',64,28],['longhorn','Longhorn','/var/lib/longhorn',128,72]].map(([role,name,mountpoint,size,used],i)=>({role,name,mountpoint,size_bytes:size*gib,fs_bytes:size*gib,used_bytes:used*gib,reserved_bytes:2*gib,minimum_bytes:size*gib,filesystem:'ext4',device:`/dev/dm-${i}`,stable_device:`/dev/disk/by-id/dm-uuid-LVM-example-volume-group-${role}-logical-volume`,fs_uuid:`example-filesystem-${role}`}));
+      const role=body.role||'os',target=(body.size_gib||80)*gib,selected=areas.find(a=>a.role===role);
+      return {node:body.node||'node-1',vg:'system-vg',total_bytes:(192+free)*gib,extent_bytes:4194304,free_bytes:free*gib,areas,role,
+        size_gib:body.size_gib??null,target_bytes:target,remaining_bytes:free*gib-target+selected.size_bytes,request_id:'c'.repeat(24),capacity_token:'demo-allocation'};
+    },
+    "/api/disks/allocation/start":()=>{window.__demoAllocationState='growing';return responses['/api/disks/allocation/status']();},
+    "/api/disks/allocation/status":()=>{
+      const state=window.__demoAllocationState||'growing',done=state==='complete',failed=state==='failed';
+      return {id:'demo-allocation',kind:'disk-allocation',node:'node-1',phase:state,status:done?'succeeded':failed?'failed':'running',role:'os',mountpoint:'/',device:'/dev/dm-0',target_bytes:80*1073741824,progress:done?100:50,
+        message:done?'Logical volume and filesystem reached the approved size.':failed?'Filesystem growth stopped after the logical volume grew.':'Growing the logical volume and mounted filesystem; existing files are retained.',cancellable:false,dismissible:done};
+    },
+    "/api/disks/allocation/recheck":()=>{
+      const plan=responses['/api/disks/allocation/review'](null,{body:'{}'}),area={...plan.areas[0],size_bytes:80*1073741824};
+      return {...plan,area,operation_id:'demo-allocation',action:'finish-filesystem',request_id:'d'.repeat(24),capacity_token:'demo-finish'};
+    },
+    "/api/disks/allocation/finish":()=>{window.__demoAllocationState='complete';return responses['/api/disks/allocation/status']();},
     "/api/disks/v2/plan": (url,init) => {
       const body=JSON.parse(init?.body||'{}');
       return {...demoV2Region(),node:body.node||'node-1',disk:body.disk||'disk-data',device:window.__demoDiskV2Region?'/dev/dm-1':'/dev/sdb',region_kind:window.__demoDiskV2Region?'lvm':'disk',protected_parents:window.__demoDiskV2Region?['/dev/nvme0n1p3','/dev/nvme0n1']:[],size_bytes:1073741824000,

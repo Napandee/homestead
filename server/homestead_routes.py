@@ -86,6 +86,7 @@ MODULES = (
     "homestead_deploy_server",
     "homestead_diagnostics",
     "homestead_disk_v2",
+    "homestead_disk_allocation",
     "homestead_disks",
     "homestead_files",
     "homestead_firewall",

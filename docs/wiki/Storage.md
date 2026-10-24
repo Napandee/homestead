@@ -608,6 +608,60 @@ behavior. Externally forced downgrades, manual cluster changes, and external
 controllers are outside these internal guards; do not force an upgrade to bypass
 a recovery hold without an administrator-approved recovery plan.
 
+## Adjust the installer OS and Longhorn allocation
+
+On a host's system disk, choose **Adjust allocation**. Homestead can grow the
+existing OS or installer-created `longhorn` logical volume using unallocated
+space in its LVM volume group. The filesystem stays mounted and files remain
+in place. Normal ext4 and XFS filesystems are supported on ordinary linear LVs
+in a single local physical volume; thin pools, snapshots, RAID, network devices,
+external XFS log/realtime devices and ambiguous layouts are refused.
+
+The current/proposed bars show **logical allocation**, not physical partition
+positions. Review the mount folder, filesystem UUID, stable logical-volume
+identity, live used space, filesystem reserve and remaining unallocated space.
+The minimum offered online size is the existing LV size: the control cannot
+reduce either filesystem. Unused space *inside* the OS or Longhorn filesystem
+cannot be used to expand the other LV until it is safely reclaimed separately.
+
+Growth first extends the selected LV to an absolute number of extents, then
+grows its filesystem and verifies both sizes. The other LVs and partition table
+are retained. A short-lived review binds host boot, LV/VG/PV identities,
+filesystem identity and allocation geometry. The one-shot helper repeats the
+inspection under a volume-group operation lock immediately before changing it.
+Concurrent Homestead disk preparation and host maintenance are blocked while
+the saved allocation job remains unresolved. External administrator changes can
+invalidate a review and must not be used to bypass these guards.
+
+If a helper fails, use **Jobs → Storage allocation → Recheck outcome**. Recheck
+reads the original helper and current allocation. If the LV already reached its
+approved size but the filesystem did not, it offers a separate **Finish
+filesystem growth** review. That operation allocates no more extents. A missing
+or altered helper, changed identity or unexpected allocation needs administrator
+inspection; Homestead does not replay an uncertain change. Keep its saved job
+and host receipts under `/var/lib/homestead/allocation` until resolved.
+
+### Reclaiming space and changing physical partitions
+
+This online feature does not shrink, erase, move or recreate an existing LV or
+partition. Shrinking a mounted ext4 root filesystem is not supported: it needs
+an offline rescue environment, verified backups and a filesystem-specific
+maintenance procedure. Homestead does not support shrinking XFS.
+
+Reducing an existing Longhorn allocation needs a separate evacuation/recreate
+workflow. Every V1 store on that filesystem (including aliases and nested
+paths), replicas, backing images, orphaned data and temporary/import files must
+be accounted for and moved to verified healthy copies or deliberately deleted
+through their normal approved workflows. The filesystem must then be proven
+unused and empty before an erase can be reviewed. Disabling scheduling or an
+empty Kubernetes list is insufficient. That destructive reclaim workflow is
+**not implemented by Adjust allocation**; it never erases data to make room.
+
+The underlying tools support the selected growth operations:
+[LVM lvextend](https://man7.org/linux/man-pages/man8/lvextend.8.html),
+[ext4 resize2fs](https://man7.org/linux/man-pages/man8/resize2fs.8.html) and
+[XFS online growth](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/7/html/storage_administration_guide/xfsgrow).
+
 ## Without Longhorn
 
 On a cluster whose storage is k3s's local-path or another provisioner, volumes

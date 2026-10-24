@@ -119,6 +119,7 @@ window.openJob = async id => {
   renderOperations();
   const operation = (STATE.data.operations || []).find(item => item.id === id);
   if (operation?.kind === "cluster-shutdown" && window.clusterShutdown) return clusterShutdown();
+  if (operation?.kind === "disk-allocation" && window.diskAllocationWatch) return diskAllocationWatch(id);
   if (operation?.kind === "disk-v2-convert" && window.diskV2Watch) return diskV2Watch(id);
   jobsDialog();
   selectJob(id);
@@ -208,6 +209,7 @@ window.openOperation = (href, id = "", savedOperation = null) => {
   const operation = savedOperation?.id === id ? savedOperation : (STATE.data.operations || []).find(item => item.id === id);
   operationPanelOpen = false;
   renderOperations();
+  if(operation?.kind==='disk-allocation' && window.diskAllocationWatch) return diskAllocationWatch(id);
   if(operation?.kind==='disk-v2-convert' && window.diskV2Watch) return diskV2Watch(id);
   // Recovery jobs need their retained-resource review, not just the page
   // where the resources live. Every review still checks the saved job afresh.
