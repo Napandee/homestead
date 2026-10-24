@@ -88,6 +88,8 @@ const DIALOGS = [
   ["add-harvester-host-4", "cluster", "clusterOnboarding()", "stepGo('host_join',3)"],
   ["remove-host", "cluster", "clusterRemovePick()"],
   ["add-host", "cluster", "platformJoinGuide()"],
+  ["add-host-control-plane", "cluster", "platformJoinGuide('control-plane')"],
+  ["add-host-tiebreaker", "cluster", "platformJoinGuide('tiebreaker')"],
   ["helm-release", "helm", "click:helmRelease"],
   ["helm-install", "helm", "helmInstall()"],
   // The addresses load only on the network page's IP tab. Each runner takes
