@@ -20,6 +20,7 @@ PARTS = {
     "cdi": ("CDI", "/apis/cdi.kubevirt.io/v1beta1/cdis", "cdi", "cdi-operator"),
 }
 CONTROL = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
+READ_COMPLETE = "\nhomestead-operator-read-complete\n"
 
 
 def external(obj, allowed_owner=""):
@@ -109,8 +110,14 @@ def _read_input(node, command, arguments, payload):
               'trap \'rm -f "$f"\' EXIT\n'
               f'head -c {len(payload)} > "$f"\n'
               f'[ "$(wc -c < "$f")" -eq {len(payload)} ] || {{ echo "Incomplete operator input" >&2; exit 1; }}\n'
-              f'{command} {arguments} -f "$f" -o json\n')
-    return HOSTRUN.run(node, script, timeout=90, stdin=payload)
+              f'{command} {arguments} -f "$f" -o json\n'
+              'printf "\\nhomestead-operator-read-complete\\n"\n')
+    out, err = HOSTRUN.run(node, script, timeout=90, stdin=payload)
+    # A failed command can still print complete objects before it stops. Exec
+    # with stdin does not expose a reliable exit status, so require our receipt.
+    if not out.endswith(READ_COMPLETE):
+        return "", err.strip() or "kubectl inspection did not finish; no change was made"
+    return out[:-len(READ_COMPLETE)], err
 
 
 def _documents(component, version, addons, node, command):
@@ -122,14 +129,28 @@ def _documents(component, version, addons, node, command):
     # quoted scalars outside Homestead's deliberately small Compose parser.
     out, err = _read_input(node, command, "create --dry-run=client --validate=false", text.encode())
     try:
-        answer = json.loads(out)
-        if not isinstance(answer, dict):
-            raise ValueError("expected a Kubernetes object")
-        rows = answer["items"] if answer.get("kind") == "List" else [answer]
-        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-            raise ValueError("expected a Kubernetes resource list")
-    except (ValueError, TypeError, KeyError):
-        raise ValueError(f"Could not read the upstream operator manifest: {err[:200]}") from None
+        # kubectl create visits and prints each resource separately. Its JSON
+        # output is a stream of pretty-printed objects, not one List. Consume
+        # every character so a damaged tail cannot become a partial manifest.
+        decoder, whitespace, rows, offset = json.JSONDecoder(), re.compile(r"[ \t\r\n]*"), [], 0
+        if not out.strip():
+            raise ValueError("kubectl returned no manifest objects")
+        while offset < len(out):
+            offset = whitespace.match(out, offset).end()
+            if offset == len(out):
+                break
+            answer, offset = decoder.raw_decode(out, offset)
+            if not isinstance(answer, dict):
+                raise ValueError("expected a Kubernetes object")
+            items = answer["items"] if answer.get("kind") == "List" else [answer]
+            if not isinstance(items, list) or any(not isinstance(row, dict) for row in items):
+                raise ValueError("expected a Kubernetes resource list")
+            if answer.get("kind") == "List" and (answer.get("metadata") or {}).get("continue"):
+                raise ValueError("incomplete Kubernetes resource list")
+            rows.extend(items)
+    except (ValueError, TypeError, KeyError) as error:
+        detail = err.strip() or str(error) or "kubectl returned an unreadable manifest"
+        raise ValueError(f"Could not read the upstream operator manifest: {detail[:200]}") from None
     allowed = {"Namespace": "v1", "ServiceAccount": "v1", "ConfigMap": "v1", "Deployment": "apps/v1",
                "ClusterRole": "rbac.authorization.k8s.io/v1", "ClusterRoleBinding": "rbac.authorization.k8s.io/v1",
                "Role": "rbac.authorization.k8s.io/v1", "RoleBinding": "rbac.authorization.k8s.io/v1",
