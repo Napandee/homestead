@@ -76,12 +76,31 @@ one, or give it a service-account token the way the Deployment does.
 
 ## Tests
 
-Run all three before sending a change; CI runs the same.
+Run all three before sending a change; CI runs the same, with the server tests
+split across four jobs (`scripts/run_tests.py --shard K/4`).
 
 ```bash
 python -m unittest discover -s tests
 for file in web/js/*.js web/sw.js; do node --check "$file"; done
 node --test tests/*.test.js
+```
+
+While working, `python scripts/run_tests.py --changed` is quicker: it runs the
+server tests that name a module or web file your branch changes (against
+`origin/dev`, or the base you give it), plus every test that scans the whole
+tree. It is a quick check, not a substitute for the full run.
+
+On Windows, run the full suite as `python -X utf8 -m unittest discover -s tests`:
+sources are UTF-8, and Windows otherwise reads text in its own code page.
+`run_tests.py` turns that mode on by itself.
+
+Every text file is checked out with LF line endings on every platform
+(`.gitattributes`); many tests read sources byte for byte. A clone made on
+Windows before that rule, or with `core.autocrlf` set, still has CRLF files
+until they are checked out again. With nothing uncommitted, run once:
+
+```bash
+git rm -r --cached --quiet . && git reset --hard
 ```
 
 Tests talk to small fakes of the Kubernetes API rather than a cluster. A change
