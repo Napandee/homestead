@@ -446,7 +446,9 @@ def recheck(operation_id):
         item = _saved(operation_id); ref = item['ref']
         if item.get('status') not in ops.TERMINAL: raise ValueError('Wait for the current helper to finish before rechecking')
         if ref['phase'] == 'queued':
-            ref['phase'] = 'cancelled'; ops.checkpoint(item)
+            ref['phase'] = 'cancelled'
+            item.update(status='cancelled', progress=0, message='No helper was dispatched. Create a fresh allocation review.')
+            ops.checkpoint(item)
             return {'operation':public(item), 'detail':'No helper was dispatched. Create a fresh allocation review.'}
         try: job = _job(ref)
         except ValueError:
@@ -460,7 +462,9 @@ def recheck(operation_id):
             ops.checkpoint(item)
             return {'operation':public(item)}
         if area['size_bytes'] != ref['target_bytes']:
-            ref['phase'] = 'cancelled'; ops.checkpoint(item)
+            ref['phase'] = 'cancelled'
+            item.update(status='cancelled', progress=0, message='No logical-volume growth was observed. Create a fresh allocation review.')
+            ops.checkpoint(item)
             return {'operation':public(item), 'detail':'No LV growth was observed. Close this job and create a fresh allocation review.'}
         request_id = secrets.token_hex(12)
         cfg = {'operation_id':operation_id, 'request_id':request_id, 'action':'finish-filesystem'}

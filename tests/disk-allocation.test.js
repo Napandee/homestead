@@ -62,3 +62,9 @@ test('allocation diagrams escape volume group labels',()=>{
   const t=setup();t.plan.vg='<img src=x onerror=bad>';
   const html=t.c.allocationDiagram(t.plan,'os',80*1073741824);assert.doesNotMatch(html,/<img/);assert.match(html,/&lt;img/);
 });
+test('a rechecked job with no applied growth is shown as settled',async()=>{
+  const t=setup();Object.assign(t.item,{status:'cancelled',phase:'cancelled',message:'No logical-volume growth was observed.'});
+  await t.c.diskAllocationWatch(t.item.id);
+  const html=t.fields['#allocationStatus'].innerHTML;assert.match(html,/No growth applied/);assert.match(html,/View allocation/);
+  assert.doesNotMatch(html,/Recheck outcome/);assert.equal(t.timers.length,0);
+});

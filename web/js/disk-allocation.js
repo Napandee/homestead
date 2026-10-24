@@ -92,7 +92,7 @@ window.diskAllocationWatch=async id=>{
       const item=await api('/api/disks/allocation/status?id='+encodeURIComponent(id));
       if(sequence!==diskAllocationSequence||$('#allocationStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
       const done=item.phase==='complete',failed=item.status==='failed',settled=done||item.phase==='cancelled';
-      host.innerHTML=UI.lead(esc(item.message))+UI.facts([['Host',esc(item.node)],['Mount folder',esc(item.mountpoint)],['Approved total',esc(allocationGiB(item.target_bytes))],['State',UI.chip(done?'Complete':failed?'Needs inspection':'Growing',done?'ok':failed?'warn':'')]])+
+      host.innerHTML=UI.lead(esc(item.message))+UI.facts([['Host',esc(item.node)],['Mount folder',esc(item.mountpoint)],['Approved total',esc(allocationGiB(item.target_bytes))],['State',UI.chip(done?'Complete':settled?'No growth applied':failed?'Needs inspection':'Growing',done?'ok':failed&&!settled?'warn':'')]])+
         (!settled&&!failed?UI.progress(item.progress,{label:'Storage growth'}):'')+
         (failed&&!settled?UI.callout('warn','Check before changing allocation','The logical volume may have grown before its filesystem. Recheck reads the saved job and current sizes; it does not repeat the growth command.'):'')+
         UI.actions(UI.cancel('Close')+(failed&&!settled?UI.button('Recheck outcome',`diskAllocationRecheck(${jsArg(id)})`,{kind:'pri',attrs:'data-need="admin"'}):settled?UI.button('View allocation',`diskAllocationOpen(${jsArg(item.node)})`,{kind:'pri'}):''),UI.button('Job log',`diskAllocationLog(${jsArg(id)})`));

@@ -117,6 +117,7 @@ class AllocationTests(unittest.TestCase):
         item=self.begin();self.text=inventory(lh_size=132)
         self.assertEqual(self.tick()['status'],'failed');self.assertFalse(self.jobs)
         outcome=A.recheck(item['id']);self.assertEqual(outcome['operation']['phase'],'cancelled')
+        self.assertEqual(outcome['operation']['status'],'cancelled')
     def test_duplicate_request_returns_original_job_and_helper_is_pinned(self):
         plan=self.plan();one=self.begin(plan);two=self.begin(plan);self.assertEqual(one['id'],two['id'])
         self.tick();spec=next(iter(self.jobs.values()))['spec']
