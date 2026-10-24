@@ -3199,6 +3199,62 @@ ssh_pwauth: true
     {key:"audit:filling-fast",version:"demo-audit-fast",severity:"degraded",category:"degraded",title:"The audit log is filling fast",body:"audit.jsonl filled 10 MiB in 12 minutes: something may be flooding Homestead with requests, and older lines on the data volume are being replaced. The pod log keeps every line.",href:"/settings?tab=about",acknowledged:false}
   ]};
   responses["/api/alerts/acknowledge"] = (url,opts) => {const body=JSON.parse(opts.body || "{}");const row=responses["/api/alerts"].active.find(a=>a.key===body.key && a.version===body.version);if(!row)throw new Error("This alert changed. Refresh and review its current state.");row.acknowledged=!body.undo;return {ok:true};};
+  // Log alerts (logalerts.js): counts per minute for the last hour. Front
+  // door's rule is over its threshold now; Paperless's is quiet; Jellyfin's
+  // app could not be read this minute, so it is not counted (never zero).
+  // Ids are the server's; a name may not repeat the query, as on the server.
+  // Not in the bell: the bell's own checks count the demo's two alerts.
+  {
+    const minute = Math.floor(Date.now() / 60000);
+    const hour = shape => Array.from({ length: 60 }, (_, i) => [minute - 59 + i, shape(i)]);
+    const noise = i => [2, 0, 1, 3, 1, 0, 2, 4, 1, 0][i % 10];
+    const ok = { state: "ok", detail: "" };
+    const rules = [
+      { id: "la-0d3f5a9b2c71", name: "Front door camera errors", apps: ["lab/frigate"], query: "Unable to read frames", regex: false, case: false,
+        threshold: 10, window: 1, severity: "degraded", status: ok, counts: hour(i => i > 52 ? 14 + (i % 3) * 6 : i > 30 && i < 35 ? 8 + i % 4 : noise(i)) },
+      { id: "la-5e8a1c4f7b20", name: "Paperless OCR timeouts", apps: ["lab/paperless"], query: "timeout waiting for OCR", regex: false, case: false,
+        threshold: 3, window: 5, severity: "info", status: ok, counts: hour(i => i === 12 || i === 41 ? 1 : 0) },
+      { id: "la-9b6e2d0a3f15", name: "Jellyfin server errors", apps: ["media/jellyfin"], query: "\" 5\\d\\d ", regex: true, case: false,
+        threshold: 20, window: 5, severity: "degraded", status: { state: "unread", detail: "could not read jellyfin" }, counts: hour(i => i === 59 ? null : noise(i) * 2) }];
+    const refuse = message => { throw new Error(message); };
+    const check = body => {
+      const name = String(body.name || "").trim(), query = String(body.query || "").trim();
+      if (!name || name.length > 60) refuse("give the alert a name of at most 60 characters");
+      if (!(body.apps || []).length) refuse("choose the app (or up to five apps) to watch");
+      if (!query) refuse("type something to search for");
+      if (query.length >= 3 && name.toLowerCase().includes(query.toLowerCase())) refuse("the name may not repeat the search text: alert names reach lock screens and config backups");
+      if (!(Number(body.threshold) >= 1)) refuse("the threshold is a number of lines, from 1");
+      return { name, apps: body.apps, query: body.query, regex: !!body.regex, case: !!body.case,
+        threshold: Number(body.threshold), window: [1, 5, 15].includes(Number(body.window)) ? Number(body.window) : 1, severity: body.severity || "degraded" };
+    };
+    responses["/api/logalerts"] = (url, init) => {
+      if ((init?.method || "GET") === "GET") return { rules, every: 60, max_rules: 20, max_apps: 5, counted_at: Math.round(Date.now() / 1000) - 20 };
+      const body = JSON.parse(init.body || "{}"), rule = check(body);
+      if (body.id !== undefined) {
+        const old = rules.find(r => r.id === body.id) || refuse("that log alert no longer exists; refresh and try again");
+        Object.assign(old, rule);
+        return old;
+      }
+      if (rules.length >= 20) refuse("at most 20 log alerts");
+      const made = { ...rule, id: `la-${Math.random().toString(16).slice(2, 14).padEnd(12, "0")}`, counts: [], status: { state: "waiting", detail: "" } };
+      rules.push(made);
+      return made;
+    };
+    responses["/api/logalerts/delete"] = (url, init) => {
+      const at = rules.findIndex(r => r.id === JSON.parse(init.body || "{}").id);
+      if (at < 0) refuse("that log alert no longer exists; refresh and try again");
+      rules.splice(at, 1);
+      return { ok: true };
+    };
+    responses["/api/logalerts/preview"] = (url, init) => {
+      const body = JSON.parse(init.body || "{}"), rule = check(body), app = rule.apps[0];
+      const rate = app.endsWith("/frigate") ? 1 : app.endsWith("/paperless") ? 0.15 : 0.4;
+      const counts = hour(i => Math.round((i > 52 ? 16 : i > 30 && i < 35 ? 9 : noise(i)) * rate));
+      const over = counts.filter((_, m) => counts.slice(Math.max(0, m - rule.window + 1), m + 1).reduce((a, c) => a + c[1], 0) > rule.threshold).length;
+      return { counts, over_minutes: over, unread: [], capped: [] };
+    };
+  }
+  // End of log alerts.
   // On the live demo, say so on every page.
   if (live) {
     const banner = () => {

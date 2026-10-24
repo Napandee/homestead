@@ -524,6 +524,9 @@ class CatalogueTests(unittest.TestCase):
     NOT_TOOLS = {
         "/api/agents/requests/approve": "approving is a person's", "/api/agents/requests/deny": "deciding is a person's",
         "/api/alerts/pending": "the app's own bell",
+        "/api/logalerts": "a log alert notifies people: who is woken is a person's call",
+        "/api/logalerts/delete": "a log alert notifies people: who is woken is a person's call",
+        "/api/logalerts/preview": "the log alert editor's trial run, for the person writing the alert",
         "/api/volumes/previous/keep": "keeping or letting a previous volume expire is a person's call (#743)", "/api/push/status": "a browser's push subscription",
         "/api/push/subscribe": "a browser's push subscription", "/api/push/unsubscribe": "a browser's push subscription",
         "/api/setup/complete": "the setup guide is a person's", "/api/setup/hide": "the setup guide is a person's",

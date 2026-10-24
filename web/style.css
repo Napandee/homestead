@@ -3941,3 +3941,17 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 /* Port links and movable tags are buttons (#487); they keep the text they sit in. */
 button.plink,button.tag.movable{font-family:inherit;line-height:inherit}
 button.a2port{font-family:inherit;line-height:inherit}
+
+/* Log alerts (logalerts.js): an hour of per-minute counts with the threshold across. */
+.la-bars{display:block;width:100%;height:auto;max-height:64px}.la-bars .la-under{fill:color-mix(in srgb,var(--mut) 45%,transparent)}
+.la-bars .la-over{fill:var(--high)}.la-bars .la-unread{fill:color-mix(in srgb,var(--mut) 25%,transparent)}
+.la-bars .la-limit{stroke:var(--tx);stroke-width:1;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.la-axis{display:flex;justify-content:space-between;gap:8px;margin-top:2px}
+.la-preview{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;display:grid;gap:6px}.la-preview:empty{display:none}
+.la-preview-head{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}.la-over-t{color:var(--high)}
+.la-thresh{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px}
+.la-rules{display:grid;gap:10px}.la-rule{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;display:grid;gap:6px;min-width:0}
+.la-rule.la-raised{border-color:color-mix(in srgb,var(--high) 60%,var(--line2))}
+.la-rule-head{display:flex;justify-content:space-between;gap:8px;align-items:center;min-width:0}.la-rule-head b{overflow-wrap:anywhere}
+.la-rule code{overflow-wrap:anywhere}.la-status{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.la-rule-actions{display:flex;flex-wrap:wrap;gap:6px}

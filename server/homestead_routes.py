@@ -112,6 +112,7 @@ MODULES = (
     "homestead_lhv2_setup",
     "homestead_lhv2_upgrade",
     "homestead_lifecycle",
+    "homestead_logalerts",
     "homestead_longhorn",
     "homestead_metrics",
     "homestead_move",
