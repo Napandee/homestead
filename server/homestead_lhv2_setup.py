@@ -7,12 +7,14 @@ import hashlib
 import json
 import re
 import urllib.error
+from pathlib import Path
 
 import homestead_kube as KUBE
 import homestead_lhcapacity as CAP
 import homestead_hostrun as HOST
 import homestead_pod_resources as R
 import homestead_routes
+import homestead_lhv2_cleanup as CLEANUP
 
 LH = CAP.LH
 LABEL = "homestead.io/longhorn-v2-setup"
@@ -139,7 +141,7 @@ def plan():
                    and p.get("status", {}).get("phase") not in ("Failed", "Succeeded"))
         target_pages = (required * 1048576 + used + 2097151) // 2097152 if required else 0
         identity = {"node": name, "node_uid": node["metadata"]["uid"], "boot_id": boot,
-                    "required_mib": required, "target_pages": target_pages, "distribution": distribution, "version": 1}
+                    "required_mib": required, "target_pages": target_pages, "distribution": distribution, "version": 2}
         matching = [j for j in jobs if j.get("metadata", {}).get("annotations", {}).get("homestead.io/node-uid") == identity["node_uid"]]
         matching.sort(key=lambda j: j["metadata"].get("creationTimestamp", ""), reverse=True)
         job = matching[0] if matching else None
@@ -278,6 +280,10 @@ def _body(ref):
     if type(ref["target_pages"]) is not int or not 0 <= ref["target_pages"] <= 1048576 or type(ref["required_mib"]) is not int:
         raise ValueError("Invalid V2 memory requirement")
     script = SCRIPT.replace('__BOOT__', ref['boot_id']).replace('__PAGES__', str(ref['target_pages'])).replace('__V2PAGES__', str(ref['required_mib'] // 2))
+    if ref.get('version', 1) >= 2:
+        source = Path(__file__).with_name('homestead_v2_memory_worker.py').read_text(encoding='utf-8')
+        script = script.split('required=')[0] + f'required={ref["target_pages"]}\n'
+        script += "python3 - <<'HOMESTEAD_MEMORY'\n" + source + '\nreserve(' + repr(ref['node_uid']) + ', ' + repr(ref['boot_id']) + ', ' + str(ref['target_pages']) + ', ' + str(ref['required_mib'] // 2) + ')\nHOMESTEAD_MEMORY\n'
     return {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": ref["name"], "namespace": NS,
         "labels": {LABEL: "true"}, "annotations": {"homestead.io/node-uid": ref["node_uid"], "homestead.io/approval": ref["approval"],
             "homestead.io/required-mib": str(ref['required_mib']), "homestead.io/target-pages": str(ref['target_pages']), "homestead.io/boot-id": ref['boot_id']}},
@@ -330,6 +336,7 @@ def prepare(body):
     if body.get('confirm') is not True or not re.fullmatch(r'[a-f0-9]{24}', str(body.get('request_id', ''))):
         raise ValueError('Review and confirm the host preparation tasks first')
     with ops.transaction():
+        CLEANUP.require_idle()
         current = plan()
         row = next((n for n in current['nodes'] if n['node'] == body.get('node')), None)
         if not row or row['review_token'] != body.get('review_token'):
@@ -367,6 +374,12 @@ def progress(item):
 
 
 def enable(body):
+    with ops.transaction():
+        return _enable_locked(body)
+
+
+def _enable_locked(body):
+    CLEANUP.require_idle()
     current = plan()
     if body.get('confirm') is not True or body.get('review_token') != current['review_token']:
         raise ValueError('V2 setup changed; check and confirm the enable step again')
@@ -402,3 +415,4 @@ ROUTES = {
 def register(ops):
     """The job store's entry for preparing hosts for Longhorn V2 (#622)."""
     ops.RESOLVERS["longhorn-v2-prepare"] = progress
+    CLEANUP.register(ops)

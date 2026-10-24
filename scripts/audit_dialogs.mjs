@@ -71,6 +71,8 @@ const DIALOGS = [
   ["disk-v2-failed", "nodes", "window.__demoDiskV2State='failed';diskV2Watch('demo-disk-v2')"],
   ["disk-v2-complete", "nodes", "window.__demoDiskV2State='complete';diskV2Watch('demo-disk-v2')"],
   ["longhorn-v2-missing", "settings", "window.__demoV2State='missing';lhV2Setup()"],
+  ["longhorn-v2-cleanup-review", "settings", "lhV2CleanupOpen()"],
+  ["longhorn-v2-cleanup-restart", "settings", "lhV2CleanupWatch('demo-v2-cleanup')"],
   ["longhorn-v2-prepare", "settings", "window.__demoV2State='missing';lhV2Setup()", "lhV2ReviewHost('k3s-test')"],
   ["longhorn-v2-running", "settings", "window.__demoV2State='running';lhV2Setup()"],
   ["longhorn-v2-reboot", "settings", "window.__demoV2State='reboot';lhV2Setup()"],
@@ -124,6 +126,11 @@ const DIALOGS = [
   ["workload-priority", "workloads", "priorityReview()"],
   ["workload-group-tier", "workloads", "groupTier(groupKeyIndex('Home'))"],
   ["workload-edit-placement", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',4)"],
+  // Starts after (#746): a second app picked, one with two ports; a Flux app's lines; a loop refused.
+  // Named "waits-for": "start" would hold the Edit form to a review's word budget.
+  ["workload-edit-waits-for", "workloads", "wlEdit('lab','paperless')", "(()=>{stepGo('e_steps',4);startsAfterAdd();const s=[...document.querySelectorAll('#e_starts_rows .sa-app')].pop();s.value='lab/frigate';startsAfterAppPicked(s)})()"],
+  ["workload-edit-waits-for-managed", "workloads", "wlEdit('lab','doublecommander')", "(async()=>{stepGo('e_steps',4);await startsAfterLines()})()"],
+  ["workload-edit-waits-for-cycle", "workloads", "wlEdit('lab','postgres')", "(async()=>{startsAfterAdd();const s=document.querySelector('#e_starts_rows .sa-app');s.value='lab/home-assistant';startsAfterAppPicked(s);await editSave('lab','postgres')})()"],
   ["workload-edit-add-container", "workloads", "wlEdit('lab','frigate')", "containerAdd('edit')"],
   ["workload-edit-hardware", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',1)"],
   ["workload-edit-environment", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',2)"],
@@ -255,6 +262,7 @@ const DIALOGS = [
   ["set-restart-blocked", "nodes", "STATE.platform.harvester=false;window.__demoSetRestartBlocked=true", "setRestartReview('data','postgres','harvester-node3')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
+  ["workload-start-waits", "workloads", "wlScale('lab','paperless',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
   ["failover", "workloads", "wlFailover()"],
   ["workload-delete", "workloads", "wlDelete('lab','frigate')"],
