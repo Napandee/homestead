@@ -628,10 +628,14 @@ Growth first extends the selected LV to an absolute number of extents, then
 grows its filesystem and verifies both sizes. The other LVs and partition table
 are retained. A short-lived review binds host boot, LV/VG/PV identities,
 filesystem identity and allocation geometry. The one-shot helper repeats the
-inspection under a volume-group operation lock immediately before changing it.
+inspection under a Homestead operation lock for the volume group immediately
+before changing it. Growth runs in a private mount namespace and uses pinned
+device/filesystem references so later host mount changes cannot redirect it.
 Concurrent Homestead disk preparation and host maintenance are blocked while
-the saved allocation job remains unresolved. External administrator changes can
-invalidate a review and must not be used to bypass these guards.
+the saved allocation job remains unresolved. **Do not run external LVM changes
+during adjustment**, including renaming logical volumes or volume groups.
+Homestead's operation lock does not fence external administration; LVM still
+selects the logical volume by its verified name when extending it.
 
 If a helper fails, use **Jobs → Storage allocation → Recheck outcome**. Recheck
 reads the original helper and current allocation. If the LV already reached its

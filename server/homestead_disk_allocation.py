@@ -57,6 +57,7 @@ snapshot() {
 INSPECT = r'''set -eu
 export LC_ALL=C
 fail() { echo "ERROR $*"; exit 1; }
+command -v unshare >/dev/null || fail 'Install util-linux unshare before adjusting storage'
 __SNAPSHOT__
 META=$(snapshot) || exit 1
 printf '%s\n' "$META"
@@ -91,7 +92,7 @@ fs_facts() {
     *) fail 'Online growth supports mounted ext4 or XFS filesystems';;
   esac
   STAT=$(stat -f -c '%S|%b|%f|%a' "$P") || fail 'Cannot read filesystem usage'
-  TOPO=$(lsblk -snrbpP -o KNAME,TYPE,SIZE,SERIAL,WWN,PARTUUID,START,TRAN "$D") || fail 'Cannot inspect parent topology'
+  TOPO=$(lsblk -snbpP -o KNAME,TYPE,SIZE,SERIAL,WWN,PARTUUID,START,TRAN "$D") || fail 'Cannot inspect parent topology'
   ANCESTRY=$(lsblk -snrpo KNAME,TYPE "$D") || fail 'Cannot resolve physical parent'
   PD=$(printf '%s\n' "$ANCESTRY" | awk '$2=="disk" {print $1}')
   [ -n "$PD" ] || fail 'Physical parent is missing'
@@ -128,7 +129,7 @@ def parse(text):
     if 'END' not in text.splitlines() or any(line.startswith('ERROR ') for line in text.splitlines()):
         raise ValueError(next((line[6:] for line in text.splitlines() if line.startswith('ERROR ')), 'Storage inventory is incomplete'))
     try:
-        lvs = json.loads(_section(text, 'LVS'))['report'][0]['lv']
+        lvs = json.loads(_section(text, 'LVS'))['report'][0]['seg']
         vgs = json.loads(_section(text, 'VGS'))['report'][0]['vg']
         pvs = json.loads(_section(text, 'PVS'))['report'][0]['pv']
         if len(vgs) != 1 or len(pvs) != 1 or not lvs:
@@ -354,15 +355,19 @@ echo 'Logical volume and filesystem reached the approved size'
 '''
     extend = ('[ "$(blockdev --getsize64 /proc/self/fd/8)" = "$TARGET" ]' if ref.get('filesystem_only') else
               'lvextend --autobackup y --extents ' + str(target // ref['extent_bytes']) + ' "$L" "$PV"')
-    grow = ('resize2fs "$B" ' + shlex.quote(str(target // 1024) + 'K') if area['filesystem'] == 'ext4' else
-            'xfs_growfs -D ' + str(target // area['block_bytes']) + ' "$P"')
+    grow = ('resize2fs /proc/self/fd/8 ' + shlex.quote(str(target // 1024) + 'K') if area['filesystem'] == 'ext4' else
+            'xfs_growfs -D ' + str(target // area['block_bytes']) + ' /proc/self/fd/7')
     values = {'__BOOT__':ref['boot_id'], '__STABLE__':area['stable_device'], '__POINT__':area['mountpoint'], '__FSUUID__':area['fs_uuid'],
               '__TARGET__':str(target), '__PV__':ref['pv'], '__VGUUID__':ref['vg_uuid'], '__REQUEST__':ref['request_id'],
               '__HASH__':ref['inspection_hash'], '__DM__':area['stable_device'].rsplit('dm-uuid-', 1)[1], '__TYPE__':area['filesystem'],
               '__ROLE__':ref['role'], '__BLOCKS__':str(target // area['block_bytes'])}
     script = script.replace('__INSPECT__', INSPECT).replace('__EXTEND__', extend).replace('__GROW__', grow)
     for key, value in values.items(): script = script.replace(key, shlex.quote(value))
-    return script
+    # Both tools can resolve mount-table paths internally even when given an
+    # fd path. Keep the reviewed mounts in our own namespace, unaffected by
+    # later host mount propagation, and pin their device/directory as well.
+    # https://github.com/tytso/e2fsprogs/blob/master/resize/online.c
+    return 'exec unshare --mount --propagation private -- sh -c ' + shlex.quote(script)
 
 
 def _job_body(ref):

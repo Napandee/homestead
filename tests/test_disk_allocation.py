@@ -29,7 +29,7 @@ def inventory(os_size=64, lh_size=128, os_fs=None, fs='ext4'):
             'lv_kernel_major':'253','lv_kernel_minor':str(index)}
            for index,(name,uid,size) in enumerate([('root','test-root-uuid',os_size),('longhorn','test-data-uuid',lh_size)])]
     chunks = []
-    for name, field, rows in [('LVS','lv',lvs),('VGS','vg',[vg]),('PVS','pv',[pv])]:
+    for name, field, rows in [('LVS','seg',lvs),('VGS','vg',[vg]),('PVS','pv',[pv])]:
         chunks += [name,json.dumps({'report':[{field:rows}]}),'END'+name]
     for index,(role,point,size) in enumerate([('os','/',os_size if os_fs is None else os_fs),('longhorn','/var/lib/longhorn',lh_size)]):
         dm = 'LVM-' + vg['vg_uuid'].replace('-','') + lvs[index]['lv_uuid'].replace('-','')
@@ -89,6 +89,11 @@ class AllocationTests(unittest.TestCase):
         self.assertGreater(plan['areas'][0]['used_bytes'],0)
         self.assertGreater(plan['areas'][0]['reserved_bytes'],0)
         self.assertFalse(self.writes)
+    def test_real_segment_report_shape_is_required_for_complete_inventory(self):
+        text=inventory()
+        self.assertEqual(len(A.parse(text)['volumes']),2)
+        with self.assertRaisesRegex(ValueError,'incomplete'):
+            A.parse(text.replace('"seg":','"lv":'))
     def test_shrink_excess_space_fractional_boolean_and_unknown_role_are_refused(self):
         for cfg in ({'size_gib':32},{'size_gib':200},{'size_gib':64.5},{'size_gib':True},{'role':'boot'}):
             with self.subTest(cfg=cfg),self.assertRaises(ValueError):self.plan(**cfg)
@@ -99,7 +104,7 @@ class AllocationTests(unittest.TestCase):
                 self.text=inventory(fs=fs);plan=self.plan(role=role,size_gib=80 if role=='os' else 144)
                 self.begin(plan);script=A._script(self.store.items[-1]['ref'])
                 self.assertIn('lvextend --autobackup y --extents ',script)
-                self.assertIn('resize2fs "$B"' if fs=='ext4' else 'xfs_growfs -D ',script)
+                self.assertIn('resize2fs /proc/self/fd/8' if fs=='ext4' else 'xfs_growfs -D ',script)
                 for forbidden in ('lvreduce','lvremove','mkfs','wipefs','parted','sgdisk','--resizefs'):
                     self.assertNotIn(forbidden,script)
                 self.store.items.clear()

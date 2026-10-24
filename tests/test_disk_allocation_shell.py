@@ -48,7 +48,10 @@ def trace(text):
 def role(): return 'longhorn' if any('testdatauuid' in a or 'dm-1' in a or 'longhorn' in a for a in args) else 'os'
 r=role();size=state['os_size' if r=='os' else 'lh_size'];fs_size=state['os_fs'] if r=='os' else state['lh_size']
 if os.environ.get('FAIL_TOOL')==cmd:sys.exit(2)
-if cmd=='lvs':
+if cmd=='unshare':
+ assert args[:4]==['--mount','--propagation','private','--']
+ os.environ['PRIVATE_MOUNTS']='yes';os.execvp(args[4],args[4:])
+elif cmd=='lvs':
  if '--noheadings' in args:
   assert args==['--noheadings','--separator','|','-o','vg_name,vg_uuid,lv_uuid',str(root/'dev/mapper/system--vg-root')], 'Canonical dm-N is not an LVM selector'
   print('system-vg|test-vg-uuid|'+('other-root-uuid' if os.environ.get('MISMATCH_REPORT')=='yes' else 'test-root-uuid'))
@@ -63,7 +66,7 @@ elif cmd=='findmnt':
  print({'SOURCE':str(root/('dev/dm-0' if r=='os' else 'dev/dm-1')),'FSROOT':'/','OPTIONS':'rw','FSTYPE':state['fs']}[field])
 elif cmd=='blkid':print('changed-fs' if (root/'changed-fs').exists() else 'fs-'+r+'-uuid')
 elif cmd=='lsblk':
- if '-snrbpP' in args:print(section(raw,'TOPO-'+r,'ENDTOPO'))
+ if '-snbpP' in args:print(section(raw,'TOPO-'+r,'ENDTOPO'))
  elif '-snrpo' in args:print('/dev/dm-0 lvm\n/dev/nvme0n1p3 part\n/dev/nvme0n1 disk')
  else:print('253:'+('0' if r=='os' else '1'))
 elif cmd=='tune2fs':print('Block size: 4096\nBlock count: '+str(fs_size*1024**3//4096))
@@ -76,10 +79,17 @@ elif cmd=='lvextend':
  state['os_size']=extent*PE//1024**3;save();trace('lv-grown')
  if os.environ.get('LATE_IDENTITY')=='yes':(root/'changed-fs').write_text('changed')
 elif cmd in ('resize2fs','xfs_growfs'):
+ assert os.environ.get('PRIVATE_MOUNTS')=='yes'
+ assert args[0]=='/proc/self/fd/8' if cmd=='resize2fs' else args[-1]=='/proc/self/fd/7'
+ if os.environ.get('RETARGET_AT_GROW')=='yes':
+  alias=root/'dev/disk/by-id/dm-uuid-LVM-testvguuidtestrootuuid'
+  alias.unlink();alias.symlink_to(root/'dev/dm-1')
+  if cmd=='resize2fs':assert os.stat(args[0]).st_ino==os.stat(root/'dev/dm-0').st_ino
+  else:assert os.stat(args[-1]).st_ino==os.stat('/').st_ino
  state['os_fs']=state['os_size'];save();trace('fs-grown')
 else:raise AssertionError(cmd)
 '''.replace('__INVENTORY__',inspect.getsource(inventory))
-        for cmd in ('lvs','vgs','pvs','mountpoint','findmnt','blkid','lsblk','tune2fs','xfs_info','blockdev','lvextend','resize2fs','xfs_growfs'):
+        for cmd in ('unshare','lvs','vgs','pvs','mountpoint','findmnt','blkid','lsblk','tune2fs','xfs_info','blockdev','lvextend','resize2fs','xfs_growfs'):
             path=self.root/'bin'/cmd;path.write_text(code);path.chmod(0o755)
         self.env={**os.environ,'FIXTURE':str(self.root),'PATH':str(self.root/'bin')+':'+os.environ['PATH']}
     def rebase(self,script):
@@ -132,6 +142,63 @@ else:raise AssertionError(cmd)
                 result=self.shell(A._script(ref),**env)
                 self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
                 self.assertEqual(self.trace(),'')
+
+    def test_namespace_failure_never_grows_anything(self):
+        result=self.shell(A._script(self.ref()),FAIL_TOOL='unshare')
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(self.trace(),'')
+
+    def test_alias_retarget_at_filesystem_growth_cannot_change_the_pinned_device(self):
+        for filesystem in ('ext4','xfs'):
+            with self.subTest(filesystem=filesystem):
+                self.state.update(fs=filesystem,os_size=64,os_fs=64)
+                (self.root/'state.json').write_text(json.dumps(self.state))
+                alias=self.root/'dev/disk/by-id/dm-uuid-LVM-testvguuidtestrootuuid'
+                alias.unlink();alias.symlink_to(self.root/'dev/dm-0')
+                result=self.shell(A._script(self.ref(request=('a' if filesystem=='ext4' else 'b')*24)),RETARGET_AT_GROW='yes')
+                # Growth uses pinned descriptors; final inspection refuses the
+                # changed alias, so the job requires explicit recovery review.
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual((self.root/'dev/dm-1').read_text(),'preserved filesystem contents')
+                self.assertEqual(json.loads((self.root/'state.json').read_text())['lh_size'],128)
+
+
+@unittest.skipUnless(sys.platform == 'linux', 'Linux mount namespaces')
+class PrivateMountNamespaceTests(unittest.TestCase):
+    def test_recursive_private_namespace_keeps_reviewed_nested_mount(self):
+        # All bind mounts exist only inside the outer disposable namespace.
+        # Unprivileged CI skips this kernel check; generated helper fixtures
+        # above still require the exact namespace arguments and fail closed.
+        check=subprocess.run(['unshare','--mount','--propagation','private','--','true'],capture_output=True)
+        if check.returncode:self.skipTest('Mount namespaces are unavailable to this test user')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for name in ('original/nested','alternate','target'):(root/name).mkdir(parents=True)
+            (root/'original/nested/marker').write_text('reviewed')
+            (root/'alternate/marker').write_text('other')
+            script=r'''
+set -eu
+mount --bind "$T/original" "$T/target"
+mount --bind "$T/original/nested" "$T/target/nested"
+mount --make-rshared "$T/target"
+unshare --mount --propagation private -- sh -c '
+  set -eu
+  [ "$(findmnt -n -o PROPAGATION --mountpoint "$T/target/nested")" = private ]
+  touch "$T/ready"
+  for i in $(seq 1 100); do [ ! -e "$T/go" ] || break; sleep .02; done
+  [ -e "$T/go" ]
+  [ "$(cat "$T/target/nested/marker")" = reviewed ]
+' &
+CHILD=$!
+for i in $(seq 1 100); do [ ! -e "$T/ready" ] || break; sleep .02; done
+[ -e "$T/ready" ]
+mount --bind "$T/alternate" "$T/target/nested"
+[ "$(cat "$T/target/nested/marker")" = other ]
+touch "$T/go"
+wait "$CHILD"
+'''
+            result=subprocess.run(['unshare','--mount','--propagation','private','--','sh','-c',script],env={**os.environ,'T':directory},capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
 
 if __name__=='__main__':unittest.main()
