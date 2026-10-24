@@ -198,7 +198,7 @@ async function viewProtect() {
   </div>
 `)}
 
-  <div id="restore-tests" class="restore-tests"><div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div></div>
+  <div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>
   <div id="previous-volumes" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
@@ -238,6 +238,8 @@ async function viewProtect() {
     <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Protected by</th><th data-nosort>Last backup</th><th></th>
   </tr></thead><tbody id="pf_rows"></tbody></table></div></div>
 
+  <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim…</div>')}</div>
+
   <div class="sec">Backups</div>
   ${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
   : backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
@@ -251,6 +253,7 @@ async function viewProtect() {
       <td data-actions>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
+  loadWeeklyTrim();
   protectVolumesPaint();
   loadRestoreTests();
   loadPreviousVolumes();
@@ -967,6 +970,62 @@ window.lhTargetSave = async () => {
 };
 
 
+/* ---------------- weekly trim (homestead_weekly_trim.py, #591) ----------------
+   Homestead trims every attached volume itself each Saturday: the last run's
+   result, Run now, and the switch. */
+const trimName = r => r.pvc || r.volume;
+const trimPlural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function trimSummary(last) {
+  const whys = {};
+  for (const s of last.skipped || []) whys[s.why] = (whys[s.why] || 0) + 1;
+  const said = Object.entries(whys).map(([why, n]) => why === "no filesystem (VM disk)" ? trimPlural(n, "VM disk") : `${n} ${why}`).join(", ");
+  return `Trimmed ${trimPlural((last.trimmed || []).length, "volume")}, skipped ${(last.skipped || []).length}${said ? ` (${said})` : ""}`;
+}
+
+function weeklyTrimCard(d) {
+  const last = d.last, failed = last?.failed || [], unconfirmed = last?.unconfirmed || [], skipped = last?.skipped || [];
+  const status = d.running ? UI.chip("trimming now", "info") : !last ? UI.chip("not run yet", "neutral")
+    : failed.length ? UI.chip("failed", "bad") : UI.chip("trimmed", "ok");
+  const lines = !last ? '<div class="dim small">Not run yet.</div>'
+    : `<div class="small">${esc(trimSummary(last))} <span class="dim xs">${esc(fmtAt(last.at))}</span></div>
+      ${failed.length ? `<div class="small wt-line">Failed: ${failed.map(f => `<b>${esc(trimName(f))}</b>: ${esc(f.message)}`).join("; ")}</div>` : ""}
+      ${unconfirmed.length ? `<div class="dim xs wt-line">Not confirmed: ${esc(unconfirmed.map(u => `${trimName(u)} (${u.why})`).join(", "))}</div>` : ""}
+      ${skipped.length ? `<div class="dim xs wt-line">Skipped: ${esc(skipped.map(s => `${trimName(s)} (${s.why})`).join(", "))}</div>` : ""}`;
+  return `<div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", `
+    <div class="card flat">
+      <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
+        <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
+        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
+      <div style="margin-top:10px">${lines}</div>
+      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well.</div>` : ""}
+      <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
+        <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
+      ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
+    </div>`)}</div>`;
+}
+
+async function loadWeeklyTrim() {
+  const host = document.getElementById("housekeeping");
+  if (!host) return;
+  try { host.outerHTML = weeklyTrimCard(await api("/api/weekly-trim")); }
+  catch (e) { host.innerHTML = UI.section("Housekeeping", UI.callout("warn", "The weekly trim could not be read", esc(e.message))); }
+}
+
+window.weeklyTrimSwitch = async on => {
+  try { const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); loadWeeklyTrim(); }
+  catch (e) { toast(e.message, "bad"); const box = $("#wt_on"); if (box) box.checked = !on; }
+};
+
+window.weeklyTrimRun = async () => {
+  try {
+    await api("/api/weekly-trim/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast("Weekly trim started; follow it under Jobs", "ok");
+    loadWeeklyTrim();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+
 /* ---------------- restore tests (homestead_restore_test.py) ----------------
    Each app with Longhorn volumes: what a test restores, its last result, and
    Test now. Switched on, Homestead tests each app with backups monthly. */
@@ -975,10 +1034,26 @@ const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");
   if (!host) return;
-  let d;
-  try { d = await api("/api/restore-tests"); }
-  catch (e) { host.innerHTML = `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(e.message))}`; return; }
-  STATE.data.restoreTests = d;
+  // A list that cannot be read is kept as the error, so the next page paint says so too.
+  try { STATE.data.restoreTests = await api("/api/restore-tests"); }
+  catch (e) { STATE.data.restoreTests = { error: e.message }; }
+  // Morphed in, prepared as the page paint prepares it, so rows that did not change stay put.
+  const next = host.cloneNode(false);
+  next.innerHTML = restoreTestsSection();
+  enhanceActions(next);
+  morph(host, next);
+  loadAppIcons(host);
+  // A box someone clicked keeps its own state through a morph: the setting decides it.
+  const box = $("#rt_on");
+  if (box && document.activeElement !== box) box.checked = !!STATE.data.restoreTests.enabled;
+  if (window.applyRole) window.applyRole();
+}
+
+// The section as the page paints it: the last list while it is read again,
+// and the placeholder only before the first (#834).
+function restoreTestsSection(d = STATE.data.restoreTests) {
+  if (!d) return `<div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div>`;
+  if (d.error) return `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(d.error))}`;
   const row = r => {
     const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
     const result = r.running ? UI.chip("testing now", "info")
@@ -990,7 +1065,7 @@ async function loadRestoreTests() {
       <td data-label="Last test">${result}${last && !last.ok ? `<div class="dim xs restore-why">${esc(last.message || "")}</div>` : ""}</td>
       <td data-actions>${r.restores.length && !r.running ? actionBar([{ label: "Test now", icon: "play", run: `restoreTestRun(${jsq(r.ns)},${jsq(r.name)})`, need: "admin" }], { label: `Restore test for ${r.name}` }) : ""}</td></tr>`;
   };
-  host.innerHTML = `<div class="between restore-head"><div class="sec">Restore tests</div>
+  return `<div class="between restore-head"><div class="sec">Restore tests</div>
       <label class="switch" data-need="admin"><input type="checkbox" id="rt_on" ${d.enabled ? "checked" : ""} onchange="restoreTestsSwitch(this.checked)"> Test each app every ${d.every_days} days</label></div>
     <div class="dim xs" id="rt_off"${d.enabled ? " hidden" : ""}>Off · tests run only when you click Test now</div>
     ${UI.guide("How restore tests work", `<p>A test restores an app's newest backups into new volumes, starts a copy of it on them - cut off from the network, its other volumes left empty so it cannot touch real data - and checks it starts and answers. Then it removes everything it made. One runs at a time, outside the maintenance window, when Longhorn has room.</p>`)}
@@ -999,7 +1074,8 @@ async function loadRestoreTests() {
 }
 
 window.restoreTestsSwitch = async on => {
-  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); const off = $("#rt_off"); if (off) off.hidden = on; }
+  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); const off = $("#rt_off"); if (off) off.hidden = on;
+    if (STATE.data.restoreTests) STATE.data.restoreTests.enabled = on; }
   catch (e) { toast(e.message, "bad"); const box = $("#rt_on"); if (box) box.checked = !on; }
 };
 

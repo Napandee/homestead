@@ -1068,7 +1068,8 @@ def _tidy_job_locks(now):
 # only if nobody changed the job meanwhile. Every other kind is resolved under
 # the store's lock, as before; more kinds move here once their requests that
 # change a running job are checked.
-OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy"}
+# The weekly trim (homestead_weekly_trim) waits up to 60 s on Longhorn per step.
+OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy", "weekly-trim"}
 _resolving = threading.local()
 
 
@@ -1449,10 +1450,16 @@ def _apply_cancel(operation_id):
         before = _mark_cancelling(match, plan)
         _write(items)
         work = json.loads(json.dumps(match))
+    # The canceller's writes are for whoever cancelled, not the loop (#621).
+    import homestead_changes as CHANGES
+    was = getattr(CHANGES.REQUEST, "user", None)
+    CHANGES.REQUEST.user = request.get("by") or None
     try:
         _run_cancel(operation_id, work, plan, chosen, before, request.get("by", ""))
     except ValueError as error:   # the job is running again and says why
         print(f"job {operation_id} not cancelled: {str(error)[:160]}", flush=True)
+    finally:
+        CHANGES.REQUEST.user = was
     return True
 
 

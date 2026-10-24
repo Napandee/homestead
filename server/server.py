@@ -966,6 +966,8 @@ import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 import homestead_setup_code as SETUP_CODE
+import homestead_auth_routes as AUTH_ROUTES
+AUTH_ROUTES.bind(DEFAULT_NS)
 API_KEYS.bind(DATA_DIR)
 API_KEYS.CLIENTADDR.bind(lambda path: KUBE_HELPERS.kget(path))
 # Looked up when asked, so a test that patches one is the one the guide reads.
@@ -1087,9 +1089,6 @@ ADMIN_ROUTES = {
     "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
     "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
-    "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
-    # API keys: made, listed and revoked by administrators only.
-    "/api/auth/keys", "/api/auth/keys/revoke",
     # The setup guide's checks that reach out, and its first opening.
     "/api/setup/https-check", "/api/setup/opened",
     # Who signed in, from where: other people's addresses and devices.
@@ -1177,17 +1176,6 @@ def needed_role(path, method):
     if declared is None:
         raise PermissionError("this route has no declared authorization policy")
     return declared
-
-
-# ---------------------------------------------------------------- linked clusters
-# The resources the combined view gathers, and how this cluster answers locally.
-FLEET_LISTS = {
-    "workloads": lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
-    "vms": lambda: CACHE.cached("vms", 5, VMS.list_vms),
-    "nodes": lambda: CACHE.cached("nodes", 5, NODES.get_nodes),
-    "volumes": lambda: CACHE.cached("vol", 8, STORAGE.get_volumes),
-    "flow": lambda: FLOW.view(),
-}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -1298,19 +1286,11 @@ class H(HTTP.LimitedHandler):
         forwarded = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
         return forwarded == "https" or bool(getattr(self.connection, "context", None))
 
-    def _set_cookie(self, token, clear=False, max_age=None):
+    def _set_cookie(self, token, max_age=None):
         # Secure only behind TLS: Homestead is usually served over plain HTTP
         # on a LAN address, and a Secure cookie there would never be sent back.
-        secure = "; Secure" if self._over_tls() else ""
-        if clear:
-            self._extra_headers.append(
-                ("Set-Cookie",
-                 f"{AUTH.COOKIE}=; Path=/; HttpOnly; SameSite=Strict{secure}; Max-Age=0"))
-        else:
-            age = AUTH.SESSION_TTL if max_age is None else max_age
-            self._extra_headers.append(
-                ("Set-Cookie", f"{AUTH.COOKIE}={token}; Path=/; HttpOnly; "
-                               f"SameSite=Strict{secure}; Max-Age={age}"))
+        self._extra_headers.append(("Set-Cookie", MODULE_ROUTES.cookie_header(MODULE_ROUTES.Cookie(
+            AUTH.COOKIE, token, max_age=AUTH.SESSION_TTL if max_age is None else max_age), self._over_tls())))
 
     def _who(self):
         if FLEET.signed(self.headers):
@@ -1492,16 +1472,6 @@ class H(HTTP.LimitedHandler):
         HOSTACCESS.set_role(self.role)
         return None
 
-    def _api_v1(self, method, path, query, body):
-        """One /api/v1 request, for a key or for someone signed in."""
-        auth = self.api_key or {"name": self.user, "kind": "session", "expires": None,
-                                "scopes": API_KEYS.scopes_for_role(self.role)}
-        if path == "/api/v1/openapi.json" and method == "GET":
-            return self._send(200, API_V1.openapi(HOMESTEAD_VERSION, {s: text for s, (_, text) in API_KEYS.SCOPES.items()}))
-        code, answer = API_V1.handle(method, path, query, body, auth)
-        MCP.audit_api(self.api_key, method, path, body, code, self._client_ip())
-        return self._send(code, answer)
-
     def _module_route(self, method, path, query, body):
         """A route a feature module declares (homestead_routes.py), answered;
         False when server.py answers it itself. The guard has already
@@ -1597,8 +1567,8 @@ class H(HTTP.LimitedHandler):
             known = True        # cannot tell now: relay as before, rather than fail the page
         if not named and not known:
             if isinstance(getattr(self, "_extra_headers", None), list):
-                self._extra_headers.append(
-                    ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
+                self._extra_headers.append(("Set-Cookie", MODULE_ROUTES.cookie_header(
+                    MODULE_ROUTES.Cookie(FLEET.COOKIE, "", max_age=0), self._over_tls())))
             return ""
         return target
 
@@ -1626,49 +1596,6 @@ class H(HTTP.LimitedHandler):
                                   "text/html; charset=utf-8")
             return self._send(502, {"error": str(error), "cluster": known.get("name", ""), "unreachable": True})
 
-    def _fleet_post(self, p, b):
-        """Linking clusters, and picking which one this browser looks at."""
-        try:
-            if p == "/api/fleet/switch":
-                wanted = str(b.get("id") or "")
-                if not wanted or wanted == FLEET.self_id():
-                    self._extra_headers.append(
-                        ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
-                    return self._send(200, {"ok": True, "id": FLEET.self_id()})
-                target = FLEET.member(wanted)
-                if not target:
-                    return self._send(404, {"error": "no linked cluster by that name"})
-                check = FLEET.check(target)
-                if not check.get("reachable"):
-                    return self._send(502, {"error": f"{target.get('name')} is not answering this Homestead: "
-                                                     f"{check.get('error') or 'no answer'}"})
-                secure = "; Secure" if self._over_tls() else ""
-                self._extra_headers.append(("Set-Cookie", f"{FLEET.COOKIE}={target['id']}; Path=/; HttpOnly; "
-                                                          f"SameSite=Strict{secure}; Max-Age=2592000"))
-                return self._send(200, {"ok": True, "id": target["id"], "name": target.get("name")})
-            if p == "/api/fleet/join":
-                return self._send(200, FLEET.join(b.get("url"), b.get("username"), b.get("password"),
-                                                  b.get("own_url", ""), plain_ok=b.get("plain_ok") is True))
-            if p == "/api/fleet/accept":
-                return self._send(200, FLEET.accept(b))
-            if p == "/api/fleet/sync":
-                if not self._fleet_from:
-                    return self._send(403, {"error": "only a linked Homestead sends this"})
-                return self._send(200, FLEET.adopt(b, self._fleet_from))
-            if p == "/api/fleet/remove":
-                return self._send(200, FLEET.remove(str(b.get("id") or ""), plain_ok=b.get("plain_ok") is True))
-            if p == "/api/fleet/leave":
-                return self._send(200, FLEET.leave(plain_ok=b.get("plain_ok") is True))
-            if p == "/api/fleet/address":
-                return self._send(200, FLEET.set_address(b.get("url")))
-            if p == "/api/fleet/link-legacy":
-                return self._send(200, MOVE.link_legacy(str(b.get("name") or ""), b.get("own_url", ""), plain_ok=b.get("plain_ok") is True))
-        except ValueError as error:
-            return self._send(409, {"error": str(error)})
-        except FLEET.Unreachable as error:
-            return self._send(502, {"error": str(error)})
-        return self._send(404, {"error": "not found"})
-
     @self_data_request
     def do_GET(self):
         self._begin()
@@ -1680,17 +1607,10 @@ class H(HTTP.LimitedHandler):
         try:
             if self._guard(p):
                 return
-            if p.startswith("/api/v1/"):
-                return self._api_v1("GET", p, q, None)
             if p == MCP.PATH:       # no event stream: one JSON answer per POST
                 return self._send(405 if MCP.enabled() else 404, {"error": "POST JSON-RPC to /mcp"})
             if self._module_route("GET", p, q, None):
                 return
-            if p == "/api/diagnostics/download":
-                filename, ctype, body = DIAGNOSTICS.export((q.get("id") or [""])[0], self.user,
-                    (q.get("format") or ["anonymised"])[0], (q.get("package") or [""])[0] == "1")
-                self._extra_headers.append(("Content-Disposition", f'attachment; filename="{filename}"'))
-                return self._send(200, body, ctype)
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
             if p == "/api/node/shell":
@@ -1738,47 +1658,6 @@ class H(HTTP.LimitedHandler):
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
                 return self._send(200, {"ok": True})
-            if p == "/api/auth/state":
-                who = self._who()
-                return self._send(200, {"setup": AUTH.needs_setup() and not (who and who.get("fleet")),
-                                        "via": ((who or {}).get("fleet") or {}).get("name", ""),
-                                        "user": who["user"] if who else None,
-                                        "role": who["role"] if who else None,
-                                        "remember": bool(who and who.get("remember")),
-                                        "session_expires": who.get("expires") if who else None,
-                                        "session_started": who.get("started") if who else None,
-                                        "session_max_days": AUTH.ABSOLUTE_TTL // 86400,
-                                        # Where Deploy puts a new app unless told otherwise.
-                                        "default_namespace": DEFAULT_NS if who else None,
-                                        "roles": list(AUTH.ROLES)})
-            if p == "/api/fleet":
-                self._who()
-                return self._send(200, FLEET.summary(via=self._fleet_from))
-            if p == "/api/fleet/state":
-                self._who()
-                if not self._fleet_from:
-                    return self._send(403, {"error": "only a linked Homestead asks for this"})
-                return self._send(200, FLEET.shared_state())
-            if p == "/api/fleet/home":
-                self._extra_headers += [("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
-                                        ("Location", "/")]
-                return self._send(302, {"ok": True})
-            if p.startswith("/api/fleet/all/") and p.rsplit("/", 1)[-1] in FLEET_LISTS:
-                what = p.rsplit("/", 1)[-1]
-                rows, missing = FLEET.gather(what, FLEET_LISTS[what], self.user, self.role)
-                if missing:
-                    self._extra_headers.append(("X-Homestead-Fleet-Missing",
-                                                urllib.parse.quote(json.dumps(missing))))
-                return self._send(200, rows)
-            if p == "/api/auth/preferences/dashboard":
-                return self._send(200, AUTH.dashboard_preferences(self.user))
-            if p.startswith("/api/self/data/handoff/"):
-                if re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}/view", p):
-                    return self._send(200, SELF_DATA_WORKER.maintenance_page(p.split("/")[-2]), "text/html; charset=utf-8")
-                status = self_data_handoff_status(p[len("/api/self/data/handoff/"):])
-                if status is None:
-                    return self._send(404, {"error": "No recorded data move with this identity"})
-                return self._send(503 if status["status"] == "unknown" else 200, status)
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
@@ -1814,90 +1693,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(400, {"error": "a JSON object is required"})
             if p in ROUTE_POLICY.TARGET_CHECKED:
                 KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
-            addr = self._client_ip()
-            if p.startswith("/api/v1/"):
-                return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit"):
-                # Made, changed and revoked in this Homestead's own app, by
-                # someone signed in to it: never relayed from a linked cluster.
-                if self._fleet_from:
-                    return self._send(403, {"error": "manage API keys in this Homestead's own app"})
-                done, event, detail = API_KEYS.manage(p.rsplit("/", 1)[-1], b, self.user)
-                self._signin(event, self.user, detail=detail)
-                return self._send(200, done)
-            if p.startswith("/api/fleet/"):
-                return self._fleet_post(p, b)
-            if p == "/api/auth/setup":
-                # The first administrator: from the LAN only, and with the setup code (#737).
-                if self._via_cloudflare():
-                    return self._send(403, {"error": "finish setting Homestead up from your LAN; "
-                                                     "setup is not offered through the tunnel"})
-                first = SETUP_CODE.first_admin(b, addr, self.headers.get("User-Agent", ""))
-                self._signin("setup", first, detail="the first administrator")
-                remember = bool(b.get("remember"))
-                self._set_cookie(AUTH.issue_token(first, remember), max_age=AUTH.idle_ttl(remember))
-                return self._send(200, {"ok": True, "user": b.get("username")})
-            if p == "/api/auth/login":
-                tried = (b.get("username") or "").strip().lower()
-                try:
-                    remember = bool(b.get("remember"))
-                    tok = AUTH.login(b.get("username"), b.get("password"), addr, remember)
-                except PermissionError as e:
-                    blocked = "too many" in str(e)
-                    self._signin("signin-blocked" if blocked else "signin-failed", tried, ok=False, detail=str(e))
-                    return self._send(401, {"error": str(e)})
-                self._signin("signin", tried, detail="kept signed in" if remember else "")
-                self._set_cookie(tok, max_age=AUTH.idle_ttl(remember))
-                return self._send(200, {"ok": True, "remember": remember,
-                                        "user": (b.get("username") or "").strip().lower()})
-            if p == "/api/auth/logout":
-                self._signin("signout", self.user)
-                self._set_cookie("", clear=True)
-                return self._send(200, {"ok": True})
-            if p == "/api/auth/preferences/dashboard":
-                try:
-                    return self._send(200, AUTH.save_dashboard_preferences(self.user, b))
-                except AUTH.StoreConflict as error:
-                    return self._send(409, {"error": str(error)})
-            if p == "/api/auth/password":
-                try:
-                    AUTH.change_password(self.user, b.get("old"), b.get("new"))
-                except (PermissionError, ValueError) as error:
-                    self._signin("password-failed", self.user, ok=False, detail=str(error))
-                    raise
-                self._signin("password", self.user)
-                self._set_cookie(AUTH.issue_token(self.user))
-                return self._send(200, {"ok": True})
-            if p == "/api/auth/users":
-                AUTH.create_user(b.get("username"), b.get("password"),
-                                 role=b.get("role", "operator"))
-                self._signin("user-added", (b.get("username") or "").strip().lower(),
-                             detail=f"as {b.get('role', 'operator')}, by {FLEET.words(self.user)}")
-                return self._send(200, {"ok": True, "users": AUTH.list_users()})
-            if p == "/api/auth/role":
-                AUTH.set_role(b["username"], b["role"], self.user)
-                self._signin("role", b["username"], detail=f"now {b['role']}, by {FLEET.words(self.user)}")
-                return self._send(200, {"ok": True, "users": AUTH.list_users()})
-            if p == "/api/auth/users/delete":
-                AUTH.delete_user(b.get("username"), self.user)
-                ALERTS.forget_user(str(b.get("username") or "").strip().lower())
-                self._signin("user-removed", b.get("username"), detail=f"by {FLEET.words(self.user)}")
-                return self._send(200, {"ok": True, "users": AUTH.list_users()})
-            if p == "/api/auth/signout-everywhere":
-                AUTH.logout_everywhere(self.user)
-                self._signin("signout-everywhere", self.user)
-                self._set_cookie("", clear=True)
-                return self._send(200, {"ok": True})
-            if p == "/api/self/data/move":
-                try:
-                    result, token = start_self_data_move(b, self.user)
-                    secure = "Secure; " if self._over_tls() else ""
-                    self._extra_headers.append(("Set-Cookie", f"homestead-data-move={token}; Path=/api/self/data/handoff/; HttpOnly; {secure}SameSite=Strict; Max-Age=86400"))
-                    return self._send(202, result)
-                except SELF_DATA_FENCE.Held as error:
-                    return self._send(409, {"error": str(error), "review_required": True})
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
@@ -1920,13 +1717,11 @@ class H(HTTP.LimitedHandler):
         target = self._fleet_target(u.path)
         if target:
             return self._fleet_forward(target, u.path)
-        if self._guard(urllib.parse.urlparse(self.path).path):
-            return
-        parts = [x for x in u.path.split("/") if x]
         try:
-            if len(parts) == 4 and parts[:2] == ["api", "workload"]:
-                return self._send(200, {"ok": True, "services": delete_workload(parts[2], parts[3])})
-            return self._send(404, {"error": "no route"})
+            if not self._guard(u.path) and not self._module_route("DELETE", u.path, Query(urllib.parse.parse_qs(u.query)), None):
+                self._send(404, {"error": "no route"})
+        except PermissionError as e:
+            return self._send(403, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})

@@ -235,12 +235,24 @@ def cleanup():
     return removed
 
 
-def _delete(path, obj):
+def _delete(path, obj, version=False):
+    """Delete Homestead's own snapshot object by its uid alone.
+
+    Callers checked the owner labels (and the snapshot/content pairing) on
+    this read. snapshot-controller, kubelet and other controllers keep
+    writing these objects (it annotates the content when its snapshot is
+    deleted), so a resourceVersion read before then would be refused with
+    409. A same-name replacement has a new uid and is still refused. A caller
+    whose check depends on content that may still change passes version=True
+    to keep the resourceVersion too. An object already deleting is left to
+    its finalizers."""
     meta = obj["metadata"]
     if not meta.get("uid") or not meta.get("resourceVersion"):
         raise ValueError("Snapshot cleanup could not verify the object's identity")
-    ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions",
-          "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}})
+    if meta.get("deletionTimestamp"):
+        return
+    pinned = ("uid", "resourceVersion") if version else ("uid",)
+    ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {key: meta[key] for key in pinned}})
 
 
 def cleanup_transfer(read, send, transfer_id, cancelled=False):
@@ -284,9 +296,9 @@ def cleanup_transfer(read, send, transfer_id, cancelled=False):
                     or (snapshot.get("spec", {}).get("source") or {}).get("volumeSnapshotContentName") != meta["name"]
                     or (ref.get("uid") and ref["uid"] != snapshot["metadata"].get("uid"))):
                 raise ValueError("Transfer restore snapshot ownership changed")
-            if not CLEANUP.delete(read, send, path, snapshot):
+            if not CLEANUP.delete(read, send, path, snapshot, own=True):
                 pending.append("restore snapshot " + meta["name"])
-        if not CLEANUP.delete(read, send, f"{API}/volumesnapshotcontents/{meta['name']}", content):
+        if not CLEANUP.delete(read, send, f"{API}/volumesnapshotcontents/{meta['name']}", content, own=True):
             pending.append("restore content " + meta["name"])
     # A previous deletion can remove the content before its snapshot has
     # finished disappearing. Reconcile either half after a lost response.
@@ -302,6 +314,6 @@ def cleanup_transfer(read, send, transfer_id, cancelled=False):
                 (not users or any((p.get("status") or {}).get("phase") != "Bound" for p in users)))):
             pending.append("restore snapshot " + meta["name"])
         elif not CLEANUP.delete(read, send,
-                f"{API}/namespaces/{meta['namespace']}/volumesnapshots/{meta['name']}", snapshot):
+                f"{API}/namespaces/{meta['namespace']}/volumesnapshots/{meta['name']}", snapshot, own=True):
             pending.append("restore snapshot " + meta["name"])
     return pending

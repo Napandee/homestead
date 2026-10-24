@@ -47,6 +47,7 @@ STORES = [
     ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
     ("Alerts", ["alerts.json"], "what is active, and recent alerts"),
     ("Schedules", ["schedules.json"], "the last stop or start of each schedule"),
+    ("Log alerts", ["logalerts.json"], "the saved log alerts, and an hour of counts for each"),
     ("Outage actions", ["outage-actions.json"], "restarts done during the current outage of each app"),
     ("Jobs", ["operations-v2.json", "operations*.json"], "the last 100 jobs"),
     ("Image update history", ["image-update-history.jsonl"], f"{LOG_DAYS} days, at most {LOG_LINES} entries"),

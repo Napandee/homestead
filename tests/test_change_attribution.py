@@ -1,6 +1,8 @@
 """Who changed an app travels on the write itself, so the leader credits a
 change whichever copy of Homestead served it (#621)."""
 import copy
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -35,6 +37,8 @@ class AttributionTests(unittest.TestCase):
         CH.bind(self.dir.name)
         CH._notes.clear()
         self.addCleanup(CH._notes.clear)
+        CH._known.clear()
+        self.addCleanup(CH._known.clear)
         self.addCleanup(setattr, CH.REQUEST, "user", None)
         # The account names the leader can tell apart, and the key it tells them by.
         for name, value in (("_author_key", lambda: b"test-key"),
@@ -167,15 +171,100 @@ class AttributionTests(unittest.TestCase):
         CH.note_write("PATCH", PATH, allowed)
         self.assertEqual(1, len(allowed), "a copy elsewhere is left alone")
 
-    def test_bodies_that_cannot_carry_it_are_sent_unchanged(self):
+    def test_a_scale_body_is_sent_unchanged(self):
+        # No caller sends one any more; a Scale's metadata is the API server's to fill.
         CH.REQUEST.user = "james"
-        json_patch = [{"op": "replace", "path": "/spec/replicas", "value": 2}]
         scale = {"metadata": {"name": "sonarr"}, "spec": {"replicas": 0}}
-        before = copy.deepcopy((json_patch, scale))
-        CH.note_write("PATCH", PATH, json_patch)
+        before = copy.deepcopy(scale)
         CH.note_write("PUT", PATH + "/scale", scale)
-        self.assertEqual(before, (json_patch, scale), "a JSON patch or a Scale has no app metadata to mark")
-        self.assertEqual(2, len(CH._notes), "both are still noted on this copy, as before")
+        self.assertEqual(before, scale, "a Scale has no app metadata to mark")
+        self.assertEqual(1, len(CH._notes), "it is still noted on this copy, as before")
+
+    # Stop, Start, /api/scale and schedules write the app itself (#621), so
+    # they carry the mark like any other write.
+    def test_a_stop_through_another_copy_is_credited_to_the_person(self):
+        import server
+        from test_scale_write import scale_subresource
+        CH.bind(self.dir.name)                      # importing server binds /data
+        with Kube(dep()) as kube:
+            scale_subresource(kube, "sonarr")
+            start = time.time() - 30
+            CH.observe([kube.object(PATH)], now=start)
+            CH.REQUEST.user = "james"
+            server.OVERVIEW_ROUTES.scale_workload("lab", "sonarr", 0)
+            CH.REQUEST.user = None
+            CH._notes.clear()                       # the leader is another copy
+            CH.observe([kube.object(PATH)], now=time.time() + 1, since=start)
+        entry = CH.history("lab", "sonarr")[0]
+        self.assertEqual(("homestead", "james"), (entry["source"], entry["by"]))
+
+    # A JSON patch (rename, the storage copy job) gets the mark as one more op,
+    # chosen from one read of the app, so the patch still applies whole or not at all.
+    def json_patch(self, rv=None):
+        ops = [{"op": "test", "path": "/metadata/uid", "value": "u1"}]
+        if rv:
+            ops.append({"op": "test", "path": "/metadata/resourceVersion", "value": rv})
+        return ops + [{"op": "add", "path": "/spec/replicas", "value": 0}]
+
+    def test_a_json_patch_carries_the_mark_after_its_own_ops(self):
+        with Kube(dep()) as kube:
+            start = time.time() - 30
+            CH.observe([kube.object(PATH)], now=start)
+            patch = self.json_patch(rv=kube.object(PATH)["metadata"]["resourceVersion"])
+            patch[0]["value"] = kube.object(PATH)["metadata"]["uid"]
+            own = copy.deepcopy(patch)
+            stored = self.write_through_another_copy(kube, "james", patch, method="PATCH",
+                                                     ctype="application/json-patch+json")
+            sent = kube.writes[-1][2]
+            self.assertEqual(own, sent[:-1], "the caller's ops are sent unchanged and in order")
+            self.assertEqual(("add", CH._AUTHOR_POINTER), (sent[-1]["op"], sent[-1]["path"]))
+            self.assertEqual(0, stored["spec"]["replicas"])
+            self.assertEqual("x", stored["metadata"]["annotations"]["homestead.io/icon"])
+            CH.observe([stored], now=time.time() + 1, since=start)
+        entry = CH.history("lab", "sonarr")[0]
+        self.assertEqual(("homestead", "james"), (entry["source"], entry["by"]))
+
+    def test_a_json_patch_to_an_app_without_annotations_adds_them_only_under_its_version_test(self):
+        bare = dep()
+        del bare["metadata"]["annotations"]
+        CH.REQUEST.user = "james"
+        with Kube(bare) as kube:
+            rv = kube.object(PATH)["metadata"]["resourceVersion"]
+            pinned = self.json_patch(rv=rv)
+            CH.note_write("PATCH", PATH, pinned)
+            self.assertEqual({"op": "add", "path": "/metadata/annotations"}, {k: pinned[-1][k] for k in ("op", "path")})
+            self.assertEqual({CH.AUTHOR}, set(pinned[-1]["value"]))
+            for unpinned in (self.json_patch(), self.json_patch(rv=str(int(rv) + 1))):
+                before = copy.deepcopy(unpinned)
+                CH.note_write("PATCH", PATH, unpinned)
+                self.assertEqual(before, unpinned, "without that version test the whole map could overwrite another's")
+
+    def test_a_json_patch_goes_unmarked_when_the_app_cannot_be_read(self):
+        CH.REQUEST.user = "james"
+        patch = self.json_patch(rv="7")
+        before = copy.deepcopy(patch)
+        with mock.patch.object(K, "kget", side_effect=OSError("the API server did not answer")):
+            CH.note_write("PATCH", PATH, patch)
+        self.assertEqual(before, patch, "marking never refuses a write")
+
+    def test_a_json_patch_goes_unmarked_when_the_key_cannot_be_read(self):
+        CH.REQUEST.user = "james"
+        patch = self.json_patch(rv="7")
+        before = copy.deepcopy(patch)
+        with mock.patch.object(CH, "_author_key", side_effect=LookupError("no key yet")), \
+                mock.patch.object(K, "kget") as read:
+            CH.note_write("PATCH", PATH, patch)
+        self.assertEqual(before, patch)
+        read.assert_not_called()
+
+    def test_a_json_patch_that_replaces_the_apps_metadata_is_sent_as_it_came(self):
+        CH.REQUEST.user = "james"
+        for target in ("", "/metadata", "/metadata/annotations"):
+            with self.subTest(target=target), Kube(dep()):
+                patch = [{"op": "remove" if target else "replace", "path": target, **({} if target else {"value": dep()})}]
+                before = copy.deepcopy(patch)
+                CH.note_write("PATCH", PATH, patch)
+                self.assertEqual(before, patch)
 
     def test_a_delete_is_neither_noted_nor_an_entry(self):
         CH.REQUEST.user = "james"
@@ -283,6 +372,63 @@ class AttributionTests(unittest.TestCase):
             self.assertEqual(("outside", ""), (CH.history("lab", "sonarr")[0]["source"], CH.history("lab", "sonarr")[0]["by"]))
             self.assertEqual(f"example/radarr:{len(broken)}",
                              CH.history("lab", "radarr")[0]["changes"][0]["after"], "the next app is still recorded")
+
+
+class KeyCacheTests(unittest.TestCase):
+    """A copy that has read the key once marks, and checks marks, through a
+    later outage of the account Secret (#621 K2)."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        CH.bind(self.dir.name)
+        CH._notes.clear()
+        self.addCleanup(CH._notes.clear)
+        CH._known.clear()
+        self.addCleanup(CH._known.clear)
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+        CH.REQUEST.user = "james"
+
+    def accounts(self, key="k1"):
+        return {"signing_key": key, "users": {"james": {}}, "api_keys": {}}
+
+    def marked(self):
+        body = dep(image="example/sonarr:4.1")
+        CH.note_write("PUT", PATH, body)
+        return body["metadata"]["annotations"].get(CH.AUTHOR)
+
+    def test_a_copy_that_read_the_key_once_still_marks_when_the_accounts_cannot_be_read(self):
+        with mock.patch.object(AUTH, "_load", return_value=self.accounts()):
+            first = self.marked()
+        with mock.patch.object(AUTH, "_load", side_effect=AUTH.StoreUnavailable("no answer")):
+            self.assertTrue(self.marked(), "marked with the key read before")
+            start = time.time() - 30
+            CH.observe([dep()], now=start)
+            CH._notes.clear()
+            stored = dep(image="example/sonarr:4.1")
+            stored["metadata"]["annotations"][CH.AUTHOR] = first
+            CH.observe([stored], now=time.time() + 1, since=start)
+        self.assertEqual(("homestead", "james"), (CH.history("lab", "sonarr")[0]["source"], CH.history("lab", "sonarr")[0]["by"]),
+                         "and the leader still checks a mark")
+
+    def test_a_copy_that_never_read_the_key_writes_unmarked(self):
+        with mock.patch.object(AUTH, "_load", side_effect=AUTH.StoreUnavailable("no answer")):
+            self.assertIsNone(self.marked())
+
+    def test_a_new_key_is_picked_up_at_the_next_read(self):
+        with mock.patch.object(AUTH, "_load", return_value=self.accounts("k1")):
+            self.marked()
+        with mock.patch.object(AUTH, "_load", return_value=self.accounts("k2")):
+            mark = json.loads(self.marked())
+        key = hmac.new(b"k2", b"homestead-change-author-v1", hashlib.sha256).digest()
+        expected = CH._signed(key, "lab", "sonarr", mark["at"], "james")
+        self.assertEqual(expected, mark["by"], "a factory reset's new key replaces the one kept")
+
+    def test_after_a_reset_to_no_key_nothing_is_marked_with_the_old_one(self):
+        with mock.patch.object(AUTH, "_load", return_value=self.accounts("k1")):
+            self.marked()
+        with mock.patch.object(AUTH, "_load", return_value={}), mock.patch.object(AUTH, "_save") as save:
+            self.assertIsNone(self.marked())
+        save.assert_not_called()
 
 
 if __name__ == "__main__":

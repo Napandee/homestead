@@ -320,10 +320,10 @@ def _clone(pvc, plan, name, require_method=True):
     return clone
 
 
-def _delete(path, obj, owner_uid=None):
+def _delete(path, obj, owner_uid=None, version=False):
     if not _owned(obj) or (owner_uid and not any(o.get("uid") == owner_uid for o in obj.get("metadata", {}).get("ownerReferences", []))):
         raise ValueError("Refusing to remove an unrelated snapshot browser resource")
-    CSI._delete(path, obj)
+    CSI._delete(path, obj, version=version)
 
 
 @serialized
@@ -350,7 +350,9 @@ def close(namespace, name):
             raise ValueError("Temporary claim identity changed; cleanup stopped")
         # Delete reclaim policy must never act on a claim rebound to live data.
         _clone(pvc, json.loads(record["metadata"]["annotations"]["homestead.io/source"]), name, require_method=False)
-        _delete(paths[2], pvc, record["metadata"]["uid"])
+        # A binding is fixed once set and was just checked. An unbound claim
+        # may bind before the DELETE, so it keeps the version check too.
+        _delete(paths[2], pvc, record["metadata"]["uid"], version=not pvc.get("spec", {}).get("volumeName"))
         return {"state": "closing"}
     snapshot = KUBE.get_optional(paths[1], read=kget)
     if snapshot:

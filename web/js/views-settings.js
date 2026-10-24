@@ -405,6 +405,35 @@ window.homesteadDataTidy = async () => {
   } catch (e) { toast(e.message, "bad"); if (go) go.disabled = false; }
 };
 
+/* #731: Homestead's data has one copy and two hosts have room for another.
+   Keep two copies makes longhorn-r2 if needed and opens the move with it
+   picked; an existing longhorn-r2 that would not keep two shareable copies
+   is named, and nothing is offered. */
+function dataCopiesNote(copies) {
+  // #620: a read that failed is said, with its reason, not left blank.
+  if (copies?.state === "unknown") return `<div class="note" style="margin-top:10px">Could not read Homestead's data copies: ${esc(copies.error || "no reason given")}</div>`;
+  if (copies?.state !== "can-keep-two") return "";
+  const r2 = copies.r2 || {}, refused = r2.exists && !r2.usable, raise = copies.action === "raise";
+  const how = raise ? ` Keep two copies raises it to two copies in place, on ${esc(copies.storage_class || "its class")}: no move and no outage.`
+    : ` Keep two copies ${r2.exists ? "picks" : "makes"} longhorn-r2 (two copies on different hosts) and opens the move; Homestead stops briefly while its data is copied.`;
+  return `<div class="note" style="margin-top:10px"><b>Homestead's data has one copy; this cluster can now keep two.</b>
+    ${refused ? `${esc(r2.why)}. Pick a class that keeps two copies under Move data.`
+      : `A second copy on another host keeps it if one host fails.${can("admin") ? how : ""}`}
+    ${!refused && can("admin") ? `<div class="row" style="margin-top:6px"><button class="btn sm pri" id="rep_keep_two" onclick="replicasKeepTwo()">Keep two copies</button></div>` : ""}</div>`;
+}
+window.replicasKeepTwo = async () => {
+  const go = $("#rep_keep_two");
+  if (go) go.disabled = true;
+  try {
+    const r = await api("/api/self/data/two-copies", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!r.ok) return toast(r.message, "warn");
+    // Raised in place: nothing to move.
+    if (r.raised) { toast(r.message, "ok"); return replicasPaint(); }
+    await replicasMoveData("", r.storage_class);
+  } catch (e) { toast(e.message, "bad"); }
+  finally { if (go) go.disabled = false; }
+};
+
 async function replicasPaint() {
   let r;
   try { r = await api("/api/self/replicas"); } catch (e) { return; }
@@ -421,6 +450,7 @@ async function replicasPaint() {
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
         <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every host" : " · one host"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
+      ${dataCopiesNote(r.data_copies)}
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.
         Check their jobs before deleting anything.
@@ -443,9 +473,10 @@ window.selfDataClose = () => { selfDataDialog = null; selfDataArchiveDialog = nu
 const selfDataPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const selfDataId = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), n => n.toString(16).padStart(2, "0")).join("");
 const selfDataHostOptions = (nodes, selected = "") => nodes.map(n => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""} ${n.ready ? "" : "disabled"}>${esc(n.name)}${n.ready ? "" : " · unavailable"}</option>`).join("");
-window.replicasMoveData = async (jobId = "") => {
-  // The class picked beside the button is the one the dialog starts with.
-  const picked = $("#rep_class")?.value || "";
+window.replicasMoveData = async (jobId = "", chosen = "") => {
+  // The class picked beside the button is the one the dialog starts with,
+  // unless the caller chose one (Keep two copies: longhorn-r2).
+  const picked = chosen || $("#rep_class")?.value || "";
   selfDataArchiveDialog = null;
   const request = {}; selfDataDialog = request;
   modal("Move Homestead data", '<div id="selfDataFlow" class="ui-stack"><p>Reading volumes and hosts…</p></div>', true, "operation-review");
@@ -1083,6 +1114,7 @@ async function selfHealthPaint() {
   }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
+  const auditFile = STATE.data.appSettings?.audit?.file !== false;
   STATE.data.sambaInstalled = !!samba.installed;
   const row = (label, tone, word, detail = "", action = "") => `<div class="health-row">${UI.chip(word, tone)}
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
@@ -1109,6 +1141,10 @@ async function selfHealthPaint() {
         `<button class="btn sm" onclick="go('shares')">Network shares</button>`)}
       ${row("Permissions", h.permissions?.state === "error" ? "bad" : h.permissions?.state === "current" || h.permissions?.state === "updated" ? "ok" : "neutral",
         h.permissions?.state || "unknown", esc(h.permissions?.detail || ""))}
+      ${row("Audit log", auditFile ? "ok" : "neutral", auditFile ? "kept" : "pod log only",
+        auditFile ? "Every change is written to the pod log and to audit.jsonl on the data volume (two files of 10 MiB at most)."
+          : "Every change is written to the pod log only.",
+        admin ? `<button class="btn sm" onclick="auditFileSet(${!auditFile})">${auditFile ? "Pod log only" : "Keep on the data volume"}</button>` : "")}
       ${h.addresses ? row("Addresses", h.addresses.error ? "neutral" : h.addresses.problem || (h.addresses.clashes || []).length ? "bad" : "ok",
         h.addresses.error ? "unknown" : h.addresses.problem || (h.addresses.clashes || []).length ? "on the cluster's address" : "separate",
         h.addresses.error ? esc(h.addresses.error)
@@ -1167,6 +1203,18 @@ window.sambaSet = async on => {
     toast(r.detail, "ok");
     setTimeout(() => { addonsPaint(); selfHealthPaint(); }, 1500);
   } catch (e) { toast(e.message, "bad"); }
+};
+
+/* The audit log (#738): always in the pod log; this keeps it on the data
+   volume too. Takes effect at once, and only this setting changes (#601). */
+window.auditFileSet = async file => {
+  try {
+    await settingsWrite({ audit: { file } });
+    STATE.data.appSettings = null;
+    await loadHealthSettings(true);
+    toast(file ? "The audit log is kept on the data volume" : "The audit log goes to the pod log only", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  selfHealthPaint();
 };
 
 window.sambaInstallGo = async (selectedAddress = null) => {

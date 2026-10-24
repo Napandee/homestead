@@ -439,11 +439,8 @@ def longhorn_copies(storing):
     return (have, want)
 
 
-def own_copies(storing):
-    """Homestead's own data volume raised with the hosts Longhorn stores on,
-    while it keeps the
-    installer's one copy or the count Homestead set before. Returns the
-    claims raised, as (claim, to)."""
+def _own_raises(storing):
+    """What own_copies() would raise: [(claim, volume name, to)]. Reads only."""
     want = max(1, min(3, len(storing)))
     ns, name = OWN
     if want < 2 or not ns or not name:
@@ -452,22 +449,41 @@ def own_copies(storing):
     claims = [v["persistentVolumeClaim"]["claimName"] for v in
               (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
               if (v.get("persistentVolumeClaim") or {}).get("claimName")]
-    state = _load()
-    ours = {1, int(state.get("own_copies") or 1)}
-    raised = []
+    ours = {1, int(_load().get("own_copies") or 1)}
+    raises = []
     for claim in claims:
         pv = ((_get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}") or {}).get("spec") or {}).get("volumeName")
         volume = _get(f"{LH_VOLUMES}/{pv}") if pv else None
         have = int(((volume or {}).get("spec") or {}).get("numberOfReplicas") or 0)
-        if not volume or have not in ours or have >= want:
-            continue
+        if volume and have in ours and have < want:
+            raises.append((claim, pv, want))
+    return raises
+
+
+def own_copies(storing):
+    """Homestead's own data volume raised with the hosts Longhorn stores on,
+    while it keeps the
+    installer's one copy or the count Homestead set before. Returns the
+    claims raised, as (claim, to)."""
+    raised = []
+    for claim, pv, want in _own_raises(storing):
         ksend("PATCH", f"{LH_VOLUMES}/{pv}", {"spec": {"numberOfReplicas": want}}, ctype="application/merge-patch+json")
         raised.append((claim, want))
     if raised:
         state = _load()
-        state["own_copies"] = want
+        state["own_copies"] = raised[-1][1]
         SHARED.write_json(_path(), state, indent=1, sort_keys=True)
     return raised
+
+
+def own_copies_due(storing):
+    """Whether copies_tick() raises Homestead's own data volume in place on
+    this platform for these storage hosts: the same test as own_copies(),
+    reading only (homestead_data_copies says "rising" meanwhile)."""
+    p = platform() or {}
+    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2") or not p.get("longhorn"):
+        return False
+    return bool(storing) and bool(_own_raises(storing))
 
 
 _seen_ready = None

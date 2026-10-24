@@ -56,6 +56,7 @@ function lhV2UpgradePaint() {
     + (view.target ? UI.fields(UI.field('Upgrade method', `<select id="lhV2UpgradeMode" onchange="lhV2UpgradeMode(this.value)"><option value="live" ${view.mode === 'live' ? 'selected' : ''}>Live · volumes stay attached</option><option value="offline" ${view.mode === 'offline' ? 'selected' : ''}>Offline · detach V2 volumes</option></select>`))
       + UI.checklist(blockers.length ? blockers.map(title => ({state:'bad',title})) : [{state:'ok',title: view.mode === 'live' ? 'Hosts and V2 replicas meet the live upgrade requirements.' : 'V2 volumes are detached and their replicas are stopped.'}])
       + (view.mode === 'live' ? UI.ack('lhV2UpgradeBackup','I have backed up the V2 volumes before this upgrade.') : '')
+      + lhV2UpgradeCheck(view.target)
       + UI.actions([UI.cancel(),UI.button(`Upgrade to ${r.target}`,'lhV2UpgradeStart()', {kind:'pri',disabled:!!blockers.length})].join(''))
       : (rows.length ? UI.section('Host progress',UI.table(['Host','Stage'],rows)) : UI.lead('No V2 host upgrade is recorded.')))
     + (!view.target && supported && admin ? UI.actions([
@@ -70,6 +71,14 @@ function lhV2UpgradePaint() {
     + '<div id="lhV2UpgradeError" class="small" role="status"></div>';
   if (window.applyRole) applyRole();
 }
+// What Homestead's table knows about this target (views-cluster.js,
+// homestead_upgrade_check), from the Platform versions report the dialog was opened from.
+function lhV2UpgradeCheck(target) {
+  // STATE is core.js's const: a global name, not a property of window.
+  const parts = typeof STATE === 'undefined' ? [] : STATE.data?.components?.components || [];
+  const row = parts.find(c => c.id === 'longhorn' && c.next === target);
+  return row?.check && typeof componentCheckSection === 'function' ? componentCheckSection(row.check) : '';
+}
 window.lhV2UpgradeMode = mode => {
   if (!LH_V2_UPGRADE || !['live','offline'].includes(mode)) return;
   LH_V2_UPGRADE.mode = mode;
@@ -79,11 +88,13 @@ window.lhV2UpgradeStart = async () => {
   const view = LH_V2_UPGRADE;
   if (!view?.target || LH_V2_UPGRADE_BUSY || view.report[`${view.mode}_blockers`]?.length) return;
   if (view.mode === 'live' && !$('#lhV2UpgradeBackup')?.checked) return toast('Confirm that the V2 volumes are backed up first.','bad');
+  const ack = $('#cmp_check_ack');
+  if (ack && !ack.checked) return toast('Tick that you have read what this upgrade breaks first','bad');
   LH_V2_UPGRADE_BUSY = true;
   const seq = LH_V2_UPGRADE_SEQ;
   try {
     const result = await api('/api/cluster/components/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({component:'longhorn',to:view.target,v2_mode:view.mode,confirm_backup:view.mode === 'live'})});
+      body:JSON.stringify({component:'longhorn',to:view.target,v2_mode:view.mode,confirm_backup:view.mode === 'live',...(ack ? {accept_check:true} : {})})});
     if (seq === LH_V2_UPGRADE_SEQ && $('#lhV2UpgradeBody')) closeModal();
     toast(result.detail,'ok');
     if (window.noteOperation) noteOperation(result.operation);

@@ -2,6 +2,7 @@
 import gzip
 import http.server
 import io
+import json
 import os
 import subprocess
 import sys
@@ -150,52 +151,105 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(0, os.stat(root).st_uid)
 
 
-class RedirectTests(unittest.TestCase):
-    def test_the_registry_token_is_not_sent_on_to_blob_storage(self):
-        seen = {}
+def fake_registry(test, blobs, manifests=None):
+    """A registry that wants a bearer token and sends blobs on to storage on
+    another host, as Docker Hub and GHCR do. Storage, like their CDNs, refuses
+    a request whose Host names the registry (421). Returns (registry port, seen)."""
+    seen = {"storage": []}
 
-        class Storage(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                seen["storage"] = self.headers.get("Authorization")
+    class Storage(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["storage"].append({"host": self.headers.get("Host"),
+                                    "authorization": self.headers.get("Authorization")})
+            if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+                self.send_response(421)
+                self.end_headers()
+                return
+            body = blobs.get(self.path.lstrip("/"))
+            self.send_response(200 if body is not None else 404)
+            self.end_headers()
+            self.wfile.write(body or b"")
+
+        def log_message(self, *_):
+            pass
+
+    storage = http.server.HTTPServer(("127.0.0.1", 0), Storage)
+
+    class Registry(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/token"):
                 self.send_response(200)
                 self.end_headers()
-                self.wfile.write(b"blob")
+                self.wfile.write(b'{"token": "secret"}')
+            elif self.headers.get("Authorization") != "Bearer secret":
+                self.send_response(401)
+                self.send_header("WWW-Authenticate",
+                                 f'Bearer realm="http://127.0.0.1:{self.server.server_port}/token"')
+                self.end_headers()
+            elif "/manifests/" in self.path:
+                body = (manifests or {}).get(self.path.rsplit("/", 1)[-1])
+                self.send_response(200 if body is not None else 404)
+                self.end_headers()
+                self.wfile.write(body or b"")
+            else:
+                self.send_response(307)
+                self.send_header("Location", f"http://127.0.0.1:{storage.server_port}/{self.path.rsplit('/', 1)[-1]}")
+                self.end_headers()
 
-            def log_message(self, *_):
-                pass
+        def log_message(self, *_):
+            pass
 
-        storage = http.server.HTTPServer(("127.0.0.1", 0), Storage)
+    registry = http.server.HTTPServer(("127.0.0.1", 0), Registry)
+    for srv in (storage, registry):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        test.addCleanup(srv.server_close)
+        test.addCleanup(srv.shutdown)
+    # The transport fixture is HTTP loopback; realm trust/TLS policy has
+    # separate tests. These checks concern what the retry carries on a redirect.
+    for patch in (mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}),
+                  mock.patch.object(UPDATES, "_auth_realm")):
+        patch.start()
+        test.addCleanup(patch.stop)
+    return registry.server_port, seen
 
-        class Registry(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path.startswith("/token"):
-                    self.send_response(200)
-                    self.end_headers()
-                    self.wfile.write(b'{"token": "secret"}')
-                elif self.headers.get("Authorization") != "Bearer secret":
-                    self.send_response(401)
-                    self.send_header("WWW-Authenticate",
-                                     f'Bearer realm="http://127.0.0.1:{self.server.server_port}/token"')
-                    self.end_headers()
-                else:
-                    self.send_response(307)
-                    self.send_header("Location", f"http://127.0.0.1:{storage.server_port}/signed")
-                    self.end_headers()
 
-            def log_message(self, *_):
-                pass
+class RedirectTests(unittest.TestCase):
+    def test_the_registry_token_is_not_sent_on_to_blob_storage(self):
+        port, seen = fake_registry(self, {"sha256:a": b"blob"})
+        url = f"http://127.0.0.1:{port}/v2/x/blobs/sha256:a"
+        with UPDATES._open(urllib.request.Request(url)) as response:
+            self.assertEqual(b"blob", response.read())
+        self.assertIsNone(seen["storage"][-1]["authorization"])
 
-        registry = http.server.HTTPServer(("127.0.0.1", 0), Registry)
-        for srv in (storage, registry):
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            self.addCleanup(srv.shutdown)
-        # The transport fixture is HTTP loopback; realm trust/TLS policy has
-        # separate tests. This check concerns stripping the bearer on redirects.
-        with mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}), mock.patch.object(UPDATES, "_auth_realm"):
-            url = f"http://127.0.0.1:{registry.server_port}/v2/x/blobs/sha256:a"
-            with UPDATES._open(urllib.request.Request(url)) as response:
-                self.assertEqual(b"blob", response.read())
-        self.assertIsNone(seen["storage"])
+    def test_the_retry_does_not_carry_the_registrys_host_to_blob_storage(self):
+        # Docker Hub's CDN answers 403 and GHCR's 421 when it does (wrap-up row 91).
+        port, seen = fake_registry(self, {"sha256:a": b"blob"})
+        url = f"http://127.0.0.1:{port}/v2/x/blobs/sha256:a"
+        request = urllib.request.Request(url, headers={"User-Agent": "Homestead/2.0", "Accept": "application/json"})
+        with UPDATES._open(request) as response:
+            self.assertEqual(b"blob", response.read())
+        self.assertEqual(1, len(seen["storage"]))
+        self.assertNotEqual(f"127.0.0.1:{port}", seen["storage"][0]["host"])
+
+    def test_image_owners_reads_the_config_and_layers_behind_a_token(self):
+        config = json.dumps({"config": {"User": "sambee"}}).encode()
+        layers = {"sha256:l1": layer(("etc/passwd", 0, 0, 0o644, PASSWD))().read(),
+                  "sha256:l2": layer(("app/data", 1000, 1000, 0o750, None))().read()}
+        manifest = json.dumps({"config": {"digest": "sha256:cfg"},
+                               "layers": [{"digest": "sha256:l1"}, {"digest": "sha256:l2"}]}).encode()
+        port, seen = fake_registry(self, {"sha256:cfg": config, **layers}, {"retry": manifest})
+        real_open = UPDATES._open
+
+        def plain(req, *args, **kwargs):
+            # The registry is always asked over HTTPS; the fixture speaks HTTP.
+            req.full_url = req.full_url.replace("https://", "http://", 1)
+            return real_open(req, *args, **kwargs)
+
+        with mock.patch.object(UPDATES, "_open", side_effect=plain):
+            owners = VOLOWNER.image_owners(f"127.0.0.1:{port}/sambee:retry", ["/app/data", "/srv/extra"])
+
+        self.assertEqual({"/app/data": (1000, 1000, 0o750), "/srv/extra": (1000, 1000, 0o755)}, owners)
+        self.assertEqual(3, len(seen["storage"]))
 
 
 if __name__ == "__main__":

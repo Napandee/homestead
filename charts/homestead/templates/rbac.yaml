@@ -61,8 +61,10 @@ rules:
   - apiGroups: [""]
     resources: [replicationcontrollers]
     verbs: [get, list]
+  # Stop, Start and schedules patch the Deployment itself, so the write carries
+  # who made it (#621); none of it goes through the scale subresource.
   - apiGroups: ["apps"]
-    resources: [deployments, deployments/scale, replicasets, statefulsets, daemonsets]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, patch, delete]
   # Priority tiers (homestead_priority.py): Homestead makes a class for a tier
   # when a tier first needs one, and reads every class, placing each by its

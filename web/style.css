@@ -833,6 +833,9 @@ html[data-display="standalone"]:has(#modal:not(.hidden)) .main,html[data-display
 .askmsg{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;font-size:14px}
 .askin{width:100%;margin:-4px 0 16px}
 .askbtns{justify-content:flex-end;gap:8px}
+/* The button bar reaches the box's edges: its 20px padding, not a dialog's 24px,
+   which made every confirm scroll sideways (#833). */
+.askbox .ui-actions{margin-left:-20px!important;margin-right:-20px!important;padding-left:20px;padding-right:20px}
 #toast{pointer-events:none;position:fixed;right:22px;bottom:calc(18px + var(--tray-lift, 4px));display:flex;flex-direction:column;gap:9px;z-index:80;transition:bottom .2s var(--e)}
 .tst{background:linear-gradient(140deg,rgba(255,255,255,.1),rgba(255,255,255,.04));backdrop-filter:blur(24px) saturate(1.3);-webkit-backdrop-filter:blur(24px) saturate(1.3);border:1px solid var(--line2);border-left:3px solid #fff;border-radius:13px;
   padding:13px 17px;min-width:250px;box-shadow:0 16px 44px rgba(0,0,0,.65);animation:slide .3s var(--e);font-size:13px}
@@ -1891,6 +1894,11 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .release-row .ui-chip{margin-left:4px}
 /* The text keeps its width; the buttons go under it when the row is narrow. */
 .release-row{flex-wrap:wrap}.release-row>div:first-child{flex:1 1 220px;min-width:0}
+/* Before an upgrade (homestead_upgrade_check): the verdict under a part, and
+   the version pairs running now under the list. */
+.component-check{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:6px}
+.component-check .ui-chip{margin-left:0}
+.component-pairs{display:grid;gap:4px;margin-top:12px}
 .upgrade-live{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px}
 .upgrade-live.running{border-color:rgba(245,158,11,.45)}
 .upgrade-live.failed{border-color:rgba(239,68,68,.5)}
@@ -3726,7 +3734,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .answer-strip.mon-mini{height:16px;width:100%}
 .mon-allup{padding:6px 2px}
 /* Restore tests on Data Protection. */
-.restore-tests{margin:6px 0 18px}.restore-head{align-items:center;gap:12px;flex-wrap:wrap}
+.housekeeping{margin:6px 0 18px}.wt-line{margin-top:6px}.wt-foot{margin-top:12px;align-items:center;gap:12px;flex-wrap:wrap}.restore-tests{margin:6px 0 18px}.restore-head{align-items:center;gap:12px;flex-wrap:wrap}
 .restore-table .restore-why{max-width:420px;white-space:normal}
 @media (max-width:560px){
   .tbl.stack.compact.restore-table tr{grid-template-columns:minmax(0,1fr)}
@@ -3941,3 +3949,17 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 /* Port links and movable tags are buttons (#487); they keep the text they sit in. */
 button.plink,button.tag.movable{font-family:inherit;line-height:inherit}
 button.a2port{font-family:inherit;line-height:inherit}
+
+/* Log alerts (logalerts.js): an hour of per-minute counts with the threshold across. */
+.la-bars{display:block;width:100%;height:auto;max-height:64px}.la-bars .la-under{fill:color-mix(in srgb,var(--mut) 45%,transparent)}
+.la-bars .la-over{fill:var(--high)}.la-bars .la-unread{fill:color-mix(in srgb,var(--mut) 25%,transparent)}
+.la-bars .la-limit{stroke:var(--tx);stroke-width:1;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.la-axis{display:flex;justify-content:space-between;gap:8px;margin-top:2px}
+.la-preview{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;display:grid;gap:6px}.la-preview:empty{display:none}
+.la-preview-head{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}.la-over-t{color:var(--high)}
+.la-thresh{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px}
+.la-rules{display:grid;gap:10px}.la-rule{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;display:grid;gap:6px;min-width:0}
+.la-rule.la-raised{border-color:color-mix(in srgb,var(--high) 60%,var(--line2))}
+.la-rule-head{display:flex;justify-content:space-between;gap:8px;align-items:center;min-width:0}.la-rule-head b{overflow-wrap:anywhere}
+.la-rule code{overflow-wrap:anywhere}.la-status{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.la-rule-actions{display:flex;flex-wrap:wrap;gap:6px}

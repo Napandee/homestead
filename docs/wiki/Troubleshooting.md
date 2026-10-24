@@ -91,6 +91,11 @@ gate can take through the sign-in and back. If that keeps failing, it asks you
 to sign in rather than reloading in a loop. The installed app (PWA) does the
 same.
 
+**Who changed this, and when?** Every change is one JSON line in the Homestead
+pods' log (`kubectl logs` on them, the lines starting `{"v":1`) and in
+`audit.jsonl` on Homestead's data volume. See
+[Settings › Audit log](Settings#audit-log).
+
 ## Monitoring Homestead itself
 
 Homestead answers these addresses for monitors. None of them needs the page.
