@@ -142,7 +142,7 @@ if [ -n "$OTHER" ]; then
   NAMES=$(printf '%s\n' "$OTHER" | sed 's|.*/||' | LC_ALL=C tr -cd -- '-A-Za-z0-9._\n' | awk 'NR<=5 {printf "%s%s", (NR>1 ? ", " : ""), substr($0,1,40)} END {if(NR>5) printf ", ..."}')
   for name in engine-binaries instance-manager unix-domain-socket metadata; do
     if [ -e "$P/$name" ] || [ -L "$P/$name" ]; then
-      fail "Longhorn runtime storage shares this filesystem ($NAMES). Conversion erases the whole filesystem, not just replica files. Relocating runtime storage requires a separate host maintenance plan before conversion."
+      fail "Longhorn runtime storage shares this filesystem ($NAMES). V2 preparation would erase files Longhorn still needs. Move replicas off this store first, then choose Review runtime move below to move these files onto the OS filesystem. This requires a dedicated Longhorn logical volume and two separately approved host restarts. After runtime maintenance finishes, return to Prepare for V2."
     fi
   done
   fail "Other files on this filesystem need to be moved first ($NAMES). Conversion erases the whole filesystem."

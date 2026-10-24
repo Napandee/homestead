@@ -73,7 +73,12 @@ def _inventory(node, disk, *, ref=None):
     status = (lh.get('status', {}).get('diskStatus') or {}).get(disk) or {}
     if not spec or spec.get('diskType', 'filesystem') != 'filesystem' or not status.get('diskUUID'):
         raise ValueError('The original V1 disk registration must remain present')
-    if not ref and spec.get('path') != SOURCE: raise ValueError('Choose the V1 store mounted at /var/lib/longhorn')
+    # Longhorn registrations may retain a trailing slash. Compare that spelling
+    # only; do not resolve aliases or collapse parent/subdirectory components.
+    if not ref and str(spec.get('path') or '').rstrip('/') != SOURCE:
+        raise ValueError('Runtime move supports only the dedicated V1 store at /var/lib/longhorn. '
+                         'Open that store under Host → Storage → Disk actions → Move Longhorn runtime. '
+                         'Other storage layouts cannot be moved by this workflow.')
     if ref and (host['metadata']['uid'] != ref['node_uid'] or lh['metadata']['uid'] != ref['lh_uid']
                 or status['diskUUID'] != ref['disk_uuid']):
         raise ValueError('Host or Longhorn disk identity changed')

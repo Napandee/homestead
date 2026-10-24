@@ -310,6 +310,24 @@ class RuntimeInventoryTests(unittest.TestCase):
         for name,value in [('kget',read),('ksend',lambda *a,**k:self.writes.append(a)),('platform',lambda force:{'harvester':False}),('_upgrade_idle',lambda:None)]:
             p=patch.object(R.V2,name,value);p.start();self.addCleanup(p.stop)
 
+    def test_runtime_store_accepts_trailing_slash_without_changing_registration(self):
+        for path in (R.SOURCE, R.SOURCE + '/', R.SOURCE + '//'):
+            self.lh['spec']['disks']['store']['path'] = path
+            self.assertEqual(R._inventory('host-1', 'store')['spec']['path'], path)
+            self.rows = {R.V2.LH + '/replicas': {'items': [{'spec': {'nodeID': 'host-1', 'diskID': 'disk-uuid'}}]}}
+            with self.assertRaisesRegex(ValueError, 'every replica'):
+                R._inventory('host-1', 'store')
+            self.rows = {}
+        self.assertFalse(self.writes)
+
+    def test_runtime_store_rejects_subdirectories_other_mounts_and_parent_aliases(self):
+        for path in ('/', '/mnt/data', R.SOURCE + '/replicas', R.SOURCE + '/.',
+                     '/var/lib/other/../longhorn', None):
+            self.lh['spec']['disks']['store']['path'] = path
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'dedicated V1 store'):
+                R._inventory('host-1', 'store')
+        self.assertFalse(self.writes)
+
     def test_empty_api_objects_are_not_enough_if_any_claim_or_paginated_inventory_remains(self):
         for suffix,obj in [('replicas',{'items':[{'spec':{'nodeID':'host-1','diskID':'disk-uuid'}}]}),
                            ('replicas',{'items':[],'metadata':{'continue':'next'}}),
