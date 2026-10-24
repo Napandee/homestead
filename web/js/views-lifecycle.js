@@ -862,9 +862,10 @@ window.nodePower = async (node, action) => {
       body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force, choices,
         allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     if (r.operation) window.noteOperation?.(r.operation);
-    if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.force || plan.planned_outage
-      ? "Sent without cordon or drain. Scheduling was left unchanged; inspect apps and VMs and storage when the host returns."
-      : `The host is cordoned and drained before the command is sent. ${plan.cordoned ? "It was cordoned before, and stays so." : "Scheduling is allowed again when it is back."}`);
+    if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.planned_outage
+      ? "Homestead will go offline during this host's maintenance. This view reconnects automatically. Scheduling was left unchanged."
+      : plan.force ? "Request accepted without cordon or drain. Scheduling was left unchanged."
+      : `The host is cordoned and drained before the command is sent. ${plan.cordoned ? "It was cordoned before, and stays so." : "Scheduling is allowed again when it is back."}`, r.operation);
     modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect apps and storage when the host returns.`
       : `Follow progress in Recent jobs. ${plan.cordoned ? "The host stays cordoned, as it was before." : "Scheduling is allowed again when it is back."}`) +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
@@ -896,17 +897,32 @@ function nodePowerSteps(power) {
     ...(power.holds ? [["restoring", reboot ? "Start what waited for it again" : "Start what waited for it when it is back"]] : []),
   ];
 }
-function nodePowerProgressMarkup(op, offline = false) {
+function nodePowerProgressMarkup(op, offline = false, disconnectedFor = 0) {
   const power = op.power || {}, steps = nodePowerSteps(power);
   const done = op.status === "succeeded", stopped = op.status === "failed" || op.status === "cancelled";
   const phase = stopped && power.failed_phase ? power.failed_phase : power.phase;
   const at = Math.max(0, steps.findIndex(([name]) => name === phase));
   const items = steps.map(([, title], i) => ({ title,
-    state: done || i < at ? "ok" : i === at ? (stopped ? "bad" : "run") : "todo",
+    state: done || i < at ? "ok" : i === at ? (stopped ? "bad" : offline ? "todo" : "run") : "todo",
     detailHtml: i === at && !done && !stopped && op.message ? esc(op.message) : "" }));
+  if (offline && !done && !stopped) {
+    const prolonged = disconnectedFor >= 15 * 60 * 1000;
+    const minutes = Math.floor(disconnectedFor / 60000);
+    const expected = power.planned_outage || power.handoff;
+    const detail = power.handoff
+      ? "The host helper was created to finish the request. Homestead must stop so its data volume can detach before power is sent."
+      : expected ? "Homestead goes offline during maintenance on the only host. The last update may be from before the restart was requested."
+      : "The connection to Homestead was lost. The host's current state cannot be confirmed.";
+    return UI.callout(prolonged ? "warn" : "info", prolonged ? "Still waiting for Homestead" : "Waiting for Homestead to reconnect",
+      `${detail} ${power.action === "poweroff" ? "After shutdown, turn the host on manually to reconnect." : "This view resumes when Homestead is reachable."}`)
+      + `<p class="ui-help" role="status">Checking automatically${minutes ? ` · disconnected for ${minutes} min` : ""}. ${prolonged
+        ? "Check the host console or network if it has not returned. Do not send another power request while its state is unknown."
+        : "Live progress is unavailable while disconnected."}</p>`
+      + (power.phase ? UI.more("Last confirmed progress", UI.checklist(items)) : "")
+      + UI.actions(UI.cancel("Close"));
+  }
   return UI.progress(done ? 100 : op.progress, { label: done ? "Finished" : stopped ? "Stopped" : "In progress", kind: done ? "ok" : stopped ? "bad" : "info" })
     + UI.checklist(items)
-    + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now. While a host it runs on restarts, that is expected; this view carries on by itself.") : "")
     + (done ? UI.callout("ok", "Done", esc(op.message || "")) : "")
     + (stopped ? UI.callout("bad", "Stopped", `${esc(op.message || "The job did not finish.")} Check the host before making another request.`) : "")
     + (power.waiting && !done && !stopped && power.phase === "observing"
@@ -920,16 +936,26 @@ window.nodePowerRelease = async id => {
     toast(r.detail, "ok");
   } catch (e) { toast(e.message, "bad"); }
 };
-window.nodePowerFollow = async (id, intro = "") => {
+window.nodePowerFollow = async (id, intro = "", initial = null) => {
   const sequence = ++NODE_POWER_FOLLOW;
   modal("Host maintenance", (intro ? UI.lead(esc(intro)) : "") + '<div id="pwProgress"><div class="empty"><span class="spin2"></span>Starting…</div></div>', true);
-  let last = null;
+  let last = initial?.id === id ? initial : null, disconnectedAt = null;
   while (sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
     let offline = false;
-    try { last = (await api("/api/operations", { keep: true, timeout: 10000 })).find(o => o.id === id) || last; }
-    catch { offline = true; }
+    try {
+      last = (await api("/api/operations", { keep: true, timeout: 10000 })).find(o => o.id === id) || null;
+      disconnectedAt = null;
+    } catch (e) {
+      if ((e.status === 401 || e.status === 403) && sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
+        $("#pwProgress").innerHTML = UI.callout("warn", "Cannot read maintenance progress", "Sign in with access to Jobs to check this request. Its outcome has not been confirmed.") + UI.actions(UI.cancel("Close"));
+        return;
+      }
+      offline = true;
+      disconnectedAt ??= Date.now();
+    }
     if (!$("#pwProgress") || sequence !== NODE_POWER_FOLLOW) return;
-    if (last) $("#pwProgress").innerHTML = nodePowerProgressMarkup(last, offline);
+    if (last) $("#pwProgress").innerHTML = nodePowerProgressMarkup(last, offline, offline ? Date.now() - disconnectedAt : 0);
+    else if (offline) $("#pwProgress").innerHTML = nodePowerProgressMarkup({ power: {}, status: "running" }, true, Date.now() - disconnectedAt);
     else if (!offline) { $("#pwProgress").innerHTML = UI.callout("warn", "Job not found", "It may have been cleared. Check Recent jobs and the host.") + UI.actions(UI.cancel("Close")); return; }
     if (last && ["succeeded", "failed", "cancelled"].includes(last.status)) { window.refreshOperations?.(true); return; }
     await new Promise(resolve => setTimeout(resolve, 2000));
