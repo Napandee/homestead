@@ -192,8 +192,12 @@ def preview_image_update(body):
 def _jobs_loop():
     """Only the leader advances jobs (#622): every 3 s while one is active, every
     20 s otherwise, or at once when something asks (OPS.advance_soon). Requests
-    read the saved jobs (OPS.snapshot) and never run a resolver themselves."""
-    OPS.run_jobs(LEADER.is_leader)
+    read the saved jobs (OPS.snapshot) and never run a resolver themselves.
+    It beats each round, so a stalled loop or a hung resolver shows in health,
+    and starts a round as soon as this replica becomes leader."""
+    LEADER.when_leading(OPS.advance_soon)
+    OPS.run_jobs(LEADER.is_leader,
+                 beat=lambda error=None: beat("jobs", OPS.JOBS_BEAT_EVERY, error, leader_only=True))
 
 
 def _detached_copies_loop():
