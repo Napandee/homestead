@@ -1,4 +1,4 @@
-"""Sign-in and sessions, through server.py's real handler (#764).
+"""Sign-in, sessions, API keys and accounts, through server.py's real handler (#764).
 
 These pin what each route answers today - the status line, the body, every
 Set-Cookie line with its flags, and the sign-in history row - through the real
@@ -17,6 +17,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_alerts as ALERTS
+import homestead_api_keys as API_KEYS
 import homestead_auth as AUTH
 import homestead_fleet as FLEET
 import homestead_setup_code as SETUP_CODE
@@ -373,6 +375,145 @@ class SignInAndSessions(Routes):
                 self.assertEqual((*answer, []), (a.status, a.body, a.cookies))
 
 
+class KeysAndAccounts(Routes):
+    """PR 3's routes: POST keys, keys/revoke, keys/edit, users, role and
+    users/delete, all for an administrator."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(AUTH, "list_users", lambda: [{"username": "robin"}]))
+
+    def test_key_routes_answer_and_record_for_an_admin(self):
+        made = {"secret": "hs_live_NEWKEYSECRET", "key": {"id": "k1", "name": "ha", "scopes": ["read", "metrics"]}}
+        changed = {"key": {"id": "k1", "name": "ha"}, "changed": ["scopes"]}
+        with mock.patch.object(API_KEYS, "create", return_value=made) as create, \
+                mock.patch.object(API_KEYS, "revoke", return_value={"ok": True, "name": "ha"}) as revoke, \
+                mock.patch.object(API_KEYS, "edit", return_value=changed) as edit:
+            token = self.signed_in(role="admin")
+            a = self.send("POST", "/api/auth/keys", {"name": "ha", "scopes": ["read", "metrics"]}, token=token)
+            create.assert_called_once_with("ha", ["read", "metrics"], None, None, "ada", False)
+            self.assertEqual((200, {"ok": True, **made}, []), (a.status, a.body, a.cookies))
+            self.assertEqual(self.row("key-added", "ada", detail="ha: read, metrics"), self.history()[0])
+            a = self.send("POST", "/api/auth/keys/edit", {"id": "k1", "scopes": ["read"], "other": 1}, token=token)
+            edit.assert_called_once_with("k1", {"scopes": ["read"]}, "ada")
+            self.assertEqual((200, {"ok": True, **changed}), (a.status, a.body))
+            self.assertEqual(self.row("key-changed", "ada", detail="ha: scopes changed"), self.history()[0])
+            a = self.send("POST", "/api/auth/keys/revoke", {"id": "k1"}, token=token)
+            revoke.assert_called_once_with("k1")
+            self.assertEqual((200, {"ok": True, "name": "ha"}), (a.status, a.body))
+            self.assertEqual(self.row("key-revoked", "ada", detail="ha"), self.history()[0])
+
+    def test_making_a_key_records_its_name_and_scopes_not_its_secret(self):
+        made = {"secret": "hs_live_NEWKEYSECRET", "key": {"id": "k1", "name": "ha", "scopes": ["read"]}}
+        with mock.patch.object(API_KEYS, "create", return_value=made):
+            self.send("POST", "/api/auth/keys", {"name": "ha", "scopes": ["read"]}, token=self.signed_in(role="admin"))
+        self.assertNotIn("NEWKEYSECRET", (Path(self.dir) / SIGNINS.FILE).read_text())
+
+    def test_a_refused_key_change_is_answered(self):
+        with mock.patch.object(API_KEYS, "revoke", side_effect=ValueError("no such key")):
+            a = self.send("POST", "/api/auth/keys/revoke", {"id": "k9"}, token=self.signed_in(role="admin"))
+        self.assertEqual((400, {"error": "no such key"}), (a.status, a.body))
+        self.assertEqual([], self.history())
+
+    def test_keys_are_refused_when_relayed(self):
+        headers = self.relayed()
+        with mock.patch.object(API_KEYS, "manage") as manage:
+            for path in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit"):
+                with self.subTest(path=path):
+                    a = self.send("POST", path, {"id": "k1"}, headers=headers)
+                    self.assertEqual((403, {"error": "manage API keys in this Homestead's own app"}, []),
+                                     (a.status, a.body, a.cookies))
+        manage.assert_not_called()
+        self.assertEqual([], self.history())
+
+    def test_account_routes_answer_and_record(self):
+        token = self.signed_in(role="admin")
+        with mock.patch.object(AUTH, "create_user") as create, mock.patch.object(AUTH, "set_role") as role, \
+                mock.patch.object(AUTH, "delete_user") as delete, mock.patch.object(ALERTS, "forget_user") as forget:
+            a = self.send("POST", "/api/auth/users", {"username": " Robin ", "password": "x" * 16}, token=token)
+            create.assert_called_once_with(" Robin ", "x" * 16, role="operator")
+            self.assertEqual((200, {"ok": True, "users": [{"username": "robin"}]}, []), (a.status, a.body, a.cookies))
+            self.assertEqual(self.row("user-added", "robin", detail="as operator, by ada"), self.history()[0])
+            a = self.send("POST", "/api/auth/role", {"username": "robin", "role": "viewer"}, token=token)
+            role.assert_called_once_with("robin", "viewer", "ada")
+            self.assertEqual((200, {"ok": True, "users": [{"username": "robin"}]}), (a.status, a.body))
+            self.assertEqual(self.row("role", "robin", detail="now viewer, by ada"), self.history()[0])
+            a = self.send("POST", "/api/auth/users/delete", {"username": " Robin "}, token=token)
+            delete.assert_called_once_with(" Robin ", "ada")
+            forget.assert_called_once_with("robin")
+            self.assertEqual((200, {"ok": True, "users": [{"username": "robin"}]}), (a.status, a.body))
+            self.assertEqual(self.row("user-removed", " Robin ", detail="by ada"), self.history()[0])
+
+    def test_user_role_and_removal_rows_name_a_relayed_admin_in_words(self):
+        headers = self.relayed()
+        with mock.patch.object(AUTH, "create_user"), mock.patch.object(AUTH, "set_role"), \
+                mock.patch.object(AUTH, "delete_user"), mock.patch.object(ALERTS, "forget_user"):
+            for path, body, detail in (
+                    ("/api/auth/users", {"username": "robin", "password": "x" * 16, "role": "viewer"},
+                     "as viewer, by ada (via Office)"),
+                    ("/api/auth/role", {"username": "robin", "role": "operator"}, "now operator, by ada (via Office)"),
+                    ("/api/auth/users/delete", {"username": "robin"}, "by ada (via Office)")):
+                with self.subTest(path=path):
+                    a = self.send("POST", path, body, headers=headers)
+                    self.assertEqual(200, a.status)
+                    self.assertEqual(detail, self.history()[0]["detail"])
+
+    def test_refused_account_changes_are_answered_and_not_recorded(self):
+        token = self.signed_in(role="admin")
+        with mock.patch.object(AUTH, "create_user", side_effect=ValueError("that username is taken")):
+            a = self.send("POST", "/api/auth/users", {"username": "robin", "password": "x"}, token=token)
+        self.assertEqual((400, {"error": "that username is taken"}), (a.status, a.body))
+        with mock.patch.object(AUTH, "set_role", side_effect=PermissionError("you cannot demote yourself")):
+            a = self.send("POST", "/api/auth/role", {"username": "ada", "role": "viewer"}, token=token)
+        self.assertEqual((403, {"error": "you cannot demote yourself"}), (a.status, a.body))
+        with mock.patch.object(AUTH, "set_role") as role:
+            a = self.send("POST", "/api/auth/role", {"role": "viewer"}, token=token)
+        self.assertEqual((500, {"error": "'username'"}), (a.status, a.body))
+        role.assert_not_called()
+        with mock.patch.object(AUTH, "delete_user", side_effect=ValueError("no such user")), \
+                mock.patch.object(ALERTS, "forget_user") as forget:
+            a = self.send("POST", "/api/auth/users/delete", {"username": "nobody"}, token=token)
+        self.assertEqual((400, {"error": "no such user"}), (a.status, a.body))
+        forget.assert_not_called()
+        self.assertEqual([], self.history())
+
+    def test_an_unreadable_account_store_is_503(self):
+        token = self.signed_in(role="admin")
+        failure = AUTH.StoreUnavailable("the cluster did not answer")
+        body = {"error": "the cluster did not answer", "cause": getattr(failure, "cause", ""), "unavailable": True}
+        for path, target, name in (("/api/auth/keys", API_KEYS, "create"), ("/api/auth/users", AUTH, "create_user"),
+                                   ("/api/auth/role", AUTH, "set_role"), ("/api/auth/users/delete", AUTH, "delete_user")):
+            with self.subTest(path=path), mock.patch.object(target, name, side_effect=failure), \
+                    mock.patch.object(ALERTS, "forget_user") as forget:
+                a = self.send("POST", path, {"username": "robin", "role": "viewer", "name": "ha", "scopes": ["read"]},
+                              token=token)
+                self.assertEqual((503, body, []), (a.status, a.body, a.cookies))
+                forget.assert_not_called()
+        self.assertEqual([], self.history())
+
+    def test_only_an_admin_reaches_them(self):
+        for role in ("viewer", "operator"):
+            token = self.signed_in(user=role, role=role)
+            for path in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit", "/api/auth/users",
+                         "/api/auth/role", "/api/auth/users/delete"):
+                with self.subTest(role=role, path=path):
+                    a = self.send("POST", path, {"username": "robin"}, token=token)
+                    self.assertEqual((403, {"error": f"your role ({role}) cannot do this — admin required",
+                                            "role": role, "needed": "admin"}), (a.status, a.body))
+        a = self.send("POST", "/api/auth/users", {"username": "robin"}, token="nobody")
+        self.assertEqual((401, {"error": "not signed in", "auth": False}), (a.status, a.body))
+        self.assertEqual([], self.history())
+
+    def test_the_wrong_method_answers_as_today(self):
+        token = self.signed_in(role="admin")
+        none = (404, {"error": "no route"})
+        undeclared = (403, {"error": "this route has no declared authorization policy"})
+        for path, answer in (("/api/auth/keys/revoke", none), ("/api/auth/keys/edit", undeclared),
+                             ("/api/auth/role", none), ("/api/auth/users/delete", none)):
+            with self.subTest(path=path):
+                a = self.send("GET", path, token=token)
+                self.assertEqual((*answer, []), (a.status, a.body, a.cookies))
+
 class Home(unittest.TestCase):
     def test_signin_routes_are_declared_in_their_module(self):
         import homestead_routes as ROUTES
@@ -403,6 +544,28 @@ class Home(unittest.TestCase):
                                                                 "new": "b"}, "ada", "admin")
                     with self.assertRaises(PermissionError):
                         ROUTES.find(method, path).handler(request)
+        self.assertEqual([], calls)
+
+    def test_key_and_user_routes_are_declared_in_their_module(self):
+        import homestead_routes as ROUTES
+        for path in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit", "/api/auth/users",
+                     "/api/auth/role", "/api/auth/users/delete"):
+            with self.subTest(path=path):
+                self.assertEqual("homestead_auth_routes", getattr(ROUTES.find("POST", path), "module", None))
+                self.assertIn(path, server.ADMIN_ROUTES)        # listed from the module's role, not by hand
+
+    def test_an_in_process_account_change_without_a_connection_changes_nothing(self):
+        import homestead_routes as ROUTES
+        calls = []
+        record = lambda name: (lambda *a, **k: calls.append(name))
+        with mock.patch.object(AUTH, "create_user", record("create")), mock.patch.object(AUTH, "set_role", record("role")), \
+                mock.patch.object(AUTH, "delete_user", record("delete")), mock.patch.object(ALERTS, "forget_user", record("forget")), \
+                mock.patch.object(API_KEYS, "manage", record("keys")), mock.patch.object(SIGNINS, "record", record("history")):
+            for path in ("/api/auth/keys", "/api/auth/keys/revoke", "/api/auth/keys/edit", "/api/auth/users",
+                         "/api/auth/role", "/api/auth/users/delete"):
+                with self.subTest(path=path), self.assertRaises(PermissionError):
+                    ROUTES.find("POST", path).handler(ROUTES.Request("POST", path, {}, {"username": "robin", "role": "viewer"},
+                                                                     "ada", "admin"))
         self.assertEqual([], calls)
 
 
