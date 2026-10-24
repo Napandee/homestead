@@ -106,6 +106,30 @@ test("the old partial saves are gone", () => {
   for (const name of ["saveHealthSettings", "saveUpdateSettings", "saveSiteName"]) assert.equal(typeof ctx[name], "undefined", name);
 });
 
+test("turning metrics on asks first, since every API key can then read them; declined, nothing is saved", async () => {
+  for (const [answer, saved] of [[false, []], [true, [{ ...without(STORED, "info"), metrics: { enabled: true } }]]]) {
+    const { ctx, posts } = load();
+    const asked = [];
+    ctx.ask = async (text, options) => { asked.push([text, options]); return answer; };
+    ctx.selfHealthPaint = () => {};
+    await ctx.metricsSet(true);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0][0], /every API key/i);
+    assert.equal(asked[0][1].ok, "Turn on metrics");
+    assert.deepEqual(posts, saved);
+  }
+});
+
+test("turning metrics off acts at once: it only narrows who can read", async () => {
+  const { ctx, posts } = load();
+  let asked = 0;
+  ctx.ask = async () => { asked++; return false; };
+  ctx.selfHealthPaint = () => {};
+  await ctx.metricsSet(false);
+  assert.equal(asked, 0);
+  assert.deepEqual(posts, [{ ...without(STORED, "info"), metrics: { enabled: false } }]);
+});
+
 // The save bar's form: every section drawn, as the page opened with it.
 function form(ctx, values) {
   const fields = { "#set_cpu_warn": { value: "60" }, "#set_cpu_crit": { value: "90" }, "#set_memory_warn": { value: "80" },

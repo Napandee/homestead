@@ -127,6 +127,30 @@ without I, L, O and U. The code stops working once the first administrator
 exists, and Homestead then deletes the Secret; clear `setupCode` from your Helm
 values after install (a code that was used once never works again anyway).
 
+A code typed on the command line stays in your shell history, and Helm keeps
+every value it is given, `--set` or a values file, in the release, where
+`helm get values` shows it. To keep it out of your history, read it in
+without it showing, then pass the variable on. For the installer (`sudo`
+drops the environment unless told to keep it):
+
+```bash
+read -rsp 'Setup code: ' HS_SETUP_CODE; echo; export HS_SETUP_CODE
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo --preserve-env=HS_SETUP_CODE sh
+unset HS_SETUP_CODE
+```
+
+Or for Helm, after the same `read`:
+
+```bash
+helm upgrade --install homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead <your other flags> --set setupCode="$HS_SETUP_CODE"
+unset HS_SETUP_CODE
+```
+
+While Helm runs, its command line (with the code) can be seen by other users of
+that machine, as with any `--set`. Clearing `setupCode` after install (above)
+takes it out of the release's current values; earlier revisions keep it until
+Helm drops them, but a code that was used once never works again.
+
 That account can then add others under **Settings → Users and access → Add user**:
 
 | Role | Can |

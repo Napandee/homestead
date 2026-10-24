@@ -14,6 +14,7 @@ function fixture({ base = "/", search = "" } = {}) {
   fields["#gatebox"] = element();
   fields["#gatebox"].contains = el => Object.entries(fields).some(([key, value]) => key.startsWith("#lg_") && value === el);
   Object.defineProperty(fields["#gatebox"], "innerHTML", { set(html) {
+    ctx.gateHtml = html;
     for (const key of Object.keys(fields)) if (key.startsWith("#lg_")) delete fields[key];
     for (const [, id] of html.matchAll(/id="(lg_\w+)"/g)) fields["#" + id] = element();
   } });
@@ -22,7 +23,7 @@ function fixture({ base = "/", search = "" } = {}) {
     localStorage: { getItem: () => null, setItem() {} },
     fetch: async (url, options) => {
       ctx.requests.push([url, options && options.body ? JSON.parse(options.body) : null]);
-      if (url !== "/api/auth/logout") return { ok: true, json: async () => response };
+      if (url !== "/api/auth/logout") return { ok: !response.error, status: response.error ? 403 : 200, json: async () => response };
       if (logout instanceof Error) throw logout;
       return { ...logout, json: async () => ({}) };
     },
@@ -211,4 +212,19 @@ test("setup without a code asks for it before sending anything (#737)", async ()
 test("sign-in has no setup code field", () => {
   const t = fixture(); t.ctx.loginForm();
   assert.equal(t.fields["#lg_code"], undefined);
+});
+
+test("the setup code hint names the namespace the server named, once it has", async () => {
+  const t = fixture(); t.ctx.loginForm("", true);
+  assert.match(t.ctx.gateHtml, /kubectl -n lab get secret homestead-setup/);
+  assert.match(t.ctx.gateHtml, /Helm: use the release's namespace/);
+  t.fields["#lg_user"].value = "robin"; t.fields["#lg_pass"].value = t.fields["#lg_pass2"].value = "a-long-password";
+  t.fields["#lg_code"].value = "ABCD-EFGH-JK";
+  t.respond({ error: "That setup code is not right. It is in the Secret homes/homestead-setup; show it with: "
+    + "kubectl -n homes get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d" });
+  await t.ctx.doSetup();
+  const hint = between(t.ctx.gateHtml, 'id="lg_code_hint"', "</details>");
+  assert.match(hint, /kubectl -n homes get secret homestead-setup/);
+  assert.doesNotMatch(hint, /-n lab\b/);
+  assert.doesNotMatch(hint, /Helm: use the release's namespace/);
 });
