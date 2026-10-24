@@ -21,6 +21,9 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_snapshot_files as S
 import homestead_route_policy as POLICY
+import homestead_kube as KUBE
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 
 class BrowserTests(unittest.TestCase):
@@ -264,6 +267,74 @@ class BrowserTests(unittest.TestCase):
                 self.assertEqual('closing', S.close('lab', self.name)['state'])
             self.assertTrue(all(c.args[0] == self.paths[3] for c in delete.call_args_list))
         self.assertIn(self.paths[2], self.objects)
+
+    def session_in_fake_cluster(self):
+        """Move the started session's objects into the fake API server, which
+        checks DELETE preconditions, finalizers and garbage collection."""
+        mine = set(self.paths) | {S.SC + self.name}
+        kube = self.enterContext(Kube(*[v for k, v in self.objects.items() if k in mine]))
+        self.enterContext(patch.object(OPS, 'DATA_DIR', self.enterContext(tempfile.TemporaryDirectory())))
+        self.enterContext(patch.multiple(S, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.enterContext(patch.object(S.CSI, 'ksend', KUBE.ksend))
+        return kube
+
+    def test_kubelet_status_updates_while_closing_do_not_make_close_fail(self):
+        # Row 98 C: kubelet updates the browser pod between close()'s read and
+        # its DELETE, and again while the pod terminates.
+        self.start()
+        kube = self.session_in_fake_cluster()
+        pod = self.paths[3]
+        def status(phase, *_):
+            kube('PATCH', pod, {'status': {'phase': phase}}, ctype='application/merge-patch+json')
+        kube('PATCH', pod, {'metadata': {'finalizers': ['example.com/drain']}}, ctype='application/merge-patch+json')
+        kube.react('DELETE', pod, lambda *_: status('Running'))  # None: the fake still answers the DELETE
+        self.assertEqual('closing', S.close('lab', self.name)['state'])
+        status('Succeeded')
+        self.assertEqual('closing', S.close('lab', self.name)['state'])
+        self.assertEqual(1, sum(m == 'DELETE' and p == pod for m, p, *_ in kube.writes))
+        kube('PATCH', pod, {'metadata': {'finalizers': None}}, ctype='application/merge-patch+json')
+        for _ in range(6):
+            if S.close('lab', self.name)['state'] == 'closed':
+                break
+        self.assertEqual('closed', S.close('lab', self.name)['state'])
+        deletes = [(p, sorted(b['preconditions'])) for m, p, b, _ in kube.writes if m == 'DELETE']
+        # The claim never bound here, so it keeps the version (see the next test).
+        self.assertEqual([(self.paths[3], ['uid']), (self.paths[2], ['resourceVersion', 'uid']), (self.paths[1], ['uid']),
+                          (S.SC + self.name, ['uid']), (self.paths[0], ['uid'])], deletes)
+
+    def test_an_unbound_claim_that_binds_before_its_delete_is_checked_again(self):
+        # close() checks the claim's volume binding on its read. An unbound
+        # claim can bind before the DELETE; that new binding has not been
+        # checked against the live volume, so the DELETE keeps the version.
+        self.start()
+        kube = self.session_in_fake_cluster()
+        claim = self.paths[2]
+        kube('DELETE', self.paths[3])
+        kube.react('DELETE', claim, lambda *_: kube('PATCH', claim, {'spec': {'volumeName': 'copy-pv'}},
+                                                    ctype='application/merge-patch+json') and None)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            S.close('lab', self.name)
+        self.assertEqual(409, error.exception.code)
+        self.assertEqual('copy-pv', kube.object(claim)['spec']['volumeName'])
+
+    def test_a_replaced_browser_pod_is_not_deleted_by_close(self):
+        self.start()
+        kube = self.session_in_fake_cluster()
+        pod = self.paths[3]
+        replaced = []
+        def replace(*_):
+            if replaced:
+                return
+            replaced.append(True)
+            obj = kube.object(pod)
+            kube('DELETE', pod)
+            obj['metadata'].update(uid='replacement', resourceVersion=None)
+            kube.add(obj)
+        kube.react('DELETE', pod, replace)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            S.close('lab', self.name)
+        self.assertEqual(409, error.exception.code)
+        self.assertEqual('replacement', kube.object(pod)['metadata']['uid'])
 
     def test_all_routes_require_admin(self):
         for method, action in [('GET', a) for a in ('plan','status','list','download')] + [('POST', a) for a in ('start','close')]:

@@ -96,6 +96,15 @@ class VolumeDeletionTests(unittest.TestCase):
         self.assertNotIn("vol", self.cache)
         self.assertIn("unrelated", self.cache)
 
+    def test_orphan_longhorn_volume_delete_keeps_the_full_version_check(self):
+        # Row 98 J: user data. Unlike Homestead's own helpers, a Longhorn
+        # volume changed since the preview must not be deleted.
+        plan = {"namespace": "lab", "name": "media", "uid": "lh-uid", "resource_version": "42",
+                "pv": {"name": "", "uid": ""}, "longhorn": {"name": "lh-1"}}
+        volumes.delete_orphan(plan, {"action": "delete_data", "pv_uid": ""})
+        self.assertEqual(("DELETE", "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-1"), self.sent[0][:2])
+        self.assertEqual({"uid": "lh-uid", "resourceVersion": "42"}, self.sent[0][2]["preconditions"])
+
     def test_claim_only_delete_forces_retain_policy(self):
         self.claim(policy="Delete", actual=1024)
 

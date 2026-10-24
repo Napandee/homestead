@@ -1,6 +1,8 @@
 """A restart cannot repeat a restore into an unrelated or deleted claim."""
 import sys
+import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -8,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_csi_restore as CSI
 import homestead_kube as KUBE
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 
 class RestoreRecoveryTests(unittest.TestCase):
@@ -108,6 +112,59 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.assertIn("next mounted", result[2])
         self.pvc["status"]["capacity"]["storage"] = "8Gi"
         self.assertEqual("succeeded", CSI.finish_resize(self.pvc, self.cfg)[0])
+
+
+class CleanupControllerRaceTests(unittest.TestCase):
+    """Row 98 B: snapshot-controller writes the restore snapshot and its
+    content while Homestead removes them."""
+    def setUp(self):
+        self.enterContext(patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("snapshot.storage.k8s.io",)))
+        self.kube.react("GET", CSI.API, lambda *_: {"kind": "APIResourceList", "groupVersion": "snapshot.storage.k8s.io/v1"})
+        self.enterContext(patch.multiple(CSI, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.name = CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem")
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                       "metadata": {"name": "example-data", "namespace": "lab"},
+                       "spec": {"dataSource": {"name": self.name, "kind": "VolumeSnapshot", "apiGroup": "snapshot.storage.k8s.io"}},
+                       "status": {"phase": "Bound"}})
+        self.snapshot = CSI.API + "/namespaces/lab/volumesnapshots/" + self.name
+        self.content = CSI.API + "/volumesnapshotcontents/" + self.name
+
+    def change(self, path, body):
+        self.kube("PATCH", path, body, ctype="application/merge-patch+json")
+
+    def deletes(self, path):
+        return [b["preconditions"] for m, p, b, _ in self.kube.writes if m == "DELETE" and p == path]
+
+    def test_content_is_removed_after_the_controller_annotates_it_for_the_snapshot_delete(self):
+        # snapshot-controller marks the content when its snapshot is deleted,
+        # after cleanup read the content and before it deletes it.
+        self.kube.react("DELETE", self.snapshot, lambda *_: self.change(self.content, {"metadata": {"annotations": {
+            "snapshot.storage.kubernetes.io/volumesnapshot-being-deleted": "yes"}}}))
+        self.assertEqual([self.name], CSI.cleanup())
+        self.assertIsNone(self.kube.object(self.snapshot))
+        self.assertIsNone(self.kube.object(self.content))
+        self.assertEqual([{"uid": "uid-1"}], self.deletes(self.content))
+
+    def test_terminating_snapshot_and_content_are_not_deleted_again(self):
+        for path in (self.snapshot, self.content):
+            self.change(path, {"metadata": {"finalizers": ["snapshot.storage.kubernetes.io/protection"]}})
+        self.kube.react("DELETE", self.snapshot, lambda *_: self.change(self.snapshot, {"status": {"readyToUse": False}}))
+        CSI.cleanup()
+        self.change(self.snapshot, {"status": {"readyToUse": True}})
+        CSI.cleanup()
+        self.assertEqual(1, len(self.deletes(self.snapshot)))
+        self.assertEqual(1, len(self.deletes(self.content)))
+        self.assertTrue(self.kube.object(self.snapshot)["metadata"].get("deletionTimestamp"))
+
+    def test_replaced_content_with_a_new_uid_is_still_refused(self):
+        content = KUBE.kget(self.content)
+        self.kube("DELETE", self.content)
+        self.kube.add({**content, "metadata": {**content["metadata"], "uid": "replacement"}})
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            CSI._delete(self.content, content)
+        self.assertEqual(409, error.exception.code)
+        self.assertEqual("replacement", self.kube.object(self.content)["metadata"]["uid"])
 
 
 if __name__ == "__main__":

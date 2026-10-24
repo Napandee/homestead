@@ -1,6 +1,7 @@
 """Transfer cleanup reclaims owned artifacts and survives interrupted deletion."""
 import copy
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -20,6 +21,9 @@ import homestead_move_source as SOURCE
 import homestead_transfer_cleanup as CLEANUP
 import test_move_flow as fixtures
 from test_move_flow import FakeCluster
+import homestead_kube as K
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 ID, OTHER, UID = "0123456789ab", "abcdef012345", "original-source-uid"
 
@@ -56,7 +60,10 @@ class API(FakeCluster):
 
     @staticmethod
     def assert_fence(meta, body):
-        if body.get("preconditions") != {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}:
+        # The API server checks only the preconditions a DELETE gives; cleanup
+        # always gives the uid (row 98).
+        wanted = body.get("preconditions") or {}
+        if "uid" not in wanted or any(meta.get(key) != value for key, value in wanted.items()):
             raise urllib.error.HTTPError("", 409, "resource replaced", {}, None)
 
 
@@ -503,6 +510,135 @@ class TransferCleanupFlowTests(unittest.TestCase):
         self.assertEqual(set(), self.artifact_paths())
         self.assertEqual("Always", self.cluster.objects[self.vm_path()]["spec"]["runStrategy"])
         self.assertEqual("Halted", self.cluster.objects[self.vm_path("copied")]["spec"]["runStrategy"])
+
+
+def changes_before_delete(kube, path, change, times=None):
+    """A controller writes the object between Homestead's read and its DELETE
+    (on every DELETE, or only the first times)."""
+    left = [times]
+    def answer(method, _path, body):
+        if left[0] is not None:
+            if left[0] <= 0:
+                return
+            left[0] -= 1
+        kube("PATCH", path, change, ctype="application/merge-patch+json")
+    kube.react("DELETE", path, answer)
+
+
+class ControllerRaceTests(unittest.TestCase):
+    """Row 98 A: longhorn-manager and snapshot-controller keep writing the
+    artifacts a transfer stamped; that must not hold cleanup."""
+    def setUp(self):
+        # The fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under its DATA_DIR.
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+
+    def longhorn(self, kind, name, **fields):
+        return {"apiVersion": "longhorn.io/v1beta2", "kind": kind, **fields,
+                "metadata": {"name": name, "namespace": "longhorn-system",
+                             "annotations": CLEANUP.ownership(ID, UID)}}
+
+    def test_status_change_before_a_backup_delete_does_not_hold_the_first_pass(self):
+        with Kube(self.longhorn("Backup", "disk-backup", spec={"snapshotName": "disk-snapshot"})) as kube:
+            backup = CLEANUP.LH + "/backups/disk-backup"
+            changes_before_delete(kube, backup, {"status": {"state": "Completed", "progress": 100}})
+            self.assertEqual([], CLEANUP.source(K.kget, K.ksend, ID, UID)["pending"])
+            self.assertIsNone(kube.object(backup))
+            deletes = [b["preconditions"] for m, p, b, _ in kube.writes if m == "DELETE"]
+            self.assertEqual([["uid"]], [sorted(d) for d in deletes])
+
+    def test_in_use_checked_artifacts_keep_the_version_and_retry_after_a_change(self):
+        # A Snapshot or (backup) backing image is deleted only after a check
+        # that nothing uses it. Its resourceVersion stays in the DELETE, and a
+        # change since that check (409) leaves it pending for the next pass,
+        # which checks its users again, instead of failing the cleanup.
+        image = self.longhorn("BackupBackingImage", "base-image")
+        with Kube(self.longhorn("Snapshot", "disk-snapshot", spec={"volume": "source-disk"}), image) as kube:
+            snapshot, backup_image = CLEANUP.LH + "/snapshots/disk-snapshot", CLEANUP.LH + "/backupbackingimages/base-image"
+            changes_before_delete(kube, snapshot, {"status": {"readyToUse": True}}, times=1)
+            changes_before_delete(kube, backup_image, {"status": {"progress": 100}}, times=1)
+            result = CLEANUP.source(K.kget, K.ksend, ID, UID)
+            self.assertEqual(["snapshot disk-snapshot", "image backup base-image"], result["pending"])
+            self.assertIsNotNone(kube.object(snapshot))
+            self.assertIsNotNone(kube.object(backup_image))
+            self.assertEqual([], CLEANUP.source(K.kget, K.ksend, ID, UID)["pending"])
+            self.assertIsNone(kube.object(snapshot))
+            self.assertIsNone(kube.object(backup_image))
+            deletes = [sorted(b["preconditions"]) for m, p, b, _ in kube.writes if m == "DELETE"]
+            self.assertEqual([["resourceVersion", "uid"]] * 4, deletes)
+
+    def test_a_cancelled_moves_backing_image_keeps_the_version_and_retries(self):
+        image = self.longhorn("BackingImage", "restored-image")
+        with Kube(image) as kube:
+            path = CLEANUP.LH + "/backingimages/restored-image"
+            kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
+                      "metadata": {"name": "other", "namespace": "longhorn-system"}, "spec": {}})
+            changes_before_delete(kube, path, {"status": {"diskFileStatusMap": {}}}, times=1)
+            move = {"id": ID, "claims": []}
+            self.assertEqual(["backing image restored-image"], CLEANUP.destination(K.kget, K.ksend, move, cancelled=True)["pending"])
+            self.assertTrue(CLEANUP.destination(K.kget, K.ksend, move, cancelled=True)["complete"])
+            deletes = [sorted(b["preconditions"]) for m, p, b, _ in kube.writes if m == "DELETE"]
+            self.assertEqual([["resourceVersion", "uid"]] * 2, deletes)
+
+    def test_terminating_artifact_is_not_deleted_again(self):
+        backup = self.longhorn("Backup", "disk-backup")
+        backup["metadata"]["finalizers"] = ["longhorn.io"]
+        with Kube(backup) as kube:
+            path = CLEANUP.LH + "/backups/disk-backup"
+            changes_before_delete(kube, path, {"status": {"state": "Deleting"}})
+            self.assertFalse(CLEANUP.source(K.kget, K.ksend, ID, UID)["complete"])
+            kube("PATCH", path, {"status": {"progress": 50}}, ctype="application/merge-patch+json")
+            self.assertFalse(CLEANUP.source(K.kget, K.ksend, ID, UID)["complete"])
+            self.assertEqual(1, sum(m == "DELETE" for m, *_ in kube.writes))
+
+    def test_same_name_replacement_with_a_new_uid_is_still_refused(self):
+        with Kube(self.longhorn("Snapshot", "disk-snapshot")) as kube:
+            path = CLEANUP.LH + "/snapshots/disk-snapshot"
+            original = K.kget(path)
+            kube("DELETE", path)
+            kube.add(self.longhorn("Snapshot", "disk-snapshot"))
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                CLEANUP.delete(K.kget, K.ksend, path, original)
+            self.assertEqual(409, error.exception.code)
+            self.assertIsNotNone(kube.object(path))
+
+    def test_destination_workloads_claims_and_credentials_keep_the_full_version_check(self):
+        # Only the transfer's Longhorn/CSI artifacts are delete by uid alone.
+        # What a move created at the destination (workload, Service, claim)
+        # and its backup credentials can be edited or adopted by a person, so
+        # their DELETE still pins the resourceVersion.
+        mark = {"annotations": CLEANUP.ownership(ID, UID)}
+        service = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "web", "namespace": "dest", **mark}}
+        claim = {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "data", "namespace": "dest", **mark}}
+        secret = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "transfer-creds", "namespace": "longhorn-system", **mark}}
+        with Kube(service, claim, secret) as kube, \
+                mock.patch.multiple(STATE, kget=K.kget, ksend=K.ksend, _store=mock.Mock(), DATA_DIR=OPS.DATA_DIR), \
+                mock.patch.object(STATE, "LH") as lh, mock.patch.object(TARGET, "_target_journal", return_value={}):
+            lh.backup_target_state.return_value = {"harvester": False, "value": {"credentialSecret": "other"}}
+            PHASE._remove_created({"id": ID, "kind": "volume", "namespace": "dest", "name": "data",
+                                   "claims": [{"claim": "data"}]})
+            TARGET._release_target({"id": ID, "status": "cancelled", "transfer_target": {"secret": "transfer-creds"}})
+            deletes = {p.rsplit("/", 1)[1]: sorted(b["preconditions"]) for m, p, b, _ in kube.writes if m == "DELETE"}
+            self.assertEqual({"web": ["resourceVersion", "uid"], "data": ["resourceVersion", "uid"],
+                              "transfer-creds": ["resourceVersion", "uid"]}, deletes)
+
+    def test_restore_snapshot_content_is_removed_after_the_controller_annotates_it(self):
+        with Kube(groups=("snapshot.storage.k8s.io",)) as kube:
+            with mock.patch.multiple(CSI, kget=K.kget, ksend=K.ksend):
+                name = CSI.import_backup("dest", "os-disk", "backup-a", "disk-a", "s3://example/backup-a", "Block", ID)
+            kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                      "metadata": {"name": "os-disk", "namespace": "dest"},
+                      "spec": {"dataSource": {"name": name, "kind": "VolumeSnapshot", "apiGroup": "snapshot.storage.k8s.io"}},
+                      "status": {"phase": "Bound"}})
+            snapshot = CSI.API + "/namespaces/dest/volumesnapshots/" + name
+            content = CSI.API + "/volumesnapshotcontents/" + name
+            def annotate(method, _path, body):
+                kube("PATCH", content, {"metadata": {"annotations": {"snapshot.storage.kubernetes.io/volumesnapshot-being-deleted": "yes"}}},
+                     ctype="application/merge-patch+json")
+            kube.react("DELETE", snapshot, annotate)
+            self.assertEqual([], CSI.cleanup_transfer(K.kget, K.ksend, ID))
+            self.assertIsNone(kube.object(snapshot))
+            self.assertIsNone(kube.object(content))
 
 
 class SourceCleanupRouteTests(unittest.TestCase):
