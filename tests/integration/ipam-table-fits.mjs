@@ -12,7 +12,7 @@ try{for(const width of [1440,1366,1280,1100]){
  await page.goto(`${base}/networking?tab=ip&demo=1`);await page.locator('.ipam-table tbody tr.ipam-row').first().waitFor();
  const fit=await page.locator('.ipam-table').evaluate(table=>{
   const box=table.closest('.tblwrap'),edge=box.getBoundingClientRect().right;
-  const outside=[...table.querySelectorAll('.ip-seen .pill, .ip-seen .tag')]
+  const outside=[...table.querySelectorAll('.ip-seen .ui-chip, .ip-seen .pill, .ip-seen .tag')]
    .filter(chip=>chip.getBoundingClientRect().right>edge+1).map(chip=>chip.textContent.trim());
   return {box:box.clientWidth,table:box.scrollWidth,outside,cards:getComputedStyle(table.querySelector('thead')).display==='none'};
  });

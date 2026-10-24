@@ -289,8 +289,8 @@ function hardwareDef(id) {
 const hardwareName = id => hardwareDef(id).name;
 const hardwareTags = ids => (ids || []).map(id => {
   const f = hardwareDef(id);
-  return `<span class="tag hw" title="${esc(f.host_path || "Configured hardware feature")}">${esc(f.name)}</span>`;
-}).join("");
+  return UI.chip(f.name, "hw", { tip: f.host_path || "Configured hardware feature" });
+}).join(" "); // a space, as .tag's margin gave, where the row has no gap
 function hardwareChoices(cls, selected = []) {
   const chosen = new Set(selected || []);
   const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
@@ -298,8 +298,8 @@ function hardwareChoices(cls, selected = []) {
     const hosts = nodes.filter(n => (n.hardware || {})[f.id]).map(n => n.name);
     return `<label class="switch hwchoice">
     <input type="checkbox" class="${esc(cls)}" data-hwid="${esc(f.id)}" ${chosen.has(f.id) ? "checked" : ""}>
-    <span><b>${esc(f.name)}</b>${f.builtin ? ' <span class="tag">built in</span>' : ""}
-    <span class="tag hw">${esc(f.host_path)} → ${esc(f.container_path || f.host_path)}</span>
+    <span><b>${esc(f.name)}</b>${f.builtin ? ` ${UI.chip("built in", "neutral")}` : ""}
+    ${UI.chip(`${f.host_path} → ${f.container_path || f.host_path}`, "hw")}
     ${f.usb_ids?.length ? `<span class="dim xs"> USB ${esc(f.usb_ids.join(", "))}</span>` : ""}
     <span class="dim xs hw-hosts">${hosts.length ? `${hosts.length} host${hosts.length === 1 ? "" : "s"}: ${esc(hosts.map(x => x.replace("harvester-", "")).join(", "))}` : "no eligible host detected"}</span></span></label>`;
   }).join("");

@@ -362,7 +362,7 @@ window.api = async (path, opts) => {
 
 /* A role is not a state, so it is not coloured: the word says which. */
 function roleClass(r) {
-  return "pill neutral";
+  return "ui-chip neutral";
 }
 function paintWho() {
   if (!ME) return;

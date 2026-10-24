@@ -3,9 +3,9 @@ let operationTimer = null;
 let operationPanelOpen = false;
 
 const operationActive = operation => !["succeeded", "failed", "cancelled"].includes(operation.status);
-// #543 M3: answer "bad"/"neutral" here once views-vms.js draws its job pills with UI.chip; it still builds `pill ${…}` classes from this.
-const operationTone = status => status === "succeeded" ? "ok" : status === "failed" ? "crit" :
-  status === "cancelled" ? "low" : "warn";
+// A job's chip tone (UI.chip), here and in the VM imports list.
+const operationTone = status => status === "succeeded" ? "ok" : status === "failed" ? "bad" :
+  status === "cancelled" ? "neutral" : "warn";
 
 function operationAge(value) {
   if (!value) return "";
