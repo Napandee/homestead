@@ -68,6 +68,7 @@ class Cluster:
         self.managers = [{'metadata': {'name': 'im-v2'}, 'spec': {'nodeID': 'node-1', 'dataEngine': 'v2', 'type': 'aio'},
                           'status': {'currentState': 'running'}}]
         self.volumes = {}; self.replicas = []; self.engines = []; self.control = None
+        self.backingimages = []; self.orphans = []; self.store_devices = {}
         self.volume('volume-data', 100)
         self.facts = HOST_FACTS; self.blank = 'VERIFIED\n'
         REVIEW.bind(lambda: b'test-only-review-key')
@@ -99,6 +100,8 @@ class Cluster:
         if path == V.LH + '/replicas': return copy.deepcopy({'items': self.replicas})
         if path == V.LH + '/volumes': return copy.deepcopy({'items': list(self.volumes.values())})
         if path == V.LH + '/engines': return copy.deepcopy({'items': self.engines})
+        if path == V.LH + '/backingimages': return copy.deepcopy({'items': self.backingimages})
+        if path == V.LH + '/orphans': return copy.deepcopy({'items': self.orphans})
         if path == V.LH + '/instancemanagers': return copy.deepcopy({'items': self.managers})
         if path.startswith(V.LH + '/settings/'): return {'value': self.settings[path.rsplit('/', 1)[1]]}
         if '/instancemanagerupgradecontrols/' in path and self.control is not None: return self.control
@@ -132,6 +135,10 @@ class Cluster:
             return {}
         raise AssertionError((method, path))
     def host(self, node, script, **options):
+        if 'echo STORECHECK' in script:
+            device = next(line.split()[1] for line in self.facts.splitlines() if line.startswith('DEVICE '))
+            stores = self.lh[node]['spec']['disks']
+            return '\n'.join(['STORECHECK'] + ['STORE ' + name + ' ' + self.store_devices.get(name, device if name == 'data' else '/dev/sdc') for name, spec in stores.items() if spec.get('diskType', 'filesystem') == 'filesystem'] + ['STORESEND']), ''
         return (self.blank if 'echo VERIFIED' in script else self.facts), ''
     def review(self): return V.review({'node': 'node-1', 'disk': 'data'})
     def start(self, plan=None):
@@ -403,8 +410,9 @@ class HostShellTests(unittest.TestCase):
             'lsblk': r'case "$*" in *SERIAL*) echo "${TEST_SERIAL:-TEST-DISK-01}";; *WWN*) echo test-wwn;; *TYPE*) echo disk;; *NAME*) echo "$FIXTURE/dev/sdb";; *MOUNTPOINT*) :;; *) exit 2;; esac',
             'blockdev': 'echo ' + str(1000 * GB),
             'blkid': r'case "$*" in *" -p "*|-p*) exit 2;; *) echo "${TEST_UUID:-fs-data}";; esac',
-            'findmnt': r'case "$*" in *FSROOT*) echo /;; *"--mountpoint"*SOURCE*) echo "$FIXTURE/dev/sdb";; *"--target"*) echo /dev/fixture-other;; *TARGET*) echo "$FIXTURE/mnt/data";; *) exit 2;; esac',
+            'findmnt': r'case "$*" in *OPTIONS*) echo ro;; *FSROOT*) echo /;; *"--mountpoint"*SOURCE*) echo "$FIXTURE/dev/sdb";; *"--target"*) echo /dev/fixture-other;; *TARGET*) echo "$FIXTURE/mnt/data";; *) exit 2;; esac',
             'umount': r'[ "${TEST_BUSY:-no}" != yes ] || exit 1; echo unmounted >> "$FIXTURE/trace"',
+            'mount': r'[ "${TEST_READONLY_FAIL:-no}" != yes ] || exit 1; if [ "${TEST_LATE_DATA:-no}" = yes ]; then mkdir -p "$FIXTURE/mnt/data/replicas"; echo data > "$FIXTURE/mnt/data/replicas/late"; fi',
             'wipefs': r'[ "$(cat "$FIXTURE/var/lib/homestead/disk-v2/' + 'b' * 24 + r'")" = started ] || exit 99; echo wiped >> "$FIXTURE/trace"',
             'systemctl': 'exit 0',
         }
@@ -437,6 +445,14 @@ class HostShellTests(unittest.TestCase):
         (self.root / 'mnt/data/user-file').write_text('keep')
         result = self.run_script(); self.assertNotEqual(result.returncode, 0)
         self.assertIn('Other files appeared', result.stdout); self.assertEqual(self.trace(), '')
+
+    def test_late_replica_data_and_readonly_failure_never_reach_erase(self):
+        for options in ({'TEST_READONLY_FAIL':'yes'}, {'TEST_LATE_DATA':'yes'}):
+            with self.subTest(options=options):
+                result = self.run_script(**options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.trace(), '')
+                self.assertEqual((self.root / 'etc/fstab').read_text(), self.initial)
 
 
 if __name__ == '__main__': unittest.main()

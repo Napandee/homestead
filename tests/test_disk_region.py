@@ -83,6 +83,30 @@ class RegionConversionTests(unittest.TestCase):
         for key, value in [('REGION', ''), ('REGION_PATH', '/dev/nvme0n1'), ('PARENTS', ''), ('PARENTS', '/dev/../root'), ('KIND', 'crypt')]:
             with self.subTest(key=key, value=value), self.assertRaises(ValueError): R.facts({**base, key: value})
 
+    def test_another_registration_on_the_filesystem_blocks_even_without_replicas(self):
+        self.cluster.facts = region()
+        self.cluster.store_devices['spare'] = '/dev/dm-1'
+        with self.assertRaisesRegex(ValueError, 'Other V1 stores.*spare'): self.cluster.review()
+        self.assertFalse(self.cluster.writes)
+
+    def test_late_store_or_orphan_or_backing_image_stops_dispatch_after_approval(self):
+        for kind in ('store', 'orphan', 'backing-image'):
+            with self.subTest(kind=kind):
+                self.cluster = Cluster(); self.cluster.facts = region()
+                self.host_mock.side_effect = self.cluster.host
+                self.cluster.awaiting(); self.cluster.prepare()
+                if kind == 'store': self.cluster.store_devices['spare'] = '/dev/dm-1'
+                if kind == 'orphan': self.cluster.orphans = [{'metadata': {'name':'orphan-data'}, 'spec': {'nodeID':'node-1','parameters': {'DiskUUID':'disk-source-uuid'}}}]
+                if kind == 'backing-image': self.cluster.backingimages = [{'metadata': {'name':'image-data'}, 'spec': {'diskFileSpecMap': {'disk-source-uuid':{}}}}]
+                self.cluster.tick()
+                self.assertFalse(self.cluster.jobs)
+
+    def test_disappeared_volume_is_not_assumed_deliberately_deleted(self):
+        self.cluster.facts = region(); self.cluster.awaiting()
+        self.cluster.volumes.clear()
+        with self.assertRaisesRegex(ValueError, 'disappeared'): self.cluster.prepare()
+        self.assertFalse(self.cluster.jobs)
+
 
 @unittest.skipUnless(sys.platform == 'linux', 'shell fixture uses Linux tools')
 class RegionShellTests(unittest.TestCase):

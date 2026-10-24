@@ -165,7 +165,8 @@ done
 [ -f "$P/longhorn-disk.cfg" ] && [ ! -L "$P/longhorn-disk.cfg" ] || fail 'Longhorn disk configuration is missing'
 echo "CONFIG $(tr -d '\n' < "$P/longhorn-disk.cfg")"
 # A dedicated Longhorn filesystem must not also hold unrelated user files.
-find "$P" -mindepth 1 -maxdepth 1 ! -name replicas ! -name backing-images ! -name backing-images-disk ! -name longhorn-disk.cfg ! -name lost+found -print | grep -q . && fail 'Other files on this filesystem need to be moved first'
+OTHER=$(find "$P" -mindepth 1 -maxdepth 1 ! -name replicas ! -name backing-images ! -name backing-images-disk ! -name longhorn-disk.cfg ! -name lost+found -print) || fail 'Filesystem contents cannot be inspected'
+[ -z "$OTHER" ] || fail 'Other files on this filesystem need to be moved first'
 [ -f /etc/fstab ] && [ ! -L /etc/fstab ] || fail 'The host fstab is not a regular file'
 awk -v p="$P" '$0 !~ /^[[:space:]]*#/ && $2==p && $4 ~ /x-systemd.automount/ {exit 1}' /etc/fstab || fail 'Disable the automatic mount before preparing this disk'
 for c in wipefs flock findmnt blkid blockdev sha256sum; do command -v "$c" >/dev/null || fail "Host tool $c is missing"; done
@@ -206,6 +207,42 @@ def _soft(v, setting):
                                   'replica-disk-soft-anti-affinity': 'replicaDiskSoftAntiAffinity',
                                   'replica-zone-soft-anti-affinity': 'replicaZoneSoftAntiAffinity'}[setting], 'ignored')
     return option == 'enabled' if option in ('enabled', 'disabled') else _setting(setting) == 'true'
+
+
+def _other_stores(node, lh, facts, selected):
+    """A registered alias/subdirectory is another owner, even with no replicas."""
+    stores = {name: spec for name, spec in (lh.get('spec', {}).get('disks') or {}).items()
+              if spec.get('diskType', 'filesystem') == 'filesystem'}
+    script = ['set -eu', 'echo STORECHECK']
+    for name, spec in stores.items():
+        path = spec.get('path')
+        if not isinstance(path, str) or not path.startswith('/') or '\n' in path:
+            raise ValueError('A V1 store path cannot be inspected; no erase is permitted')
+        script += ['S=$(findmnt -rn --target ' + shlex.quote(path) + ' -o SOURCE)',
+                   'D=$(readlink -f "$S")', '[ -b "$D" ]',
+                   'printf \'STORE %s %s\\n\' ' + shlex.quote(name) + ' "$D"']
+    script += ['echo STORESEND']
+    out, _ = HOST.run(node, '\n'.join(script), timeout=60)
+    if 'STORESEND' not in out.splitlines():
+        raise ValueError('Every V1 store must be reachable and inspected before erasing')
+    seen = {line.split()[1]: line.split()[2] for line in out.splitlines() if line.startswith('STORE ') and len(line.split()) == 3}
+    if set(seen) != set(stores):
+        raise ValueError('V1 store inventory is incomplete; no erase is permitted')
+    impacted = [name for name, device in seen.items() if device == facts['device'] and name != selected]
+    if impacted:
+        raise ValueError('Other V1 stores use this filesystem: ' + ', '.join(impacted) + '. Move or separately delete their data and remove these store registrations first')
+
+
+def _residual_claims(node, disk_uuid):
+    for image in _items(LH + '/backingimages'):
+        if any(disk_uuid in (image.get(section, {}).get(field) or {}) for section, field in (
+                ('spec', 'diskFileSpecMap'), ('status', 'diskFileStatusMap'))):
+            raise ValueError('Backing image ' + image['metadata']['name'] + ' still claims this disk; relocate or separately remove it first')
+    for orphan in _items(LH + '/orphans'):
+        spec = orphan.get('spec') or {}
+        params = spec.get('parameters') or {}
+        if spec.get('nodeID') == node and params.get('DiskUUID', params.get('diskUUID', disk_uuid)) == disk_uuid:
+            raise ValueError('Orphaned storage ' + orphan['metadata']['name'] + ' needs inspection and separate cleanup before erasing')
 
 
 def _placements(inv):
@@ -309,6 +346,7 @@ def review(body):
             return {'operation': public(existing)}
     inv = _inventory(node, disk)
     facts = _host_facts(inv['spec']['path'], node)
+    _other_stores(node, inv['lh'], facts, disk)
     if facts['longhorn_uuid'] != inv['status']['diskUUID']:
         raise ValueError('The mounted filesystem does not match this Longhorn disk')
     rows, blockers = _placements(inv)
@@ -405,6 +443,8 @@ def _verify_original(inv, ref):
 
 
 def _evacuated(inv, ref):
+    _other_stores(ref['node'], inv['lh'], ref['hardware'], ref['disk'])
+    _residual_claims(ref['node'], ref['disk_uuid'])
     mine = [r for r in inv['replicas'] if _on_disk(r, inv)]
     ref['remaining'] = max(len(mine), len(inv['status'].get('scheduledReplica') or {}))
     if ref['remaining'] or inv['status'].get('scheduledBackingImage'):
@@ -412,7 +452,7 @@ def _evacuated(inv, ref):
     for row in ref['volumes']:
         volume = inv['volumes'].get(row['volume'])
         if not volume:
-            continue  # a deliberately deleted volume no longer needs replicas
+            return False, row['volume'] + ': the tracked volume disappeared; stop and review its deletion and remaining files before starting a new preparation'
         if not _same_volume(volume, row):
             return False, row['volume'] + ': volume identity, size or replica target changed, or migration/expansion is active; stop and review again'
         status = volume.get('status') or {}
@@ -522,6 +562,20 @@ exec 9>"$R/lock-$(printf '%s' "$B" | sha256sum | cut -d' ' -f1)"
 flock -n 9 || fail 'Another preparation holds this device'
 J="$R/"__RECEIPT__
 [ ! -e "$J" ] && [ ! -L "$J" ] || fail 'An earlier erase attempt exists; it will not be repeated'
+echo 'Making the evacuated filesystem read-only for the final data check'
+mount -o remount,ro "$P" || fail 'Filesystem cannot be made read-only; no erase is permitted'
+OPTIONS=$(findmnt -rn --mountpoint "$P" -o OPTIONS) || fail 'Cannot verify read-only mount'
+case ",$OPTIONS," in *,ro,*) ;; *) fail 'Filesystem is not read-only';; esac
+OTHER=$(find "$P" -mindepth 1 -maxdepth 1 ! -name replicas ! -name backing-images ! -name backing-images-disk ! -name longhorn-disk.cfg ! -name lost+found -print) || fail 'Cannot inspect filesystem contents; no erase is permitted'
+[ -z "$OTHER" ] || fail 'Other files remain; filesystem is retained read-only for inspection'
+for sub in replicas backing-images backing-images-disk lost+found; do
+  [ ! -L "$P/$sub" ] || fail 'A storage directory is a symlink; filesystem is retained read-only'
+  [ ! -e "$P/$sub" ] || [ -d "$P/$sub" ] || fail 'Unexpected storage file; filesystem is retained read-only'
+  if [ -d "$P/$sub" ]; then
+    LEFT=$(find "$P/$sub" -mindepth 1 -print -quit) || fail 'Cannot inspect remaining storage files; no erase is permitted'
+    [ -z "$LEFT" ] || fail 'Replica, backing-image or orphan files remain; filesystem is retained read-only for separate cleanup'
+  fi
+done
 echo 'Unmounting the evacuated filesystem'
 umount "$P" || fail 'Filesystem is busy; no force or lazy unmount is used'
 cp -p /etc/fstab "$R/fstab-"__RECEIPT__
@@ -552,11 +606,6 @@ echo 'Device is blank; waiting for Homestead to register it with Longhorn V2'
         script = script.replace("# Lock this physical device", r'''# Accept a persistent LVM alias only when it resolves to the reviewed region.
 awk -v p="$P" '$0 !~ /^[[:space:]]*#/ && $2==p {print $1}' /etc/fstab | while read -r s; do
   [ "$s" = "UUID=$U" ] || [ "$(readlink -f "$s")" = "$D" ] || fail 'fstab source changed'
-done
-for sub in replicas backing-images backing-images-disk lost+found; do
-  [ ! -L "$P/$sub" ] || fail 'A storage directory is a symlink'
-  [ ! -e "$P/$sub" ] || [ -d "$P/$sub" ] || fail 'Unexpected storage file'
-  [ ! -d "$P/$sub" ] || [ -z "$(find "$P/$sub" -mindepth 1 -print -quit)" ] || fail 'Replica, backing-image or other files remain; clean them up before erasing'
 done
 # Lock this physical device''')
         script = script.replace('(($1!=u && $1!=d && $1!=b) || $4 ~ /x-systemd.automount/)', '($4 ~ /x-systemd.automount/)')
@@ -700,6 +749,8 @@ def _no_replicas(ref):
     probe = {'node': ref['node'], 'status': {'diskUUID': ref['disk_uuid']}, 'spec': ref['original_disk']}
     if any(_on_disk(r, probe) for r in _items(LH + '/replicas')):
         raise ValueError('A replica still refers to the evacuated disk; no erase is dispatched')
+    _other_stores(ref['node'], lh, ref['hardware'], None)
+    _residual_claims(ref['node'], ref['disk_uuid'])
     _upgrade_idle()
 
 
@@ -709,7 +760,7 @@ def _replacement_health(ref):
     for row in ref['volumes']:
         volume = volumes.get(row['volume'])
         if not volume:
-            continue
+            raise ValueError(row['volume'] + ': tracked volume disappeared; no erase is dispatched')
         if (not _same_volume(volume, row) or volume.get('status', {}).get('state') != 'attached'
                 or volume.get('status', {}).get('robustness') != 'healthy'
                 or len(_rw(inv, row['volume'])) < row['replicas']):

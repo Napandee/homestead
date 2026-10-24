@@ -230,6 +230,16 @@ automatically recreated. Keep the task and inspect its log, the device and
 the host receipt in `/var/lib/homestead/disk-v2` before recovering partial
 changes; unresolved tasks cannot be dismissed.
 
+Erasing is blocked while another V1 store registration uses the same filesystem,
+including an alias or nested folder. Backing-image claims, orphan records,
+remaining replica directories and unknown files also block it. Move the data,
+or delete it through its normal reviewed action and wait for cleanup; preparation
+never deletes volumes to make room. A tracked volume disappearing during
+evacuation requires a new review rather than being treated as a successful move.
+Immediately before unmounting, the helper makes the filesystem read-only and
+checks its contents again. If this final check fails, it keeps the filesystem
+read-only for inspection and does not erase it. The task log explains the blocker.
+
 Preparing a physical disk does not convert its volumes. Create a V2 storage
 class, then use **Change storage class** on each volume you want to move.
 That copies the volume and stops its workloads for the copy.
