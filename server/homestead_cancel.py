@@ -31,7 +31,8 @@ import homestead_helm as HELM
 import homestead_imports as IMP
 import homestead_kube as KUBE
 import homestead_longhorn as LH
-import homestead_move_engine as MOVE_ENGINE
+import homestead_move_actions as MOVE_ACTIONS
+import homestead_move_state as MOVE_STATE
 import homestead_names as NAMES
 import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
@@ -604,7 +605,7 @@ def service_cancel(item, _options):
 
 
 def move_plan(item):
-    move = MOVE_ENGINE._find((item.get("ref") or {}).get("move", ""))
+    move = MOVE_STATE._find((item.get("ref") or {}).get("move", ""))
     if not move:
         return {"mode": "forget", "needs": "admin", "keeps": ["This move's record is gone"]}
     return {"mode": "rollback", "needs": "admin", "severity": "high",
@@ -616,7 +617,7 @@ def move_plan(item):
 
 
 def move_cancel(item, _options):
-    moved = MOVE_ENGINE.abandon((item.get("ref") or {}).get("move", ""))
+    moved = MOVE_ACTIONS.abandon((item.get("ref") or {}).get("move", ""))
     return moved.get("message") or "Put back"
 
 

@@ -809,10 +809,12 @@ TOOLS = [
          "How an app or VM is checked: settings {kind, ns, name, mode (auto, tcp, http, off), port, path}.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/uptime/setting")),
     Tool("set_outage_actions", "Set outage actions", "containers:manage", CHANGE,
-         "What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook}}.",
+         "What to do when an app or VM is down: settings {kind, ns, name, actions {restart {after_min, max}, webhook, "
+         "format (generic, ntfy or gotify; generic if left out), lan (true lets it reach a LAN address; admins only)}}.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/monitoring/actions")),
     Tool("test_outage_webhook", "Test an outage webhook", "containers:manage", CHANGE,
-         "Sends a test call to the webhook an app's or VM's outage actions would call: settings {kind, ns, name, webhook}.",
+         "Sends a test call to the webhook an app's or VM's outage actions would call: settings {kind, ns, name, webhook, format}. "
+         "It needs an admin, so it waits for one to approve it.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/monitoring/actions/test")),
     # ---- #424: schedules
     Tool("list_schedules", "Scheduled jobs", "read", READ, "Scheduled jobs (CronJobs) and when they last ran.",

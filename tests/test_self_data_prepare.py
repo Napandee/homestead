@@ -371,6 +371,35 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaises(Held): self.tick()
         self.assertEqual(count, len(self.c.sent))
 
+    def churn_pod_on_read(self, change):
+        """Model kubelet: the binding pod changes right after every read of it."""
+        original = self.f.read
+        def read(path):
+            result = original(path)
+            if path == self.path("pods") and path in self.c.objects:
+                change(self.c.objects[path])
+            return result
+        self.f.read = read
+
+    def test_status_update_while_releasing_the_binding_pod_does_not_stop_preparation(self):
+        # Row 92 / CI self-data-k3s: on the tick the destination binds, kubelet
+        # updates the pod's status between Homestead's read and its delete.
+        self.tick(); self.tick(); self.bind()
+        def status(pod):
+            pod["metadata"]["resourceVersion"] = str(int(pod["metadata"]["resourceVersion"]) + 1)
+            pod["status"] = {"phase": "Running"}
+        self.churn_pod_on_read(status)
+        self.assertEqual(85, self.tick()[1])
+        self.assertEqual("succeeded", self.tick()[0])
+        deletes = [b for m, p, b in self.c.sent if m == "DELETE"]
+        self.assertEqual([{"uid": "homestead-data-bind-" + OP + "-created"}], [b["preconditions"] for b in deletes])
+
+    def test_binding_pod_replaced_between_review_and_delete_is_never_deleted(self):
+        self.tick(); self.tick(); self.bind()
+        self.churn_pod_on_read(lambda pod: pod["metadata"].update(uid="replacement"))
+        with self.assertRaises(Held): self.tick()
+        self.assertFalse(any(m == "DELETE" for m, _, _ in self.c.sent))
+
     def test_replaced_binding_pod_is_never_deleted(self):
         self.tick(); self.tick(); self.bind()
         self.c.objects[self.path("pods")]["metadata"]["uid"] = "replacement"

@@ -28,7 +28,7 @@ test("the host console is one add-on row: its state, each host, one Enable or Di
   assert.match(html, /onclick="[^"]*hostConsoleSet\(false\)">Disable</, "on, it offers Disable");
   assert.doesNotMatch(html, /type="checkbox"/, "it acts at once, so it is a button, not a switch");
   assert.match(ctx.hostConsoleRow(state({ enabled: false, installed: 0 })), /hostConsoleSet\(true\)">Enable</);
-  assert.match(ctx.hostConsoleRow(state({ settled: true, current: 2 })), /pill ok">installed/);
+  assert.match(ctx.hostConsoleRow(state({ settled: true, current: 2 })), /ui-chip ok">installed/);
   assert.match(ctx.hostConsoleRow(state({ enabled: false, installed: 1 })), /removing · 1 left/);
   assert.equal(ctx.hostConsoleRow(state({ harvester: true })), "");
   assert.equal(ctx.hostConsoleRow(null), "", "not an administrator, or not readable: no row");

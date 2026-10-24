@@ -94,3 +94,11 @@ test("shapes a real probe reports: a hottest sensor that is the CPU itself adds 
   // A drive running hotter than the CPU is named beside it.
   assert.equal(c.nodeTemp({ ...base, temps: { cpu_c: 30, max_c: 37.9, max_source: "NVMe nvme0", disks: [] } }).extra, "max 37.9°C, NVMe nvme0");
 });
+
+test("a host's address chips keep a space between them (#543: .ui-chip has no margin)", () => {
+  const c = context();
+  const host = { ...base, addresses: { InternalIP: "192.0.2.7" }, duties: { vips: ["192.0.2.14", "192.0.2.15"] } };
+  const html = vm.runInContext("nodeAddressTags", c)(host);
+  assert.equal((html.match(/class="ui-chip /g) || []).length, 3);
+  assert.doesNotMatch(html, /<\/span><\/span><span/, "two address chips touch");
+});

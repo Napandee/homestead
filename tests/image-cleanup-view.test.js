@@ -10,6 +10,11 @@ function load() {
     serviceRow: (title, pill, detail, bar) => `<row>${title}|${pill}|${detail}|${bar}</row>`,
     actionBar: rows => { actions.push(...rows.filter(Boolean)); return rows.filter(Boolean).map(r => `[${r.label}]`).join(""); } };
   ctx.window = ctx;
+  // The real UI.chip, from its own context so the stubs above (serviceRow, actionBar) stay.
+  const ui = { window: {}, esc: v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]) };
+  vm.createContext(ui);
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ui);
+  ctx.UI = ui.window.UI;
   vm.createContext(ctx);
   const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
   vm.runInContext(between(src, "const imageUnused = d =>", "window.imageCleanupRow = imageCleanupRow;"), ctx);
@@ -25,7 +30,7 @@ test("only images nothing keeps count, by every host's copy", () => {
   const { ctx, actions } = load();
   const html = ctx.imageCleanupRow(images, { auto: false, after_days: 14 });
   assert.match(html, /1 unused image · 123 MiB across hosts/);
-  assert.match(html, /Automatic clean-up\|<span class="pill neutral">off/);
+  assert.match(html, /Automatic clean-up\|<span class="ui-chip neutral">off/);
   assert.deepEqual(actions.map(a => [a.label, a.need, !!a.disabled]), [["Clean all unused", "admin", false], ["Turn on", "admin", false]]);
 });
 

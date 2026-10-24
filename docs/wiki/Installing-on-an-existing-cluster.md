@@ -75,10 +75,10 @@ then change three things:
 curl -sfLO https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/deploy.yaml
 ```
 
-1. `storageClassName: longhorn-r2` and the `STORAGE_CLASS` value - to a class
-   `kubectl get storageclass` lists. Longhorn makes `longhorn`, not
-   `longhorn-r2`, so use `longhorn` (or create `longhorn-r2` first); otherwise
-   the data claim stays Pending, and `kubectl describe pvc -n lab` shows why.
+1. `storageClassName: longhorn` and the `STORAGE_CLASS` value - Longhorn makes
+   `longhorn` itself, so with Longhorn there is nothing to change. Without it,
+   use a class `kubectl get storageclass` lists (k3s's `local-path`, say). If
+   the data claim stays Pending, `kubectl describe pvc -n lab` shows why.
    Keep `ReadWriteMany` for a shareable Longhorn class; use `ReadWriteOnce`
    for anything else.
 2. `LB_IP` and every `192.0.2.242` - to Homestead's address.
@@ -89,6 +89,28 @@ curl -sfLO https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy
 kubectl apply -f deploy.yaml
 kubectl -n lab rollout status deployment/homestead --timeout=5m
 ```
+
+Longhorn's `longhorn` class asks for three copies. On a cluster with one host
+Homestead lowers its own data volume to the one copy that host can keep, once
+Longhorn says another cannot be placed, so it reads healthy; no other volume
+or Longhorn setting is changed. Once a second host can hold a copy,
+`longhorn-r2` ("Longhorn, two copies") is the class to move Homestead's data
+onto: **Settings > About > Redundancy** then offers **Keep two copies**,
+which makes it and opens the move.
+
+Installed earlier from a manifest that said `longhorn-r2`? A claim's class
+cannot change. Check the claim first:
+
+```bash
+kubectl -n lab get pvc homestead-data
+```
+
+Only if its STATUS is `Pending` does it hold nothing: then
+`kubectl -n lab delete pvc homestead-data` and apply again (or create
+`longhorn-r2` first). **Never delete a `Bound` claim: that can lose
+Homestead's data.** A Bound claim keeps its class and keeps working, and
+in-app updates change only the image; to apply the manifest again over it,
+set `storageClassName` back to the class that command shows.
 
 ## What Homestead is allowed to do
 
@@ -107,8 +129,20 @@ role says what each is for. Image clean-up, for one, has read-only `get` and
 `list` on KubeVirt's `virtualmachinepools` (`pool.kubevirt.io`) and
 `virtualmachineinstancereplicasets` (`kubevirt.io`): a VM pool or replica set
 scaled to zero still starts from its template's container disks, and only these
-lists name them. Without that read, Homestead keeps every image and says why on
-the Image cache page; it never cleans up an image it cannot account for.
+lists name them. The same read-only access covers Harvester's
+`virtualmachinetemplateversions` (`harvesterhci.io`), KubeVirt's
+`virtualmachinesnapshotcontents` (`snapshot.kubevirt.io`) and CDI's
+`dataimportcrons` (`cdi.kubevirt.io`): a VM template or snapshot boots from the
+container disks it names, and a CDI import that pulls through the node
+(`pullMethod: node`) needs its image again. Without that read, Homestead keeps every image and says why on
+the Image cache page; it never cleans up an image it cannot account for. The
+Volumes page, for another, has read-only `get` and `list` on
+`replicationcontrollers`, so a volume that only a ReplicationController made on
+its own uses is not shown as orphaned. Until that permission is applied
+(Homestead brings its own permissions up to date, or apply `deploy/rbac.yaml`),
+a volume nothing else names shows as unknown, never as orphaned, and installing
+an app over a leftover volume of the same name is refused, because Homestead
+cannot check what uses it.
 
 ## Next
 

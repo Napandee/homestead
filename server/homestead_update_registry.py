@@ -139,8 +139,13 @@ def _open(req, credential=None, timeout=12):
         token = token_body.get("token") or token_body.get("access_token")
         if not token:
             raise PermissionError("registry authentication did not return a token")
-        retry = urllib.request.Request(req.full_url, method=req.get_method(),
-                                       headers=dict(req.header_items()))
+        # Only the caller's own headers go on to a redirect. urllib records the
+        # first request's Host among the headers it kept back: carried along,
+        # it would reach a blob's storage host, which refuses it (403/421).
+        retry = urllib.request.Request(req.full_url, method=req.get_method(), headers=dict(req.headers))
+        for name, value in req.unredirected_hdrs.items():
+            if name.lower() not in ("host", "authorization"):
+                retry.add_unredirected_header(name, value)
         # A blob answers with a redirect to storage that has its own
         # signature and refuses a second one, so the token stays here.
         retry.add_unredirected_header("Authorization", "Bearer " + token)

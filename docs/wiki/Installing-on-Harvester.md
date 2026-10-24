@@ -112,7 +112,7 @@ From a host (step 4, first way), one line fetches the manifest, gives it your
 address and Harvester's storage class, and applies it:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/deploy.yaml | sed -e 's/192\.0\.2\.242/192.0.2.242/g' -e 's/longhorn-r2/harvester-longhorn/g' -e 's/accessModes: \[ReadWriteMany\]/accessModes: [ReadWriteOnce]/' | kubectl apply -f -
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/deploy.yaml | sed -e 's/192\.0\.2\.242/192.0.2.242/g' -e 's/storageClassName: longhorn\(-r2\)\{0,1\}$/storageClassName: harvester-longhorn/' -e 's/value: "longhorn\(-r2\)\{0,1\}"$/value: "harvester-longhorn"/' -e 's/accessModes: \[ReadWriteMany\]/accessModes: [ReadWriteOnce]/' | kubectl apply -f -
 ```
 
 Change the second `192.0.2.242` to your address. Or, with Helm on your own

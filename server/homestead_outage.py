@@ -9,8 +9,31 @@ Each app and VM may have actions for an outage, kept as an annotation on it
   an alert says so. A VM is rebooted cleanly, and only when it is monitored on
   a port of its own choosing: automatically, Homestead cannot tell a VM that is
   down from one that does not answer on the usual ports.
-* call a webhook - an HTTP POST of JSON - when it goes down, when it comes
-  back, and when an automatic update of it finishes or is rolled back.
+* call a webhook - an HTTP POST - when it goes down, when it comes back, and
+  when an automatic update of it finishes or is rolled back. Its format is
+  generic JSON (the default), ntfy (the sentence as text, with Title, Priority
+  and Tags headers) or Gotify (JSON title, message and priority) (#741).
+
+A webhook's address can carry secrets anywhere after its host (a password
+before the host, a token in the path, the query or the fragment), so it is
+only ever shown as its scheme, host and port, with everything after the host
+as HIDDEN: in the app and VM lists, the Resources page, errors and the
+leader's record of its last call. Saving or testing the address as shown
+uses the stored one, and only while the scheme, host and port are unchanged,
+so a hidden part never moves to another host. The admin-only reveal on the
+Resources page shows it all.
+
+Where a webhook may go: every address its name resolves to is checked, and
+the call is made to the address checked (no second lookup). Loopback,
+link-local, multicast and cloud metadata addresses are never reached; an
+IPv6 address that carries an IPv4 one (NAT64 64:ff9b::/96, 6to4) is checked
+as the IPv4 inside, and local-use NAT64 and Teredo are never reached. A LAN
+or cluster address (private, carrier-grade NAT, unique local) - a
+self-hosted ntfy or Gotify, say - only when an admin ticked "Allow a LAN
+address" for that webhook (lan); an operator's save keeps an admin's
+allowance only while the address is unchanged. No redirect is followed.
+Send a test is admin-only, may reach the LAN, and goes out at most
+TEST_LIMIT times a minute.
 
 Nothing is restarted while a job is working on the app (an update, a
 rollback, a move, a restore test, a scheduled stop or start): an automatic
@@ -20,12 +43,17 @@ restart in the middle would read as the update failing.
 The leader runs tick() after each monitoring round. Its state - restarts done,
 what each webhook was last told - is a small file, written when it changes.
 """
+import base64
+import http.client
+import ipaddress
 import json
 import os
+import re
+import socket
+import ssl
 import threading
 import time
 import urllib.parse
-import urllib.request
 
 import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
@@ -38,18 +66,28 @@ UP_RESET = 30 * 60
 MAX_RESTARTS = 10
 WEBHOOK_TIMEOUT = 10
 DATA_DIR = "/data"
+FORMATS = ("generic", "ntfy", "gotify")
+HIDDEN = "(hidden)"
+TEST_LIMIT, TEST_WINDOW = 5, 60
+# Never reached, even on an admin's say: cloud metadata services.
+METADATA = [ipaddress.ip_network(n) for n in ("169.254.169.254/32", "fd00:ec2::254/128", "100.100.100.200/32")]
+# IPv6 prefixes that carry an IPv4 address: checked as the address inside.
+NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# Local-use NAT64 (its IPv4 sits at a place the network chooses) and Teredo: never.
+NEVER_V6 = [ipaddress.ip_network(n) for n in ("64:ff9b:1::/48", "2001::/32")]
 _lock = threading.Lock()
+_tests = []
 
 
 # What server.py lends to read and write the app or VM, and to check its
 # name: the same functions its own routes use (bind).
-_bound = {"kget": None, "ksend": None, "dns_name": None, "guard": lambda ns, name: None}
+_bound = {"kget": None, "ksend": None, "dns_name": None, "guard": lambda ns, name: None, "ns": "lab"}
 
 
-def bind(data_dir="/data", kget=None, ksend=None, dns_name=None, guard=None):
+def bind(data_dir="/data", kget=None, ksend=None, dns_name=None, guard=None, ns=None):
     global DATA_DIR
     DATA_DIR = data_dir
-    for key, value in (("kget", kget), ("ksend", ksend), ("dns_name", dns_name), ("guard", guard)):
+    for key, value in (("kget", kget), ("ksend", ksend), ("dns_name", dns_name), ("guard", guard), ("ns", ns)):
         if value:
             _bound[key] = value
 
@@ -78,8 +116,89 @@ def webhook_url(value):
     return url
 
 
-def clean(value, kind="app", monitored_on_port=True):
-    """Actions as given, checked: {"restart": {...}?, "webhook": url?}, or None for none."""
+def _parts(url):
+    """(scheme, host and port as typed, everything else) of an address."""
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    userinfo, at, hostport = parsed.netloc.rpartition("@")
+    tail = (userinfo + at) + urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+    return parsed.scheme, hostport, "" if tail in ("", "/") else tail
+
+
+def hide(url):
+    """The address as anyone may see it: scheme, host and port, the rest HIDDEN."""
+    scheme, hostport, tail = _parts(url)
+    return f"{scheme}://{hostport}" + (f"/{HIDDEN}" if tail else "")
+
+
+def scrub(text, url):
+    """text with the address, and every piece after its host, hidden - raw or quoted."""
+    text = str(text or "")
+    if not url:
+        return text
+    text = text.replace(str(url), hide(url))
+    tail = _parts(url)[2]
+    pieces = {tail} | set(re.split(r"[/?#&=@:;,]", tail))
+    for piece in sorted((p for p in pieces if len(p) >= 4 and p != HIDDEN), key=len, reverse=True):
+        for form in {piece, urllib.parse.quote(piece, safe=""), urllib.parse.quote_plus(piece), urllib.parse.unquote(piece)}:
+            text = text.replace(form, HIDDEN)
+    return text
+
+
+def restore(given, stored):
+    """The address to keep or use: given as typed, or - when it is shown
+    hidden - the stored one, only if its scheme, host and port are unchanged."""
+    if HIDDEN not in (given or ""):
+        return given
+    if stored and hide(stored) == given:
+        return stored
+    raise ValueError("the address changed, so its hidden part is not used: type the whole address again")
+
+
+def public(actions):
+    """Actions as the browser may read them: the address hidden after its host."""
+    if not actions or not actions.get("webhook"):
+        return actions
+    return {**actions, "webhook": hide(actions["webhook"])}
+
+
+def mask_annotations(annotations):
+    """Annotations as a reader other than an admin's reveal sees them (Resources page)."""
+    raw = (annotations or {}).get(NAMES.key(KEY))
+    if raw is None:
+        return annotations
+    try:
+        value = json.loads(raw)
+        masked = json.dumps(public(value), separators=(",", ":")) if isinstance(value, dict) else HIDDEN
+    except ValueError:
+        masked = HIDDEN
+    return {**annotations, NAMES.key(KEY): masked}
+
+
+def unmask_annotations(annotations, current):
+    """Annotations edited from a masked copy, with the stored secrets put
+    back - only where the rest of the address is unchanged."""
+    raw = (annotations or {}).get(NAMES.key(KEY))
+    if raw is None or HIDDEN not in raw:
+        return annotations
+    before = stored(current, NAMES) or {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        raise ValueError("the outage actions annotation is hidden: reveal it before editing it")
+    hook = restore(str(value.get("webhook") or ""), before.get("webhook"))
+    if hook != before.get("webhook"):
+        raise ValueError("the outage actions annotation is hidden: reveal it before editing it")
+    return {**annotations, NAMES.key(KEY): json.dumps({**value, "webhook": hook}, separators=(",", ":"))}
+
+
+def clean(value, kind="app", monitored_on_port=True, before=None, role="operator"):
+    """Actions as given, checked: {"restart": {...}?, "webhook": url?, "format": f?, "lan": True?},
+    or None for none. before: the actions saved now, whose hidden parts an
+    address showing HIDDEN keeps, and whose LAN allowance an operator keeps
+    only while the address is unchanged."""
+    before = before or {}
     value = value or {}
     if not isinstance(value, dict):
         raise ValueError("outage actions are a restart and a webhook")
@@ -98,13 +217,23 @@ def clean(value, kind="app", monitored_on_port=True):
             raise ValueError("a VM is restarted only when it is monitored on a port you chose: "
                              "automatically, Homestead cannot tell it is down")
         out["restart"] = {"after_min": after, "max": most}
-    url = webhook_url(value.get("webhook"))
+    url = webhook_url(restore(webhook_url(value.get("webhook")), before.get("webhook")))
+    fmt = str(value.get("format") or "generic")
+    if fmt not in FORMATS:
+        raise ValueError("the webhook format is generic, ntfy or gotify")
+    lan = bool(value.get("lan")) and bool(url)
+    if lan and role != "admin" and not (before.get("lan") and url == before.get("webhook")):
+        raise PermissionError("only an admin can allow a webhook to reach a LAN address")
     if url:
         out["webhook"] = url
+        out["format"] = fmt     # always: a save since #741 is told from one before it (homestead_outage_carry)
+        if lan:
+            out["lan"] = True
     return out or None
 
 
-def read(annotations, names):
+def stored(annotations, names):
+    """The actions as kept on the annotation, tokens and all: never for the browser."""
     raw = names.read(annotations or {}, KEY)
     if not raw:
         return None
@@ -113,6 +242,11 @@ def read(annotations, names):
         return value if isinstance(value, dict) and (value.get("restart") or value.get("webhook")) else None
     except ValueError:
         return None
+
+
+def read(annotations, names):
+    """The actions as the app and VM lists show them: tokens hidden."""
+    return public(stored(annotations, names))
 
 
 def items(workloads, vms):
@@ -131,7 +265,8 @@ def items(workloads, vms):
 
 def payload(item, event, state=None, detail="", now=None):
     """What a webhook is sent: plain fields, and a sentence as text/content/message
-    so chat services (Slack, Discord, ntfy, Home Assistant) show it as it is."""
+    so chat services (Slack, Discord, Home Assistant) show it as it is.
+    ntfy and Gotify get it in their own form (request_for)."""
     state = state or {}
     error = (state.get("last") or {}).get("error") or ""
     what = "VM " if item["kind"] == "vm" else ""
@@ -146,22 +281,132 @@ def payload(item, event, state=None, detail="", now=None):
             "at": round(now or time.time()), "text": sentence, "content": sentence, "message": sentence}
 
 
-def post(url, body):
-    """Send one webhook; raises on failure."""
-    data = json.dumps(body).encode()
-    request = urllib.request.Request(url, data=data, method="POST", headers={
-        "Content-Type": "application/json", "User-Agent": "Homestead outage actions"})
-    with urllib.request.urlopen(request, timeout=WEBHOOK_TIMEOUT) as response:
-        if response.status >= 400:
-            raise OSError(f"HTTP {response.status}")
+URGENT = ("down", "gave-up")
+NTFY_TAGS = {"down": "rotating_light", "gave-up": "rotating_light", "up": "white_check_mark",
+             "restarted": "arrows_counterclockwise", "update": "package", "test": "test_tube"}
+
+
+def request_for(url, body, fmt="generic"):
+    """(url, data, headers) for one call in the webhook's format."""
+    headers = {"User-Agent": "Homestead outage actions"}
+    urgent = body.get("event") in URGENT
+    if fmt == "ntfy":
+        # ntfy publishes the body of a POST to a topic as the message itself.
+        headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": "Homestead",
+                        "Priority": "high" if urgent else "default", "Tags": NTFY_TAGS.get(body.get("event"), "house")})
+        return url, str(body.get("message") or "").encode(), headers
+    if fmt == "gotify":
+        data = {"title": "Homestead", "message": body.get("message") or "", "priority": 8 if urgent else 5}
+    else:
+        data = body
+    headers["Content-Type"] = "application/json"
+    return url, json.dumps(data).encode(), headers
+
+
+class Refused(OSError):
+    """An address a webhook may not reach."""
+
+
+def _resolve(host, port):
+    return sorted({info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
+
+
+def _kind(ip):
+    """public, lan (private, carrier-grade NAT, unique local: a home's own
+    services and the cluster's), or never (loopback, link-local, multicast,
+    unspecified, reserved, cloud metadata)."""
+    address = ipaddress.ip_address(str(ip).split("%")[0])
+    if address.version == 6:
+        if any(address in net for net in NEVER_V6):
+            return "never"
+        if address.ipv4_mapped:
+            address = address.ipv4_mapped
+        elif address.sixtofour:
+            address = address.sixtofour
+        elif address in NAT64:
+            address = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    if (any(address in net for net in METADATA if net.version == address.version) or address.is_loopback
+            or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved):
+        return "never"
+    return "public" if address.is_global else "lan"
+
+
+def _addresses(url):
+    """(parsed, every address its host resolves to, port); OSError when none."""
+    parsed = urllib.parse.urlsplit(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        found = _resolve(parsed.hostname, port)
+    except (OSError, UnicodeError):
+        found = []
+    if not found:
+        raise OSError(f"{parsed.hostname} could not be found")
+    return parsed, found, port
+
+
+def destination(url, allow_lan=False):
+    """(address, port) to connect to: every address the host resolves to checked."""
+    parsed, found, port = _addresses(url)
+    kinds = {_kind(ip) for ip in found}
+    if "never" in kinds:
+        raise Refused(f"{parsed.hostname} is this host, a link-local or a cloud metadata address, which a webhook never reaches")
+    if "lan" in kinds and not allow_lan:
+        raise Refused(f"{parsed.hostname} is a LAN address: an admin must tick Allow a LAN address for this webhook")
+    return found[0], port
+
+
+class _Pinned(http.client.HTTPConnection):
+    """A connection to the address checked, whatever the name resolves to now."""
+
+    def __init__(self, host, port, address, timeout):
+        super().__init__(host, port, timeout=timeout)
+        self.address = address
+
+    def connect(self):
+        self.sock = socket.create_connection((self.address, self.port), self.timeout)
+
+
+class _PinnedTLS(http.client.HTTPSConnection):
+    def __init__(self, host, port, address, timeout):
+        super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
+        self.address = address
+
+    def connect(self):
+        sock = socket.create_connection((self.address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def post(url, body, fmt="generic", allow_lan=False):
+    """Send one webhook; raises on failure, in words that never hold its secrets.
+    No redirect is followed."""
+    url, data, headers = request_for(url, body, fmt)
+    parsed = urllib.parse.urlsplit(url)
+    address, port = destination(url, allow_lan)
+    if "@" in parsed.netloc:
+        user, _, password = parsed.netloc.rpartition("@")[0].partition(":")
+        pair = f"{urllib.parse.unquote(user)}:{urllib.parse.unquote(password)}".encode()
+        headers["Authorization"] = "Basic " + base64.b64encode(pair).decode()
+    connection = (_PinnedTLS if parsed.scheme == "https" else _Pinned)(parsed.hostname, port, address, WEBHOOK_TIMEOUT)
+    try:
+        connection.request("POST", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""), body=data, headers=headers)
+        status = connection.getresponse().status
+    except Exception as error:
+        raise OSError(scrub(str(error), url)[:200]) from None
+    finally:
+        connection.close()
+    if 300 <= status < 400:
+        raise OSError(f"HTTP {status}: it redirects, and a webhook never follows a redirect")
+    if status >= 400:
+        raise OSError(f"HTTP {status}")
 
 
 def tick(scheduled, report, restart, busy, operations=(), send=None, now=None):
     """One look after a monitoring round. restart(item) restarts it (raises
     to say why it could not); busy(item) is whether a job is working on it;
-    send(url, body) sends a webhook. Returns what was done."""
+    send(url, body, actions) sends a webhook (url and actions as the lists
+    show them, secrets hidden). Returns what was done."""
     now = now or time.time()
-    send = send or (lambda url, body: _send_later(url, body))
+    send = send or _send_later
     did = []
     with _lock:
         data = _load()
@@ -179,7 +424,7 @@ def tick(scheduled, report, restart, busy, operations=(), send=None, now=None):
 
             def tell(event, detail=""):
                 if hook:
-                    send(hook, payload(item, event, seen, detail, now))
+                    send(hook, payload(item, event, seen, detail, now), item["actions"])
 
             if now_state == "down":
                 if mine.get("told") != "down":
@@ -239,15 +484,33 @@ def tick(scheduled, report, restart, busy, operations=(), send=None, now=None):
     return did
 
 
-def _send_later(url, body):
+def _path_of(kind, ns, name):
+    return (f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}" if kind == "vm"
+            else f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+
+
+def _stored_actions(kind, ns, name):
+    """The actions saved on the app or VM now, secrets included."""
+    current = _bound["kget"](_path_of(kind, ns, name)) or {}
+    return stored((current.get("metadata") or {}).get("annotations") or {}, NAMES) or {}
+
+
+def _send_later(url, body, actions=None):
     """Webhooks go out on their own thread, so a slow one holds nothing up;
-    how the last one went is kept for the dialog."""
+    how the last one went is kept for the dialog. url is as the lists show
+    it: the address, format and LAN allowance used are the ones saved now."""
     def run():
+        real = url
         try:
-            post(url, body)
+            now = _stored_actions(body["kind"], body["namespace"], body["name"])
+            real, fmt = now.get("webhook") or "", now.get("format") or "generic"
+            if not real or hide(real) != url:
+                raise OSError("its webhook changed meanwhile; the next call uses the new one")
+            post(real, body, fmt, bool(now.get("lan")))
             result = {"at": round(time.time()), "ok": True, "event": body.get("event")}
         except Exception as error:
-            result = {"at": round(time.time()), "ok": False, "event": body.get("event"), "error": str(error)[:200]}
+            result = {"at": round(time.time()), "ok": False, "event": body.get("event"),
+                      "error": scrub(str(error), real)[:200]}
         _last_webhook[f"{body['kind']}:{body['namespace']}/{body['name']}"] = result
         LEADER_STATE.put("outage-webhooks", dict(_last_webhook))
     threading.Thread(target=run, name="outage-webhook", daemon=True).start()
@@ -312,7 +575,7 @@ def target(b):
     raise ValueError("outage actions are for an app or a VM")
 
 
-def set_actions(b):
+def set_actions(b, role="operator"):
     """What to do when an app or VM is down - nothing unless asked. An annotation, so nothing restarts."""
     kind, ns, name, path = target(b)
     on_port = True
@@ -320,7 +583,16 @@ def set_actions(b):
         current = _bound["kget"](path)
         chosen = UPTIME.setting(NAMES.read((current.get("metadata") or {}).get("annotations") or {}, "uptime"))
         on_port = chosen["mode"] in ("tcp", "http") and bool(chosen.get("port"))
-    actions = clean(b.get("actions"), kind, on_port)
+    given = b.get("actions") if isinstance(b.get("actions"), dict) else {}
+    before = _stored_actions(kind, ns, name) if given.get("webhook") else {}
+    actions = clean(b.get("actions"), kind, on_port, before, role)
+    if actions and actions.get("webhook"):
+        try:
+            destination(actions["webhook"], bool(actions.get("lan")))
+        except Refused as error:
+            raise ValueError(str(error)) from None
+        except OSError:
+            pass    # not found now: checked again at each call
     _bound["ksend"]("PATCH", path, {"metadata": {"annotations": {
         NAMES.key(KEY): json.dumps(actions, separators=(",", ":")) if actions else None}}},
         ctype="application/merge-patch+json")
@@ -331,24 +603,45 @@ def set_actions(b):
         said.append(f"restarted after {r['after_min']} min down, at most {r['max']} time{'s' if r['max'] != 1 else ''}")
     if actions and actions.get("webhook"):
         said.append("its webhook called")
-    return {"ok": True, "actions": actions,
+    return {"ok": True, "actions": public(actions),
             "detail": f"When {name} is down: " + (" and ".join(said) if said else "nothing is done")}
 
 
+def _allow_test(now=None):
+    """At most TEST_LIMIT tests a minute from this copy of Homestead."""
+    now = now or time.time()
+    with _lock:
+        _tests[:] = [t for t in _tests if now - t < TEST_WINDOW]
+        if len(_tests) >= TEST_LIMIT:
+            return False
+        _tests.append(now)
+        return True
+
+
 def test_webhook(b):
+    """Send a test now, in the format chosen in the dialog (saved or not)."""
     kind, ns, name, _ = target(b)
     url = webhook_url(b.get("webhook"))
     if not url:
         raise ValueError("type the webhook address to test")
+    fmt = str(b.get("format") or "generic")
+    if fmt not in FORMATS:
+        raise ValueError("the webhook format is generic, ntfy or gotify")
+    before = _stored_actions(kind, ns, name) if HIDDEN in url else {}
+    url = webhook_url(restore(url, before.get("webhook")))
+    if not _allow_test():
+        return ROUTER.Reply(429, {"error": f"at most {TEST_LIMIT} tests a minute; wait a little and send it again"})
     item = {"kind": kind, "ns": ns, "name": name}
+    what = {"ntfy": "ntfy", "gotify": "Gotify"}.get(fmt, "The webhook")
     try:
-        post(url, payload(item, "test"))
+        post(url, payload(item, "test"), fmt, allow_lan=True)    # an admin's test may reach the LAN
     except Exception as error:
-        return {"ok": False, "detail": f"The webhook did not take it: {str(error)[:200]}"}
-    return {"ok": True, "detail": "The webhook took the test"}
+        return {"ok": False, "detail": f"{what} did not take it: {scrub(str(error), url)[:200]}"}
+    return {"ok": True, "detail": f"{what} took the test"}
 
 
 ROUTES = {
-    ("POST", "/api/monitoring/actions"): ("operator", lambda request: set_actions(request.body)),
-    ("POST", "/api/monitoring/actions/test"): ("operator", lambda request: test_webhook(request.body)),
+    ("POST", "/api/monitoring/actions"): ("operator", lambda request: set_actions(request.body, request.role)),
+    # Admin-only: it sends a request from inside the cluster to any address typed.
+    ("POST", "/api/monitoring/actions/test"): ("admin", lambda request: test_webhook(request.body)),
 }
