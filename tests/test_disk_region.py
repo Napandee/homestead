@@ -140,4 +140,3 @@ findmnt() { [ "${SYSTEM:-no}" = no ] && echo /dev/os || echo "$D"; }
 
 
 if __name__ == '__main__': unittest.main()
-

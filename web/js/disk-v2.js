@@ -8,23 +8,23 @@ function diskV2Region(plan) {
   const contains=row=>selected(row)||(row.children||[]).some(contains);
   const label=row=>selected(row)?'Erase contents':contains(row)?'Contains selected volume':'Keep';
   const physical=(root.children||[]).filter(r=>r.kind==='part').sort((a,b)=>(a.start_bytes||0)-(b.start_bytes||0));
-  const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?'erase':contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' · '+label(row))}"><span>${esc(label(row))}</span></span>`;
+  const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?'erase':contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' - '+label(row))}"><span>${esc(label(row))}</span></span>`;
   let cursor=0,bar='';
   for(const row of physical) {
     const start=Number(row.start_bytes)||cursor;
-    if(start>cursor) bar+=`<span class="pmap-seg free" style="flex:${start-cursor}" title="Other space · keep"></span>`;
+    if(start>cursor) bar+=`<span class="pmap-seg free" style="flex:${start-cursor}" title="Other space - keep"></span>`;
     bar+=segment(row,row.size_bytes);cursor=start+row.size_bytes;
   }
-  if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space · keep"></span>`;
+  if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space - keep"></span>`;
   function rows(row,depth=0) {
     const children=row.children||[],logical=row.kind==='lvm',isSelected=selected(row);
     return `<div class="disk-v2-layout-row ${isSelected?'selected':''}">
-      <div><strong>${esc(row.path)}</strong><span>${esc(logical?'Logical volume':row.kind==='part'?'Partition':'Disk')}${row.mountpoint?' · '+esc(row.mountpoint):''}</span></div>
+      <div><strong>${esc(row.path)}</strong><span>${esc(logical?'Logical volume':row.kind==='part'?'Partition':'Disk')}${row.mountpoint?' - '+esc((row.mountpoint==='/'?'Host OS ':row.mountpoint.startsWith('/boot')?'Boot ':'')+row.mountpoint):''}</span></div>
       <span>${esc(diskV2GiB(row.size_bytes))}</span><b>${esc(label(row))}</b>
     </div>`+(children.length?`<div class="disk-v2-layout-children">${children.some(r=>r.kind==='lvm')?'<p class="ui-help">Logical volumes share this partition; their positions below do not represent physical extents.</p>':''}${children.map(r=>rows(r,depth+1)).join('')}</div>`:'');
   }
   return `<div class="disk-v2-layout" aria-label="Disk layout and erase scope">
-    <div class="sec">${esc(root.path)} · ${esc(diskV2GiB(root.size_bytes))}</div>
+    <div class="sec">${esc(root.path)} - ${esc(diskV2GiB(root.size_bytes))}</div>
     <div class="pmap" role="img" aria-label="Physical partitions. The list below identifies the contents to erase and the regions to keep.">${bar}</div>
     ${physical.map(row=>rows(row)).join('')}
     <p class="ui-help">Erase all contents of <strong>${esc(plan.device)}</strong> (${esc(plan.mountpoint||'dedicated Longhorn filesystem')}). Keep its size and boundary.</p>
