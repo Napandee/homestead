@@ -124,9 +124,12 @@ def _rw(inv, volume):
     modes = {name: mode for e in inv['engines'] if e.get('spec', {}).get('volumeName') == volume
              and e.get('status', {}).get('currentState') == 'running' and not e.get('metadata', {}).get('deletionTimestamp')
              for name, mode in (e.get('status', {}).get('replicaModeMap') or {}).items()}
+    def host_ready(replica):
+        node = replica.get('spec', {}).get('nodeID')
+        return ('kube' not in inv or _ready(inv['kube'].get(node, {}))) and ('lhs' not in inv or _ready(inv['lhs'].get(node, {})))
     return [r for r in inv['replicas'] if r.get('spec', {}).get('volumeName') == volume
             and not r.get('metadata', {}).get('deletionTimestamp') and not r.get('spec', {}).get('failedAt')
-            and r.get('status', {}).get('currentState') == 'running' and modes.get(r['metadata']['name']) == 'RW']
+            and host_ready(r) and r.get('status', {}).get('currentState') == 'running' and modes.get(r['metadata']['name']) == 'RW']
 
 
 def inspect_script(path):
@@ -755,7 +758,9 @@ def _no_replicas(ref):
 
 
 def _replacement_health(ref):
-    inv = {'replicas': _items(LH + '/replicas'), 'engines': _items(LH + '/engines')}
+    inv = {'replicas': _items(LH + '/replicas'), 'engines': _items(LH + '/engines'),
+           'kube': {n['metadata']['name']: n for n in _items('/api/v1/nodes')},
+           'lhs': {n['metadata']['name']: n for n in _items(LH + '/nodes')}}
     volumes = {v['metadata']['name']: v for v in _items(LH + '/volumes')}
     for row in ref['volumes']:
         volume = volumes.get(row['volume'])

@@ -107,6 +107,13 @@ class RegionConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'disappeared'): self.cluster.prepare()
         self.assertFalse(self.cluster.jobs)
 
+    def test_offline_replacement_host_cannot_be_counted_from_stale_rw_status(self):
+        self.cluster.facts = region(); self.cluster.awaiting(); self.cluster.prepare()
+        self.cluster.tick()  # remove the old V1 registration
+        self.cluster.nodes['node-2']['status']['conditions'] = []
+        self.cluster.tick()
+        self.assertFalse(self.cluster.jobs)
+
 
 @unittest.skipUnless(sys.platform == 'linux', 'shell fixture uses Linux tools')
 class RegionShellTests(unittest.TestCase):
