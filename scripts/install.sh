@@ -932,7 +932,7 @@ pick_longhorn_path() {
   while :; do
     LH_DATA_PATH=$(ask HS_LONGHORN_DATA_PATH "Match the Cluster's Storage" "This host must use the storage folder already set by your cluster. Choosing a different folder could put app and VM data on the OS filesystem instead of the space reserved for storage.
 
-Find it in Homestead: Hosts > Add a host > Storage setting for the installer.
+Find it in Homestead: Cluster > Add a host > Storage setting for the installer.
 
 Or run this on an existing server:
 sudo $path_command -n longhorn-system get settings.longhorn.io default-data-path -o jsonpath='{.value}'
