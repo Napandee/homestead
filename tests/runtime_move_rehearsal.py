@@ -5,7 +5,6 @@ temporary directory. Host identity/boot probes are substituted, never weakened
 in the shipped worker. Mount/copy/checksum/retirement operations run for real.
 """
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys

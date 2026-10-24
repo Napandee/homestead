@@ -1,5 +1,4 @@
 """Review, stage and follow offline relocation of installer Longhorn runtime."""
-import copy
 import hashlib
 from contextlib import contextmanager
 import json
