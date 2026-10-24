@@ -180,10 +180,9 @@ Homestead's own data volume to one copy once Longhorn says another cannot be
 placed and none is being rebuilt, so it reads healthy; no other volume, class
 or Longhorn setting is changed. Once a second host can hold a copy,
 `longhorn-r2` ("Longhorn, two copies") is the class to move Homestead's data
-onto: create it under **Settings > Hardware and storage > Storage
-classes** (two copies, not migratable) and move from **Settings > About >
-Redundancy**. On k3s and RKE2 Homestead raises its own volume's copies in
-place as hosts join.
+onto: **Settings > About > Redundancy** offers **Keep two copies**, which
+makes it and opens the move. On k3s and RKE2 Homestead raises its own
+volume's copies in place as hosts join.
 
 A claim's class cannot change. On a cluster installed from an older manifest
 that said `longhorn-r2`, check the claim first:
@@ -917,13 +916,32 @@ deletes resources or frees IP records; guest installation may continue.
 
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
-serves through its share manager. A migratable class - Harvester's own and
-`longhorn-r2` - gives a VM-disk volume only one node can mount, and a copy on
-a second node would wait forever. Redundancy says so and offers **Move data**.
+serves through its share manager. A migratable class - Harvester's own, or a
+`longhorn-r2` someone made migratable - gives a VM-disk volume only one node
+can mount, and a copy on a second node would wait forever. Redundancy says so
+and offers **Move data**.
 Choose the destination class, prepare the new volume, then review and confirm
 the downtime. Host choices and capacity details are available under Details.
 Local-path and unknown storage drivers use single-node RWO; a known shareable
 driver such as non-migratable Longhorn can use RWX.
+
+Copies of the data itself are Longhorn's. `data_copies` in
+`GET /api/self/health` and `GET /api/self/replicas` says how many Homestead's
+data volume has and whether the cluster can keep two: `can-keep-two` once it
+has one copy and two hosts Longhorn stores on have room for its size
+(`rising` on k3s and RKE2, which raise it in place within a minute;
+`single-host`, `ok`, `n/a` on Harvester and other storage, or `unknown` with
+an `error` when something could not be read, which Cluster Health and
+Redundancy show). Then Cluster Health and Redundancy offer **Keep two
+copies**: `POST /api/self/data/two-copies` (admin) makes `longhorn-r2` - two
+copies on different hosts (`replicaSoftAntiAffinity: disabled`), not
+migratable, Retain - when the cluster has none, refuses an existing one that
+keeps fewer than two copies, is migratable, lets copies share a host, has a
+`nodeSelector` or is not Longhorn's, and starts nothing. The page then opens
+**Move data** with `longhorn-r2` picked, and the move is prepared and
+confirmed as above. When the data's own class already keeps two copies
+(`action: "raise"`), the call instead raises the volume to two copies in
+place: no move and no outage.
 
 An independent helper stops Homestead, waits for its pods to release the source,
 copies and verifies the files and metadata, releases the copy mounts, then starts

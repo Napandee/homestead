@@ -8,6 +8,19 @@
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
 
+  /* Copies of Homestead's data (#731). The demo's data is on longhorn-r2 with
+     two copies; window.__demoDataCopies = true shows the one-copy cluster that
+     can now keep two, for the checks and screenshots of that offer, and
+     "unknown" a read that failed (#620). */
+  const demoDataCopies = () => window.__demoDataCopies === "unknown"
+    ? { state: "unknown", error: "Longhorn's nodes could not be read", claim: "homestead-data", storage_class: "longhorn", copies: 1 }
+    : window.__demoDataCopies
+    ? { state: "can-keep-two", claim: "homestead-data", storage_class: "longhorn", copies: 1, storage_hosts: 2, room_hosts: 2, size_gb: 2,
+      r2: window.__demoTwoCopiesMade
+        ? { exists: true, replicas: 2, migratable: false, longhorn: true, usable: true, why: "" }
+        : { exists: false, replicas: 0, migratable: false, longhorn: false, usable: true, why: "" } }
+    : { state: "ok", claim: "homestead-data", storage_class: "longhorn-r2", copies: 2, storage_hosts: 3, room_hosts: 3, size_gb: 2, r2: null };
+
   /* What the counters add up to, the way the server computes it. */
   const diskHealth = smart => {
     const issues = [];
@@ -1631,7 +1644,8 @@ ssh_pwauth: true
         permissions: { state: "current", detail: "Homestead's permissions match this release" },
         backups: { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000" },
         addresses: { lb_ip: "192.0.2.242", problem: "", clashes: [], platform: ["192.0.2.210"] },
-        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 } };
+        mqtt: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", error: "", last_publish: now - 20 },
+        data_copies: demoDataCopies() };
     },
     "/api/network/vips/add": { ok: true, added: ["192.0.2.232"], skipped: [], detail: "1 address added" },
     "/api/network/vips/remove": { ok: true, detail: "192.0.2.231 is no longer reserved for Homestead" },
@@ -2300,9 +2314,19 @@ ssh_pwauth: true
       ? { ok: true, desired: JSON.parse(init.body || "{}").replicas, detail: "Homestead runs as 2 copies, spread over different nodes" }
       : { desired: 1, max: 3, leader: "homestead-6f9c-a1", spread_nodes: 1, pods: [
         { name: "homestead-6f9c-a1", node: "harvester-node1", ready: true, leader: true, this: true, terminating: false }],
-        data: { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
+        data: window.__demoDataCopies
+          ? { pvc: "homestead-data", storage_class: "longhorn", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: true, reason: "",
+            candidates: ["longhorn"], classes: window.__demoTwoCopiesMade ? [{ name: "longhorn-r2", shareable: true }] : [] }
+          : { pvc: "homestead-data", storage_class: "longhorn-r2", access_modes: ["ReadWriteMany"], size: "2Gi", shareable: false,
           reason: "homestead-data is on longhorn-r2, a migratable class: Longhorn gives it a VM-disk volume that only one node can mount, so a copy on a second node would never start",
-          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] } },
+          candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] },
+        data_copies: demoDataCopies() },
+    "/api/self/data/two-copies": () => {
+      const created = !window.__demoTwoCopiesMade;
+      window.__demoTwoCopiesMade = true;
+      return { ok: true, storage_class: "longhorn-r2", created,
+        message: (created ? "longhorn-r2 created: two copies on different hosts. " : "") + "Review the move of Homestead's data onto longhorn-r2; Homestead stops briefly while it is copied" };
+    },
     "/api/self/data/prepare": (url, init) => {
       if (init?.method === "POST") {
         window.__demoDataPrepared = true;
@@ -2319,7 +2343,9 @@ ssh_pwauth: true
           window.__demoOps.push(blocker);
         }
       }
-      return { source: "homestead-data", classes: [{ name: "longhorn", shareable: true }], execution_ready: false,
+      return { source: "homestead-data", classes: window.__demoDataCopies
+          ? (window.__demoTwoCopiesMade ? [{ name: "longhorn-r2", shareable: true }] : [])
+          : [{ name: "longhorn", shareable: true }], execution_ready: false,
         blocking_jobs: blocker?.mutation_recovery ? [blocker] : [],
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
         preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,

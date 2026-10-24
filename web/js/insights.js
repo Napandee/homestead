@@ -59,6 +59,8 @@ const HealthInsights = (() => {
     if (h) {
       if (h.api?.ok === false) rows.push(item("self-api","critical","Homestead cannot reach Kubernetes",h.api.error || "Check cluster connectivity.","settings:about#selfHealthCard"));
       if (h.replicas?.pods && h.replicas.pods.filter(p=>p.ready).length < h.replicas.desired) rows.push(item("self-replicas","medium","Homestead has unavailable replicas","Inspect its pods and restart errors.","settings:about#replicaCard"));
+      if (h.data_copies?.state === "can-keep-two") rows.push(item("self-data-copies","low","Homestead's data has one copy; this cluster can now keep two","Keep a second copy on another host from Redundancy.","settings:about#replicaCard"));
+      else if (h.data_copies?.state === "unknown") rows.push(item("self-data-copies","low","Could not read Homestead's data copies",h.data_copies.error || "Retry or check access.","settings:about#replicaCard"));
       const loops=(h.loops || []).filter(l=>["failing","stale","error"].includes(l.state));
       if (loops.length) rows.push(item("self-loops","medium",`${loops.length} Homestead background check${loops.length===1?" needs":"s need"} attention`,loops.map(l=>l.label || l.name).join(", ")+". Review Homestead health.","settings:about#selfHealthCard"));
       if (h.permissions?.state === "error") rows.push(item("self-permissions","critical","Homestead permissions need repair",h.permissions.detail || "Review the installation permissions.","about"));
