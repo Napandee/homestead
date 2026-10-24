@@ -426,8 +426,9 @@ def upgrade(component, target, options=None):
         detail = OPERATOR_MANIFESTS.upgrade(component, target, kget, platform(True), addons)
     else:
         detail = _start_operator(component, target)
-    return {"ok": True, "component": component, "name": found["name"], "from": found["installed"], "how": found["how"],
+    return {"ok": True, "component": component, "name": found["name"], "from": found["installed"],
             "to": target, "detail": detail,
+            **({"how": "manifests"} if found.get("how") == "manifests" else {}),
             **({"v2_mode": mode} if component == "longhorn" else {}),
             **({"held": held} if component == "cluster" else {})}
 
@@ -810,8 +811,9 @@ def _upgrade_route(request):
         {"kind": "Cluster" if result["component"] == "cluster" else
                  result["name"] if result.get("how") == "manifests" else "HelmChart", "name": result["name"],
          "namespace": ""}, "/system/cluster",
-        {"component": result["component"], "name": result["name"], "from": result["from"], "how": result.get("how", ""),
+        {"component": result["component"], "name": result["name"], "from": result["from"],
          "to": result["to"], "started": time.time(),
+         **({"how": result["how"]} if result.get("how") else {}),
          "phase": "controller" if result["component"] == "cluster" else "",
          **({"held": result["held"]} if "held" in result else {}),
          **({"v2_mode": result["v2_mode"]} if result.get("v2_mode") else {})},
