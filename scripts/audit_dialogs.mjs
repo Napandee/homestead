@@ -26,6 +26,12 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["allocation-edit", "nodes", "diskAllocationOpen('node-1')"],
+  ["allocation-review", "nodes", "diskAllocationOpen('node-1')", "diskAllocationReview()"],
+  ["allocation-identity", "nodes", "diskAllocationOpen('host-with-a-long-descriptive-storage-name-01')", "diskAllocationReview()", "[...document.querySelectorAll('#mbody details')].find(d=>d.textContent.includes('Device identity')).open=true"],
+  ["allocation-no-free", "nodes", "window.__demoAllocationNoFree=true;diskAllocationOpen('node-1')"],
+  ["allocation-failed", "nodes", "window.__demoAllocationState='failed';diskAllocationWatch('demo-allocation')"],
+  ["allocation-recovery", "nodes", "window.__demoAllocationState='failed';diskAllocationWatch('demo-allocation')", "diskAllocationRecheck('demo-allocation')"],
   ["volume-copy-move", "storage", "volumeCopyMove({name:'pvc-demo',pvc_name:'example-data'})"],
   ["volume-copy-move-review", "storage", "volumeCopyMove({name:'pvc-demo',pvc_name:'example-data'},{disk_tags:['nvme']})"],
   ["volume-copy-move-blocked", "storage", "volumeCopyMove({name:'pvc-demo',pvc_name:'example-data'},{disk_tags:['missing']})"],

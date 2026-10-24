@@ -645,6 +645,7 @@ import homestead_host_bonds as HOST_BONDS
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
 import homestead_disk_v2 as DISK_V2
+import homestead_disk_allocation as DISK_ALLOCATION
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 MOVE_SOURCE.bind(kget, ksend, LH, DEFAULT_NS)
@@ -775,7 +776,7 @@ HOST_BONDS.bind(HOSTRUN, kget, ksend, PLATFORM.detect)
 UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
 # Each module registers its own kinds of job (#622).
 for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS,
-                VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISKS, HELM, ADDONS):
+                VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISK_ALLOCATION, DISKS, HELM, ADDONS):
     _module.register(OPS)
 RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
                   LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
@@ -797,13 +798,12 @@ VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
              lambda url, display, reuse: HVIMAGE.download(KUBE_HELPERS.kget, KUBE_HELPERS.ksend, DEFAULT_NS, url, "", None, display, reuse),
              IMP.list_vm_images, _vm_image_disks,
              lambda ns, name: KUBE_HELPERS.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
-
-
 SNAPSHOT_DELETE.bind(kget, ksend)
 DISKS.bind(kget, ksend, NODES.node_temps)
 DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
 DISK_V2.protect_mutations(DISKS)
-
+DISK_ALLOCATION.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
+DISK_ALLOCATION.protect_mutations(DISKS)
 
 # Every job can be cancelled; what that does for each kind is said there.
 CANCEL.bind(kget, ksend, delete_workload, lambda: STORAGE_CLASSES.cleanup_restore_classes())

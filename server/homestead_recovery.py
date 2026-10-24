@@ -54,7 +54,7 @@ managed_by = lambda dep: {}
 MOVES_OR_RESTARTS = ("host-os", "host-promote", "cluster-shutdown", "deployment", "move", "workload-copy", "workload-rename",
                      "restructure", "reclass", "volume-restore", "snapshot-revert", "self-data-move",
                      "self-data-handoff", "self-data-prepare", "vm-migration", "vm-power", "image-update",
-                     "image-rollback", "disk-retire", "disk-v2-convert", "longhorn-v2-prepare",
+                     "image-rollback", "disk-retire", "disk-v2-convert", "disk-allocation", "longhorn-v2-prepare",
                      "platform-upgrade", "harvester-upgrade", "restore-test", "set-priority")
 # How long one move may take: Balance hosts waits up to ten minutes for each
 # container to start on its new host, so a run may outlast the window.

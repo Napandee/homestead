@@ -1700,7 +1700,7 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="row">${d.system ? UI.chip("system", "neutral") : ""}${d.system && d.role === "system" ? "" : UI.chip(word, tone)}
           ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
+          ${!harvester && d.system ? actionBar([{label:"Adjust allocation",need:"admin",run:`diskAllocationOpen(${jsq(node)})`},{label:"Use free space",need:"admin",run:`diskOsSpace(${jsq(node)})`}],{shown:1,label:"Storage allocation"}) : ""}</div></div>
       ${lh}${d.v2_preparation && !d.longhorn.length ? UI.actions(UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'})) : ''}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
