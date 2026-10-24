@@ -175,6 +175,9 @@ def prepare(component, version, read, platform, addons):
     operator = ("apps/v1", "Deployment", component, PARTS[component][3])
     if operator not in current:
         raise ValueError("The operator deployment disappeared during inspection; refresh before trying again")
+    expected = read(f"/apis/apps/v1/namespaces/{component}/deployments/{PARTS[component][3]}")
+    if (current[operator].get("metadata") or {}).get("uid") != (expected.get("metadata") or {}).get("uid"):
+        raise ValueError("The host's Kubernetes connection does not match this operator; no change was made")
     for row in rows:
         live = current.get(_key(row))
         if live is not None:

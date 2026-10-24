@@ -149,6 +149,14 @@ class ManifestOperatorTests(unittest.TestCase):
                 self.enable()
         self.assertFalse(self.sent)
 
+    def test_a_host_kubeconfig_for_another_cluster_cannot_adopt_or_update_it(self):
+        self.live = [copy.deepcopy(self.dep)]
+        self.live[0]["metadata"]["uid"] = "another-clusters-operator"
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.enable()
+        self.assertFalse(self.sent)
+        self.assertFalse(any("change" in kw for _, _, kw in self.runs))
+
     def test_update_preserves_configuration_pins_objects_and_dry_runs_before_applying(self):
         self.upgrade()
         _, script, options = self.runs[-1]

@@ -807,7 +807,8 @@ def _upgrade_route(request):
     homestead_routes.forget("components", "helm", "platform")
     result["operation"] = OPS.start(
         "platform-upgrade", f"Upgrade {result['name']} to {result['to']}",
-        {"kind": "Cluster" if result["component"] == "cluster" else "HelmChart", "name": result["name"],
+        {"kind": "Cluster" if result["component"] == "cluster" else
+                 result["name"] if result.get("how") == "manifests" else "HelmChart", "name": result["name"],
          "namespace": ""}, "/system/cluster",
         {"component": result["component"], "name": result["name"], "from": result["from"], "how": result.get("how", ""),
          "to": result["to"], "started": time.time(),
