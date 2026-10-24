@@ -82,6 +82,14 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("HS_LONGHORN_DATA_PATH", out)
         self.assertNotIn("bootstrap-k3s.sh agent", out)
 
+    def test_custom_join_storage_stops_before_installing(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
+                       "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1",
+                       "HS_LONGHORN_DATA_PATH": "/custom/data"})
+        self.assertNotEqual(0, code)
+        self.assertIn("Custom storage folders need manual setup", out)
+        self.assertNotIn("bootstrap-k3s.sh agent", out)
+
     def test_joining_as_a_tiebreaker(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "tiebreaker", "HS_NODE_IP": "192.0.2.6",
                                                           "HS_SERVER": "192.0.2.5", "HS_TOKEN": "K10example::server:secret", "HS_YES": "1"})

@@ -15,6 +15,7 @@ import urllib.error
 import homestead_kube as KUBE
 import homestead_multus as MULTUS
 import homestead_roles as ROLES
+from homestead_version import VERSION
 
 kget = None
 _cached = {"at": 0.0, "value": None, "failed_at": 0.0}
@@ -238,6 +239,17 @@ def shared_server_args(nodes):
     return [], False
 
 
+def join_storage():
+    """Read the current setting; a failed read must never pick a layout."""
+    try:
+        value = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/settings/default-data-path").get("value")
+    except Exception:
+        value = None
+    return {"storage_path": value if isinstance(value, str) else None,
+            "storage_supported": value in ("/mnt/longhorn-os", "/var/lib/longhorn"),
+            "installer_url": f"https://raw.githubusercontent.com/homestead-lab/homestead/v{VERSION}/scripts/install.sh"}
+
+
 def join_guide():
     """How to add a machine to a k3s or RKE2 cluster: the command, the server
     address, and where the token is - Homestead cannot read it."""
@@ -248,7 +260,7 @@ def join_guide():
         server_join = (f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=\"v{p['version']}\" "
                        f"K3S_TOKEN=<token> sh -s - server --server https://{server or '<server>'}:6443"
                        + "".join(f" {a}" for a in shared))
-        return {"distribution": "k3s", "server": server, "token_file": "/var/lib/rancher/k3s/server/node-token",
+        return {**join_storage(), "distribution": "k3s", "server": server, "token_file": "/var/lib/rancher/k3s/server/node-token",
                 "version": p["version"],
                 "agent": (f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=\"v{p['version']}\" "
                           f"K3S_URL=https://{server or '<server>'}:6443 K3S_TOKEN=<token> sh -"),
@@ -261,7 +273,7 @@ def join_guide():
                           " | sudo HS_ROLE=tiebreaker sh -s -- --check"),
                 "longhorn": "sudo apt-get install -y open-iscsi nfs-common   # or: sudo dnf install -y iscsi-initiator-utils nfs-utils"}
     if p["distribution"] == "rke2":
-        return {"distribution": "rke2", "server": server, "token_file": "/var/lib/rancher/rke2/server/node-token",
+        return {**join_storage(), "distribution": "rke2", "server": server, "token_file": "/var/lib/rancher/rke2/server/node-token",
                 "version": p["version"],
                 "config": f"server: https://{server or '<server>'}:9345\ntoken: <token>",
                 "agent": f"curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent INSTALL_RKE2_VERSION=\"v{p['version']}\" sh -\n"
