@@ -89,3 +89,15 @@ test('LV erase review identifies the whole filesystem and the protected siblings
   assert.match(t.html(),/Erase all contents of/);assert.match(t.html(),/Keep its size and boundary/);
   assert.match(t.html(),/\/dev\/dm-0/);assert.match(t.html(),/>Keep</);
 });
+
+test('whole-disk PV renders its OS and selected logical volumes without invented partition extents',()=>{
+  const t=setup();
+  const html=t.c.diskV2Region({device:'/dev/dm-1',mountpoint:'/var/lib/longhorn',layout:{path:'/dev/sdb',kind:'disk',size_bytes:2000,children:[
+    {path:'/dev/dm-0',kind:'lvm',size_bytes:500,mountpoint:'/',children:[]},
+    {path:'/dev/dm-1',kind:'lvm',size_bytes:1000,mountpoint:'/var/lib/longhorn',children:[]}
+  ]}});
+  assert.match(html,/\/dev\/dm-0/);assert.match(html,/\/dev\/dm-1/);
+  assert.match(html,/share this disk/);assert.match(html,/do not represent physical extents/);
+  assert.match(html,/Contains selected volume/);assert.match(html,/Erase contents/);
+  assert.doesNotMatch(html,/pmap-seg free/);
+});

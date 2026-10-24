@@ -8,6 +8,7 @@ function diskV2Region(plan) {
   const contains=row=>selected(row)||(row.children||[]).some(contains);
   const label=row=>selected(row)?'Erase contents':contains(row)?'Contains selected volume':'Keep';
   const physical=(root.children||[]).filter(r=>r.kind==='part').sort((a,b)=>(a.start_bytes||0)-(b.start_bytes||0));
+  const directLogical=(root.children||[]).filter(r=>r.kind!=='part');
   const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?'erase':contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' - '+label(row))}"><span>${esc(label(row))}</span></span>`;
   let cursor=0,bar='';
   for(const row of physical) {
@@ -15,18 +16,19 @@ function diskV2Region(plan) {
     if(start>cursor) bar+=`<span class="pmap-seg free" style="flex:${start-cursor}" title="Other space - keep"></span>`;
     bar+=segment(row,row.size_bytes);cursor=start+row.size_bytes;
   }
-  if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space - keep"></span>`;
+  if(directLogical.length) bar=segment(root,root.size_bytes);
+  else if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space - keep"></span>`;
   function rows(row,depth=0) {
     const children=row.children||[],logical=row.kind==='lvm',isSelected=selected(row);
     return `<div class="disk-v2-layout-row ${isSelected?'selected':''}">
       <div><strong>${esc(row.path)}</strong><span>${esc(logical?'Logical volume':row.kind==='part'?'Partition':'Disk')}${row.mountpoint?' - '+esc((row.mountpoint==='/'?'Host OS ':row.mountpoint.startsWith('/boot')?'Boot ':'')+row.mountpoint):''}</span></div>
       <span>${esc(diskV2GiB(row.size_bytes))}</span><b>${esc(label(row))}</b>
-    </div>`+(children.length?`<div class="disk-v2-layout-children">${children.some(r=>r.kind==='lvm')?'<p class="ui-help">Logical volumes share this partition; their positions below do not represent physical extents.</p>':''}${children.map(r=>rows(r,depth+1)).join('')}</div>`:'');
+    </div>`+(children.length?`<div class="disk-v2-layout-children">${children.some(r=>r.kind==='lvm')?'<p class="ui-help">Logical volumes share this '+(row.kind==='disk'?'disk':'partition')+'; their positions below do not represent physical extents.</p>':''}${children.map(r=>rows(r,depth+1)).join('')}</div>`:'');
   }
   return `<div class="disk-v2-layout" aria-label="Disk layout and erase scope">
     <div class="sec">${esc(root.path)} - ${esc(diskV2GiB(root.size_bytes))}</div>
     <div class="pmap" role="img" aria-label="Physical partitions. The list below identifies the contents to erase and the regions to keep.">${bar}</div>
-    ${physical.map(row=>rows(row)).join('')}
+    ${directLogical.length?rows(root):physical.map(row=>rows(row)).join('')}
     <p class="ui-help">Erase all contents of <strong>${esc(plan.device)}</strong> (${esc(plan.mountpoint||'dedicated Longhorn filesystem')}). Keep its size and boundary.</p>
   </div>`+UI.more('Device identity and checks',UI.facts([['Stable device',`<span class="disk-v2-identity mono">${esc(plan.stable_device||plan.device)}</span>`],['Disk access','AIO; Linux keeps control of the physical disk']])+ '<p class="ui-help">System files, shared mounts and remaining replica or backing-image files block preparation. Partition tables and other logical volumes are retained.</p>');
 }
@@ -115,7 +117,7 @@ window.diskV2EraseReview = async id => {
     diskV2Approval=plan;
     childModal('Erase and prepare device',UI.lead(`V1 replicas have moved off <b class="mono">${esc(plan.device)}</b>. Review the device before preparing it for V2.`) +
       UI.facts([['Host',esc(plan.node)],[plan.region_kind==='lvm'?'Logical volume':plan.region_kind==='part'?'Partition':'Device',`<span class="mono">${esc(plan.device)}</span>`],['Size',esc(diskV2GiB(plan.size_bytes))],['Result','Longhorn V2 block disk']]) +
-      UI.callout('warn','The filesystem will be erased','Remove the V1 entry, unmount this filesystem, remove its mount from fstab and erase its signatures. Its old replica files become inaccessible. The blank device will be registered with V2.') +
+      UI.callout('warn','The filesystem will be erased','Remove the V1 entry, unmount this filesystem, remove its mount from fstab and erase its signatures. Remaining replica or other data files block erasure. The blank device will be registered with V2.') +
       diskV2Region(plan) + UI.typedConfirm({ id: 'diskV2Device', expect: plan.device, oninput: 'diskV2EraseReady()' }) +
       UI.ack('diskV2EraseConfirm','Erase this evacuated device and use it for V2',{onchange:'diskV2EraseReady()'}) +
       UI.actions(UI.button('Back to task',`diskV2Watch(${jsArg(id)})`, { attrs: 'data-dialog-dismiss="true"' }) +UI.button('Erase and prepare','diskV2Erase()',{kind:'danger',id:'diskV2Erase',disabled:true,attrs:'data-need="admin"'})),true,'disk-v2');
