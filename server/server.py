@@ -1178,17 +1178,6 @@ def needed_role(path, method):
     return declared
 
 
-# ---------------------------------------------------------------- linked clusters
-# The resources the combined view gathers, and how this cluster answers locally.
-FLEET_LISTS = {
-    "workloads": lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
-    "vms": lambda: CACHE.cached("vms", 5, VMS.list_vms),
-    "nodes": lambda: CACHE.cached("nodes", 5, NODES.get_nodes),
-    "volumes": lambda: CACHE.cached("vol", 8, STORAGE.get_volumes),
-    "flow": lambda: FLOW.view(),
-}
-
-
 # ---------------------------------------------------------------- HTTP
 _key_refusals = {}      # address -> when a refused API key was last written down
 
@@ -1588,8 +1577,8 @@ class H(HTTP.LimitedHandler):
             known = True        # cannot tell now: relay as before, rather than fail the page
         if not named and not known:
             if isinstance(getattr(self, "_extra_headers", None), list):
-                self._extra_headers.append(
-                    ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
+                self._extra_headers.append(("Set-Cookie", MODULE_ROUTES.cookie_header(
+                    MODULE_ROUTES.Cookie(FLEET.COOKIE, "", max_age=0), self._over_tls())))
             return ""
         return target
 
@@ -1616,49 +1605,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(503, FLEET.unreachable_page(known.get("name") or "That cluster", error),
                                   "text/html; charset=utf-8")
             return self._send(502, {"error": str(error), "cluster": known.get("name", ""), "unreachable": True})
-
-    def _fleet_post(self, p, b):
-        """Linking clusters, and picking which one this browser looks at."""
-        try:
-            if p == "/api/fleet/switch":
-                wanted = str(b.get("id") or "")
-                if not wanted or wanted == FLEET.self_id():
-                    self._extra_headers.append(
-                        ("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"))
-                    return self._send(200, {"ok": True, "id": FLEET.self_id()})
-                target = FLEET.member(wanted)
-                if not target:
-                    return self._send(404, {"error": "no linked cluster by that name"})
-                check = FLEET.check(target)
-                if not check.get("reachable"):
-                    return self._send(502, {"error": f"{target.get('name')} is not answering this Homestead: "
-                                                     f"{check.get('error') or 'no answer'}"})
-                secure = "; Secure" if self._over_tls() else ""
-                self._extra_headers.append(("Set-Cookie", f"{FLEET.COOKIE}={target['id']}; Path=/; HttpOnly; "
-                                                          f"SameSite=Strict{secure}; Max-Age=2592000"))
-                return self._send(200, {"ok": True, "id": target["id"], "name": target.get("name")})
-            if p == "/api/fleet/join":
-                return self._send(200, FLEET.join(b.get("url"), b.get("username"), b.get("password"),
-                                                  b.get("own_url", ""), plain_ok=b.get("plain_ok") is True))
-            if p == "/api/fleet/accept":
-                return self._send(200, FLEET.accept(b))
-            if p == "/api/fleet/sync":
-                if not self._fleet_from:
-                    return self._send(403, {"error": "only a linked Homestead sends this"})
-                return self._send(200, FLEET.adopt(b, self._fleet_from))
-            if p == "/api/fleet/remove":
-                return self._send(200, FLEET.remove(str(b.get("id") or ""), plain_ok=b.get("plain_ok") is True))
-            if p == "/api/fleet/leave":
-                return self._send(200, FLEET.leave(plain_ok=b.get("plain_ok") is True))
-            if p == "/api/fleet/address":
-                return self._send(200, FLEET.set_address(b.get("url")))
-            if p == "/api/fleet/link-legacy":
-                return self._send(200, MOVE.link_legacy(str(b.get("name") or ""), b.get("own_url", ""), plain_ok=b.get("plain_ok") is True))
-        except ValueError as error:
-            return self._send(409, {"error": str(error)})
-        except FLEET.Unreachable as error:
-            return self._send(502, {"error": str(error)})
-        return self._send(404, {"error": "not found"})
 
     @self_data_request
     def do_GET(self):
@@ -1729,25 +1675,6 @@ class H(HTTP.LimitedHandler):
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
                 return self._send(200, {"ok": True})
-            if p == "/api/fleet":
-                self._who()
-                return self._send(200, FLEET.summary(via=self._fleet_from))
-            if p == "/api/fleet/state":
-                self._who()
-                if not self._fleet_from:
-                    return self._send(403, {"error": "only a linked Homestead asks for this"})
-                return self._send(200, FLEET.shared_state())
-            if p == "/api/fleet/home":
-                self._extra_headers += [("Set-Cookie", f"{FLEET.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
-                                        ("Location", "/")]
-                return self._send(302, {"ok": True})
-            if p.startswith("/api/fleet/all/") and p.rsplit("/", 1)[-1] in FLEET_LISTS:
-                what = p.rsplit("/", 1)[-1]
-                rows, missing = FLEET.gather(what, FLEET_LISTS[what], self.user, self.role)
-                if missing:
-                    self._extra_headers.append(("X-Homestead-Fleet-Missing",
-                                                urllib.parse.quote(json.dumps(missing))))
-                return self._send(200, rows)
             if p.startswith("/api/self/data/handoff/"):
                 if re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}/view", p):
                     return self._send(200, SELF_DATA_WORKER.maintenance_page(p.split("/")[-2]), "text/html; charset=utf-8")
@@ -1794,8 +1721,6 @@ class H(HTTP.LimitedHandler):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p.startswith("/api/fleet/"):
-                return self._fleet_post(p, b)
             if p == "/api/self/data/move":
                 try:
                     result, token = start_self_data_move(b, self.user)

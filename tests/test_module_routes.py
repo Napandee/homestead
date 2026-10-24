@@ -17,8 +17,8 @@ import source_scan as SS
 SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 1959
-MAX_PATH_BRANCHES = 16
+MAX_LINES = 1884
+MAX_PATH_BRANCHES = 5
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20
 # Lines in server.py's alias block (names tests still patch on server). Only lowered.
@@ -35,23 +35,11 @@ INLINE_ROUTES = (
     ("GET", "/api/node/shell", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/vm/console", "connection-bound: WebSocket upgrade"),
     ("GET", "/api/icons/", "connection-bound: serves a file with its own headers (path prefix)"),
-    ("GET", "/api/fleet", "connection-bound: fleet forwarding"),
-    ("GET", "/api/fleet/state", "connection-bound: fleet forwarding"),
-    ("GET", "/api/fleet/home", "connection-bound: cookies/session"),
-    ("GET", "/api/fleet/all/", "connection-bound: fleet forwarding"),
     ("GET", "/api/self/data/handoff/", "stays: the handler matches the handoff id in the path by prefix (path prefix)"),
     ("POST", "/api/v1/", "connection-bound: API keys and sessions (homestead_api_v1)"),
-    ("POST", "/api/fleet/", "connection-bound: fleet forwarding"),
     ("POST", "/api/self/data/move", "connection-bound: cookies/session"),
     ("ANY", "/api/self/data/abandon", "not a route here: _guard lets the recovery action through while boot is pending; the route is in homestead_self_data_server"),
-    ("ANY", "/api/fleet/accept", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/address", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/join", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/leave", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/link-legacy", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/remove", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/switch", "stays: fleet forwarding (_fleet_post)"),
-    ("ANY", "/api/fleet/sync", "stays: fleet forwarding (_fleet_post)"),
+    ("ANY", "/api/fleet/home", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/v1/openapi.json", "connection-bound: API keys and sessions (homestead_api_v1)"),
     ("ANY", "/api/auth/login", "not a route here: the guard checks it before routing"),
     ("ANY", "/api/auth/setup", "not a route here: the guard checks it before routing"),
@@ -87,7 +75,7 @@ def api_literals(method):
 
 def helper_literals(source=SS.SERVER_PY):
     """Every "/api/..." path written in class H outside its do_* methods:
-    helpers such as _fleet_post answer routes too, and so could a class
+    helpers such as _fleet_target check routes too, and so could a class
     attribute they read."""
     lines = (source if isinstance(source, SS.Code) else SS.text(source)).splitlines()
     cls = next(node for node in SS.tree(source).body if isinstance(node, ast.ClassDef) and node.name == "H")
@@ -359,7 +347,7 @@ class ServerStaysRouting(unittest.TestCase):
         INLINE_ROUTES with the reason it needs the handler (cookies, request
         headers, fleet forwarding, a WebSocket): under its method when it is in
         do_GET, do_POST or do_DELETE, under "ANY" when only a helper method
-        (such as _fleet_post) writes it. A new route goes in its module's ROUTES
+        (such as _fleet_target) writes it. A new route goes in its module's ROUTES
         instead. A route that moves out of server.py comes off INLINE_ROUTES in
         the same commit. Only literals are seen: a path compared with a constant
         (p == MCP.PATH) is not."""

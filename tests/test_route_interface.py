@@ -141,7 +141,7 @@ class PrefixRoutes(unittest.TestCase):
                              # server.py's own prefix answers (review I2)
                              ("GET", "/api/self/data/handoff/*"), ("GET", "/api/self/data/*"),
                              ("DELETE", "/api/workload/*"), ("DELETE", "/api/workload/lab/*"),
-                             ("GET", "/api/fleet/all/*"), ("GET", "/api/icons/*")):
+                             ("GET", "/api/icons/*")):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 self.declare(method, path)
         self.assertIn(("GET", "/api/test-free/*"), self.declare("GET", "/api/test-free/*"))

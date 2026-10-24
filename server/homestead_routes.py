@@ -88,6 +88,7 @@ MODULES = (
     "homestead_files",
     "homestead_firewall",
     "homestead_fleet",
+    "homestead_fleet_routes",
     "homestead_flow",
     "homestead_forecast",
     "homestead_gitops",

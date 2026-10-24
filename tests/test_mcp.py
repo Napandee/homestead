@@ -536,6 +536,7 @@ class CatalogueTests(unittest.TestCase):
         "/api/weekly-trim/run": "trim_volume trims one volume; trimming them all is the weekly job's",
         **{f"/api/auth/{path}": "a person's own session" for path in (
             "setup", "login", "logout", "password", "signout-everywhere", "preferences/dashboard")},
+        "/api/fleet/switch": "a browser's choice of cluster",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):
