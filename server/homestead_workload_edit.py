@@ -638,8 +638,19 @@ def prepare_edit(cfg, current=None):
             spec["hostname"] = L.dns_label(pod_hostname, "pod hostname")
         else:
             spec.pop("hostname", None)
+    if "service_links" in cfg:
+        # Kubernetes gives every container <SERVICE>_HOST, _PORT and the like
+        # for each Service in the namespace; an image that reads such a name
+        # itself (IMMICH_PORT) can refuse to start. Off leaves them out; on is
+        # Kubernetes' default, so an app that never set it is left as it is.
+        if not isinstance(cfg["service_links"], bool):
+            raise ValueError("service links are on or off")
+        if not cfg["service_links"]:
+            spec["enableServiceLinks"] = False
+        elif spec.get("enableServiceLinks") is False:
+            spec.pop("enableServiceLinks")
 
-    seeds = _prepare_seed_configs(ns, dep, cfg.get("seed_configs") or [])
+    seeds =_prepare_seed_configs(ns, dep, cfg.get("seed_configs") or [])
 
     if cfg.get("failover"):
         FAILOVER.apply(spec, cfg["failover"])

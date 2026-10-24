@@ -529,6 +529,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const basics = `
       <div class="f"><label>App name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       ${UI.more("Optional settings", `<div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the app name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
+      <label class="switch"><input type="checkbox" id="e_service_links" ${w.service_links === false ? "" : "checked"}>
+        Service environment variables ${tip("Kubernetes gives each container a NAME_HOST and NAME_PORT variable for every Service in its namespace. Turn this off when an image reads one of those names itself - a Service called immich gives IMMICH_PORT, which the Immich image refuses to start with. On is Kubernetes' default; changing it restarts the app.")}</label>
       <div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><div class="row logo-field"><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/logo.png or https://example.com">
         <button class="btn" type="button" onclick="logoFindInline(${jsq(ns)},${jsq(name)},'e_icon')">${icon("search")}Find</button></div><div id="e_icon_find"></div></div>`)}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
@@ -702,6 +704,7 @@ window.editSave = async (ns, name) => {
     key: el.dataset.key, value: el.value,
   }));
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
+    ...($("#e_service_links") ? { service_links: $("#e_service_links").checked } : {}),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
     placement: readPlacement(), failover: $("#e_failover")?.value || "", monitoring: monitoringFieldValue("e"),
