@@ -581,10 +581,11 @@ window.editReview = async body => {
     const concerns = capacityNotes(review.capacity).concerns;
     const copying = !!review.capacity.copy_helper;
     if (copying) {
-      childModal("Move container data", storageCopyReview(config,review.capacity), true, "operation-review");
+      childModal("Move container data", gitopsNote(review.managed) + storageCopyReview(config,review.capacity), true, "operation-review");
       return;
     }
     childModal(rename ? "Rename app" : "Review app changes", `
+      ${gitopsNote(review.managed, { rename: !!rename })}
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
@@ -600,6 +601,11 @@ window.confirmEdit = async () => {
   const body = { ...review.config, capacity_token: review.capacity_token, confirm_capacity: true };
   const { ns, name, workload_name: workloadName } = body;
   const renaming = workloadName && workloadName !== name;
+  // Flux or Argo CD brings the old name back (#734): its own tick, sent so the server knows.
+  if (renaming && review.managed?.by) {
+    if (!$("#editManagedConfirm")?.checked) return toast(`Tick "${review.managed.by} will bring back the old name" first`, "bad");
+    body.confirm_managed = true;
+  }
   review.submitting = true;
   const button = $("#editGo");
   button.disabled = true;

@@ -274,6 +274,9 @@
   const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
     { name: w.name.replace(/(^|-)([a-z])/g, (_, dash, c) => (dash ? " " : "") + c.toUpperCase()), icon: demoLogo(w.name[0].toUpperCase(), (i * 47) % 360), repo: w.images[0], key: `${w.name}|${w.images[0]}` },
     { name: `${w.name}-alt`, icon: demoLogo(w.name[0].toUpperCase(), (i * 47 + 180) % 360), repo: `example/${w.name}-alt`, key: `${w.name}-alt|example` }]);
+  // Flux applies paperless from git (#734): its edit, move and rename reviews say so.
+  const demoGitops = body => body.ns === "lab" && body.name === "paperless"
+    ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {};
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
@@ -2612,7 +2615,7 @@ ssh_pwauth: true
     },
     "/api/move/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      return { capacity_token: "demo-host-move", capacity: {
+      return { capacity_token: "demo-host-move", managed: demoGitops(body), capacity: {
         blocked: false, requires_confirmation: true, additional: 1, candidates: [],
         pod_request_gb: 0.5, pod_memory_gb: 1, pod_cpu_request_percent: 10,
         warnings: ["Demo snapshot: all containers stop before replacements start. Placement is not reserved."],
@@ -2624,7 +2627,7 @@ ssh_pwauth: true
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const rename = body.workload_name && body.workload_name !== body.name;
-      return { capacity_token: "demo-review", capacity: {
+      return { capacity_token: "demo-review", managed: demoGitops(body), capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
       candidates: [
         { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,

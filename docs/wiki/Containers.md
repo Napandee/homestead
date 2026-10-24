@@ -130,6 +130,23 @@ old volume is kept until you remove it. A new volume is given the old
 location's owner and permissions, whether its data comes along or it starts
 empty, so an app that runs as its own user can still write to it.
 
+### Apps applied by Flux or Argo CD
+
+Flux and Argo CD put back what git says at their next sync, usually within ten
+minutes. So when one of them applies an app - Homestead reads the labels Flux
+and the annotation Argo CD leave on it, or your own **Updated elsewhere** mark -
+the **Edit** and **Move** reviews say so before you save:
+
+> Flux applies this app (Kustomization flux-system/apps). This change lasts
+> until Flux next applies it. To keep it, change it in git.
+
+You can still save: trying a change here and then committing it is fine.
+**Rename** asks for one more tick, "Flux will bring back the old name": a
+rename makes the app under its new name and removes the old one, and Flux then
+brings the old one back, so you would have two copies. Rename it in git
+instead. An AI agent renaming such an app has to say the same, with
+`confirm_managed: true`.
+
 ### Start and scale capacity checks
 
 Before increasing a Deployment's replica count, Homestead reads reservations

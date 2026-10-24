@@ -18,6 +18,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_copy_job as COPY_JOB
 import homestead_env_secrets as ENVSEC
 import homestead_failover as FAILOVER
+import homestead_gitops as GITOPS
 import homestead_group_tiers as GROUPS
 import homestead_hardware as HW
 import homestead_host_access as HOSTACCESS
@@ -176,8 +177,9 @@ def set_primary_port(request):
 def preview_edit(request):
     b = request.body
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
-    _, context, plan = edit_capacity_plan(b)
-    return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context)}
+    prepared, context, plan = edit_capacity_plan(b)
+    return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
+            "managed": GITOPS.notice(kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}"))}
 
 
 def edit(request):
@@ -213,6 +215,7 @@ def edit(request):
                 ((dep_now.get("spec") or {}).get("template") or {}).get("spec") or {})[0] != wanted:
             notes = PRIORITY.ensure((wanted,), PRIORITY.ladder())
     if context.get("action") == RENAME.KIND:
+        GITOPS.require_rename_ack(kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}"), b)
         def admission(dep):
             return PLACE.manifest_plan(dep, b["ns"], dep["metadata"]["name"], dep["spec"]["replicas"],
                 get_app_settings()["thresholds"]["memory"]["critical"], read=kget,
@@ -531,8 +534,9 @@ def move_capacity_plan(body):
 
 
 def preview_host_move(body):
-    _, capacity, context = move_capacity_plan(body)
-    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+    current, capacity, context = move_capacity_plan(body)
+    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context),
+            "managed": GITOPS.notice(current)}
 
 
 def reviewed_host_move(body):
