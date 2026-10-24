@@ -223,6 +223,33 @@ class VMEditAdmissionTests(unittest.TestCase):
         plan, _, _ = server.VM_REVIEW.vm_edit_capacity(prepared)
         self.assertTrue(plan["vm"]["admission_needed"])
 
+    def test_growing_a_running_vms_disk_needs_no_second_launcher(self):
+        # Growing a disk expands its claim; KubeVirt starts no new launcher, so
+        # a VM whose host has no room for a second copy can still grow one.
+        self.disk()
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"] = {"disks": [{"name": "root", "disk": {"bus": "virtio"}}]}
+        pvc = self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/root"]
+        pvc["spec"]["resources"] = {"requests": {"storage": "10Gi"}}
+        pvc["status"]["capacity"] = {"storage": "10Gi"}
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims"] = {"items": [pvc]}
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn"] = {
+            "metadata": {"name": "longhorn", "uid": "sc-uid", "resourceVersion": "1"}, "allowVolumeExpansion": True}
+        self.running()
+        self.nodes = []
+        patch = mock.patch.object(server.STORAGE_RESIZE, "upgrade_guard", None)
+        patch.start()
+        self.addCleanup(patch.stop)
+        prepared = server.VM_REVIEW.prepare_vm_edit({"ns": "lab", "name": "guest", "disks": [{"name": "root", "size": "20Gi"}]})
+        self.assertEqual([("root", "20Gi")], prepared["resize"])
+        plan, _, _ = server.VM_REVIEW.vm_edit_capacity(prepared)
+        self.assertFalse(plan["vm"]["admission_needed"])
+        self.assertFalse(plan["blockers"], plan)
+        self.body = {"ns": "lab", "name": "guest", "disks": [{"name": "root", "size": "20Gi"}]}
+        result, writes = self.call("/api/vm/edit", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        grown = [c.args[2] for c in writes.call_args_list if c.args[1].endswith("/persistentvolumeclaims/root")]
+        self.assertEqual("20Gi", grown[0]["spec"]["resources"]["requests"]["storage"])
+
     def disk_setup(self, platform):
         self.body = {"ns": "lab", "name": "guest", "add_disks": [{"size": "2Gi", "storage_class": "storage"}]}
         self.objects["/api/v1/namespaces/lab/persistentvolumeclaims"] = {"items": []}
