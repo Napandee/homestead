@@ -57,9 +57,11 @@ class ManifestOperatorTests(unittest.TestCase):
         if "homestead-files-checked" in script:
             return "homestead-files-checked\n", ""
         if "--dry-run=client" in script:
-            return json.dumps({"kind": "List", "items": self.desired}), ""
+            # kubectl create prints each resource separately, including with
+            # --dry-run=client; unlike get, it does not wrap them in a List.
+            return "".join(json.dumps(row, indent=4) + "\n" for row in self.desired) + O.READ_COMPLETE, ""
         if "get --ignore-not-found" in script:
-            return json.dumps({"kind": "List", "items": self.live}), ""
+            return json.dumps({"kind": "List", "items": self.live}) + O.READ_COMPLETE, ""
         return "homestead-operator-applied\n", ""
 
     def enable(self):
@@ -78,6 +80,59 @@ class ManifestOperatorTests(unittest.TestCase):
     def test_bootstrap_marker_enables_upgrades_without_adoption(self):
         self.cr["metadata"]["annotations"] = {O.MARK: "manifests"}
         self.assertEqual("manifests", O.state("kubevirt", self.read, self.platform)["how"])
+
+    def test_all_concatenated_release_objects_are_checked_before_enabling(self):
+        self.desired.insert(0, {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "kubevirt"}})
+        self.enable()
+        inventory = next(options["stdin"] for _, script, options in self.runs if "get --ignore-not-found" in script)
+        self.assertEqual(self.desired, json.loads(inventory)["items"])
+        self.assertEqual(1, len(self.sent))
+
+    def test_manifest_list_and_single_object_outputs_remain_supported(self):
+        for output in (json.dumps(self.desired[0]), json.dumps({"kind": "List", "items": self.desired})):
+            with self.subTest(output=output), patch.object(O, "_read_input", return_value=(output, "")):
+                self.assertEqual(self.desired, O._documents("kubevirt", "v1.9.0", self.addons, "node-1", "k3s kubectl"))
+
+    def test_invalid_or_truncated_manifest_stream_never_enables_upgrades(self):
+        valid = json.dumps(self.desired[0], indent=4)
+        for output in ("", " \n\t", valid + '\n{"kind":', valid + "\ninvalid tail", valid + "\n[]",
+                       valid + '\n{"kind":"List","items":{}}', valid + "\nnull", valid + '\n{"kind":"List"}',
+                       valid + '\n{"kind":"List","items":[],"metadata":{"continue":"next"}}'):
+            with self.subTest(output=output):
+                def read_input(node, command, arguments, payload):
+                    if "--dry-run=client" in arguments:
+                        return output, ""
+                    return json.dumps({"kind": "List", "items": self.live}), ""
+                with patch.object(O, "_read_input", side_effect=read_input):
+                    with self.assertRaisesRegex(ValueError, "Could not read the upstream operator manifest: .+[^ ]"):
+                        self.enable()
+        self.assertFalse(self.sent)
+        self.assertFalse(any("change" in options for _, _, options in self.runs))
+
+    def test_manifest_read_failure_reports_kubectl_diagnostic(self):
+        with patch.object(O, "_read_input", return_value=("", "  Unable to connect to the server\n")):
+            with self.assertRaisesRegex(ValueError, "manifest: Unable to connect to the server$"):
+                self.enable()
+        self.assertFalse(self.sent)
+
+    def test_complete_objects_without_command_receipt_never_enable_upgrades(self):
+        original = self.host_run
+        for stage in ("--dry-run=client", "get --ignore-not-found"):
+            with self.subTest(stage=stage):
+                def unfinished(node, script, **options):
+                    out, err = original(node, script, **options)
+                    return (out.removesuffix(O.READ_COMPLETE), err) if stage in script else (out, err)
+                with patch.object(O.HOSTRUN, "run", side_effect=unfinished):
+                    with self.assertRaisesRegex(ValueError, "kubectl inspection did not finish"):
+                        self.enable()
+        self.assertFalse(self.sent)
+
+    def test_cdi_release_stream_keeps_every_resource(self):
+        rows = [{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {"name": "cdi-operator", "namespace": "cdi"}},
+                {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "cdi-operator", "namespace": "cdi"}}]
+        output = " \n" + "\n\n".join(json.dumps(row, indent=4) for row in rows) + "\n\t"
+        with patch.object(O, "_read_input", return_value=(output, "")):
+            self.assertEqual(rows, O._documents("cdi", "v1.66.1", self.addons, "node-1", "k3s kubectl"))
 
     def test_enable_only_marks_the_reviewed_configuration_and_never_updates_operator(self):
         before = copy.deepcopy(self.cr)
@@ -190,6 +245,8 @@ class ManifestOperatorTests(unittest.TestCase):
                             except subprocess.TimeoutExpired:
                                 self.fail("operator inspection waited for stdin EOF")
                             self.assertEqual(7 if fail else 0, process.returncode)
+                            self.assertEqual(not fail, process.stdout.read().endswith(O.READ_COMPLETE.encode()),
+                                             "only a completed kubectl command produces the receipt")
                             self.assertEqual(options["stdin"], received.read_bytes())
                             self.assertFalse(Path(input_path.read_text()).exists(), "temporary input is removed")
                         finally:
