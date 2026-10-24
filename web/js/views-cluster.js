@@ -103,6 +103,7 @@ async function viewCluster() {
       <div class="row"><button class="btn" data-need="admin" onclick="clusterRemovePick()">Remove a host</button>
         <button class="btn" data-need="admin" onclick="clusterOnboarding()">Add a host</button></div></section>
   </div>
+  <div id="clusterGitops"></div>
   <div id="clusterComponents">${STATE.data.componentsHtml || ""}</div>
   <div id="clusterUpgrades">${STATE.data.upgradeHtml || ""}</div>
   <div id="clusterCleanup">${STATE.data.cleanupHtml || ""}</div>`);
@@ -111,6 +112,7 @@ async function viewCluster() {
   // GitHub is asked at most hourly, so this is cheap; still, the page does not wait.
   clusterUpgradesPaint();
   clusterComponentsPaint();
+  clusterGitopsPaint();
   HealthInsights.load();
 }
 

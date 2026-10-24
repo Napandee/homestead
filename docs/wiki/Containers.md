@@ -150,6 +150,27 @@ brings the old one back, so you would have two copies. Rename it in git
 instead. An AI agent renaming such an app has to say the same, with
 `confirm_managed: true`.
 
+#### Is Flux applying it?
+
+A note that says "change it in git" is only half the story if Flux has
+stopped applying what is in git - after a bad commit, an expired deploy key or
+a missing Secret. So Homestead also reads each Kustomization and HelmRelease,
+once a minute:
+
+- **An app's details** (open its row on Containers) show what applies it,
+  whether that is Ready, the revision it last applied (`main@a1b2c3d`, or a
+  chart and its version), when it last tried, and Flux's own message when it is
+  not Ready.
+- **System › Cluster** has one GitOps line, for example "2 Kustomizations,
+  6 HelmReleases: all ready", and lists any that are not Ready.
+- **An alert** (Degraded) is raised when one has not been Ready for 10 minutes,
+  and cleared when it is again. Flux's message is on the Cluster page, not in
+  the alert, since it can name repositories and Secrets. A suspended one is shown
+  as suspended and never alerts: someone paused it on purpose.
+
+This only reads; Homestead does not reconcile, suspend or change Flux objects.
+Argo CD's Applications are not read.
+
 #### Copy as YAML for git
 
 The edit review has **YAML for git**: the change as a patch, with only the

@@ -41,3 +41,47 @@ function gitopsYamlBlock(yaml, secret = {}) {
 window.gitopsCopyButton = gitopsCopyButton;
 window.gitopsYamlBlock = gitopsYamlBlock;
 window.gitopsNote = gitopsNote;
+
+/* Is Flux applying it? (#742) /api/gitops, read once a minute on the server:
+   each Kustomization and HelmRelease, and the apps each applies. */
+async function gitopsLoad() {
+  STATE.data.gitops = await api("/api/gitops").catch(error => ({ error: error.message }));
+  return STATE.data.gitops;
+}
+const gitopsAgo = iso => { const at = Date.parse(iso || ""); return at ? fmtAgo(Math.max(1, Math.round((Date.now() - at) / 1000))) : ""; };
+function gitopsState(row) {
+  return row.suspended ? "Suspended" : row.ready === true ? "Ready" : row.ready === false ? "Not ready" : "Applying";
+}
+/* An app's details: what applies it and how that is going. "" for an app
+   Flux does not apply, or before the read has come back. */
+function gitopsDetail(w) {
+  const report = STATE.data.gitops;
+  if (report?.error) {
+    // Unread is not fine: an app the update check says Flux applies says so.
+    const owner = (STATE.data.imageUpdateMap || {})[`${w.ns}/${w.name}`]?.managed;
+    return owner?.by === "Flux" && !window.remoteRow?.(w) ? `<div class="wl-detail-gitops"><span>Flux</span><b>${esc(owner.source || "Flux")}</b>
+      <div class="updateerror">Whether Flux is applying it could not be read: ${esc(report.error)}</div></div>` : "";
+  }
+  const id = report?.apps?.[`${w.ns}/${w.name}`];
+  const row = id && (report.objects || []).find(r => r.id === id);
+  if (!row || window.remoteRow?.(w)) return "";
+  const bits = [gitopsState(row), row.revision, row.tried && `tried ${gitopsAgo(row.tried)}`].filter(Boolean).map(esc).join(" · ");
+  return `<div class="wl-detail-gitops"><span>Flux</span><b>${esc(row.id)}</b><div class="dim xs">${bits}</div>${
+    row.ready === false && !row.suspended ? `<div class="updateerror">${esc(row.message || "Flux says it is not ready")}</div>` : ""}</div>`;
+}
+/* The Cluster page: one GitOps line, and what is not Ready with Flux's message. */
+async function clusterGitopsPaint() {
+  const report = await gitopsLoad(), box = $("#clusterGitops");
+  if (!box) return;
+  if (report?.error) {
+    box.innerHTML = UI.callout("warn", "GitOps", `<p>Flux's Kustomizations and HelmReleases could not be read: ${esc(report.error)}</p>`);
+    return;
+  }
+  if (!(report?.objects || []).length) { box.innerHTML = ""; return; }
+  const failing = report.objects.filter(row => row.ready === false && !row.suspended);
+  box.innerHTML = UI.callout(failing.length ? "warn" : "info", `GitOps: ${report.summary}`, failing.length
+    ? `<ul class="ui-list">${failing.map(row => `<li><b>${esc(row.id)}</b> · not ready${row.since ? ` (${esc(gitopsAgo(row.since))})` : ""}: ${esc(row.message || "no message")}</li>`).join("")}</ul>` : "");
+}
+window.gitopsLoad = gitopsLoad;
+window.gitopsDetail = gitopsDetail;
+window.clusterGitopsPaint = clusterGitopsPaint;
