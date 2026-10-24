@@ -346,12 +346,25 @@ function joinCommandHtml(g, role) {
   return check + guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config || "")}`) + shared;
 }
 window.joinCommandHtml = joinCommandHtml;
+/* Longhorn attaches a volume over iSCSI on the host running the app, so every
+   host that runs apps needs its packages; a tiebreaker runs none (#833). */
+function joinLonghornHtml(g, role) {
+  if (role === "tiebreaker") return `<p class="dim small">Not needed: a tiebreaker runs no apps and holds no storage.</p>`;
+  const wiki = `https://github.com/homestead-lab/homestead/wiki/Installing-on-${g.distribution === "rke2" ? "RKE2" : "k3s"}#if-something-is-stuck`;
+  return guideCopy(g.longhorn)
+    + `<p class="dim xs">Longhorn attaches volumes over iSCSI on the host where an app runs, so every host that runs apps needs these, even one that holds no copies. If Longhorn's pods keep restarting on it, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>`;
+}
+window.joinLonghornHtml = joinLonghornHtml;
 window.platformJoinRole = role => {
   const g = STATE.data.joinGuide;
+  if (g && $("#joinLonghorn")) $("#joinLonghorn").innerHTML = joinLonghornHtml(g, role);
   if (g && $("#joinCmd")) $("#joinCmd").innerHTML = joinCommandHtml(g, role);
 };
 window.platformJoinGuide = async (role = "app") => {
   modal("Add a host", '<div class="empty"><span class="spin2"></span>reading the cluster</div>', true);
+  // The role radios choose what the guide shows; nothing here is saved, so
+  // closing it never asks about unsaved changes.
+  window.__modalGuard = () => "";
   let g;
   try { g = await api("/api/platform/join"); } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   STATE.data.joinGuide = g;
@@ -365,10 +378,11 @@ window.platformJoinGuide = async (role = "app") => {
       <p>It is on the server${g.server ? ` at <span class="mono">${esc(g.server)}</span>` : ""}; Homestead cannot read it for you.</p>
       ${guideCopy(`sudo cat ${g.token_file}`)}
       <p class="dim xs">Anyone holding it can join a machine to this cluster, so keep it out of chats and notes.</p></section>
-    <section class="guide-step"><h4><span>2</span>If it will hold Longhorn volumes</h4>${guideCopy(g.longhorn)}</section>
-    <section class="guide-step"><h4><span>3</span>Choose what it does, and join it</h4>
+    <section class="guide-step"><h4><span>2</span>Choose what it does</h4>
       <div class="answer-modes">${JOIN_ROLES.map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="joinRole" value="${value}"${value === role ? " checked" : ""}
-        onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div>
-      <div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>4</span>Watch it join</h4><p class="dim small">It appears on the Hosts page within a minute or two, and turns Ready once its networking is up.</p></section>`;
+        onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div></section>
+    <section class="guide-step"><h4><span>3</span>Install Longhorn's host packages</h4><div id="joinLonghorn">${joinLonghornHtml(g, role)}</div></section>
+    <section class="guide-step"><h4><span>4</span>Join it</h4><div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
+    <section class="guide-step"><h4><span>5</span>Watch it join</h4><p class="dim small">It appears on the Hosts page within a minute or two, and turns Ready once its networking is up.</p>
+      <div>${UI.button("View hosts", "closeModal();go('nodes')", { kind: "pri" })}</div></section>`;
 };

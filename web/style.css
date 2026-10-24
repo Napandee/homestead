@@ -833,6 +833,9 @@ html[data-display="standalone"]:has(#modal:not(.hidden)) .main,html[data-display
 .askmsg{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;font-size:14px}
 .askin{width:100%;margin:-4px 0 16px}
 .askbtns{justify-content:flex-end;gap:8px}
+/* The button bar reaches the box's edges: its 20px padding, not a dialog's 24px,
+   which made every confirm scroll sideways (#833). */
+.askbox .ui-actions{margin-left:-20px!important;margin-right:-20px!important;padding-left:20px;padding-right:20px}
 #toast{pointer-events:none;position:fixed;right:22px;bottom:calc(18px + var(--tray-lift, 4px));display:flex;flex-direction:column;gap:9px;z-index:80;transition:bottom .2s var(--e)}
 .tst{background:linear-gradient(140deg,rgba(255,255,255,.1),rgba(255,255,255,.04));backdrop-filter:blur(24px) saturate(1.3);-webkit-backdrop-filter:blur(24px) saturate(1.3);border:1px solid var(--line2);border-left:3px solid #fff;border-radius:13px;
   padding:13px 17px;min-width:250px;box-shadow:0 16px 44px rgba(0,0,0,.65);animation:slide .3s var(--e);font-size:13px}

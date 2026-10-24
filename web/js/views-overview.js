@@ -1103,6 +1103,7 @@ async function viewNodes() {
   const layout = viewLayout("nodes");
   paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
+        {label:"Add a host…",run:"clusterOnboarding()",need:"admin"},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}
