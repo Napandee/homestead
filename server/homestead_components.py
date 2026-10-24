@@ -20,9 +20,10 @@ How each moves on depends on who put it there:
   the version, and it upgrades the servers one at a time, then the agents.
   Homestead installs the controller (a chart through the Helm controller, as
   its add-ons are) the first time.
-* Longhorn, KubeVirt and CDI installed by Homestead (or any HelmChart) move
-  on by changing that HelmChart. Installed some other way, they are shown
-  with the release notes, and upgraded the way they were installed.
+* Helm-managed components move on by changing their HelmChart. KubeVirt and
+  CDI installed from upstream manifests use that same method after explicit
+  management is enabled (the host installer marks new installs). External
+  managers retain control of their installations.
 """
 import json
 import re
@@ -36,6 +37,7 @@ import homestead_operations as OPS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_upgrade_check as UPGRADE_CHECK
 import homestead_routes
+import homestead_operator_manifests as OPERATOR_MANIFESTS
 
 kget = ksend = None
 ktext = None            # path -> plain text: a pod's log
@@ -300,7 +302,7 @@ def network_rows(p):
 # ------------------------------------------------------------------ the report
 def _row(component, name, installed, kind, how, note="", extra=None):
     available, error = releases(kind) if kind else ([], "")
-    target = next_step(installed, available) if how in ("helmchart", "suc") else None
+    target = next_step(installed, available) if how in ("helmchart", "suc", "manifests") else None
     newest = available[0] if available else ""
     ahead = bool(newest and parse(installed) and parse(newest) > parse(installed))
     row = {"id": component, "name": name, "installed": installed, "newest": newest,
@@ -341,22 +343,18 @@ def report(force=False):
                          "harvester" if p.get("harvester") else "helmchart" if managed else "manual",
                          harvester_note if p.get("harvester") else
                          "" if managed else "Installed outside Homestead: upgrade it the way it was installed."))
-    if p.get("kubevirt"):
-        installed, phase = kubevirt_version()
-        managed = not p.get("harvester") and bool(_helmchart(CHARTS["kubevirt"]))
-        rows.append(_row("kubevirt", "KubeVirt", installed, "kubevirt",
-                         "harvester" if p.get("harvester") else "helmchart" if managed else "manual",
-                         harvester_note if p.get("harvester") else
-                         "" if managed else "Installed outside Homestead: upgrade it the way it was installed.",
-                         {"phase": phase}))
-    if p.get("cdi"):
-        installed, phase = cdi_version()
-        managed = not p.get("harvester") and bool(_helmchart(CHARTS["cdi"]))
-        rows.append(_row("cdi", "CDI", installed, "cdi",
-                         "harvester" if p.get("harvester") else "helmchart" if managed else "manual",
-                         harvester_note if p.get("harvester") else
-                         "" if managed else "Installed outside Homestead: upgrade it the way it was installed.",
-                         {"phase": phase}))
+    for component, label, version in (("kubevirt", "KubeVirt", kubevirt_version), ("cdi", "CDI", cdi_version)):
+        if not p.get(component):
+            continue
+        installed, phase = version()
+        chart = None if p.get("harvester") else _helmchart(CHARTS[component])
+        external = OPERATOR_MANIFESTS.external(chart) if chart else ""
+        managed = bool(chart and not external)
+        state = ({"how": "harvester", "note": harvester_note} if p.get("harvester") else
+                 {"how": "manual", "note": f"Managed by {external}; upgrade it through that manager."} if external else
+                 {"how": "helmchart", "note": ""} if managed else OPERATOR_MANIFESTS.state(component, kget, p))
+        rows.append(_row(component, label, installed, component, state["how"], state["note"],
+                         {"phase": phase, "can_manage": state.get("can_manage", False)}))
     rows.extend(network_rows(p))
     if p.get("kubevirt") and not p.get("harvester"):
         import homestead_macvtap as MACVTAP
@@ -380,7 +378,7 @@ def _component(component):
         raise ValueError(f"this cluster has no {component} to upgrade")
     if found["how"] == "harvester":
         raise ValueError(f"{found['name']} comes with Harvester and is upgraded with it")
-    if found["how"] not in ("helmchart", "suc"):
+    if found["how"] not in ("helmchart", "suc", "manifests"):
         raise ValueError(f"{found['name']} was installed outside Homestead; upgrade it the way it was installed")
     if not found["next"]:
         raise ValueError(f"{found['name']} {found['installed']} is the newest there is")
@@ -424,9 +422,11 @@ def upgrade(component, target, options=None):
         helm_upgrade({"namespace": HELM_NS, "name": CHARTS[component], "version": target})
         app = app_version(component, target)
         detail = f"Upgrading {found['name']} to chart {target}{f' ({app})' if app else ''}"
+    elif found["how"] == "manifests":
+        detail = OPERATOR_MANIFESTS.upgrade(component, target, kget, platform(True), addons)
     else:
         detail = _start_operator(component, target)
-    return {"ok": True, "component": component, "name": found["name"], "from": found["installed"],
+    return {"ok": True, "component": component, "name": found["name"], "from": found["installed"], "how": found["how"],
             "to": target, "detail": detail,
             **({"v2_mode": mode} if component == "longhorn" else {}),
             **({"held": held} if component == "cluster" else {})}
@@ -438,16 +438,12 @@ def _start_operator(component, target):
     chart = _helmchart(CHARTS[component])
     if not chart:
         raise ValueError(f"Homestead did not install {component}")
+    owner = OPERATOR_MANIFESTS.external(chart)
+    if owner:
+        raise ValueError(f"{component} is managed by {owner}; upgrade it through that manager")
     base = addons.KUBEVIRT if component == "kubevirt" else addons.CDI
     manifest = addons.fetch(f"{base}/download/{target}/{'kubevirt' if component == 'kubevirt' else 'cdi'}-operator.yaml")[0]
-    if component == "kubevirt":
-        current = (_items("/apis/kubevirt.io/v1/kubevirts") or [{}])[0]
-        configuration = (current.get("spec") or {}).get("configuration") or {}
-        emulation = bool((configuration.get("developerConfiguration") or {}).get("useEmulation"))
-        switch_on = addons.kubevirt_cr(emulation, configuration.get("network"),
-                                       (configuration.get("developerConfiguration") or {}).get("disabledFeatureGates"))
-    else:
-        switch_on = addons.cdi_cr()
+    switch_on = OPERATOR_MANIFESTS.configuration(component, kget)
     chart.setdefault("spec", {})["chartContent"] = addons.chart_archive(component, target, manifest, switch_on)
     chart["metadata"].pop("managedFields", None)
     ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{HELM_NS}/helmcharts/{CHARTS[component]}", chart)
@@ -733,15 +729,23 @@ def status(item):
             return V2.progress(item)
         now = longhorn_version()
     elif component == "kubevirt":
-        now = kubevirt_version()[0]
+        now, phase = kubevirt_version()
     elif component == "macvtap":
         import homestead_macvtap as MACVTAP
         state = MACVTAP.inspect()
         now = state["version"] if state["ready"] else ""
     elif component == "cdi":
-        now = cdi_version()[0]
+        now, phase = cdi_version()
     else:
         return "failed", 100, "Unknown platform component; inspect this upgrade before retrying"
+    if ref.get("how") == "manifests":
+        if now == target and phase == "Deployed":
+            return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
+        if phase in ("Failed", "Error"):
+            return "failed", 50, f"{ref.get('name', component)} reports {phase}; inspect its operator before retrying"
+        if _elapsed(item) > 30 * 60:
+            return "failed", 50, f"Timed out waiting for {ref.get('name', component)} {target}; its operator may still be updating"
+        return "running", 50, f"{ref.get('name', component)} {now or '…'} → {target}; {phase or 'waiting for operator status'}"
     if now == target:
         return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
     job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-{CHARTS.get(component, component)}") or {}
@@ -805,7 +809,7 @@ def _upgrade_route(request):
         "platform-upgrade", f"Upgrade {result['name']} to {result['to']}",
         {"kind": "Cluster" if result["component"] == "cluster" else "HelmChart", "name": result["name"],
          "namespace": ""}, "/system/cluster",
-        {"component": result["component"], "name": result["name"], "from": result["from"],
+        {"component": result["component"], "name": result["name"], "from": result["from"], "how": result.get("how", ""),
          "to": result["to"], "started": time.time(),
          "phase": "controller" if result["component"] == "cluster" else "",
          **({"held": result["held"]} if "held" in result else {}),
@@ -814,10 +818,24 @@ def _upgrade_route(request):
     return result
 
 
+def _manage_operator_route(request):
+    component = str(request.body.get("component") or "")
+    if component not in OPERATOR_MANIFESTS.PARTS or request.body.get("confirm") is not True:
+        raise ValueError("Review and confirm enabling Homestead operator upgrades")
+    p = platform(True) or {}
+    if _helmchart(CHARTS[component]):
+        raise ValueError("This operator already has a HelmChart; manage its existing release")
+    version, _ = kubevirt_version() if component == "kubevirt" else cdi_version()
+    OPERATOR_MANIFESTS.enable(component, version, kget, ksend, p, addons)
+    homestead_routes.forget("components")
+    return {"ok": True, "detail": f"Homestead upgrades enabled for {OPERATOR_MANIFESTS.PARTS[component][0]}"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/cluster/components"): ("viewer", _report_route),
     ("POST", "/api/cluster/components/upgrade"): ("admin", _upgrade_route),
+    ("POST", "/api/cluster/components/manage-operator"): ("admin", _manage_operator_route),
 }
 
 

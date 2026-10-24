@@ -246,6 +246,11 @@ host_journal() {
 # folder like the rest; each one's switch goes in once its CRD is there.
 install_kubevirt() {
   say "Installing KubeVirt and CDI"
+  # Re-running the installer must not take over an existing Helm/operator
+  # installation or reset its configuration. Older manifest installs can be
+  # reviewed and enabled under Settings > Updates instead.
+  KV_PRESENT=$($KUBECTL get crd kubevirts.kubevirt.io --ignore-not-found -o name) || fail "Could not inspect KubeVirt."
+  CDI_PRESENT=$($KUBECTL get crd cdis.cdi.kubevirt.io --ignore-not-found -o name) || fail "Could not inspect CDI."
   KV_RELEASES=https://github.com/kubevirt/kubevirt/releases/download
   CDI_RELEASES=https://github.com/kubevirt/containerized-data-importer/releases
   KV="$KUBEVIRT_VERSION"
@@ -259,18 +264,23 @@ install_kubevirt() {
   case "$KV" in v*) ;; *) KV="v$KV" ;; esac
   case "$CDI" in v*) ;; *) fail "Could not determine the CDI release ($CDI)." ;; esac
   echo "  KubeVirt $KV, CDI $CDI"
-  curl -sfL "$KV_RELEASES/$KV/kubevirt-operator.yaml" -o "$MANIFESTS/kubevirt-operator.yaml" \
-    || fail "Could not download KubeVirt $KV."
-  curl -sfL "$CDI_RELEASES/download/$CDI/cdi-operator.yaml" -o "$MANIFESTS/cdi-operator.yaml" \
-    || fail "Could not download CDI $CDI."
-  apply "$MANIFESTS/kubevirt-operator.yaml"
-  apply "$MANIFESTS/cdi-operator.yaml"
+  if [ -z "$KV_PRESENT" ]; then
+    curl -sfL "$KV_RELEASES/$KV/kubevirt-operator.yaml" -o "$MANIFESTS/kubevirt-operator.yaml" \
+      || fail "Could not download KubeVirt $KV."
+    apply "$MANIFESTS/kubevirt-operator.yaml"
+  fi
+  if [ -z "$CDI_PRESENT" ]; then
+    curl -sfL "$CDI_RELEASES/download/$CDI/cdi-operator.yaml" -o "$MANIFESTS/cdi-operator.yaml" \
+      || fail "Could not download CDI $CDI."
+    apply "$MANIFESTS/cdi-operator.yaml"
+  fi
   modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
   EMULATION=""
   if [ ! -e /dev/kvm ]; then
     EMULATION="      useEmulation: true"
     echo "  Hardware virtualisation (/dev/kvm) is not available: KubeVirt will use emulation."
   fi
+  if [ -z "$KV_PRESENT" ]; then
   wait_crd kubevirts.kubevirt.io
   cat > "$MANIFESTS/kubevirt-cr.yaml" <<KUBEVIRT_CR
 apiVersion: kubevirt.io/v1
@@ -278,6 +288,8 @@ kind: KubeVirt
 metadata:
   name: kubevirt
   namespace: kubevirt
+  annotations:
+    homestead.io/operator-install: manifests
 spec:
   certificateRotateStrategy: {}
   customizeComponents: {}
@@ -289,18 +301,27 @@ spec:
 $EMULATION
 KUBEVIRT_CR
   apply "$MANIFESTS/kubevirt-cr.yaml"
+  else
+    say "KubeVirt is already installed; keeping its current manager and settings"
+  fi
+  if [ -z "$CDI_PRESENT" ]; then
   wait_crd cdis.cdi.kubevirt.io
   cat > "$MANIFESTS/cdi-cr.yaml" <<'CDI_CR'
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: CDI
 metadata:
   name: cdi
+  annotations:
+    homestead.io/operator-install: manifests
 spec:
   imagePullPolicy: IfNotPresent
   config:
     featureGates: [HonorWaitForFirstConsumer]
 CDI_CR
   apply "$MANIFESTS/cdi-cr.yaml"
+  else
+    say "CDI is already installed; keeping its current manager and settings"
+  fi
 }
 
 wait_crd() {

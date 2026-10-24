@@ -1153,7 +1153,7 @@ ADMIN_ROUTES = {
     # Which share folders the ISO library reads, and deleting an ISO's volume.
     "/api/vm/isos/folders", "/api/vm/isos/delete", "/api/vm/isos/browse", "/api/vm/isos/keep",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
-    "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
+    "/api/cluster/components/upgrade", "/api/cluster/components/manage-operator", "/api/cluster/upgrades/start",
     "/api/longhorn/v2/upgrade/review", "/api/longhorn/v2/upgrade/settings",
     # The VM image store downloads gigabytes into the cluster.
     "/api/vm/store/keep", "/api/vm/store/auto", "/api/vm/store/forget", "/api/vm/store/refresh",
