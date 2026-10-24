@@ -78,7 +78,7 @@ async function viewCluster() {
 
 
 
-  <section class="card flat" id="clusterHealth">${UI.moduleHeader("Health", "Prioritized suggestions across your cluster", UI.button("Refresh", "HealthInsights.load(true)"))}<div data-insight="full"><div class="empty small">Loading checks…</div></div></section>
+  <section class="card flat" id="clusterHealth">${UI.moduleHeader("Health", "Prioritized suggestions across your cluster", UI.button("Refresh", "HealthInsights.load(true)"))}<div data-insight="full">${HealthInsights.fullBody()}</div></section>
   <div class="cluster-layout">
     <section class="card flat cluster-wide">${UI.moduleHeader(`Hosts and capacity pressure`, `Roles, scheduling state, resource use, and Kubernetes pressure conditions`, `${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
         `${(report.nodes || []).filter(node => node.ready).length}/${(report.nodes || []).length} ready`)}`)}

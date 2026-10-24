@@ -155,6 +155,9 @@ const HealthInsights = (() => {
       (rows.length?list(rows,compact?3:Infinity):'<div class="empty small">No suggestions from the available checks.</div>')+
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
   }
+  // Cluster Health's body as the page paints it: the last results while they are
+  // checked again, so a refresh keeps the rows; the placeholder only before any (#834).
+  function fullBody() {return needs.health.every(key=>key in data)?healthBody():'<div class="empty small">Loading checks…</div>';}
   function body(id, settings={}) {
     if (!needs[id].every(key=>key in data))return '<div class="empty small"><span class="spin2"></span>Loading checks…</div>';
     if(id==="health")return healthBody(true);
@@ -184,7 +187,7 @@ const HealthInsights = (() => {
     banner.classList.toggle("acknowledged",done);
     title.textContent=done?"Acknowledged until it gets worse":title.dataset.text;
   }
-  function paint() {paintBanner();for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();}
+  function paint() {paintBanner();for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();window.dropOrphanTooltip?.();}
   let seeded={};
   const SEED_FRESH=15000;
   function seed(key,value){if(value && typeof value==="object" && !value.error && (key!=="overview" || value.health_issues!==undefined)){data={...data,[key]:value};seeded[key]=Date.now();}}
@@ -211,7 +214,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody};
+  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody,fullBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

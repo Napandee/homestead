@@ -74,6 +74,7 @@ case "${1:-}" in
     node scripts/check_update_channels.mjs
     node scripts/check_troubleshooting.mjs
     node tests/integration/navigation-aborts-reads.mjs
+    HEALTH_TOOLTIP_SCREENSHOTS=release-assets/pages/health-tooltip node tests/integration/health-keeps-results.mjs
     ;;
   *)
     echo "Usage: sh scripts/ci_ui_checks.sh dialogs-0|dialogs-1|dialogs-2|dialog-flows|pages|pages-dashboard|pages-setup|pages-live" >&2

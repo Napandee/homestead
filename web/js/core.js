@@ -659,11 +659,21 @@ function showTooltip(owner) {
   bubble.style.left = Math.round(left) + "px";
   bubble.style.top = Math.round(Math.max(margin, top)) + "px";
 }
+// A repaint or a new page can remove the element a tooltip belongs to, and no
+// browser then says the pointer left it; Firefox does not say focus left it
+// either. So the tooltip goes as soon as anything notices its element is gone (#834).
+function dropOrphanTooltip() {
+  if (tooltipOwner && !tooltipOwner.isConnected) hideTooltip();
+}
+window.dropOrphanTooltip = dropOrphanTooltip;
 document.addEventListener("pointerover", e => {
+  dropOrphanTooltip();
   const owner = tooltipTarget(e.target);
   if (owner && !owner.contains(e.relatedTarget)) showTooltip(owner);
 });
+document.addEventListener("pointermove", dropOrphanTooltip, { passive: true });
 document.addEventListener("pointerout", e => {
+  dropOrphanTooltip();
   if (tooltipOwner && tooltipOwner.contains(e.target) && !tooltipOwner.contains(e.relatedTarget)) hideTooltip(tooltipOwner);
 });
 document.addEventListener("focusin", e => showTooltip(tooltipTarget(e.target)));
@@ -948,6 +958,7 @@ function paint(html) {
     host.dataset.painted = "1";
     host.dataset.sig = html.length + ":" + STATE.view;
     if (window.applyRole) window.applyRole();
+    dropOrphanTooltip();
     return;
   }
   const next = document.createElement("div");
@@ -956,6 +967,7 @@ function paint(html) {
   morph(host, next);
   loadAppIcons(host);
   if (window.applyRole) window.applyRole();
+  dropOrphanTooltip();
 }
 function morph(a, b) {
   // fast path: identical markup, nothing to do
@@ -1000,7 +1012,7 @@ function syncAttrs(x, y) {
     if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
   }
 }
-function resetPaint() { const h = V(); delete h.dataset.painted; h.classList.remove("refreshing"); h.innerHTML = ""; }
+function resetPaint() { const h = V(); delete h.dataset.painted; h.classList.remove("refreshing"); h.innerHTML = ""; dropOrphanTooltip(); }
 
 /* ---------------- chart primitives ---------------- */
 const sparkAnimations = new WeakMap();
