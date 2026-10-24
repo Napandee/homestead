@@ -10,15 +10,17 @@ const LIST = { enabled: true, every_days: 30, apps: [{ ns: "lab", name: "paperle
   restores: [{ claim: "paperless-data", backup: "backup-1" }], last: { at: 1, ok: true, seconds: 60 } }] };
 
 function view(answer = LIST) {
-  const calls = { morph: [], enhanced: 0, roles: 0 };
+  const calls = { morph: [], enhanced: 0, roles: 0, icons: [] };
   const host = { innerHTML: "OLD", cloneNode: deep => (assert.equal(deep, false), { innerHTML: "" }) };
-  const ctx = { document: { addEventListener() {}, getElementById: id => id === "restore-tests" ? host : null },
+  const box = { checked: false };
+  const ctx = { document: { addEventListener() {}, getElementById: id => id === "restore-tests" ? host : null, activeElement: null },
     STATE: { data: {} }, setTimeout: () => 0, clearTimeout() {}, toast() {},
     esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
-    $: () => null, tip: t => t, icon: () => "", jsArg: s => JSON.stringify(String(s)), fmtAt: String,
+    $: sel => sel === "#rt_on" ? box : null, tip: t => t, icon: () => "", jsArg: s => JSON.stringify(String(s)), fmtAt: String,
     appAvatar: name => `<i>${name}</i>`, actionBar: () => "<span>actions</span>",
-    enhanceActions: () => { calls.enhanced++; }, morph: (a, b) => calls.morph.push([a, b]),
-    api: async path => path === "/api/restore-tests" ? JSON.parse(JSON.stringify(answer)) : { detail: "ok" } };
+    enhanceActions: () => { calls.enhanced++; }, morph: (a, b) => calls.morph.push([a, b]), loadAppIcons: el => calls.icons.push(el),
+    api: async path => { if (answer instanceof Error) throw answer; return path === "/api/restore-tests" ? JSON.parse(JSON.stringify(answer)) : { detail: "ok" }; } };
+  calls.box = box;
   ctx.jsq = s => ctx.esc(ctx.jsArg(s)); ctx.window = ctx; ctx.applyRole = () => { calls.roles++; };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   vm.runInContext(src, ctx);
@@ -48,6 +50,17 @@ test("a new list is morphed in, prepared as the page paint prepares it", async (
   assert.equal(calls.morph[0][1].innerHTML, ctx.restoreTestsSection(), "the same markup the page paints");
   assert.equal(calls.enhanced, 1, "enhanced as paint() enhances the page, so the two agree");
   assert.equal(calls.roles, 1, "roles applied again, so the admin switch stays hidden from a viewer");
+  assert.deepEqual(calls.icons, [host], "app icons wired again, as paint() wires them, so they do not blank");
+  assert.equal(calls.box.checked, true, "the switch shows the setting, even after someone clicked it");
+});
+
+test("a list that cannot be read is kept as the error, so both paints show the same warning", async () => {
+  const { ctx, calls } = view(new Error("timed out"));
+  ctx.STATE.data.restoreTests = LIST;
+  await ctx.loadRestoreTests();
+  assert.match(calls.morph[0][1].innerHTML, /Restore tests could not be listed[^]*timed out/);
+  assert.equal(calls.morph[0][1].innerHTML, ctx.restoreTestsSection(), "the next page paint shows the warning too");
+  assert.doesNotMatch(ctx.restoreTestsSection(), /paperless/, "not the old list, as if it were current");
 });
 
 test("switching restore tests on or off updates the kept list", async () => {

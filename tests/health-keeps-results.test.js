@@ -43,6 +43,8 @@ test("new Health results drop a tooltip whose row they replaced", async () => {
   global.window.dropOrphanTooltip = () => { dropped++; };
   await H.load(true);
   assert.equal(dropped, 1);
+  H.liveJobs([], true);
+  assert.equal(dropped, 2, "so do the jobs widgets, rewritten as jobs change");
 });
 
 test("the Cluster page paints the Health results it already has", async () => {

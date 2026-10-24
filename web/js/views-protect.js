@@ -975,15 +975,18 @@ const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(
 async function loadRestoreTests() {
   const host = document.getElementById("restore-tests");
   if (!host) return;
-  let d;
-  try { d = await api("/api/restore-tests"); }
-  catch (e) { host.innerHTML = `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(e.message))}`; return; }
-  STATE.data.restoreTests = d;
-  // Morphed in, as the page paint does it, so rows that did not change stay put.
+  // A list that cannot be read is kept as the error, so the next page paint says so too.
+  try { STATE.data.restoreTests = await api("/api/restore-tests"); }
+  catch (e) { STATE.data.restoreTests = { error: e.message }; }
+  // Morphed in, prepared as the page paint prepares it, so rows that did not change stay put.
   const next = host.cloneNode(false);
   next.innerHTML = restoreTestsSection();
   enhanceActions(next);
   morph(host, next);
+  loadAppIcons(host);
+  // A box someone clicked keeps its own state through a morph: the setting decides it.
+  const box = $("#rt_on");
+  if (box && document.activeElement !== box) box.checked = !!STATE.data.restoreTests.enabled;
   if (window.applyRole) window.applyRole();
 }
 
@@ -991,6 +994,7 @@ async function loadRestoreTests() {
 // and the placeholder only before the first (#834).
 function restoreTestsSection(d = STATE.data.restoreTests) {
   if (!d) return `<div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div>`;
+  if (d.error) return `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(d.error))}`;
   const row = r => {
     const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
     const result = r.running ? '<span class="pill info">testing now</span>'

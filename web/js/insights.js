@@ -213,7 +213,7 @@ const HealthInsights = (() => {
       data={...data,...Object.fromEntries(results)};checkedAt=Date.now();paint();
     })().finally(()=>{request=null;});return request;
   }
-  function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
+  function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");window.dropOrphanTooltip?.();}
   return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody,fullBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;

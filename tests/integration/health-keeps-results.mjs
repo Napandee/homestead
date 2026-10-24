@@ -47,7 +47,8 @@ try {
   const name = (await hostName.textContent()).trim();
   if (kind === "chromium") await page.evaluate(() => {
     // Firefox sends no focusout when the focused name is removed: nor does this page now.
-    window.addEventListener("focusout", e => { if (e.target.closest?.(".node-compact-heading")) e.stopImmediatePropagation(); }, true);
+    window.__holdFocusout = e => { if (e.target.closest?.(".node-compact-heading")) e.stopImmediatePropagation(); };
+    window.addEventListener("focusout", window.__holdFocusout, true);
   });
   await hostName.hover();
   assert.equal((await tip(page)).text, name, "hovering the host's name shows its tooltip");
@@ -61,6 +62,7 @@ try {
   await page.evaluate(() => refresh(true));
   state = await tip(page);
   assert.ok(!state.visible, `nor after a refresh: ${JSON.stringify(state)}`);
+  await page.evaluate(() => window.__holdFocusout && window.removeEventListener("focusout", window.__holdFocusout, true));
 
   // (a) Cluster Health: the first results, then refreshes with the cache run out.
   await page.evaluate(() => go("cluster"));
@@ -84,7 +86,8 @@ try {
     const done = page.evaluate(() => refresh(true));
     for (let t = 0; t < 12; t++) {
       texts.push(await page.evaluate(() => document.querySelector('[data-insight="full"]')?.textContent.trim().slice(0, 40) || "(gone)"));
-      if (t === 3 && i === 0) await shot(page, `${kind}-health-rechecking`);
+      // Half way: the page has painted, and Health's own reads are still out.
+      if (t === 6 && i === 0) await shot(page, `${kind}-health-rechecking`);
       await page.waitForTimeout(250);
     }
     await done;
@@ -102,6 +105,8 @@ try {
   state = await tip(page);
   assert.ok(!state.ownerGone, `an unchanged refresh keeps the button, so its tooltip may stay: ${JSON.stringify(state)}`);
   // Another account's view, say: Health starts over, and the rows are rebuilt.
+  // Checked as soon as refresh() resolves, before Health's own reads answer:
+  // paint() itself must drop the tooltip, with no pointer event and no wait.
   await page.evaluate(() => { HealthInsights.reset(); return refresh(true); });
   await shot(page, `${kind}-health-rebuilt-under-pointer`);
   state = await tip(page);
