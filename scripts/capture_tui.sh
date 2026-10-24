@@ -64,7 +64,7 @@ key Escape; sleep 1; key Escape
 # Joining cannot infer the remote Longhorn setting from a node token.
 start "$BIN" 32 "HS_ROLE=agent HS_DIST=k3s HS_SERVER=192.0.2.10 HS_TOKEN=example-token HS_NODE_IP=192.0.2.50"
 shot join-checks "Results for"
-key Enter; shot join-storage "Cluster Storage Path"
+key Enter; shot join-storage "Match the Cluster's Storage"
 key Escape
 
 # ---- a k3s server with things to fix

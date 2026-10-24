@@ -2353,6 +2353,7 @@ ssh_pwauth: true
           why: "rebuilds on harvester-node2 from its healthy copy" }] },
     "/api/disks/retire": { ok: true, operation: { id: "op-retire" } },
     "/api/platform/join": { distribution: "k3s", server: "192.0.2.50", version: "1.31.4+k3s1", token_file: "/var/lib/rancher/k3s/server/node-token",
+      storage_path: "/mnt/longhorn-os", storage_supported: true,
       agent: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_URL=https://192.0.2.50:6443 K3S_TOKEN=<token> sh -',
       server_join: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage',
       tiebreaker: 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.4+k3s1" K3S_TOKEN=<token> sh -s - server --server https://192.0.2.50:6443 --disable traefik --default-local-storage-path /var/lib/rancher/k3s/storage --node-taint node-role/tiebreaker=true:NoSchedule --node-label node-role/tiebreaker=true',
