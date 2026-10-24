@@ -69,6 +69,7 @@ const PAGES = [
   ["certificates-and-keys", "network", "networkTab('expiry')"],
   ["import", "imports"],
   ["schedules", "schedules"],
+  ["schedules-week", "schedule-week"],
   ["monitoring", "monitoring"],
   ["monitoring-30-days", "monitoring", "monitorRange('month')"],
   ["events", "events"],
