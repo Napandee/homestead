@@ -1117,7 +1117,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.332-dev.3/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.332-dev.8/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1128,7 +1128,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.332-dev.3 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.332-dev.8 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1146,6 +1146,25 @@ TAG=2.8.332-dev.3 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 - Homestead itself and its helpers (SMB, NFS, the object store) are counted
   apart: `report.updates`/`errors` cover apps, `report.homestead` Homestead's
   parts, which are updated from the top bar and Settings → Updates.
+
+## KubeVirt and CDI upgrades
+
+**Settings → Updates → Platform versions** upgrades both the Helm installations
+made in the web interface and upstream manifest installations made by the host
+installer. New installer runs record which method they used. Older manifest
+installations offer **Enable upgrades**, including when CDI is already current.
+This checks the installation and records consent; upgrading to a new version is
+a separate action. Existing VM disks and the complete KubeVirt/CDI configuration
+are kept.
+
+Helm, Flux, Argo CD, OLM and other operator owners are not taken over. Custom
+operator images or pinned registries/versions keep their existing upgrade
+method. Every control-plane host must be ready to check for old active
+auto-deploy files. Manifest updates use the upstream release, check every
+object's identity and ownership, and dry-run the complete change before applying
+it without forced conflicts. A conflict or partial failure stops the update and
+requires inspection before retrying. Harvester continues to upgrade its bundled
+components itself.
 
 ## Image cache cleanup
 
@@ -2181,10 +2200,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.332-dev.3`, the workflow publishes:
+For a release such as `v2.8.332-dev.8`, the workflow publishes:
 
 ```text
-ghcr.io/homestead-lab/homestead:2.8.332-dev.3
+ghcr.io/homestead-lab/homestead:2.8.332-dev.8
 ghcr.io/homestead-lab/homestead:2.8
 ghcr.io/homestead-lab/homestead:2
 ghcr.io/homestead-lab/homestead:latest
@@ -2195,8 +2214,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.332-dev.3
-git push origin v2.8.332-dev.3
+git tag v2.8.332-dev.8
+git push origin v2.8.332-dev.8
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

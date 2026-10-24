@@ -1627,7 +1627,7 @@ async function lhSettingsPaint() {
     <div class="lh-v2">
       <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
         {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
-        v2.enabled && {label:'Disable V2',run:'lhV2Disable()',danger:true}
+        ...(v2.enabled || v2.harvester_setting == null ? [{label:v2.enabled?'Disable V2':'Review V2 resource cleanup',run:'lhV2Disable()',danger:!!v2.enabled}] : [])
       ],{shown:1}) : ''}</div>
       <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and usually 2 GiB of hugepages (setup checks the installed requirement), and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
@@ -1678,6 +1678,11 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ` ${UI.chip("V2", "info")}` : ""}</span>
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
+        ${x.reserved_gb > 0 ? UI.more('Capacity breakdown',UI.facts([
+          [x.type==='block'?'Store capacity':'Filesystem capacity',esc(sizeText(x.capacity_gb))],
+          ['Reserved by Longhorn',esc(sizeText(x.reserved_gb))],
+          ['Capacity after reserve',esc(sizeText(x.size_gb))]
+        ])+`<p class="ui-help">The usage bar excludes Longhorn’s reserve.${x.type==='block'?'':' Filesystem capacity is smaller than the underlying device because of filesystem overhead.'} Growing the OS does not grow this store.</p>`) : ''}
         ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
         <div class="row disk-tags">${(x.tags || []).map(t => UI.chip(t, "info")).join("")
           || '<span class="dim xs">no tags</span>'}
@@ -1687,10 +1692,11 @@ function diskRowsHtml(node, disks, harvester) {
           ${x.evicting ? UI.chip("moving replicas off", "warn") : !x.scheduling ? UI.chip("no new replicas", "neutral") : ''}
           ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
             !x.ready && {label:'Replace failed disk',need:'admin',run:`diskRetire(${jsq(node)},${jsq(x.id)})`},
+            !harvester && (x.path?.replace(/\/+$/,'')==='/var/lib/longhorn'||x.path?.startsWith('/mnt/homestead-retired-')) && {label:'Move Longhorn runtime',need:'admin',run:`runtimeMoveOpen(${jsq(node)},${jsq(x.id)})`},
             {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
             x.ready && x.replicas && !x.evicting && {label:'Move replicas off',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},true)`},
             x.evicting && {label:'Stop moving',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},false)`},
-            !harvester && !d.system && x.ready && x.type!=='block' && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
+            !harvester && x.ready && x.type!=='block' && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
             !x.replicas && !x.scheduling && {label:'Remove from Longhorn',need:'admin',kind:'danger',run:`diskAction('remove',${jsq(node)},${jsq(x.id)})`}
           ],{shown:1,label:'Disk actions'})}</div></div>`;
     }).join("");
@@ -1700,7 +1706,7 @@ function diskRowsHtml(node, disks, harvester) {
         <div class="row">${d.system ? UI.chip("system", "neutral") : ""}${d.system && d.role === "system" ? "" : UI.chip(word, tone)}
           ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
           ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
+          ${!harvester && d.system ? actionBar([{label:"Adjust allocation",need:"admin",run:`diskAllocationOpen(${jsq(node)})`},{label:"Use free space",need:"admin",run:`diskOsSpace(${jsq(node)})`}],{shown:1,label:"Storage allocation"}) : ""}</div></div>
       ${lh}${d.v2_preparation && !d.longhorn.length ? UI.actions(UI.button('V2 preparation',`diskV2Watch(${jsArg(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'})) : ''}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");

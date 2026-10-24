@@ -399,10 +399,25 @@ class NodeParityTests(unittest.TestCase):
         sent = next(body for _, path, body in cluster.sent if path == f"{HELM}/longhorn")["spec"]["valuesContent"]
         self.assertNotIn("priorityClass", sent)
 
+    def test_new_installer_storage_path_is_preserved_when_more_hosts_join(self):
+        for path in ("/mnt/longhorn-os", "/var/lib/longhorn"):
+            with self.subTest(path=path):
+                values = PARITY.addons.longhorn_values(1) + f"  defaultDataPath: {path}\n"
+                cluster = Cluster([node("a"), node("b"), node("c")], {
+                    f"{HELM}/longhorn": {"spec": {"valuesContent": values}},
+                    PARITY.LONGHORN_SETTING: {"value": "1"}})
+                self.bind(cluster)
+                PARITY._seen_ready = None
+                self.assertIn("keep 3 copies", PARITY.copies_tick())
+                sent = next(body for _, target, body in cluster.sent if target == f"{HELM}/longhorn")["spec"]["valuesContent"]
+                self.assertEqual(PARITY.addons.longhorn_values(3) + f"  defaultDataPath: {path}\n", sent)
+
     def test_the_installer_writes_the_same_longhorn_values_as_homestead(self):
         script = (Path(__file__).resolve().parents[1] / "scripts" / "bootstrap-k3s.sh").read_text(encoding="utf-8")
         block = script.split("  valuesContent: |\n", 1)[1].split("EOF\n", 1)[0]
-        self.assertEqual(PARITY.addons.longhorn_values(1), textwrap.dedent(block))
+        # Only a fresh installation sets the default path. Reconciliation must
+        # preserve an existing cluster's path rather than adopting this default.
+        self.assertEqual(PARITY.addons.longhorn_values(1) + "  defaultDataPath: $LONGHORN_DATA_PATH\n", textwrap.dedent(block))
 
     def test_a_count_someone_set_after_homestead_is_kept(self):
         chart = {"spec": {"valuesContent": INSTALLER_LONGHORN.replace("1", "2")}}

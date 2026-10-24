@@ -37,6 +37,10 @@ def reference_view(item):
         out["disk_v2_preparation"] = True
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("evacuating", "awaiting-erase", "cancelled")
         out["cleanable"] = False
+    if item.get("kind") == "disk-allocation":
+        out.update(cancellable=False, cleanable=False, allocation=True)
+    if item.get("kind") == "longhorn-runtime":
+        out.update(cancellable=False, cleanable=False, runtime_maintenance=True)
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
     if item.get("kind") == "auto-update":
@@ -47,6 +51,8 @@ def reference_view(item):
         ref = item.get("ref") or {}
         out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
                         "direct": bool(ref.get("planned_outage") or ref.get("forced")),
+                        "planned_outage": bool(ref.get("planned_outage")),
+                        "handoff": bool(ref.get("handoff") and ref.get("helper_uid")),
                         "failed_phase": ref.get("failed_phase", ""),
                         "holds": bool(ref.get("held")) or any(
                             choice == "wait" or (choice == "move" and key.startswith("VirtualMachine/"))
@@ -96,7 +102,7 @@ def reference_view(item):
     return out
 
 
-BRANCHED = ["disk-v2-convert", "k3s-cluster", "auto-update", "node-power", "set-restart", "vm-power",
+BRANCHED = ["disk-v2-convert", "disk-allocation", "longhorn-runtime", "k3s-cluster", "auto-update", "node-power", "set-restart", "vm-power",
             "vm-create", "vm-edit", "import-create", "self-data-prepare", "host-console",
             "cluster-shutdown", "longhorn-v2-prepare", "workload-rename", "workload-copy", "restructure",
             "reclass"]
