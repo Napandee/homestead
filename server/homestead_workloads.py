@@ -178,8 +178,18 @@ def preview_edit(request):
     b = request.body
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
     prepared, context, plan = edit_capacity_plan(b)
+    current = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
+    # The edit as YAML for git (#735); a rename is made in git as a rename.
+    # Values kept in the app's own Secret - and any value with a credential
+    # in it - are shown as references to that Secret, not as values.
+    change, secret = {}, {}
+    if context.get("action") != RENAME.KIND:
+        proposed = copy.deepcopy(prepared["deployment"])
+        secret = ENVSEC.as_saved(proposed, current, b.get("masked_env"), ENVSEC.held(b["ns"], current, kget))
+        change = GITOPS.patch(current, proposed)
     return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
-            "managed": GITOPS.notice(kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}"))}
+            "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else "",
+            "secret": secret if change else {}}
 
 
 def edit(request):

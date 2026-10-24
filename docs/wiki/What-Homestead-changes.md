@@ -189,6 +189,9 @@ Homestead also changes and deletes existing objects when you ask:
 
 - an app's `Deployment` or `StatefulSet` when you edit, scale, restart,
   update, stop or move it;
+- an app's own `Secret` (`<app>-env`) when you save it: environment values
+  that look secret move there - by name, a password or token in the value, or
+  a value it already held under a variable you renamed;
 - a `Node` when you cordon, drain, label or remove a host, and the Cluster
   API `Machine` behind it, where there is one;
 - a `PersistentVolume`'s reclaim policy and claim while a volume moves to

@@ -32,9 +32,12 @@ people start from the [App Store](App-Store) instead, which fills all of that in
 from the app's template, or [import](Importing) one from Unraid or a Compose
 file.
 
-Passwords, tokens and keys - a field the form masks, or a variable named like
-one (`*_PASSWORD`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*PEPPER*` and so on) -
-are kept in a Secret named `<app>-env`, not in the Deployment. The container
+Passwords, tokens and keys - a field the form masks, a variable named like
+one (`*_PASSWORD`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*PEPPER*` and so on), a
+value with a password or token in it (`postgres://user:pass@db`,
+`https://hooks.example.com/x?token=...`), or a value the Secret already holds
+under a variable you renamed - are kept in a Secret named `<app>-env`, not in
+the Deployment. The container
 reads them with `secretKeyRef`; **Edit** shows them as ordinary variables, typed
 blind, and saving puts changes back in the Secret. A container saved before
 this moves its values over the next time it is edited. The Secret is deleted
@@ -146,6 +149,34 @@ rename makes the app under its new name and removes the old one, and Flux then
 brings the old one back, so you would have two copies. Rename it in git
 instead. An AI agent renaming such an app has to say the same, with
 `confirm_managed: true`.
+
+#### Copy as YAML for git
+
+The edit review has **YAML for git**: the change as a patch, with only the
+fields it sets, under the app's kind, name and namespace. **Copy as YAML for
+git** puts it on the clipboard; paste it into a kustomize patch, or set the same
+fields in the app's manifest. Containers, environment variables and volumes are
+listed by name, so the patch merges into the ones there; one you removed is
+marked `$patch: delete`. Homestead's own bookkeeping - update history, the
+digests it last ran, restart stamps - is left out; settings you chose, such as
+the group or logo, stay in. Services and volumes are not in it.
+
+Secret values are moved out of the YAML, as well as Homestead can tell them:
+a variable it keeps in the app's own Secret (a masked field, a name that looks
+like a password or token, or one the Secret already holds, even under a new
+name) and any value with a password or token in it (`postgres://user:pass@db`,
+`https://hooks.example.com/x?token=...`) appear as a `secretKeyRef` to that
+Secret, with the `homestead.io/env-secret` annotation a save adds. It is a
+heuristic: check the YAML before committing it to a public repository.
+
+That Secret (`<app>-env`) exists only once Homestead has saved the app, and
+never in git. If Flux applies the app, create the Secret in git first - for
+example encrypted with SOPS - with the keys the review lists, or save the app
+here first. Otherwise the pod cannot start.
+
+On **Image updates**, an app Flux or Argo CD updates has the same button: the
+new `image:` line for each container, pinned to the new digest when only what
+the tag points at moved.
 
 ### Start and scale capacity checks
 
