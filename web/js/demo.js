@@ -1933,6 +1933,7 @@ ssh_pwauth: true
     },
     "/api/longhorn/v2/upgrade/review": () => ({capacity_token:'demo-v2-upgrade-review'}),
     "/api/longhorn/v2/upgrade/settings": () => ({ok:true,detail:'V2 upgrade settings updated in this demo'}),
+    "/api/cluster/components/manage-operator": {ok:true, detail:"Homestead operator upgrades enabled"},
     "/api/cluster/components/upgrade": { ok: true, component: "cluster", name: "k3s", from: "v1.31.4+k3s1", to: "v1.31.12+k3s1",
       detail: "Installing Rancher's system-upgrade-controller first; then the servers move to v1.31.12+k3s1 one at a time, and the agents after them" },
     "/api/cluster/upgrades/start": { ok: true, upgrade: "hvst-upgrade-demo", detail: "Harvester is upgrading to v1.9.0" },

@@ -1147,6 +1147,25 @@ TAG=2.8.332-dev.4 HOST=rancher@your-harvester-node ./scripts/deploy.sh
   apart: `report.updates`/`errors` cover apps, `report.homestead` Homestead's
   parts, which are updated from the top bar and Settings → Updates.
 
+## KubeVirt and CDI upgrades
+
+**Settings → Updates → Platform versions** upgrades both the Helm installations
+made in the web interface and upstream manifest installations made by the host
+installer. New installer runs record which method they used. Older manifest
+installations offer **Enable upgrades**, including when CDI is already current.
+This checks the installation and records consent; upgrading to a new version is
+a separate action. Existing VM disks and the complete KubeVirt/CDI configuration
+are kept.
+
+Helm, Flux, Argo CD, OLM and other operator owners are not taken over. Custom
+operator images or pinned registries/versions keep their existing upgrade
+method. Every control-plane host must be ready to check for old active
+auto-deploy files. Manifest updates use the upstream release, check every
+object's identity and ownership, and dry-run the complete change before applying
+it without forced conflicts. A conflict or partial failure stops the update and
+requires inspection before retrying. Harvester continues to upgrade its bundled
+components itself.
+
 ## Image cache cleanup
 
 Image Cache groups kubelet aliases by digest and labels images retained by a

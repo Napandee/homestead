@@ -143,6 +143,7 @@ window.clusterComponentsPaint = clusterComponentsPaint;
 const COMPONENT_HOW = {
   harvester: "comes with Harvester", helmchart: "installed by Homestead", suc: "system-upgrade-controller",
   manual: "installed outside Homestead",
+  manifests: "managed by Homestead",
 };
 
 function componentRow(c) {
@@ -153,7 +154,8 @@ function componentRow(c) {
     : c.behind ? UI.chip(`${c.newest} is out`, c.next ? "warn" : "neutral", { size: "slim", tip: c.next ? "" : c.note || "" }) : UI.chip("up to date", "ok", { size: "slim" });
   const nodes = c.mixed && c.nodes ? `<div class="dim xs">${Object.entries(c.nodes).map(([n, v]) => `${esc(n)} ${esc(v)}`).join(" · ")}</div>` : "";
   const action = running ? UI.chip("upgrading", "info", { size: "slim" })
-    : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade(${jsq(c.id)})">Upgrade to ${esc(c.next)}</button>` : "";
+    : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade(${jsq(c.id)})">Upgrade to ${esc(c.next)}</button>`
+    : c.can_manage ? `<button class="btn sm" data-need="admin" onclick="componentManageOperator(${jsq(c.id)})">Enable upgrades</button>` : "";
   return `<div class="release-row component-row"><div>
       <span class="cluster-kicker">${esc(c.name.toUpperCase())}</span>
       <div><b class="mono">${esc(c.installed || "—")}</b> ${state}
@@ -226,6 +228,29 @@ window.componentUpgradeGo = async (id, to) => {
     if (window.noteOperation) noteOperation(r.operation);
     clusterComponentsPaint();
   } catch (e) { toast(e.message, "bad"); }
+};
+
+window.componentManageOperator = id => {
+  const c = (STATE.data.components?.components || []).find(row => row.id === id);
+  if (!c?.can_manage) return;
+  modal(`Manage ${c.name} upgrades`, `
+    <p>Let Homestead upgrade this ${esc(c.name)} installation using its upstream release manifests.</p>
+    <div class="note">This enables future upgrades. It does not change the installed version, VM disks or existing settings.</div>
+    ${UI.more('Before enabling', '<p>Use this for a Homestead installer or plain manifest installation. Keep using Helm, GitOps or another operator if it manages this component. Homestead checks for those owners and active installer files before enabling upgrades.</p>')}
+    ${UI.ack('cmp_manage_ack', 'I confirm no other system manages these upgrades.')}
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn pri" onclick="componentManageOperatorGo(${jsq(id)})">Enable upgrades</button>`)}`);
+};
+
+window.componentManageOperatorGo = async id => {
+  if (!$('#cmp_manage_ack')?.checked) return toast('Confirm who manages this installation first', 'bad');
+  try {
+    const result = await api('/api/cluster/components/manage-operator', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({component:id, confirm:true})});
+    closeModal();
+    toast(result.detail, 'ok');
+    clusterComponentsPaint(true);
+  } catch (error) { toast(error.message, 'bad'); }
 };
 
 window.harvesterUpgradeStart = version => {

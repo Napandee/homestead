@@ -35,6 +35,15 @@ test("a check with nothing checked reads as not checked, never as a pass", () =>
   assert.doesNotMatch(html, /No known breaks/);
 });
 
+test("manifest installs offer explicit management even when their version is current", () => {
+  const card = page()("componentsCard");
+  const c = row({id:'cdi',name:'CDI',how:'manual',next:'',behind:false,can_manage:true});
+  const html = card({components:[c]});
+  assert.match(html, /Enable upgrades/);
+  assert.match(html, /componentManageOperator/);
+  assert.doesNotMatch(card({components:[{...c,can_manage:false}]}), /Enable upgrades/);
+});
+
 test("the review lists every finding with its source, and asks for a tick only when blocked", () => {
   const section = page()("componentCheckSection");
   const blocked = section(check("blocked", [finding("block", "Outside"), finding("info", "Fine")]));
