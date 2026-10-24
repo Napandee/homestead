@@ -362,6 +362,9 @@ window.platformJoinRole = role => {
 };
 window.platformJoinGuide = async (role = "app") => {
   modal("Add a host", '<div class="empty"><span class="spin2"></span>reading the cluster</div>', true);
+  // The role radios choose what the guide shows; nothing here is saved, so
+  // closing it never asks about unsaved changes.
+  window.__modalGuard = () => "";
   let g;
   try { g = await api("/api/platform/join"); } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   STATE.data.joinGuide = g;
@@ -380,5 +383,6 @@ window.platformJoinGuide = async (role = "app") => {
         onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div></section>
     <section class="guide-step"><h4><span>3</span>Install Longhorn's host packages</h4><div id="joinLonghorn">${joinLonghornHtml(g, role)}</div></section>
     <section class="guide-step"><h4><span>4</span>Join it</h4><div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>5</span>Watch it join</h4><p class="dim small">It appears on the Hosts page within a minute or two, and turns Ready once its networking is up.</p></section>`;
+    <section class="guide-step"><h4><span>5</span>Watch it join</h4><p class="dim small">It appears on the Hosts page within a minute or two, and turns Ready once its networking is up.</p>
+      <div>${UI.button("View hosts", "closeModal();go('nodes')", { kind: "pri" })}</div></section>`;
 };

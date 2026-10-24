@@ -11,7 +11,8 @@ function setup(guide = GUIDE) {
   const ctx = { console, Promise, document: { addEventListener() {} }, STATE: { data: {} },
     $: key => fields[key] || (fields[key] = { innerHTML: "" }), $$: () => [],
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
-    modal: () => {}, guideCopy: cmd => `<pre>${cmd}</pre>`, api: async () => guide };
+    modal: () => {}, guideCopy: cmd => `<pre>${cmd}</pre>`, api: async () => guide,
+    UI: { button: (label, onclick, { kind = "" } = {}) => `<button class="btn ${kind}" onclick="${onclick}">${label}</button>` } };
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(fs.readFileSync("web/js/platform.js", "utf8"), ctx);
   return { ctx, fields };
@@ -110,4 +111,22 @@ test("changing the role redraws the Longhorn step as well as the command", async
   assert.match(t.fields["#joinCmd"].innerHTML, /TIEBREAKER-CMD/);
   t.ctx.platformJoinRole("control-plane");
   assert.match(t.fields["#joinLonghorn"].innerHTML, /LONGHORN-CMD/);
+});
+
+// Found while testing #833: the role radios choose what the guide shows, they
+// are not an edit, so closing it after a role change asks nothing.
+test("dismissing the guide after a role change does not ask about unsaved changes", async () => {
+  const t = setup();
+  t.ctx.modal = () => { t.ctx.__modalGuard = null; };   // as core.js modal() does
+  await t.ctx.platformJoinGuide();
+  t.ctx.platformJoinRole("tiebreaker");
+  assert.equal(typeof t.ctx.__modalGuard, "function");
+  assert.equal(t.ctx.__modalGuard(), "");
+});
+
+test("the last step opens the Hosts page, as the Harvester guide's View hosts does", async () => {
+  const t = setup();
+  await t.ctx.platformJoinGuide();
+  const step = t.fields["#mbody"].innerHTML.split("<h4><span>5</span>")[1];
+  assert.match(step, /<button class="btn pri" onclick="closeModal\(\);go\('nodes'\)">View hosts<\/button>/);
 });
