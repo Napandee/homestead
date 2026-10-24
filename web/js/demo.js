@@ -2393,7 +2393,10 @@ ssh_pwauth: true
       const said = [a?.restart && `restarted after ${a.restart.after_min} min down, at most ${a.restart.max} times`, a?.webhook && "its webhook called"].filter(Boolean);
       return { ok: true, actions: a || null, detail: `When ${body.name} is down: ${said.join(" and ") || "nothing is done"}` };
     },
-    "/api/monitoring/actions/test": () => ({ ok: true, detail: "The webhook took the test" }),
+    "/api/monitoring/actions/test": (url, init) => {
+      const format = JSON.parse(init?.body || "{}").format;
+      return { ok: true, detail: `${({ ntfy: "ntfy", gotify: "Gotify" })[format] || "The webhook"} took the test` };
+    },
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const port = body.mode !== "off" && body.port ? `:${body.port}` : "", path = body.path || "/";

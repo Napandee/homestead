@@ -31,7 +31,7 @@ class Base(unittest.TestCase):
 
     def tick(self, report, now, item=APP, busy=False, ops=(), restart=None):
         return O.tick([item], report, restart or (lambda i: self.restarts.append(now)), lambda i: busy, ops,
-                      send=lambda url, body: self.sent.append(body["event"]), now=now)
+                      send=lambda url, body, *_: self.sent.append(body["event"]), now=now)
 
 
 class CleanTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class CleanTests(unittest.TestCase):
         self.assertIsNone(O.clean({"restart": None, "webhook": ""}))
 
     def test_checked(self):
-        self.assertEqual({"restart": {"after_min": 5, "max": 3}, "webhook": "http://192.0.2.5:8123/api/webhook/x"},
+        self.assertEqual({"restart": {"after_min": 5, "max": 3}, "webhook": "http://192.0.2.5:8123/api/webhook/x", "format": "generic"},
                          O.clean({"restart": {"after_min": "5", "max": 3}, "webhook": " http://192.0.2.5:8123/api/webhook/x "}))
         for bad in ({"restart": {"after_min": 0, "max": 1}}, {"restart": {"after_min": 5, "max": 11}},
                     {"restart": {"after_min": "x"}}, {"webhook": "ftp://x"}, {"webhook": "https://a b"}):
@@ -51,7 +51,7 @@ class CleanTests(unittest.TestCase):
     def test_a_vm_restarts_only_when_monitored_on_its_own_port(self):
         with self.assertRaises(ValueError):
             O.clean({"restart": {"after_min": 5, "max": 1}}, "vm", monitored_on_port=False)
-        self.assertEqual({"webhook": "https://h.example.com"}, O.clean({"webhook": "https://h.example.com"}, "vm", False))
+        self.assertEqual({"webhook": "https://h.example.com", "format": "generic"}, O.clean({"webhook": "https://h.example.com"}, "vm", False))
 
     def test_read_from_an_annotation(self):
         self.assertEqual(2, O.read({NAMES.key(O.KEY): json.dumps(APP["actions"])}, NAMES)["restart"]["max"])
@@ -164,7 +164,7 @@ class ServerTests(unittest.TestCase):
              mock.patch.object(server.OPS, "list_operations", return_value=[{"status": "running", "resource": {"namespace": "lab", "name": "frigate"}}]), \
              mock.patch.object(server.UPTIME, "report", return_value=down(0)), \
              mock.patch.object(server.OVERVIEW_ROUTES, "restart_workload", side_effect=lambda ns, n: restarted.append(n)), \
-             mock.patch.object(O, "_send_later"):
+             mock.patch.object(O, "_send_later"), mock.patch.object(server.OVERVIEW_ROUTES.OUTAGE_CARRY, "carry_lan"):
             server.OVERVIEW_ROUTES.outage_tick()
         self.assertEqual([], restarted)
 

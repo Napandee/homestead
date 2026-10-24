@@ -472,12 +472,15 @@ Monitoring says why, until another is chosen. None of this restarts the app.
   an automatic update watches the app itself and rolls the image back if it
   stays down, and a restart then would read as the update failing. A VM is
   rebooted cleanly, and only while it is monitored on a port you chose.
-- **Call a webhook**: an HTTP POST of JSON when it goes down, comes back, is
+- **Call a webhook**: an HTTP POST when it goes down, comes back, is
   restarted or runs out of tries, and when an automatic update of it finishes or
-  is rolled back. Besides its fields (`event`, `kind`, `namespace`, `name`,
-  `state`, `since`, `error`, `detail`, `at`) it carries a sentence as `text`,
-  `content` and `message`, which Slack, Discord and Home Assistant show as it is.
-  **Send a test** sends one now.
+  is rolled back. **Format** is Generic JSON (fields `event`, `kind`,
+  `namespace`, `name`, `state`, `since`, `error`, `detail`, `at`, and a
+  sentence as `text`, `content` and `message`, which Slack, Discord and Home
+  Assistant show as it is), **ntfy** or **Gotify**. Once saved, the address
+  shows only up to its host, the rest as `(hidden)`, and a LAN address needs
+  an admin's **Allow a LAN address**. **Send a test** (admins) sends one now. More in
+  [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#outage-webhooks).
 
 ## Logos
 
