@@ -13,8 +13,8 @@ async function mqttPaint() {
 /* Laid out as UniFi is beside it: the broker, its facts, then power control. */
 function mqttCardHtml(m, now = Date.now() / 1000) {
   const s = m.status || {}, set = !!m.host;
-  const state = !set ? ["neutral", "not connected"] : { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["crit", "failing"],
-    off: ["low", "off"] }[s.state] || ["low", s.state || "off"];
+  const state = !set ? ["neutral", "not connected"] : { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["bad", "failing"],
+    off: ["neutral", "off"] }[s.state] || ["neutral", s.state || "off"];
   const sensors = `${m.sensors?.cluster ?? 0} cluster sensors and ${m.sensors?.node ?? 0} for each host`;
   const facts = set ? UI.facts([
     ["Broker", `<span class="mono">${esc(m.host)}:${esc(m.port)}</span> <span class="dim xs">· ${m.tls ? "TLS" : "no TLS"}${m.username ? ` · as ${esc(m.username)}` : " · no sign-in"}</span>`],
@@ -22,13 +22,13 @@ function mqttCardHtml(m, now = Date.now() / 1000) {
     ["Last publish", s.last_publish ? `${now - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(now - s.last_publish))} <span class="dim xs">· every ${esc(m.interval)}s · ${esc(sensors)}</span>` : "not yet"]]) : "";
   const count = (m.controlled || []).length;
   const control = set ? serviceRow("Power control from Home Assistant",
-    m.control ? `<span class="pill ok">on · ${count}</span>` : '<span class="pill neutral">off</span>',
+    m.control ? UI.chip(`on · ${count}`, "ok") : UI.chip("off", "neutral"),
     m.control ? `${count === 1 ? "One container or VM" : `${count} containers and VMs`} with a Power switch and Restart; VMs also Force off and Reset`
       : "Optional: start, stop and restart the containers and VMs you pick from Home Assistant",
     actionBar([{ label: m.control ? "Choose" : "Turn on", run: "mqttControl()", need: "admin", pri: !m.control },
       m.control ? { label: "Turn off", run: "mqttControlOff()", need: "admin" } : null])) : "";
   return `${UI.moduleHeader(`MQTT and Home Assistant`, `Cluster and host stats to an MQTT broker, with Home Assistant discovery, and power control if you turn it on`, ``)}
-    ${serviceRow(set ? "MQTT broker" : "No broker", `<span class="pill ${state[0]}">${esc(state[1])}</span>`,
+    ${serviceRow(set ? "MQTT broker" : "No broker", UI.chip(state[1], state[0]),
       set ? (m.enabled ? esc(s.state === "publishing" ? "" : s.detail || "starting") : "Publishing is switched off") : `Optional: ${esc(sensors)}, for Home Assistant or anything else on MQTT`,
       actionBar([{ label: set ? "Edit" : "Connect MQTT", run: "mqttConfigure()", need: "admin", pri: !set },
         set ? { label: "What is published", run: "mqttPreview()" } : null]))}
@@ -201,7 +201,7 @@ async function historyLoad(host, range, request, abort) {
       <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mb/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56, times: h.t, key: range })}</div>
       ${historyStat("Your pods", h.pods, "", undefined, h.t, range)}</div>
       <div class="hist-nodes">${h.nodes.map(n => `<div class="hist-node"><b>${esc(n.name)}</b>
-        <span class="pill slim ${n.availability >= 99.9 ? "ok" : n.availability >= 99 ? "med" : "crit"}" data-tip="Share of samples in which the host was Ready">${n.availability.toFixed(n.availability >= 99.95 ? 0 : 2)}% up</span>
+        ${UI.chip(`${n.availability.toFixed(n.availability >= 99.95 ? 0 : 2)}% up`, n.availability >= 99.9 ? "ok" : n.availability >= 99 ? "warn" : "bad", { size: "slim", tip: "Share of samples in which the host was Ready" })}
         <span class="dim xs">cpu ${n.cpu}% · ram ${n.mem}%</span></div>`).join("")}</div>
       ${h.vol_bad.some(v => v > 0) ? `<div class="note" style="margin-top:8px">Volumes were degraded or faulted for part of this period (peak ${Math.max(...h.vol_bad)}).</div>` : ""}` : ""}`;
   const next = document.createElement("section");

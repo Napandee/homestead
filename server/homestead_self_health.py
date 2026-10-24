@@ -5,6 +5,7 @@ where. Settings shows it; server.py runs the tasks and keeps their beats.
 import time
 import urllib.parse
 
+import homestead_data_copies as DATA_COPIES
 import homestead_heartbeats as HEARTBEATS
 import homestead_leader as LEADER
 import homestead_mqtt as MQTT
@@ -31,7 +32,7 @@ def bind(_kget, _ksend, _data_volume, _heartbeats, _node_temps, _samba_state, na
 MAX_REPLICAS = 3
 # What each background task is called in Settings.
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "recovery": "Rebalance after a host returns", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "usage": "App usage history", "recovery": "Rebalance after a host returns", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync", "jobs": "Jobs"}
 
 
 def loop_states(rows, shared, leading, now):
@@ -114,7 +115,24 @@ def report():
     return {"version": VERSION, "addresses": addresses, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
             "replicas": replicas, "loops": loops, "probe": probe, "samba": samba,
             "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint")},
-            "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")}}
+            "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")},
+            "data_copies": data_copies()}
+
+
+def data_copies():
+    """How many copies of Homestead's data Longhorn keeps, and whether the
+    cluster can now keep two (homestead_data_copies.facts), read at most
+    every 15 seconds; "unknown" with the reason when it cannot be read."""
+    try:
+        return homestead_routes.cached("data-copies", 15, lambda: DATA_COPIES.facts())
+    except Exception as error:
+        return {"state": "unknown", "error": str(error)[:160]}
+
+
+def replicas_view():
+    """The Redundancy card's read: replicas_now(), with the copies of
+    Homestead's data (data_copies), so the card needs no second call."""
+    return {**replicas_now(), "data_copies": data_copies()}
 
 
 def replicas_now():
@@ -187,6 +205,6 @@ def set_replicas(count):
 
 ROUTES = {
     ("GET", "/api/self/health"): ("viewer", lambda request: report()),
-    ("GET", "/api/self/replicas"): ("viewer", lambda request: replicas_now()),
+    ("GET", "/api/self/replicas"): ("viewer", lambda request: replicas_view()),
     ("POST", "/api/self/replicas"): ("admin", lambda request: set_replicas(request.body.get("replicas"))),
 }

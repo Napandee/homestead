@@ -14,7 +14,7 @@ const map = (file, name) => {
 test("Image Cache: only active is green; rollback, stopped and scheduled are neutral", () => {
   const reasons = map("web/js/views-lifecycle.js", "IMAGE_REASONS");
   assert.equal(reasons.active.tone, "ok");
-  for (const r of ["rollback", "stopped", "scheduled"]) assert.equal(reasons[r].tone, "", r);
+  for (const r of ["rollback", "stopped", "scheduled"]) assert.equal(reasons[r].tone, "neutral", r);
 });
 
 test("Image Cache: an image kept because a record could not be read is amber and says why", () => {
@@ -25,8 +25,9 @@ test("Image Cache: an image kept because a record could not be read is amber and
 
 test("Schedules and Import show a running or waiting job as neutral, not amber", () => {
   const src = read("web/js/views-lifecycle.js");
-  assert.doesNotMatch(src, /<span class="pill med">running<\/span>/);
-  assert.doesNotMatch(src, /j\.state === "failed" \? "crit" : "med"/);
+  assert.match(src, /UI\.chip\("running", "neutral"\)/);
+  assert.doesNotMatch(src, /UI\.chip\("running", "warn"\)/);
+  assert.match(src, /j\.state === "failed" \? "bad" : "neutral"/);
 });
 
 test("App Store and Helm labels are neutral: guidance, official, verified, installed here", () => {
@@ -43,7 +44,7 @@ test("a VM in progress or paused is neutral; Running is green", () => {
   const tones = map("web/js/views-vms.js", "VM_TONE");
   assert.equal(tones.Running, "ok");
   for (const s of ["Stopped", "Paused", "Migrating", "Starting", "Stopping", "Deleting", "Provisioning", "WaitingForVolumeBinding"])
-    assert.equal(tones[s], "low", s);
+    assert.equal(tones[s], "neutral", s);
 });
 
 test("a k3s VM's cluster and role tags are the shared neutral cluster tag", () => {
@@ -53,8 +54,8 @@ test("a k3s VM's cluster and role tags are the shared neutral cluster tag", () =
   assert.doesNotMatch(src, /UI\.chip\("server", "info"\)/, "the k3s review's role chips are neutral too");
 });
 
-test("an Unraid VM that is shut off has a pill, as Stopped does", () => {
-  assert.match(read("web/js/views-vms.js"), /<span class="pill \$\{off \? "low" : "ok"\}">/);
+test("an Unraid VM that is shut off has a neutral chip, as Stopped does", () => {
+  assert.match(read("web/js/views-vms.js"), /UI\.chip\(vm\.state \|\| "unknown", off \? "neutral" : "ok"\)/);
 });
 
 test("Dashboard widgets: low severity and acknowledged findings are neutral, running jobs too", () => {
@@ -82,13 +83,15 @@ test("AI agent requests: pending waits for a person, so amber; running and denie
 
 test("other progress states are neutral too: installing, starting, rebuilding, copying, a container starting", () => {
   const platform = read("web/js/platform.js");
-  assert.doesNotMatch(platform, /pill med">installing</);
-  assert.doesNotMatch(platform, /pill med">starting</);
-  assert.doesNotMatch(platform, /pill med">\$\{probe\.ready/);
-  assert.doesNotMatch(platform, /pill med">removing ·/);
-  assert.doesNotMatch(platform, /pill med">\$\{c\.current\} of/);
-  assert.match(platform, /pill med">partial service</, "a partly served share still needs a person");
-  assert.doesNotMatch(read("web/js/views-storage.js"), /pill med" data-tip="Longhorn is copying a replica/);
-  assert.doesNotMatch(read("web/js/vm-hardware.js"), /pill med">copying</);
+  assert.match(platform, /UI\.chip\("installing", "neutral"\)/);
+  assert.match(platform, /UI\.chip\("starting", "neutral"\)/);
+  assert.doesNotMatch(platform, /UI\.chip\("(installing|starting)", "(warn|med)"/);
+  assert.match(platform, /UI\.chip\(`\$\{probe\.ready[^`]*`, "neutral"\)/);
+  assert.match(platform, /UI\.chip\(`removing ·[^`]*`, "neutral"\)/);
+  assert.match(platform, /UI\.chip\(`\$\{c\.current\} of[^`]*`, "neutral"\)/);
+  assert.match(platform, /UI\.chip\("partial service", "warn"\)/, "a partly served share still needs a person");
+  assert.match(read("web/js/views-storage.js"), /UI\.chip\(`rebuilding \$\{rebuild\.pct\}%`, "neutral"/);
+  assert.doesNotMatch(read("web/js/views-storage.js"), /UI\.chip\(`rebuilding[^`]*`, "(warn|med)"/);
+  assert.match(read("web/js/vm-hardware.js"), /UI\.chip\("copying", "neutral"\)/);
   assert.doesNotMatch(read("web/js/views-workloads.js"), /c\.state === "running" \? "med"/);
 });

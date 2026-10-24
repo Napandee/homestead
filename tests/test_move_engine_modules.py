@@ -46,6 +46,193 @@ def moved(part):
             and name not in BOUND and not isinstance(vars(part)[name], type(sys))] + list(LOCKS.get(part, ()))
 
 
+def engine_holders():
+    """Which attribute of a server module is homestead_move_engine (server.MOVE_ENGINE)."""
+    holds = {}
+    for path in SERVER.glob("*.py"):
+        tree = ast.parse(path.read_text())
+        holds[path.stem] = {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+                            for a in node.names if a.name == "homestead_move_engine"}
+    return holds
+
+
+def _replacements(node):
+    """(module, name) for each replacement this node makes: assignments (tuple
+    targets too), setattr, patch.object (target and name positional or as
+    keywords), patch.multiple, and (module, name, value) rows a test patches in
+    a loop. The name is a str or the expression that gives it."""
+    if isinstance(node, (ast.Assign, ast.AugAssign)):
+        return [(one.value, one.attr) for target in getattr(node, "targets", [getattr(node, "target", None)])
+                for one in (target.elts if isinstance(target, ast.Tuple) else [target])
+                if isinstance(one, ast.Attribute)]
+    if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
+        called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+        keywords = {k.arg: k.value for k in node.keywords}
+        first = node.args[0] if node.args else keywords.get("target")
+        second = node.args[1] if len(node.args) > 1 else keywords.get("attribute")
+        if called in ("object", "setattr") and first is not None and second is not None:
+            return [(first, second)]
+        if called == "multiple" and first is not None:
+            return [(first, ",".join(k.arg or "?" for k in node.keywords))]
+    if isinstance(node, ast.Tuple) and len(node.elts) == 3 and isinstance(node.elts[1], ast.Constant) \
+            and isinstance(node.elts[1].value, str):
+        return [(node.elts[0], node.elts[1])]
+    return []
+
+
+def _calls(node, helpers):
+    """(module, name) a call to one of helpers hands it."""
+    if not isinstance(node, ast.Call) or not isinstance(node.func, (ast.Attribute, ast.Name)):
+        return []
+    called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+    keywords = {k.arg: k.value for k in node.keywords}
+    rows = []
+    for names, position, name in helpers.get(called, ()):
+        # A method called on self or cls: its first parameter is not in the call.
+        skip = 1 if isinstance(node.func, ast.Attribute) and names and names[0] in ("self", "cls") else 0
+
+        def argument(index):
+            if 0 <= index - skip < len(node.args):
+                return node.args[index - skip]
+            return keywords.get(names[index])
+
+        module = argument(position)
+        if module is not None:
+            rows.append((module, argument(name) if isinstance(name, int) else name))
+    return rows
+
+
+def _helpers(tree):
+    """Functions that replace a name on a module they are handed, directly or by
+    handing it on: {function: {(parameters, module position, name)}}, the name a
+    str, a parameter's position, or None when the helper does not spell it out."""
+    functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    params = {fn: [a.arg for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs] for fn in functions}
+
+    def entry(fn, module, name):
+        if not (isinstance(module, ast.Name) and module.id in params[fn]):
+            return None
+        if isinstance(name, ast.Constant) and isinstance(name.value, str):
+            name = name.value
+        elif isinstance(name, ast.Name) and name.id in params[fn]:
+            name = params[fn].index(name.id)
+        elif not isinstance(name, str):
+            name = None
+        return (tuple(params[fn]), params[fn].index(module.id), name)
+
+    found = {}
+    for fn in functions:
+        for node in ast.walk(fn):
+            for module, name in _replacements(node):
+                if entry(fn, module, name):
+                    found.setdefault(fn.name, set()).add(entry(fn, module, name))
+    # A helper that hands its module on to one of these is one too.
+    grown = True
+    while grown:
+        grown = False
+        for fn in functions:
+            for node in ast.walk(fn):
+                for module, name in _calls(node, found):
+                    row = entry(fn, module, name)
+                    if row and row not in found.get(fn.name, set()):
+                        found.setdefault(fn.name, set()).add(row)
+                        grown = True
+    return found
+
+
+def replaced(sources, holds):
+    """Each place a test replaces a name on homestead_move_engine other than
+    the ones it defines, as "file:line name". Read: what _replacements reads,
+    and mock.patch("homestead_move_engine.…") or through a server module that
+    imports it (server.MOVE_ENGINE.…); on the engine as a test imported it, as
+    it took it from another test module (from test_move_flow import engine,
+    fixtures.engine), or as a server module names it (server.MOVE_ENGINE). Also
+    a helper that is handed the engine and replaces a name on it, or hands it on
+    to one that does (#623's wrap-up), when the helper is defined in the same
+    test file. A name the code does not spell out reads as "?". Not read: a
+    helper from another file, functools.partial, or the module held in a
+    local variable inside the helper."""
+    found = []
+    trees = {name: ast.parse(text) for name, text in sources.items()}
+    imported = {Path(name).stem: {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+                                  for a in node.names if a.name == "homestead_move_engine"}
+                for name, tree in trees.items()}
+    anywhere = set().union(*imported.values(), *holds.values())
+    strings = ("homestead_move_engine.",) + tuple(f"{stem}.{alias}." for stem, aliases in holds.items()
+                                                  for alias in aliases)
+    for path, tree in trees.items():
+        stem = Path(path).stem
+        aliases = imported[stem] | {a.asname or a.name for node in ast.walk(tree)
+                                    if isinstance(node, ast.ImportFrom) and node.module in imported
+                                    for a in node.names if a.name in imported[node.module]}
+
+        def engine(node):
+            return (isinstance(node, ast.Name) and node.id in aliases) or \
+                (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.attr in anywhere)
+
+        helpers = _helpers(tree)
+        for node in ast.walk(tree):
+            rows = [(module, name, "") for module, name in _replacements(node)]
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
+                called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+                rows += [(module, name, f" (through {called})") for module, name in _calls(node, helpers)]
+                first = node.args[0] if node.args else None
+                if called == "patch" and isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    prefix = next((s for s in strings if first.value.startswith(s)), None)
+                    if prefix and first.value[len(prefix):].split(".")[0] not in OWN:
+                        found.append(f"{path}:{node.lineno} {first.value[len(prefix):].split('.')[0]}")
+            for module, name, through in rows:
+                if not engine(module):
+                    continue
+                if isinstance(name, ast.Constant) and isinstance(name.value, str):
+                    name = name.value
+                if not isinstance(name, str):
+                    name = "?"
+                if any(part not in OWN for part in name.split(",")):
+                    found.append(f"{path}:{node.lineno} {name}{through}")
+    return found
+
+
+# The guard's own example: helpers handed the engine, as test_optional_storage_hosts'
+# reading(module, reader) is handed the module whose kget it replaces.
+HELPERS = '''
+import homestead_move_engine as ENGINE
+import server
+from unittest import mock
+
+
+def keyword(value, *, module):
+    module.dismiss = value
+
+
+def naming(module, name, value):
+    setattr(module, name, value)
+
+
+class Example:
+    def reading(self, module, reader):
+        patch = mock.patch.object(module, "abandon", reader)
+        patch.start()
+
+    def passing(self, target):
+        naming(target, "tick_all", None)
+
+    def test(self, name):
+        self.reading(ENGINE, None)
+        naming(module=ENGINE, name="carry_icon", value=None)
+        self.passing(server.MOVE_ENGINE)
+        naming(ENGINE, name, None)
+        naming(ENGINE, "after_finish", None)
+        self.reading(STATE, None)
+        for module, name, value in ((ENGINE, "_find", None),):
+            setattr(module, name, value)
+        mock.patch("server.MOVE_ENGINE._retry").start()
+        ENGINE.TICK_SECONDS = 1
+        keyword(None, module=ENGINE)
+        mock.patch.multiple(ENGINE, **{"retry": None})
+'''
+
+
 class MoveEngineModuleTests(unittest.TestCase):
     def test_every_moved_name_is_the_same_object_on_homestead_move_engine(self):
         for part in PARTS:
@@ -60,7 +247,8 @@ class MoveEngineModuleTests(unittest.TestCase):
             self.assertFalse(hasattr(ENGINE, name), f"homestead_move_engine.{name} would be a stale copy")
 
     def test_each_module_can_be_imported_first(self):
-        for name in NAMES:
+        # The modules that read the moved names too (wrap-up row 40).
+        for name in NAMES + ("homestead_cancel", "homestead_deploy_server", "homestead_names_helpers"):
             done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_move_engine as E; "
                                    "E.tick_all; E.carry_icon; E.abandon; E._find; E.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
@@ -121,48 +309,77 @@ class MoveEngineModuleTests(unittest.TestCase):
 
     def test_no_test_replaces_a_moved_name_on_homestead_move_engine(self):
         # A replacement there would not reach the moved code, so it must go to the
-        # module that defines the name. Read: assignments, setattr, mock.patch(...),
-        # patch.object and patch.multiple, on the engine as a test imported it, as it
-        # took it from another test module (from test_move_flow import engine,
-        # fixtures.engine), or as server.py names it (server.MOVE_ENGINE). Not read:
-        # a helper that is handed the module and replaces a name on it itself.
+        # module that defines the name. What replaced() reads is in its docstring.
+        sources = {path.name: path.read_text() for path in sorted((ROOT / "tests").glob("test_*.py"))}
+        self.assertEqual([], replaced(sources, engine_holders()))
+
+    def test_the_guard_sees_a_helper_that_is_handed_the_engine(self):
+        # As test_optional_storage_hosts' reading(module, reader) does with kget:
+        # the helper replaces the name, the test only hands it the module.
+        found = replaced({"test_example.py": HELPERS}, {"server": {"MOVE_ENGINE"}})
+        self.assertEqual(sorted(["abandon (through reading)", "carry_icon (through naming)",
+                                 "tick_all (through passing)", "? (through naming)", "_find", "_retry",
+                                 "TICK_SECONDS", "dismiss (through keyword)", "?"]),
+                         sorted(row.split(" ", 1)[1] for row in found))
+
+    def test_no_server_module_reads_a_moved_name_through_homestead_move_engine(self):
+        # A test replacing a name where it is defined (ACT.abandon, PHASE.tick_all)
+        # would not reach a read of the re-export, so the readers use the part.
         found = []
-        trees = {path: ast.parse(path.read_text()) for path in sorted((ROOT / "tests").glob("test_*.py"))}
-        imported = {path.stem: {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-                                for a in node.names if a.name == "homestead_move_engine"}
-                    for path, tree in trees.items()}
-        anywhere = set().union(*imported.values()) | {"MOVE_ENGINE"}
-        for path, tree in trees.items():
-            aliases = imported[path.stem] | {a.asname or a.name for node in ast.walk(tree)
-                                             if isinstance(node, ast.ImportFrom) and node.module in imported
-                                             for a in node.names if a.name in imported[node.module]}
-
-            def engine(node):
-                return (isinstance(node, ast.Name) and node.id in aliases) or \
-                    (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.attr in anywhere)
-
-            for node in ast.walk(tree):
-                name = None
-                if isinstance(node, (ast.Assign, ast.AugAssign)):
-                    for target in getattr(node, "targets", [getattr(node, "target", None)]):
-                        if isinstance(target, ast.Attribute) and engine(target.value):
-                            name = target.attr
-                elif isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
-                    called = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
-                    first = node.args[0] if node.args else None
-                    keywords = {k.arg: k.value for k in node.keywords}
-                    second = node.args[1] if len(node.args) > 1 else keywords.get("attribute")
-                    if called in ("object", "setattr") and first is not None and engine(first) \
-                            and isinstance(second, ast.Constant):
-                        name = second.value
-                    elif called == "multiple" and first is not None and engine(first):
-                        name = ",".join(k.arg for k in node.keywords)
-                    elif called == "patch" and isinstance(first, ast.Constant) \
-                            and str(first.value).startswith("homestead_move_engine."):
-                        name = first.value.split(".")[1]
-                if name and name not in OWN:
-                    found.append(f"{path.name}:{node.lineno} {name}")
+        for path in sorted(SERVER.glob("*.py")):
+            if path.stem == "homestead_move_engine":
+                continue
+            tree = ast.parse(path.read_text())
+            aliases = {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+                       for a in node.names if a.name == "homestead_move_engine"}
+            found += [f"{path.name}:{node.lineno} {node.attr}" for node in ast.walk(tree)
+                      if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                      and node.value.id in aliases and node.attr not in OWN]
         self.assertEqual([], found)
+
+
+class ReadWhereDefinedTests(unittest.TestCase):
+    """Cancel, the leader's loop and the icon heal read the moved names from
+    the module that defines them, so replacing a name there reaches them."""
+
+    def test_cancelling_a_move_reads_the_record_and_abandons_through_the_parts(self):
+        import homestead_cancel as CANCEL
+        item = {"ref": {"move": "0123456789ab"}}
+        with mock.patch.object(STATE, "_find", return_value={"name": "web", "cluster": "other"}):
+            self.assertEqual("rollback", CANCEL.move_plan(item)["mode"])
+        with mock.patch.object(ACT, "abandon", return_value={"message": "Put back web"}) as abandon:
+            self.assertEqual("Put back web", CANCEL.move_cancel(item, {}))
+        abandon.assert_called_once_with("0123456789ab")
+
+    def test_the_leaders_loop_ticks_through_homestead_move_phases(self):
+        import homestead_deploy_server as DEPLOY_SERVER
+
+        class Stop(Exception):
+            pass
+
+        beats = []
+        with mock.patch.object(DEPLOY_SERVER.LEADER, "is_leader", return_value=True), \
+                mock.patch.object(PHASE, "tick_all") as tick_all, \
+                mock.patch.object(STATE, "TICK_SECONDS", 7), \
+                mock.patch.object(DEPLOY_SERVER, "beat", lambda *args, **kw: beats.append((args, kw)), create=True), \
+                mock.patch.object(DEPLOY_SERVER.time, "sleep", side_effect=Stop) as sleep:
+            with self.assertRaises(Stop):
+                DEPLOY_SERVER._moves_loop()
+        tick_all.assert_called_once_with()
+        self.assertEqual([(("moves", 7), {"leader_only": True})], beats)
+        sleep.assert_called_once_with(7)
+
+    def test_the_icon_heal_carries_the_icon_through_homestead_move_phases(self):
+        import homestead_names as NAMES_MODULE
+        import homestead_names_helpers as NAMES_HELPERS
+        reference = "/api/icons/" + "a" * 64 + ".png"
+        self.addCleanup(NAMES_HELPERS._ICON_HEALED.pop, reference, None)
+        annotations = {NAMES_MODULE.key("moved-from"): "oldcluster/web"}
+        with mock.patch.object(PHASE, "carry_icon", return_value="/api/icons/carried.png") as carry:
+            NAMES_HELPERS._heal_icon(reference, annotations)
+        self.assertEqual("oldcluster", carry.call_args.args[0])
+        self.assertEqual("/api/icons/carried.png", NAMES_HELPERS._ICON_HEALED[reference])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,10 +66,11 @@ window.fleetSocketUrl = url => {
    one that has not answered yet fills in on a later refresh; one that keeps
    missing, or failed, is said so, with how old the rows still shown are.
    what names them: "rows" on a list, "graph" on the Architecture page. */
+const fleetAge = s => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min`);
 window.fleetMissingSentence = (row, what = "rows") => {
   const state = row.state || "not answering";
   const shown = row.age_s == null ? ""
-    : `its ${what} shown ${what === "rows" ? "are" : "is"} from ${row.age_s < 60 ? `${row.age_s} s` : `${Math.floor(row.age_s / 60)} min`} ago`;
+    : `its ${what} shown ${what === "rows" ? "are" : "is"} from ${fleetAge(row.age_s)} ago`;
   if (state === "waiting") return shown ? `${row.name} is slow to answer; ${shown}.` : `${row.name} has not answered yet; its ${what} ${what === "rows" ? "appear" : "appears"} when it does.`;
   const why = state === "error" ? `${row.name} could not answer (${row.error || "unknown error"})` : `${row.name} is not answering`;
   return shown ? `${why}; ${shown}.` : `${why}, so it is missing here.`;
@@ -108,9 +109,14 @@ document.addEventListener("click", event => {
 /* Rows in the view of all clusters: whose each is. */
 const clusterOf = row => (row?.site && fleetAll() ? row.site : null);
 window.clusterAttr = row => { const c = clusterOf(row); return c ? ` data-cluster="${esc(c.id)}"` : ""; };
+/* A row kept from a cluster's last answer, while it is slow or out of reach,
+   says how old it is (#705): the toast says so once, the tag for as long as it lasts. */
 window.clusterTag = row => {
   const c = clusterOf(row);
-  return c ? `<span class="tag cluster-tag" title="On ${esc(c.name)}">${esc(c.name)}</span>` : "";
+  if (!c) return "";
+  const age = c.age_s == null ? "" : fleetAge(c.age_s);
+  const title = `On ${esc(c.name)}${age ? `; its last answer, from ${age} ago: it has not answered since` : ""}`;
+  return `<span class="tag cluster-tag" title="${title}">${esc(c.name)}${age ? `<span class="cluster-age">· ${age} ago</span>` : ""}</span>`;
 };
 /* A row that lives on another cluster: this one's own records - image
    updates, say - do not describe it. */
@@ -206,8 +212,14 @@ window.fleetShowAll = () => {
 window.fleetOpenSettings = () => {
   fleetMenuClose();
   closeModal();
-  settingsTab("fleet");
-  if (STATE.view === "settings") fleetSettingsPaint(); else go("settings");
+  // On Settings already, the section is shown without its own load and
+  // painted here, so the clusters are read once; it then counts as loaded.
+  if (STATE.view === "settings") {
+    settingsTab("fleet", false);
+    (STATE.settingsLoaded || (STATE.settingsLoaded = new Set())).add("fleet");
+    fleetSettingsPaint();
+  }
+  else { settingsTab("fleet"); go("settings"); }
 };
 window.fleetManage = window.fleetOpenSettings;
 

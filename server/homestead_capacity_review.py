@@ -10,7 +10,9 @@ import time
 
 _key = None
 TTL = 600
-CONTROL_FIELDS = {"capacity_token", "confirm_capacity", "ack_state_initialization", "confirm_state_name"}
+CONTROL_FIELDS = {"capacity_token", "confirm_capacity", "ack_state_initialization", "confirm_state_name",
+                  # A rename of an app git applies (#734): an acknowledgement, given after the review.
+                  "confirm_managed"}
 
 
 def bind(key_provider):

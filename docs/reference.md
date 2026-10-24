@@ -168,13 +168,35 @@ StorageClass used in `deploy/deploy.yaml` exists:
 kubectl get storageclass
 ```
 
-The supplied manifest uses `longhorn-r2`. Longhorn makes `longhorn`, not
-`longhorn-r2`, so on a new Longhorn the data claim stays Pending and Homestead
-never starts; `kubectl describe pvc -n lab` shows why. Change
-`storageClassName` (and the `STORAGE_CLASS` value) to a class the cluster
-has: `longhorn`, or create a `longhorn-r2` class first. Without Longhorn -
-k3s's `local-path`, say - use that class and change the claim to
-`ReadWriteOnce`. The k3s script does both.
+The supplied manifest uses `longhorn`, the class Longhorn makes itself.
+Without Longhorn - k3s's `local-path`, say - change `storageClassName` (and
+the `STORAGE_CLASS` value) to that class and the claim to `ReadWriteOnce`;
+otherwise the data claim stays Pending and Homestead never starts
+(`kubectl describe pvc -n lab` shows why). The k3s script does both.
+
+Longhorn's `longhorn` class asks for three copies. On a cluster with exactly
+one host (one Kubernetes node and one Longhorn node) the leader lowers
+Homestead's own data volume to one copy once Longhorn says another cannot be
+placed and none is being rebuilt, so it reads healthy; no other volume, class
+or Longhorn setting is changed. Once a second host can hold a copy,
+`longhorn-r2` ("Longhorn, two copies") is the class to move Homestead's data
+onto: **Settings > About > Redundancy** offers **Keep two copies**, which
+makes it and opens the move. On k3s and RKE2 Homestead raises its own
+volume's copies in place as hosts join.
+
+A claim's class cannot change. On a cluster installed from an older manifest
+that said `longhorn-r2`, check the claim first:
+
+```bash
+kubectl -n lab get pvc homestead-data
+```
+
+Only if its STATUS is `Pending` does it hold nothing: then
+`kubectl -n lab delete pvc homestead-data` and apply again (or create
+`longhorn-r2` first). **Never delete a `Bound` claim: that can lose
+Homestead's data.** A Bound claim keeps its class and keeps working, and
+in-app updates change only the image; to apply the manifest again over it,
+set `storageClassName` back to the claim's class first.
 
 ### 2. Configure and install
 
@@ -894,13 +916,32 @@ deletes resources or frees IP records; guest installation may continue.
 
 Copies on different nodes all mount Homestead's data claim, so more than one
 copy needs a claim every node can mount: ReadWriteMany on a class Longhorn
-serves through its share manager. A migratable class - Harvester's own and
-`longhorn-r2` - gives a VM-disk volume only one node can mount, and a copy on
-a second node would wait forever. Redundancy says so and offers **Move data**.
+serves through its share manager. A migratable class - Harvester's own, or a
+`longhorn-r2` someone made migratable - gives a VM-disk volume only one node
+can mount, and a copy on a second node would wait forever. Redundancy says so
+and offers **Move data**.
 Choose the destination class, prepare the new volume, then review and confirm
 the downtime. Host choices and capacity details are available under Details.
 Local-path and unknown storage drivers use single-node RWO; a known shareable
 driver such as non-migratable Longhorn can use RWX.
+
+Copies of the data itself are Longhorn's. `data_copies` in
+`GET /api/self/health` and `GET /api/self/replicas` says how many Homestead's
+data volume has and whether the cluster can keep two: `can-keep-two` once it
+has one copy and two hosts Longhorn stores on have room for its size
+(`rising` on k3s and RKE2, which raise it in place within a minute;
+`single-host`, `ok`, `n/a` on Harvester and other storage, or `unknown` with
+an `error` when something could not be read, which Cluster Health and
+Redundancy show). Then Cluster Health and Redundancy offer **Keep two
+copies**: `POST /api/self/data/two-copies` (admin) makes `longhorn-r2` - two
+copies on different hosts (`replicaSoftAntiAffinity: disabled`), not
+migratable, Retain - when the cluster has none, refuses an existing one that
+keeps fewer than two copies, is migratable, lets copies share a host, has a
+`nodeSelector` or is not Longhorn's, and starts nothing. The page then opens
+**Move data** with `longhorn-r2` picked, and the move is prepared and
+confirmed as above. When the data's own class already keeps two copies
+(`action: "raise"`), the call instead raises the volume to two copies in
+place: no move and no outage.
 
 An independent helper stops Homestead, waits for its pods to release the source,
 copies and verifies the files and metadata, releases the copy mounts, then starts
@@ -1110,13 +1151,26 @@ TAG=2.8.332-dev.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 
 Image Cache groups kubelet aliases by digest and labels images retained by a
 running pod, a container scaled to zero or a scheduled job (which start from
-it), a stopped VM or a VM pool or VM replica set scaled to zero (their
-container disks), or the immediate managed-update rollback. A record that says
-which images are in use but cannot be read - a malformed rollback note or
-template, or a VM pool or replica-set list the role may not read - keeps every
+it), a workload waiting for its pods (a suspended Job or one between retries,
+a DaemonSet that matches no node, a Deployment or StatefulSet whose status does
+not show every pod it wants), a stopped VM or a VM pool or VM replica set
+scaled to zero (their container disks), a Harvester VM template version or a
+KubeVirt VM snapshot (the container disks they boot from), a CDI DataVolume or
+DataImportCron that pulls a registry image through the node
+(`pullMethod: node`), or the immediate managed-update rollback. A record that
+says which images are in use but cannot be read - a malformed rollback note or
+template, or one of the optional lists the role may not read - keeps every
 image, labelled *unreadable* with the record it names, until it is fixed. That
-read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`
-and `kubevirt.io` `virtualmachineinstancereplicasets`. Admins can remove an
+read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`,
+`kubevirt.io` `virtualmachineinstancereplicasets`, `harvesterhci.io`
+`virtualmachinetemplateversions`, `snapshot.kubevirt.io`
+`virtualmachinesnapshotcontents` and `cdi.kubevirt.io` `dataimportcrons`. These
+optional groups are read at the version API discovery prefers; a group counts as
+not installed only when discovery says so. While a record is unreadable,
+automatic clean-up keeps each image's "unused since" date rather than starting
+it again. The Volumes page's check of what uses a claim reads the same way:
+read-only `get` and `list` on `replicationcontrollers`, beside the Jobs, Pods
+and ReplicaSets Homestead already lists. Admins can remove an
 unreferenced application digest from selected nodes after an impact preview and
 typed confirmation. The backend rechecks live references immediately before
 starting one short-lived cleanup pod per node; active, stopped, scheduled,
@@ -1168,6 +1222,15 @@ whichever group you pick. The jobs a plan makes are ordinary jobs afterwards.
 
 Any volume's snapshots and backups are also a click away on Volumes: take one
 now, back up now, or restore.
+
+The weekly trim is Homestead's own: each Saturday at 04:00 UTC a `weekly-trim`
+job trims every attached Longhorn volume through Longhorn's `trimFilesystem`
+action, one at a time, and skips detached volumes and VM disks (Block volumes),
+naming them. **Housekeeping** shows the last result, **Run now** and the
+switch (`GET /api/weekly-trim`, `POST /api/weekly-trim/run` for operators,
+`POST /api/weekly-trim/settings` for admins). The Longhorn `RecurringJob`
+`homestead-weekly-trim` earlier releases made is removed once if unchanged; a
+changed one is kept as yours and Homestead's own trim stays off.
 
 ## Restore a Longhorn backup
 
@@ -1867,7 +1930,7 @@ authenticated.
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
 | `SAMBA_IMAGE` | `dperson/samba:latest` | image Samba is installed from when the first share is created |
 | `NFS_IMAGE` | `pedroetb/nfs-server:v2.4.0` | image used by the optional NFSv4 server |
-| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes |
+| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes (the manifest sets `longhorn`) |
 | `LB_IP` | empty | shared kube-vip address |
 | `SESSION_TTL_HOURS` | `12` | idle window for an ordinary session |
 | `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |

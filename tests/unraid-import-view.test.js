@@ -2,6 +2,11 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
+// The real UI.chip, loaded into its own context so the stubs below (actionBar) stay.
+const uiCtx = { window: {}, esc: s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]) };
+vm.createContext(uiCtx);
+vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), uiCtx);
+const UI = uiCtx.window.UI;
 
 test("finished imports offer dismissal while active and recovery records keep their history", () => {
   const host = {}, actions = [], opened = [], dismissed = [];
@@ -18,8 +23,8 @@ test("finished imports offer dismissal while active and recovery records keep th
     actionBar: rows => { actions.push(...rows); return ""; }, operationLog: id => opened.push(id),
     dismissOperation: id => dismissed.push(id) };
   ctx.window = ctx;
+  ctx.UI = { ...UI, reviewFlow: () => ({}) }; // the real chips; the VM review flows are unused here
   vm.createContext(ctx);
-  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   ctx.uvmCopiesPaint();
   assert.match(host.innerHTML, /Recent imports/);
@@ -48,7 +53,7 @@ test("the shared dismissal refreshes the import list only after the server accep
     actionBar: () => "", toast: message => errors.push(message),
     api: async (path, init) => { requests.push({ path, body: JSON.parse(init.body) }); } };
   ctx.window = ctx;
-  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
+  ctx.UI = { ...UI, reviewFlow: () => ({}) }; // the real chips; the VM review flows are unused here
   vm.createContext(ctx);
   for (const file of ["operations", "views-vms"]) vm.runInContext(fs.readFileSync(`web/js/${file}.js`, "utf8"), ctx);
   vm.runInContext("renderOperations = () => uvmCopiesPaint()", ctx);
@@ -75,8 +80,8 @@ function importPage(kind) {
     actionBar: rows => { actions.push(...rows.filter(Boolean)); return rows.filter(Boolean).map(r => r.label).join("|"); },
     api: async (path, init) => { posted.push([path, JSON.parse(init.body)]); return { source: "pve", kind, virsh: true, vms: [pve, running] }; } };
   ctx.window = ctx;
+  ctx.UI = { ...UI, reviewFlow: () => ({}) }; // the real chips; the VM review flows are unused here
   vm.createContext(ctx);
-  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   return { ctx, hosts, actions, posted };
 }
@@ -114,8 +119,8 @@ test("a Proxmox host added as Unraid says so, with Remove and Add as Proxmox", a
     actionBar: rows => { actions.push(...rows); return rows.map(r => r.label).join(","); },
     api: async () => ({ source: "pve", kind: "unraid", virsh: false, proxmox: true, vms: [] }) };
   ctx.window = ctx;
+  ctx.UI = { ...UI, reviewFlow: () => ({}) }; // the real chips; the VM review flows are unused here
   vm.createContext(ctx);
-  ctx.UI = { reviewFlow: () => ({}) }; // the VM review flows, unused here
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   await ctx.uvmLoad("pve");
   assert.match(hosts["uvm-pve"].innerHTML, /This is a Proxmox host/);
@@ -142,6 +147,7 @@ test("a refused Add server can be corrected and saved again; the name is sent lo
   const ctx = { $: s => fields[s], toast: (m, k) => toasts.push([m, k]), STATE: { data: {} }, srcVerify: async () => {},
     api: async (path, init) => { sent.push(JSON.parse(init.body)); if (answer) throw Object.assign(new Error(answer.message), { status: answer.status }); return { sources: [] }; } };
   ctx.window = ctx;
+  ctx.UI = UI;
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
   await ctx.doSrcAdd();

@@ -14,6 +14,8 @@ class FleetArchitectureTests(unittest.TestCase):
         self.members=[{"id":"home","name":"Home","handle":"home","self":True,"reachable":True},{"id":"away","name":"Away","handle":"away","self":False,"reachable":True},{"id":"offline","name":"Offline","handle":"offline","self":False,"reachable":False}]
         for patch in [mock.patch.object(server.FLEET,"summary",return_value={"self":"home","members":self.members}),mock.patch.dict(FLEET_ROUTES.FLEET_LISTS,{"flow":lambda:copy.deepcopy(self.graph)})]:
             patch.start();self.addCleanup(patch.stop)
+        # Kept answers live in the module: start each test without any, and leave none.
+        server.FLEET.forget_answers();self.addCleanup(server.FLEET.forget_answers)
 
     def test_matching_resource_names_stay_in_distinct_cluster_graphs_and_relay_uses_caller_role(self):
         with mock.patch.object(server.FLEET,"call",return_value=copy.deepcopy(self.graph)) as relay:
@@ -27,10 +29,12 @@ class FleetArchitectureTests(unittest.TestCase):
 
     def test_unavailable_or_old_member_is_named_without_discarding_other_graphs(self):
         for reply in ({"error":"not found"},[],None):
+            server.FLEET.forget_answers()
             with self.subTest(reply=reply),mock.patch.object(server.FLEET,"call",return_value=reply):
                 result,missing=server.FLEET.gather("flow",FLEET_ROUTES.FLEET_LISTS["flow"],"alice","operator")
             self.assertEqual(1,len(result["clusters"]))
             self.assertEqual({"offline","away"},{m["id"] for m in missing})
+            self.assertEqual("error",next(m["state"] for m in missing if m["id"]=="away"),"one miss is an error, not yet not answering")
 
     def test_local_failure_keeps_remote_graph_visible(self):
         def fail(): raise RuntimeError("API unavailable")

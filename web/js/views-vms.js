@@ -1,8 +1,8 @@
 /* Virtual machines: each one's real state and the actions that fit it, a
    page per VM (disks, network, guest, events), editing and deleting. */
 
-const VM_TONE = { Running: "ok", Stopped: "low", Paused: "low", Migrating: "low", Starting: "low", Stopping: "low", Deleting: "low",
-  Provisioning: "low", WaitingForVolumeBinding: "low" };
+const VM_TONE = { Running: "ok", Stopped: "neutral", Paused: "neutral", Migrating: "neutral", Starting: "neutral", Stopping: "neutral",
+  Deleting: "neutral", Provisioning: "neutral", WaitingForVolumeBinding: "neutral" };
 const VM_ACTIONS = {
   // Shut down asks the guest to power off, as its own power button would;
   // Force off cuts it at once, like pulling the plug. Each has an icon of
@@ -11,7 +11,7 @@ const VM_ACTIONS = {
   restart: ["Restart", "restart", "Restart the VM"], pause: ["Pause", "pause", "Freeze the VM where it is, keeping its memory"],
   unpause: ["Resume", "play", "Carry on from where it was paused"], "force-stop": ["Force off", "plug", "Cut the power at once, without asking the guest - like pulling the plug; unsaved work in it is lost"],
 };
-const vmTone = status => VM_TONE[status] || (/Error|Fail|Crash|BackOff/i.test(status) ? "crit" : "med");
+const vmTone = status => VM_TONE[status] || (/Error|Fail|Crash|BackOff/i.test(status) ? "bad" : "warn");
 /* A disk CDI is still filling: what a Provisioning VM is waiting for. */
 const VM_FILL_WORDS = { ImageDownloading: "Harvester is downloading the image for", ImportInProgress: "Downloading", CloneInProgress: "Copying", ImportScheduled: "Waiting to start the download",
   CloneScheduled: "Waiting to start the copy", Pending: "Waiting for its volume", WaitForFirstConsumer: "Waiting for the VM to be placed",
@@ -40,7 +40,7 @@ async function viewVMs() {
   paint(`<div class="vms-page collection-page" data-collection="vms">${UI.pageHeader(`Virtual machines`, `${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}`, `${layoutSwitch("vms", "viewVMs")}
       ${moreMenu(items)}${create}`)}
     ${UI.collectionHeader(`<span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}`, `<span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
-        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}`)}
+        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? UI.chip("No CDI", "warn", { size: "slim" }) : ""}`)}
     ${uptimeUnreadNote()}
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}</div>`);
@@ -74,12 +74,12 @@ window.vmStore = async (check = false) => {
     if (!s.harvester) return "";
     if (!r.kept) return '<span class="dim xs">not here</span>';
     const v = r.versions[r.versions.length - 1];
-    if (!v) return '<span class="pill slim med">starting</span>';
-    if (v.failed) return '<span class="pill slim crit">download failed</span>';
-    if (!v.ready) return `<span class="pill slim med">downloading ${Math.round(v.progress || 0)}%</span>`;
-    return `<span class="pill slim ok" data-tip="${esc(v.display || v.image)}">here · ${esc(day(v.added))}</span>`
+    if (!v) return UI.chip("starting", "warn", { size: "slim" });
+    if (v.failed) return UI.chip("download failed", "bad", { size: "slim" });
+    if (!v.ready) return UI.chip(`downloading ${Math.round(v.progress || 0)}%`, "warn", { size: "slim" });
+    return UI.chip(`here · ${day(v.added)}`, "ok", { size: "slim", tip: v.display || v.image })
       + (r.versions.length > 1 ? ` <span class="dim xs" data-tip="Older builds stay while a disk was made from them">+${r.versions.length - 1} older</span>` : "")
-      + (r.update ? ' <span class="pill slim warn" data-tip="The publisher has a newer build; it downloads on the next check if this keeps itself current">newer build out</span>' : "");
+      + (r.update ? ` ${UI.chip("newer build out", "warn", { size: "slim", tip: "The publisher has a newer build; it downloads on the next check if this keeps itself current" })}` : "");
   };
   // Keeping current is a setting of a kept image, so it sits with its state.
   const current = r => s.harvester && r.kept ? ` <label class="switch xs" data-tip="Check twice a day for a newer build, download it, and let go of older builds no disk came from"><input type="checkbox" ${r.auto ? "checked" : ""} data-need="admin" onchange="vmStoreAuto(${jsq(r.id)}, this.checked)"> current</label>` : "";
@@ -99,7 +99,7 @@ window.vmStore = async (check = false) => {
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
-        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
+        <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GiB` : o.failed ? UI.chip("failed", "bad", { size: "slim" }) : UI.chip(`${Math.round(o.progress || 0)}%`, "warn", { size: "slim" })}</td>
         <td data-actions>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
           { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
@@ -112,7 +112,7 @@ window.vmStore = async (check = false) => {
         const group = shown.filter(r => r.distro === d);
         return group.length ? `<tbody><tr class="vmstore-distro"><td colspan="${s.harvester ? 6 : 5}">${esc(d)}</td></tr>
           ${group.map(r => `<tr><td><b>${esc(r.name)}</b>${r.error ? `<div class="dim xs badtext">${esc(r.error)}</div>` : ""}</td>
-            <td data-label="Variant"><span class="tag" data-tip="${esc(r.about)}">${esc(r.variant)}</span></td>
+            <td data-label="Variant">${UI.chip(r.variant, "neutral", { tip: r.about })}</td>
             <td class="mono small" data-label="Download">${mb(r.size)}</td>
             <td class="mono small" data-label="Sign in as">${esc(r.user)}</td>
             ${s.harvester ? `<td data-label="Here">${state(r)}${current(r)}</td>` : ""}<td data-actions>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
@@ -171,7 +171,7 @@ function vmAddress(v, withNetwork = true) {
   if (!ips.length) return `<span class="dim">${v.running ? "no address reported yet" : "no address while stopped"}</span>`;
   return `<span class="mono vm-ip">${esc(ips[0])}</span>
     <button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy(${jsq(ips[0])})">${icon("copy")}</button>
-    ${ips.length > 1 ? `<span class="tag" data-tip="${esc(ips.slice(1).join(", "))}">+${ips.length - 1}</span>` : ""}
+    ${ips.length > 1 ? UI.chip(`+${ips.length - 1}`, "neutral", { tip: ips.slice(1).join(", ") }) : ""}
     ${withNetwork && v.network ? `<span class="dim xs vm-net" title="${esc(v.network)}">on ${esc(v.network)}</span>` : ""}`;
 }
 /* What a running VM is using. CPU and memory are its launcher pod's, from
@@ -237,7 +237,7 @@ function vmTable(rows) {
       <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b title="${esc(v.name)}">${esc(v.name)}</b>
         ${clusterTag(v) || vmClusterTag(v) ? `<div class="row vm-tags">${clusterTag(v)}${vmClusterTag(v)}</div>` : ""}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></div></div></td>
-      <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>${answerTag(v, true)}${scheduleTag(v)}
+      <td data-label="Status" data-status data-sort="${esc(v.status)}">${UI.chip(v.status, vmTone(v.status), { tip: v.problem || "" })}${answerTag(v, true)}${scheduleTag(v)}
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
       <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
@@ -291,7 +291,7 @@ function vmCard(v) {
     <div class="between vm-head">
       <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})">${vmAvatar(v)}
         <div class="vm-name"><b title="${esc(v.description || v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc(sub)}">${esc(sub)}</div></div></a>
-      <span class="row nowrap" style="gap:6px">${clusterTag(v)}<span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></span></div>
+      <span class="row nowrap" style="gap:6px">${clusterTag(v)}${UI.chip(v.status, vmTone(v.status), { tip: v.problem || "" })}</span></div>
     ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     ${v.restart_required ? '<div class="dim xs vm-restart">Changes are waiting for a restart</div>' : ""}
@@ -418,7 +418,7 @@ window.vmOpen = async (ns, name) => {
       ${v.description ? `<p class="small" style="margin-top:10px">${esc(v.description)}</p>` : ""}
       ${v.guest?.prettyName ? "" : '<p class="dim xs" style="margin-top:8px">The guest reports its OS and addresses through the QEMU guest agent, when it runs one.</p>'}
       ${v.conditions.length ? UI.more("Conditions", `<table class="tbl dense stack"><thead><tr><th>Condition</th><th>Status</th><th>Detail</th></tr></thead><tbody>
-        ${v.conditions.map(c => `<tr><td>${esc(c.type)}</td><td><span class="pill slim ${c.status === "True" ? "ok" : "neutral"}">${esc(c.status)}</span></td><td class="small">${esc(c.message || c.reason)}</td></tr>`).join("")}</tbody></table>`) : ""}`;
+        ${v.conditions.map(c => `<tr><td>${esc(c.type)}</td><td>${UI.chip(c.status, c.status === "True" ? "ok" : "neutral", { size: "slim" })}</td><td class="small">${esc(c.message || c.reason)}</td></tr>`).join("")}</tbody></table>`) : ""}`;
   const disks = `<table class="tbl dense stack"><thead><tr><th>Disk</th><th>Kind</th><th>Volume</th><th>Size</th><th>Boot</th></tr></thead><tbody>
       ${v.disks.map(d => `<tr><td><b>${esc(d.name)}</b><div class="dim xs">${esc(d.bus)}</div></td><td>${esc(d.kind)}</td>
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
@@ -447,9 +447,9 @@ window.vmOpen = async (ns, name) => {
       ${v.host_devices.map(d => `<tr><td><b>${esc(d.name)}</b>${d.gpu ? ` ${UI.chip("GPU", "info")}` : ""}</td><td class="mono small">${esc(d.resource)}</td><td>${d.rom ? "its own" : '<span class="dim">default</span>'}</td></tr>`).join("")}</tbody></table>`
       : '<div class="dim small">No PCI or USB device is passed through.</div>'}${change("devices")}`;
   const events = v.events.length ? `<table class="tbl dense stack"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Last</th></tr></thead><tbody>
-      ${v.events.map(e => `<tr><td><span class="pill slim ${e.type === "Warning" ? "med" : "neutral"}">${esc(e.type)}</span></td><td class="small">${esc(e.reason)}</td>
+      ${v.events.map(e => `<tr><td>${UI.chip(e.type, e.type === "Warning" ? "warn" : "neutral", { size: "slim" })}</td><td class="small">${esc(e.reason)}</td>
         <td class="small">${esc(e.message)}</td><td class="small dim">${fmtWhen(e.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="dim small">No recent events.</div>';
-  $("#mbody").innerHTML = `<div class="between vm-head"><div><span class="pill ${vmTone(v.status)}">${esc(v.status)}</span></div>
+  $("#mbody").innerHTML = `<div class="between vm-head"><div>${UI.chip(v.status, vmTone(v.status))}</div>
       ${vmDialogActions(v)}</div>
     ${v.problem ? UI.callout("bad", "", `<p>${esc(v.problem)}</p>`) : ""}
     ${vmFilling(v)}
@@ -502,7 +502,7 @@ function vmDiskRow(d, o) {
   return `<tr data-disk="${esc(d.name)}" data-size="${esc(d.size || d.template_size || "")}" data-source="${esc(current)}" data-url="${esc(d.source?.url || "")}">
     <td><b>${esc(d.name)}</b><div class="dim xs">${esc(d.kind)}${d.claim ? ` · <span class="mono">${esc(d.claim)}</span>` : ""}</div>
       ${d.storage_class || d.template_class ? `<div class="dim xs">${esc(d.storage_class || d.template_class)}</div>` : ""}
-      ${unmade ? `<span class="pill slim crit" data-tip="This disk has not been made${d.phase ? ` (${esc(d.phase)})` : ""}, so its source can still be changed">not made</span>` : ""}</td>
+      ${unmade ? UI.chip("not made", "bad", { size: "slim", tip: `This disk has not been made${d.phase ? ` (${d.phase})` : ""}, so its source can still be changed` }) : ""}</td>
     <td><input class="vd_boot mono" type="number" min="1" max="64" value="${d.boot || ""}" placeholder="—" style="width:64px"></td>
     <td><select class="vd_bus">${buses.map(b => vmOpt(b, b, d.bus)).join("")}</select></td>
     <td>${d.claim ? `<input class="vd_size mono" value="${esc(d.size || d.template_size || "")}" style="width:84px" data-tip="${unmade ? "Its size when it is made" : "Grow the disk; it cannot shrink"}">` : "—"}</td>
@@ -973,7 +973,7 @@ async function viewVmImport() {
       <th>Disk</th><th>State</th><th>Size</th><th>Attached to</th><th></th></tr></thead><tbody>${disks.map(d => {
       const done = d.phase === "Succeeded", failed = ["Failed", "Error", "Unknown"].includes(d.phase);
       return `<tr><td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)}</div></td>
-        <td data-label="State"><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase())}</span>${failed && d.message ? `<div class="dim xs">${esc(d.message)}</div>` : ""}</td>
+        <td data-label="State">${UI.chip(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase(), done ? "ok" : failed ? "bad" : "warn")}${failed && d.message ? `<div class="dim xs">${esc(d.message)}</div>` : ""}</td>
         <td class="mono" data-label="Size">${esc(d.capacity || "—")}</td>
         <td data-label="Attached to">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
         <td data-actions>${done && !d.in_use ? actionBar([{ label: "Create VM", run: `vmNew(${jsq(d.name)},${jsq(d.namespace)})`, need: "operator" }]) : ""}</td></tr>`;
@@ -989,7 +989,7 @@ function uvmCopiesPaint() {
   if (!host) return;
   const ops = (STATE.data.operations || []).filter(op => op.kind === "unraid-vm-import").slice(0, 10);
   host.innerHTML = ops.length ? `<div class="sec">Recent imports</div><div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
-    <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b><div><span class="pill ${operationTone(op.status)}">${esc(op.status)}</span></div></td>
+    <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b><div>${UI.chip(op.status, operationTone(op.status))}</div></td>
       <td data-label="Progress" style="min-width:200px"><div class="small">${esc(op.message || "")}</div>
         <span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></td>
       <td data-actions>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` },
@@ -1015,7 +1015,7 @@ window.uvmLoad = async name => {
   STATE.data.uvms[name] = found;
   if (!found.virsh && found.proxmox) {
     // A Proxmox host saved as Unraid or a Docker host: its type can't be changed, so it is added again.
-    host.innerHTML = serviceRow("This is a Proxmox host", '<span class="pill warn">wrong type</span>',
+    host.innerHTML = serviceRow("This is a Proxmox host", UI.chip("wrong type", "warn"),
       `${esc(name)} was added as ${esc(SOURCE_KINDS[STATE.data.srcs?.find(s => s.name === name)?.kind] || "Unraid")}. Remove it, then add it again with the type Proxmox VE to import its VMs.`,
       actionBar([{ label: "Remove server", run: `srcDel(${jsq(name)})`, need: "admin", danger: true },
         { label: "Add as Proxmox", run: "srcAdd('proxmox')", need: "admin", pri: true }]));
@@ -1032,7 +1032,7 @@ window.uvmLoad = async name => {
       : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.id)})`, need: "admin", pri: true }
         : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.id)},this)`, need: "admin", tip: `Shut it down on ${uvmKind(name)}, so its disk is copied as it was left` }]);
     return `<tr><td><b>${esc(vm.name)}</b>${found.kind === "proxmox" ? ` <span class="dim xs mono">${esc(vm.id)}</span>` : ""}${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
-      <td data-label="State"><span class="pill ${off ? "low" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
+      <td data-label="State">${UI.chip(vm.state || "unknown", off ? "neutral" : "ok")}${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
       <td data-label="Machine" class="small">${machine}</td>
       <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GiB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
       <td>${action}</td></tr>`;

@@ -275,11 +275,17 @@ function outageSectionHtml(kind, row) {
         : ""}Never while a job is working on it: an automatic update watches it itself and rolls the image back if it stays down.</p></div>
     <label class="switch"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
     <div class="outage-hook"${a.webhook ? "" : " hidden"}>
+      ${UI.field("Format", `<select id="oa_format" aria-label="Webhook format">${OUTAGE_FORMATS.map(([v, label]) =>
+        `<option value="${v}"${(a.format || "generic") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`)}
       <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
-        ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="operator"' })}</div>
-      <p class="dim xs">A POST of JSON when it goes down, comes back, is restarted or runs out of tries, and when an automatic update of it finishes or is rolled back. Its text, content and message fields carry a sentence, for chat services and Home Assistant.</p></div>
+        ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
+      <label class="switch" data-need="admin"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address (a self-hosted ntfy or Gotify, say)</label>
+      <p class="dim xs">Called when it goes down, comes back, is restarted or runs out of tries, and when an automatic update of it finishes.</p>
+      ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries a sentence as text, content and message, for chat services and Home Assistant; ntfy gets it as the message, Gotify with a title and priority. Once saved, the address shows only up to its host: the rest, where tokens sit, is kept and shows as (hidden). It never reaches this host, link-local or metadata addresses, and a LAN address only when an admin allows it.</p>`, false)}</div>
     ${status.length ? `<div class="dim small">${status.map(esc).join("<br>")}</div>` : ""}</div>`);
 }
+
+const OUTAGE_FORMATS = [["generic", "Generic JSON"], ["ntfy", "ntfy"], ["gotify", "Gotify"]];
 
 window.outageToggle = () => {
   const restart = $("#mbody .outage-restart"), hook = $("#mbody .outage-hook");
@@ -290,7 +296,12 @@ window.outageToggle = () => {
 function outageFromForm() {
   const out = {};
   if ($("#oa_restart")?.checked) out.restart = { after_min: +($("#oa_after")?.value || 0), max: +($("#oa_max")?.value || 0) };
-  if ($("#oa_hook")?.checked && ($("#oa_url")?.value || "").trim()) out.webhook = $("#oa_url").value.trim();
+  if ($("#oa_hook")?.checked && ($("#oa_url")?.value || "").trim()) {
+    out.webhook = $("#oa_url").value.trim();
+    const format = $("#oa_format")?.value || "generic";
+    if (format !== "generic") out.format = format;
+    if ($("#oa_lan")?.checked) out.lan = true;
+  }
   return Object.keys(out).length ? out : null;
 }
 
@@ -311,7 +322,7 @@ window.outageTest = async (kind, ns, name) => {
   if (!webhook) return toast("Type the webhook address first", "bad");
   try {
     const r = await api("/api/monitoring/actions/test", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, ns, name, webhook }) });
+      body: JSON.stringify({ kind, ns, name, webhook, format: $("#oa_format")?.value || "generic" }) });
     toast(r.detail, r.ok ? "ok" : "bad");
   } catch (e) { toast(e.message, "bad"); }
 };

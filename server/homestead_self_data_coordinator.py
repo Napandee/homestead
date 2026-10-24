@@ -317,7 +317,7 @@ class Coordinator:
             if not deletion:
                 job = self.writer.observe(known)
                 self.writer.write("release-copy", "DELETE", self.job_path,
-                                  {"propagationPolicy": "Foreground"}, expected=identity(job))
+                                  {"propagationPolicy": "Foreground"}, expected=identity(job), own=True)
                 return self._result("Waiting for the copy pod to release both volumes")
             if self.writer.observe(deletion) is not None or any(owner(p, "Job", known["after"]["uid"]) for p in self._pods()):
                 return self._result("Waiting for the copy pod to release both volumes")
@@ -375,7 +375,7 @@ class Coordinator:
         if known and not release:
             job = self.writer.observe(known)
             self.writer.write("recover-release-copy", "DELETE", self.job_path,
-                              {"propagationPolicy": "Foreground"}, expected=identity(job))
+                              {"propagationPolicy": "Foreground"}, expected=identity(job), own=True)
             return self._result("Releasing the copy mounts before original-volume recovery")
         if release and (self.writer.observe(release) is not None or any(
                 owner(p, "Job", known["after"]["uid"]) for p in self._pods())):
