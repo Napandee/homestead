@@ -26,6 +26,7 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["host-join-storage", "nodes", "platformJoinGuide()", "document.querySelector('#mbody details').open=true"],
   ["allocation-edit", "nodes", "diskAllocationOpen('node-1')"],
   ["allocation-review", "nodes", "diskAllocationOpen('node-1')", "diskAllocationReview()"],
   ["allocation-identity", "nodes", "diskAllocationOpen('host-with-a-long-descriptive-storage-name-01')", "diskAllocationReview()", "[...document.querySelectorAll('#mbody details')].find(d=>d.textContent.includes('Device identity')).open=true"],

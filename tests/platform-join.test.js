@@ -61,6 +61,17 @@ test("on RKE2 a server or tiebreaker joins through the installer, never as an ag
   assert.match(setup().ctx.joinCommandHtml(rke2, "app"), /RKE2-AGENT-CMD/);
 });
 
+test("the installer command carries the verified storage setting, except for a tiebreaker", () => {
+  const g = { ...GUIDE, distribution: "rke2", storage_path: "/var/lib/longhorn", storage_supported: true,
+    installer_url: "https://example.com/pinned/install.sh" };
+  const ctx = setup().ctx;
+  assert.match(ctx.joinCommandHtml(g, "control-plane"), /pinned\/install.sh[^]*HS_DIST=rke2 HS_ROLE=server HS_LONGHORN_DATA_PATH=\/var\/lib\/longhorn/);
+  assert.doesNotMatch(ctx.joinCommandHtml(g, "tiebreaker"), /HS_LONGHORN_DATA_PATH/);
+  assert.doesNotMatch(ctx.joinCommandHtml({ ...g, storage_path: "/custom/$(id)" }, "control-plane"), /HS_LONGHORN_DATA_PATH/);
+  assert.match(ctx.joinLonghornHtml(g, "app"), /copy this value exactly[^]*\/var\/lib\/longhorn/);
+  assert.match(ctx.joinLonghornHtml({ ...g, storage_path: null }, "app"), /could not be read[^]*Do not guess/);
+});
+
 test("a server or tiebreaker is checked before it joins", () => {
   const html = setup().ctx.joinCommandHtml({ ...GUIDE, check: "CHECK-CMD" }, "tiebreaker");
   assert.match(html, /CHECK-CMD[^]*TIEBREAKER-CMD/);

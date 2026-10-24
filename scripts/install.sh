@@ -929,14 +929,19 @@ volume_args() {
 pick_longhorn_path() {
   if [ "$DIST" = rke2 ]; then path_command='/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml'
   else path_command='k3s kubectl'; fi
-  LH_DATA_PATH=$(choose HS_LONGHORN_DATA_PATH "Cluster Storage Path" "Match the existing cluster's Longhorn default-data-path setting. On a server, check with:
+  while :; do
+    LH_DATA_PATH=$(ask HS_LONGHORN_DATA_PATH "Match the Cluster's Storage" "This host must use the storage folder already set by your cluster. Choosing a different folder could put app and VM data on the OS filesystem instead of the space reserved for storage.
 
+Find it in Homestead: Hosts > Add a host > Storage setting for the installer.
+
+Or run this on an existing server:
 sudo $path_command -n longhorn-system get settings.longhorn.io default-data-path -o jsonpath='{.value}'
 
-This selects where replica data goes on this host. It does not change the cluster's settings. A custom path needs manual storage setup." \
-    /mnt/longhorn-os "/mnt/longhorn-os   Replica data only (new layout)" \
-    /var/lib/longhorn "/var/lib/longhorn  Replicas and runtime (legacy layout)") || exit
-  case "$LH_DATA_PATH" in /mnt/longhorn-os|/var/lib/longhorn) ;; *) fail "HS_LONGHORN_DATA_PATH must match one of the two supported layouts." ;; esac
+Paste the exact folder below. Do not choose a new one:" "") || exit
+    case "$LH_DATA_PATH" in /mnt/longhorn-os|/var/lib/longhorn) break ;; esac
+    [ -z "$(given HS_LONGHORN_DATA_PATH)" ] || fail "Storage setting not supported. Copy the cluster's default-data-path into HS_LONGHORN_DATA_PATH. Custom storage folders need manual setup; no storage has been changed."
+    msg "Check the Storage Folder" "Copy only the folder shown in Homestead or by the command, without quotes or spaces. Custom storage folders need manual setup: choose Cancel on the next screen to leave the installer. No storage has been changed."
+  done
 }
 
 dist_name() { if [ "$DIST" = rke2 ]; then echo RKE2; else echo k3s; fi; }

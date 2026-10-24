@@ -162,6 +162,13 @@ can reach the cluster before changing anything, and joins. Install the same
 k3s version as the existing servers: the summary uses the cluster's version
 where the cluster reports it, and otherwise lets you select it.
 
+The storage folder must match the existing cluster. In Homestead, open
+**Hosts → Add a host → Storage setting for the installer** and copy the value
+into the installer's **Match the Cluster's Storage** screen. This is an existing
+setting, not a choice between storage types. If Homestead cannot read it, the
+installer shows a command to run on an existing server. Do not guess: a wrong
+folder could put volume data on the OS filesystem instead of the reserved space.
+
 Or, with no questions, each joins with the first machine's address and its
 token. The token is on the first machine:
 
