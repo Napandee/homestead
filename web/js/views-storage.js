@@ -1679,10 +1679,10 @@ function diskRowsHtml(node, disks, harvester) {
           <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} replica${x.replicas === 1 ? "" : "s"}</span></div>
         ${meter(pct, "", "disk")}
         ${x.reserved_gb > 0 ? UI.more('Capacity breakdown',UI.facts([
-          ['Filesystem capacity',esc(sizeText(x.capacity_gb))],
+          [x.type==='block'?'Store capacity':'Filesystem capacity',esc(sizeText(x.capacity_gb))],
           ['Reserved by Longhorn',esc(sizeText(x.reserved_gb))],
           ['Capacity after reserve',esc(sizeText(x.size_gb))]
-        ])+'<p class="ui-help">The usage bar excludes Longhorn’s reserve. Filesystem capacity is smaller than its logical volume because of filesystem overhead. Growing the OS does not grow this store.</p>') : ''}
+        ])+`<p class="ui-help">The usage bar excludes Longhorn’s reserve.${x.type==='block'?'':' Filesystem capacity is smaller than the underlying device because of filesystem overhead.'} Growing the OS does not grow this store.</p>`) : ''}
         ${!x.ready ? `<div class="badtext xs disk-why">${esc(x.missing || x.problem || "Longhorn reports this disk not ready")}</div>` : ""}
         <div class="row disk-tags">${(x.tags || []).map(t => UI.chip(t, "info")).join("")
           || '<span class="dim xs">no tags</span>'}

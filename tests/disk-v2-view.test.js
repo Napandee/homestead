@@ -90,6 +90,8 @@ test('runtime move is offered for either spelling of its mount and capacity expl
   }
   store.path='/var/lib/longhorn/replicas';assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],false),/Move Longhorn runtime/);
   store.path='/var/lib/longhorn/';assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],true),/Move Longhorn runtime/);
+  store.type='block';store.path='/dev/sdb';const block=t.c.diskRowsHtml('node-1',[disk],false);
+  assert.match(block,/Store capacity/);assert.doesNotMatch(block,/Filesystem capacity|filesystem overhead/);
 });
 
 test('runtime blocker offers a direct review for the selected store without starting maintenance',async()=>{
