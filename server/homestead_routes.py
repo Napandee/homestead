@@ -113,6 +113,7 @@ MODULES = (
     "homestead_lhcapacity",
     "homestead_lhrebuild",
     "homestead_lhv2_setup",
+    "homestead_lhv2_cleanup",
     "homestead_lhv2_upgrade",
     "homestead_lifecycle",
     "homestead_logalerts",

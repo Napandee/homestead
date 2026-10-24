@@ -2192,6 +2192,16 @@ ssh_pwauth: true
     },
     "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
+    "/api/longhorn/v2/cleanup": (url,init) => {
+      const rows=[{node:'node-1',baseline:256,owned_pages:1024,phase:'prepared'},
+        {node:'node-2',baseline:1024,owned_pages:0,phase:'retained',reason:'No ownership record. Existing hugepages are retained.'}];
+      if(init?.method==='POST')return {id:'demo-v2-cleanup',kind:'longhorn-v2-cleanup',status:'running',phase:'stopping',nodes:rows};
+      return {enabled:true,request_id:'demo-review',capacity_token:'demo-cleanup',nodes:rows};
+    },
+    "/api/longhorn/v2/cleanup/status": () => ({id:'demo-v2-cleanup',kind:'longhorn-v2-cleanup',status:'running',phase:'restart-required',message:'V2 stopped. Review the host restart to release owned RAM.',nodes:[
+      {node:'node-1',baseline:256,owned_pages:1024,phase:'restart-required'},
+      {node:'node-2',baseline:1024,owned_pages:0,phase:'retained',reason:'No ownership record. Existing hugepages are retained.'}]}),
+    "/api/longhorn/v2/cleanup/recheck": () => ({ok:true}),
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
     "/api/workloads/rebalance/review": (url, init) => {
