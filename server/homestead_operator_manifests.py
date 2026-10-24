@@ -102,6 +102,17 @@ def _check_files(component, servers):
             raise ValueError(f"Cannot enable operator upgrades on {node}: {(err or out)[:240]}")
 
 
+def _read_input(node, command, arguments, payload):
+    # Exec v4 sends stdin without closing it. kubectl -f - waits for EOF,
+    # so give it a complete file after reading exactly the supplied bytes.
+    script = ('set -eu\numask 077\nf=$(mktemp /tmp/homestead-operator-read.XXXXXX)\n'
+              'trap \'rm -f "$f"\' EXIT\n'
+              f'head -c {len(payload)} > "$f"\n'
+              f'[ "$(wc -c < "$f")" -eq {len(payload)} ] || {{ echo "Incomplete operator input" >&2; exit 1; }}\n'
+              f'{command} {arguments} -f "$f" -o json\n')
+    return HOSTRUN.run(node, script, timeout=90, stdin=payload)
+
+
 def _documents(component, version, addons, node, command):
     if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
         raise ValueError("The installed operator version must be a numbered upstream release")
@@ -109,8 +120,7 @@ def _documents(component, version, addons, node, command):
     text = addons.fetch(f"{base}/download/{version}/{component}-operator.yaml")[0]
     # Use Kubernetes' own YAML parser: release CRD schemas include multiline
     # quoted scalars outside Homestead's deliberately small Compose parser.
-    out, err = HOSTRUN.run(node, f"set -eu\n{command} create --dry-run=client --validate=false -f - -o json\n",
-                           timeout=90, stdin=text.encode())
+    out, err = _read_input(node, command, "create --dry-run=client --validate=false", text.encode())
     try:
         answer = json.loads(out)
         if not isinstance(answer, dict):
@@ -155,8 +165,8 @@ def prepare(component, version, read, platform, addons):
     _check_files(component, nodes)
     command = _kubectl(platform["distribution"])
     rows = _documents(component, version, addons, nodes[0], command)
-    out, err = HOSTRUN.run(nodes[0], f"set -eu\n{command} get --ignore-not-found=true -f - -o json\n", timeout=90,
-                           stdin=json.dumps({"apiVersion": "v1", "kind": "List", "items": rows}).encode())
+    out, err = _read_input(nodes[0], command, "get --ignore-not-found=true",
+                           json.dumps({"apiVersion": "v1", "kind": "List", "items": rows}).encode())
     try:
         answer = json.loads(out)
         if not isinstance(answer, dict):

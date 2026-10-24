@@ -230,27 +230,44 @@ window.componentUpgradeGo = async (id, to) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+const componentManagePending = new Set();
 window.componentManageOperator = id => {
+  if (componentManagePending.has(id)) return toast('This installation is still being checked. Please wait.');
   const c = (STATE.data.components?.components || []).find(row => row.id === id);
   if (!c?.can_manage) return;
   modal(`Manage ${c.name} upgrades`, `
     <p>Let Homestead upgrade this ${esc(c.name)} installation using its upstream release manifests.</p>
-    <div class="note">This enables future upgrades. It does not change the installed version, VM disks or existing settings.</div>
+    <div id="cmp_manage_status" role="status" aria-live="polite"><div class="note">This enables future upgrades. It does not change the installed version, VM disks or existing settings.</div></div>
     ${UI.more('Before enabling', '<p>Use this for a Homestead installer or plain manifest installation. Keep using Helm, GitOps or another operator if it manages this component. Homestead checks for those owners and active installer files before enabling upgrades.</p>')}
-    ${UI.ack('cmp_manage_ack', 'I confirm no other system manages these upgrades.')}
-    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="componentManageOperatorGo(${jsq(id)})">Enable upgrades</button>`)}`);
+    ${UI.ack('cmp_manage_ack', 'I confirm no other system manages these upgrades.', {onchange:"$('#cmp_manage_go').disabled=!this.checked"})}
+    ${UI.actions(UI.cancel('Close') + UI.button('Enable upgrades', `componentManageOperatorGo(${jsArg(id)})`,
+      {kind:'pri', id:'cmp_manage_go', disabled:true, attrs:'data-need="admin"'}))}`);
 };
 
 window.componentManageOperatorGo = async id => {
+  if (componentManagePending.has(id)) return;
   if (!$('#cmp_manage_ack')?.checked) return toast('Confirm who manages this installation first', 'bad');
+  const button = $('#cmp_manage_go'), ack = $('#cmp_manage_ack'), status = $('#cmp_manage_status');
+  if (!button || !status) return;
+  componentManagePending.add(id);
+  button.disabled = true; button.textContent = 'Checking installation…'; ack.disabled = true;
+  status.innerHTML = '<div class="note"><span class="spin2" aria-hidden="true"></span> Checking the installation and host configuration. This can take a few minutes.</div>';
   try {
     const result = await api('/api/cluster/components/manage-operator', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({component:id, confirm:true})});
-    closeModal();
+    if ($('#cmp_manage_go') === button) closeModal();
     toast(result.detail, 'ok');
     clusterComponentsPaint(true);
-  } catch (error) { toast(error.message, 'bad'); }
+  } catch (error) {
+    if ($('#cmp_manage_go') === button) {
+      status.innerHTML = UI.callout('bad', 'Could not enable upgrades', esc(error.message));
+    } else toast(error.message, 'bad');
+  } finally {
+    componentManagePending.delete(id);
+    if ($('#cmp_manage_go') === button) {
+      ack.disabled = false; button.disabled = !ack.checked; button.textContent = 'Enable upgrades';
+    }
+  }
 };
 
 window.harvesterUpgradeStart = version => {
