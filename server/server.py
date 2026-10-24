@@ -1611,11 +1611,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(405 if MCP.enabled() else 404, {"error": "POST JSON-RPC to /mcp"})
             if self._module_route("GET", p, q, None):
                 return
-            if p == "/api/diagnostics/download":
-                filename, ctype, body = DIAGNOSTICS.export((q.get("id") or [""])[0], self.user,
-                    (q.get("format") or ["anonymised"])[0], (q.get("package") or [""])[0] == "1")
-                self._extra_headers.append(("Content-Disposition", f'attachment; filename="{filename}"'))
-                return self._send(200, body, ctype)
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
             if p == "/api/node/shell":
@@ -1663,13 +1658,6 @@ class H(HTTP.LimitedHandler):
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
                 return self._send(200, {"ok": True})
-            if p.startswith("/api/self/data/handoff/"):
-                if re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}/view", p):
-                    return self._send(200, SELF_DATA_WORKER.maintenance_page(p.split("/")[-2]), "text/html; charset=utf-8")
-                status = self_data_handoff_status(p[len("/api/self/data/handoff/"):])
-                if status is None:
-                    return self._send(404, {"error": "No recorded data move with this identity"})
-                return self._send(503 if status["status"] == "unknown" else 200, status)
             return self._send(404, {"error": "no route"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
@@ -1707,14 +1695,6 @@ class H(HTTP.LimitedHandler):
                 KUBE_HELPERS.require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
                 return
-            if p == "/api/self/data/move":
-                try:
-                    result, token = start_self_data_move(b, self.user)
-                    secure = "Secure; " if self._over_tls() else ""
-                    self._extra_headers.append(("Set-Cookie", f"homestead-data-move={token}; Path=/api/self/data/handoff/; HttpOnly; {secure}SameSite=Strict; Max-Age=86400"))
-                    return self._send(202, result)
-                except SELF_DATA_FENCE.Held as error:
-                    return self._send(409, {"error": str(error), "review_required": True})
             return self._send(404, {"error": "no route"})
         except CAPACITY_REVIEW.Rejected as e:
             return self._send(409, {"error": str(e), "capacity": e.plan, "review_required": True})
