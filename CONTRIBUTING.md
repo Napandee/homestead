@@ -90,6 +90,10 @@ server tests that name a module or web file your branch changes (against
 `origin/dev`, or the base you give it), plus every test that scans the whole
 tree. It is a quick check, not a substitute for the full run.
 
+On Windows, run the full suite as `python -X utf8 -m unittest discover -s tests`:
+sources are UTF-8, and Windows otherwise reads text in its own code page.
+`run_tests.py` turns that mode on by itself.
+
 Every text file is checked out with LF line endings on every platform
 (`.gitattributes`); many tests read sources byte for byte. A clone made on
 Windows before that rule, or with `core.autocrlf` set, still has CRLF files

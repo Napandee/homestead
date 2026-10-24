@@ -91,6 +91,10 @@ def run(files):
 
 
 def main(argv=None):
+    if not sys.flags.utf8_mode and argv is None:
+        # Sources are UTF-8. Windows reads text as its own code page unless
+        # Python's UTF-8 mode is on, as it always is on Linux and macOS.
+        return subprocess.run([sys.executable, "-X", "utf8", *sys.argv]).returncode
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--shard", metavar="K/N", help="run share K of N")
