@@ -84,6 +84,7 @@ test("an app host is told to install Longhorn's packages, why, and where to look
     const step = t.fields["#mbody"].innerHTML.split("<h4><span>3</span>")[1].split("<h4><span>4</span>")[0];
     assert.match(step, /LONGHORN-CMD/);
     assert.match(step, /iSCSI on the host where an app runs/);
+    assert.match(step, /If Longhorn.s pods keep restarting on it, see the wiki/);
     assert.match(step, /<a class="linkish" href="https:\/\/github\.com\/homestead-lab\/homestead\/wiki\/Installing-on-k3s#if-something-is-stuck"/);
   }
 });
@@ -129,4 +130,10 @@ test("the last step opens the Hosts page, as the Harvester guide's View hosts do
   await t.ctx.platformJoinGuide();
   const step = t.fields["#mbody"].innerHTML.split("<h4><span>5</span>")[1];
   assert.match(step, /<button class="btn pri" onclick="closeModal\(\);go\('nodes'\)">View hosts<\/button>/);
+});
+
+test("the wiki section the Longhorn step links to exists on both pages", () => {
+  for (const page of ["Installing-on-k3s", "Installing-on-RKE2"]) {
+    assert.match(fs.readFileSync(`docs/wiki/${page}.md`, "utf8"), /^## If something is stuck$/m, `${page} has "If something is stuck"`);
+  }
 });

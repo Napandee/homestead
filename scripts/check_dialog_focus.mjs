@@ -52,6 +52,8 @@ try {
   // side of it, so every confirm had a horizontal scrollbar (#833).
   for (const [width, height] of [[1280, 900], [390, 844]]) {
     const sized = await browser.newPage({ viewport: { width, height } });
+    const sizedErrors = [];
+    sized.on("pageerror", error => sizedErrors.push(error.message));
     await sized.goto(`${base}/?demo=1`, { waitUntil: "networkidle" });
     for (const open of ['ask("Discard your changes to Add a host?", { title: "Unsaved changes", ok: "Discard changes", cancel: "Keep editing", danger: true })',
       'askText("Name the snapshot", "nightly", { title: "Take a snapshot" })']) {
@@ -63,6 +65,7 @@ try {
       await sized.keyboard.press("Escape");
       await box.waitFor({ state: "detached" });
     }
+    assert.deepEqual(sizedErrors, [], `no page errors at ${width}px`);
     await sized.close();
   }
   console.log("Dialog focus: moves in, Tab stays inside, returns to the opener; Close is a button; error toasts stay until dismissed or the next action, and let clicks through; ask() fits its box at desktop and phone width");

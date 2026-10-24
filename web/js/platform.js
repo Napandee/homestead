@@ -352,7 +352,7 @@ function joinLonghornHtml(g, role) {
   if (role === "tiebreaker") return `<p class="dim small">Not needed: a tiebreaker runs no apps and holds no storage.</p>`;
   const wiki = `https://github.com/homestead-lab/homestead/wiki/Installing-on-${g.distribution === "rke2" ? "RKE2" : "k3s"}#if-something-is-stuck`;
   return guideCopy(g.longhorn)
-    + `<p class="dim xs">Longhorn attaches volumes over iSCSI on the host where an app runs, so every host that runs apps needs these, even one that holds no copies. If its pods keep restarting, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>`;
+    + `<p class="dim xs">Longhorn attaches volumes over iSCSI on the host where an app runs, so every host that runs apps needs these, even one that holds no copies. If Longhorn's pods keep restarting on it, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>`;
 }
 window.joinLonghornHtml = joinLonghornHtml;
 window.platformJoinRole = role => {
