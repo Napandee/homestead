@@ -157,6 +157,53 @@ class ManifestOperatorTests(unittest.TestCase):
         self.assertFalse(self.sent)
         self.assertFalse(any("change" in kw for _, _, kw in self.runs))
 
+    @unittest.skipUnless(os.name == "posix", "executes the host's POSIX shell")
+    def test_operator_reads_finish_while_exec_stdin_stays_open(self):
+        with patch.object(self.addons, "fetch", return_value=("upstream manifest with a non-ASCII label: café", "")):
+            self.enable()
+        reads = [(script, options) for _, script, options in self.runs if options.get("stdin")]
+        self.assertEqual(2, len(reads), "manifest parsing and live inventory both use stdin")
+        with tempfile.TemporaryDirectory() as folder:
+            command = Path(folder) / "k3s"
+            received = Path(folder) / "received"
+            input_path = Path(folder) / "input-path"
+            command.write_text('#!/bin/sh\nwhile [ "$1" != -f ]; do shift; done\nshift\n'
+                               'printf "%s" "$1" > "$INPUT_PATH"\n'
+                               'if [ "$1" = - ]; then cat; else cat "$1"; fi > "$RECEIVED"\n'
+                               'printf \'{"kind":"List","items":[]}\\n\'\nexit "${FAIL_READ:-0}"\n')
+            command.chmod(0o755)
+            env = {**os.environ, "PATH": folder + os.pathsep + os.environ["PATH"],
+                   "RECEIVED": str(received), "INPUT_PATH": str(input_path)}
+            for script, options in reads:
+                for fail in (False, True):
+                    with self.subTest(inventory="get --ignore-not-found" in script, failed=fail):
+                        process = subprocess.Popen(["sh", "-c", script], stdin=subprocess.PIPE,
+                                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                   env={**env, "FAIL_READ": "7" if fail else "0"})
+                        try:
+                            process.stdin.write(options["stdin"])
+                            process.stdin.flush()
+                            # Kubernetes exec v4 leaves stdin open after sending the bytes.
+                            # Waiting here (not communicate()) catches readers waiting for EOF.
+                            try:
+                                process.wait(timeout=3)
+                            except subprocess.TimeoutExpired:
+                                self.fail("operator inspection waited for stdin EOF")
+                            self.assertEqual(7 if fail else 0, process.returncode)
+                            self.assertEqual(options["stdin"], received.read_bytes())
+                            self.assertFalse(Path(input_path.read_text()).exists(), "temporary input is removed")
+                        finally:
+                            if process.poll() is None:
+                                process.kill()
+                            process.communicate(timeout=3)
+                # A truncated stream must not reach kubectl, even if it ends cleanly.
+                received.unlink()
+                short = subprocess.run(["sh", "-c", script], input=options["stdin"][:-1],
+                                       capture_output=True, env=env, timeout=3)
+                self.assertNotEqual(0, short.returncode)
+                self.assertIn(b"Incomplete operator input", short.stderr)
+                self.assertFalse(received.exists())
+
     def test_update_preserves_configuration_pins_objects_and_dry_runs_before_applying(self):
         self.upgrade()
         _, script, options = self.runs[-1]
