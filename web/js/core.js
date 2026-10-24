@@ -199,9 +199,13 @@ applySettings();
    answer over the page you actually asked for, leaving the URL, the title and
    the body disagreeing. A read whose answer arrives after you have navigated
    away is for a page nobody is looking at, so it is abandoned rather than
-   returned. Writes are never abandoned: their result has to be reported. */
+   returned. Writes are never abandoned: their result has to be reported.
+   An abandoned read never settles, so nothing of the page left runs on. Each
+   gets a promise of its own that nothing else holds: the frames awaiting it,
+   and the page data they keep, are then freed with it. One shared promise
+   would hold every abandoned page for the rest of the visit. */
 window.NAV_TOKEN = 0;
-const ABANDONED = new Promise(() => { });
+const abandoned = () => new Promise(() => { });
 
 /* Dropping a late answer is not enough: the request itself keeps one of the
    browser's six connections to Homestead busy until the cluster answers, and
@@ -248,7 +252,7 @@ async function api(path, opts) {
     // A connection that broke after you left the page is for a page nobody is
     // looking at too: dropped like a late answer, so its error is not shown on
     // the page you went to.
-    if (left) return ABANDONED;
+    if (left) return abandoned();
     throw error;
   }
   const missing = r.headers.get("x-homestead-fleet-missing");
@@ -260,11 +264,11 @@ async function api(path, opts) {
     const left = readOnly && startedAt !== window.NAV_TOKEN;
     diagnostic?.done(r.status, undefined, left && error?.name === "AbortError");
     // Cancelled while its answer was still arriving, because you left the page.
-    if (left) return ABANDONED;
+    if (left) return abandoned();
     throw error;
   }
   diagnostic?.done(r.status, b?.operation?.id);
-  if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
+  if (readOnly && startedAt !== window.NAV_TOKEN) return abandoned();
   if (!r.ok) throw Object.assign(new Error((b && b.error) || r.statusText), { status: r.status, body: b });
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;
