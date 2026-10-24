@@ -140,6 +140,15 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(Held): self.client.send("DELETE", path, body)
             self.open.assert_not_called()
 
+    def test_copy_job_release_may_pin_only_its_uid_but_never_nothing(self):
+        # Row 92: the journal releases Homestead's own copy Job by uid alone, so
+        # a status update by the Job controller cannot refuse the release.
+        self.client.send("DELETE", self.scope.job, {"preconditions": {"uid": "copy-uid"}, "propagationPolicy": "Foreground"})
+        self.open.reset_mock()
+        with self.assertRaises(Held):
+            self.client.send("DELETE", self.scope.job, {"preconditions": {"resourceVersion": "12"}, "propagationPolicy": "Foreground"})
+        self.open.assert_not_called()
+
     def test_mutations_cannot_change_target_identity_or_use_overrides(self):
         original = {"kind": "Deployment", "apiVersion": "apps/v1", "metadata": {
             "namespace": "lab", "name": "homestead", "uid": "deployment-uid", "resourceVersion": "1"}}

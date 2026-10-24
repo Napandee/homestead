@@ -106,7 +106,9 @@ class Cluster:
         else:
             old = self.objects[path]
             expected = body["preconditions"] if method == "DELETE" else body["metadata"]
-            if any(expected.get(k) != old["metadata"][k] for k in ("uid", "resourceVersion")):
+            # The API server checks only the preconditions a DELETE gives.
+            keys = [k for k in ("uid", "resourceVersion") if k in expected] if method == "DELETE" else ("uid", "resourceVersion")
+            if not keys or any(expected.get(k) != old["metadata"][k] for k in keys):
                 raise urllib.error.HTTPError(path, 409, "changed", {}, None)
             if method == "DELETE":
                 del self.objects[path]
@@ -394,6 +396,24 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaises(Held): c.step()
             self.assertEqual(before + 1, sum(p == c.dep_path for _, p, _ in c.sent))
             self.assertEqual("target", c.objects[c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_job_status_update_while_releasing_the_copy_does_not_stop_the_move(self):
+        # Row 92: the Job controller may update the finished Job's status between
+        # Homestead's read and its delete; the copy Job is Homestead's own helper.
+        c = self.c; c.copying(); c.finish_copy(); c.step()
+        original = c.read
+        def read(path):
+            result = original(path)
+            if path == c.job_path and path in c.objects:
+                job = c.objects[path]
+                job["metadata"]["resourceVersion"] = str(int(job["metadata"]["resourceVersion"]) + 1)
+                job["status"]["ready"] = 0
+            return result
+        c.read = read
+        c.step()
+        deletes = [b for m, p, b in c.sent if m == "DELETE" and p == c.job_path]
+        self.assertEqual([{"uid": "homestead-data-copy-" + OP + "-created"}], [b["preconditions"] for b in deletes])
+        self.assertNotIn(c.job_path, c.objects)
 
     def test_replacement_copy_job_cannot_be_deleted_by_old_receipt(self):
         c = self.c; c.copying(); c.finish_copy(); c.step()

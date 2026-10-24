@@ -31,7 +31,8 @@ import homestead_imports as IMP
 import homestead_lan as LAN
 import homestead_leader as LEADER
 import homestead_lifecycle as LC
-import homestead_move_engine as MOVE_ENGINE
+import homestead_move_phases as MOVE_PHASES
+import homestead_move_state as MOVE_STATE
 import homestead_names as NAMES
 import homestead_namespaces as NSMOD
 import homestead_networking as NETWORK
@@ -415,11 +416,11 @@ def _moves_loop():
     while True:
         if LEADER.is_leader():
             try:
-                MOVE_ENGINE.tick_all()
-                beat("moves", MOVE_ENGINE.TICK_SECONDS, leader_only=True)
+                MOVE_PHASES.tick_all()
+                beat("moves", MOVE_STATE.TICK_SECONDS, leader_only=True)
             except Exception as error:
-                beat("moves", MOVE_ENGINE.TICK_SECONDS, error, leader_only=True)
-        time.sleep(MOVE_ENGINE.TICK_SECONDS)
+                beat("moves", MOVE_STATE.TICK_SECONDS, error, leader_only=True)
+        time.sleep(MOVE_STATE.TICK_SECONDS)
 
 
 def rollout_review_context(current):

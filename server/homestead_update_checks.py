@@ -139,6 +139,9 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
             "unchecked": any(x.get("unchecked") for x in images),
             "available": any(x["available"] for x in images),
             "managed": U.managed_by(dep),
+            # Flux or Argo CD applies it: the bump is made in git, and this is it (#735).
+            "yaml": GITOPS.image_yaml(dep, {x["container"]: GITOPS.git_image(x) for x in images if x["available"]})
+                    if U.managed_by(dep) and any(x["available"] for x in images) else "",
             "can_rollback": bool(U._annotation_json(dep, U.PREVIOUS)),
             "last_action": U._annotation(dep, U.LAST_ACTION)}
 # A scan asks a registry about every workload, one network round trip each,
@@ -367,3 +370,4 @@ def report(force=False):
 # both only look these names up when a function runs.
 from homestead_update_registry import channel_behind, channel_release, newer_semver, parse_image, release_key, semver  # noqa: E402
 import homestead_updates as U  # noqa: E402
+import homestead_gitops as GITOPS  # noqa: E402

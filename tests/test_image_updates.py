@@ -135,6 +135,21 @@ class ImageUpdateTests(unittest.TestCase):
         finally:
             updates.registry_tags, updates.manifest_info, updates._secret_credentials = originals
 
+    def test_a_flux_app_with_an_update_gets_the_image_line_to_commit(self):
+        # #735: Flux applies it, so the bump is made in git - here is the line.
+        self.dep["metadata"]["labels"] = {"kustomize.toolkit.fluxcd.io/name": "apps",
+                                          "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
+        old, new = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+        report = self._latest(new, running_digest=old)
+        self.assertTrue(report["available"])
+        self.assertTrue(report["yaml"].startswith("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: demo\n  namespace: lab"))
+        # The tag did not change, only what it points at: the line pins the digest.
+        self.assertIn(f"      - name: demo\n        image: n8nio/n8n:latest@{new}", report["yaml"])
+
+    def test_an_app_homestead_updates_gets_no_yaml(self):
+        report = self._latest("sha256:" + "2" * 64, running_digest="sha256:" + "1" * 64)
+        self.assertEqual("", report["yaml"])
+
     def test_a_stopped_workload_is_compared_with_what_it_last_ran(self):
         old, new = "sha256:" + "1" * 64, "sha256:" + "2" * 64
         before = copy.deepcopy(self.dep)

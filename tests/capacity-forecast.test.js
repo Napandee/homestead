@@ -21,8 +21,9 @@ const forecast = { node: "node2", verdict: "waits", moving: 3, unreserved: 1, se
 test("each verdict has its word and tone", () => {
   const { ctx } = setup(() => ({}));
   assert.deepEqual(["ok", "fits"], [...ctx.capacityVerdict("fits")]);
-  assert.deepEqual(["crit", "apps wait"], [...ctx.capacityVerdict("waits")]);
+  assert.deepEqual(["bad", "apps wait"], [...ctx.capacityVerdict("waits")]);
   assert.deepEqual(["neutral", "unknown"], [...ctx.capacityVerdict("unknown")]);
+  assert.deepEqual(["bad", "no host left"], [...ctx.capacityVerdict("no-host")]);
 });
 
 test("the room section shows each host and an app evicted to make room", () => {

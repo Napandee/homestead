@@ -734,7 +734,7 @@ UPTIME.bind(DATA_DIR, setting=lambda b: set_uptime_setting(b))
 HOUSEKEEPING.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), portal_links=lambda: PORTAL.stored())
 SCHEDULES.bind(DATA_DIR, items=lambda: scheduled_items(), setter=lambda b: set_schedule(b))
 OUTAGE.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
-            dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name))
+            dns_name=lambda value, label: _dns_name(value, label), guard=lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name), ns=DEFAULT_NS)
 CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
              deployments=lambda: [d for d in KUBE_HELPERS.kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
 FORECAST.bind(DATA_DIR, lambda: (CACHE.cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)

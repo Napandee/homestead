@@ -35,6 +35,7 @@ import homestead_import_job as IMPORT_JOB
 import homestead_kube as KUBE
 import homestead_rename as RENAME
 import homestead_restore_test as RESTORE_TEST
+import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_vm_power_job as VM_POWER_JOB
 from unittest import mock
 
@@ -74,9 +75,11 @@ REST = [
     (ADDONS, {"multus"}, set()),
     (AUTOUPDATE, {AUTOUPDATE.KIND}, set()),
     (RESTORE_TEST, {RESTORE_TEST.KIND}, set()),
+    (WEEKLY_TRIM, {WEEKLY_TRIM.KIND}, set()),
 ]
 REST_ALIASES = {VM_POWER_JOB: "VM_POWER_JOB", RENAME: "RENAME", IMPORT_JOB: "IMPORT_JOB", DISK_V2: "DISK_V2",
-                DISKS: "DISKS", HELM: "HELM", ADDONS: "ADDONS", AUTOUPDATE: "AUTOUPDATE", RESTORE_TEST: "RESTORE_TEST"}
+                DISKS: "DISKS", HELM: "HELM", ADDONS: "ADDONS", AUTOUPDATE: "AUTOUPDATE", RESTORE_TEST: "RESTORE_TEST",
+                WEEKLY_TRIM: "WEEKLY_TRIM"}
 same = lambda functions: [(f.__module__, f.__qualname__) for f in functions]
 ALIASES = {"homestead_host_os": "HOST_OS", "homestead_os_rollout": "OS_ROLLOUT", "homestead_host_bridge": "HOST_BRIDGE",
            "homestead_host_bonds": "HOST_BONDS", "homestead_uplinks": "UPLINKS", "homestead_host_console": "HOST_CONSOLE",
@@ -164,7 +167,8 @@ class RestKindTests(unittest.TestCase):
                     (IMPORT_JOB, "status", IMPORT_JOB.KIND, (item, read)),
                     (RENAME, "status", RENAME.KIND, (item, ops)),
                     (AUTOUPDATE, "resolve", AUTOUPDATE.KIND, (item, ops.checkpoint)),
-                    (RESTORE_TEST, "resolve", RESTORE_TEST.KIND, (item, ops.checkpoint))]:
+                    (RESTORE_TEST, "resolve", RESTORE_TEST.KIND, (item, ops.checkpoint)),
+                    (WEEKLY_TRIM, "resolve", WEEKLY_TRIM.KIND, (item, ops.checkpoint))]:
                 with self.subTest(kind=kind), mock.patch.object(module, name) as called:
                     ops.RESOLVERS[kind](item)
                     called.assert_called_once_with(*args)

@@ -49,7 +49,7 @@ def guards(current, target, read):
 
 
 def prepare(body, current, clone, read):
-    if set(body) - {"ns", "name", "workload_name", "capacity_token", "confirm_capacity"}:
+    if set(body) - {"ns", "name", "workload_name", "capacity_token", "confirm_capacity", "confirm_managed"}:
         raise ValueError("Rename separately from other edits. Review only the old and new workload names")
     source = identity(current)
     guards(current, body["workload_name"], read)

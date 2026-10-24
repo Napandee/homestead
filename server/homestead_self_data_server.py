@@ -349,8 +349,10 @@ def homestead_data_volume(dep=None):
 
     Copies of Homestead on different nodes all mount this one claim, so it has
     to be ReadWriteMany on a class Longhorn serves through its share manager.
-    A migratable class - Harvester's own, and longhorn-r2 - hands out a VM-disk
-    volume that one node attaches, and a pod on a second node waits forever."""
+    A migratable class - Harvester's own, or a longhorn-r2 someone made
+    migratable (Homestead makes its "Longhorn, two copies" class without
+    migration, homestead_data_copies) - hands out a VM-disk volume that one
+    node attaches, and a pod on a second node waits forever."""
     ns, name = SELF.NS, NAMES.BRAND
     dep = dep or kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     volumes = (dep["spec"]["template"]["spec"].get("volumes") or [])

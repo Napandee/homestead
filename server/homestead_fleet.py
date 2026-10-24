@@ -953,7 +953,9 @@ def _said(error, m):
     return text[:200]
 
 
-def _ask(entry, m, what, user, role):
+def _ask(entry, done, m, what, user, role):
+    """Ask one member, keep its answer in entry, then set done: the Event of
+    the gather that asked, never a fresher one a later gather swapped in."""
     try:
         result = call(m, "GET", f"/api/{what}", timeout=12, user=_own_name(user), role=role)
         if what == "flow" and (not isinstance(result, dict) or
@@ -975,7 +977,7 @@ def _ask(entry, m, what, user, role):
     finally:
         with _answers_lock:
             entry["pending"] = False
-        entry["done"].set()
+        done.set()
 
 
 def gather(what, local, user, role):
@@ -1002,9 +1004,10 @@ def gather(what, local, user, role):
             start = not entry["pending"]
             if start:
                 entry["pending"], entry["done"] = True, threading.Event()
+            done = entry["done"]
         if start:
-            threading.Thread(target=_ask, args=(entry, m, what, user, role), daemon=True).start()
-        asked.append((m, entry))
+            threading.Thread(target=_ask, args=(entry, done, m, what, user, role), daemon=True).start()
+        asked.append((m, entry, done))
     results = {}
     missing = [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering",
                 "state": "not answering"}
@@ -1016,11 +1019,12 @@ def gather(what, local, user, role):
             raise
         missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200],
                         "state": "error"})
-    now = time.time()
-    for m, entry in asked:
-        entry["done"].wait(max(0.0, deadline - time.monotonic()))
+    for m, entry, done in asked:
+        done.wait(max(0.0, deadline - time.monotonic()))
         with _answers_lock:
-            pending, misses, error = entry["pending"], entry["misses"], entry["error"]
+            # Whether the question this gather asked has come back: a later
+            # gather may already have asked again and set "pending" anew.
+            pending, misses, error = not done.is_set(), entry["misses"], entry["error"]
             result, at = entry["result"], entry["at"]
         if not pending and not misses:
             results[m["id"]] = result
@@ -1028,8 +1032,10 @@ def gather(what, local, user, role):
         note = {"id": m["id"], "name": m["name"],
                 "state": "not answering" if misses >= NOT_ANSWERING else "waiting" if pending else "error",
                 "error": error or "has not answered yet"}
-        if result is not None and now - at <= ANSWER_KEEP:
-            note["age_s"] = int(now - at)
+        # Its age now, after the wait; never below 0 should the clock step back.
+        age = max(0.0, time.time() - at)
+        if result is not None and age <= ANSWER_KEEP:
+            note["age_s"] = int(age)
             results[m["id"]] = result
             tags[m["id"]] = {**tags[m["id"]], "age_s": note["age_s"]}
         missing.append(note)
