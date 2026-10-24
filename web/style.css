@@ -3973,6 +3973,7 @@ button.a2port{font-family:inherit;line-height:inherit}
 .disk-v2-layout-row>b{text-align:right}
 .disk-v2-layout-row.selected{background:var(--tone-bad-bg);border:1px solid var(--crit);border-radius:8px;margin-top:6px}
 .disk-v2-layout-row.selected>b{color:var(--crit)}
+.disk-v2-layout-row.maintenance-selected{background:var(--surf2);border:1px solid var(--mut);border-radius:8px;margin-top:6px}
 .disk-v2-layout-children{margin-left:12px;padding-left:12px;border-left:2px solid var(--line)}
 .disk-v2-identity{overflow-wrap:anywhere}
 @media(max-width:600px){.disk-v2-layout-row{grid-template-columns:minmax(0,1fr) auto;gap:6px}.disk-v2-layout-row>b{grid-column:1/-1;text-align:left}.disk-v2-layout-children{margin-left:6px;padding-left:8px}}

@@ -7,7 +7,7 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
-  const demoV2Region = () => window.__demoDiskV2Region ? {
+  const demoV2Region = (force=false) => (force || window.__demoDiskV2Region) ? {
     mountpoint:'/var/lib/longhorn',stable_device:'/dev/disk/by-id/dm-uuid-LVM-example-storage-volume',
     layout:{path:'/dev/nvme0n1',kind:'disk',size_bytes:2147483648000,children:[
       {path:'/dev/nvme0n1p1',kind:'part',start_bytes:1048576,size_bytes:1073741824,mountpoint:'/boot/efi',children:[]},
@@ -2155,6 +2155,12 @@ ssh_pwauth: true
       return {...plan,area,operation_id:'demo-allocation',action:'finish-filesystem',request_id:'d'.repeat(24),capacity_token:'demo-finish'};
     },
     "/api/disks/allocation/finish":()=>{window.__demoAllocationState='complete';return responses['/api/disks/allocation/status']();},
+    "/api/disks/runtime/review": () => ({...demoV2Region(true),node:'host-1',disk:'disk-data',device:'/dev/dm-1',stable_device:'/dev/disk/by-id/dm-uuid-LVM-example-group-longhorn-volume',size_bytes:1000*1073741824,runtime_bytes:134217728,available_bytes:64*1073741824,destination:'/var/lib/homestead/longhorn-runtime/example-maintenance/active',retained:'/mnt/homestead-retired-example-maintenance',request_id:'a'.repeat(24),capacity_token:'demo-runtime'}),
+    "/api/disks/runtime/start": () => {window.__demoRuntimePhase='staged';return responses['/api/disks/runtime/status']();},
+    "/api/disks/runtime/status": () => ({...responses['/api/disks/runtime/review'](),id:'demo-runtime',kind:'longhorn-runtime',phase:window.__demoRuntimePhase||'relocated',status:window.__demoRuntimePhase==='retired'?'succeeded':'running',message:window.__demoRuntimePhase==='staged'?'Restart through host maintenance to move runtime.':'Runtime moved; original files and a separate archive are retained.'}),
+    "/api/disks/runtime/retirement-review": () => ({...responses['/api/disks/runtime/review'](),id:'demo-runtime',action:'retire-runtime'}),
+    "/api/disks/runtime/retire": () => {window.__demoRuntimePhase='retire-staged';return responses['/api/disks/runtime/status']();},
+    "/api/disks/runtime/recheck": () => responses['/api/disks/runtime/status'](),
     "/api/disks/v2/plan": (url,init) => {
       const body=JSON.parse(init?.body||'{}');
       return {...demoV2Region(),node:body.node||'node-1',disk:body.disk||'disk-data',device:window.__demoDiskV2Region?'/dev/dm-1':'/dev/sdb',region_kind:window.__demoDiskV2Region?'lvm':'disk',protected_parents:window.__demoDiskV2Region?['/dev/nvme0n1p3','/dev/nvme0n1']:[],size_bytes:1073741824000,

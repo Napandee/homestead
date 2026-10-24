@@ -218,10 +218,9 @@ shared mounts, nested storage, thin pools and complex LVM layouts are refused.
 The installer can mount its dedicated Longhorn LV at `/var/lib/longhorn`.
 Longhorn also keeps runtime files there, including engine binaries, sockets,
 metadata and logs. **That layout cannot be converted while runtime storage
-still shares the filesystem.** Homestead names the entries blocking review;
-it does not delete or relocate them. Moving runtime storage needs a separate
-host maintenance plan and may require stopping workloads and Longhorn on the
-host. Changing **Default Data Path** alone does not relocate those runtime
+still shares the filesystem.** Homestead names the entries blocking review.
+For a supported installer LV, **Runtime maintenance** offers the separate
+move and retirement workflow below. Changing **Default Data Path** alone does not relocate those runtime
 paths ([Longhorn host paths](https://longhorn.io/docs/1.13.0/deploy/install/)).
 Remaining replica, backing-image, lost+found or other files also block erasing.
 See [Longhorn block disk drivers](https://longhorn.io/docs/1.13.0/nodes-and-volumes/nodes/multidisk/). Harvester manages its own disks. Resolve backing-image copies
@@ -250,6 +249,72 @@ read-only for inspection and does not erase it. The task log explains the blocke
 Preparing a physical disk does not convert its volumes. Create a V2 storage
 class, then use **Change storage class** on each volume you want to move.
 That copies the volume and stops its workloads for the copy.
+
+### Move runtime off a legacy installer LV
+
+Older installations put both Longhorn replicas and its runtime files on the LV
+mounted at `/var/lib/longhorn`. Runtime is shared by V1 and V2. New installations
+keep runtime on the OS and replicas on `/mnt/longhorn-os`; an existing mount is
+never changed by an upgrade.
+
+On the legacy store, open **… → Runtime maintenance**, or **Review runtime move**
+from its blocked V2 review. This supports a dedicated, ordinary linear LV in the
+OS's single-PV volume group, an ext4 or XFS OS filesystem, Python 3.11 or newer,
+and one K3s server or agent service. Other layouts require manual maintenance.
+The disk diagram identifies the selected LV and the OS and sibling regions to keep.
+
+1. Move every replica and backing image elsewhere, or remove it through its normal
+   separately reviewed action. Wait for cleanup and healthy replacement copies.
+   Other registered stores on the same filesystem, residual data, unfinished
+   storage jobs, unknown files and automatic default-disk creation block review.
+2. Review **Move runtime**. Homestead checks room on the OS filesystem for an active
+   copy, a separate archive and 5 GiB remaining. It disables the V1 disk and rebinds
+   its existing registration to a protected retained mount. Scheduling stays off.
+   This step saves a boot worker and a required K3s startup dependency; it does not
+   remove the original files or restart the host.
+3. Use **Review host restart**. During the restart, before K3s starts, the worker
+   checks device identities, mounts and process use, makes the source read-only,
+   and copies and verifies supported runtime files. Runtime goes under
+   `/var/lib/homestead/longhorn-runtime/<operation>/active` on the OS, with a separate
+   `archive` beside it. A persistent bind mount keeps the fixed `/var/lib/longhorn`
+   path. The original LV remains read-only at `/mnt/homestead-retired-<operation>`.
+4. Once the host returns, **Review retirement** verifies the retained source and
+   archive again. Type the exact device and confirm removal of only the verified
+   archived originals. A second separately reviewed restart performs this removal
+   before K3s starts. The filesystem, LV boundary, disk configuration and archive
+   remain; this action does not format the LV or delete volume data.
+5. After retirement succeeds, **Prepare for V2** opens the ordinary evacuation and
+   erase reviews for that retained registration. All existing V2 safety checks still
+   apply. It is only this separate erase approval that clears filesystem signatures
+   and registers the raw LV as a V2 disk. Volumes are converted separately.
+
+A single-host cluster is unavailable during each restart. On a multi-host cluster,
+finish one host's runtime workflow before starting another. Each restart still
+uses host maintenance's workload, capacity and quorum review; moving runtime never
+automatically restarts a host. Resolve other host and
+storage maintenance first; do not change its LVM layout, mounts or disk registration
+while this job is open. Both the active runtime and its archive consume OS space;
+normal runtime growth continues there after the move.
+
+If an inspection or verification fails, the worker blocks K3s startup and preserves
+its last durable phase. It never treats an interrupted copy as success or switches
+back to an old runtime copy after activation. Open the saved job in **Jobs** and use
+**Recheck outcome** when the host is reachable. If Kubernetes cannot start, inspect
+`RECOVERY.txt`, `state.json`, `failure.txt` and `journalctl -u homestead-longhorn-runtime`
+from the host console. Keep the original LV, archive and startup dependency.
+For an **unarmed** job that never started copying, `RECOVERY.txt` provides a local
+`recover-staging` command. It verifies the original writable mount, fstab, receipt,
+worker and protected retained placeholder before releasing only Homestead's exact
+startup dependency. It leaves the disk disabled and all data intact. After explicitly
+starting K3s, **Recheck outcome** restores and verifies staging. This recovery is
+refused once copying starts, if Kubernetes is running, or if any checked identity
+or configuration differs. Interrupted staging can also be repaired directly by
+**Recheck outcome** while Homestead remains reachable; no missing helper is silently
+redispatched in the background.
+Fix the recorded cause and retry the recorded phase; never clear a recovery hold
+by deleting the receipt or forcing an erase. Interrupted retirement resumes only
+when every remaining file still matches its archive. Unknown files, unreadable
+process state, private mounts or open files block removal.
 
 ## When a drive fails
 

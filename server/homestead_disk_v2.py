@@ -198,6 +198,11 @@ echo END
 def _host_facts(path, node):
     path = path.rstrip('/') or '/'
     out, err = HOST.run(node, inspect_script(path), timeout=60)
+    return parse_host_facts(path, out, err)
+
+
+def parse_host_facts(path, out, err=''):
+    """Parse identity evidence; callers retain their own contents policy."""
     error = next((line[4:] for line in out.splitlines() if line.startswith('ERR ')), '')
     if error or 'END' not in out.splitlines():
         raise ValueError(error or 'Host disk inspection did not finish; ' + str(err or '')[:160])

@@ -63,7 +63,8 @@ elif cmd=='pvs':print(section(raw,'PVS'))
 elif cmd=='mountpoint':sys.exit(0)
 elif cmd=='findmnt':
  field=args[-1]
- print({'SOURCE':str(root/('dev/dm-0' if r=='os' else 'dev/dm-1')),'FSROOT':'/','OPTIONS':'rw','FSTYPE':state['fs']}[field])
+ print({'SOURCE':str(root/('dev/dm-0' if r=='os' else 'dev/dm-1')),'FSROOT':'/','OPTIONS':'rw','FSTYPE':state['fs'],
+        'TARGET':'/\n'+str(root/'var/lib/longhorn')}[field])
 elif cmd=='blkid':print('changed-fs' if (root/'changed-fs').exists() else 'fs-'+r+'-uuid')
 elif cmd=='lsblk':
  if '-snbpP' in args:print(section(raw,'TOPO-'+r,'ENDTOPO'))

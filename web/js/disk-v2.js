@@ -1,15 +1,15 @@
 /* A separate approval for evacuation and for erasing a dedicated V1 disk. */
 let diskV2Sequence=0, diskV2Timer=null, diskV2Approval=null, diskV2Busy=false;
 const diskV2GiB = bytes => `${(Number(bytes)/1073741824).toFixed(1)} GiB`;
-function diskV2Region(plan) {
+function diskV2Region(plan, scope={}) {
   const root=plan.layout;
   if (!root) return '';
   const selected=row=>row.path===plan.device;
   const contains=row=>selected(row)||(row.children||[]).some(contains);
-  const label=row=>selected(row)?'Erase contents':contains(row)?'Contains selected volume':'Keep';
+  const label=row=>selected(row)?(scope.label||'Erase contents'):contains(row)?'Contains selected volume':'Keep';
   const physical=(root.children||[]).filter(r=>r.kind==='part').sort((a,b)=>(a.start_bytes||0)-(b.start_bytes||0));
   const directLogical=(root.children||[]).filter(r=>r.kind!=='part');
-  const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?'erase':contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' - '+label(row))}"><span>${esc(label(row))}</span></span>`;
+  const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?(scope.label?'allocation-selected':'erase'):contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' - '+label(row))}"><span>${esc(label(row))}</span></span>`;
   let cursor=0,bar='';
   for(const row of physical) {
     const start=Number(row.start_bytes)||cursor;
@@ -20,17 +20,17 @@ function diskV2Region(plan) {
   else if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space - keep"></span>`;
   function rows(row,depth=0) {
     const children=row.children||[],logical=row.kind==='lvm',isSelected=selected(row);
-    return `<div class="disk-v2-layout-row ${isSelected?'selected':''}">
+    return `<div class="disk-v2-layout-row ${isSelected?(scope.label?'maintenance-selected':'selected'):''}">
       <div><strong>${esc(row.path)}</strong><span>${esc(logical?'Logical volume':row.kind==='part'?'Partition':'Disk')}${row.mountpoint?' - '+esc((row.mountpoint==='/'?'Host OS ':row.mountpoint.startsWith('/boot')?'Boot ':'')+row.mountpoint):''}</span></div>
       <span>${esc(diskV2GiB(row.size_bytes))}</span><b>${esc(label(row))}</b>
     </div>`+(children.length?`<div class="disk-v2-layout-children">${children.some(r=>r.kind==='lvm')?'<p class="ui-help">Logical volumes share this '+(row.kind==='disk'?'disk':'partition')+'; their positions below do not represent physical extents.</p>':''}${children.map(r=>rows(r,depth+1)).join('')}</div>`:'');
   }
-  return `<div class="disk-v2-layout" aria-label="Disk layout and erase scope">
+  return `<div class="disk-v2-layout" aria-label="${esc(scope.label?'Disk layout and maintenance scope':'Disk layout and erase scope')}">
     <div class="sec">${esc(root.path)} - ${esc(diskV2GiB(root.size_bytes))}</div>
-    <div class="pmap" role="img" aria-label="Physical partitions. The list below identifies the contents to erase and the regions to keep.">${bar}</div>
+    <div class="pmap" role="img" aria-label="${esc(scope.label?'Physical partitions. The list identifies the selected logical volume and the regions to keep.':'Physical partitions. The list below identifies the contents to erase and the regions to keep.')}">${bar}</div>
     ${directLogical.length?rows(root):physical.map(row=>rows(row)).join('')}
-    <p class="ui-help">Erase all contents of <strong>${esc(plan.device)}</strong> (${esc(plan.mountpoint||'dedicated Longhorn filesystem')}). Keep its size and boundary.</p>
-  </div>`+UI.more('Device identity and checks',UI.facts([['Stable device',`<span class="disk-v2-identity mono">${esc(plan.stable_device||plan.device)}</span>`],['Disk access','AIO; Linux keeps control of the physical disk']])+ '<p class="ui-help">System files, shared mounts and remaining replica or backing-image files block preparation. Partition tables and other logical volumes are retained.</p>');
+    <p class="ui-help">${scope.summary?esc(scope.summary):`Erase all contents of <strong>${esc(plan.device)}</strong> (${esc(plan.mountpoint||'dedicated Longhorn filesystem')}). Keep its size and boundary.`}</p>
+  </div>`+(scope.label?'':UI.more('Device identity and checks',UI.facts([['Stable device',`<span class="disk-v2-identity mono">${esc(plan.stable_device||plan.device)}</span>`],['Disk access','AIO; Linux keeps control of the physical disk']])+ '<p class="ui-help">System files, shared mounts and remaining replica or backing-image files block preparation. Partition tables and other logical volumes are retained.</p>'));
 }
 const diskV2Post = (path, body) => api(`/api/disks/v2/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 function diskV2Reset() {
@@ -63,7 +63,7 @@ window.diskV2Open = async (node,disk) => {
       (!plan.blockers.length?UI.ack('diskV2Confirm','Disable new replicas and move existing replicas off this disk',{onchange:"$('#diskV2Begin').disabled=!this.checked"}):'') +
       UI.actions(UI.cancel('Close')+UI.button('Move replicas off','diskV2Begin()',{kind:'pri',id:'diskV2Begin',disabled:true,attrs:'data-need="admin"'}),UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`));
     window.applyRole?.();
-  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`) + (e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):''));}
+  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsArg(node)},${jsArg(disk)})`) + (e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):e.message.includes('Longhorn runtime storage shares')?UI.button('Review runtime move',`runtimeMoveOpen(${jsArg(node)},${jsArg(disk)})`,{kind:'pri',attrs:'data-need="admin"'}):''));}
 };
 window.diskV2Begin = async () => {
   if(diskV2Busy || !diskV2Approval || !$('#diskV2Confirm')?.checked || !$('#diskV2Review') || $('#modal')?.classList.contains('hidden')) return;

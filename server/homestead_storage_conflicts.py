@@ -5,7 +5,7 @@ from PV names: they are not interchangeable, even when provisioners make them
 look alike. The creating workflow must capture both from its reviewed binding.
 """
 
-KINDS = {"reclass", "snapshot-delete", "snapshot-revert", "volume-delete", "volume-restore", "disk-v2-convert", "disk-allocation"}
+KINDS = {"reclass", "snapshot-delete", "snapshot-revert", "volume-delete", "volume-restore", "disk-v2-convert", "disk-allocation", "longhorn-runtime"}
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
@@ -51,6 +51,8 @@ def unresolved(item):
     if item.get("kind") not in KINDS:
         return False
     ref = item.get("ref", {})
+    if item.get("kind") == "longhorn-runtime":
+        return ref.get("phase") != "retired"
     if item.get("kind") in ("disk-v2-convert", "disk-allocation"):
         return ref.get("phase") not in ("complete", "cancelled")
     if ref.get("retain_resources") or item.get("status") not in TERMINAL:
@@ -79,6 +81,17 @@ def _holds_v2(kind, ref):
 
 
 def require_clear(items, kind, ref, resource=None):
+    runtime = [i for i in items if i.get('kind') == 'longhorn-runtime' and unresolved(i)]
+    for item in runtime:
+        saved = item.get('ref') or {}
+        same_host = saved.get('node') == ref.get('node')
+        # A reboot is part of the approved workflow, but still goes through
+        # the ordinary workload/quorum/storage maintenance review.
+        reboot = (kind == 'node-power' and ref.get('action') == 'reboot'
+                  and saved.get('phase') in ('staged', 'retire-staged'))
+        if _holds_v2(kind, ref) or (same_host and kind in ('disk-v2-convert', 'disk-allocation', 'node-power', 'host-os',
+                'host-promote', 'longhorn-v2-prepare', 'disk-retire', 'longhorn-runtime') and not reboot):
+            raise ValueError('Finish the saved Longhorn runtime maintenance before changing this host or upgrading Longhorn.')
     if (_holds_v2(kind, ref) and any(i.get("kind") in ("disk-v2-convert", "disk-allocation") and unresolved(i) for i in items)
             or kind in ("disk-v2-convert", "disk-allocation") and any(_holds_v2(i.get("kind"), i.get("ref")) and i.get("status") not in TERMINAL for i in items)):
         raise ValueError("Finish disk preparation before upgrading V2 instance managers or shutting down hosts.")

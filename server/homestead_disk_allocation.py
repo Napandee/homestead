@@ -101,9 +101,15 @@ fs_facts() {
   printf 'FS %s|%s|%s|%s|%s|%s|%s|%s|%s|%s\nUSAGE %s|%s\nTOPO-%s\n%s\nENDTOPO\n' "$ROLE" "$P" "$D" "$U" "$TYPE" "$BS" "$BLOCKS" "$MM" "$STABLE" "$DM" "$ROLE" "$STAT" "$ROLE" "$TOPO"
 }
 fs_facts os /
-if mountpoint -q /var/lib/longhorn; then fs_facts longhorn /var/lib/longhorn
-elif mountpoint -q /mnt/longhorn-os; then fs_facts longhorn /mnt/longhorn-os
-fi
+MOUNT_POINTS=$(findmnt -rn -o TARGET) || fail 'Cannot inspect installed storage mounts'
+for candidate in /mnt/longhorn-os /var/lib/longhorn; do
+  if printf '%s\n' "$MOUNT_POINTS" | grep -Fxq "$candidate"; then
+    FS_ROOT=$(findmnt -rn --mountpoint "$candidate" -o FSROOT) || fail 'Cannot inspect installer filesystem root'
+    # Relocated runtime is an OS-backed bind mount, not another growable LV.
+    # Do not let that hide the independent OS allocation or new data mount.
+    if [ "$FS_ROOT" = / ]; then fs_facts longhorn "$candidate"; break; fi
+  fi
+done
 echo END
 '''.replace('__SNAPSHOT__', SNAPSHOT)
 

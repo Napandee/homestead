@@ -39,6 +39,8 @@ def reference_view(item):
         out["cleanable"] = False
     if item.get("kind") == "disk-allocation":
         out.update(cancellable=False, cleanable=False, allocation=True)
+    if item.get("kind") == "longhorn-runtime":
+        out.update(cancellable=False, cleanable=False, runtime_maintenance=True)
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
     if item.get("kind") == "auto-update":
@@ -100,7 +102,7 @@ def reference_view(item):
     return out
 
 
-BRANCHED = ["disk-v2-convert", "disk-allocation", "k3s-cluster", "auto-update", "node-power", "set-restart", "vm-power",
+BRANCHED = ["disk-v2-convert", "disk-allocation", "longhorn-runtime", "k3s-cluster", "auto-update", "node-power", "set-restart", "vm-power",
             "vm-create", "vm-edit", "import-create", "self-data-prepare", "host-console",
             "cluster-shutdown", "longhorn-v2-prepare", "workload-rename", "workload-copy", "restructure",
             "reclass"]
