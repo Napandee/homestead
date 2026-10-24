@@ -309,7 +309,7 @@
       ...(c.image ? [`        image: ${c.image}`] : []),
       ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
   const workloads = [
-    { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
+    { name: "frigate", ns: "lab", kind: "Deployment", update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
       images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214", name: "web", primary: true }, { port: 8554, ip: "192.0.2.214", name: "rtsp" }], claims: ["frigate-config"],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },
@@ -441,10 +441,20 @@
       progress: 63.4, capacity: "16Gi", storage_class: "longhorn-r2",
       access_modes: ["ReadWriteOnce"], message: "", in_use: false, used_by: [] },
   ];
+  // The demo's deliberate schedule clash: weekly-trim starts with nightly-backup
+  // at the next Saturday 02:00 UTC, on both of the default group's volumes.
+  const demoSaturday = (() => {
+    const now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
+    for (let day = 0; day < 8; day++) {
+      const at = today + day * 86400000 + 2 * 3600000;
+      if (new Date(at).getUTCDay() === 6 && at > now) return at / 1000;
+    }
+    return 0;
+  })();
   const lhOverview = {
     total: 3, protected: 2, backed_up: 2, unprotected: ["homeassistant-config"], groups: ["critical", "default", "media"],
     group_rows: [{ name: "critical", volumes: ["pvc-demo-frigate"], jobs: ["hourly-snapshot"] },
-      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup"] },
+      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup", "weekly-trim"] },
       { name: "media", volumes: ["pvc-demo-hass"], jobs: ["media-weekly-trim"] }],
     target: { configured: true, available: true, name: "default",
       url: "s3://homestead-backups@us-east-1/", reason: "", interval: "5m",
@@ -462,7 +472,12 @@
       desc: "Snapshot — point-in-time, stored on the volume", last_run: "", last_success: "", running: 0, last_failed: false },
       { name: "media-weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0,
       concurrency: 1, groups: ["media"], covers: 1, volumes: ["pvc-demo-hass"],
+      desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false },
+      { name: "weekly-trim", task: "filesystem-trim", cron: "0 2 * * 6", retain: 0,
+      concurrency: 1, groups: ["default"], covers: 2, volumes: ["pvc-demo-frigate", "pvc-demo-scratch"],
       desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false }],
+    clashes: [{ severity: "clash", jobs: [{ name: "nightly-backup", task: "backup" }, { name: "weekly-trim", task: "filesystem-trim" }],
+      volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], times: [[demoSaturday, demoSaturday]], count: 1, gap_min: 0 }],
     volumes: [
       { name: "pvc-demo-frigate", pvc: "frigate-config", namespace: "lab", size_gb: 20,
         robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["critical", "default"],
@@ -677,7 +692,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       audit: { file: true },
       info: { version: "2.8.332-dev.8", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
@@ -1692,6 +1707,7 @@ ssh_pwauth: true
           { name: "alerts", label: "Alerts and notifications", state: "ok", last_ok: now - 8, error: "", every: 20 },
           { name: "history", label: "Long-term stats", state: "ok", last_ok: now - 140, error: "", every: 300 },
           { name: "hardware", label: "Hardware detection", state: "ok", last_ok: now - 20, error: "", every: 30 },
+          { name: "expiry", label: "Certificate expiry check", state: "ok", last_ok: now - 1260, error: "", every: 3600 },
           { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach branch: timed out", every: 10 }],
         probe: { installed: true, desired: 3, ready: 3, reporting: 3, smart: 2, state: "current", detail: "homestead-nodeprobe is running this release's scripts" },
         samba: { installed: true, enabled: true, desired: 1, ready: 1, name: "homestead-smb",
@@ -2249,6 +2265,47 @@ ssh_pwauth: true
     "/api/longhorn/v2/cleanup/recheck": () => ({ok:true}),
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    // Consistent snapshots (fs-freeze.js): off, with a VM disk, a shared volume
+    // and a V2 volume Longhorn cannot freeze. window.__demoFsFreezeOldKernel
+    // adds a host on kernel 5.15; window.__demoFsFreezeUnsupported is Longhorn 1.6.
+    "/api/longhorn/fs-freeze": (url, init) => {
+      if (init?.method === "POST") {
+        demoState.fsFreezeOn = !!JSON.parse(init.body || "{}").enabled;
+        demoState.fsFreezeChanged = Math.floor(Date.now() / 1000);
+        return { ok: true, enabled: demoState.fsFreezeOn, detail: demoState.fsFreezeOn
+          ? "Longhorn now freezes each volume's filesystem for its snapshots and backups"
+          : "Longhorn no longer freezes filesystems for snapshots, except on volumes set to always" };
+      }
+      if (window.__demoFsFreezeUnsupported) return { supported: false, version: "v1.6.2", volumes: [],
+        why: "Longhorn v1.6.2 cannot freeze filesystems for snapshots: Longhorn 1.7 added it." };
+      const on = !!demoState.fsFreezeOn, modes = demoState.fsFreezeModes || (demoState.fsFreezeModes = { "pvc-demo-scratch": "disabled" });
+      const syncWhy = { Block: "A block volume, such as a VM disk: there is no filesystem to freeze, so Longhorn syncs it instead",
+        rwx: "A shared (RWX) volume: Longhorn's share manager holds its filesystem, so Longhorn syncs it instead" };
+      const volumes = [
+        ["pvc-demo-paperless", "lab/paperless-data", "v1", "rwo", "Filesystem"], ["pvc-demo-nextcloud", "lab/nextcloud-data", "v1", "rwo", "Filesystem"],
+        ["pvc-demo-hass", "lab/homeassistant-config", "v1", "rwo", "Filesystem"], ["pvc-demo-frigate", "lab/frigate-config", "v1", "rwo", "Filesystem"],
+        ["pvc-demo-media", "lab/jellyfin-media", "v1", "rwx", "Filesystem"], ["pvc-demo-vm-disk", "lab/windows-disk-0", "v1", "rwo", "Block"],
+        ["pvc-demo-fast", "lab/arr-dashboard-data", "v2", "rwo", "Filesystem"], ["pvc-demo-scratch", "lab/scratch", "v1", "rwo", "Filesystem"],
+      ].map(([name, claim, engine, access, volumeMode]) => {
+        const mode = modes[name] || "ignored", effective = mode === "enabled" || (mode === "ignored" && on);
+        const whenOn = engine === "v2" ? "no" : volumeMode === "Block" || access === "rwx" ? "sync" : "yes";
+        const whyOn = engine === "v2" ? "A V2 volume: Longhorn never freezes these" : syncWhy[volumeMode] || syncWhy[access] || "";
+        const shown = effective || engine === "v2";
+        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, freezes: shown ? whenOn : "no",
+          changed: mode === "ignored" ? null : { who: "admin", at: Math.floor(Date.now() / 1000) - 3 * 86400 },
+          why: shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
+      });
+      return { supported: true, version: "v1.13.0", enabled: on, value: JSON.stringify({ v1: String(on) }), unknown_value: false,
+        from_chart: false, changed: demoState.fsFreezeChanged ? { who: "admin", at: demoState.fsFreezeChanged } : null,
+        old_kernels: window.__demoFsFreezeOldKernel ? [{ host: "harvester-node3", kernel: "5.15.0-91-generic" }] : [],
+        volumes, counts: { total: volumes.length, freezing: volumes.filter(v => v.freezes === "yes").length } };
+    },
+    "/api/longhorn/fs-freeze/volume": (url, init) => {
+      const { volume, mode } = JSON.parse(init?.body || "{}");
+      (demoState.fsFreezeModes = demoState.fsFreezeModes || { "pvc-demo-scratch": "disabled" })[volume] = mode;
+      const said = { ignored: "follows the cluster setting", enabled: "is always frozen for snapshots", disabled: "is never frozen for snapshots" }[mode];
+      return { ok: true, volume, mode, detail: `${volume} ${said}` };
+    },
     "/api/workloads/rebalance/review": (url, init) => {
       const picks = JSON.parse(init?.body || "{}").picks || [];
       const rows = picks.map((p, i) => ({ id: p.id, from: "harvester-node1", to: p.to, cpu_m: 250, mem_mb: 512, reserves: true,
@@ -2541,6 +2598,9 @@ ssh_pwauth: true
       const t = Date.now() / 1000, day = 86400;
       const words = "Stops 19:00, starts 08:00, weekdays";
       return { grace: 1800, items: [
+        // Stops during its own volume's nightly backup on Sundays: Schedules › This week calls it close.
+        { kind: "app", ns: "lab", name: "frigate", running: true, words: "Stops 02:01, Sunday",
+          schedule: { stop: "02:01", days: [6], tz: "UTC" }, next: [], last: null },
         { kind: "app", ns: "lab", name: "paperless", running: true, words: "Stops 01:00, starts 07:00, weekdays",
           schedule: { stop: "01:00", start: "07:00", days: [0, 1, 2, 3, 4], tz: "UTC" },
           next: [{ at: t + 5 * 3600, action: "stop" }, { at: t + 11 * 3600, action: "start" }],
@@ -2955,6 +3015,30 @@ ssh_pwauth: true
       }
       return review;
     },
+    // What's in an update, from the two images' labels and configs. Env by name only.
+    "/api/image-updates/notes": (url, init) => {
+      const {ns, name} = JSON.parse(init?.body || "{}");
+      const none = {ports: {added: [], removed: []}, volumes: {added: [], removed: []},
+        env: {added: [], removed: [], changed: [], set_by_app: []}, user: null, build_env_changed: 0, none: true};
+      const images = {
+        // A new build behind the same "stable" tag: a port, a volume, settings and the user changed with it.
+        frigate: [{container: "frigate", from_tag: "stable", to_tag: "stable", from_version: "0.16.1", to_version: "0.16.2",
+          source: "https://github.com/example/frigate",
+          links: {release: "https://github.com/example/frigate/releases?q=0.16.2&expanded=true",
+            compare: "https://github.com/example/frigate/compare/4be1d2c09a7e...9c0f31aa52d8", project: "https://frigate.example.com/"},
+          changes: {ports: {added: ["8971/tcp"], removed: []}, volumes: {added: ["/media/frigate/exports"], removed: []},
+            env: {added: ["FRIGATE_AUTH"], removed: ["FRIGATE_LEGACY_UI"], changed: ["LIBVA_DRIVER_NAME", "TZ"], set_by_app: ["TZ"]},
+            user: {was: "root", now: "1000"}, build_env_changed: 3, none: false}}],
+        // Homestead's own: same settings, only build details moved.
+        homestead: [{container: "homestead", from_tag: "2.8.331", to_tag: "2.8.332", from_version: "2.8.331", to_version: "2.8.332",
+          source: "https://github.com/example/homestead",
+          links: {release: "https://github.com/example/homestead/releases?q=2.8.332&expanded=true"},
+          changes: {...none, build_env_changed: 1}}],
+      }[name];
+      // Others: an image that carries no labels.
+      return {ns, name, images: images || [{container: name, from_tag: "1.0.0", to_tag: "1.1.0", from_version: "1.0.0",
+        to_version: "1.1.0", source: "", links: {}, changes: none}]};
+    },
     "/api/image-updates/apply": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
     "/api/image-updates/rollback": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
     // An administrator marking an app as updated elsewhere, or clearing it.
@@ -3139,6 +3223,38 @@ ssh_pwauth: true
     namespaces:["lab","default","kube-system"],policies:[{namespace:firewallConfig.namespace,name:firewallConfig.name,
       uid:"demo-firewall",resource_version:"1",managed:true,config:firewallConfig,spec:firewallSpec(firewallConfig)}]};
   responses["/api/firewall"] = () => firewall;
+  // Certificates and keys that expire (homestead_expiry). Dates are relative to now.
+  const expiryNow = () => Date.now() / 1000;
+  const expiryState = (days, renews, overdue) => days <= 0 ? "expired" : renews ? "renews" : days <= 7 ? "critical"
+    : days <= 21 || overdue ? "warn" : "ok";
+  const expiryRow = (kind, namespace, name, days, { renews = false, overdue = false, note = "" } = {}) => ({ kind, namespace, name,
+    not_after: Math.round(expiryNow() + days * 86400), days_left: Math.trunc(days), state: expiryState(days, renews, overdue),
+    note, renews, overdue });
+  responses["/api/expiry"] = () => {
+    const items = [
+      expiryRow("tls-secret", "media", "photos-tls", 5.4),
+      expiryRow("certificate", "apps", "wiki-example-com", 48.2, { overdue: true, note: "Renewal is overdue: cert-manager has not renewed it" }),
+      expiryRow("tls-secret", "lab", "mqtt-broker-tls", -3.1),
+      expiryRow("tls-secret", "lab", "printer-tls", 16.6),
+      expiryRow("certificate", "lab", "homestead-example-com", 61.3, { renews: true, note: "cert-manager renews it" }),
+      expiryRow("certificate", "monitoring", "grafana-internal", 290, { renews: true, note: "cert-manager renews it" }),
+      expiryRow("api-server", "", "Kubernetes API server", 350.2, { note: "k3s and RKE2 renew it when the server restarts close to its expiry" }),
+      expiryRow("webhook-ca", "", "virt-api-validator", 4.7, { renews: true, note: "Its operator rotates it (it lives 7 days)" }),
+      expiryRow("webhook-ca", "", "cdi-api-validate", 1.3, { renews: true, note: "Its operator rotates it (it lives 2 days)" }),
+      expiryRow("webhook-ca", "", "longhorn-webhook-validator", 3632),
+      expiryRow("tls-secret", "data", "postgres-server-tls", 3412),
+      { ...expiryRow("tls-secret", "lab", "old-import", 0), not_after: null, days_left: null, state: "unknown",
+        note: "Homestead could not read the certificate in tls.crt" },
+    ];
+    const order = ["expired", "critical", "warn", "unknown", "ok", "renews"];
+    items.sort((a, b) => (order.indexOf(a.state) - order.indexOf(b.state)) || ((a.not_after ?? 1e12) - (b.not_after ?? 1e12)));
+    return { checked_at: Math.round(expiryNow() - 1260), items, counts: Object.fromEntries(order.map(s => [s, items.filter(r => r.state === s).length])),
+      errors: {}, partial: false, stale: false, max_secrets: 2000, warn_days: 21, critical_days: 7 };
+  };
+  responses["/api/expiry/keys"] = () => ({ warn_days: 21, critical_days: 7, items: [
+    ...demoKeys.keys.map(k => ({ ...expiryRow("api-key", "", k.name, (k.expires - expiryNow()) / 86400), owner: k.owner })),
+    { ...expiryRow("fleet-key", "", "Linked-cluster key", 0), not_after: null, days_left: null, state: "no-expiry",
+      note: "It has no expiry; it changes when a cluster is unlinked" }] });
   responses["/api/firewall/preview"] = (url, init) => {
     const cfg = JSON.parse(init?.body || "{}");
     return {review:"demo-reviewed-policy",pods:[`${cfg.target.name}-demo`],overlapping:[],update:!!cfg.uid,

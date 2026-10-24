@@ -22,6 +22,7 @@ import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
 import homestead_disks as DISKS
+import homestead_expiry as EXPIRY
 import homestead_forecast as FORECAST
 import homestead_gitops as GITOPS
 import homestead_history as HISTORY
@@ -135,7 +136,13 @@ def _uptime_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=cached("vms", 5, VMS.list_vms))
+                try:
+                    vms = cached("vms", 5, VMS.list_vms)
+                except Exception as error:
+                    # Unread VMs sit this round out; their records are left as they were, not checked as gone.
+                    vms = None
+                    print(f"uptime: VMs not read: {str(error)[:160]}", flush=True)
+                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=vms)
                 try:
                     outage_tick()
                 except Exception as error:
@@ -294,6 +301,7 @@ def _alert_sources():
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("gitops", GITOPS.alert_facts)
+    take("expiry", EXPIRY.alert_facts)
     take("recovery", RECOVERY.alert_facts)
     # Log alerts read on their own thread; this only takes their last count.
     take("logs", LOGALERTS.alert_facts)
