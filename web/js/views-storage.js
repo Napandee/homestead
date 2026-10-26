@@ -1583,12 +1583,12 @@ const AUDIT_RESULTS = {
 const AUDIT_SOURCES = { "": "both logs", changes: "changes", agents: "agent calls" };
 const auditFilter = () => (STATE.auditFilter ||= { source: "", person: "", offset: 0 });
 
-function auditQuery(f = auditFilter()) {
+function auditParams(f = auditFilter()) {
   const query = new URLSearchParams({ limit: String(AUDIT_PAGE) });
   if (f.source) query.set("source", f.source);
   if (f.person) query.set("person", f.person);
   if (f.offset) query.set("offset", String(f.offset));
-  return `/api/audit/log?${query}`;
+  return String(query);
 }
 
 function auditCount(answer) {
@@ -1605,7 +1605,7 @@ function auditRowHtml(x) {
   const how = x.source === "agents" ? [x.key, x.via && x.via.toUpperCase()].filter(Boolean).join(" · ") : x.via && `via ${x.via}`;
   const detail = [x.target, x.detail].filter(Boolean).join(" · ");
   return `<tr><td><b>${esc(x.who || "—")}</b><div class="dim xs">${esc([log, how].filter(Boolean).join(" · "))}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
-    <td data-status>${UI.chip(x.code && x.result !== "ok" ? `${word} · ${x.code}` : word, tone, { size: "slim" })}</td>
+    <td data-status>${UI.chip(x.code >= 400 ? `${word} · ${x.code}` : word, tone, { size: "slim" })}</td>
     <td class="small ev-msg"><span class="mono">${esc(x.what || "—")}</span>${detail ? `<div class="dim xs">${esc(detail)}</div>` : ""}${x.addr ? `<div class="dim xs mono">${esc(x.addr)}</div>` : ""}</td>
     <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(new Date((x.at || 0) * 1000)))}">${esc(ago)}</td></tr>`;
 }
@@ -1645,7 +1645,8 @@ window.auditPage = step => {
 };
 
 async function viewAudit() {
-  const answer = await api(auditQuery());
+  const answer = await api(`/api/audit/log?${auditParams()}`);
+  auditFilter().offset = answer.offset || 0;     // the server clamps it: Older never runs past its cap
   const rows = answer.rows || [];
   STATE.data.eventRows = rows;
   const filtered = auditFilter().source || auditFilter().person;

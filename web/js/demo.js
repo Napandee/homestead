@@ -3443,8 +3443,8 @@ ssh_pwauth: true
   // and paged as homestead_audit_view does it.
   const demoChanges = [
     { at: ago(1), who: "demo", via: "browser", addr: "192.0.2.20", what: "POST /api/workload/scale", target: "lab/Deployment/frigate", result: "ok", code: 200 },
-    { at: ago(15), who: "alex", via: "browser", addr: "172.70.4.18", what: "POST /api/workload/restart", target: "media/Deployment/jellyfin", result: "ok", code: 200 },
-    { at: ago(22), who: "alex", via: "browser", addr: "172.70.4.18", what: "POST /api/settings", result: "refused", code: 403 },
+    { at: ago(15), who: "alex", via: "browser", addr: "198.51.100.18", what: "POST /api/workload/restart", target: "media/Deployment/jellyfin", result: "ok", code: 200 },
+    { at: ago(22), who: "alex", via: "browser", addr: "198.51.100.18", what: "POST /api/settings", result: "refused", code: 403 },
     { at: ago(95), who: "demo", via: "browser", addr: "192.0.2.20", what: "POST /api/snapshots/delete", target: "lab/snap-0412", result: "ok", code: 200 },
     { at: ago(140), who: "demo", via: "key", addr: "192.0.2.20", what: "POST /api/v1/workloads/restart", target: "home/Deployment/home-assistant", result: "ok", code: 200 },
     { at: ago(305), who: "demo", via: "mcp", addr: "198.51.100.7", what: "restore_backup", result: "error", code: 200 },

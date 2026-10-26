@@ -135,6 +135,19 @@ class Merge(Base):
         os.remove(os.path.join(self.dir, CHANGES.FILE))
         self.assertEqual([], self.read()["rows"])
 
+    def test_a_time_that_is_not_finite_is_skipped(self):
+        """Review M5: NaN would make the answer invalid JSON."""
+        self.write(AGENT.FILE, [call(1)], raw=['{"at": NaN, "owner": "x"}', '{"at": Infinity, "owner": "x"}'])
+        rows = self.read()["rows"]
+        self.assertEqual([1], [round(r["at"] - T0) for r in rows])
+        json.dumps(rows, allow_nan=False)
+
+    def test_crlf_lines_and_a_half_written_last_line(self):
+        with open(os.path.join(self.dir, CHANGES.FILE), "wb") as handle:
+            handle.write((json.dumps(change(1)) + "\r\n" + json.dumps(change(2)) + "\r\n").encode())
+            handle.write(json.dumps(change(3)).encode()[:40])
+        self.assertEqual([2, 1], [round(r["at"] - T0) for r in self.read()["rows"]])
+
     def test_a_line_longer_than_a_chunk_is_read_whole(self):
         self.write(CHANGES.FILE, [change(1, path="/api/" + "x" * (VIEW.CHUNK * 2)), change(2)])
         rows = self.read()["rows"]
@@ -220,6 +233,27 @@ class Limits(Base):
         self.assertTrue(answer["partial"])
         self.assertFalse(self.read(person="robin")["partial"])
 
+    def test_when_one_log_hits_the_cap_the_page_ends_there_and_says_so(self):
+        """Review I1: rows of the other log older than where the search stopped
+        would hide the stopped log's unread rows, so they are not shown."""
+        self.write(CHANGES.FILE, [change(500 + i, user="ada") for i in range(100)]
+                   + [change(700 + i, user="robin") for i in range(150)])
+        self.write(AGENT.FILE, [call(i, owner="ada") for i in range(200)])
+        with mock.patch.object(VIEW, "SCAN", 100):
+            answer = self.read(person="ada", limit=50)
+        self.assertTrue(answer["partial"])
+        self.assertFalse(answer["more"])
+        self.assertTrue(all(r["source"] == "changes" or r["at"] - T0 >= 600 for r in answer["rows"]),
+                        "no agent row from before the change log's search stopped")
+
+    def test_older_stops_at_the_offset_cap(self):
+        """Review M1: the last page reachable says there is no more."""
+        with mock.patch.object(VIEW, "MAX_OFFSET", 20):
+            answer = self.read(limit=10, offset=20)
+            self.assertEqual(20, answer["offset"])
+            self.assertFalse(answer["more"])
+            self.assertTrue(self.read(limit=10, offset=10)["more"])
+
 
 class AdminsOnly(unittest.TestCase):
     def test_the_route_is_declared_admin_in_a_listed_module(self):
@@ -255,12 +289,12 @@ class ThroughTheServer(unittest.TestCase):
         with open(os.path.join(self.dir, AGENT.FILE), "w", encoding="utf-8") as handle:
             handle.write(json.dumps(call(1)) + "\n")
 
-    def get(self, role):
+    def get(self, role, query="limit=5"):
         who = {"user": "ada", "role": role, "stale": False, "remember": False, "started": None}
         with mock.patch.object(self.server.H, "_who", return_value=who):
             client = HTTPConnection(*self.listener.server_address, timeout=5)
             try:
-                client.request("GET", "/api/audit/log?limit=5", headers={"X-Homestead-Auth": "1"})
+                client.request("GET", f"/api/audit/log?{query}", headers={"X-Homestead-Auth": "1"})
                 response = client.getresponse()
                 return response.status, json.loads(response.read() or b"null")
             finally:
@@ -277,6 +311,11 @@ class ThroughTheServer(unittest.TestCase):
         status, body = self.get("admin")
         self.assertEqual(200, status)
         self.assertEqual(["agents"], [r["source"] for r in body["rows"]])
+
+    def test_a_bad_filter_or_limit_is_a_400(self):
+        for query in ("source=signins", "limit=all", "offset=x"):
+            with self.subTest(query=query):
+                self.assertEqual(400, self.get("admin", query)[0])
 
 
 if __name__ == "__main__":

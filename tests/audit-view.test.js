@@ -15,7 +15,7 @@ function load({ admin = true } = {}) {
     esc: s => String(s ?? "").replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`),
     jsq: s => `'${String(s).replace(/[\\']/g, "\\$&")}'`,
     fmtAgo: s => `${Math.round(s)}s ago`, fmtAt: t => String(t),
-    api: async path => { calls.push(path); return ctx.answer; },
+    api: async path => { calls.push(path); return typeof ctx.answer === "function" ? ctx.answer(path) : ctx.answer; },
     paint: html => painted.push(html), $: () => null, icon: () => "" };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -40,14 +40,15 @@ test("the Audit tab is offered to admins only, beside Sign-ins", () => {
 
 test("the filters and the page go to the server", () => {
   const { ctx } = load();
-  assert.equal(ctx.auditQuery(), `/api/audit/log?limit=${ctx.AUDIT_PAGE}`);
+  assert.equal(ctx.auditParams(), `limit=${ctx.AUDIT_PAGE}`);
   Object.assign(ctx.auditFilter(), { source: "agents", person: "robin a", offset: 200 });
-  assert.equal(ctx.auditQuery(), `/api/audit/log?limit=${ctx.AUDIT_PAGE}&source=agents&person=robin+a&offset=200`);
+  assert.equal(ctx.auditParams(), `limit=${ctx.AUDIT_PAGE}&source=agents&person=robin+a&offset=200`);
 });
 
 test("changing a filter starts again at the newest; Older and Newer move a page", async () => {
   const { ctx, calls } = load();
-  ctx.answer = { rows: [], offset: 0, limit: ctx.AUDIT_PAGE, more: true, partial: false };
+  ctx.answer = path => ({ rows: [], offset: Number(new URLSearchParams(path.split("?")[1]).get("offset")) || 0,
+    limit: ctx.AUDIT_PAGE, more: true, partial: false });
   ctx.STATE.eventsTab = "audit";
   ctx.viewEvents = () => ctx.viewAudit();
   await ctx.auditPage(1);
@@ -62,6 +63,37 @@ test("changing a filter starts again at the newest; Older and Newer move a page"
   await ctx.auditFilterSet("person", " ada ");
   assert.deepEqual([ctx.auditFilter().person, ctx.auditFilter().offset], ["ada", 0]);
   assert.match(calls.at(-1), /person=ada$/);
+});
+
+test("the page shown is the one the server answered, so Older cannot run past its cap", async () => {
+  const { ctx } = load();
+  // The server clamps the offset at 200 and says there is no more there (review M1).
+  ctx.answer = path => {
+    const offset = Math.min(200, Number(new URLSearchParams(path.split("?")[1]).get("offset")) || 0);
+    return { rows: [{ source: "changes", at: 1, who: "ada", what: "POST /api/x", result: "ok" }], offset, limit: 100, more: offset < 200 };
+  };
+  ctx.STATE.eventsTab = "audit";
+  ctx.viewEvents = () => ctx.viewAudit();
+  ctx.paint = html => { ctx.painted = html; };
+  for (let i = 0; i < 4; i++) await ctx.auditPage(1);
+  assert.equal(ctx.auditFilter().offset, 200);
+  assert.match(ctx.painted, /disabled onclick="auditPage\(1\)"/, "Older is off at the cap");
+});
+
+test("an HTTP status is shown only when it says something went wrong", () => {
+  const { ctx } = load();
+  // An MCP tool refused or failed is answered 200 (review M2).
+  const tool = ctx.auditRowHtml({ source: "changes", at: 0, who: "ada", what: "restore_backup", result: "error", code: 200 });
+  assert.doesNotMatch(tool, /· 200/);
+  const refused = ctx.auditRowHtml({ source: "changes", at: 0, who: "ada", what: "POST /api/x", result: "refused", code: 403 });
+  assert.match(refused, /Refused · 403/);
+});
+
+test("the demo's audit rows use documentation addresses only", () => {
+  const block = between(fs.readFileSync("web/js/demo.js", "utf8"), "const demoChanges = [", 'responses["/api/audit/log"]');
+  const addresses = [...block.matchAll(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g)].map(m => m[0]);
+  assert.ok(addresses.length);
+  assert.deepEqual(addresses.filter(a => !/^(192\.0\.2|198\.51\.100|203\.0\.113)\./.test(a)), []);
 });
 
 test("a change row says its log, who, what, the target and the result", () => {

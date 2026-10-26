@@ -18,6 +18,7 @@ import datetime
 import heapq
 import itertools
 import json
+import math
 import os
 
 import homestead_agent_audit as AGENT
@@ -73,7 +74,7 @@ def _seconds(at):
     if isinstance(at, bool):
         return None
     if isinstance(at, (int, float)):
-        return float(at)
+        return float(at) if math.isfinite(at) else None     # NaN would make the answer invalid JSON
     if isinstance(at, str):
         try:
             return datetime.datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
@@ -165,10 +166,21 @@ def log(query):
     if source in ("", "agents"):
         streams.append(_rows((os.path.join(AGENT.DATA_DIR, AGENT.FILE),), _agent_row, budgets["agents"]))
     merged = heapq.merge(*streams, key=lambda row: -row["at"])
-    matching = (row for row in merged if not person or row["who"].lower() == person)
+    matching = (row for row in _until_stopped(merged, budgets.values()) if not person or row["who"].lower() == person)
     page = list(itertools.islice(matching, offset, offset + limit + 1))
-    return {"rows": page[:limit], "offset": offset, "limit": limit, "more": len(page) > limit,
-            "partial": len(page) <= limit and any(budget["stopped"] for budget in budgets.values())}
+    stopped = any(budget["stopped"] for budget in budgets.values())
+    return {"rows": page[:limit], "offset": offset, "limit": limit,
+            "more": len(page) > limit and offset + limit <= MAX_OFFSET, "partial": stopped and len(page) <= limit}
+
+
+def _until_stopped(merged, budgets):
+    """The merged rows until one log's search stops at SCAN: the rows it left
+    unread are older than its last, so a row of the other log past that point
+    could stand in front of them. The page ends there instead."""
+    for row in merged:
+        if any(budget["stopped"] for budget in budgets):
+            return
+        yield row
 
 
 ROUTES = {
