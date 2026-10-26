@@ -132,6 +132,64 @@ class AnchorTests(unittest.TestCase):
         with self.assertRaises(Held): self.patch(self.writer(self.restored()))
         self.assertEqual(1, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
 
+    def status_write_before_first_request(self):
+        """A controller writes the claim's status between the journal's read and its request (#826)."""
+        original = self.cluster.send
+        def send(method, path, body, **kwargs):
+            if path == self.cluster.pvc and not any(p == path for _, p, _ in self.cluster.sent):
+                pvc = self.cluster.objects[path]
+                pvc["status"] = {"phase": "Bound"}
+                pvc["metadata"]["resourceVersion"] = str(int(pvc["metadata"]["resourceVersion"]) + 1)
+            return original(method, path, body, **kwargs)
+        self.cluster.send = send
+
+    def test_a_status_conflict_retry_is_recorded_and_survives_restart(self):
+        self.status_write_before_first_request()
+        self.patch(self.writer(self.record))
+        entry = self.restored().item()["ref"]["storage_writes"][0]
+        self.assertEqual("accepted", entry["state"])
+        self.assertEqual([{"resourceVersion": "1", "code": 409}], entry["retries"])
+        self.assertEqual({"uid": "pvc-old", "resourceVersion": "1"}, entry["reviewed"])
+        self.assertEqual({"uid": "pvc-old", "resourceVersion": "2"}, entry["before"])
+        self.patch(self.writer(self.restored()))  # observed, never resent
+        self.assertEqual(2, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
+
+    def test_only_a_status_retry_may_rewrite_an_open_intent(self):
+        self.cluster.lose_at = 2  # leave the intent open, nothing sent
+        with self.assertRaises(Held): self.patch(self.writer(self.record))
+        record = self.restored()
+        intent = record.item()["ref"]["storage_writes"][0]
+        retry = {"resourceVersion": "1", "code": 409}
+        good = dict(intent, before={"uid": "pvc-old", "resourceVersion": "2"}, retries=[retry],
+                    reviewed={"uid": "pvc-old", "resourceVersion": "1"})
+        bad = (dict(good, before={"uid": "pvc-new", "resourceVersion": "2"}),           # a replacement
+               dict(good, before={"uid": "pvc-old", "resourceVersion": "1"}),           # no new version
+               dict(good, payload="0" * 64),                                             # another request
+               dict(good, retries=[retry, retry]),                                       # two at once
+               dict(good, retries=[dict(retry, resourceVersion="7")]),                   # not the refused one
+               dict(good, retries=[dict(retry, code=422)]),                              # not a conflict
+               dict(good, reviewed={"uid": "pvc-old", "resourceVersion": "9"}),          # another review
+               dict(good, state="accepted"))                                             # skipped the send
+        for entry in bad:
+            with self.subTest(entry):
+                job = record.item(); job["ref"]["storage_writes"] = [entry]
+                with self.assertRaises(Held):
+                    self.fresh().load(**self.handle).checkpoint(job)
+        job = record.item(); job["ref"]["storage_writes"] = [good]
+        record.checkpoint(job)
+        self.assertEqual(good, self.restored().item()["ref"]["storage_writes"][0])
+        import homestead_storage_journal as J
+        entry = good
+        for version in range(2, J.RETRIES + 2):  # each later retry, one at a time, up to the bound
+            entry = dict(entry, before={"uid": "pvc-old", "resourceVersion": str(version + 1)},
+                         retries=entry["retries"] + [{"resourceVersion": str(version), "code": 409}])
+            job = record.item(); job["ref"]["storage_writes"] = [entry]
+            if version <= J.RETRIES:
+                record.checkpoint(job)
+            else:
+                with self.assertRaises(Held):
+                    self.fresh().load(**self.handle).checkpoint(job)
+
     def test_old_local_copy_cannot_erase_current_history(self):
         old = self.record.item()
         self.patch(self.writer(self.record))

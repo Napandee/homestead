@@ -12,7 +12,7 @@ import time
 import homestead_self_data_copy as COPY
 import homestead_self_data_anchor as A
 from homestead_self_data_fence import require_app_readiness, pin_app_image
-from homestead_storage_journal import Held, Journal, identity, shape
+from homestead_storage_journal import Held, Journal, identity, settled, shape
 
 
 def owner(obj, kind, uid):
@@ -173,7 +173,10 @@ class Coordinator:
     def _update_dep(self, step, dep, proposed):
         proposed = copy.deepcopy(proposed)
         proposed["metadata"].update(identity(dep))
-        self.writer.write(step, "PUT", self.dep_path, proposed, expected={**identity(dep), "shape": shape(dep)})
+        # The Deployment controller writes its status on its own schedule;
+        # settled lets only that pass between this read and the PUT (#826).
+        self.writer.write(step, "PUT", self.dep_path, proposed,
+                          expected={**identity(dep), "shape": shape(dep), "settled": settled(dep)})
 
     def _result(self, message):
         return {"phase": self.anchor.state["phase"], "message": message,

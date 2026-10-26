@@ -101,6 +101,23 @@ def shape(obj):
                    "annotations": annotations, "owners": meta.get("ownerReferences", [])})
 
 
+# What a controller writes on an object it manages without anyone editing it:
+# its status, and the server's bookkeeping for that write. Stricter than
+# shape(): every other field counts, ignored annotations and finalizers
+# included, because a PUT built from an older read would write them back.
+SERVER_WRITTEN = ("resourceVersion", "managedFields")
+# How often one write is sent again after a 409 that only a status write caused.
+RETRIES = 3
+
+
+def settled(obj):
+    """A digest of everything but status and the server's bookkeeping (#826)."""
+    rest = {key: value for key, value in obj.items() if key != "status"} if isinstance(obj, dict) else obj
+    if isinstance(rest, dict) and isinstance(rest.get("metadata"), dict):
+        rest["metadata"] = {key: value for key, value in rest["metadata"].items() if key not in SERVER_WRITTEN}
+    return digest(rest)
+
+
 def target(method, path, body, namespace):
     match = PATH.fullmatch(path) if isinstance(path, str) else None
     if not match or method not in ("POST", "PUT", "PATCH", "DELETE"):
@@ -198,6 +215,34 @@ class Journal:
             raise Held("Storage API receipt does not match the requested object")
         identity(obj)
 
+    def _refuse(self, event, error):
+        self.failed = True
+        event["state"] = "refused" if isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 409, 422) else "uncertain"
+        try:
+            self._save()
+        except Held:
+            pass  # the durable intent is sufficient to prohibit replay
+
+    def _status_only(self, error, event, dest, baseline):
+        """The fresh object when a 409 came from a status write alone, else None.
+
+        A 409 means the API server applied nothing. Only a new version of the
+        same object (same uid) whose settled() equals the read the request was
+        sent against qualifies, and only RETRIES times for one step."""
+        if (baseline is None or not isinstance(error, urllib.error.HTTPError) or error.code != 409
+                or len(event.get("retries", ())) >= RETRIES):
+            return None
+        try:
+            fresh = self._get(dest["path"])
+            self._check_target(fresh, dest)
+        except Held:
+            return None
+        now = identity(fresh)
+        if (now["uid"] != event["before"]["uid"] or now["resourceVersion"] == event["before"]["resourceVersion"]
+                or fresh["metadata"].get("deletionTimestamp") or settled(fresh) != baseline):
+            return None
+        return fresh
+
     def write(self, step, method, path, body=None, *, expected=None, ctype=None, own=False):
         """Send once, with optimistic concurrency and a durable receipt.
 
@@ -209,6 +254,16 @@ class Journal:
         accepted POST receipt for the same path and UID): its controller or
         kubelet keeps updating its status, so the UID alone is compared and
         sent as the precondition. Every other write pins the resourceVersion.
+
+        A PUT or PATCH of an object Homestead did not create (#826) may still
+        go ahead when only a controller's status write moved its version:
+        - before sending, when expected carries "settled" (settled() of the
+          object the request was built from) and the object's uid and
+          settled() are unchanged; the request then pins the new version;
+        - after a 409, at most RETRIES times, when a fresh read has the same
+          uid, a new version and the same settled() as the read it was sent
+          against. The refused attempts stay in the receipt's "retries".
+        Anything else that changed still holds, and nothing else is retried.
         """
         self.check()
         if not isinstance(step, str) or not re.fullmatch(r"[a-zA-Z0-9_.:/-]{1,500}", step):
@@ -224,7 +279,8 @@ class Journal:
         if existing:
             if (existing["method"], existing["target"], existing["payload"]) != (method, dest, fingerprint):
                 raise Held("A completed storage step cannot be reused for a different request")
-            if method != "POST" and any((expected or {}).get(key) != existing["before"][key] for key in pinned):
+            seen = [existing["before"]] + ([existing["reviewed"]] if isinstance(existing.get("reviewed"), dict) else [])
+            if method != "POST" and not any(all((expected or {}).get(key) == known.get(key) for key in pinned) for known in seen):
                 raise Held("A completed storage step cannot be reused with a different reviewed identity")
             return self.observe(existing)
         current = self._get(dest["path"])
@@ -235,7 +291,9 @@ class Journal:
         else:
             self._check_target(current, dest)
             before = identity(current)
-            if not isinstance(expected, dict) or any(before[key] != expected.get(key) for key in pinned):
+            moved = [key for key in pinned if before[key] != expected.get(key)] if isinstance(expected, dict) else list(pinned)
+            if moved and not (moved == ["resourceVersion"] and method in ("PUT", "PATCH") and not own
+                              and isinstance(expected.get("settled"), str) and settled(current) == expected["settled"]):
                 raise Held("Storage resource changed after review; no request was sent")
             if own and not any(e["method"] == "POST" and e.get("state") == "accepted" and e["target"] == dest
                                and (e.get("after") or {}).get("uid") == before["uid"] for e in self.entries):
@@ -247,7 +305,9 @@ class Journal:
         request = copy.deepcopy(body)
         if method in ("PUT", "PATCH"):
             meta = request.setdefault("metadata", {})
-            if any(meta.get(key) is not None and meta[key] != before[key] for key in before):
+            # Built from the reviewed read; it is the same as current unless
+            # only status moved since (checked above).
+            if any(meta.get(key) is not None and meta[key] != expected[key] for key in before):
                 raise Held("Storage mutation was prepared from a different resource version")
             meta.update(before)
         elif method == "DELETE":
@@ -260,22 +320,39 @@ class Journal:
             self.before_write()
         event = {"step": step, "method": method, "target": dest, "payload": fingerprint,
                  "before": before, "state": "intent"}
+        reviewed = {key: expected[key] for key in pinned} if before else None
+        if before and any(before[key] != reviewed[key] for key in pinned):
+            event["reviewed"] = reviewed  # a status write came between review and request
         if self.preview:
             # All validation above still runs. No intent, durable save or API
             # dispatch may occur in an inspector's request-local journal.
             raise NextWrite(step, method, dest, before, fingerprint)
         self.entries.append(event)
         self._save()  # must reach durable storage before the API call
-        try:
-            result = self.send(method, path, request, **({"ctype": ctype} if ctype else {}))
-        except Exception as error:
-            self.failed = True
-            event["state"] = "refused" if isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 409, 422) else "uncertain"
+        baseline = settled(current) if method in ("PUT", "PATCH") and not own else None
+        while True:
             try:
-                self._save()
-            except Held:
-                pass  # the durable intent is sufficient to prohibit replay
-            raise Held("Storage request failed or its outcome is uncertain; inspect retained resources. Nothing was retried") from None
+                result = self.send(method, path, request, **({"ctype": ctype} if ctype else {}))
+                break
+            except Exception as error:
+                fresh = self._status_only(error, event, dest, baseline)
+                if fresh is None:
+                    self._refuse(event, error)
+                    raise Held("Storage request failed or its outcome is uncertain; inspect retained resources. Nothing was retried") from None
+                if self.before_write is not None:
+                    try:
+                        self.before_write()
+                    except Exception:
+                        self._refuse(event, error)  # the 409 stands; nothing more was sent
+                        raise
+            # Refused because of a status write alone: send it again against
+            # the new version, recorded durably first.
+            event.setdefault("retries", []).append({"resourceVersion": event["before"]["resourceVersion"], "code": 409})
+            event["before"] = identity(fresh)
+            event.setdefault("reviewed", reviewed)
+            request["metadata"].update(event["before"])
+            self._save()
+        before = event["before"]
         try:
             if method == "DELETE" and isinstance(result, dict) and result.get("kind") == "Status":
                 if result.get("status") != "Success" or result.get("details", {}).get("uid") not in (None, before["uid"]):
