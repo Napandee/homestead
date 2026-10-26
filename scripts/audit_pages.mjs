@@ -33,6 +33,9 @@ const PAGES = [
   ["containers-rows", "workloads", "setViewLayout('containers','renderWorkloads','rows')"],
   ["containers-cards", "workloads", "setViewLayout('containers','renderWorkloads','cards')"],
   ["containers-inline", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.collection-disclosure')?.click()"],
+  // Every card's pod list open (#873): an app with a pod on each host.
+  ["containers-card-pods", "workloads", "setViewLayout('containers','renderWorkloads','cards');document.querySelectorAll('.wcard .workloadtree').forEach((d) => { d.open = true; })"],
+  ["containers-inline-pods", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.wl-row[data-row-key*=\"edge-tunnel\"] .collection-disclosure')?.click();document.querySelectorAll('.wl-detail-row:not([hidden]) .workloadtree').forEach((d) => { d.open = true; })"],
   // Every linked cluster at once.
   ["containers-all", "workloads", "localStorage.setItem('homestead.fleet.mode','all');viewWorkloads()"],
   ["vms-all", "vms", "localStorage.setItem('homestead.fleet.mode','all');viewVMs()"],
@@ -106,6 +109,10 @@ async function audit([label, width, height, mobile], items) {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  // What reloads the tab under a check, when one does: the reload is rare
+  // and its cause not yet known, so it is named where it happens.
+  let checking = "";
+  page.on("load", () => { if (checking) console.log(`the tab reloaded during ${checking} (${label}): ${page.url()}`); });
   await page.addInitScript(theme => {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   }, theme);
@@ -113,7 +120,8 @@ async function audit([label, width, height, mobile], items) {
   // Running jobs and passing notices belong to a moment, not the page.
   await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
 
-  for (const [name, view, after] of items) {
+  for (const [name, view, after] of items) for (let attempt = 1; ; attempt++) {
+    checking = name;
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } localStorage.removeItem("homestead.fleet.mode"); });
       await page.evaluate((v) => go(v), view);
@@ -149,7 +157,15 @@ async function audit([label, width, height, mobile], items) {
           && ![...(e.labels || [])].some((l) => l.textContent.trim())
           && !(e.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => document.getElementById(id)?.textContent.trim()))
           .map((e) => e.id ? `#${e.id}` : `${e.tagName.toLowerCase()}${e.name ? `[name=${e.name}]` : ""}.${[...e.classList].slice(0, 2).join(".")}`);
+        // Where each pod runs, and an image's name and tag, are never cut (#873).
+        const cut = (e) => e.scrollWidth > e.clientWidth + 1 || e.getBoundingClientRect().right > e.parentElement.getBoundingClientRect().right + 1;
+        const hostEls = [...root.querySelectorAll(".tree-pod-head .tree-node")].filter((e) => e.checkVisibility());
+        const clipped = [...hostEls, ...[...root.querySelectorAll(".tree-image-name")].filter((e) => e.checkVisibility())]
+          .filter(cut).map((e) => `${e.className} "${e.textContent.trim().slice(0, 40)}"`);
         return {
+          // The most hosts one pod list spans: one app with pods on several hosts.
+          hosts: Math.max(0, ...[...root.querySelectorAll(".workloadtree[open]")].map((tree) => new Set([...tree.querySelectorAll(".tree-pod-head .tree-node")].map((e) => e.textContent.trim())).size)),
+          clipped: [...new Set(clipped)].slice(0, 6),
           unnamed: [...new Set(unnamed)].slice(0, 8),
           title: document.querySelector("#views .phead h1, #views .phead h2, #views .phead")?.textContent.trim().split("\n")[0].slice(0, 40),
           height: document.documentElement.scrollHeight,
@@ -167,10 +183,22 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.overflow.length) failures.push(`${name} (${label}): runs off the screen: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
       if (metrics.squeezed.length) failures.push(`${name} (${label}): text squeezed into a narrow column: ${metrics.squeezed.join(", ")}`);
+      if (metrics.clipped.length) failures.push(`${name} (${label}): a pod's host or an image's tag is cut: ${metrics.clipped.join(", ")}`);
+      if (name.endsWith("-pods") && metrics.hosts < 3) failures.push(`${name} (${label}): no open pod list with pods on three hosts (at most ${metrics.hosts})`);
       if (metrics.unnamed.length) failures.push(`${name} (${label}): fields with no name: ${metrics.unnamed.join(", ")}`);
     } catch (error) {
+      // The tab reloaded under the check ("Execution context was destroyed"),
+      // now and then on any of the later pages: open the app again and look
+      // at this page once more. A page that navigates away itself fails twice.
+      if (attempt === 1 && /Execution context was destroyed/.test(error.message)) {
+        checking = "";
+        await openAuditPage(page, base);
+        await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
+        continue;
+      }
       failures.push(`${name} (${label}): could not open: ${error.message.split("\n")[0]}${errors.length ? ` - error: ${errors.at(-1)}` : ""}`);
     }
+    break;
   }
   await context.close();
 }

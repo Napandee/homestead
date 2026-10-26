@@ -288,3 +288,294 @@ class ListedPodShapeTests(unittest.TestCase):
         self.assertEqual(journal.shape(alone), journal.shape(listed_with_cni))
         self.assertNotEqual(journal.shape(alone), journal.shape({"metadata": dict(meta, annotations={"kept": "no"}), "spec": spec}),
                             "other annotations still count")
+
+
+class ForeignStatusRaceTests(unittest.TestCase):
+    """#826: a controller's status write is not an edit to what Homestead reviewed.
+
+    pv-controller and the Deployment controller write status (and so a new
+    resourceVersion) on objects Homestead did not create, on their own
+    schedule. Between Homestead's read and its request that must not stop a
+    move for good; a change to anything else still must."""
+
+    PV = "/api/v1/persistentvolumes/pv-data"
+    DEP = "/apis/apps/v1/namespaces/lab/deployments/app"
+
+    def setUp(self):
+        from fakes.kube import Kube
+        import homestead_kube as K
+        pv = {"apiVersion": "v1", "kind": "PersistentVolume",
+              "metadata": {"name": "pv-data", "annotations": {"pv.kubernetes.io/provisioned-by": "csi.example.com"},
+                           "finalizers": ["kubernetes.io/pv-protection"]},
+              "spec": {"persistentVolumeReclaimPolicy": "Delete", "csi": {"driver": "csi.example.com", "volumeHandle": "vol-1"}},
+              "status": {"phase": "Bound"}}
+        dep = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "app", "namespace": "lab"},
+               "spec": {"replicas": 0, "template": {"spec": {"containers": [{"name": "app", "image": "app:1"}]}}},
+               "status": {"observedGeneration": 1}}
+        self.kube = Kube(pv, dep)
+        self.kube.__enter__()
+        self.addCleanup(self.kube.__exit__, None, None, None)
+        self.K = K
+        self.item = {"id": "move-1", "status": "running", "ref": {"namespace": "lab"}}
+        self.saved = []
+        self.requests = []
+        self.before_send = None
+
+    def send(self, method, path, body=None, ctype=None):
+        # Straight to the fake API server: this tests the journal, not the
+        # write guards in front of it (those take the operations store's lock).
+        self.requests.append((method, path, copy.deepcopy(body)))
+        if self.before_send:
+            self.before_send(len(self.requests))
+        return self.kube(method, path, body, ctype=ctype)
+
+    def writer(self):
+        return journal.Journal(self.item, self.K.kget, self.send, lambda item: self.saved.append(copy.deepcopy(item)))
+
+    def status(self, path, **status):
+        """What a controller does: a status-only write, which moves resourceVersion."""
+        self.kube("PUT", path + "/status", {"status": status})
+
+    def reviewed(self, path):
+        obj = self.K.kget(path)
+        return obj, {**journal.identity(obj), "settled": journal.settled(obj)}
+
+    def retain(self, expected, writer=None):
+        return (writer or self.writer()).write("retain-original", "PATCH", self.PV,
+                                               {"spec": {"persistentVolumeReclaimPolicy": "Retain"}},
+                                               expected=expected, ctype="application/merge-patch+json")
+
+    def sent(self, method, path):
+        return [body for m, p, body in self.requests if (m, p) == (method, path)]
+
+    def test_a_status_update_after_the_review_continues_with_the_new_version(self):
+        _, expected = self.reviewed(self.PV)
+        self.status(self.PV, phase="Released", lastPhaseTransitionTime="2026-10-26T00:00:00Z")
+        current = self.kube.object(self.PV)["metadata"]["resourceVersion"]
+        self.retain(expected)
+        self.assertEqual("Retain", self.kube.object(self.PV)["spec"]["persistentVolumeReclaimPolicy"])
+        [body] = self.sent("PATCH", self.PV)
+        self.assertEqual(current, body["metadata"]["resourceVersion"], "the request still pins the version it saw")
+        entry = self.item["ref"]["storage_writes"][0]
+        self.assertEqual("accepted", entry["state"])
+        self.assertEqual(expected["resourceVersion"], entry["reviewed"]["resourceVersion"])
+        self.assertEqual(current, entry["before"]["resourceVersion"])
+
+    def test_a_status_update_just_before_the_request_is_retried_once_it_is_refused(self):
+        _, expected = self.reviewed(self.PV)
+        self.before_send = lambda n: n == 1 and self.status(self.PV, phase="Released")
+        self.retain(expected)
+        self.assertEqual("Retain", self.kube.object(self.PV)["spec"]["persistentVolumeReclaimPolicy"])
+        first, second = self.sent("PATCH", self.PV)
+        self.assertNotEqual(first["metadata"]["resourceVersion"], second["metadata"]["resourceVersion"])
+        entry = self.item["ref"]["storage_writes"][0]
+        self.assertEqual("accepted", entry["state"])
+        self.assertEqual([{"resourceVersion": first["metadata"]["resourceVersion"], "code": 409}], entry["retries"])
+        self.assertEqual(second["metadata"]["resourceVersion"], entry["before"]["resourceVersion"])
+        # The retry was durable before it was sent.
+        self.assertTrue(any(e["state"] == "intent" and e.get("retries") for s in self.saved for e in s["ref"]["storage_writes"]))
+
+    def test_a_deployment_put_survives_the_controller_writing_status(self):
+        dep, expected = self.reviewed(self.DEP)
+        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = 1
+        self.status(self.DEP, observedGeneration=1, replicas=0)
+        self.before_send = lambda n: n == 1 and self.status(self.DEP, observedGeneration=1, replicas=0, readyReplicas=0)
+        self.writer().write("restart", "PUT", self.DEP, proposed, expected=expected)
+        self.assertEqual(1, self.kube.object(self.DEP)["spec"]["replicas"])
+        self.assertEqual(2, len(self.sent("PUT", self.DEP)))
+
+    def test_a_spec_change_after_the_review_still_holds_and_sends_nothing(self):
+        _, expected = self.reviewed(self.PV)
+        self.kube("PATCH", self.PV, {"spec": {"persistentVolumeReclaimPolicy": "Recycle"}}, ctype="application/merge-patch+json")
+        with self.assertRaisesRegex(journal.Held, "changed after review"):
+            self.retain(expected)
+        self.assertEqual([], self.sent("PATCH", self.PV))
+        self.assertEqual("Recycle", self.kube.object(self.PV)["spec"]["persistentVolumeReclaimPolicy"])
+
+    def test_metadata_edits_after_the_review_still_hold(self):
+        edits = ({"metadata": {"annotations": {"example.com/hold": "true"}}},
+                 {"metadata": {"labels": {"tier": "gold"}}},
+                 {"metadata": {"finalizers": ["kubernetes.io/pv-protection", "example.com/keep"]}})
+        for edit in edits:
+            with self.subTest(edit):
+                self.setUp()
+                _, expected = self.reviewed(self.PV)
+                self.kube("PATCH", self.PV, edit, ctype="application/merge-patch+json")
+                with self.assertRaisesRegex(journal.Held, "changed after review"):
+                    self.retain(expected)
+                self.assertEqual([], self.sent("PATCH", self.PV))
+
+    def test_a_spec_change_just_before_the_request_is_refused_and_not_retried(self):
+        dep, expected = self.reviewed(self.DEP)
+        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = 1
+        def edit(n):
+            if n == 1:
+                self.kube("PATCH", self.DEP, {"spec": {"template": {"spec": {"containers": [{"name": "app", "image": "app:2"}]}}}},
+                          ctype="application/merge-patch+json")
+        self.before_send = edit
+        writer = self.writer()
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            writer.write("restart", "PUT", self.DEP, proposed, expected=expected)
+        self.assertEqual(1, len(self.sent("PUT", self.DEP)))
+        self.assertEqual("refused", self.item["ref"]["storage_writes"][0]["state"])
+        self.assertEqual("app:2", self.kube.object(self.DEP)["spec"]["template"]["spec"]["containers"][0]["image"])
+        with self.assertRaises(journal.Held):
+            writer.write("other", "PUT", self.DEP, proposed, expected=expected)
+
+    def replace(self):
+        """Someone deletes the volume and creates another under the same name."""
+        obj = self.kube.object(self.PV)
+        self.kube("PATCH", self.PV, {"metadata": {"finalizers": None}}, ctype="application/merge-patch+json")
+        self.kube("DELETE", self.PV, {"propagationPolicy": "Background"})
+        self.kube("POST", "/api/v1/persistentvolumes", {"apiVersion": "v1", "kind": "PersistentVolume",
+                  "metadata": {"name": "pv-data", "annotations": obj["metadata"]["annotations"]},
+                  "spec": obj["spec"], "status": obj["status"]})
+
+    def retains(self):
+        return [b for b in self.sent("PATCH", self.PV) if "spec" in b]
+
+    def test_a_replacement_still_holds(self):
+        _, expected = self.reviewed(self.PV)
+        self.replace()
+        self.assertNotEqual(expected["uid"], self.kube.object(self.PV)["metadata"]["uid"])
+        with self.assertRaisesRegex(journal.Held, "changed after review"):
+            self.retain(expected)
+        self.assertEqual([], self.retains())
+
+    def test_a_replacement_just_before_the_request_is_not_retried(self):
+        _, expected = self.reviewed(self.PV)
+        self.before_send = lambda n: n == 1 and self.replace()
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            self.retain(expected)
+        self.assertEqual(1, len(self.retains()))
+        self.assertEqual("refused", self.item["ref"]["storage_writes"][0]["state"])
+
+    def test_a_controller_that_never_settles_still_surfaces(self):
+        _, expected = self.reviewed(self.PV)
+        self.before_send = lambda n: self.status(self.PV, phase="Released", attempt=str(n))
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            self.retain(expected)
+        attempts = self.sent("PATCH", self.PV)
+        self.assertEqual(1 + journal.RETRIES, len(attempts))
+        entry = self.item["ref"]["storage_writes"][0]
+        self.assertEqual("refused", entry["state"])
+        self.assertEqual(journal.RETRIES, len(entry["retries"]))
+        self.assertEqual("Delete", self.kube.object(self.PV)["spec"]["persistentVolumeReclaimPolicy"])
+
+    def test_other_refusals_are_not_retried(self):
+        for code in (400, 403, 422):
+            with self.subTest(code):
+                self.setUp()
+                _, expected = self.reviewed(self.PV)
+                self.kube.fail(self.PV, code, method="PATCH")
+                with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+                    self.retain(expected)
+                self.assertEqual(1, len(self.sent("PATCH", self.PV)))
+                self.assertEqual("refused", self.item["ref"]["storage_writes"][0]["state"])
+
+    def test_a_conflict_without_a_new_version_is_not_retried(self):
+        _, expected = self.reviewed(self.PV)
+        self.kube.fail(self.PV, 409, method="PATCH")
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            self.retain(expected)
+        self.assertEqual(1, len(self.sent("PATCH", self.PV)))
+
+    def test_without_a_settled_review_a_moved_version_still_holds(self):
+        obj, _ = self.reviewed(self.PV)
+        self.status(self.PV, phase="Released")
+        with self.assertRaisesRegex(journal.Held, "changed after review"):
+            self.retain(journal.identity(obj))
+        self.assertEqual([], self.sent("PATCH", self.PV))
+
+    def test_deletes_of_user_data_keep_the_full_check(self):
+        obj, expected = self.reviewed(self.PV)
+        self.status(self.PV, phase="Released")
+        with self.assertRaisesRegex(journal.Held, "changed after review"):
+            self.writer().write("delete", "DELETE", self.PV, expected=expected)
+        self.assertEqual([], self.sent("DELETE", self.PV))
+
+    def test_a_rebased_step_is_observed_again_with_the_reviewed_identity(self):
+        _, expected = self.reviewed(self.PV)
+        self.status(self.PV, phase="Released")
+        writer = self.writer()
+        self.retain(expected, writer)
+        self.retain(expected, writer)
+        self.assertEqual(1, len(self.sent("PATCH", self.PV)))
+
+    def test_a_step_retried_several_times_is_observed_with_either_identity(self):
+        _, expected = self.reviewed(self.PV)
+        self.before_send = lambda n: n <= 2 and self.status(self.PV, phase="Released", attempt=str(n))
+        writer = self.writer()
+        self.retain(expected, writer)
+        entry = self.item["ref"]["storage_writes"][0]
+        self.assertEqual(2, len(entry["retries"]))
+        self.retain(expected, writer)
+        self.retain({k: entry["before"][k] for k in ("uid", "resourceVersion")}, writer)
+        with self.assertRaisesRegex(journal.Held, "different reviewed identity"):
+            self.retain({"uid": entry["before"]["uid"], "resourceVersion": entry["retries"][1]["resourceVersion"]}, writer)
+        self.assertEqual(3, len(self.sent("PATCH", self.PV)))
+
+    def test_a_review_older_than_the_read_it_names_still_holds(self):
+        # The request was built from one read and names the identity of a later
+        # one: whatever changed in between counts, even with no version change since.
+        old, _ = self.reviewed(self.PV)
+        self.kube("PATCH", self.PV, {"spec": {"persistentVolumeReclaimPolicy": "Recycle"}}, ctype="application/merge-patch+json")
+        expected = {**journal.identity(self.K.kget(self.PV)), "settled": journal.settled(old)}
+        with self.assertRaisesRegex(journal.Held, "changed after review"):
+            self.retain(expected)
+        self.assertEqual([], self.sent("PATCH", self.PV))
+
+    def test_a_settled_review_without_a_version_is_refused_cleanly(self):
+        obj, expected = self.reviewed(self.PV)
+        self.status(self.PV, phase="Released")
+        for partial in ({"uid": expected["uid"], "settled": expected["settled"]},
+                        {"uid": expected["uid"], "resourceVersion": None, "settled": expected["settled"]}):
+            with self.subTest(partial), self.assertRaisesRegex(journal.Held, "changed after review"):
+                self.retain(partial)
+        self.assertEqual([], self.sent("PATCH", self.PV))
+
+    def test_stale_managed_fields_are_never_written_back(self):
+        dep, expected = self.reviewed(self.DEP)
+        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = 1
+        proposed["metadata"]["managedFields"] = [{"manager": "kube-controller-manager", "operation": "Update",
+                                                  "subresource": "status", "time": "2026-10-26T00:00:00Z"}]
+        self.status(self.DEP, observedGeneration=1, replicas=0)
+        self.writer().write("restart", "PUT", self.DEP, proposed, expected=expected)
+        [put] = self.sent("PUT", self.DEP)
+        self.assertNotIn("managedFields", put["metadata"])
+
+    def test_a_failed_pre_write_check_before_a_retry_sends_nothing_more(self):
+        _, expected = self.reviewed(self.PV)
+        self.before_send = lambda n: n == 1 and self.status(self.PV, phase="Released")
+        checks = []
+        def before_write():
+            checks.append(1)
+            if len(checks) > 1:
+                raise journal.Held("Homestead replica runtime identity is incomplete")
+        writer = journal.Journal(self.item, self.K.kget, self.send, lambda item: self.saved.append(copy.deepcopy(item)),
+                                 before_write=before_write)
+        with self.assertRaisesRegex(journal.Held, "runtime identity"):
+            self.retain(expected, writer)
+        self.assertEqual(1, len(self.sent("PATCH", self.PV)))
+        entry = self.item["ref"]["storage_writes"][0]
+        self.assertEqual("refused", entry["state"])
+        self.assertNotIn("retries", entry)
+
+    def test_a_volume_being_deleted_is_not_retried(self):
+        _, expected = self.reviewed(self.PV)
+        self.before_send = lambda n: n == 1 and self.kube("DELETE", self.PV, {"propagationPolicy": "Background"})
+        with self.assertRaisesRegex(journal.Held, "Nothing was retried"):
+            self.retain(expected)
+        self.assertTrue(self.kube.object(self.PV)["metadata"]["deletionTimestamp"])
+        self.assertEqual(1, len(self.sent("PATCH", self.PV)))
+        self.assertEqual("refused", self.item["ref"]["storage_writes"][0]["state"])
+
+    def test_inspection_after_a_status_update_shows_the_new_version_and_writes_nothing(self):
+        _, expected = self.reviewed(self.PV)
+        self.status(self.PV, phase="Released")
+        writer = journal.Journal(self.item, self.K.kget, None, None, preview=True)
+        with self.assertRaises(journal.NextWrite) as ready:
+            self.retain(expected, writer)
+        self.assertEqual(self.kube.object(self.PV)["metadata"]["resourceVersion"], ready.exception.plan["before"]["resourceVersion"])
+        self.assertEqual([], self.item["ref"]["storage_writes"])
+        self.assertEqual([], self.sent("PATCH", self.PV))

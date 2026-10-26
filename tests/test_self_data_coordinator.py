@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -456,6 +457,120 @@ class CoordinatorTests(unittest.TestCase):
         c = self.c; c.switching(); c.step(); c.settle_stop(); c.step(); c.settle_start()
         c.objects["/api/v1/namespaces/lab/pods/new-0"]["status"]["conditions"] = []
         self.assertEqual("start", c.step()["phase"])
+
+
+class ForeignStatusRaceTests(unittest.TestCase):
+    """#826: the Deployment controller writes Homestead's Deployment status on
+    its own schedule. A status write between the coordinator's read and its PUT
+    no longer stops the move; any other change still does."""
+
+    def setUp(self):
+        self.c = Cluster()
+
+    def status(self, **status):
+        dep = self.c.objects[self.c.dep_path]
+        dep["status"] = {**dep.get("status", {}), **status}
+        dep["metadata"]["resourceVersion"] = str(int(dep["metadata"]["resourceVersion"]) + 1)
+
+    def before_review(self, step, change):
+        """change() runs once, between the coordinator's read and the journal's own."""
+        import homestead_storage_journal as J
+        original = J.Journal.write
+        def write(writer, name, *args, **kwargs):
+            if name == step and not getattr(write, "done", False):
+                write.done = True
+                change()
+            return original(writer, name, *args, **kwargs)
+        patcher = mock.patch.object(J.Journal, "write", write)
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def before_request(self, change):
+        """change() runs once, between the journal's read and the PUT."""
+        def reject(method, path, body):
+            if method == "PUT" and path == self.c.dep_path and not getattr(reject, "done", False):
+                reject.done = True
+                change()
+            return False
+        self.c.reject = reject
+
+    def puts(self):
+        return [b for m, p, b in self.c.sent if (m, p) == ("PUT", self.c.dep_path)]
+
+    def receipt(self, step):
+        return next(e for e in self.c.fresh().load(**self.c.handle).item()["ref"]["storage_writes"] if e["step"] == step)
+
+    def test_a_status_update_before_the_stop_does_not_stop_the_move(self):
+        self.before_review("stop", lambda: self.status(observedGeneration=1, readyReplicas=1))
+        self.assertEqual("quiesce", self.c.step()["phase"])
+        [put] = self.puts()
+        self.assertEqual(0, put["spec"]["replicas"])
+        self.assertIn("reviewed", self.receipt("stop"))
+
+    def test_a_status_update_racing_the_stop_is_retried(self):
+        self.before_request(lambda: self.status(observedGeneration=1, readyReplicas=1))
+        self.assertEqual("quiesce", self.c.step()["phase"])
+        first, second = self.puts()
+        self.assertNotEqual(first["metadata"]["resourceVersion"], second["metadata"]["resourceVersion"])
+        self.assertEqual(0, self.c.objects[self.c.dep_path]["spec"]["replicas"])
+        self.assertEqual(1, len(self.receipt("stop")["retries"]))
+
+    def test_a_status_update_racing_the_switch_is_retried(self):
+        c = self.c; c.switching()
+        self.before_request(lambda: self.status(observedGeneration=2, replicas=0))
+        self.assertEqual("start", c.step()["phase"])
+        self.assertEqual(2, len(self.puts()[-2:]))
+        self.assertEqual("target", c.objects[c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_a_replica_change_before_the_stop_still_holds(self):
+        def edit():
+            self.c.objects[self.c.dep_path]["spec"]["replicas"] = 3
+            self.status()
+        self.before_review("stop", edit)
+        with self.assertRaisesRegex(Held, "changed after review"):
+            self.c.step()
+        self.assertEqual([], self.puts())
+        self.assertEqual(3, self.c.objects[self.c.dep_path]["spec"]["replicas"])
+
+    def test_a_pod_template_change_racing_the_stop_is_not_retried(self):
+        def edit():
+            self.c.objects[self.c.dep_path]["spec"]["template"]["metadata"] = {"annotations": {"example.com/restart": "1"}}
+            self.status()
+        self.before_request(edit)
+        with self.assertRaisesRegex(Held, "Nothing was retried"):
+            self.c.step()
+        self.assertEqual(1, len(self.puts()))
+        self.assertEqual("refused", self.receipt("stop")["state"])
+        self.assertNotEqual(0, self.c.objects[self.c.dep_path]["spec"]["replicas"])
+
+    def admission_changes(self, purpose, change):
+        original = self.c.admit
+        def admit(name, proposed):
+            if name == purpose:
+                change()
+            return original(name, proposed)
+        self.c.admit = admit
+
+    def test_a_status_update_during_switch_admission_does_not_stop_the_move(self):
+        c = self.c; c.switching()
+        self.admission_changes("switch", lambda: self.status(observedGeneration=2, replicas=0))
+        self.assertEqual("start", c.step()["phase"])
+        self.assertEqual("target", c.objects[c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_an_edit_during_switch_admission_is_not_overwritten(self):
+        # The switch is built from the read before admission; an edit made
+        # while admission ran must hold the move, not be written over.
+        # A spec edit is caught by the review of the Deployment itself; a
+        # finalizer is not part of that review, and a PUT from the older
+        # read would remove it.
+        c = self.c; c.switching(); before = len(self.puts())
+        def edit():
+            c.objects[c.dep_path]["metadata"]["finalizers"] = ["example.com/keep"]
+            self.status()
+        self.admission_changes("switch", edit)
+        with self.assertRaisesRegex(Held, "changed after review"):
+            c.step()
+        self.assertEqual(before, len(self.puts()))
+        self.assertEqual(["example.com/keep"], c.objects[c.dep_path]["metadata"]["finalizers"])
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import time
 import homestead_self_data_copy as COPY
 import homestead_self_data_anchor as A
 from homestead_self_data_fence import require_app_readiness, pin_app_image
-from homestead_storage_journal import Held, Journal, identity, shape
+from homestead_storage_journal import Held, Journal, identity, settled, shape
 
 
 def owner(obj, kind, uid):
@@ -170,10 +170,16 @@ class Coordinator:
             raise Held("Current placement or capacity needs review before the data handoff can continue")
         return self._environment()  # admission may take time; recheck afterwards
 
-    def _update_dep(self, step, dep, proposed):
+    def _update_dep(self, step, dep, proposed, built_from):
+        """PUT proposed, built from the read built_from, pinned to the later read dep.
+
+        The Deployment controller writes its status on its own schedule; only
+        that may differ between built_from, dep and the object the PUT
+        reaches (#826). An edit made while admission ran still holds."""
         proposed = copy.deepcopy(proposed)
         proposed["metadata"].update(identity(dep))
-        self.writer.write(step, "PUT", self.dep_path, proposed, expected={**identity(dep), "shape": shape(dep)})
+        self.writer.write(step, "PUT", self.dep_path, proposed,
+                          expected={**identity(dep), "shape": shape(dep), "settled": settled(built_from)})
 
     def _result(self, message):
         return {"phase": self.anchor.state["phase"], "message": message,
@@ -267,7 +273,7 @@ class Coordinator:
                     from homestead_self_data_preflight import validate_receipt
                     validate_receipt(self.plan.get("copy_preflight"), self._copy_manifest(), now=self.clock())
                 proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = 0
-                self._update_dep("stop", dep, proposed)
+                self._update_dep("stop", dep, proposed, dep)
             self.anchor.advance("quiesce")
             return self._result("Waiting for Homestead and its volume mounts to stop")
         if phase == "quiesce":
@@ -337,10 +343,10 @@ class Coordinator:
                 proposed["spec"]["strategy"] = {"type": "Recreate"}
                 # Place the reviewed restart, not the current zero replicas.
                 starting = copy.deepcopy(proposed); starting["spec"]["replicas"] = self.state["replicas"]
-                dep = self._admission("switch", starting)
+                built_from, dep = dep, self._admission("switch", starting)
                 if not self._quiet(dep):
                     raise Held("A writer returned during cutover admission")
-                self._update_dep("switch", dep, proposed)
+                self._update_dep("switch", dep, proposed, built_from)
             self.anchor.advance("start")
             return self._result("New data volume selected; checking restart placement")
         if phase == "start":
@@ -348,10 +354,10 @@ class Coordinator:
                 if not self._quiet(dep):
                     return self._result("Waiting for volume mounts to be released before starting")
                 proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
-                dep = self._admission("start", proposed)
+                built_from, dep = dep, self._admission("start", proposed)
                 if not self._quiet(dep):
                     raise Held("A writer returned during restart admission")
-                self._update_dep("start", dep, proposed)
+                self._update_dep("start", dep, proposed, built_from)
                 return self._result("Homestead is starting on the new data volume")
             if not self._ready(dep):
                 return self._result("Waiting for every Homestead replica to become ready on the new volume")
@@ -387,9 +393,9 @@ class Coordinator:
         volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v["name"] == self.plan["data_volume"]]
         if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]:
             raise Held("Recovery can start only the unchanged original data mount")
-        dep = self._admission("recover-start", proposed)
+        built_from, dep = dep, self._admission("recover-start", proposed)
         if not self._quiet(dep): raise Held("A writer returned during recovery admission")
-        self._update_dep("recover-start", dep, proposed)
+        self._update_dep("recover-start", dep, proposed, built_from)
         return self._result("Starting Homestead on its original volume; both volumes are retained")
 
     def _ready(self, dep, *, original=False):

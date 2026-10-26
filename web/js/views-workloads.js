@@ -84,7 +84,39 @@ const workloadBlocked = w => {
   return pod ? `Cannot start: ${pod.unplaced}` : "";
 };
 
-function workloadHierarchy(w) {
+/* What tells one pod of an app from another: the part Kubernetes adds after
+   the ReplicaSet hash (#873). A name of 20 characters or fewer, such as most
+   StatefulSet pods', is shown whole; the title and the wide layout carry the full one. */
+function podShortName(name) {
+  const text = String(name || "");
+  const last = text.split("-").pop();
+  return text.length <= 20 || !last || last === text ? text : `…-${last}`;
+}
+/* An image as the path a narrow card may cut and the name that keeps its tag,
+   a digest shortened in the middle (#873). The full reference goes in a title. */
+function imageParts(ref) {
+  const text = String(ref || "").replace(/@sha256:([0-9a-f]{4})[0-9a-f]{4,}([0-9a-f]{3})$/, "@sha256:$1…$2");
+  const at = text.lastIndexOf("/", text.includes("@") ? text.indexOf("@") : text.length);
+  return [text.slice(0, at + 1), text.slice(at + 1)];
+}
+function treeImage(image) {
+  if (!image) return `<div class="dim xs tree-image">Image unavailable</div>`;
+  const [path, name] = imageParts(image);
+  return `<div class="mono dim tree-image" title="${esc(image)}">${path ? `<span class="tree-image-path">${esc(path)}</span>` : ""}<span class="tree-image-name">${esc(name)}</span></div>`;
+}
+/* The pod's name: the part that tells it apart, or, in the wide rows layout,
+   the whole name where the screen has room for it. */
+function treePodName(p, wide) {
+  const short = p.hostname || podShortName(p.name);
+  const title = p.hostname ? `${p.name} (pod hostname ${p.hostname})` : p.name;
+  return wide && short !== p.name
+    ? `<span class="mono dim tree-podname wide" title="${esc(title)}"><span class="tree-podname-short">${esc(short)}</span><span class="tree-podname-full">${esc(p.name)}</span></span>`
+    : `<span class="mono dim tree-podname" title="${esc(title)}">${esc(short)}</span>`;
+}
+
+/* An app's Deployment → pods → containers. Each pod row leads with its host,
+   which is never cut (#873); the pod name and image give way instead. */
+function workloadHierarchy(w, { wide = false } = {}) {
   const pods = w.pods || [];
   const podCount = w.pod_count ?? pods.length;
   const containerCount = w.container_count ?? pods.reduce((n, p) => n + (p.container_count || p.containers?.filter(c => c.kind !== "init").length || 0), 0);
@@ -95,19 +127,18 @@ function workloadHierarchy(w) {
       <span>${podLabel}</span><span class="tree-arrow">→</span><span>${containerLabel}</span>
       <span class="tree-hint">show runtime objects</span></summary>
     <div class="tree-body">${pods.map(p => `<div class="tree-pod">
-      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.hostname || p.name)}</b>
-        ${p.hostname ? `<span class="mono dim tree-resource" title="Kubernetes runtime name">${esc(p.name)}</span>` : ""}
+      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="tree-node">${esc(p.node || "unscheduled")}</b>
         ${UI.chip(p.terminating ? "stopping" : p.ready ? "ready" : p.phase || "pending", p.terminating ? "neutral" : p.ready ? "ok" : p.phase === "Pending" ? "warn" : "bad",
           { tip: p.terminating ? "Told to stop and not gone yet. One that never started is cleared when the container is stopped or started again" : "" })}
-        <span class="dim xs tree-node">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
+        ${p.restarts ? `<span class="dim xs tree-restarts">${p.restarts} restart${p.restarts === 1 ? "" : "s"}</span>` : ""}
+        ${treePodName(p, wide)}</div>
       ${p.pull?.total_bytes ? `<div class="tree-pull">${pullBar(p.pull)}</div>` : ""}
       ${p.unplaced ? `<div class="tree-why unplaced" title="${esc(p.unplaced)}">Cannot be placed: ${esc(p.unplaced)}</div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
-        <b>${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}
+        <b title="${esc(c.name)}">${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}
         ${c.restarts ? UI.chip(`${c.restarts} restart${c.restarts === 1 ? "" : "s"}`, "warn") : ""}
-        <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
-      </div>${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
+      </div>${treeImage(c.image)}${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
         ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
     </div>`).join("") || `<div class="dim xs">No pods exist yet. Kubernetes creates them once the instance count is above zero.</div>`}</div>
   </details>`;
@@ -1007,7 +1038,7 @@ function workloadTableRows(rows) {
           ${gitopsDetail(w)}
           ${startsAfterFact(w)}
         </div>
-        ${workloadHierarchy(w)}
+        ${workloadHierarchy(w, { wide: true })}
         <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>
       </div></td></tr>`;
   }).join("");
@@ -1196,7 +1227,7 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 const BALANCE = {};
 const balanceReset = () => {
   BALANCE.containers = { on: true, exclude: new Set(), plan: null };
-  BALANCE.volumes = { on: true, exclude: new Set(), plan: null };
+  BALANCE.volumes = { on: true, exclude: new Set(), plan: null, follow: true };
 };
 window.balanceHosts = async (start = "containers") => {
   balanceReset();
@@ -1208,7 +1239,8 @@ window.balanceHosts = async (start = "containers") => {
   ], UI.button("Start balancing", "balanceStart()", { kind: "pri", id: "balanceGo", attrs: 'data-need="operator"' })), true);
   if (start !== "containers") UI.selectSection("balance", start);
   balanceReview();
-  await Promise.all([balancePlan("containers"), balancePlan("volumes")]);
+  await balancePlan("containers");
+  await balancePlan("volumes");
 };
 window.containerRebalance = () => balanceHosts("containers");
 window.volumeRebalance = () => balanceHosts("volumes");
@@ -1217,7 +1249,9 @@ async function balancePlan(kind) {
   const b = BALANCE[kind], pane = $(kind === "containers" ? "#balContainers" : "#balVolumes");
   if (!pane) return;
   const path = kind === "containers" ? "/api/workloads/rebalance/plan" : "/api/longhorn/rebalance/plan";
-  try { b.plan = await api(`${path}?${new URLSearchParams({ exclude: [...b.exclude].join(",") })}`); }
+  // Volume copies follow the containers moved, so each reads locally on its new host.
+  const follow = kind === "volumes" && b.follow ? balanceMoves("containers").map(m => `${m.id}:${m.to}`).join(",") : "";
+  try { b.plan = await api(`${path}?${new URLSearchParams({ exclude: [...b.exclude].join(","), ...(follow ? { follow } : {}) })}`); }
   catch (e) { b.plan = null; pane.innerHTML = UI.callout("bad", "Could not work out a plan", esc(e.message)); balanceReview(); return; }
   if (!$(kind === "containers" ? "#balContainers" : "#balVolumes")) return;
   pane.innerHTML = kind === "containers" ? balanceContainersHtml(b) : balanceVolumesHtml(b);
@@ -1242,7 +1276,7 @@ function balanceContainersHtml(b) {
   const rows = (plan.apps || []).map((id, i) => {
     const m = moves.find(x => x.id === id), off = b.exclude.has(id);
     return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">stays where it is</span>'
-      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}</span>`];
+      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}${m.note ? ` · ${esc(m.note)}` : ""}</span>`];
   });
   return [
     balanceSwitch("containers", b, "Balance containers"),
@@ -1270,12 +1304,15 @@ function balanceVolumesHtml(b) {
   const rows = (plan.apps || []).map((app, i) => {
     const mine = moves.filter(m => m.app === app), off = b.exclude.has(app);
     return [balanceTick("volumes", app, i, off), off ? '<span class="ui-help">left where they are</span>'
-      : mine.map(m => `<div><span class="mono">${esc(m.claim)}</span> <span class="sub">${esc(gb(m.size_gb))} · ${esc(m.from)} → ${esc(m.to)}</span></div>`).join("")];
+      : mine.map(m => `<div><span class="mono">${esc(m.claim)}</span> <span class="sub">${esc(gb(m.size_gb))} · ${esc(m.from)} → ${esc(m.to)}${m.follows ? " · follows its container there" : ""}</span></div>`).join("")];
   });
   return [
     balanceSwitch("volumes", b, "Balance volume copies"),
+    b.on && balanceMoves("containers").length ? `<label class="switch balance-switch"><input type="checkbox" id="balFollow" ${b.follow ? "checked" : ""}
+      onchange="balanceFollow(this.checked)"> Move a copy of each moved container's volumes to its new host</label>
+      <p class="ui-help">So it reads its data locally there. Off, its volumes stay where they are and it reads them over the network.</p>` : "",
     UI.lead(!b.on ? "Volume copies are left where they are."
-      : moves.length ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts. Nothing restarts: each copy is built on its new host before the old one is removed.`
+      : moves.length ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts${moves.some(m => m.follows) ? ", and so each container moved has a copy of its volumes on its new host" : ""}. Nothing restarts: each copy is built on its new host before the old one is removed.`
       : (plan.closed || []).length ? `Nothing can move now: ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies - cordoned, not Ready, or with scheduling off in Longhorn.`
       : "The hosts are as even as moving copies can make them."),
     UI.section("Hosts", hosts),
@@ -1304,16 +1341,21 @@ function balanceReview() {
   const go = $("#balanceGo");
   if (go) go.disabled = pending || !(containers.length || volumes.length);
 }
+// The volume plan follows the container moves: worked out again when they change.
+const balanceReplanVolumes = () => { BALANCE.volumes.plan = null; balanceReview(); return balancePlan("volumes"); };
+window.balanceFollow = on => { BALANCE.volumes.follow = on; balanceReplanVolumes(); };
 window.balanceToggle = (kind, on) => {
   BALANCE[kind].on = on;
   const pane = $(kind === "containers" ? "#balContainers" : "#balVolumes");
   if (pane && BALANCE[kind].plan) pane.innerHTML = kind === "containers" ? balanceContainersHtml(BALANCE[kind]) : balanceVolumesHtml(BALANCE[kind]);
   balanceReview();
+  if (kind === "containers") balanceReplanVolumes();
 };
-window.balanceItem = (kind, id, on) => {
+window.balanceItem = async (kind, id, on) => {
   on ? BALANCE[kind].exclude.delete(id) : BALANCE[kind].exclude.add(id);
   BALANCE[kind].plan = null; balanceReview();
-  balancePlan(kind);
+  await balancePlan(kind);
+  if (kind === "containers") balanceReplanVolumes();
 };
 window.balanceStart = async () => {
   const containers = balanceMoves("containers"), volumes = balanceMoves("volumes");
@@ -1339,7 +1381,7 @@ window.balanceStart = async () => {
   } catch (e) {
     toast((started.length ? `Started ${started.join(" and ")}, but ` : "") + e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Start balancing"; }
-    if (e.body?.plan) { balancePlan("containers"); balancePlan("volumes"); }
+    if (e.body?.plan) { balancePlan("containers").then(() => balancePlan("volumes")); }
   } finally { window.refreshOperations?.(true); }
 };
 

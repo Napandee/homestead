@@ -273,6 +273,8 @@ def restart_proposals(item, writer, *, remaining=False):
         if not entry:
             raise JOURNAL.Held("A restart has no verified stop receipt")
         obj = copy.deepcopy(writer.observe(entry))
+        # What the restart is built from, but for its status (#826).
+        settled = JOURNAL.settled(obj)
         kind = consumer["kind"]
         if kind in ("Deployment", "StatefulSet"):
             obj["spec"]["replicas"] = consumer["replicas"]
@@ -283,7 +285,7 @@ def restart_proposals(item, writer, *, remaining=False):
         obj["metadata"].get("annotations", {}).pop("homestead.io/storage-copy-job", None)
         obj.pop("status", None)
         obj["metadata"].pop("managedFields", None)
-        out.append({"kind": kind, "path": path, "object": obj})
+        out.append({"kind": kind, "path": path, "object": obj, "settled": settled})
     return out
 
 
@@ -407,7 +409,10 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         raise JOURNAL.Held("A pod is using cutover data; workloads remain held for inspection")
     def patch(step, obj, body):
         path = f"/api/v1/persistentvolumes/{obj['metadata']['name']}"
-        writer.write(step, "PATCH", path, body, expected=JOURNAL.identity(obj), ctype="application/merge-patch+json")
+        # pv-controller writes the volume's status while claims bind and
+        # release; settled lets that pass, and nothing else (#826).
+        writer.write(step, "PATCH", path, body, expected={**JOURNAL.identity(obj), "settled": JOURNAL.settled(obj)},
+                     ctype="application/merge-patch+json")
     if not _receipt(item, "retain-original"):
         patch("retain-original", old, {"spec": {"persistentVolumeReclaimPolicy": "Retain"}})
         return "running", 77, "Original volume protected with Retain"
@@ -546,14 +551,17 @@ def restart_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
             raise JOURNAL.Held("Remaining workloads need a fresh placement review; already restarted workloads were not rolled back")
         bound_destination(item, writer)
         fresh = restart_proposals(item, writer, remaining=True)
-        if JOURNAL.digest(proposals) != JOURNAL.digest(fresh):
+        # Admission may take a while, and the workload's controller writes its
+        # status meanwhile (#826): compare everything else, version aside.
+        reviewed = lambda found: [(p["kind"], p["path"], p["settled"], JOURNAL.settled(p["object"])) for p in found]
+        if reviewed(proposals) != reviewed(fresh):
             raise JOURNAL.Held("Workload configuration changed during restart admission")
         for pod in pods(item):
             if pod.get("status", {}).get("phase") not in RC.FINISHED and not _started_owner(pod, item):
                 raise JOURNAL.Held("An unreviewed pod appeared during restart admission")
         selected = fresh[0]
         saved = writer.write("restart:" + selected["path"], "PUT", selected["path"], selected["object"],
-                             expected=JOURNAL.identity(selected["object"]))
+                             expected={**JOURNAL.identity(selected["object"]), "settled": selected["settled"]})
         consumer = next(c for c in ref["consumers"] if _path(ref["namespace"], c["kind"], c["name"]) == selected["path"])
         _restored(consumer, saved)
         return "running", 93, "One workload restored on the copied volume; checking the rest before their next writes"
