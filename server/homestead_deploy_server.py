@@ -184,9 +184,10 @@ def deploy_capacity_plan(config, existing=None):
                                threshold, planned_claims=claims)
     # The host chosen in Deploy is a preference (#844): say so when it can't take the app.
     host = cfg.get("node")
-    if host and not any(row.get("name") == host and row.get("eligible") for row in plan.get("candidates") or []):
+    # With no copies to start, nothing is placed, so there is nothing to warn of.
+    if host and plan.get("additional") and not any(row.get("name") == host and row.get("eligible") for row in plan.get("candidates") or []):
         plan["warnings"] = [*plan.get("warnings", []), f"the chosen host {host} cannot take this app now, so it starts on another host"]
-        plan["requires_confirmation"] = bool(plan.get("additional"))
+        plan["requires_confirmation"] = True
     return plan
 
 

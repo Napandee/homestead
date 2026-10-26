@@ -62,6 +62,7 @@ class DeployPlacementTests(unittest.TestCase):
         self.assertEqual("move", server.FAILOVER.mode_of(spec))
         empty = self.build(self.cfg(placement={"spread": "", "with": [], "apart": []}, node="", failover=""))
         self.assertEqual(self.placed(dep), self.placed(empty))
+        self.assertEqual(dep, empty, "the whole manifest, pod annotations included")
         self.assertEqual([], self.read)
 
     def test_a_deployed_apps_placement_is_exactly_what_edit_writes(self):
@@ -145,6 +146,17 @@ class DeployPlacementReviewTests(unittest.TestCase):
 
     def test_a_chosen_host_that_can_take_it_says_nothing(self):
         plan = self.plan({"node": "node-1"}, eligible=True)
+        self.assertEqual([], plan["warnings"])
+        self.assertFalse(plan["requires_confirmation"])
+
+    def test_no_copies_to_start_says_nothing_of_the_host(self):
+        with mock.patch.object(server.DEPLOY_ROUTES.PLACE, "manifest_plan", return_value={
+                "additional": 0, "warnings": [], "requires_confirmation": False, "blocked": False,
+                "candidates": [{"name": "node-1", "eligible": False}]}), \
+                mock.patch.object(server.HW, "features", return_value=[]), \
+                mock.patch.object(server.DEPLOY_ROUTES, "get_app_settings", return_value={"thresholds": {"memory": {"critical": 90}}}):
+            plan = server.DEPLOY_ROUTES.deploy_capacity_plan({"name": "app", "image": "app:1", "namespace": "lab", "ports": [],
+                                                              "volumes": [], "hardware": [], "replicas": 0, "node": "node-1"})
         self.assertEqual([], plan["warnings"])
         self.assertFalse(plan["requires_confirmation"])
 

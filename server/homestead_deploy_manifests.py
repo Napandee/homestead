@@ -296,7 +296,8 @@ def build_deployment(cfg):
     if tier:
         LC._apply_priority(dep["spec"]["template"]["spec"], tier)
     # Its hosts, spread and neighbours, written as Edit writes them (#844).
-    WORKLOAD_EDIT.apply_placement(dep, cfg)
+    # Only what was chosen: an empty host would still stamp the pods as moved.
+    WORKLOAD_EDIT.apply_placement(dep, {key: cfg[key] for key in ("placement", "node") if cfg.get(key)})
     return dep, service
 
 
