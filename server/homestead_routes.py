@@ -185,6 +185,10 @@ MODULES = (
     "homestead_workloads",
 )
 ROLES = ("viewer", "operator", "admin")
+# The methods server.py's handler H answers, each with its own do_GET, do_POST,
+# do_DELETE: a route declared with any other would get http.server's 501, so
+# table() refuses it. tests/test_module_routes.py keeps the two in step.
+METHODS = ("GET", "POST", "DELETE")
 
 # addr: the address the request came from, as server.py sees it; conn: the
 # Connection it came on, or None when a route is called in-process.
@@ -425,7 +429,8 @@ def page(key, fn, seconds=PAGE_SECONDS):
 
 def table():
     """Every declared route, by (method, path). Read once; a module that
-    declares a route twice, or one another module declares, is refused."""
+    declares a route twice, or one another module declares, or one with a
+    method H does not answer (METHODS), is refused."""
     if _table:
         return _table
     found = {}
@@ -433,6 +438,8 @@ def table():
         module = importlib.import_module(name)
         for (method, path), (role, handler) in getattr(module, "ROUTES", {}).items():
             key = (method.upper(), path)
+            if key[0] not in METHODS:
+                raise ValueError(f"{method} {path} in {name}: server.py answers only {', '.join(METHODS)}")
             if key in found:
                 raise ValueError(f"{method} {path} is declared by {found[key].module} and {name}")
             if role not in ROLES:

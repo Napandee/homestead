@@ -152,13 +152,16 @@ engine checks the viewport bounds. Emulation does not replace an iPhone test.
 ## Generated files
 
 Some files are produced by scripts; edit the source and re-run the script.
-Tests fail when the two disagree.
+Where a test is named, it fails when the two disagree. Nothing checks the
+icons: re-run their script and commit the PNGs with any change to it.
 
-| Generated | From | Run |
-|---|---|---|
-| `deploy/nodeprobe.yaml` | `server/homestead_probe.py`, `server/probe/` | `python scripts/render_nodeprobe.py` |
-| `deploy/rbac.yaml` | the RBAC objects in `deploy/deploy.yaml` | `python scripts/render_rbac.py` |
-| `web/icons/*.png` | the mark's geometry in the script | `python scripts/render_icons.py` |
+| Generated | From | Run | Test |
+|---|---|---|---|
+| `deploy/nodeprobe.yaml` | `server/homestead_probe.py`, `server/probe/` | `python scripts/render_nodeprobe.py` | `tests/test_node_probe_upgrade.py` |
+| `deploy/rbac.yaml` | the RBAC objects in `deploy/deploy.yaml` | `python scripts/render_rbac.py` | `tests/test_self.py` |
+| `charts/homestead/` | `deploy/deploy.yaml`, and the probe as for `deploy/nodeprobe.yaml` | `python scripts/render_chart.py` | `tests/test_chart.py` |
+| `docs/api/openapi.json` | the endpoints in `server/homestead_api_v1.py`, the scopes in `server/homestead_api_keys.py` | `python scripts/build_api_docs.py` | `tests/test_api_v1.py` |
+| `web/icons/*.png` | the mark's geometry in the script | `python scripts/render_icons.py` | none |
 
 ## Style
 

@@ -42,6 +42,10 @@ def _last_known(ns, name, container):
         return {}
     kept = {k: image[k] for k in ("current_digest", "remote_digest", "candidate", "candidate_tag", "available") if k in image}
     return dict(kept, stale=True) if kept else {}
+def _names_tag(ref):
+    """Whether a reference names a tag (postgres:16-alpine@sha256:...), not
+    only a digest (postgres@sha256:...): parse_image reads none as latest."""
+    return ":" in ref.split("@", 1)[0].rsplit("/", 1)[-1]
 def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     tracked = U._annotation_json(dep, U.TRACKED)
@@ -91,6 +95,12 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                     candidate_tag = None
             if candidate_tag:
                 candidate = parsed["base"] + ":" + candidate_tag
+            elif not own and parsed["digest"] and _names_tag(source) and not semver(parsed["tag"]):
+                # Pinned as tag@digest to a tag that is not a release
+                # (postgres:16-alpine@sha256:...): follow the tag, as an
+                # unpinned one is followed. Asking about the pin itself only
+                # ever answers with the pin, so a rebuild went unseen (#874).
+                candidate = source.split("@", 1)[0]
             else:
                 candidate = source
             manifest = U.manifest_info(candidate, auths, force)
@@ -112,8 +122,8 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                 # Stopped, and never seen running here: nothing to compare the
                 # registry with. It is not "current" - it is unchecked.
                 item["unchecked"] = True
-            elif not own and not semver(parsed["tag"]) and parsed["digest"]:
-                # Pinned to a digest with no release recorded to follow. Saying
+            elif not own and parsed["digest"] and not _names_tag(source):
+                # Pinned to a digest with no tag recorded to follow. Saying
                 # nothing here reads as "up to date", which is not what it means.
                 item["error"] = ("no release tag recorded for this image, so newer "
                                  "versions cannot be found — redeploy it from a tag")
