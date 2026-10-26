@@ -23,6 +23,7 @@ import homestead_privileges as PRIV
 import homestead_updates as UPDATES
 import homestead_uptime as UPTIME
 import homestead_volowner as VOLOWNER
+import homestead_workload_edit as WORKLOAD_EDIT
 
 
 def analyze_deploy_intent(cfg):
@@ -240,8 +241,6 @@ def _build_single_deployment(cfg):
     if cfg.get("network_mode") == "host":
         podspec["hostNetwork"] = True
         podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
-    if cfg.get("node"):
-        podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
     FAILOVER.apply(podspec, cfg.get("failover") or "move")
     lan_address = cfg.get("lan") if cfg.get("network_mode") == "lan" else None
     # How it is monitored, if not automatically: an annotation, read by homestead_uptime.
@@ -296,6 +295,8 @@ def build_deployment(cfg):
     dep, service = _build_deployment_with_extras(cfg)
     if tier:
         LC._apply_priority(dep["spec"]["template"]["spec"], tier)
+    # Its hosts, spread and neighbours, written as Edit writes them (#844).
+    WORKLOAD_EDIT.apply_placement(dep, cfg)
     return dep, service
 
 
@@ -481,6 +482,8 @@ def build_sidecar_deployment(cfg, current):
     service_cfg["hardware"] = []
     service_cfg["gpu"] = False
     service_cfg.pop("priority", None)   # a joined app keeps the tier it has
+    for key in ("placement", "node"):   # and the placement it has (#844)
+        service_cfg.pop(key, None)
     _, service = build_deployment(service_cfg)
     if service:
         service["spec"]["selector"] = selector
