@@ -81,7 +81,8 @@ class FluxStatus(unittest.TestCase):
         self.assertEqual({"kind": "Kustomization", "namespace": "flux-system", "name": "apps", "ready": True,
                           "suspended": False, "revision": "main@246b3c6", "tried": "2026-10-22T09:06:31Z",
                           "since": "2026-10-22T08:56:31Z", "interval": "10m",
-                          "message": f"Applied revision: main@sha1:{SHA}", "id": "Kustomization flux-system/apps"}, row)
+                          "message": f"Applied revision: main@sha1:{SHA}", "id": "Kustomization flux-system/apps",
+                          "requested": "", "handled": ""}, row)
 
     def test_a_helmrelease_gives_its_chart_and_version(self):
         row = self.rows()["HelmRelease dev/runner"]
