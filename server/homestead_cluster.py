@@ -271,6 +271,16 @@ def inventory():
                         csrs, harvester, unavailable=unavailable)
 
 
+def _short_of_hosts(volume, nodes):
+    """A degraded volume on a one-host cluster that asks for more copies than
+    Longhorn can place there (#841): Scheduled False for
+    ReplicaSchedulingFailure, and no copy being rebuilt. Its warning says so,
+    and points to the offer to match copies to hosts."""
+    return (len(nodes) == 1 and int(volume.get("replicas") or 0) > 1 and not volume.get("rebuild")
+            and any(c.get("type") == "Scheduled" and c.get("reason") == "ReplicaSchedulingFailure"
+                    for c in volume.get("conditions") or []))
+
+
 def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None):
     """Separate real availability faults from normal workload transitions."""
     issues, activities = list(protection or []), []
@@ -291,6 +301,12 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
         if robustness == "faulted":
             issues.append({"severity": "critical", "kind": "Volume", "name": label,
                            "reason": "Longhorn reports the volume faulted"})
+        elif robustness == "degraded" and _short_of_hosts(volume, nodes):
+            copies = int(volume.get("replicas") or 0)
+            issues.append({"severity": "degraded", "kind": "Volume", "name": label, "one_host": True,
+                           "reason": f"This cluster has one host, so Longhorn keeps 1 of the {copies} copies this "
+                                     "volume asks for. An admin can match its copies to hosts: Cluster Health, "
+                                     "Match copies to hosts"})
         elif robustness == "degraded":
             issues.append({"severity": "degraded", "kind": "Volume", "name": label,
                            "reason": "Longhorn is rebuilding or missing a replica"})

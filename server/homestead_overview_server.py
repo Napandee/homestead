@@ -706,6 +706,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "workload_pods": len(usrp),
         "system_pods": len(sysp),
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
+        "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
         "cpu_used": round(tuse, 2), "cpu_cap": tcap,
