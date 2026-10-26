@@ -33,6 +33,9 @@ const PAGES = [
   ["containers-rows", "workloads", "setViewLayout('containers','renderWorkloads','rows')"],
   ["containers-cards", "workloads", "setViewLayout('containers','renderWorkloads','cards')"],
   ["containers-inline", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.collection-disclosure')?.click()"],
+  // Every card's pod list open (#873): an app with a pod on each host.
+  ["containers-card-pods", "workloads", "setViewLayout('containers','renderWorkloads','cards');document.querySelectorAll('.wcard .workloadtree').forEach((d) => { d.open = true; })"],
+  ["containers-inline-pods", "workloads", "setViewLayout('containers','renderWorkloads','rows');document.querySelector('.wl-row[data-row-key*=\"edge-tunnel\"] .collection-disclosure')?.click();document.querySelectorAll('.wl-detail-row:not([hidden]) .workloadtree').forEach((d) => { d.open = true; })"],
   // Every linked cluster at once.
   ["containers-all", "workloads", "localStorage.setItem('homestead.fleet.mode','all');viewWorkloads()"],
   ["vms-all", "vms", "localStorage.setItem('homestead.fleet.mode','all');viewVMs()"],
@@ -148,7 +151,14 @@ async function audit([label, width, height, mobile], items) {
           && ![...(e.labels || [])].some((l) => l.textContent.trim())
           && !(e.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => document.getElementById(id)?.textContent.trim()))
           .map((e) => e.id ? `#${e.id}` : `${e.tagName.toLowerCase()}${e.name ? `[name=${e.name}]` : ""}.${[...e.classList].slice(0, 2).join(".")}`);
+        // Where each pod runs, and an image's name and tag, are never cut (#873).
+        const cut = (e) => e.scrollWidth > e.clientWidth + 1 || e.getBoundingClientRect().right > e.parentElement.getBoundingClientRect().right + 1;
+        const hostEls = [...root.querySelectorAll(".tree-pod-head .tree-node")].filter((e) => e.checkVisibility());
+        const clipped = [...hostEls, ...[...root.querySelectorAll(".tree-image-name")].filter((e) => e.checkVisibility())]
+          .filter(cut).map((e) => `${e.className} "${e.textContent.trim().slice(0, 40)}"`);
         return {
+          hosts: new Set(hostEls.map((e) => e.textContent.trim())).size,
+          clipped: [...new Set(clipped)].slice(0, 6),
           unnamed: [...new Set(unnamed)].slice(0, 8),
           title: document.querySelector("#views .phead h1, #views .phead h2, #views .phead")?.textContent.trim().split("\n")[0].slice(0, 40),
           height: document.documentElement.scrollHeight,
@@ -166,6 +176,8 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.overflow.length) failures.push(`${name} (${label}): runs off the screen: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
       if (metrics.squeezed.length) failures.push(`${name} (${label}): text squeezed into a narrow column: ${metrics.squeezed.join(", ")}`);
+      if (metrics.clipped.length) failures.push(`${name} (${label}): a pod's host or an image's tag is cut: ${metrics.clipped.join(", ")}`);
+      if (name.endsWith("-pods") && metrics.hosts < 3) failures.push(`${name} (${label}): no open pod list with pods on three hosts (${metrics.hosts})`);
       if (metrics.unnamed.length) failures.push(`${name} (${label}): fields with no name: ${metrics.unnamed.join(", ")}`);
     } catch (error) {
       failures.push(`${name} (${label}): could not open: ${error.message.split("\n")[0]}${errors.length ? ` - error: ${errors.at(-1)}` : ""}`);

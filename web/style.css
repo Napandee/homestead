@@ -359,11 +359,20 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 /* The pod tree's state chips are compact (#543: the older .pill rule, ported). */
 .tree-pod-head .ui-chip,.tree-container .ui-chip{padding:0 7px;font-size:10px}
 .tree-containers{margin:7px 0 0 15px;padding-left:12px;border-left:1px solid var(--line)}
-.tree-pod-head>b.mono{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tree-pod-head .tree-node{flex:0 1 auto;min-width:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Where a pod runs is never cut (#873): the host leads the row at its full
+   width, and the pod's name, pushed to the end, gives way instead. */
+.tree-pod-head .tree-node{flex:0 0 auto;font-weight:700;white-space:nowrap}
+.tree-pod-head .tree-restarts{flex:0 0 auto;white-space:nowrap}
+.tree-pod-head .tree-podname{flex:1 1 7ch;min-width:0;text-align:right;font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-podname-full{display:none}
+@media(min-width:721px){.tree-podname.wide .tree-podname-short{display:none}.tree-podname.wide .tree-podname-full{display:inline}}
 .tree-pod-head .ui-chip,.tree-container .ui-chip{flex:0 0 auto}
-.tree-container>b{flex:0 1 auto;max-width:50%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tree-container .tree-image{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-container>b{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The image on a line of its own under the container row: its path is
+   cut first, and the name and tag wrap rather than be cut (#873). */
+.tree-image{display:flex;min-width:0;margin:0 0 3px;font-size:10.5px;align-items:baseline}
+.tree-image-path{flex:0 1 auto;min-width:2ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-image-name{flex:0 0 auto;max-width:calc(100% - 2ch);overflow-wrap:anywhere}
 .tree-why{margin:0 0 4px 70px;font-size:10.5px;line-height:1.35;color:var(--med);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .tree-pull{margin:4px 0 2px}
 /* A node card: thirty days of uptime under the head, then its meters two
@@ -412,9 +421,8 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .nodeterm .xterm{height:100%}
 .vmstore-distro td{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);background:var(--surf2);padding-top:6px;padding-bottom:6px}
 .pullbar{display:grid;gap:3px;margin:6px 0 2px}.pullbar .meter{height:5px}
-.tree-container{padding:3px 0}.tree-branch{font-size:10px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 58px}.tree-branch.init{color:var(--vio)}
-.tree-image{margin-left:auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:720px){.tree-hint,.tree-image{display:none}.tree-pod-head{flex-wrap:wrap}.tree-container{flex-wrap:wrap}}
+.tree-container{padding:3px 0}.tree-branch{font-size:10px;letter-spacing:.06em;text-transform:uppercase;flex:0 0 auto;min-width:58px;white-space:nowrap}.tree-branch.init{color:var(--vio)}
+@media(max-width:720px){.tree-hint{display:none}.tree-pod-head{flex-wrap:wrap}.tree-container{flex-wrap:wrap}}
 .consolebar{display:grid;grid-template-columns:1.4fr 1fr .8fr auto;gap:10px;align-items:end}.consolebar .f{margin:0}
 .console-security{margin:12px 0 8px;padding:8px 10px;border-radius:9px;background:rgba(74,158,255,.08);border:1px solid rgba(74,158,255,.2);color:var(--mut);font-size:11px}
 .consolestate{padding:6px 9px;border-radius:8px 8px 0 0;background:#18191d;color:var(--ok);font:600 10.5px/1.2 "JetBrains Mono",monospace;border:1px solid #292b31;border-bottom:0}

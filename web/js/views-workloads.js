@@ -84,7 +84,38 @@ const workloadBlocked = w => {
   return pod ? `Cannot start: ${pod.unplaced}` : "";
 };
 
-function workloadHierarchy(w) {
+/* What tells one pod of an app from another: the part Kubernetes adds after
+   the ReplicaSet hash (#873). A short name, such as a StatefulSet's, is shown whole. */
+function podShortName(name) {
+  const text = String(name || "");
+  const last = text.split("-").pop();
+  return text.length <= 20 || !last || last === text ? text : `…-${last}`;
+}
+/* An image as the path a narrow card may cut and the name that keeps its tag,
+   a digest shortened in the middle (#873). The full reference goes in a title. */
+function imageParts(ref) {
+  const text = String(ref || "").replace(/@sha256:([0-9a-f]{4})[0-9a-f]{4,}([0-9a-f]{3})$/, "@sha256:$1…$2");
+  const at = text.lastIndexOf("/", text.includes("@") ? text.indexOf("@") : text.length);
+  return [text.slice(0, at + 1), text.slice(at + 1)];
+}
+function treeImage(image) {
+  if (!image) return `<div class="dim xs tree-image">Image unavailable</div>`;
+  const [path, name] = imageParts(image);
+  return `<div class="mono dim tree-image" title="${esc(image)}"><span class="tree-image-path">${esc(path)}</span><span class="tree-image-name">${esc(name)}</span></div>`;
+}
+/* The pod's name: the part that tells it apart, or, in the wide rows layout,
+   the whole name where the screen has room for it. */
+function treePodName(p, wide) {
+  const short = p.hostname || podShortName(p.name);
+  const title = p.hostname ? `${p.name} (pod hostname ${p.hostname})` : p.name;
+  return wide && short !== p.name
+    ? `<span class="mono dim tree-podname wide" title="${esc(title)}"><span class="tree-podname-short">${esc(short)}</span><span class="tree-podname-full">${esc(p.name)}</span></span>`
+    : `<span class="mono dim tree-podname" title="${esc(title)}">${esc(short)}</span>`;
+}
+
+/* An app's Deployment → pods → containers. Each pod row leads with its host,
+   which is never cut (#873); the pod name and image give way instead. */
+function workloadHierarchy(w, { wide = false } = {}) {
   const pods = w.pods || [];
   const podCount = w.pod_count ?? pods.length;
   const containerCount = w.container_count ?? pods.reduce((n, p) => n + (p.container_count || p.containers?.filter(c => c.kind !== "init").length || 0), 0);
@@ -95,19 +126,18 @@ function workloadHierarchy(w) {
       <span>${podLabel}</span><span class="tree-arrow">→</span><span>${containerLabel}</span>
       <span class="tree-hint">show runtime objects</span></summary>
     <div class="tree-body">${pods.map(p => `<div class="tree-pod">
-      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="mono">${esc(p.hostname || p.name)}</b>
-        ${p.hostname ? `<span class="mono dim tree-resource" title="Kubernetes runtime name">${esc(p.name)}</span>` : ""}
+      <div class="tree-pod-head"><span class="tree-branch">Pod</span><b class="tree-node">${esc(p.node || "unscheduled")}</b>
         ${UI.chip(p.terminating ? "stopping" : p.ready ? "ready" : p.phase || "pending", p.terminating ? "neutral" : p.ready ? "ok" : p.phase === "Pending" ? "warn" : "bad",
           { tip: p.terminating ? "Told to stop and not gone yet. One that never started is cleared when the container is stopped or started again" : "" })}
-        <span class="dim xs tree-node">${esc(p.node || "unscheduled")}${p.restarts ? ` · ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}</span></div>
+        ${p.restarts ? `<span class="dim xs tree-restarts">${p.restarts} restart${p.restarts === 1 ? "" : "s"}</span>` : ""}
+        ${treePodName(p, wide)}</div>
       ${p.pull?.total_bytes ? `<div class="tree-pull">${pullBar(p.pull)}</div>` : ""}
       ${p.unplaced ? `<div class="tree-why unplaced" title="${esc(p.unplaced)}">Cannot be placed: ${esc(p.unplaced)}</div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
-        <b>${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}
+        <b title="${esc(c.name)}">${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}
         ${c.restarts ? UI.chip(`${c.restarts} restart${c.restarts === 1 ? "" : "s"}`, "warn") : ""}
-        <span class="mono dim tree-image">${esc(c.image || "image unavailable")}</span>
-      </div>${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
+      </div>${treeImage(c.image)}${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
         ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
     </div>`).join("") || `<div class="dim xs">No pods exist yet. Kubernetes creates them once the instance count is above zero.</div>`}</div>
   </details>`;
@@ -1005,7 +1035,7 @@ function workloadTableRows(rows) {
           ${gitopsDetail(w)}
           ${startsAfterFact(w)}
         </div>
-        ${workloadHierarchy(w)}
+        ${workloadHierarchy(w, { wide: true })}
         <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>
       </div></td></tr>`;
   }).join("");
