@@ -689,7 +689,8 @@ def _summary(ref):
     order = {"failed": 0, "not reached": 1, "skipped": 2, "moved": 3}
     words = {"moved": "Moved {id} to {to}", "skipped": "Skipped {id}: {detail}", "failed": "{id} failed: {detail}",
              "not reached": "{id} not reached"}
-    named = [words[r["result"]].format(**r) for r in sorted(results, key=lambda r: order[r["result"]])]
+    named = [words[r["result"]].format(**r) + (f" ({r['detail']})" if r["result"] == "moved" and r.get("detail") else "")
+             for r in sorted(results, key=lambda r: order[r["result"]])]
     return "; ".join(named[:6]) + (f"; and {len(named) - 6} more" if len(named) > 6 else "")
 
 
@@ -732,6 +733,19 @@ def _running_on(ns, name, keep=None):
     hosts = {(p.get("spec") or {}).get("nodeName") for p in _items(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}")
              if (p.get("status") or {}).get("phase") == "Running" and not (p.get("metadata") or {}).get("deletionTimestamp")}
     return settled, hosts
+
+
+def _pull_first(dep, node):
+    """Start pulling the app's images the host lacks; ([pulls], [images]).
+    A pull that cannot start is not a reason to stop: it moves at once, as
+    it always did."""
+    import homestead_host_move as HOST_MOVE
+    import homestead_image_cache as IMAGES
+    try:
+        need = HOST_MOVE.missing(dep, node) if dep else []
+        return [IMAGES.prepull(image, [node])["daemonset"] for image in need], need
+    except Exception:
+        return [], []
 
 
 def status(item):
@@ -780,6 +794,14 @@ def status(item):
                                                   if (b.get("metadata") or {}).get("namespace") == move["ns"]])
         if budget:
             return skip(budget)
+        # Its image onto the new host first: a host already holding it
+        # scores for that, and can outweigh the preferred placement (#880).
+        if ref.get("pulled") != i:
+            pulls, need = _pull_first(dep, move["to"])
+            ref["pulled"] = i
+            if pulls:
+                ref.update(stage="pulling", pulls=pulls, since=now)
+                return "running", progress, f"Pulling {', '.join(need)} onto {move['to']} first, so {move['id']} lands there"
         # The job runs with no request behind it: asked again for whoever
         # started it, since the app may have changed since the review, and
         # the move written as them, so the fence on Kubernetes writes checks
@@ -801,16 +823,32 @@ def status(item):
             return "running", progress, (f"{i + 1} of {len(moves)}: " + (f"moved {', '.join(moved)}; " if moved else "")
                                          + f"moving {move['id']} to {move['to']}")
         return "running", progress, f"Moving {move['id']} to {move['to']} ({i + 1} of {len(moves)}); it restarts there"
+    if stage == "pulling":
+        import homestead_host_move as HOST_MOVE
+        pulls = ref.get("pulls") or []
+        if not HOST_MOVE._pulled(pulls) and now - ref.get("since", now) < HOST_MOVE.PULL_WAIT:
+            return "running", progress, f"Pulling {move['id']}'s image onto {move['to']} first, so it lands there"
+        HOST_MOVE._clear(pulls)
+        ref.pop("pulls", None)
+        # The checks again, then the move: the pull took a while.
+        ref["stage"] = "move"
+        return "running", progress, f"Image on {move['to']}; moving {move['id']}"
     if stage == "starting":
         settled, hosts = _running_on(move["ns"], move["name"])
         if settled and hosts and move["from"] not in hosts:
-            _note(ref, move, "moved")
+            # Where it landed, when not where it was sent.
+            _note(ref, move, "moved", "" if move["to"] in hosts else f"it landed on {', '.join(sorted(hosts))}, not {move['to']}")
             ref.update(index=i + 1, stage="move", moved=done + 1)
             return "running", int(100 * (i + 1) / len(moves)), f"{move['id']} runs on {', '.join(sorted(hosts))}"
         if now - ref.get("started", now) > 600:
             # Stop rather than restart more: one that did not come up is looked at first.
             if ref.get("stop_on_failure"):
                 return _halt(ref, i, move, f"did not start on {move['to']} within 10 minutes")
+            if settled and hosts == {move["from"]}:
+                where = f"{move['id']} restarted on {move['from']}, not {move['to']}"
+                if ref.get("stop_on_failure"):
+                    return _halt(ref, i, move, where.split(" ", 1)[1])
+                return "failed", progress, f"{where}; the rest were not moved. Moved {done} before it"
             return "failed", progress, (f"{move['id']} did not start on {move['to']} within 10 minutes; the rest were not moved. "
                                         f"Moved {done} before it. Check its events in Containers")
         return "running", progress, f"Waiting for {move['id']} to start on {move['to']} ({i + 1} of {len(moves)})"
