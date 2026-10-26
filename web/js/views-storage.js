@@ -1603,10 +1603,11 @@ function auditRowHtml(x) {
   const [word, tone] = AUDIT_RESULTS[x.result] || [x.result || "—", "neutral"];
   const log = x.source === "agents" ? "Agent log" : "Change log";
   const how = x.source === "agents" ? [x.key, x.via && x.via.toUpperCase()].filter(Boolean).join(" · ") : x.via && `via ${x.via}`;
-  const detail = [x.target, x.detail].filter(Boolean).join(" · ");
+  // One run of text with its separators: a phone's compact row lays the cell out inline.
+  const detail = [x.target, x.detail, x.addr].filter(Boolean).join(" · ");
   return `<tr><td><b>${esc(x.who || "—")}</b><div class="dim xs">${esc([log, how].filter(Boolean).join(" · "))}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
     <td data-status>${UI.chip(x.code >= 400 ? `${word} · ${x.code}` : word, tone, { size: "slim" })}</td>
-    <td class="small ev-msg"><span class="mono">${esc(x.what || "—")}</span>${detail ? `<div class="dim xs">${esc(detail)}</div>` : ""}${x.addr ? `<div class="dim xs mono">${esc(x.addr)}</div>` : ""}</td>
+    <td class="small ev-msg"><span class="mono">${esc(x.what || "—")}</span>${detail ? `<span class="dim xs"> · ${esc(detail)}</span>` : ""}</td>
     <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(new Date((x.at || 0) * 1000)))}">${esc(ago)}</td></tr>`;
 }
 

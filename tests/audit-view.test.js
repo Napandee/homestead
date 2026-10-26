@@ -80,6 +80,15 @@ test("the page shown is the one the server answered, so Older cannot run past it
   assert.match(ctx.painted, /disabled onclick="auditPage\(1\)"/, "Older is off at the cap");
 });
 
+test("the What cell reads as separate words when a phone runs it into one line", () => {
+  // A compact stacked row lays the cell's parts inline (first phone screenshot).
+  const { ctx } = load();
+  const html = ctx.auditRowHtml({ source: "changes", at: 0, who: "ada", what: "POST /api/workload/scale",
+    target: "lab/Deployment/app-1", addr: "192.0.2.10", result: "ok", code: 200 });
+  const cell = html.match(/<td class="small ev-msg">([\s\S]*?)<\/td>/)[1].replace(/<[^>]+>/g, "");
+  assert.equal(cell, "POST /api/workload/scale · lab/Deployment/app-1 · 192.0.2.10");
+});
+
 test("an HTTP status is shown only when it says something went wrong", () => {
   const { ctx } = load();
   // An MCP tool refused or failed is answered 200 (review M2).
