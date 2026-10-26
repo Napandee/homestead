@@ -15,7 +15,10 @@ const Timeline = (() => {
   const RANGES = { last: ["Since last visit", 0], day: ["24 hours", 86400], week: ["7 days", 7 * 86400], month: ["30 days", 30 * 86400] };
   const MARK_EVERY = 5 * 60 * 1000;
   // The card always shows since you were last here; the page whatever range is picked.
-  const state = { data: null, error: "", card: null, cardError: "", range: "last", filter: { kind: "", app: "", host: "" }, marked: 0 };
+  // The filter lasts while the page stays open (#871): its refresh calls view()
+  // again on the same navigation; opening the page anew starts unfiltered.
+  const state = { data: null, error: "", card: null, cardError: "", range: "last", filter: { kind: "", app: "", host: "" },
+    filterFor: null, marked: 0 };
 
   const counts = entries => entries.reduce((all, e) => ({ ...all, [e.kind]: (all[e.kind] || 0) + 1 }), {});
   const top = (entries, n = 5) => [...entries]
@@ -82,15 +85,17 @@ const Timeline = (() => {
       return;
     }
     const entries = data.entries || [], shown = filter(entries, f);
-    const values = key => [...new Set(entries.map(e => e[key]).filter(Boolean))].sort();
-    const pick = (key, label, all) => `<label class="tl-pick"><span class="dim xs">${esc(label)}</span><select aria-label="${esc(label)}" onchange="timelineFilter(${jsq(key)}, this.value)">
+    // A choice the window no longer has stays listed, so the menu says what is filtered.
+    const values = key => [...new Set([...entries.map(e => e[key]), f[key]].filter(Boolean))].sort();
+    // A menu with nothing to choose besides "All" is left out (#871).
+    const pick = (key, label, all) => !values(key).length ? "" : `<label class="tl-pick"><span class="dim xs">${esc(label)}</span><select aria-label="${esc(label)}" onchange="timelineFilter(${jsq(key)}, this.value)">
       <option value="">${esc(all)}</option>${values(key).map(v => `<option value="${esc(v)}"${f[key] === v ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
     const kinds = `<div class="seg" role="group" aria-label="Kind"><button type="button" class="${f.kind ? "" : "on"}" aria-pressed="${!f.kind}" onclick="timelineFilter('kind', '')">All</button>${Object.keys(KINDS)
-      .filter(k => data.counts?.[k]).map(k => `<button type="button" class="${f.kind === k ? "on" : ""}" aria-pressed="${f.kind === k}" onclick="timelineFilter('kind', ${jsq(k)})">${esc(KINDS[k][2])} ${data.counts[k]}</button>`).join("")}</div>`;
+      .filter(k => data.counts?.[k] || f.kind === k).map(k => `<button type="button" class="${f.kind === k ? "on" : ""}" aria-pressed="${f.kind === k}" onclick="timelineFilter('kind', ${jsq(k)})">${esc(KINDS[k][2])} ${data.counts?.[k] || 0}</button>`).join("")}</div>`;
     const row = e => `<tr class="tl-row">
       <td data-label="When" class="nowrap" data-sort="${e.at}">${fmtWhen(e.at)}</td>
       <td data-label="Kind">${UI.chip(KINDS[e.kind]?.[2] || e.kind, e.tone, { size: "slim" })}</td>
-      <td data-label="What">${esc(e.text)}${e.app || e.host ? `<span class="dim xs"> · ${esc(e.app || e.host)}</span>` : ""}</td>
+      <td data-label="What">${esc(e.text)}${e.app || e.host ? `<span class="dim xs"> · ${[e.app, e.host].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>
       <td data-actions>${e.href ? `<button type="button" class="btn sm"${open(e.href)}>Open</button>` : ""}</td></tr>`;
     paint(`${UI.pageHeader("Timeline", `${esc(sinceWords(data))} · ${many(entries.length + (data.more || 0), "event", "events")}`, rangeSeg)}
       ${state.error ? UI.callout("warn", "Could not read the timeline just now", `${esc(state.error)} · this is the last read.`) : ""}
@@ -103,7 +108,10 @@ const Timeline = (() => {
   }
 
   async function view() {
-    state.filter = { kind: "", app: "", host: "" };
+    // go() counts every navigation in NAV_TOKEN; the refresh loop does not.
+    const navigation = typeof window !== "undefined" ? window.NAV_TOKEN : undefined;
+    if (navigation !== state.filterFor) state.filter = { kind: "", app: "", host: "" };
+    state.filterFor = navigation;
     page();
     await load(state.range, { page: true });
     page();

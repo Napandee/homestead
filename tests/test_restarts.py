@@ -416,6 +416,26 @@ class RestartRecordTests(unittest.TestCase):
         self.look(pod(restarts=1, last=oom()), now=T0 + 40)
         self.assertEqual(1, len(self.records()), "recorded once, when it could be told whose pod it is")
 
+    # #871: the timeline filters by host, so a record names the host it happened on.
+    def test_a_restart_names_the_host_its_pod_ran_on(self):
+        self.look(pod(node="node-b"))
+        self.look(pod(node="node-b", restarts=1, last=oom()), now=T0 + 20)
+        self.assertEqual("node-b", self.records()[0]["node"])
+        self.assertEqual("node-b", R.recent(T0)[0]["node"])
+
+    def test_a_replaced_pod_names_the_host_it_ran_on_not_the_new_one(self):
+        self.look(pod(node="node-b"))
+        self.look(pod(name="game-6d4f-xyz", uid="pod-2", node="node-c", created="2026-10-22T09:00:00Z"), now=T0 + 20)
+        self.assertEqual(("replaced", "node-b"), (self.records()[0]["kind"], self.records()[0]["node"]))
+
+    def test_a_rollout_names_no_host(self):
+        self.look(pod())
+        self.look(pod(name="game-7a1b-xyz", uid="pod-2", rs="game-7a1b", hash_="7a1b", images={"server": "example/server:2"},
+                      created="2026-10-22T09:00:00Z"), now=T0 + 20)
+        [rec] = self.records()
+        self.assertEqual("rollout", rec["kind"])
+        self.assertNotIn("node", rec, "a new template is the app's, not one host's")
+
 
 class LaterTests(unittest.TestCase):
     def test_the_pages_never_wait_for_the_record_and_one_look_runs_at_a_time(self):

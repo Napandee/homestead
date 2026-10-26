@@ -89,7 +89,7 @@ class DeclaredRoutes(unittest.TestCase):
         table = ROUTES.table()
         self.assertTrue(table)
         for (method, path), route in table.items():
-            self.assertIn(method, ("GET", "POST", "PUT", "DELETE"), path)
+            self.assertIn(method, ROUTES.METHODS, path)
             # Outside /api/ only where the guard does not take it for a page,
             # which it lets through before sign-in (/readyz, /metrics: #736).
             # ModuleRoutesNeedCredentials below is this rule's safety net.
@@ -140,6 +140,99 @@ class DeclaredRoutes(unittest.TestCase):
         self.assertEqual({"a": 1}, seen[0].body)
         self.assertEqual("ada", seen[0].user)
         self.assertIsNone(ROUTES.find("GET", "/api/test/echo"))
+
+
+def _bound_names(target):
+    """The names an assignment target binds, through tuple and list unpacking."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _bound_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for element in target.elts for name in _bound_names(element)]
+    return []
+
+
+def declares_routes(source):
+    """Whether a module binds ROUTES at module level, as homestead_routes.table()
+    finds it through getattr: assigned (ROUTES = ..., ROUTES: ... = ..., unpacked)
+    or imported, directly or inside a top-level if, try or with. A def or class
+    body does not count."""
+    pending = list(SS.tree(source).body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Assign):
+            names = [name for target in node.targets for name in _bound_names(target)]
+        elif isinstance(node, ast.AnnAssign):
+            names = _bound_names(node.target)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.asname or alias.name for alias in node.names]
+        else:
+            names = []
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for field in ("body", "orelse", "finalbody", "handlers"):
+                    pending += getattr(node, field, None) or []
+        if "ROUTES" in names:
+            return True
+    return False
+
+
+class ModuleList(unittest.TestCase):
+    """table() reads only the modules in MODULES (#870): a module with ROUTES
+    left out of it loads without error, and its routes answer 404."""
+
+    def test_every_module_with_routes_is_listed(self):
+        unlisted = [path.stem for path in SS.server_modules() if declares_routes(path) and path.stem not in ROUTES.MODULES]
+        self.assertEqual([], unlisted, "these declare ROUTES but are not in homestead_routes.MODULES, so their routes answer 404")
+
+    def test_every_listed_module_exists(self):
+        # A module may be listed without ROUTES (homestead_audit is, to register
+        # its after-request hook), but every listed name is a module here.
+        missing = [name for name in ROUTES.MODULES if not (SS.SERVER / f"{name}.py").is_file()]
+        self.assertEqual([], missing, "listed in homestead_routes.MODULES, but there is no server/<name>.py")
+
+    def test_only_a_top_level_routes_assignment_counts(self):
+        for source, declares in (("ROUTES = {}", True), ("ROUTES: dict = {}", True),
+                                 ("def f():\n    ROUTES = {}", False), ("# ROUTES = {}", False),
+                                 ("ROUTES_V1 = {}", False), ("x = ROUTES", False),
+                                 ("if X:\n    ROUTES = {}", True), ("try:\n    pass\nexcept E:\n    ROUTES = {}", True),
+                                 ("ROUTES, X = {}, 1", True), ("from x import ROUTES", True),
+                                 ("from x import TABLE as ROUTES", True), ("from x import ROUTES as OTHER", False),
+                                 ("class C:\n    ROUTES = {}", False)):
+            with self.subTest(source=source):
+                self.assertIs(declares, declares_routes(SS.code(source)))
+
+
+class ServedMethods(unittest.TestCase):
+    """A route is only reached through server.py's handler H, which answers a
+    method only with a do_<METHOD> of its own (#870): any other method gets
+    http.server's 501, so table() refuses a route declared with one."""
+
+    def declare(self, method, path="/api/test/method"):
+        """table() as it reads a module that declares only this route."""
+        module = type(sys)("homestead_test_method")
+        module.ROUTES = {(method, path): ("viewer", lambda request: {})}
+        with mock.patch.dict(sys.modules, {"homestead_test_method": module}), \
+                mock.patch.object(ROUTES, "MODULES", ("homestead_test_method",)), mock.patch.object(ROUTES, "_table", {}):
+            return ROUTES.table()
+
+    def test_the_methods_are_the_ones_h_serves(self):
+        import server
+        served = {name[3:] for name in dir(server.H) if name.startswith("do_")}
+        self.assertEqual(served, set(ROUTES.METHODS), "homestead_routes.METHODS and server.H's do_* methods disagree")
+
+    def test_a_method_h_does_not_serve_is_refused_naming_the_module_and_route(self):
+        for method in ("PUT", "PATCH", "patch", "HEAD", "OPTIONS"):
+            with self.subTest(method=method):
+                with self.assertRaises(ValueError) as refused:
+                    self.declare(method)
+                self.assertIn("homestead_test_method", str(refused.exception))
+                self.assertIn(f"{method} /api/test/method", str(refused.exception))
+
+    def test_a_served_method_is_read_in_any_case(self):
+        for method in ("GET", "post", "Delete"):
+            with self.subTest(method=method):
+                self.assertEqual({(method.upper(), "/api/test/method")}, set(self.declare(method)))
 
 
 def guard(path, method="GET", headers=None):
