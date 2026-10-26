@@ -78,56 +78,76 @@ function gitopsRow(w) {
 const gitopsWaiting = row => !!row.requested && row.requested !== row.handled;
 
 /* Reconcile now (#742): an admin asks Flux to apply the app again, as
-   `flux reconcile` does, then follows the shared read until Flux has taken
-   the request (the server reads every 5 s for two minutes after it). */
+   `flux reconcile` does (without --with-source: Flux applies the revision it
+   last fetched), then follows the shared read until Flux has taken the
+   request (the server reads every 5 s for two minutes after it). */
 const GITOPS_FOLLOW = { wait: ms => new Promise(done => setTimeout(done, ms)), every: 5000, tries: 30 };
+// The latest request per app: an older follow stops once a newer one starts.
+const GITOPS_FOLLOWING = {};
+// Taken: Flux handled this request, or a later one (another Reconcile now, flux reconcile).
+const gitopsTaken = (row, requested) => !!row.handled
+  && (row.handled === requested || Date.parse(row.handled) >= Date.parse(requested));
 function gitopsReconcileItem(w) {
   const row = gitopsRow(w);
   if (!row || row.suspended) return null;
   return { label: "Reconcile now", run: `gitopsReconcile(${jsq(w.ns)},${jsq(w.name)})`, icon: "refresh", ariaLabel: `Reconcile now ${w.name}`,
-    need: "admin", tip: `Ask Flux to apply ${row.id} from git now` };
+    need: "admin", tip: `Ask Flux to apply ${row.id} again now` };
 }
 /* How it is going, and Flux's message when it is not Ready: the review and its result. */
 function gitopsFacts(row, apps = []) {
-  return UI.facts([["Applied by", esc(row.id)], ["State", esc([gitopsState(row), row.revision].filter(Boolean).join(" · "))]])
+  return UI.facts([["Applied by", esc(row.id)], ["State", esc([gitopsState(row), row.revision].filter(Boolean).join(" · "))],
+    apps.length && ["Apps", String(apps.length)]])
     + (row.ready === false && !row.suspended ? UI.callout("warn", "Flux says", `<p>${esc(row.message || "not ready")}</p>`) : "")
     + (apps.length ? UI.more(`Apps it applies · ${apps.length}`, `<p>${apps.map(esc).join(", ")}</p>`) : "");
 }
+// Marks the dialog as this app's Reconcile now, so a follow paints only its own dialog.
+const gitopsMark = key => `<span hidden data-gitops-follow="${esc(key)}"></span>`;
 function gitopsReconcile(ns, name) {
   const row = gitopsRow({ ns, name });
   if (!row) return toast(`Flux does not apply ${ns}/${name}`, "bad");
   const apps = Object.entries(STATE.data.gitops.apps || {}).filter(([, id]) => id === row.id).map(([key]) => key);
-  modal(`Reconcile now · ${name}`, UI.lead(esc(`Flux applies ${row.id} from git now, not at its next interval. Nothing in git changes.`))
+  modal(`Reconcile now · ${name}`, gitopsMark(`${ns}/${name}`)
+    + UI.lead(esc(`Flux applies ${row.id} again now, from the revision it last fetched from git.`))
     + gitopsFacts(row, apps)
     + UI.actions(UI.cancel() + UI.button("Reconcile now", `gitopsReconcileGo(this,${jsq(ns)},${jsq(name)})`, { kind: "pri" })));
 }
 async function gitopsReconcileGo(button, ns, name) {
-  const title = `Reconcile now · ${name}`, close = UI.actions(UI.cancel("Close"));
+  const key = `${ns}/${name}`, title = `Reconcile now · ${name}`, close = UI.actions(UI.cancel("Close"));
+  const mine = GITOPS_FOLLOWING[key] = (GITOPS_FOLLOWING[key] || 0) + 1;
+  const current = () => GITOPS_FOLLOWING[key] === mine;
   // The dialog follows the request while it is open; closed, the result is a message.
-  const paint = html => modalIsOpen() && $("#mtitle")?.textContent === title ? (modal(title, html), true) : false;
+  const paint = html => current() && modalIsOpen() && $("#mbody")?.querySelector(`[data-gitops-follow="${key}"]`)
+    ? (modal(title, gitopsMark(key) + html), true) : false;
+  const say = (html, text, tone) => { if (current() && !paint(html + close)) toast(text, tone); };
   button.disabled = true;
   let asked;
   try {
     asked = await api("/api/gitops/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name }) });
   } catch (error) { button.disabled = false; return toast(error.message, "bad"); }
   paint(UI.lead(esc(`Asked Flux to apply ${asked.id}.`)) + UI.progress(null, { label: "Waiting for Flux to take the request" }) + close);
-  for (let tries = 0; tries < GITOPS_FOLLOW.tries; tries++) {
+  let unread = "";
+  for (let tries = 0; tries < GITOPS_FOLLOW.tries && current(); tries++) {
     const report = await gitopsLoad();
-    if (STATE.view === "workloads" && !modalIsOpen()) window.renderWorkloads?.();
-    const now = (report?.objects || []).find(r => r.id === asked.id);
-    if (now && now.handled === asked.requested) {
-      const failed = now.ready === false;
-      const said = failed ? `Flux tried ${now.id}: it is not ready` : `Flux applied ${now.id}`;
-      if (!paint(UI.lead(esc(`${said}.`)) + gitopsFacts(now) + close)) {
-        toast(failed ? `${said}: ${now.message || "no message"}` : `${said}${now.revision ? `: ${now.revision}` : ""}`, failed ? "bad" : "ok");
-      }
-      return;
+    if (!current()) return;
+    unread = report?.error || "";
+    const now = !unread && (report.objects || []).find(r => r.id === asked.id);
+    if (unread) {
+      paint(UI.lead(esc(`Asked Flux to apply ${asked.id}.`)) + UI.callout("warn", "", `<p>Flux's status could not be read: ${esc(unread)}</p>`)
+        + UI.progress(null, { label: "Trying again" }) + close);
+    } else if (now && gitopsTaken(now, asked.requested) && now.ready !== null && now.ready !== undefined) {
+      if (STATE.view === "workloads" && !modalIsOpen()) window.renderWorkloads?.();
+      const failed = now.ready === false, said = failed ? `Flux tried ${now.id}: it is not ready` : `Flux applied ${now.id}`;
+      return say(UI.lead(esc(`${said}.`)) + gitopsFacts(now),
+        failed ? `${said}: ${now.message || "no message"}` : `${said}${now.revision ? `: ${now.revision}` : ""}`, failed ? "bad" : "ok");
     }
     await GITOPS_FOLLOW.wait(GITOPS_FOLLOW.every);
   }
-  const late = `Flux has not taken the request yet. ${name}'s details show when it does.`;
-  if (!paint(UI.lead(esc(late)) + close)) toast(late, "warn");
+  if (!current()) return;
+  const late = unread ? `Flux's status could not be read: ${unread}. Whether Flux took the request is not known.`
+    : `Flux has not taken the request yet. ${name}'s details show when it does.`;
+  say(UI.lead(esc(late)), late, "warn");
 }
+
 window.GITOPS_FOLLOW = GITOPS_FOLLOW;
 window.gitopsReconcileItem = gitopsReconcileItem;
 window.gitopsReconcile = gitopsReconcile;

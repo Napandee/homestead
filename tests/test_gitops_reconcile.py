@@ -128,6 +128,24 @@ class ReconcileNow(unittest.TestCase):
             self.reconcile({"ns": "lab", "name": "held"})
         self.assertEqual([], self.sent)
 
+    def test_suspended_since_the_shared_read_is_refused_too(self):
+        """The live object decides, not the minute-old read (pinning)."""
+        report = GITOPS._read()
+        self.objects[f"{KS}/v1/namespaces/flux-system/kustomizations/apps"]["spec"]["suspend"] = True
+        with mock.patch.object(GITOPS, "status", return_value=report):
+            with self.assertRaisesRegex(ValueError, "suspended"):
+                self.reconcile({"ns": "lab", "name": "web"})
+        self.assertEqual([], self.sent)
+
+    def test_refused_when_the_object_is_gone(self):
+        """In the shared read, deleted since (pinning)."""
+        report = GITOPS._read()
+        del self.objects[f"{KS}/v1/namespaces/flux-system/kustomizations/apps"]
+        with mock.patch.object(GITOPS, "status", return_value=report):
+            with self.assertRaisesRegex(ValueError, "no longer there"):
+                self.reconcile({"ns": "lab", "name": "web"})
+        self.assertEqual([], self.sent)
+
     def test_refused_without_an_app(self):
         for body in ({}, {"ns": "lab"}, {"ns": "lab", "name": ""}, {"ns": ["lab"], "name": "web"}, None):
             with self.assertRaises(ValueError):

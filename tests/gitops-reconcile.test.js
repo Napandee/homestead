@@ -13,7 +13,8 @@ const AT = "2026-10-26T09:00:00.000000Z";
 function setup(answers) {
   const calls = [], toasts = [], dialogs = [], state = { open: false, title: "" };
   const c = { window: { remoteRow: w => !!w.remote }, console, STATE: { data: {} },
-    $: s => s === "#mtitle" ? { textContent: state.title } : null,
+    $: s => s === "#mtitle" ? { textContent: state.title }
+      : s === "#mbody" ? { querySelector: q => state.open && dialogs.at(-1)?.html.includes(q.slice(1, -1)) ? {} : null } : null,
     esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"), copyText: async () => true,
     fmtAgo: s => `${s} s ago`, jsq: s => `'${s}'`,
     toast: (text, tone) => toasts.push({ text, tone }),
@@ -124,4 +125,61 @@ test("The details say a request is waiting for Flux until it is handled", async 
   const done = setup([report([row("apps", { requested: "x", handled: "x" })])]);
   await done.c.window.gitopsLoad();
   assert.doesNotMatch(done.c.window.gitopsDetail({ ns: "lab", name: "web" }), /waiting for Flux/);
+});
+
+// Review fixes: a second request, a request someone else made, an unread status, a status still Unknown.
+test("A second request takes over from the first: one result, and no false 'not taken' message", async () => {
+  const AT2 = "2026-10-26T09:01:00.000000Z", done = row("apps", { requested: AT2, handled: AT2 });
+  const t = setup([report([row("apps")]), { ok: true, id: "Kustomization flux-system/apps", requested: AT },
+    report([row("apps", { requested: AT, handled: "" })]),
+    { ok: true, id: "Kustomization flux-system/apps", requested: AT2 }, report([done]),
+    ...Array.from({ length: 40 }, () => report([done]))]);
+  await t.c.window.gitopsLoad();
+  t.c.window.gitopsReconcile("lab", "web");
+  let second;
+  t.c.window.GITOPS_FOLLOW.wait = async () => { second ??= t.c.window.gitopsReconcileGo({}, "lab", "web"); await second; };
+  await t.c.window.gitopsReconcileGo({}, "lab", "web");
+  const ends = [...t.dialogs.map(d => d.html), ...t.toasts.map(m => m.text)].filter(text => /Flux applied|not taken|could not be read/.test(text));
+  assert.equal(ends.length, 1, ends.join("\n"));
+  assert.match(ends[0], /Flux applied/);
+});
+
+test("A later request handled by Flux (flux reconcile, say) also counts as taken", async () => {
+  const t = setup([report([row("apps")]), { ok: true, id: "Kustomization flux-system/apps", requested: AT },
+    report([row("apps", { requested: "2026-10-26T10:00:05.123456789+01:00", handled: "2026-10-26T10:00:05.123456789+01:00" })])]);
+  await t.c.window.gitopsLoad();
+  t.c.window.gitopsReconcile("lab", "web");
+  await t.c.window.gitopsReconcileGo({}, "lab", "web");
+  assert.match(t.dialogs.at(-1).html, /Flux applied/);
+});
+
+test("A status that cannot be read is said, and completion is left unverified", async () => {
+  const t = setup([report([row("apps")]), { ok: true, id: "Kustomization flux-system/apps", requested: AT },
+    ...Array.from({ length: 40 }, () => new Error("Kubernetes said 500"))]);
+  await t.c.window.gitopsLoad();
+  t.c.window.gitopsReconcile("lab", "web");
+  await t.c.window.gitopsReconcileGo({}, "lab", "web");
+  assert.match(t.dialogs.at(-1).html, /could not be read: Kubernetes said 500/);
+  assert.doesNotMatch(t.dialogs.at(-1).html, /Flux applied/);
+});
+
+test("Handled but still Unknown is followed until Flux says Ready or not", async () => {
+  const t = setup([report([row("apps")]), { ok: true, id: "Kustomization flux-system/apps", requested: AT },
+    report([row("apps", { requested: AT, handled: AT, ready: null })]),
+    report([row("apps", { requested: AT, handled: AT, ready: true })])]);
+  await t.c.window.gitopsLoad();
+  t.c.window.gitopsReconcile("lab", "web");
+  await t.c.window.gitopsReconcileGo({}, "lab", "web");
+  assert.equal(t.calls.filter(call => call.path === "/api/gitops").length, 3);
+  assert.match(t.dialogs.at(-1).html, /Flux applied/);
+});
+
+test("The review says Flux applies the revision it last fetched, with the count of apps in view", async () => {
+  const t = setup([report([row("apps")])]);
+  await t.c.window.gitopsLoad();
+  t.c.window.gitopsReconcile("lab", "web");
+  const html = t.dialogs.at(-1).html;
+  assert.match(html, /revision it last fetched/);
+  assert.doesNotMatch(html, /from git now/);
+  assert.match(html, /<dt>Apps<\/dt><dd>2<\/dd>/);
 });
