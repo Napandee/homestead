@@ -366,6 +366,16 @@ took. Opening a console or a host shell writes one line when it ends.
 - Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
   asked for, with their arguments, in the agent audit.
 
+Admins read it under **Events → Audit**, together with the agent audit (every
+call an API key made, on `/api/v1` and `/mcp`): one list, newest first, each
+row saying which log it came from, who, what and how it ended. Filter it by log
+or by person; **Older** and **Newer** move 100 rows at a time. The two files
+stay apart: an agent's arguments are shown only under **Settings → AI agent requests**.
+Each page reads the logs from their newest end, so a full log stays quick; when
+a filter matches little, only the newest 20,000 lines of each log are searched,
+and the page says so. A change an AI agent made through `/mcp` appears in both
+logs, once as the request and once as the agent's call.
+
 ## Sign-in history
 
 Every sign-in to Homestead, failed attempt, sign-out, password change and

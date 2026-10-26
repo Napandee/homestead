@@ -3439,6 +3439,27 @@ ssh_pwauth: true
     { at: ago(130), key: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", via: "api", action: "GET /api/v1/status", args: {}, outcome: "ok", detail: "", addr: "192.0.2.20" },
     { at: ago(300), key: "8c41e07a9b55", name: "Ops agent", owner: "demo", via: "mcp", action: "restore_backup", args: { backup: "backup-7f3a91" }, outcome: "error", detail: "the cluster changed since you reviewed this", addr: "198.51.100.7" },
     { at: ago(310), key: "8c41e07a9b55", name: "Ops agent", owner: "demo", via: "mcp", action: "scale_container", args: {}, outcome: "refused", detail: "the key lacks containers:manage", addr: "198.51.100.7" }] };
+  // Events › Audit (#738): the change log and the agent log together, filtered
+  // and paged as homestead_audit_view does it.
+  const demoChanges = [
+    { at: ago(1), who: "demo", via: "browser", addr: "192.0.2.20", what: "POST /api/workload/scale", target: "lab/Deployment/frigate", result: "ok", code: 200 },
+    { at: ago(15), who: "alex", via: "browser", addr: "172.70.4.18", what: "POST /api/workload/restart", target: "media/Deployment/jellyfin", result: "ok", code: 200 },
+    { at: ago(22), who: "alex", via: "browser", addr: "172.70.4.18", what: "POST /api/settings", result: "refused", code: 403 },
+    { at: ago(95), who: "demo", via: "browser", addr: "192.0.2.20", what: "POST /api/snapshots/delete", target: "lab/snap-0412", result: "ok", code: 200 },
+    { at: ago(140), who: "demo", via: "key", addr: "192.0.2.20", what: "POST /api/v1/workloads/restart", target: "home/Deployment/home-assistant", result: "ok", code: 200 },
+    { at: ago(305), who: "demo", via: "mcp", addr: "198.51.100.7", what: "restore_backup", result: "error", code: 200 },
+    { at: ago(720), who: "", via: "none", addr: "203.0.113.7", what: "audit-suppressed", result: "note", detail: "27 more refused requests from 203.0.113.7 in the 60 s since 07:12:03: on stdout, not kept here" },
+  ].map(row => ({ source: "changes", ...row }));
+  responses["/api/audit/log"] = url => {
+    const query = new URL(url, location.origin).searchParams;
+    const source = query.get("source") || "", person = (query.get("person") || "").trim().toLowerCase();
+    const limit = Math.max(1, Math.min(500, Number(query.get("limit")) || 100)), offset = Math.max(0, Number(query.get("offset")) || 0);
+    const agents = responses["/api/agents/audit"].calls.map(c => ({ source: "agents", at: c.at, who: c.owner, via: c.via, addr: c.addr,
+      what: c.action, key: c.name, result: c.outcome, detail: c.detail }));
+    const rows = [...(source === "agents" ? [] : demoChanges), ...(source === "changes" ? [] : agents)]
+      .filter(row => !person || row.who.toLowerCase() === person).sort((a, b) => b.at - a.at);
+    return { rows: rows.slice(offset, offset + limit), offset, limit, more: rows.length > offset + limit, partial: false };
+  };
   responses["/api/auth/keys"] = (url, init) => {
     if (init?.method !== "POST") return demoKeys;
     const body = JSON.parse(init.body || "{}");
